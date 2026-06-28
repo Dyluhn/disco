@@ -896,3 +896,27 @@ On scoping P1's first PR, two issues surfaced that reshape it:
 - Deferred (tracked, surface-bound): CXT-4 prompt-wiring + C6 recitation de-dup (routing seam);
   context_compact_if_needed live firing (condenser); direct-edit record hook (P8).
 
+
+## PR HARN-1a — provider-call ledger + ProviderLedgerOracle — COMPLETE
+
+### Codex review (CODE, binding) — APPROVE (after 1 hardening round)
+- round-1 REVISE → 4 fixes (None-vs-[]-vs-malformed conflation; fail-closed on required-but-absent;
+  classify_run_folder crash-proof tolerant read; expanded parser/folder tests). Targeted re-review → APPROVE.
+  Logs: .claude/harn1a-codex-code.log.
+
+### Implementation
+- NEW provider_ledger.py (record contract + tolerant parse_relay_log/_lines).
+- NEW oracles/provider_ledger.py (ProviderLedgerOracle): OPT-IN per scenario assertions.provider;
+  FAIL-CLOSED — required-but-absent/empty/malformed → fc.MISSING_REQUIRED_EVIDENCE → INVALID_RUN (opt-out
+  via require_ledger:false → SKIP); enforces forbidden-host (default openrouter) / required-host /
+  pinned-model / zero-calls-after-terminal. THE live mechanism for the HARD MiniMax-only/no-OpenRouter rule.
+- CHANGED failure_codes.py (PROVIDER_FORBIDDEN/PROVIDER_WRONG_MODEL/PROVIDER_CALL_AFTER_TERMINAL = P0);
+  classify.py (provider_ledger param + oracle step 7 + tolerant _read_ledger); oracles/__init__.py (export).
+- Tests: 60 passed. basedpyright strict: 0 errors.
+
+### Remaining for P1 (tracked)
+- LIVE POPULATION of provider-call-ledger.jsonl from the MiniMax relay log during a run (soak-setup, P17);
+  the READ+enforce pipeline is complete now.
+- HARN-1b Playwright product harness + browser evidence streams (ws/network/console/screenshots/downloads).
+- HARN-2 the 7 browser-evidence oracles. HARN-3 centralized product promotion policy (provider clause now
+  enforceable).

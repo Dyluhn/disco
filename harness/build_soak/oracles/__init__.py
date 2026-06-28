@@ -12,6 +12,7 @@ from .contract import ContractOracle
 from .event_chain import EventChainOracle
 from .harness_validity import HarnessValidityOracle
 from .output_truth import OutputTruthOracle
+from .provider_ledger import ProviderLedgerOracle
 from .revision import RevisionOracle
 from .schema import OracleResult, failing, passing, skipping
 from .tool_scope import ToolScopeOracle
@@ -22,6 +23,7 @@ __all__ = [
     "HarnessValidityOracle",
     "OracleResult",
     "OutputTruthOracle",
+    "ProviderLedgerOracle",
     "RevisionOracle",
     "ToolScopeOracle",
     "failing",

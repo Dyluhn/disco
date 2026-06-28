@@ -30,6 +30,7 @@ from .oracles import (
     EventChainOracle,
     HarnessValidityOracle,
     OutputTruthOracle,
+    ProviderLedgerOracle,
     RevisionOracle,
     ToolScopeOracle,
 )
@@ -78,6 +79,7 @@ def classify(
     tool_scope: list[dict[str, Any]] | None = None,
     autonomous: bool | None = None,
     revision_meta: dict[str, Any] | None = None,
+    provider_ledger: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Classify one run from its raw event log (full-event dicts OR DB rows) plus
     optional captured evidence. Returns the §13 classification dict.
@@ -136,6 +138,12 @@ def classify(
         # 6. output truth.
         results += OutputTruthOracle().check(
             events, scenario=scenario, workspace_manifest=workspace_manifest, preview=preview
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 7. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
+        results += ProviderLedgerOracle().check(
+            events, scenario=scenario, provider_ledger=provider_ledger
         )
         first_fail = _first_fail(results)
 
@@ -210,6 +218,18 @@ def classify_run_folder(
     if events_path.is_file():
         events_raw = _read_jsonl(events_path)
 
+    # HARN-1a: the provider-call ledger (MiniMax-only / no-OpenRouter enforcement).
+    # Read it if present anywhere in the run folder; absent → the oracle SKIPs (or
+    # fails closed if the scenario requires it). A malformed line is NOT silently
+    # dropped (that would under-report a forbidden call) nor crashes classification —
+    # it becomes a hostless record the ProviderLedgerOracle fails on as an evidence gap.
+    provider_ledger: list[dict[str, Any]] | None = None
+    ledger_path = base / "provider-call-ledger.jsonl"
+    if not ledger_path.is_file():
+        ledger_path = next(iter(base.rglob("provider-call-ledger.jsonl")), ledger_path)
+    if ledger_path.is_file():
+        provider_ledger = _read_ledger(ledger_path)
+
     classification = classify(
         events_raw,
         scenario=scenario,
@@ -218,6 +238,7 @@ def classify_run_folder(
         seed=manifest.seed if manifest else None,
         evidence_intact=evidence_intact,
         autonomous=manifest.autonomous if manifest else None,
+        provider_ledger=provider_ledger,
     )
     (base / CLASSIFICATION_NAME).write_text(
         json.dumps(classification, indent=2, sort_keys=True), encoding="utf-8"
@@ -231,6 +252,25 @@ def _read_jsonl(path: str | Path) -> list[Any]:
         line = line.strip()
         if line:
             out.append(json.loads(line))
+    return out
+
+
+def _read_ledger(path: str | Path) -> list[dict[str, Any]]:
+    """Tolerant provider-call-ledger reader: never crashes on a malformed line and
+    never silently drops one. A non-JSON / non-dict line becomes a hostless
+    ``{"__malformed__": ...}`` record so the ProviderLedgerOracle surfaces it as an
+    evidence gap (rather than under-reporting a possibly-forbidden call)."""
+    out: list[dict[str, Any]] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            out.append({"__malformed__": line[:160]})
+            continue
+        out.append(obj if isinstance(obj, dict) else {"__malformed__": str(obj)[:160]})
     return out
 
 

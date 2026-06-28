@@ -64,6 +64,14 @@ ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
 # "content omitted"/"truncated for brevity" marker with NO recover cue) — unrecoverable
 # placeholder text shipped into a deliverable. Rule set v1 (disco.core.observations).
 DESTRUCTIVE_ELISION = "DESTRUCTIVE_ELISION"
+# P1/HARN-1a: provider-ledger violations of the soak constraint. A provider call went
+# to a FORBIDDEN host (e.g. openrouter) or a host that isn't the required one; used the
+# WRONG model (not the pinned soak model); or fired AFTER the conversation went terminal
+# (runaway burn). These enforce the MiniMax-only / no-OpenRouter / zero-calls-after-terminal
+# rule from the provider-call-ledger evidence. All P0.
+PROVIDER_FORBIDDEN = "PROVIDER_FORBIDDEN"
+PROVIDER_WRONG_MODEL = "PROVIDER_WRONG_MODEL"
+PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
 NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
 OBSERVATION_WITHOUT_ACTION = "OBSERVATION_WITHOUT_ACTION"
 WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
@@ -155,6 +163,9 @@ SEVERITY_BY_CODE: dict[str, str] = {
     EVENT_LOG_STATE_DIVERGENCE: P0,
     WS_FRAME_DROPPED_NO_ERROR: P0,
     UI_ENABLED_DEAD_CONTROL: P0,
+    PROVIDER_FORBIDDEN: P0,
+    PROVIDER_WRONG_MODEL: P0,
+    PROVIDER_CALL_AFTER_TERMINAL: P0,
     UNKNOWN_FAILURE: P0,
     # P1
     PLAN_REVISION_NOT_INCREMENTED: P1,
