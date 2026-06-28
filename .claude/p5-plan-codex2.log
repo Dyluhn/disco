@@ -1,0 +1,37 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5-codex
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f0f4e-8d04-7d31-be1d-0f694741c0db
+--------
+user
+# Codex PLAN Review — P5-DELIVERY (Preview/Show/Delivery: audit + contract delivery shape)
+
+Read the PLAN under "## PR P5-DELIVERY" in /home/dylan/projects/disclaude/disclaude.md (just appended).
+
+Context you can verify: preview tools (builtin/preview.py: preview_start/status/logs/stop) are host-owned
+(platform picks the port). The serve→DeliverableEvent path (core/loop/turn_control.py handle_serve +
+events.py DeliverableEvent kind app|files) is the show/deliver handoff, hardened (dedup, post-resume gate,
+F3 false-URL drop). HARN-2 ShowToUserOracle (harness/build_soak/oracles/browser_evidence.py) covers live
+shown/preview evidence. ArtifactContract (contract/models.py) currently has kind/required_files/starter_kit.
+
+The plan: (1) add delivery_mode_for_kind + ArtifactContract.delivery_mode property (app|files, derived from
+kind); (2) deliverable_kind_matches_contract validator; (3) runtime expected_delivery_mode(conversation_id)
+accessor; (4) tests; audit-note the existing substrate as done (no rebuild); track the handle_serve
+wrong-shape REJECT wire as a follow-up (loop integration).
+
+Judge: (a) is the audit verdict correct — is P5's preview/show/deliver substrate genuinely present + does the
+plan avoid rebuilding it? (b) is the contract delivery_mode (derived property, app|files) the right
+campaign-coherent addition, or is it scope-inventing / is there a MORE essential P5 gap I'm missing (an
+actual missing show/deliver TOOL, a non-negotiable not met)? (c) is deferring the handle_serve reject-wire
+(while landing the validator+accessor tested) acceptable, consistent with prior loop-integration deferrals?
+(d) the app|files kind→mode mapping (custom→files) — correct? Return APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE
++ REASONS + REQUIRED_REVISIONS.
+ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.5-codex' model is not supported when using Codex with a ChatGPT account."}}
+ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.5-codex' model is not supported when using Codex with a ChatGPT account."}}

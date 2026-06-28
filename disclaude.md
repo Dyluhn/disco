@@ -1145,3 +1145,58 @@ follow-ups (all are "needs the contract↔loop phase integration", which this bu
 
 ### CONTRACT PILLAR COMPLETE + ACTIVATED: P2 (models/registry/scopes/enforce/phase) + P3 (packs/assembler/
 ### skills) + P4/TOOL-1 (app_* tools) + CONTRACT-ENFORCE + CONTRACT-ACTIVATE. Enforcement is LIVE, not decorative.
+
+## PR P5-DELIVERY — Preview/Show/Delivery (audit + contract delivery shape) — PLAN
+SCOUT VERDICT: the P5 product surface ALREADY EXISTS + is hardened in the clone (audit-mostly-done, like P0B):
+- Preview is HOST-OWNED: preview_start/status/logs/stop; the platform picks the port (no manual ownership).
+- Show/Deliver: the `serve` tool → turn_control.handle_serve emits a DeliverableEvent (Open-the-app /
+  Download-the-files), with dedup, post-resume gate, no-op counting, and F3 false-URL dropping (no false
+  affordance). HARN-2 ShowToUserOracle already covers the LIVE shown/preview evidence.
+NO REBUILD. The genuine campaign gap is tying DELIVERY to the P2 contract (the host-owned delivery SHAPE):
+1. core/contract: delivery_mode_for_kind(kind) → Literal["app","files"]; ArtifactContract.delivery_mode
+   property (derived, always coherent, no migration). app = open-in-preview (appkit.leadgen/static.site/
+   interactive.prototype); files = download/inspect (deck/document/workflow.output/custom).
+2. deliverable_kind_matches_contract(contract, artifact_kind) — pure "no wrong-shape handoff" validator (a
+   deck contract can't hand off as a runnable app). Ready for the deliver-gate wire.
+3. runtime: expected_delivery_mode(conversation_id) accessor reading the resolved contract → the agent-server
+   deliverable surface can label/validate the handoff. (Default CUSTOM→files; declared appkit→app.)
+4. Tests: per-kind mapping, every-builtin coherence, validator accept/reject, runtime accessor.
+TRACKED FOLLOW-UP: wire deliverable_kind_matches_contract into handle_serve (loop) to REJECT a wrong-shape
+serve — a loop-integration like the build-surface verify wire (the validator + accessor land here, tested).
+Global gates honored: no manual preview ownership (already), no false affordance (validator enforces shape).
+NEXT after P5: P6 Verification Finalizers.
+
+### GATE FAILOVER — 2026-06-28: gpt-5.3-codex-spark hit usage limit (resets Jun 29 ~22:52).
+Per the campaign rule (blocked gate = P0 infra, don't bypass), probed alternates: gpt-5.3-codex not supported
+on a ChatGPT account; **gpt-5.5-codex AVAILABLE** → the binding Codex gate now runs on gpt-5.5-codex (stronger
+reviewer). Same `codex exec --sandbox read-only` contract. Revert to spark when its limit resets if desired.
+
+### GATE CONFIRMED DOWN — 2026-06-28 (re-probed): spark usage-limited until Jun 29 ~22:52 UTC; gpt-5.3-codex
++ gpt-5.5-codex BOTH "not supported on a ChatGPT account" (the 5.5 probe was a false positive — codex echoes
+the prompt, which contained the OK token). The binding gate has NO working alternate right now.
+DECISION (honoring the rule "don't bypass the gate"): PAUSE shipping unreviewed PRs. Do gate-INDEPENDENT prep
+(review-ready plans + scouting) + poll hourly for spark's return; when back, run the queued plan reviews
+(P5-DELIVERY, P6) → implement in a burst. No code is committed to the campaign without an APPROVE.
+
+## PR P6-FINALIZERS — Verification Finalizers (host-truth) — PLAN (queued, awaiting gate)
+SCOUT VERDICT — a LIVE FALSE AFFORDANCE exists: the contracts + prompt packs instruct the model to call
+per-kind finalizers (ready_for_app_verification / ready_for_static_site_verification / ready_for_deck_
+verification / ready_for_document_verification / ready_for_prototype_verification / ready_for_workflow_output_
+verification / ready_for_artifact_verification), but NONE of these are registered tools — only verify_web_app
+exists (builtin/verify_app.py) feeding the finish gate (finish.py finish_verify_passed / finish_dod_gate_
+passed / _gate_verify_web_app). So a model following the pack calls a tool that doesn't exist → unknown_tool.
+PLAN: make the contract finalizers REAL host-truth gates (non-negotiable: "no finish without host truth"):
+1. A single finalizer tool family driven by the contract's VerificationContract.finalizer name — register the
+   per-kind finalizer names (from BuildContractRegistry) so they resolve; each is the agent's "I claim ready"
+   SIGNAL that hands to the HOST verifier (it does NOT self-certify). The tool returns a structured
+   "verification requested" outcome; the host finish gate adjudicates pass/fail (reuses _gate_verify_web_app
+   for app-shaped contracts; a DoD/required-files + render check for files-shaped contracts).
+2. Wire the finalizer success → BuildPhaseTracker.note_finalizer_called (already supported) and the gate
+   verdict → note_build_verify_result (the entry point built in CONTRACT-ACTIVATE) — this also RETIRES the
+   build-surface verify-edge follow-up.
+3. Coherence: every contract's declared finalizer MUST be a registered tool (a test asserting no false
+   affordance — the inverse of the P2 tools-exist test, now covering finalizers).
+4. Honor VerificationLevel (STRICT for appkit) — strict requires the host render/lead-persist evidence, not a
+   clean console.
+RISK: touches the finish gate (finish.py) — high-care, full-suite verify + adversarial review required.
+NEXT after P6: P7 Starter/Brand/UI Kits.
