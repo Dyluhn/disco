@@ -980,3 +980,17 @@ P2+ is being built FORWARD on the isolated disclaude branch (nothing promoted to
 "no P2+ PROMOTION until P0/P0B/P1 green" is a RELEASE gate, not a build-order stop. P0+P0B complete; P1's
 entire HEADLESS harness layer green+gated; only HARN-1b's LIVE Playwright spec remains (needs a running
 frontend+agent-server stack — real ops, not a stub). Promotion to mainline still waits on that + the P17 soak.
+
+## PR CONTRACT-2 — BuildContractRegistry (P2) — COMPLETE
+- Codex (CODE, binding): APPROVE (after 1 round). 
+- NEW contract/registry.py: BuildContractRegistry maps ContractKind→BuildContract; default() registers a
+  built-in per kind (static.site/appkit.leadgen/deck/document/interactive.prototype/workflow.output/custom)
+  with real required-files/starter-kits/tool-packs/finalizer/export/prompt-pack/UI-card. get()/kinds()/
+  get_for_brief(strict_kind). Pure data+lookup.
+- round-1 fixes (Codex): appkit.leadgen now references ONLY registered tools (app_* are P4, documented) +
+  a test asserts EVERY built-in contract's tools exist in build_default_registry() (no false affordance);
+  get_for_brief partial-registry-safe (_custom() → registered or minimal, no KeyError); explicit unknown-kind
+  policy (missing→CUSTOM; present-but-malformed→ValueError by default, strict_kind=False opt-out).
+- Tests: 19 passed (CONTRACT-1+2). basedpyright strict: 0 errors.
+- NEXT: CONTRACT-3 — Contract→ToolScope compiler (compile a BuildContract into hard executor allowlists per
+  phase: bootstrap/edit/repair/verify/export; appkit bootstrap can't file_write etc.).

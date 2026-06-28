@@ -22,10 +22,12 @@ from .models import (
     VerificationContract,
     VerificationLevel,
 )
+from .registry import BuildContractRegistry
 
 __all__ = [
     "ArtifactContract",
     "BuildContract",
+    "BuildContractRegistry",
     "ContractKind",
     "EditContract",
     "ExportContract",
