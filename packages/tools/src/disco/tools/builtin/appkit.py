@@ -16,6 +16,7 @@ from typing import Any, Callable
 
 from disco.core import SecurityRisk
 from disco.core.appkit import AppSection, AppSpec, render_html
+from disco.core.kits import lead_form_appspec
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
@@ -120,15 +121,14 @@ class AppCreateTool:
                 sections = tuple(AppSection(id=s.id, kind=s.kind, fields=s.fields) for s in args.sections)
             except Exception as exc:  # bad kind etc.
                 return ToolOutcome(success=False, error="invalid_app_edit", content=str(exc))
+            try:
+                spec = AppSpec(title=args.title, sections=sections)
+            except Exception as exc:
+                return ToolOutcome(success=False, error="invalid_app_edit", content=str(exc))
         else:
-            sections = (
-                AppSection(id="hero", kind="hero", fields={"headline": args.title, "subhead": "", "cta_text": "Get started"}),
-                AppSection(id="lead", kind="lead_form", fields={"title": "Contact us", "submit_text": "Send"}),
-            )
-        try:
-            spec = AppSpec(title=args.title, sections=sections)
-        except Exception as exc:
-            return ToolOutcome(success=False, error="invalid_app_edit", content=str(exc))
+            # P7: scaffold the default from the host-owned lead_form starter (single
+            # source — the StarterKit and app_create can't drift).
+            spec = lead_form_appspec(args.title)
         await store.write(spec)
         return ToolOutcome(success=True, content=f"created app '{args.title}' + index.html",
                            structured={"sections": [s.id for s in spec.sections]})

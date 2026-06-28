@@ -115,6 +115,8 @@ AGENT_TOOLS = frozenset(
         "app_set_design",
         "app_set_tweak",
         "app_snapshot_version",
+        # P7: materialize the contract's host-owned starter frame
+        "scaffold_starter",
         "sheet_generate",
         "slides_generate",
         "audio_overview",
@@ -169,6 +171,8 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
         "app_set_design",
         "app_set_tweak",
         "app_snapshot_version",
+        # P7: materialize the contract's host-owned starter frame (workspace FS only)
+        "scaffold_starter",
         # C-EDIT-4: deck editing is safe in artifact scope (no shell/browser)
         "deck_patch",
     }

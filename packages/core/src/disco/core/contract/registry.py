@@ -74,7 +74,11 @@ def _appkit_leadgen() -> BuildContract:
 def _deck() -> BuildContract:
     return BuildContract(
         kind=ContractKind.DECK,
-        artifact=ArtifactContract(kind=ContractKind.DECK, required_files=("deck.json",), starter_kit="deck_stage"),
+        # P7: the deck's authored source is the AuthoredDeck sidecar `deck.authored.json`
+        # (what slides_generate/deck_patch actually write/edit — NOT a hand-written
+        # deck.json). slides_generate IS the deck materializer, so there is no file-map
+        # starter_kit (it would be paper); the deck pack tells the model to use it.
+        artifact=ArtifactContract(kind=ContractKind.DECK, required_files=("deck.authored.json",)),
         bootstrap=ToolPack(name="deck.bootstrap", tools=("slides_generate",)),
         edit=EditContract(edit_tools=("deck_patch",)),
         verify=VerificationContract(finalizer="ready_for_deck_verification"),

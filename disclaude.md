@@ -1379,3 +1379,12 @@ packs must NOT imply it exists.
 IMPLEMENT NEXT TURN (fresh context for this multi-file PR). Files: core/kits/{starter.py,brand.py}, tools/builtin/
 scaffold_starter.py (+ registry/scopes), tools/builtin/appkit.py (app_create→lead_form starter), contract/registry.py
 (deck required_files) + build_deck.md pack, tests. Then Codex CODE gate → commit.
+
+## PR P7-KITS — IMPLEMENTED, COMMITTED GATE-PENDING (2026-06-28 emergency save — workstation GPU leak took the desktop down)
+Plan was Codex-APPROVED; implementation complete + 76 tests green + basedpyright clean (1 pre-existing fire_now).
+The Codex CODE gate had NOT yet run when the GPU memory leak crashed the desktop. Committed to PRESERVE the work
+before reboot. >>> ON RESUME: run the Codex(gpt-5.5) CODE review of THIS diff (HEAD) before treating P7 as
+accepted; fix any REVISE, then continue P8. <<<
+Files: core/kits/{starter,brand,__init__}.py, tools/builtin/scaffold_starter.py, ToolContext.starter_kit +
+executor + runtime wiring, appkit.py app_create→lead_form single source, deck contract+pack reconcile
+(deck.authored.json), AGENT_TOOLS snapshot, tests (test_kits.py, test_scaffold_starter.py).

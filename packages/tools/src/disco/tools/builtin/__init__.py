@@ -13,6 +13,7 @@ from ..registry import ToolRegistry
 from ._deck_patch import DeckPatchTool
 from .appkit import APP_TOOLS
 from .audio_overview import AudioOverviewTool
+from .scaffold_starter import ScaffoldStarterTool
 from .browser import BrowserTool
 from .context_memory import ContextMemoryTool
 from .files import (
@@ -129,6 +130,7 @@ def build_default_registry() -> ToolRegistry:
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
         ContextMemoryTool(),  # CXT-2: durable .disco/context/* read + narrative write
         *(cls() for cls in APP_TOOLS),  # P4/TOOL-1: AppKit semantic mutation tools
+        ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned
         # here — the tool re-reads the saved provider per call (config honored live).

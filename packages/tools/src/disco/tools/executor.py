@@ -282,6 +282,7 @@ class DefaultToolExecutor:
         read_char_budget: int | None = None,
         scope_guard: ContractScopeGuard | None = None,
         on_tool_success: Callable[[str], None] | None = None,
+        starter_kit: str | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -295,6 +296,9 @@ class DefaultToolExecutor:
         # build-phase tracker can advance (bootstrap-tool success → edit; finalizer →
         # verify). None ⇒ no tracking. Best-effort: a callback error never fails the call.
         self._on_tool_success = on_tool_success
+        # P7: the active contract's starter_kit name, stamped on every ToolContext so
+        # scaffold_starter materializes THIS build's starter. None ⇒ no contract starter.
+        self._starter_kit = starter_kit
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -537,6 +541,7 @@ class DefaultToolExecutor:
             assist=self._model_policy.assist,
             driver_llm=self._driver_llm,
             read_char_budget=self._read_char_budget,
+            starter_kit=self._starter_kit,
         )
 
     def _fail(

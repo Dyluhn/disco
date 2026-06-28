@@ -225,6 +225,7 @@ _EXPECTED_AGENT_TOOLS = [
     "preview_start",
     "preview_status",
     "preview_stop",
+    "scaffold_starter",  # P7: materialize the contract's host-owned starter frame
     "search",
     "server_status",
     "sheet_generate",

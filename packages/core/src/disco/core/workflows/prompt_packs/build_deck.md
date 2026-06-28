@@ -5,12 +5,12 @@ You build a presentation deck. The host owns rendering, verification, and export
 author the deck structure and content inside the rails.
 
 ## Artifact contract
-A `deck` deliverable. Required file: `deck.json` (the authored deck). Prefer static
-slide markup with large, readable type; slide titles should tell the story; speaker
-notes travel with their slide.
+A `deck` deliverable. Required file: `deck.authored.json` (the AuthoredDeck source that
+slides_generate writes and deck_patch edits). Prefer static slide markup with large,
+readable type; slide titles should tell the story; speaker notes travel with their slide.
 
 ## Workflow steps
-1. Generate the deck from the `deck_stage` starter (slides_generate).
+1. Generate the deck with slides_generate (it authors the AuthoredDeck source).
 2. Author slides: one idea per slide, readable type, notes per slide.
 3. Targeted edits via deck_patch (RFC-6902) — never regenerate the whole deck for a
    single-slide change.
@@ -43,5 +43,5 @@ Keep goal + todo + the deck outline in view. Snip resolved authoring exploration
 summarized; never compact an unresolved render failure.
 
 ## Done criteria
-`deck.json` exists AND the deck renders AND ready_for_deck_verification passed AND the
+`deck.authored.json` exists AND the deck renders AND ready_for_deck_verification passed AND the
 export was delivered.

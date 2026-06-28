@@ -66,6 +66,10 @@ class ToolContext(BaseModel):
     # the tool resolves the secret itself. None ⇒ the tool falls back to the global
     # AGENT_DRIVER from ConfigStore (behavior-preserving for non-build executors).
     driver_llm: tuple[str, str, str | None] | None = None
+    # P7: the active Build contract's starter_kit name (app_shell / lead_form), threaded
+    # from the runtime so scaffold_starter materializes THIS build's host-owned starter —
+    # active-contract-bound, not a free-for-all. None ⇒ no contract starter for this run.
+    starter_kit: str | None = None
 
 
 class ToolOutcome(BaseModel):

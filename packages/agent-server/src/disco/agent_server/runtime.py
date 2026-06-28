@@ -1192,6 +1192,15 @@ class ConversationRuntime:
             entry = self._build_trackers.get(conversation_id)
         return entry[0].artifact.delivery_mode if entry is not None else None
 
+    def _starter_kit_for(self, conversation_id: str) -> str | None:
+        """P7: the active contract's starter_kit name (app_shell / lead_form), stamped on
+        the executor's ToolContext so scaffold_starter materializes THIS build's starter.
+        None for a non-build run or a contract with no starter_kit."""
+        if conversation_id not in self._build_kind:
+            return None
+        self._build_scope_guard(conversation_id)  # resolve + cache (contract, tracker)
+        return self._build_trackers[conversation_id][0].artifact.starter_kit
+
     def _finalizer_alias_for(self, conversation_id: str) -> str | None:
         """P6: the contract's verification finalizer to advertise as a `finish` alias —
         ONLY for a RESOLVED, NON-CUSTOM contract. A plain build, a declared "custom" kind,
@@ -1593,6 +1602,8 @@ class ConversationRuntime:
             # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only).
             scope_guard=_scope_guard,
             on_tool_success=_on_tool_success,
+            # P7: the active contract's starter_kit for scaffold_starter.
+            starter_kit=self._starter_kit_for(conversation_id),
         )
         # RP-05 rung A+B: extend the registry with MCP tools from the pool
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
