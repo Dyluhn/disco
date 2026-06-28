@@ -874,6 +874,21 @@ now) + unit tests; (2) HARN-3 promotion-policy module composing existing+new ora
 (3) HARN-1 Playwright product harness + its evidence streams; (4) the 7 browser-evidence oracles; (5) wire
 HARN-3 to require both gates. Each PR: plan→Codex→implement→test→commit.
 
+### P1 BLOCKER FINDING (durable — corrects the order above)
+On scoping P1's first PR, two issues surfaced that reshape it:
+- LifecycleOracle on headless evidence would LARGELY DUPLICATE EventChainOracle (canonical loop) +
+  fail-closed BUILD_DID_NOT_FINISH — low marginal value until browser/provider-after-terminal evidence exists.
+- ProviderLedgerOracle (the MiniMax-only / no-OpenRouter enforcer — the campaign's HARD constraint) needs
+  provider data the current oracle interface does NOT pass: `check(events, *, scenario, workspace_manifest,
+  preview)` has no provider/model/ledger arg. The EvidenceManifest holds provider/model but isn't handed to
+  oracles, and there is NO call-level provider-call-ledger.jsonl yet.
+→ REVISED P1 FIRST PR (HARN-1a, evidence-first): capture a provider-call-ledger in the HEADLESS runner
+  (parse the MiniMax relay log / add a logging shim around the live provider path → provider-call-ledger.jsonl
+  per run) AND thread it (or the EvidenceManifest) into the oracle `check()` interface. THEN ProviderLedgerOracle
+  becomes a real zero-OpenRouter / MiniMax-only / zero-calls-after-terminal gate. This is the highest-value,
+  constraint-serving P1 entry and unblocks HARN-3's provider clause. The full browser harness (HARN-1b,
+  Playwright) + the 7 browser-evidence oracles follow. This is a fresh-context effort, scoped + durable here.
+
 ### Campaign progress snapshot (durable)
 - DONE: bootstrap + P0 (CXT-1..7) + P0B (LIFE-1..5). Commits 5d281625 → edc71501, all pushed, all
   Codex-gated, basedpyright strict 0 errors. MiniMax/OpenRouter NOT yet exercised (soak=P17).
