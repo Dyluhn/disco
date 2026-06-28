@@ -47,14 +47,21 @@ def _appkit_leadgen() -> BuildContract:
             required_files=(".disco/appspec.json", "index.html"),
             starter_kit="lead_form",
         ),
-        # NOTE: the specialized app_* mutation tools (app_create/app_update_content/…)
-        # ship in P4 (Specialized Mutation Tools). Until then this contract uses the
-        # real, registered generic file tools so it is coherent with the live tool
-        # surface (no false affordance); P4 will swap these for the semantic app_* tools.
-        bootstrap=ToolPack(name="appkit.leadgen.bootstrap", tools=("file_write",)),
+        # P4/TOOL-1: the AppKit semantic mutation tools are now registered, so the
+        # contract scopes the SEMANTIC tools (edit the AppSpec, not raw HTML). Raw
+        # file_write is the repair-only escape hatch.
+        bootstrap=ToolPack(name="appkit.leadgen.bootstrap", tools=("app_create",)),
         edit=EditContract(
-            edit_tools=("file_edit", "file_replace_lines"),
-            repair_tools=("file_write",),
+            edit_tools=(
+                "app_update_content",
+                "app_add_section",
+                "app_remove_section",
+                "app_reorder_section",
+                "app_set_design",
+                "app_set_tweak",
+                "app_snapshot_version",
+            ),
+            repair_tools=("file_write", "file_edit"),
         ),
         verify=VerificationContract(finalizer="ready_for_app_verification", level=VerificationLevel.STRICT),
         export=ExportContract(name="cloudflare_project", pipeline=("preflight", "bundle", "validate", "deliver")),

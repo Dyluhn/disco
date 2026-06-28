@@ -18,11 +18,11 @@ hand-draw repeated scaffolds — use the `lead_form` starter and the app structu
 5. Export the Cloudflare project + handoff package.
 
 ## Allowed tools
-file_write (scaffold the app + .disco/appspec.json), file_edit / file_replace_lines
-(targeted content/section edits), preview_* (platform-owned preview),
-ready_for_app_verification. (The AppKit SEMANTIC tools — app_create / app_update_content /
-app_add_section / app_set_design / app_set_tweak — replace these in P4; do not call them
-until they are registered.)
+app_create (scaffold the app + .disco/appspec.json + index.html), and the semantic edit
+tools — app_update_content / app_add_section / app_remove_section / app_reorder_section /
+app_set_design / app_set_tweak / app_snapshot_version — which edit the AppSpec and
+re-render. preview_* (platform-owned preview), ready_for_app_verification. Raw file_write
+is repair-only, not for normal edits.
 
 ## Forbidden tools
 No fake testimonials, logos, or stats. No manual port/server. No raw whole-app rewrite

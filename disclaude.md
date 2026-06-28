@@ -1076,3 +1076,22 @@ live-wiring + WPP-2 kernel-wiring — an explicit, tracked gap, NOT a silent one
 ### ledger population; CXT-4 ContextPack live prompt-wiring + C6 recitation de-dup; context_compact_if_needed
 ### live firing; direct-edit record hook (P8); CONTRACT-3 executor scope-enforcement; WPP-2 kernel prompt-
 ### wiring; WPP-3 skill mount-path enforcement. These need the live stack / deeper runtime surface.
+
+## PR TOOL-1 — AppKit specialized mutation tools (P4) — COMPLETE
+- Codex (CODE, binding): APPROVE on all tool-specific items (1 CSS-escape / 2 deterministic snapshot /
+  3 unique-id validation / 5 robust tweak coercion) after 1 hardening round. Items 4+6 (dispatch-time
+  edit-vs-repair enforcement + its integration test) are the executor-enforcement layer → building it NEXT
+  as CONTRACT-ENFORCE (retiring the CONTRACT-3 tracked follow-up rather than re-deferring).
+- NEW core/appkit/{models.py,__init__}: AppSpec/AppSection (frozen, unique-id validated) + pure mutations
+  (with_content/section add·remove·reorder/design/tweak) + render_html (deterministic, inline CSS,
+  CSS-token-sanitized, html-escaped fields, data-disco-* anchors).
+- NEW tools/builtin/appkit.py: AppSpecStore + 8 tools (app_create / app_update_content / app_add_section /
+  app_remove_section / app_reorder_section / app_set_design / app_set_tweak / app_snapshot_version).
+  Structured errors: no_app / invalid_app_edit / corrupt_appspec; snapshot is content-addressed (sha256).
+  Registered + in AGENT_TOOLS + ARTIFACT_TOOLS. appkit.leadgen contract now scopes the REAL app_* tools
+  (file_write→repair-only); the appkit pack's allowed-tools updated to match.
+- Tests: 24 (10 model + 14 tool) incl. CSS-injection sanitization, duplicate-id rejection, deterministic
+  snapshot, robust tweak coercion, registry+scope membership, 3 error paths. basedpyright strict 0 errors.
+- NEXT: CONTRACT-ENFORCE — wire compile_tool_scopes into tool dispatch so a contract's per-phase allowlist
+  is HARD-enforced (appkit EDIT can't file_write; bootstrap can't shell) + the integration test. Retires
+  the CONTRACT-3 / TOOL-1#4 / WPP-3 enforcement follow-ups in one real integration.

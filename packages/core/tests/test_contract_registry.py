@@ -77,9 +77,10 @@ def test_appkit_leadgen_contract_shape() -> None:
     c = BuildContractRegistry.default().get(ContractKind.APPKIT_LEADGEN)
     assert c is not None
     assert ".disco/appspec.json" in c.artifact.required_files
-    # app_* semantic tools ship in P4; until then the contract uses real generic tools
-    assert "file_write" in c.bootstrap.tools
-    assert "file_edit" in c.edit.edit_tools
+    # P4: appkit now scopes the real semantic AppKit mutation tools
+    assert "app_create" in c.bootstrap.tools
+    assert "app_update_content" in c.edit.edit_tools
+    assert "file_write" in c.edit.repair_tools  # raw write is repair-only
     assert c.verify.finalizer == "ready_for_app_verification"
     assert c.export is not None and c.export.name == "cloudflare_project"
     assert c.prompt_pack == "build_appkit_leadgen"

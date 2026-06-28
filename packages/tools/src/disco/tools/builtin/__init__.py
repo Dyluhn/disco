@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from ..registry import ToolRegistry
 from ._deck_patch import DeckPatchTool
+from .appkit import APP_TOOLS
 from .audio_overview import AudioOverviewTool
 from .browser import BrowserTool
 from .context_memory import ContextMemoryTool
@@ -127,6 +128,7 @@ def build_default_registry() -> ToolRegistry:
         DeckPatchTool(),  # deck_patch: C-EDIT-4 RFC-6902 JSON Patch + re-render
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
         ContextMemoryTool(),  # CXT-2: durable .disco/context/* read + narrative write
+        *(cls() for cls in APP_TOOLS),  # P4/TOOL-1: AppKit semantic mutation tools
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned
         # here — the tool re-reads the saved provider per call (config honored live).

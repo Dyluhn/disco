@@ -106,6 +106,15 @@ AGENT_TOOLS = frozenset(
         "think",  # NO-OP reasoning scratchpad — let a small model "say" things without side effects
         # CXT-2: durable .disco/context/* working memory (read any kind; write narrative kinds).
         "context_memory",
+        # P4/TOOL-1: AppKit semantic mutation tools (edit the AppSpec, not raw HTML).
+        "app_create",
+        "app_update_content",
+        "app_add_section",
+        "app_remove_section",
+        "app_reorder_section",
+        "app_set_design",
+        "app_set_tweak",
+        "app_snapshot_version",
         "sheet_generate",
         "slides_generate",
         "audio_overview",
@@ -151,6 +160,15 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
         "think",
         # CXT-2: durable context memory is safe in artifact scope (workspace FS only)
         "context_memory",
+        # P4/TOOL-1: AppKit semantic mutation tools are safe in artifact scope (FS only)
+        "app_create",
+        "app_update_content",
+        "app_add_section",
+        "app_remove_section",
+        "app_reorder_section",
+        "app_set_design",
+        "app_set_tweak",
+        "app_snapshot_version",
         # C-EDIT-4: deck editing is safe in artifact scope (no shell/browser)
         "deck_patch",
     }
