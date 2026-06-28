@@ -1034,3 +1034,20 @@ follow-up above, then P3 (WorkflowPromptPack) / P4 (specialized mutation tools i
 - Tests: 12 WPP-1 + contract regression. basedpyright strict: 0 errors.
 - NEXT: WPP-2 (kernel-neutral prompt assembly: both kernels consume stable prefix + ContextPack +
   WorkflowPromptPack + recent turns + tool schema) → WPP-3 (skill mount policy).
+
+## PR WPP-2 — kernel-neutral prompt assembly (P3) — COMPLETE
+- Codex (CODE, binding): APPROVE, none required. (Optional follow-up: a live runtime test proving BOTH
+  DiscoKernel + PiKernel source assembly from this helper — that's the kernel-wiring integration, tracked.)
+- NEW workflows/assembly.py: assemble_workflow_prompt(*, system_prefix, prompt_pack, context_pack_block,
+  recent_turns) → list[LLMMessage]. Order: stable prefix → WorkflowPromptPack (system) → ContextPack block
+  (user) → recent turns. Pure + deterministic (kernel-neutral); each structured part once; tool schema left
+  to the driver. Composes WPP-1 PromptPack.render() + CXT-4 render_context_pack().
+- Tests: 7 (order, each-part-once, deterministic, optional-omit, end-to-end real pack+contextpack). 0 pyright errors.
+- TRACKED FOLLOW-UP: wire DiscoKernel + PiKernel to BOTH call assemble_workflow_prompt in the LIVE prompt
+  path (closes the kernel-neutral claim end-to-end) — belongs with WPP-3 / the kernel-prompt integration.
+- NEXT: WPP-3 (skill mount policy — mount skills only via workflow/contract; no global skill soup).
+
+### P3 STATUS: WPP-1 (format+packs) + WPP-2 (assembler) COMPLETE. WPP-3 (skill mount) remains.
+### CAMPAIGN TALLY: 18 substantive PRs (bootstrap + P0×7 + P0B + P1×4 + P2×3 + P3×2), all Codex-gated,
+### all green, all pushed on the isolated disclaude branch. Live-stack items (HARN-1b Playwright, kernel
+### prompt-wiring, executor scope-enforcement, CXT live-wiring) are explicitly tracked, not silently dropped.
