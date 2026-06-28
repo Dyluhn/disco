@@ -1,73 +1,19 @@
-# disclaude.md — Disco Build Artifact Runtime Campaign (spine)
+# Codex Plan Review (ROUND 2)
 
-**Status:** Authoritative campaign spine (append-only after baseline).
-**Owner:** Claude Code, executing autonomously inside the isolated `disclaude` experimental repo.
-**Reviewer gate:** Codex (`codex exec --sandbox read-only`), plan APPROVE required before each PR is executed.
-**Operating mode:** Autonomous. No user questions. Safest/narrowest assumption, document it, proceed.
-**Soak driver:** MiniMax-M3 via direct MiniMax API ONLY. No OpenRouter. No other model for soak/promotion.
+You are the read-only gate for Disco Build campaign PR CXT-1 (Core context models).
+You previously returned REVISE with 4 required revisions. Below is the ORIGINAL plan followed by
+REVISION 1 which addresses your points. Confirm whether REVISION 1 fully resolves your required
+revisions. Return exactly one of: APPROVE | REVISE | BLOCKED_CODEX_UNAVAILABLE.
 
-This file is the immutable spine. The full authoritative campaign text was supplied by Dylan
-(P0..P17, the global safety gates, the PR specs). Below is the self-contained operating contract +
-the append-only ledger. Do not delete old entries; append superseding notes.
+Your round-1 REQUIRED_REVISIONS were:
+1. Define exact enum value sets + timestamp/id field types for all models.
+2. ContextPack.from_ledger must accept an explicit CompactionPolicy (not a hardcoded path).
+3. Add tests for SourcePriority.default() order semantics + compaction-by-kind incl never_compact.
+4. Decide enum base intentionally to match repo standard.
 
----
+Verify each is resolved. Only APPROVE if all four are satisfied and the scope is still correct/minimal.
 
-## Non-negotiables (carried verbatim in spirit)
-
-- **Thesis:** Disco Build becomes a host-owned artifact runtime (context → contract → prompt pack →
-  starter/AppKit/BrandKit → specialized mutation tools → preview/show tools → verification finalizer →
-  export/handoff → product-harness proof). Chat = control plane. Project FS = memory. Artifact
-  contract = working context. Verifier = separate. Event log = audit. ContextPack = current model view.
-- **Sequencing (no P2+ promotes until P0+P0B+P1 green):**
-  P0 Context Runtime · P0B Lifecycle/Safety · P1 Product Harness/Oracles · P2 Contract Runtime ·
-  P3 WorkflowPromptPack · P4 Specialized Mutation Tools · P5 Preview/Show/Delivery · P6 Verification
-  Finalizers · P7 Starter/Brand/UI Kits · P8 Semantic Direct Manipulation · P9 TweakSpec ·
-  P10 Export/Handoff · P11 Resource Import/Provenance · P12 Content/Design Discipline · P13 Deck/Doc/
-  Prototype/Media · P14 Agent Ergonomics Lab/WorldSim · P15 PiKernel Product Integration ·
-  P16 AppKit Return-to-Mainline · P17 Final MiniMax-M3 Soak.
-- **Global gates:** no false affordances; no finish without host truth (host-owned finalizer);
-  no destructive elision (recoverable excerpts w/ path+range+hash); no manual preview ownership;
-  no user-installable Pi packages; Pi never gets real provider keys (local gateway, ephemeral token);
-  MiniMax-direct-only soak with zero-OpenRouter proof.
-- **Per-PR workflow:** read protocol + PR + deps → write plan in this file → Codex read-only review →
-  revise until APPROVE → implement (parallel subagents) → tests → fix → re-test → ledger update →
-  commit+push → next PR. No user approval between PRs.
-- **Codex verdicts:** APPROVE | REVISE | BLOCKED_CODEX_UNAVAILABLE. If BLOCKED, fixing the Codex review
-  path becomes P0 infra; do not silently bypass the gate.
-
----
-
-## Ledger
-
-### Repository Isolation Bootstrap — 2026-06-28 02:55 UTC
-
-- source_repo: /home/dylan/projects/Disco-Pi  (chosen over /home/dylan/projects/disco because it is the
-  only checkout containing build_kernel/pi_kernel.py + the Pi-kernel substrate the campaign builds on)
-- experimental_repo: /home/dylan/projects/disclaude
-- branch: disclaude/experimental-20260628T025508Z
-- origin_remote: /home/dylan/projects/disclaude.git (local bare; gh not installed → local-remote fallback)
-- source_upstream_remote: source-upstream-origin → /home/dylan/projects/Disco-Pi
-- backup-mirror neutralization: Disco-Pi's `homelab` (blackbox:git-backups/disco.git) did NOT transfer
-  into the clone (clone inherits source as origin only); repo_guard additionally pattern-refuses
-  *git-backups* / *Disco-Pi* origins.
-- repo_guard: pass (basename==disclaude AND origin not a source/backup mirror)
-- git hooks: pre-commit + pre-push both run repo_guard
-- heartbeat_location: .claude/heartbeat.py inside experimental repo
-- main_repo_write_policy: read-only after bootstrap (no commits/pushes/campaign edits to source)
-- ASSUMPTION (documented): the 3 uncommitted fixes on Disco-Pi (prompts.py inline-first,
-  turn_control.py recover-don't-kill, test_cluster2_turntaking.py) are NOT carried into disclaude
-  (clone copies committed history only). They remain untouched on Disco-Pi. CXT-3/CXT-5 reimplement
-  context/elision behavior natively, so this is non-blocking.
-
-### Tooling verified — 2026-06-28 02:56 UTC
-
-- Codex gate: `codex exec --sandbox read-only --model gpt-5.3-codex-spark --reasoning xhigh "<prompt>"`
-  → returns APPROVE/REVISE/BLOCKED; smoke test rc=0 (`CODEX_OK`). codex-cli 0.142.2.
-- Heartbeat: `.claude/heartbeat.py --interval 600` running (pid in .claude/heartbeat.pid); log gitignored.
-- gh: NOT installed → origin is a local bare remote (`~/projects/disclaude.git`).
-- Tests: `python3 -m pytest packages/core/tests/...` (asyncio_mode=auto). Type-check: basedpyright strict,
-  zero errors tree-wide, tests excluded from pyright.
-
+## Plan (original + REVISION 1)
 ## PR CXT-1 — Core context models
 
 ### Status
@@ -180,36 +126,12 @@ TESTS (added per Codex):
 - plus the round-1 tests (roundtrip, extra-field reject, bad-enum reject, empty(), immutability).
 
 ### Codex review (round 2)
-- verdict: APPROVE (all 4 required revisions RESOLVED; scope confirmed pure models + derivation/tests,
-  no loop/runtime wiring or I/O). Logs: .claude/cxt1-codex-r2.log.
-- Status → APPROVED → EXECUTING → COMPLETE.
+- verdict: (pending)
 
-### Implementation notes
-- files created: packages/core/src/disco/core/context/{__init__,_util,source_priority,compaction,
-  artifact_memory,ledger,pack}.py + packages/core/tests/test_context_{ledger,pack}.py
-- decisions: enums `(str, Enum)` (repo standard, no StrEnum); pure value objects, no event/runtime
-  imports; `_cap()` routes EVERY list kind through `policy.limit_for(kind)` so never_compact is the
-  real exemption mechanism (not a special-case skip); ContextPack.resource_refs holds ResourceRef
-  (not ArtifactMemoryRef — fixed a first-draft type error); from_ledger takes optional todo_text so
-  current_todo isn't a structurally-always-None false affordance.
-- ENV NOTE (durable): the fresh clone has NO synced venv. Test/typecheck via the source venv +
-  PYTHONPATH override so `disco` resolves to the disclaude tree (NOT Disco-Pi):
-    PP=$(ls -d "$PWD"/packages/*/src | tr '\n' ':'); export PYTHONPATH="$PP"
-    /home/dylan/projects/Disco-Pi/.venv/bin/python3 -m pytest <files>
-    /home/dylan/projects/Disco-Pi/.venv/bin/basedpyright <path>
-  Verified disco.core.context.__file__ → /home/dylan/projects/disclaude/...  (override wins).
 
-### Tests
-- command: pytest packages/core/tests/test_context_ledger.py packages/core/tests/test_context_pack.py
-- results: 13 passed
-- typecheck: basedpyright packages/core/src/disco/core/context/ → 0 errors, 0 warnings, 0 notes
-- failures/fixes: none (after the resource_refs type fix during authoring)
-
-### Remaining risk
-- ContextPack.current_todo / todo_text path is unexercised by real file I/O until CXT-2/CXT-4.
-- No wiring yet — these models are dead code until CXT-2 (durable files) + CXT-4 (assembler) consume
-  them. Intentional per sequencing.
-
-### Next PR
-- CXT-2 — Durable .disco/context files (file-backed memory + context_memory tool).
-
+## Required response format
+VERDICT: APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE
+REASONS:
+- ...
+REQUIRED_REVISIONS:
+- ...
