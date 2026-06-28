@@ -1318,3 +1318,64 @@ explicit tracked follow-ups). MANDATORY: full agent-server+loop suite green; no-
 - SCOPED OUT (tracked): VerificationLevel STRICT escalation; the cross-layer phase-tracker verify edges; Pi
   finalizer wiring → P15 (pi-kernel fixed finish allowlists untouched; Pi-path false affordance persists till P15).
 - NEXT: P7 Starter/Brand/UI Kits.
+
+## PR P7-KITS — Starter/Brand Kits — PLAN (queued)
+SCOUT VERDICT — a LIVE FALSE AFFORDANCE: the contracts (artifact.starter_kit) + prompt packs reference named
+starters app_shell / lead_form / deck_stage, but NOTHING resolves them — they are bare strings. app_create
+(TOOL-1) hard-codes its hero+lead_form default instead of a named starter. No BrandKit exists (appkit has
+DEFAULT_DESIGN tokens; the packs reference a DesignSpec/brand that isn't real). slides_generate exists (deck
+authoring) but there's no deck_stage starter. So "scaffold from the app_shell starter" is an instruction the
+host can't honor → the model hand-draws frames (violating the host-owned-scaffold non-negotiable).
+DESIGN (pure, host-owned, contract-coherent):
+1. core/kits/starter.py — StarterKit (id + scaffold() → dict[rel_path, text]) + StarterKitRegistry built-ins:
+   - app_shell → {"index.html": minimal RENDERABLE inline-CSS shell} (static.site / interactive.prototype)
+   - lead_form → REUSE appkit: an AppSpec (hero+lead_form) → {".disco/appspec.json", "index.html"} via
+     render_html (single source — app_create will scaffold from THIS, not its inline default)
+   - deck_stage → {"deck.json": a starter deck (title + 2 content slides)}
+2. core/kits/brand.py — BrandKit (named design-token presets building on appkit DEFAULT_DESIGN) +
+   BrandKitRegistry: neutral (=DEFAULT_DESIGN) / bold / warm / cool — each a {primary,accent,bg,fg,font} set
+   appliable via app_set_design. Pure value objects.
+3. COHERENCE (no false affordance): test that EVERY BuildContract.artifact.starter_kit (non-None) resolves in
+   StarterKitRegistry (the inverse of the tools-exist test, for starters).
+4. WIRE: app_create scaffolds the default from StarterKitRegistry's lead_form starter (single source; removes
+   the inline hardcoded AppSpec) — and stays byte-coherent (same hero+lead_form result).
+5. Tests: every contract starter resolves; each starter's scaffold has its required files + renders; brand kits
+   are valid token sets; app_create uses the lead_form starter.
+SCOPE OUT (tracked → P7b if needed): a full UIKit component library (appkit's section kinds hero/features/
+lead_form/about/cta/footer already serve as the UI kit); brand-as-a-tool (app_set_brand) — P9 TweakSpec-adjacent.
+NEXT after P7: P8 Semantic Direct Manipulation.
+
+### PR P7-KITS — PLAN REVISION 1 (post gpt-5.5: audit confirmed, 5 required fixes)
+gpt-5.5 confirmed: starters are bare strings (false affordance); reusing appkit AppSpec for lead_form is right
+(not scope creep). Revisions:
+1. STARTER MATERIALIZER (real consumer, not a decorative registry): StarterKit.scaffold(title) is PARAMETERIZED
+   + PATH-SAFE (normalized rel paths, no traversal). REAL consumers: (a) app_create scaffolds the lead_form
+   starter when sections is None (byte-equivalent to today's inline default — single source); (b) a NEW
+   host-owned tool `scaffold_starter` materializes the ACTIVE contract's starter files into the workspace (the
+   model invokes it per the pack's "scaffold from the <name> starter" — closes the false affordance with a
+   real callable). Registered + scoped + coherence-tested.
+2. PARAMETERIZED + PATH-SAFE scaffold (title; reject any '..'/absolute path).
+3. lead_form: the default AppSpec lives in starter.py; app_create uses it when sections is None; rendered
+   output byte-equivalent.
+4. DECK RECONCILE (fix the real inconsistency): the deck contract required_files=("deck.json",) + the build_deck
+   pack are WRONG — the slides tooling writes/edits the AuthoredDeck sidecar `{name}.authored.json`
+   (slides.py:485, _slides_pipeline). Fix: align the deck contract + pack to the real AuthoredDeck source;
+   slides_generate IS the deck "starter/materializer" (NO deck_stage file-map — that would be paper). Confirm
+   the exact canonical filename in slides tooling before editing.
+5. BRANDKIT = an AppKit PROJECTION over the EXISTING disco.core.brand themes (Theme: accent + font_display/ui/
+   reading/mono + branded; THEMES registry), NOT a parallel token catalog: a brand_to_appkit_tokens(theme) →
+   appkit {primary,accent,bg,fg,font} mapping + named-brand lookup reusing core.brand. Apply via app_set_design.
+SCOPE OUT (tracked): full UIKit (appkit section kinds suffice); app_set_brand tool (P9 TweakSpec-adjacent) —
+packs must NOT imply it exists.
+
+### PR P7-KITS — PLAN APPROVED (gpt-5.5, after 1 revision). Implementation guidance locked:
+- scaffold_starter tool: bootstrap-scoped + active-contract-bound; keep app_create as the AppKit lead-form materializer.
+- lead_form: default AppSpec in starter.py; app_create(sections=None) consumes it; TEST byte-equivalence of BOTH
+  .disco/appspec.json AND index.html vs today.
+- deck reconcile: standardize the deck base filename="deck" → align the contract required_files + build_deck pack
+  to the AuthoredDeck sidecar `deck.authored.json` (do NOT change tooling, do NOT add deck_stage).
+- BrandKit: projection over disco.core.brand.THEMES → appkit {primary,accent,bg,fg,font}; no parallel catalog, no app_set_brand.
+- StarterKit.scaffold(title): normalized rel paths, reject absolute/'..'.
+IMPLEMENT NEXT TURN (fresh context for this multi-file PR). Files: core/kits/{starter.py,brand.py}, tools/builtin/
+scaffold_starter.py (+ registry/scopes), tools/builtin/appkit.py (app_create→lead_form starter), contract/registry.py
+(deck required_files) + build_deck.md pack, tests. Then Codex CODE gate → commit.
