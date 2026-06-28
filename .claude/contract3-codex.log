@@ -1,0 +1,2816 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.3-codex-spark
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f0efd-c0cb-78b1-abe7-bdc01ce8277f
+--------
+user
+# Codex CODE Review — P2 / CONTRACT-3 (Contract→ToolScope compiler) — IMPLEMENTED
+
+Inspect packages/core/src/disco/core/contract/scopes.py + packages/core/tests/test_contract_scopes.py
+(+ __init__ export). Built on CONTRACT-1/2 (merged).
+
+compile_tool_scopes(contract) → ContractToolScopes (frozen): HARD per-phase tool allowlists —
+bootstrap=bootstrap.tools, edit=edit.edit_tools, repair=edit.repair_tools, verify={finalizer}, export=∅
+(export TOOLS are P10; ExportContract today declares pipeline STAGE names, not tools). Phase enum +
+for_phase + allowed(phase, tool) hard-membership check. Pure projection; no tool-runtime import (the
+executor-side deny-out-of-scope enforcement is the later integration that consumes these, same deferral
+discipline as the context runtime wiring).
+
+Tests: 27 passed (full contract suite). Key invariants proven: a tool absent from a phase pack is
+hard-excluded (bootstrap of only app_create cannot file_write); repair bounded to repair_tools; edit can't
+rewrite via file_write; verify scope == the finalizer; static.site cannot file_write during EDIT; custom
+permits file_write in REPAIR (declared) but not EDIT; roundtrip; every built-in compiles. basedpyright
+strict 0 errors.
+
+Judge: (a) is the projection correct + does allowed() give a genuine HARD allowlist (no leak path)? (b) is
+export=∅-until-P10 + verify={finalizer} the right modeling, or a gap? (c) is deferring the executor-side
+enforcement (deny out-of-scope calls) acceptable for this PR, consistent with the campaign's seam? (d) test
+sufficiency for the "model cannot use generic file/shell during bootstrap unless permitted" done-when.
+Return APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE + REASONS + REQUIRED_REVISIONS.
+codex
+I’ll inspect the two touched modules and the package `__init__` export once, then assess projection correctness, leak surfaces, phase modeling, and whether runtime enforcement can safely remain deferred per your seam plan.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,280p' packages/core/tests/test_contract_scopes.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""CONTRACT-3 tests: Contract→ToolScope compiler — hard per-phase allowlists."""
+
+from __future__ import annotations
+
+from disco.core.contract import (
+    ArtifactContract,
+    BuildContract,
+    BuildContractRegistry,
+    ContractKind,
+    ContractToolScopes,
+    EditContract,
+    Phase,
+    ToolPack,
+    VerificationContract,
+    compile_tool_scopes,
+)
+
+
+def _contract(*, bootstrap=(), edit=(), repair=(), rewrite=False, finalizer="ready_for_artifact_verification"):
+    return BuildContract(
+        kind=ContractKind.CUSTOM,
+        artifact=ArtifactContract(kind=ContractKind.CUSTOM),
+        bootstrap=ToolPack(name="b", tools=bootstrap),
+        edit=EditContract(edit_tools=edit, repair_tools=repair, rewrite_allowed=rewrite),
+        verify=VerificationContract(finalizer=finalizer),
+    )
+
+
+def test_scopes_project_the_packs_per_phase() -> None:
+    c = _contract(bootstrap=("app_create",), edit=("app_update_content",), repair=("file_write",))
+    s = compile_tool_scopes(c)
+    assert s.bootstrap == frozenset({"app_create"})
+    assert s.edit == frozenset({"app_update_content"})
+    assert s.repair == frozenset({"file_write"})
+    assert s.verify == frozenset({"ready_for_artifact_verification"})
+    assert s.export == frozenset()
+
+
+def test_tool_absent_from_phase_is_hard_excluded() -> None:
+    # the campaign invariant: a bootstrap pack of ONLY app_create cannot file_write
+    s = compile_tool_scopes(_contract(bootstrap=("app_create",), edit=("app_update_content",)))
+    assert s.allowed(Phase.BOOTSTRAP, "app_create") is True
+    assert s.allowed(Phase.BOOTSTRAP, "file_write") is False  # not in the bootstrap pack
+    assert s.allowed(Phase.EDIT, "app_update_content") is True
+    assert s.allowed(Phase.EDIT, "file_write") is False
+
+
+def test_repair_scope_is_bounded_to_repair_tools() -> None:
+    s = compile_tool_scopes(_contract(edit=("file_edit",), repair=("file_write",)))
+    assert s.allowed(Phase.REPAIR, "file_write") is True
+    assert s.allowed(Phase.REPAIR, "file_edit") is False  # edit tool is not a repair tool
+    assert s.allowed(Phase.EDIT, "file_write") is False  # rewrite stays out of edit
+
+
+def test_verify_scope_is_the_finalizer() -> None:
+    s = compile_tool_scopes(_contract(finalizer="ready_for_app_verification"))
+    assert s.verify == frozenset({"ready_for_app_verification"})
+    assert s.allowed(Phase.VERIFY, "ready_for_app_verification") is True
+    assert s.allowed(Phase.VERIFY, "file_write") is False
+
+
+def test_static_site_contract_cannot_rewrite_during_edit() -> None:
+    # a real built-in: editing must use file_edit/file_replace_lines, NOT file_write
+    c = BuildContractRegistry.default().get(ContractKind.STATIC_SITE)
+    assert c is not None
+    s = compile_tool_scopes(c)
+    assert s.allowed(Phase.BOOTSTRAP, "file_write") is True  # bootstrap may create files
+    assert s.allowed(Phase.EDIT, "file_edit") is True
+    assert s.allowed(Phase.EDIT, "file_write") is False  # cannot clobber-rewrite during edit
+
+
+def test_custom_contract_permits_broad_repair_only_as_declared() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.CUSTOM)
+    assert c is not None and c.edit.rewrite_allowed is True
+    s = compile_tool_scopes(c)
+    # custom DECLARED file_write as a repair tool → allowed in repair, still not in edit
+    assert s.allowed(Phase.REPAIR, "file_write") is True
+    assert s.allowed(Phase.EDIT, "file_write") is False
+
+
+def test_scopes_roundtrip() -> None:
+    s = compile_tool_scopes(_contract(bootstrap=("a", "b"), edit=("c",)))
+    assert ContractToolScopes.model_validate(s.model_dump(mode="json")) == s
+
+
+def test_every_builtin_compiles() -> None:
+    reg = BuildContractRegistry.default()
+    for kind in ContractKind:
+        c = reg.get(kind)
+        assert c is not None
+        s = compile_tool_scopes(c)
+        # verify phase always carries exactly the finalizer
+        assert s.verify == frozenset({c.verify.finalizer})
+
+exec
+/bin/bash -lc "sed -n '1,240p' packages/core/src/disco/core/contract/scopes.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Contract → ToolScope compiler (CONTRACT-3).
+
+Compiles a BuildContract into HARD per-phase tool allowlists: in each phase
+(bootstrap / edit / repair / verify / export) the model may call ONLY the tools the
+contract declared for that phase. A tool absent from a phase's pack is hard-excluded —
+so e.g. a contract whose bootstrap pack is the semantic app_* tools cannot fall back to
+a generic file_write during bootstrap.
+
+Pure projection of the contract's tool packs onto phases; no tool-runtime import. The
+executor-side enforcement (intersect with the registry + deny out-of-scope calls) is a
+later integration that consumes these scopes (same deferral discipline as the context
+runtime's wiring).
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict
+
+from .models import BuildContract
+
+
+class Phase(str, Enum):
+    BOOTSTRAP = "bootstrap"
+    EDIT = "edit"
+    REPAIR = "repair"
+    VERIFY = "verify"
+    EXPORT = "export"
+
+
+class ContractToolScopes(BaseModel):
+    """The compiled, hard per-phase tool allowlists for one contract."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    bootstrap: frozenset[str] = frozenset()
+    edit: frozenset[str] = frozenset()
+    repair: frozenset[str] = frozenset()
+    verify: frozenset[str] = frozenset()
+    export: frozenset[str] = frozenset()
+
+    def for_phase(self, phase: Phase) -> frozenset[str]:
+        return {
+            Phase.BOOTSTRAP: self.bootstrap,
+            Phase.EDIT: self.edit,
+            Phase.REPAIR: self.repair,
+            Phase.VERIFY: self.verify,
+            Phase.EXPORT: self.export,
+        }[phase]
+
+    def allowed(self, phase: Phase, tool: str) -> bool:
+        """True iff ``tool`` is permitted in ``phase`` — a HARD allowlist check."""
+        return tool in self.for_phase(phase)
+
+
+def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
+    """Project a contract's tool packs onto the five execution phases.
+
+    - bootstrap → the bootstrap ToolPack's tools (scaffold the artifact)
+    - edit      → the EditContract's edit_tools (targeted, semantic edits)
+    - repair    → the EditContract's repair_tools (bounded recovery set; broad/rewrite
+                  tools appear here ONLY when the contract declared them, which a custom
+                  contract does via rewrite_allowed + its repair pack)
+    - verify    → the single host finalizer (ready_for_*_verification)
+    - export    → empty for now; export TOOLS ship in P10 (the ExportContract today
+                  declares a pipeline of stage names, not tool names)
+    """
+    return ContractToolScopes(
+        bootstrap=frozenset(contract.bootstrap.tools),
+        edit=frozenset(contract.edit.edit_tools),
+        repair=frozenset(contract.edit.repair_tools),
+        verify=frozenset({contract.verify.finalizer}),
+        export=frozenset(),
+    )
+
+exec
+/bin/bash -lc "sed -n '1,240p' packages/core/src/disco/core/contract/__init__.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""disco.core.contract — the Build Artifact Contract runtime (P2).
+
+A Build run declares an ARTIFACT CONTRACT before execution: what kind of deliverable
+it produces (a lead-gen app, a static site, a deck, …), the required files, the tool
+packs it may use at each phase (bootstrap/edit/repair), how it is verified, and how it
+is exported. The host owns truth; the model operates inside these rails.
+
+CONTRACT-1 ships the pure, serializable domain models. The registry (CONTRACT-2) and
+the Contract→ToolScope compiler (CONTRACT-3) consume them. No frontend/tool/loop
+runtime dependencies — stable value objects only (same discipline as disco.core.context).
+"""
+
+from __future__ import annotations
+
+from .models import (
+    ArtifactContract,
+    BuildContract,
+    ContractKind,
+    EditContract,
+    ExportContract,
+    ToolPack,
+    VerificationContract,
+    VerificationLevel,
+)
+from .registry import BuildContractRegistry
+from .scopes import ContractToolScopes, Phase, compile_tool_scopes
+
+__all__ = [
+    "ArtifactContract",
+    "BuildContract",
+    "BuildContractRegistry",
+    "ContractKind",
+    "ContractToolScopes",
+    "EditContract",
+    "ExportContract",
+    "Phase",
+    "ToolPack",
+    "VerificationContract",
+    "VerificationLevel",
+    "compile_tool_scopes",
+]
+
+codex
+I’ve reviewed the compiler/tests and the export from `contract/__init__`. Next I’m checking current callers to confirm whether deferring runtime enforcement creates any direct call-path gap or inconsistent assumptions.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,280p' packages/core/src/disco/core/contract/models.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Core Build Artifact Contract models (CONTRACT-1).
+
+Pure, frozen, serializable Pydantic v2 value objects (house style: `BaseModel` +
+`ConfigDict(frozen=True, extra="forbid")`, `model_dump(mode="json")` round-trip). No
+runtime/tool/frontend imports.
+"""
+
+from __future__ import annotations
+
+import re
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+# Host finalizers are the ready_for_*_verification family (§3.2). Pinning the shape
+# keeps minimal()/manual contracts from naming a finalizer the platform can't route.
+_FINALIZER_RE = re.compile(r"^ready_for_[a-z0-9_]+_verification$")
+
+
+class ContractKind(str, Enum):
+    """The artifact kinds a Build run can declare. Values are the on-the-wire ids."""
+
+    APPKIT_LEADGEN = "appkit.leadgen"
+    STATIC_SITE = "static.site"
+    INTERACTIVE_PROTOTYPE = "interactive.prototype"
+    DECK = "deck"
+    DOCUMENT = "document"
+    WORKFLOW_OUTPUT = "workflow.output"
+    CUSTOM = "custom"
+
+
+class VerificationLevel(str, Enum):
+    """How hard the finalizer verifies before a contract is 'done'."""
+
+    LOAD_ONLY = "load_only"  # small copy change → just confirm it still loads
+    STANDARD = "standard"  # feature/data change → route + console + verify
+    STRICT = "strict"  # export/deploy → full check
+
+
+class ToolPack(BaseModel):
+    """A named, ordered allowlist of tool names available in a contract phase."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    tools: tuple[str, ...] = ()
+    description: str = ""
+
+
+class EditContract(BaseModel):
+    """How a contract's artifact may be MUTATED. Targeted, semantic edits are the
+    norm; a raw rewrite is available only when ``rewrite_allowed`` (repair/custom)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    edit_tools: tuple[str, ...] = ()
+    repair_tools: tuple[str, ...] = ()
+    rewrite_allowed: bool = False
+
+
+class VerificationContract(BaseModel):
+    """The host-owned finalizer that decides a contract is done (NOT the model)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    finalizer: str  # e.g. "ready_for_app_verification"
+    level: VerificationLevel = VerificationLevel.STANDARD
+
+    @field_validator("finalizer")
+    @classmethod
+    def _finalizer_shape(cls, v: str) -> str:
+        if not _FINALIZER_RE.match(v):
+            raise ValueError(
+                f"finalizer {v!r} must match the host ready_for_*_verification convention"
+            )
+        return v
+
+
+class ExportContract(BaseModel):
+    """A host-owned export pipeline (preflight → bundle → validate → deliver)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    pipeline: tuple[str, ...] = ()
+
+
+class ArtifactContract(BaseModel):
+    """WHAT the deliverable is: its kind, the files it must produce, and the starter
+    kit it scaffolds from (host-owned, so the model doesn't hand-draw common frames)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: ContractKind
+    required_files: tuple[str, ...] = ()
+    starter_kit: str | None = None
+
+
+class BuildContract(BaseModel):
+    """The full contract a Build run declares before execution. Binds the artifact to
+    its bootstrap/edit/verify/export rails + the prompt pack and UI card."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: ContractKind
+    artifact: ArtifactContract
+    bootstrap: ToolPack
+    edit: EditContract
+    verify: VerificationContract
+    export: ExportContract | None = None
+    prompt_pack: str | None = None  # workflow prompt pack id (P3)
+    ui_card: str | None = None  # the UI card that renders this contract's state
+
+    @model_validator(mode="after")
+    def _kind_coherent(self) -> BuildContract:
+        if self.kind != self.artifact.kind:
+            raise ValueError(
+                f"BuildContract.kind ({self.kind.value}) != artifact.kind ({self.artifact.kind.value})"
+            )
+        return self
+
+    @classmethod
+    def minimal(cls, kind: ContractKind, *, finalizer: str = "ready_for_artifact_verification") -> BuildContract:
+        """A minimal well-formed contract for ``kind`` (no required files, empty packs).
+        Real contracts come from the BuildContractRegistry (CONTRACT-2)."""
+        return cls(
+            kind=kind,
+            artifact=ArtifactContract(kind=kind),
+            bootstrap=ToolPack(name=f"{kind.value}.bootstrap"),
+            edit=EditContract(),
+            verify=VerificationContract(finalizer=finalizer),
+        )
+
+exec
+/bin/bash -lc "rg -n \"compile_tool_scopes|ContractToolScopes|Phase\\.\" packages/core/src/disco -S" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/contract/__init__.py:26:from .scopes import ContractToolScopes, Phase, compile_tool_scopes
+packages/core/src/disco/core/contract/__init__.py:33:    "ContractToolScopes",
+packages/core/src/disco/core/contract/__init__.py:40:    "compile_tool_scopes",
+packages/core/src/disco/core/contract/scopes.py:32:class ContractToolScopes(BaseModel):
+packages/core/src/disco/core/contract/scopes.py:45:            Phase.BOOTSTRAP: self.bootstrap,
+packages/core/src/disco/core/contract/scopes.py:46:            Phase.EDIT: self.edit,
+packages/core/src/disco/core/contract/scopes.py:47:            Phase.REPAIR: self.repair,
+packages/core/src/disco/core/contract/scopes.py:48:            Phase.VERIFY: self.verify,
+packages/core/src/disco/core/contract/scopes.py:49:            Phase.EXPORT: self.export,
+packages/core/src/disco/core/contract/scopes.py:57:def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
+packages/core/src/disco/core/contract/scopes.py:69:    return ContractToolScopes(
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "export.*tools|verify.*finalizer|repair_tools|edit_tools|file_write|tool.*scope" packages/core/src/disco/core -S' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/contract/__init__.py:9:the Contract→ToolScope compiler (CONTRACT-3) consume them. No frontend/tool/loop
+packages/core/src/disco/core/contract/__init__.py:26:from .scopes import ContractToolScopes, Phase, compile_tool_scopes
+packages/core/src/disco/core/contract/__init__.py:33:    "ContractToolScopes",
+packages/core/src/disco/core/contract/__init__.py:40:    "compile_tool_scopes",
+packages/core/src/disco/core/contract/scopes.py:1:"""Contract → ToolScope compiler (CONTRACT-3).
+packages/core/src/disco/core/contract/scopes.py:4:(bootstrap / edit / repair / verify / export) the model may call ONLY the tools the
+packages/core/src/disco/core/contract/scopes.py:7:a generic file_write during bootstrap.
+packages/core/src/disco/core/contract/scopes.py:32:class ContractToolScopes(BaseModel):
+packages/core/src/disco/core/contract/scopes.py:57:def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
+packages/core/src/disco/core/contract/scopes.py:61:    - edit      → the EditContract's edit_tools (targeted, semantic edits)
+packages/core/src/disco/core/contract/scopes.py:62:    - repair    → the EditContract's repair_tools (bounded recovery set; broad/rewrite
+packages/core/src/disco/core/contract/scopes.py:65:    - verify    → the single host finalizer (ready_for_*_verification)
+packages/core/src/disco/core/contract/scopes.py:66:    - export    → empty for now; export TOOLS ship in P10 (the ExportContract today
+packages/core/src/disco/core/contract/scopes.py:69:    return ContractToolScopes(
+packages/core/src/disco/core/contract/scopes.py:71:        edit=frozenset(contract.edit.edit_tools),
+packages/core/src/disco/core/contract/scopes.py:72:        repair=frozenset(contract.edit.repair_tools),
+packages/core/src/disco/core/contract/scopes.py:73:        verify=frozenset({contract.verify.finalizer}),
+packages/core/src/disco/core/contract/registry.py:33:        bootstrap=ToolPack(name="static.site.bootstrap", tools=("file_write", "preview_start")),
+packages/core/src/disco/core/contract/registry.py:34:        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",)),
+packages/core/src/disco/core/contract/registry.py:35:        verify=VerificationContract(finalizer="ready_for_static_site_verification"),
+packages/core/src/disco/core/contract/registry.py:54:        bootstrap=ToolPack(name="appkit.leadgen.bootstrap", tools=("file_write",)),
+packages/core/src/disco/core/contract/registry.py:56:            edit_tools=("file_edit", "file_replace_lines"),
+packages/core/src/disco/core/contract/registry.py:57:            repair_tools=("file_write",),
+packages/core/src/disco/core/contract/registry.py:59:        verify=VerificationContract(finalizer="ready_for_app_verification", level=VerificationLevel.STRICT),
+packages/core/src/disco/core/contract/registry.py:71:        edit=EditContract(edit_tools=("deck_patch",)),
+packages/core/src/disco/core/contract/registry.py:72:        verify=VerificationContract(finalizer="ready_for_deck_verification"),
+packages/core/src/disco/core/contract/registry.py:83:        bootstrap=ToolPack(name="document.bootstrap", tools=("file_write",)),
+packages/core/src/disco/core/contract/registry.py:84:        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+packages/core/src/disco/core/contract/registry.py:85:        verify=VerificationContract(finalizer="ready_for_document_verification"),
+packages/core/src/disco/core/contract/registry.py:98:        bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=("file_write", "preview_start")),
+packages/core/src/disco/core/contract/registry.py:99:        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+packages/core/src/disco/core/contract/registry.py:100:        verify=VerificationContract(finalizer="ready_for_prototype_verification"),
+packages/core/src/disco/core/contract/registry.py:112:        verify=VerificationContract(finalizer="ready_for_workflow_output_verification"),
+packages/core/src/disco/core/contract/registry.py:122:        bootstrap=ToolPack(name="custom.bootstrap", tools=("file_write", "file_edit", "shell")),
+packages/core/src/disco/core/contract/registry.py:123:        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",), rewrite_allowed=True),
+packages/core/src/disco/core/contract/registry.py:124:        verify=VerificationContract(finalizer="ready_for_artifact_verification"),
+packages/core/src/disco/core/contract/models.py:56:    edit_tools: tuple[str, ...] = ()
+packages/core/src/disco/core/contract/models.py:57:    repair_tools: tuple[str, ...] = ()
+packages/core/src/disco/core/contract/models.py:131:            verify=VerificationContract(finalizer=finalizer),
+packages/core/src/disco/core/events.py:301:# H2: elide large ARGUMENT values (e.g. a file_write's full body) at RENDER time.
+packages/core/src/disco/core/events.py:320:# into a REAL tool argument (e.g. a file_write body), which — if executed — would
+packages/core/src/disco/core/view.py:56:_DURABLE_TOOLS = frozenset({"file_write", "file_append", "file_edit", "plan_step"})
+packages/core/src/disco/core/view.py:573:            # (file_write / file_edit / file_append / ...) — the engine passes
+packages/core/src/disco/core/llm/prompts.py:194:    "(file_write, file_edit, shell, code_exec, etc.).\n\n"
+packages/core/src/disco/core/llm/prompts.py:247:    "`file_write` creates/overwrites a whole file; `file_append` adds to the end.\n"
+packages/core/src/disco/core/llm/prompts.py:248:    "READ BEFORE REWRITING — the engine enforces this: if you call `file_write` on a "
+packages/core/src/disco/core/llm/prompts.py:261:    "  • For a FULL REWRITE: `file_read` the file first, then `file_write` with the complete "
+packages/core/src/disco/core/llm/prompts.py:273:    "produce the correct artifact format; `file_write` is for source code and "
+packages/core/src/disco/core/llm/prompts.py:332:    "(file_write, file_edit, shell, code_exec, etc.).\n\n"
+packages/core/src/disco/core/llm/prompts.py:364:    "  • `file_write` creates/overwrites a file. `file_append` adds to the end.\n"
+packages/core/src/disco/core/llm/prompts.py:365:    "  • READ BEFORE REWRITING: if you call `file_write` on a file you have "
+packages/core/src/disco/core/llm/prompts.py:409:    "  • Presentations: use `slides_generate`, NOT `file_write` with HTML/Markdown.\n"
+packages/core/src/disco/core/llm/prompts.py:410:    "  • Spreadsheets: use `sheet_generate`, NOT `file_write` with CSV or cell markup.\n\n"
+packages/core/src/disco/core/llm/prompts.py:446:    "  • `file_write`, `file_edit`, `file_append`, `file_insert_lines`, `file_replace_lines` "
+packages/core/src/disco/core/llm/types.py:209:    # Tool-call argument streaming (the file body for a `file_write` arrives HERE,
+packages/core/src/disco/core/llm/exec_policy.py:11:frozen, and threaded immutably into the loop, executor, tool scope, prompt selection,
+packages/core/src/disco/core/brand/__init__.py:4:report_export) and the future deck renderer (tools.slides).  Lives in ``core``
+packages/core/src/disco/core/brand/css.py:3:Three functions consumed by report_export.py (and the future deck renderer in tools):
+packages/core/src/disco/core/loop/file_state.py:11:  * ``record_agent_io`` — call after a successful file_read or file_write /
+packages/core/src/disco/core/loop/file_state.py:82:          * A successful file_write / file_edit / file_append (pre-register
+packages/core/src/disco/core/loop/agent.py:199:        # optimization: for large tool-call arguments (e.g. a `file_write` with a big
+packages/core/src/disco/core/loop/stream_extract.py:4:The watch-it-write UX needs to show a `file_write`'s `content` growing while the
+packages/core/src/disco/core/loop/dedup.py:6:* F8 (`_f8_confirmed_file_writes`): which file_writes are confirmed-successful,
+packages/core/src/disco/core/loop/dedup.py:41:    "file_write", "file_append", "file_edit",
+packages/core/src/disco/core/loop/dedup.py:72:# When assist is ON, after a `file_write` tool call has been CONFIRMED
+packages/core/src/disco/core/loop/dedup.py:107:def _f8_confirmed_file_writes(events: list[Event]) -> dict[str, tuple[str, str]]:
+packages/core/src/disco/core/loop/dedup.py:108:    """For every file_write whose execution has been CONFIRMED successful,
+packages/core/src/disco/core/loop/dedup.py:111:    A file_write is "confirmed successful" when:
+packages/core/src/disco/core/loop/dedup.py:113:      * an ``ActionEvent`` exists with ``tool_call.tool_name == "file_write"``
+packages/core/src/disco/core/loop/dedup.py:141:            if e.tool_call.tool_name == "file_write":
+packages/core/src/disco/core/loop/dedup.py:188:# any file_write / file_edit / file_append / file_replace_lines /
+packages/core/src/disco/core/loop/dedup.py:630:    mutating set: file_write / file_edit / file_append / file_replace_lines /
+packages/core/src/disco/core/loop/stuck.py:43:    "file_write",
+packages/core/src/disco/core/loop/stuck.py:377:        # file_writes succeeding) on that loop is wrong. Mirror the existing
+packages/core/src/disco/core/loop/stuck.py:450:    edit_tools: frozenset[str] = _F6_FILE_MUTATING_TOOLS,
+packages/core/src/disco/core/loop/stuck.py:475:            and e.tool_call.tool_name in edit_tools
+packages/core/src/disco/core/loop/finish.py:2:nudge, the browser-verify gate, and the auto-continue finalizer.
+packages/core/src/disco/core/loop/finish.py:88:    "(file_write, file_edit, shell, code_exec, …) to carry out the plan's steps "
+packages/core/src/disco/core/loop/finish.py:169:                "file_write",
+packages/core/src/disco/core/loop/finish.py:199:_FILE_WRITE_TOOLS = frozenset(
+packages/core/src/disco/core/loop/finish.py:200:    {"file_write", "file_edit", "file_append", "file_replace_lines", "file_insert_lines"}
+packages/core/src/disco/core/loop/finish.py:348:        if isinstance(ev, ActionEvent) and ev.tool_call.tool_name in _FILE_WRITE_TOOLS:
+packages/core/src/disco/core/loop/observe.py:33:    _f8_confirmed_file_writes,
+packages/core/src/disco/core/loop/observe.py:60:def _recover_elided_file_write_content(
+packages/core/src/disco/core/loop/observe.py:66:    When a model copies the `_snip_args` placeholder back as a `file_write`
+packages/core/src/disco/core/loop/observe.py:70:    backwards for the most-recent prior `file_write` to the SAME `path` whose
+packages/core/src/disco/core/loop/observe.py:78:    AgentErrorEvent (the `_f8_confirmed_file_writes` contract). A BLIND write the
+packages/core/src/disco/core/loop/observe.py:92:    confirmed = _f8_confirmed_file_writes(events)
+packages/core/src/disco/core/loop/observe.py:101:        if e.tool_call.tool_name != "file_write":
+packages/core/src/disco/core/loop/observe.py:122:    placeholder was ALREADY appended. Unlike `file_write` (idempotent overwrite), re-running
+packages/core/src/disco/core/loop/observe.py:171:             mutating-tool set: file_write / file_edit / file_append /
+packages/core/src/disco/core/loop/observe.py:330:                # never set, and a following file_write of the same path would be
+packages/core/src/disco/core/loop/observe.py:333:                # file_write loop. Ground the read so the gate clears.
+packages/core/src/disco/core/loop/observe.py:374:        # argument — e.g. a file_write body. Executing that would overwrite real
+packages/core/src/disco/core/loop/observe.py:383:            # cleanly-recoverable shape is a `file_write` whose `content` is PURELY
+packages/core/src/disco/core/loop/observe.py:393:                and action.tool_call.tool_name == "file_write"
+packages/core/src/disco/core/loop/observe.py:398:                    _orig = _recover_elided_file_write_content(
+packages/core/src/disco/core/loop/observe.py:403:                            "K1 recovery: re-expanded elided file_write content for %s "
+packages/core/src/disco/core/loop/observe.py:414:            # (file_write above is idempotent overwrite; append is not), and the marker
+packages/core/src/disco/core/loop/view_render.py:35:    _f8_confirmed_file_writes,
+packages/core/src/disco/core/loop/view_render.py:149:    WHY (root cause, source-verified + reproduced live): a file_write's body is
+packages/core/src/disco/core/loop/view_render.py:206:            "use `file_write` with the FULL new content — but you MUST call `file_read` "
+packages/core/src/disco/core/loop/view_render.py:223:            "the line numbers shown below). For a full rewrite, use `file_write` with "
+packages/core/src/disco/core/loop/view_render.py:325:        # invites the model to reflexively copy the ``` into its file_write
+packages/core/src/disco/core/loop/view_render.py:363:def f8_shrink_file_write_args(
+packages/core/src/disco/core/loop/view_render.py:367:    whose tool_call is a ``file_write`` that was CONFIRMED successful
+packages/core/src/disco/core/loop/view_render.py:368:    (per :func:`_f8_confirmed_file_writes`), replace the long
+packages/core/src/disco/core/loop/view_render.py:393:    confirmed = _f8_confirmed_file_writes(events)
+packages/core/src/disco/core/loop/view_render.py:409:                tc.get("name") == "file_write"
+packages/core/src/disco/core/loop/view_render.py:542:        # subsequent file_write of it is grounded, NOT a blind rewrite-from-memory.
+packages/core/src/disco/core/loop/view_render.py:606:        # in any past assistant message whose `file_write` tool call was
+packages/core/src/disco/core/loop/view_render.py:618:                    "messages": self._loop._f8_shrink_file_write_args(view.messages, events),
+packages/core/src/disco/core/loop/turn_control.py:960:            scope = str(step.tool_call.arguments.get("scope") or "").strip()
+packages/core/src/disco/core/loop/engine.py:622:        # execution nudge, browser-verify gate, auto-continue finalizer).
+packages/core/src/disco/core/loop/engine.py:731:    _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file")
+packages/core/src/disco/core/loop/engine.py:813:    def _f8_shrink_file_write_args(
+packages/core/src/disco/core/loop/engine.py:816:        """Delegates to view_render.f8_shrink_file_write_args (pure transform).
+packages/core/src/disco/core/loop/engine.py:818:        return view_render.f8_shrink_file_write_args(messages, events)
+packages/core/src/disco/core/loop/engine.py:985:            # ANY OTHER tool (file_write, shell, browser, serve, finish, remember,
+packages/core/src/disco/core/loop/engine.py:1085:        _scope_fn = getattr(self.executor, "tool_scope", None)
+packages/core/src/disco/core/loop/engine.py:1086:        _tool_scope = "unknown"
+packages/core/src/disco/core/loop/engine.py:1089:                _tool_scope = _scope_fn(action.tool_call.tool_name)
+packages/core/src/disco/core/loop/engine.py:1091:                _tool_scope = "unknown"
+packages/core/src/disco/core/loop/engine.py:1097:            _gates = _sca(risk, scope=_tool_scope, tool_name=action.tool_call.tool_name)
+packages/core/src/disco/core/loop/engine.py:1365:                # file_write/shell/browser/…) gets a recoverable rejection — closing
+packages/core/src/disco/core/loop/engine.py:1932:                    #             for non-risky tools). The scope-aware analysis
+
+codex
+I’ve confirmed no direct compiler call-sites yet, so I’m checking the loop/executor path to see whether scope checks are truly deferred and whether a gap exists where out-of-scope calls can still execute.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1020,1140p' packages/core/src/disco/core/loop/engine.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1320,1420p' packages/core/src/disco/core/loop/engine.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/loop/executor.py" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+sed: can't read packages/core/src/disco/core/loop/executor.py: No such file or directory
+
+ succeeded in 0ms:
+
+                disp = await self._valve.gate_circuit_breaker(events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
+                # WALK-19 — semantic no-progress breaker (failure-independent)
+                disp = await self._valve.gate_no_progress(events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
+                disp, events = await self._valve.gate_bookkeeping_streak(events)
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
+                # Bug 12 (§11.4) — RUNNING→steer path. A change/revision follow-up
+                # can arrive WHILE the task is already RUNNING; runtime.kick()
+                # returns early when a task is active, so the run() intake above
+                # never saw it. Re-enter PLANNING here too so a mutating mid-run
+                # steer goes through a revised plan, not a write on the old plan.
+                # Lock is held here (caller frame). Pure Q&A is exempt.
+                if await self._maybe_reenter_planning_for_followup(events):
+                    events = await self._events()
+
+                # (d) build the model-facing View, condensing if triggered (§8)
+                view = await self._materialize_view(events)
+
+                step, disp = await self._driver.drive_step(view, events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+                # drive_step returns a None step ONLY paired with CONTINUE/HALT
+                # (handled above); a fall-through disp always carries a real step.
+                assert step is not None
+
+                # (e.3) PLANNING PHASE GATE — runs BEFORE the per-tool meta/finish
+                # handlers below so NOTHING outside the planning allowlist reaches
+                # its handler or execution while in PLANNING. submit_plan is
+                # intercepted, a no-tool prose turn is nudged, read/explore tools +
+                # ask_user/clarify fall through to their normal paths, and EVERY
+                # other tool (finish/serve/remember/notify_user/delegate_explore/
+                # file_write/shell/browser/…) gets a recoverable rejection — closing
+                # the bypass where a finish/serve/remember could run before plan
+                # approval. In EXECUTION mode this is an immediate no-op fall-through,
+                # so the meta/finish handlers behave exactly as before.
+                disp = await self._gate_planning_mode(step, events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
+                # (e.4) TURN-TAKING NORMALIZATION (GAP B fix). Completion is now
+                # AFFIRMATIVE: the agent ends a run only by calling the `finish`
+                # tool, never by emitting a tool-less prose turn (which the old
+                # code mis-read as "done"). Two virtual tools the loop intercepts:
+                #   - `notify_user`: non-blocking progress / a mid-run reply →
+                #     record an agent message and CONTINUE (the safe talk-back
+                #     channel that replaces the dangerous tool-less-prose one).
+                #   - `finish`: the explicit terminal move → normalize to a
+                #     finished, tool-less step so the existing finish-path gate
+                #     (stop-hook veto, plan-completeness, auto-continue) runs.
+                if step.tool_call is not None and step.tool_call.tool_name == "notify_user":
+                    if await self._meta.handle_notify_user(step, events) is Disp.HALT:
+                        return await self.get_state()
+                    continue
+                if step.tool_call is not None and step.tool_call.tool_name == "remember":
+                    if await self._meta.handle_remember(step, events) is Disp.HALT:
+                        return await self.get_state()
+                    continue
+                if step.tool_call is not None and step.tool_call.tool_name == "serve":
+                    if await self._meta.handle_serve(step, events) is Disp.HALT:
+                        return await self.get_state()
+                    continue
+                if (
+                    step.tool_call is not None
+                    and step.tool_call.tool_name == "delegate_explore"
+                ):
+                    if await self._meta.handle_delegate_explore(step, events) is Disp.HALT:
+                        return await self.get_state()
+                    continue
+                if step.tool_call is not None and step.tool_call.tool_name == "finish":
+                    step, disp = await self._finish.normalize_finish_step(step, events)
+                    if disp is Disp.CONTINUE:
+                        continue
+
+                # Any productive step (planning read OR execution action) resets the
+                # nudge counter so a recovered loop gets a fresh budget next time.
+                # (The planning phase gate above already intercepted/rejected the
+                # non-fall-through cases; a step reaching here is a real action or an
+                # allowlist planning read.)
+                self._plan_nudges = 0
+
+                # (e.6) TRUNCATION (W-31). The provider cut the assistant message
+                # off mid-sentence (finish_reason=="length") with no tool call —
+                # worst right after a re-steer, when a long <think> preamble eats
+                # the output budget. The agent already forced finished=False, so
+                # this never reaches the finish path; intercept BEFORE the generic
+
+ succeeded in 0ms:
+                            "before plan approval. Call `submit_plan`, use a safe "
+                            "read tool (file_read/file_list/search/extract), or "
+                            "ask/clarify if details are missing.\n"
+                            "</system-reminder>"
+                        ),
+                        action_id=action.id,
+                        tool_call_id=tc.call_id,
+                    )
+                )
+                return Disp.CONTINUE
+            # An allowed planning tool. ask_user/clarify are virtual escape hatches
+            # handled by their own halt handlers downstream — do NOT count them as
+            # exploration reads. Only an ACTUAL read tool (file_read/file_list/
+            # search/extract) counts toward the explore cap + can force a plan at
+            # the cap (logic in Planner), then falls through to the normal action
+            # path. Phase-1 reads below the cap are unchanged.
+            if tc.tool_name not in planning_noncounting:
+                await self._planner.note_planning_read_and_maybe_force()
+        return Disp.FALLTHROUGH
+
+    async def _gate_hard_deny(self, action: ActionEvent) -> Disp:
+        # (h.5) HARD DENY (Cluster 3) — catastrophic commands are refused
+        # outright, BEFORE the confirm gate. No approval, policy, or LLM
+        # can run them. The agent sees the refusal as an error and adapts.
+        deny_reason = signals.hard_deny_reason(action)
+        if deny_reason is not None:
+            await self._emit(action)  # record the proposed action for audit
+            await self._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        f"REFUSED: that command is hard-denied ({deny_reason}). It "
+                        "will never be executed regardless of approval. Choose a "
+                        "different, safe approach.\n"
+                        "</system-reminder>"
+                    ),
+                    action_id=action.id,
+                    tool_call_id=action.tool_call.call_id if action.tool_call else None,
+                )
+            )
+            return Disp.CONTINUE
+        return Disp.FALLTHROUGH
+
+    async def _gate_risk_confirm(self, action: ActionEvent) -> tuple[Disp, ActionEvent]:
+        # (i) RISK GATE — assess, then maybe require confirmation (§5).
+        # Audit (security §7): when the analyzer exposes the detailed
+        # assessment, stamp it into the action's meta so the security
+        # posture (final risk, rationale, contributing analyzers, the
+        # self-assessment) is reconstructable from the log. Analyzers that
+        # implement only assess() are unaffected.
+        detailed = getattr(self.analyzer, "assess_detailed", None)
+        if callable(detailed):
+            # Duck-typed: analyzers implementing the richer protocol return a
+            # RiskAssessment; the getattr(..., None) probe widens it to object.
+            assessment = cast("RiskAssessment", detailed(action))
+            risk = assessment.risk
+            audited_meta = {
+                **action.meta,
+                "risk_assessment": assessment.model_dump(mode="json"),
+            }
+            action = action.model_copy(update={"meta": audited_meta})
+        else:
+            risk = self.analyzer.assess(action)
+
+        # DC-03: obtain WHERE the tool executes (duck-typed; absent → "unknown").
+        _scope_fn = getattr(self.executor, "tool_scope", None)
+        _tool_scope = "unknown"
+        if callable(_scope_fn):
+            try:
+                _tool_scope = _scope_fn(action.tool_call.tool_name)
+            except Exception:
+                _tool_scope = "unknown"
+
+        # Use should_confirm_action if the policy supports it; fall back to
+        # should_confirm(risk) for policies that predate DC-03.
+        _sca = getattr(self.policy, "should_confirm_action", None)
+        if callable(_sca):
+            _gates = _sca(risk, scope=_tool_scope, tool_name=action.tool_call.tool_name)
+        else:
+            _gates = self.policy.should_confirm(risk)
+
+        # Journal: stamp auto_approved when scope-based exemption overrides
+        # what the base risk gate would have decided.
+        if not _gates and self.policy.should_confirm(risk):
+            action = action.model_copy(
+                update={"meta": {**action.meta, "auto_approved": "sandboxed"}}
+            )
+
+        if _gates:
+            await self._emit(action)  # record the PROPOSED action
+            await self._emit(
+                StatusEvent(
+                    status=ConversationStatus.WAITING_FOR_CONFIRMATION,
+                    detail=action.id,
+                )
+            )
+            return Disp.HALT, action
+        return Disp.FALLTHROUGH, action
+
+    async def run(self) -> ConversationState:
+        """Drive until a terminal-for-now status. Idempotent to call again after
+        a pause/confirmation. [CONTRACT] returns the resulting ConversationState."""
+        # Fresh run segment → fresh invisible-step accounting (the counter only
+        # measures spin WITHIN a segment; a resume/steer is a clean slate).
+        self._invisible_steps = 0
+        self._finish_verify_refusals = 0  # fresh segment → fresh verify-cap streak
+        self._finish_verify_strips = 0
+        # C1c — fresh segment → fresh DoD-refusal streak (telemetry; the gate
+        # has no cap, but a resume/steer should not carry a streak across).
+        self._dod_refusals = 0
+        # C20 — fresh segment → fresh fan-out budget. The cap is per-run-
+        # segment so a resume/steer gets a fresh budget (a steered user
+        # message is a clean slate; the prior segment's helper round-trips
+        # are already visible in the log).
+        self._fanout_count = 0
+        # C6 — fresh segment → fresh recitation cadence. The step counter
+        # restarts at 0 (so the first step after resume is on a cadence
+        # boundary and re-emits the recap — the model may have lost
+        # context across the pause and the goal needs to be visible).
+        # The signature is reset to None so a plan that arrived mid-pause
+        # OR a checklist mark the model made pre-pause is detected as
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "class .*Executor|def execute|tool_scope" packages/core/src/disco/core -S' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/contract/__init__.py:26:from .scopes import ContractToolScopes, Phase, compile_tool_scopes
+packages/core/src/disco/core/contract/__init__.py:40:    "compile_tool_scopes",
+packages/core/src/disco/core/contract/scopes.py:57:def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
+packages/core/src/disco/core/loop/engine.py:1085:        _scope_fn = getattr(self.executor, "tool_scope", None)
+packages/core/src/disco/core/loop/engine.py:1086:        _tool_scope = "unknown"
+packages/core/src/disco/core/loop/engine.py:1089:                _tool_scope = _scope_fn(action.tool_call.tool_name)
+packages/core/src/disco/core/loop/engine.py:1091:                _tool_scope = "unknown"
+packages/core/src/disco/core/loop/engine.py:1097:            _gates = _sca(risk, scope=_tool_scope, tool_name=action.tool_call.tool_name)
+packages/core/src/disco/core/loop/observe.py:263:    async def execute_and_observe(self, action: ActionEvent) -> None:
+packages/core/src/disco/core/loop/boundaries.py:75:class ToolExecutor(Protocol):
+packages/core/src/disco/core/loop/boundaries.py:80:    async def execute(self, call: ToolCall) -> ToolResult: ...
+
+codex
+I hit a path mismatch (no `executor.py` file), so I’m checking the loop boundaries/execution interfaces directly to confirm scope enforcement hooks and where deny logic should land.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' packages/core/src/disco/core/loop/boundaries.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '220,420p' packages/core/src/disco/core/loop/observe.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""The loop's collaborator boundaries — agent-loop-contract.md §3.
+
+The loop is the orchestrator; it invokes four collaborators across clean
+boundaries. Three (`SecurityAnalyzer`, `ConfirmationPolicy`, `ToolExecutor`) are
+*defined elsewhere* — the Security design and the Tool/Sandbox contract — and
+appear here only as the Protocols the loop binds to. `Agent` is the brain that
+wraps the LLM router (concrete impl in agent.py). `StopHook` is the completion
+gate (§7.4).
+
+Field names/types/signatures are normative; the loop neither knows nor cares
+about the interiors behind these seams.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict
+
+from ..events import ActionEvent, Event, SecurityRisk, ToolCall, ToolResult
+from ..llm import OperatingMode, OverflowSignal, StreamChunk, ToolSpec
+from ..state import ConversationState
+from ..view import View
+
+# A watch-it-write hook: awaited with each streamed tool-call argument fragment
+# (StreamChunk.tool_args_delta) so the loop can surface a file body as it
+# assembles. Optional everywhere — None means "don't stream" (tests, CLI).
+StreamHook = Callable[[StreamChunk], Awaitable[None]]
+
+
+class AgentStep(BaseModel):
+    """The product of one `Agent.step()`. The loop converts this into events.
+
+    [CONTRACT] Exactly ONE proposed action (or a finish/no-op). The loop enforces
+    one-action-per-iteration; the Agent must not return multiple tool calls to be
+    run without observation (the single `tool_call` field makes that structural).
+    """
+
+    model_config = ConfigDict(frozen=True)
+    thought: str = ""
+    tool_call: ToolCall | None = None  # None => no action this step
+    self_assessed_risk: SecurityRisk = SecurityRisk.UNKNOWN
+    finished: bool = False  # agent declares the goal complete
+    # W-31 — the provider cut this assistant message off mid-sentence
+    # (finish_reason=="length") with no tool call. The loop must NOT surface it
+    # as a complete turn (it injects a "continue where you left off" reminder and
+    # re-steps). Only meaningful on a tool-less prose step.
+    truncated: bool = False
+    llm_response_id: str | None = None  # carried into ActionEvent
+
+
+@runtime_checkable
+class Agent(Protocol):
+    """[CONTRACT] The 'brain': given the current View (model-facing messages) and
+    the available tools, produce the next step — text and/or one tool call, with
+    a self-assessed risk. Wraps the LLMRouter; does NOT execute tools."""
+
+    async def step(
+        self,
+        view: View,
+        tools: list[ToolSpec],
+        *,
+        mode: OperatingMode,
+        overflow_signal: OverflowSignal,
+        on_stream: StreamHook | None = None,
+        temperature: float | None = None,
+        assist: bool = False,
+        attempt: int = 1,
+        provider_prefs: dict | None = None,
+    ) -> AgentStep: ...
+
+
+@runtime_checkable
+class ToolExecutor(Protocol):
+    """[CONTRACT BOUNDARY — defined in the Tool/Sandbox contract, next doc]
+    Executes one ToolCall (often in the sandbox) and returns a ToolResult. The
+    loop neither knows nor cares whether execution is local or sandboxed."""
+
+    async def execute(self, call: ToolCall) -> ToolResult: ...
+
+    def available_tools(self) -> list[ToolSpec]: ...  # what the model may call
+
+
+@runtime_checkable
+class Sandbox(Protocol):
+    """[CONTRACT BOUNDARY — the Tool/Sandbox contract owns the full surface]
+    The minimal file-IO slice of a sandbox instance the loop's projection /
+    memory-mirror steps touch. The concrete `SandboxInstance` (packages/tools)
+    structurally satisfies this; core stays dependency-light by binding only to
+    this duck-typed view (it neither imports nor owns the sandbox)."""
+
+    async def read_file(self, path: str) -> bytes: ...
+    async def write_file(self, path: str, data: bytes) -> None: ...
+    async def list_dir(self, path: str) -> list[str]: ...
+
+    async def file_exists(self, path: str) -> bool:
+        """B4 — existence check resolved in the SANDBOX's own namespace. The
+        container backend's files live INSIDE the box (its `workspace_path` is
+        None), so a host-side `Path` check would falsely report a just-written
+        file as missing. C18 asks the sandbox instead. Returns False for a
+        missing file or a path that escapes the workspace jail; never raises on
+        a plain absence."""
+        ...
+
+    @property
+    def workspace_path(self) -> str | None:
+        """The sandbox's workspace root as an absolute path on the HOST filesystem
+        (process backend) or None when unavailable. Consumed by C18 `file_exists`
+        resolution and the C1c DoD evaluator so predicates resolve against the
+        real sandbox FS rather than the agent-server CWD."""
+        ...
+
+
+@runtime_checkable
+class SecurityAnalyzer(Protocol):
+    """[CONTRACT BOUNDARY — defined in the Security design, BoD §17] Scores a
+    proposed action's risk BEFORE execution. May override the agent's
+    self-assessment."""
+
+    def assess(self, action: ActionEvent) -> SecurityRisk: ...
+
+
+@runtime_checkable
+class ConfirmationPolicy(Protocol):
+    """[CONTRACT BOUNDARY — Security design] Decides whether a given risk requires
+    human confirmation."""
+
+    def should_confirm(self, risk: SecurityRisk) -> bool: ...
+
+
+@runtime_checkable
+class StopHook(Protocol):
+    """[CONTRACT] Consulted when the agent declares finished. Returning False
+    VETOES completion and the loop continues (with injected feedback)."""
+
+    async def allow_stop(self, state: ConversationState, events: list[Event]) -> bool: ...
+
+ succeeded in 0ms:
+            bn = os.path.basename(name)
+            if bn.startswith(".disco-spill-"):
+                _add(name)
+
+        # 3. the standing-memory mirror if present (.disco/, or legacy .pmx/).
+        for memory_path in (".disco/MEMORY.md", ".pmx/MEMORY.md"):
+            try:
+                await sbx.read_file(memory_path)
+                _add(memory_path)
+                break
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except Exception:  # noqa: BLE001 — a dead sandbox just skips the pointer
+                break
+
+        return candidates
+
+    async def hard_reset(self, events: list[Event]) -> bool:
+        """Forget-and-recover after a context-window error (§8). Returns True
+        if a tombstone was appended (progress made).
+
+        C16 — this is a POINTER-ONLY flush (NOT a prose recap). The tombstone's
+        summary is a manifest of on-disk artifact paths the model can re-read
+        selectively — never a freeform prose summary. The dropped span is
+        already too large to re-summarize usefully (it overflowed the
+        context window), and a lossy prose recap is worse than pointing at
+        the bytes on disk. The soft-condense path (should_condense → condense
+        on a token-bound trigger) is byte-unchanged — it still produces a
+        prose summary via the summarizer. Only the hard_reset call site
+        changes (it now passes reason="hard_reset" + the collected paths)."""
+        artifact_paths = await self.collect_pointer_manifest_paths(events)
+        tombstone = await self._loop.condenser.condense(
+            events,
+            View.of(events),
+            summarizer=self._loop.summarizer,
+            reason="hard_reset",
+            artifact_paths=artifact_paths,
+        )
+        if tombstone is not None:
+            await self._loop._emit(tombstone)
+            return True
+        return False
+
+    async def execute_and_observe(self, action: ActionEvent) -> None:
+        """[CONTRACT] Every executed ActionEvent yields exactly one observation
+        event (ObservationEvent on success, AgentErrorEvent on failure),
+        correlated by action.id.
+
+        NO hidden retries, NO automatic failure escalation. Errors are surfaced
+        IMMEDIATELY and IN FULL to the model on its next turn (the Claude Code
+        pattern — see the v2 redesign note in this module's header). Recovery
+        is a collaboration: the model reasons about the visible error, the user
+        watches the trace and can steer at any moment, and the agent has a
+        clean `ask_user` tool available when IT decides it needs human input.
+
+        F9 — GATED read-only sliding-window dedup (assist-tier). When
+        assist is ON and the current call is a read-only tool that
+        EXACTLY repeats a recent read-only call (same tool name + same
+        arguments) within the last _F9_WINDOW_SIZE read-only calls, AND
+        nothing has invalidated the prior result, short-circuit: emit a
+        synthetic ObservationEvent pointing to the prior result instead
+        of re-executing. The pointer is short (no content re-render) so
+        the model gets the dedup context-savings; the model can always
+        re-`file_read` to force a fresh read. Assist OFF → the dedup
+        path is never entered; the call falls through to
+        executor.execute() exactly as today.
+
+        If the sandbox transparently RECREATED itself during this call (a mid-
+        session death the session healed), append an implicit system-reminder
+        so the model knows files-on-disk remain but processes/state were lost."""
+        # F9 — short-circuit identical read-only calls within the window.
+        # Gated on self._assist so capable-model (assist=OFF) runs are
+        # byte-identical to today. The dedup fires ONLY when:
+        #   1. self._assist is True (the gate — closeable end-to-end);
+        #   2. the action is a read-only tool call (per the executor's
+        #      readonly_tool_names, falling back to _WORKSPACE_READ_TOOLS);
+        #   3. a prior ActionEvent in the last _F9_WINDOW_SIZE read-only
+        #      calls has the SAME tool name + SAME arguments;
+        #   4. that prior call has a successful observation; AND
+        #   5. no mutating tool call has touched the same path between
+        #      the prior read and now (stale-read guard).
+        # When all five hold we emit a synthetic ObservationEvent
+        # carrying the F9 pointer, return WITHOUT calling
+        # executor.execute(). The persisted event shape is unchanged
+        # (ActionEvent + ObservationEvent pair) — only the observation
+        # content differs.
+        # W-39 — ADVISORY shell-verify reminder text, decided BEFORE execution
+        # (it reads the prior event log, where this action is the last event)
+        # but EMITTED AFTER the success observation below, so it never
+        # interleaves between the tool-call action and its result (strict
+        # provider tool-pairing) — mirrors maybe_emit_sandbox_restart's
+        # after-the-fact placement. None ⇒ no reminder this call.
+        _w39_text: str | None = None
+        if self._loop._assist and action.tool_call is not None:
+            _f9_events = await self._loop._events()
+            _f9_deduped, _f9_prior_id, _f9_pointer = _f9_dedupable_read(
+                action.tool_call.tool_name,
+                action.tool_call.arguments,
+                _f9_events,
+                readonly_names=self._loop._readonly_tool_names(),
+            )
+            if _f9_deduped:
+                _LOG.info(
+                    "F9 read-dedup: short-circuited %s (call_id=%s, prior_action_id=%s)",
+                    action.tool_call.tool_name,
+                    action.tool_call.call_id,
+                    _f9_prior_id,
+                )
+                # A deduped file_read returns a POINTER to the prior bytes instead
+                # of executing FileReadTool.run — so the read-before-write bit is
+                # never set, and a following file_write of the same path would be
+                # refused even though the model HAS the current content (the prior
+                # read's result, still in context). That is the unrecoverable
+                # file_write loop. Ground the read so the gate clears.
+                _f9_path = action.tool_call.arguments.get("path")
+                if isinstance(_f9_path, str) and _f9_path:
+                    _ground_read(self._loop, _f9_path)
+                await self._loop._emit(
+                    ObservationEvent(
+                        tool_result=ToolResult(
+                            call_id=action.tool_call.call_id,
+                            tool_name=action.tool_call.tool_name,
+                            success=True,
+                            content=_f9_pointer,
+                        ),
+                        action_id=action.id,
+                    )
+                )
+                return
+            # W-39 — the SHELL analogue of the F9 read-loop: when this shell
+            # command is byte-identical to one that already SUCCEEDED earlier
+            # and nothing has been written to the workspace since (reusing the
+            # A8 mutating-tool tracking F9 is built on), queue ONE advisory
+            # system-reminder that it already passed. ADVISORY ONLY — the
+            # command is NEVER skipped (shell may have side effects); we just
+            # nudge the model not to re-verify next time. Anti-spam: at most
+            # one reminder per passed-and-unmutated streak.
+            _w39_remind, _w39_prior_seq, _w39_text_candidate = _w39_shell_verify_reminder(
+                action.tool_call.tool_name,
+                action.tool_call.arguments,
+                _f9_events,
+            )
+            if _w39_remind:
+                _LOG.info(
+                    "W-39 shell-verify reminder: %s already passed at step %s "
+                    "(call_id=%s) — advisory, executing anyway",
+                    action.tool_call.tool_name,
+                    _w39_prior_seq,
+                    action.tool_call.call_id,
+                )
+                _w39_text = _w39_text_candidate
+        # K1 — elision-marker execution guard. A weak model can copy the
+        # `_snip_args` placeholder (rendered into the action history as a context-
+        # saving stand-in for content it already wrote) back into a REAL tool
+        # argument — e.g. a file_write body. Executing that would overwrite real
+        # content with the ~72-byte placeholder (DATA LOSS) and re-feed the marker
+        # into the next read (the reproduced 88× read loop). Reject BEFORE
+        # execution and tell the model to resend the FULL content from the live
+        # CURRENT WORKSPACE snapshot. Catches ALL execution paths (run loop,
+        # confirm, verify, finish) because every one funnels through here.
+        if action.tool_call is not None:
+            _k1_bad = find_elided_arg_markers(action.tool_call.arguments)
+            # K1 RECOVERY — re-expand instead of dead-ending. The most common,
+            # cleanly-recoverable shape is a `file_write` whose `content` is PURELY
+            # the copied-back marker (no real text around it). The full original
+            # content the marker stood in for is still in the event log
+            # (`_snip_args` elides only at render time). Recover it, ground the
+            # write (the engine is supplying the file's known content, so it is NOT
+            # a blind rewrite), and fall through to execute — the model never has to
+            # reproduce tens of KB from memory (which it can't do reliably and which
+            # re-collides with elision → the unrecoverable loop).
+            if (
+                _k1_bad == ["content"]
+                and action.tool_call.tool_name == "file_write"
+                and value_is_only_elision_marker(action.tool_call.arguments.get("content"))
+            ):
+                _wpath = action.tool_call.arguments.get("path")
+                if isinstance(_wpath, str) and _wpath:
+                    _orig = _recover_elided_file_write_content(
+                        await self._loop._events(), _wpath, before_id=action.id
+                    )
+                    if _orig is not None:
+                        _LOG.info(
+                            "K1 recovery: re-expanded elided file_write content for %s "
+                            "(%d chars, call_id=%s)",
+                            _wpath,
+                            len(_orig),
+                            action.tool_call.call_id,
+                        )
+                        action.tool_call.arguments["content"] = _orig
+                        _ground_read(self._loop, _wpath)
+                        _k1_bad = []  # recovered → fall through to normal execution below
+            # K1 (file_append) — codex-approved REDIRECT-not-replay. file_append is
+            # ADDITIVE: re-expanding + re-executing a recovered body would DOUBLE-append
+            # (file_write above is idempotent overwrite; append is not), and the marker
+            # carries NO provenance for a safe exact recovery. So when `content` is PURELY
+            # the copied-back marker AND a CONFIRMED prior file_append to the SAME path
+            # already landed, this is a CONFUSED copy-back of an ALREADY-APPLIED append:
+            # REDIRECT the model and RETURN WITHOUT emitting the (ActionEvent,
+            # AgentErrorEvent) pair — so it does NOT accrue repeated_action_error →
+            # stuck_escape → STUCK (stuck.py:370-393). A model that ignores the redirect is
+
+exec
+/bin/bash -lc "sed -n '1,360p' packages/core/src/disco/core/loop/engine.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""The agent loop — agent-loop-contract.md §2, §4, §5, §7, §8.
+
+A bounded iteration over `Agent.step()`. The loop's correctness *is* the
+product's reliability (BoD §1.1). It is transport-agnostic and drivable headless:
+it produces events and consumes control operations, nothing more.
+
+Key invariants (principles §1):
+- One action per iteration, observed before the next.
+- Status is reconstructed from the log, never held privately.
+- A per-conversation FIFO lock guards every status read/mutation; stepping holds
+  it EXCEPT during tool execution, so pause/steer/confirm land between steps and
+  concurrent user input is never dropped.
+- `max_iterations` is the ultimate backstop beneath stuck detection.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from ..security import RiskAssessment
+    from .boundaries import StreamHook
+
+from ..dod import DoDPredicate, DoDSpec, DoDSpecAlreadySet
+from ..dod_evaluator import DoDEvaluator
+from ..events import (
+    ActionEvent,
+    AgentErrorEvent,
+    AlternativesEvent,
+    ConversationStatus,
+    ErrorEvent,
+    Event,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    PlanEvent,
+    StatusEvent,
+    ToolCall,
+    ToolResult,
+)
+from ..llm import (
+    LLMRouter,
+    ModelExecutionPolicy,
+    OperatingMode,
+)
+from ..state import ConversationState
+from ..store.base import EventStore
+from ..view import Condenser, Summarizer, View
+from . import signals, view_render
+from .boundaries import (
+    Agent,
+    AgentStep,
+    ConfirmationPolicy,
+    SecurityAnalyzer,
+    StopHook,
+    ToolExecutor,
+)
+from .control import Disp
+from .driver import Driver
+from .finish import (  # noqa: F401 — finish helpers/consts re-exported for back-compat
+    _DOD_REFUSAL_CAP,
+    _EXECUTION_NUDGE,
+    _FINISH_VERIFY_CAP,
+    FinishGate,
+    _app_verify_command,
+    _browser_verified,
+    _DoDWorkspaceUnavailable,
+    _is_web_deliverable,
+    _last_productive_seq,
+    _latest_browser_error,
+    _static_verify_command,
+)
+from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for back-compat
+    _FANOUT_INPUT_MAX_CHARS,
+    Observer,
+)
+from .plan_conditions import PlanStepConditions
+from .plans import Planner
+from .recitation import (  # noqa: F401 — _RECITATION_SENTINEL re-exported for back-compat
+    _RECITATION_SENTINEL,
+    RecitationRegrounder,
+)
+from .signals import (  # noqa: F401 — re-exported for back-compat (moved to signals.py)
+    _BOOKKEEPING_TOOLS,
+    _NON_PRODUCTIVE_TOOLS,
+)
+from .stuck import StuckDetector, StuckThresholds
+from .turn_control import (  # noqa: F401 — _CONTINUE_OPTION_ID re-exported for back-compat
+    _CONTINUE_OPTION_ID,
+    MetaToolHandlers,
+    Valve,
+)
+from .view_render import (  # noqa: F401 — re-exported for back-compat (moved to view_render.py)
+    _WS_MAX_FILES,
+    _WS_PER_FILE_CHARS,
+    _WS_READ_TIMEOUT_S,
+    _WS_TOTAL_CHARS,
+)
+
+_LOG = logging.getLogger("disco.loop")
+
+# _sleep / _DRIVER_RETRY_BACKOFFS_S / _STUCK_ESCAPE_TEMP moved to loop/driver.py
+# (with the drive step that uses them).
+
+
+# `_BOOKKEEPING_TOOLS` + `_NON_PRODUCTIVE_TOOLS` now live in loop/signals.py
+# (the pure log-derived signal helpers that use them moved there too).
+
+
+# _BOOKKEEPING_STREAK_* / _BOOKKEEPING_PLAN_SLACK / _PROPOSE_PLAN_UPDATE_REPEAT_CAP /
+# _CONTINUE_OPTION_ID moved to loop/turn_control.py (with the valves + meta-tool
+# handlers that use them); _CONTINUE_OPTION_ID re-exported above for back-compat.
+# _FINISH_VERIFY_CAP / _DOD_REFUSAL_CAP moved to loop/finish.py (re-exported above).
+# _WS_* snapshot budget constants moved to loop/view_render.py with the snapshot fn.
+
+_DEFAULT_VETO_FEEDBACK = (
+    "<system-reminder>\n"
+    "The goal does not appear complete yet. Continue working toward it — a stop "
+    "hook refused the FINISHED transition.\n"
+    "</system-reminder>"
+)
+
+# Module-level constant so `ModelExecutionPolicy.standard()` is evaluated once
+# and the per-parameter call doesn't trip ruff's B008 rule (function call in
+# default). The policy is a frozen dataclass — safe to share as a singleton.
+_DEFAULT_MODEL_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
+
+# C6 — recitation cadence (Manus telemetry: re-emitting the plan/objective
+# tail-recap on every iteration wastes ~1/3 of actions with no behavior
+# change). Borrow the cadence math from smolagents' `planning_interval` ONLY:
+# fire on a fixed interval, e.g. `(step_number - 1) % interval == 0`. We do
+# NOT borrow smolagents' re-planning/steering behavior — Disco has a STRICT
+# no-automatic-nudge invariant (commit c97c1b3) and the recap is a passive
+# PASSIVE re-render of the SAME plan/checklist, never new instructions/goals.
+# The content (built in view.py:_recitation_message) is unchanged — only the
+# FREQUENCY of emission changes here.
+_RECITATION_CADENCE_DEFAULT = 5
+# _RECITATION_SENTINEL moved to loop/recitation.py (with the gate that uses it);
+# re-exported via the import at the top of this module for back-compat.
+
+# HS-03 — scheduled facts re-grounding (assist tier only). A weak model that
+# has drifted through dozens of actions can lose track of the stable facts
+# (goal, plan state, recently-touched files). The fix mirrors the smolagents
+# `planning_interval` pattern: every N actions, re-anchor with a short
+# RECAP. The recap is FACTS ONLY — no imperative/steer language — so the
+# no-automatic-nudge invariant (commit c97c1b3) survives. Assist OFF
+# (capable-model default) is byte-identical to today: the gate is closed
+# and the helper is never called. Post-resume the recap fires ONCE on the
+# very first step (a pause may have lost context). Cadence thereafter:
+# `_HS03_REGROUND_INTERVAL` actions since the last resume. A per-boundary
+# guard (the last-emitted action count) prevents re-firing on consecutive
+# steps at the same boundary. Interval chosen at 12 (vs. C6's 5) so the
+# recaps don't pile up: the C6 recap fires every 5 steps for plan state;
+# the HS-03 recap fires every 12 steps and carries the broader
+# goal/files/constraints anchors a drifted model most often loses.
+_HS03_REGROUND_INTERVAL = 12
+
+# Statuses at which the loop yields control back to the caller at a checkpoint.
+_TERMINAL_FOR_NOW = frozenset(
+    {
+        ConversationStatus.PAUSED,
+        ConversationStatus.IDLE,
+        ConversationStatus.FINISHED,
+        ConversationStatus.STUCK,
+        ConversationStatus.ERROR,
+        ConversationStatus.WAITING_FOR_CONFIRMATION,
+        ConversationStatus.AWAITING_PLAN_APPROVAL,
+        # ask_user halts the loop — kicks must not race past the gate. Both the
+        # pick-a-card (DECISION) and the free-form (QUESTION) Ask-gates re-kick
+        # only on the user's reply.
+        ConversationStatus.AWAITING_USER_DECISION,
+        ConversationStatus.AWAITING_USER_QUESTION,
+    }
+)
+
+# Injected (as an implicit system-reminder) when the planner answers in prose
+# instead of calling submit_plan: in PLANNING mode the terminal moves are to
+# PROPOSE a structured plan OR ask the user for a detail you genuinely need
+# first. Reads (file_list/file_read/search/extract) fall through and never
+# trigger this — only a tool-less prose response does.
+_PLAN_NUDGE = (
+    "<system-reminder>\n"
+    "Still in PLANNING mode — no plan has been proposed yet. To advance, either "
+    "(a) call the `submit_plan` tool with a summary, ordered steps, and a markdown "
+    "`context` block, or (b) if required details are genuinely missing and you "
+    "cannot plan well without them (the user named something only they know — a "
+    "color, a credential, a target, a file that isn't here), call `ask_user` with "
+    "a clear `question` (for ONE missing detail) or `clarify` (for SEVERAL) to get "
+    "them BEFORE planning. Prefer asking over guessing on "
+    "details the user explicitly required. You may also keep reading (file_list, "
+    "file_read, search, extract) for more context, but a prose reply alone doesn't "
+    "advance the conversation.\n"
+    "</system-reminder>"
+)
+
+# Emitted when a REVISION re-plan has been narrated >= _REVISION_FORCE_SUBMIT_K times
+# without a submit_plan call (the soft _PLAN_NUDGE was ignored). This is paired with a
+# durable StatusEvent(detail="force_submit_plan") marker so the NEXT planning step's tool
+# set is narrowed to submit_plan ONLY (driver.tools_for_step reads the marker) — the model
+# must submit the plan it has already described instead of looping in prose. The marker is
+# in the event log, so a RESUMED build replays it and stays forced (no soft-nudge loop).
+_FORCE_SUBMIT_DIRECTIVE = (
+    "<system-reminder>\n"
+    "You have already DESCRIBED the revised plan but have not SUBMITTED it. Stop "
+    "narrating: call the `submit_plan` tool NOW with the revised plan (summary, ordered "
+    "steps, and a markdown `context` block). It is the only available action — do not "
+    "reply in prose.\n"
+    "</system-reminder>"
+)
+# After this many consecutive prose-only nudges during a REVISION re-plan, escalate to the
+# forced-submit recovery (narrow tools to submit_plan). Gated default-ON; kill switch
+# DISCO_REVISION_FORCE_SUBMIT=0.
+_REVISION_FORCE_SUBMIT_K = 2
+
+# Bug 12 (§11.4) — refusal for a mutating tool that reaches the apply boundary
+# AFTER a change/revision steer landed mid-step (the in-flight write-through race).
+# The build has been put back into PLANNING; the model must submit a revised plan.
+_MIDSTEP_STEER_REFUSAL = (
+    "<system-reminder>\n"
+    "REFUSED: `{tool}` was not applied. A change request arrived while you were "
+    "mid-step, so this action would have landed on the OLD, now-stale plan. The "
+    "build has re-entered PLANNING. Fold the new request into a REVISED plan and "
+    "call `submit_plan`; once it is approved you can apply the change. You may also "
+    "read (file_read/file_list/search/extract) or ask/clarify first.\n"
+    "</system-reminder>"
+)
+
+# _STUCK_ESCAPE_TEMP moved to loop/driver.py (with the drive step that applies it).
+
+# _EXECUTION_NUDGE moved to loop/finish.py (with the execution-nudge gate).
+
+# GAP B turn-taking tools — notify (non-blocking progress / mid-run reply) and
+# finish (the explicit, affirmative terminal move). Both are intercepted by the
+# loop and never reach the executor.
+# The `remember` virtual tool — durable memory. When the agent learns a fact it
+# will need LATER in the SAME run (a chosen library version, a discovered build
+# command, a constraint the user stated, a dead-end to avoid), it records it
+# here. The loop intercepts the call and emits a pinned KnowledgeEvent: pinned
+# means the fact is EXEMPT from condensation, so it survives even after the raw
+# transcript that taught it is summarized away. This is the standing-memory
+# channel that backs MEMORY.md-style recall without a separate store — the View
+# already injects KnowledgeEvents back into context every step.
+_REMEMBER_DESCRIPTION = (
+    "Record a durable fact you will need LATER in this run — a decision you made "
+    "(a chosen library/version), something you discovered (the build command, an "
+    "API shape, a path), a constraint the user stated, or a dead-end to avoid. "
+    "Unlike normal observations, a remembered fact is PINNED: it survives context "
+    "condensation, so you won't forget it on a long run. Keep each `fact` to one "
+    "or two sentences. Optionally set `scope` to a keyword/path the fact applies "
+    "to. This does NOT stop the run — you keep working right after."
+)
+_REMEMBER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "fact": {
+            "type": "string",
+            "description": "The durable fact to remember (one or two sentences).",
+        },
+        "scope": {
+            "type": "string",
+            "description": "Optional applicability hint — a keyword or path the fact applies to.",
+        },
+    },
+    "required": ["fact"],
+}
+# The `serve` virtual tool — the finished-artifact HANDOFF. When the agent has
+# produced something the user should see/use (a built site, a running app, a
+# generated report/file), it calls `serve` to mark the deliverable. The loop
+# intercepts the call and emits a DeliverableEvent that the UI renders as a real
+# handoff (Open the live app / Download the files) — the difference between "the
+# run ended" and "here is your thing." Non-blocking: the agent keeps working (it
+# usually serves, then verifies, then finishes).
+_SERVE_DESCRIPTION = (
+    "Hand off a finished deliverable to the user. Call this when you've produced "
+    "something they should open or download. Set `kind`='app' for a runnable "
+    "result they open in the live preview (a built site / running dev server "
+    "rooted at `path`) — make sure your server is serving on port 8000 (the "
+    "workspace auto-serves the 'preview' session there by default). Set "
+    "`kind`='files' for artifacts to download (`path` = the file or folder). "
+    "Give a short human `title`. This does NOT end the run — serve the "
+    "deliverable, verify it, THEN call finish."
+)
+_SERVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "Short human label, e.g. 'Landing page' or 'Sales report'.",
+        },
+        "path": {
+            "type": "string",
+            "description": "Workspace-relative path: app root (kind=app) or file/folder (files).",
+        },
+        "kind": {
+            "type": "string",
+            "enum": ["app", "files"],
+            "description": "'app' = open in live preview; 'files' = download. Default 'app'.",
+        },
+        "url": {
+            "type": "string",
+            "description": (
+                "Optional: the canonical URL the deliverable is reachable at (a deploy "
+                "target / tunnel / live address). Surfaced as an 'Open deployed app' link."
+            ),
+        },
+    },
+    "required": ["title", "path"],
+}
+_FINISH_DESCRIPTION = (
+    "Declare the task COMPLETE and end the run. Call this ONLY when every plan "
+    "step is done and verified — it is the single affirmative way to finish. A "
+    "plain message without this tool does NOT end the run. Provide a short "
+    "`summary` of what you built / accomplished. STRONGLY PREFERRED: attach a "
+    "`verify` shell command that proves the deliverable works (the build "
+    "compiles, the tests pass, the server responds) — exit 0 means good. If it "
+    "fails you'll see exactly what broke and should fix it before finishing; after "
+    "a few failures the run finishes anyway with a warning, so make your check real "
+    "and your fix correct rather than relying on a broken verify to pass."
+)
+_FINISH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "Short summary of what was accomplished."},
+        "verify": {
+            "type": "string",
+            "description": (
+                "Optional check that proves completion (exit 0 = success). One of: a "
+                "shell command (`npm test`, `python -m pytest -q`); for a STATIC page "
+                "the literal `static` (checks index.html exists + parses) or "
+                "`static:<path>`; or for a RUNNING web app the literal `app` (GETs "
+                "http://localhost:8000/ and requires HTTP 200 + a non-empty body) or "
+                "`app:<url>` for another address — make sure your server is serving on "
+                "port 8000 first. If it fails, the finish is refused and you must fix the problem."
+            ),
+        },
+    },
+    "required": [],
+}
+
+
+def _finish_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="finish", description=_FINISH_DESCRIPTION, parameters_schema=_FINISH_SCHEMA
+    )
+
+
+def _remember_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="remember", description=_REMEMBER_DESCRIPTION, parameters_schema=_REMEMBER_SCHEMA
+    )
+
+
+
+codex
+I confirmed scope checks currently only exist in the loop as a risk-policy label and not as hard allow/deny. I’ll now inspect the registry contract defaults to validate bootstrap/rewrite/export assumptions against real built-ins.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/contract/registry.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""BuildContractRegistry (CONTRACT-2).
+
+Declares the concrete BuildContract for each artifact kind — its required files,
+starter kit, bootstrap/edit tool packs, verification finalizer, export pipeline,
+prompt pack, and UI card — and looks one up by kind or from a BuildBrief. Both kernels
+(DiscoKernel/PiKernel) resolve the same contract here, so a Build run has a declared,
+host-owned contract before execution. Pure data + lookup; no runtime imports.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from .models import (
+    ArtifactContract,
+    BuildContract,
+    ContractKind,
+    EditContract,
+    ExportContract,
+    ToolPack,
+    VerificationContract,
+    VerificationLevel,
+)
+
+
+def _static_site() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.STATIC_SITE,
+        artifact=ArtifactContract(
+            kind=ContractKind.STATIC_SITE, required_files=("index.html",), starter_kit="app_shell"
+        ),
+        bootstrap=ToolPack(name="static.site.bootstrap", tools=("file_write", "preview_start")),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",)),
+        verify=VerificationContract(finalizer="ready_for_static_site_verification"),
+        export=ExportContract(name="static_standalone", pipeline=("preflight", "bundle", "validate", "deliver")),
+        prompt_pack="build_static_site",
+        ui_card="SiteCard",
+    )
+
+
+def _appkit_leadgen() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.APPKIT_LEADGEN,
+        artifact=ArtifactContract(
+            kind=ContractKind.APPKIT_LEADGEN,
+            required_files=(".disco/appspec.json", "index.html"),
+            starter_kit="lead_form",
+        ),
+        # NOTE: the specialized app_* mutation tools (app_create/app_update_content/…)
+        # ship in P4 (Specialized Mutation Tools). Until then this contract uses the
+        # real, registered generic file tools so it is coherent with the live tool
+        # surface (no false affordance); P4 will swap these for the semantic app_* tools.
+        bootstrap=ToolPack(name="appkit.leadgen.bootstrap", tools=("file_write",)),
+        edit=EditContract(
+            edit_tools=("file_edit", "file_replace_lines"),
+            repair_tools=("file_write",),
+        ),
+        verify=VerificationContract(finalizer="ready_for_app_verification", level=VerificationLevel.STRICT),
+        export=ExportContract(name="cloudflare_project", pipeline=("preflight", "bundle", "validate", "deliver")),
+        prompt_pack="build_appkit_leadgen",
+        ui_card="AppCard",
+    )
+
+
+def _deck() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.DECK,
+        artifact=ArtifactContract(kind=ContractKind.DECK, required_files=("deck.json",), starter_kit="deck_stage"),
+        bootstrap=ToolPack(name="deck.bootstrap", tools=("slides_generate",)),
+        edit=EditContract(edit_tools=("deck_patch",)),
+        verify=VerificationContract(finalizer="ready_for_deck_verification"),
+        export=ExportContract(name="deck_export", pipeline=("bundle", "validate", "deliver")),
+        prompt_pack="build_deck",
+        ui_card="DeckCard",
+    )
+
+
+def _document() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.DOCUMENT,
+        artifact=ArtifactContract(kind=ContractKind.DOCUMENT, required_files=("report.md",)),
+        bootstrap=ToolPack(name="document.bootstrap", tools=("file_write",)),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+        verify=VerificationContract(finalizer="ready_for_document_verification"),
+        export=ExportContract(name="document_pdf", pipeline=("preflight", "bundle", "validate", "deliver")),
+        prompt_pack="build_document",
+        ui_card="DocumentCard",
+    )
+
+
+def _interactive_prototype() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.INTERACTIVE_PROTOTYPE,
+        artifact=ArtifactContract(
+            kind=ContractKind.INTERACTIVE_PROTOTYPE, required_files=("index.html",), starter_kit="app_shell"
+        ),
+        bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=("file_write", "preview_start")),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+        verify=VerificationContract(finalizer="ready_for_prototype_verification"),
+        prompt_pack="build_static_site",
+        ui_card="PrototypeCard",
+    )
+
+
+def _workflow_output() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.WORKFLOW_OUTPUT,
+        artifact=ArtifactContract(kind=ContractKind.WORKFLOW_OUTPUT),
+        bootstrap=ToolPack(name="workflow.output.bootstrap"),
+        edit=EditContract(),
+        verify=VerificationContract(finalizer="ready_for_workflow_output_verification"),
+        ui_card="WorkflowCard",
+    )
+
+
+def _custom() -> BuildContract:
+    # the escape hatch: broad tools + rewrite allowed; the generic artifact finalizer.
+    return BuildContract(
+        kind=ContractKind.CUSTOM,
+        artifact=ArtifactContract(kind=ContractKind.CUSTOM),
+        bootstrap=ToolPack(name="custom.bootstrap", tools=("file_write", "file_edit", "shell")),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",), rewrite_allowed=True),
+        verify=VerificationContract(finalizer="ready_for_artifact_verification"),
+        ui_card="ArtifactCard",
+    )
+
+
+_BUILTINS = (
+    _static_site,
+    _appkit_leadgen,
+    _deck,
+    _document,
+    _interactive_prototype,
+    _workflow_output,
+    _custom,
+)
+
+
+class BuildContractRegistry:
+    """Maps a ContractKind → its BuildContract."""
+
+    def __init__(self) -> None:
+        self._by_kind: dict[ContractKind, BuildContract] = {}
+
+    def register(self, contract: BuildContract) -> None:
+        self._by_kind[contract.kind] = contract
+
+    def get(self, kind: ContractKind) -> BuildContract | None:
+        return self._by_kind.get(kind)
+
+    def kinds(self) -> frozenset[ContractKind]:
+        return frozenset(self._by_kind)
+
+    def _custom(self) -> BuildContract:
+        """The CUSTOM contract — registered one, else a deterministic minimal fallback
+        (so a partial registry never KeyErrors). A run always gets a contract."""
+        return self._by_kind.get(ContractKind.CUSTOM) or BuildContract.minimal(ContractKind.CUSTOM)
+
+    def get_for_brief(
+        self, brief: Mapping[str, Any] | None, *, strict_kind: bool = True
+    ) -> BuildContract:
+        """Resolve the contract for a BuildBrief from ``brief['kind']``.
+
+        A MISSING kind (no 'kind' key) → the CUSTOM contract (the legitimate default: a
+        brief that declares no kind is a custom build). A PRESENT-but-unknown/malformed
+        kind (a typo, wrong type) is a bad input: with ``strict_kind=True`` (default) it
+        raises ValueError rather than silently broadening to CUSTOM; ``strict_kind=False``
+        opts into the compatibility fallback. Never returns None / KeyErrors on a partial
+        registry."""
+        raw = (brief or {}).get("kind")
+        if raw is None:
+            return self._custom()
+        try:
+            kind = ContractKind(raw)
+        except (ValueError, TypeError) as exc:
+            if strict_kind:
+                raise ValueError(f"BuildBrief declares an unknown contract kind: {raw!r}") from exc
+            return self._custom()
+        return self._by_kind.get(kind) or self._custom()
+
+    @classmethod
+    def default(cls) -> BuildContractRegistry:
+        """A registry with every built-in contract registered."""
+        reg = cls()
+        for factory in _BUILTINS:
+            reg.register(factory())
+        return reg
+
+codex
+I’m doing a final pass for any accidental scope checks already present in tool selection/executor boundaries so we can judge whether deferral introduces a real security gap versus an intended staged integration.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"def tool_scope|tool_scope\\(|allowed\\(Phase|ContractToolScopes|ContractScope|tool_scope\\b\" packages -S" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/tools/tests/test_executor_scope.py:1:"""DC-03 — executor.tool_scope() resolution tests.
+packages/tools/tests/test_executor_scope.py:38:    assert ex.tool_scope("shell") == "sandbox"
+packages/tools/tests/test_executor_scope.py:43:    assert ex.tool_scope("file_write") == "sandbox"
+packages/tools/tests/test_executor_scope.py:48:    assert ex.tool_scope("code_exec") == "sandbox"
+packages/tools/tests/test_executor_scope.py:75:    assert ex.tool_scope("ip_tool") == "in_process"
+packages/tools/tests/test_executor_scope.py:84:    assert ex.tool_scope("nonexistent_tool_xyz") == "unknown"
+packages/tools/tests/test_executor_scope.py:89:    tool_scope uses in_scope() so it naturally returns 'unknown' for out-of-scope tools."""
+packages/tools/tests/test_executor_scope.py:109:    assert ex.tool_scope("other_sandboxed") == "unknown"
+packages/tools/src/disco/tools/executor.py:317:    def tool_scope(self, tool_name: str) -> str:
+packages/core/tests/test_contract_scopes.py:10:    ContractToolScopes,
+packages/core/tests/test_contract_scopes.py:42:    assert s.allowed(Phase.BOOTSTRAP, "app_create") is True
+packages/core/tests/test_contract_scopes.py:43:    assert s.allowed(Phase.BOOTSTRAP, "file_write") is False  # not in the bootstrap pack
+packages/core/tests/test_contract_scopes.py:44:    assert s.allowed(Phase.EDIT, "app_update_content") is True
+packages/core/tests/test_contract_scopes.py:45:    assert s.allowed(Phase.EDIT, "file_write") is False
+packages/core/tests/test_contract_scopes.py:50:    assert s.allowed(Phase.REPAIR, "file_write") is True
+packages/core/tests/test_contract_scopes.py:51:    assert s.allowed(Phase.REPAIR, "file_edit") is False  # edit tool is not a repair tool
+packages/core/tests/test_contract_scopes.py:52:    assert s.allowed(Phase.EDIT, "file_write") is False  # rewrite stays out of edit
+packages/core/tests/test_contract_scopes.py:58:    assert s.allowed(Phase.VERIFY, "ready_for_app_verification") is True
+packages/core/tests/test_contract_scopes.py:59:    assert s.allowed(Phase.VERIFY, "file_write") is False
+packages/core/tests/test_contract_scopes.py:67:    assert s.allowed(Phase.BOOTSTRAP, "file_write") is True  # bootstrap may create files
+packages/core/tests/test_contract_scopes.py:68:    assert s.allowed(Phase.EDIT, "file_edit") is True
+packages/core/tests/test_contract_scopes.py:69:    assert s.allowed(Phase.EDIT, "file_write") is False  # cannot clobber-rewrite during edit
+packages/core/tests/test_contract_scopes.py:77:    assert s.allowed(Phase.REPAIR, "file_write") is True
+packages/core/tests/test_contract_scopes.py:78:    assert s.allowed(Phase.EDIT, "file_write") is False
+packages/core/tests/test_contract_scopes.py:83:    assert ContractToolScopes.model_validate(s.model_dump(mode="json")) == s
+packages/agent-server/tests/test_pi_tool_bridge_unit.py:99:    def tool_scope(self, tool_name: str) -> str:
+packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py:212:        ``tool_scope(name) -> str``, ``note_grounding_read(path)``,
+packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py:742:        scope_fn = getattr(self._host.executor, "tool_scope", None)
+packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py:743:        tool_scope = "unknown"
+packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py:746:                tool_scope = scope_fn(action.tool_call.tool_name)
+packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py:748:                tool_scope = "unknown"
+packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py:753:            gated = bool(sca(risk, scope=tool_scope, tool_name=action.tool_call.tool_name))
+packages/core/src/disco/core/contract/__init__.py:26:from .scopes import ContractToolScopes, Phase, compile_tool_scopes
+packages/core/src/disco/core/contract/__init__.py:33:    "ContractToolScopes",
+packages/core/tests/test_gate_scoping.py:77:    """scope == 'unknown' (executor without tool_scope) → conservative fallback."""
+packages/core/tests/test_gate_scoping.py:150:    """A FakeExecutor that reports every tool as sandboxed via tool_scope()."""
+packages/core/tests/test_gate_scoping.py:152:    def tool_scope(self, tool_name: str) -> str:
+packages/core/tests/test_gate_scoping.py:200:    def tool_scope(self, tool_name: str) -> str:
+packages/core/tests/test_gate_scoping.py:249:    """When executor has no tool_scope() (old-style FakeExecutor), the gate falls
+packages/core/tests/test_gate_scoping.py:254:        executor=FakeExecutor(),  # no tool_scope method
+packages/core/src/disco/core/contract/scopes.py:32:class ContractToolScopes(BaseModel):
+packages/core/src/disco/core/contract/scopes.py:57:def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
+packages/core/src/disco/core/contract/scopes.py:69:    return ContractToolScopes(
+packages/core/src/disco/core/loop/engine.py:1085:        _scope_fn = getattr(self.executor, "tool_scope", None)
+packages/core/src/disco/core/loop/engine.py:1086:        _tool_scope = "unknown"
+packages/core/src/disco/core/loop/engine.py:1089:                _tool_scope = _scope_fn(action.tool_call.tool_name)
+packages/core/src/disco/core/loop/engine.py:1091:                _tool_scope = "unknown"
+packages/core/src/disco/core/loop/engine.py:1097:            _gates = _sca(risk, scope=_tool_scope, tool_name=action.tool_call.tool_name)
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '660,820p' packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+        self,
+        tool_call: ToolCall,
+        thought: str,
+        self_assessed_risk: SecurityRisk | None,
+        llm_response_id: str | None,
+    ) -> BridgeOutcome | None:
+        """Mirror of the allowlist-rejection branch of ``_gate_planning_mode``
+        (engine.py:945-969). Returns a REFUSED outcome when the tool is not in the
+        planning allowlist; ``None`` (fall through) when it is allowed.
+
+        The submit_plan interception and tool-less-prose nudge (engine.py:864-916)
+        are loop/virtual concerns, not executor-tool safety — the plan tool is in
+        ``virtual_tool_names`` and short-circuits in :meth:`route` before reaching
+        here.
+        """
+        allowed = self._host.planning_allowed_tool_names()
+        if tool_call.tool_name in allowed:
+            return None
+        action = ActionEvent(
+            thought=thought,
+            tool_call=tool_call,
+            self_assessed_risk=self_assessed_risk or SecurityRisk.UNKNOWN,
+            llm_response_id=llm_response_id,
+        )
+        await self._host.emit(action)
+        error = AgentErrorEvent(
+            error=_PLANNING_REFUSAL.format(tool=tool_call.tool_name),
+            action_id=action.id,
+            tool_call_id=tool_call.call_id,
+        )
+        await self._host.emit(error)
+        return BridgeOutcome(
+            decision=BridgeDecision.REFUSED, action=action, error=error
+        )
+
+    # -- G2: hard deny --------------------------------------------------------
+    async def _gate_hard_deny(self, action: ActionEvent) -> BridgeOutcome | None:
+        """Mirror of ``_gate_hard_deny`` (engine.py:980-1001) over the FREE
+        function ``signals.hard_deny_reason`` (signals.py:99). Refuses catastrophic
+        commands BEFORE the confirm gate — no approval can run them."""
+        deny_reason = signals.hard_deny_reason(action)
+        if deny_reason is None:
+            return None
+        await self._host.emit(action)  # record the proposed action for audit
+        error = AgentErrorEvent(
+            error=_HARD_DENY_REFUSAL.format(reason=deny_reason),
+            action_id=action.id,
+            tool_call_id=action.tool_call.call_id if action.tool_call else None,
+        )
+        await self._host.emit(error)
+        return BridgeOutcome(
+            decision=BridgeDecision.REFUSED, action=action, error=error
+        )
+
+    # -- G3: risk + confirmation ----------------------------------------------
+    async def _gate_risk_confirm(
+        self, action: ActionEvent
+    ) -> tuple[ActionEvent, bool]:
+        """Mirror of ``_gate_risk_confirm`` (engine.py:1003-1057).
+
+        Assess risk (stamping the detailed audit into the action meta when the
+        analyzer supports it), resolve the tool scope, and consult the
+        confirmation policy. Returns ``(action, gated)``; when ``gated`` the
+        proposed action + a ``WAITING_FOR_CONFIRMATION`` status are emitted and the
+        caller HALTs pending (the existing confirm/reject surface resumes it).
+        """
+        detailed = getattr(self._host.analyzer, "assess_detailed", None)
+        if callable(detailed):
+            assessment = cast("RiskAssessment", detailed(action))
+            risk = assessment.risk
+            action = action.model_copy(
+                update={
+                    "meta": {
+                        **action.meta,
+                        "risk_assessment": assessment.model_dump(mode="json"),
+                    }
+                }
+            )
+        else:
+            risk = self._host.analyzer.assess(action)
+
+        # WHERE the tool executes (duck-typed; absent → "unknown"), mirror 1024-1031.
+        scope_fn = getattr(self._host.executor, "tool_scope", None)
+        tool_scope = "unknown"
+        if callable(scope_fn):
+            try:
+                tool_scope = scope_fn(action.tool_call.tool_name)
+            except Exception:  # noqa: BLE001 — scope is best-effort
+                tool_scope = "unknown"
+
+        # should_confirm_action when available; fall back to should_confirm.
+        sca = getattr(self._host.policy, "should_confirm_action", None)
+        if callable(sca):
+            gated = bool(sca(risk, scope=tool_scope, tool_name=action.tool_call.tool_name))
+        else:
+            gated = bool(self._host.policy.should_confirm(risk))
+
+        # Journal the scope-based exemption (mirror 1043-1046).
+        if not gated and self._host.policy.should_confirm(risk):
+            action = action.model_copy(
+                update={"meta": {**action.meta, "auto_approved": "sandboxed"}}
+            )
+
+        if gated:
+            await self._host.emit(action)  # record the PROPOSED action
+            await self._host.emit(
+                StatusEvent(
+                    status=ConversationStatus.WAITING_FOR_CONFIRMATION,
+                    detail=action.id,
+                )
+            )
+        return action, gated
+
+    # -- G4: K1 guard/recovery + execute + pairing ----------------------------
+    async def _execute_and_observe(self, action: ActionEvent) -> BridgeOutcome:
+        """Mirror of the SAFETY core of ``Observer.execute_and_observe``
+        (observe.py:226-459): optional F9 dedup, the K1 elision guard + recovery,
+        the executor call, and the [CONTRACT] one-observation-per-action pairing.
+
+        F8 arg-shrink, W-39 shell-verify reminder, sandbox-restart notice, and the
+        plan-step done-condition note are LOOP-INTELLIGENCE / product surface left
+        to the Pi loop (see the module header). Executor validation, the generic
+        K1 boundary guard, and the file-write read-before-write/binary/syntax gates
+        all come FOR FREE inside ``executor.execute`` (executor.py:363-418,
+        files.py:212/411).
+        """
+        assert action.tool_call is not None  # route() never builds a toolless action
+        tc = action.tool_call
+
+        # F9 — assist-only read-dedup short-circuit (default OFF). Mirror 253-311.
+        deduped = await self._maybe_f9_dedup(action)
+        if deduped is not None:
+            return deduped
+
+        # K1 — elision-marker execution guard + recovery. Mirror 334-413.
+        bad = find_elided_arg_markers(tc.arguments)
+        if (
+            bad == ["content"]
+            and tc.tool_name == "file_write"
+            and value_is_only_elision_marker(tc.arguments.get("content"))
+        ):
+            path = tc.arguments.get("path")
+            if isinstance(path, str) and path:
+                original = _recover_elided_file_write_content(
+                    await self._host.events(), path, before_id=action.id
+                )
+                if original is not None:
+                    _LOG.info(
+                        "K1 recovery: re-expanded elided file_write content for %s "
+                        "(%d chars, call_id=%s)",
+                        path,
+                        len(original),
+                        tc.call_id,
+                    )
+                    tc.arguments["content"] = original
+                    self._ground_read(path)  # engine supplied content → not a blind rewrite
+                    bad = []  # recovered → fall through to normal execution
+        if bad:
+            _LOG.info(
+                "K1 guard: rejected %s — arg(s) %s carry an elision placeholder "
+                "(call_id=%s)",
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '820,980p' packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+                "(call_id=%s)",
+                tc.tool_name,
+                bad,
+                tc.call_id,
+            )
+            error = AgentErrorEvent(
+                error=_K1_REFUSAL.format(bad=bad),
+                action_id=action.id,
+                tool_call_id=tc.call_id,
+            )
+            await self._host.emit(error)
+            return BridgeOutcome(
+                decision=BridgeDecision.REFUSED, action=action, error=error
+            )
+
+        # Execute — never raises (mirror 416-429): exceptions become paired errors.
+        try:
+            result = await self._host.executor.execute(tc)
+        except Exception as e:  # noqa: BLE001 — any failure is observable, never dangling
+            error = AgentErrorEvent(
+                error=str(e), action_id=action.id, tool_call_id=tc.call_id
+            )
+            await self._host.emit(error)
+            return BridgeOutcome(
+                decision=BridgeDecision.FAILED, action=action, error=error
+            )
+
+        # Pairing — exactly one observation per action (mirror 430-458).
+        if result.success:
+            observation = ObservationEvent(tool_result=result, action_id=action.id)
+            await self._host.emit(observation)
+            return BridgeOutcome(
+                decision=BridgeDecision.EXECUTED,
+                action=action,
+                observation=observation,
+            )
+        error = AgentErrorEvent(
+            error=result.error or "tool failed",
+            action_id=action.id,
+            tool_call_id=tc.call_id,
+        )
+        await self._host.emit(error)
+        return BridgeOutcome(decision=BridgeDecision.FAILED, action=action, error=error)
+
+    async def _maybe_f9_dedup(self, action: ActionEvent) -> BridgeOutcome | None:
+        """ASSIST-only F9 read-dedup (default OFF). Mirror of observe.py:253-311.
+
+        When ``assist`` is on and this read-only call exactly repeats a recent one
+        within the window (and nothing invalidated it), emit a pointer observation
+        instead of re-executing — AND ground the read so a following same-path write
+        is not falsely blocked (the read-before-write loop the loop's ``_ground_read``
+        closes, observe.py:296-299).
+        """
+        if not self._assist or action.tool_call is None:
+            return None
+        # P1/#5 — mirror Driver.readonly_tool_names (driver.py:159-170) EXACTLY:
+        # absent OR raising → None (NOT an empty frozenset). None lets
+        # _f9_dedupable_read fall back to the narrow _WORKSPACE_READ_TOOLS, the same
+        # backstop the loop uses; an empty frozenset would instead WRONGLY mark every
+        # tool non-read-only. Critically, the unguarded call previously raised
+        # AFTER route() emitted the ActionEvent (and BEFORE any observation),
+        # leaving a DANGLING action — the executor try/except below never covered
+        # it. Catch here so a flaky readonly() degrades to "no dedup", never dangles.
+        readonly = getattr(self._host.executor, "readonly_tool_names", None)
+        readonly_names: frozenset[str] | None
+        if readonly is None:
+            readonly_names = None
+        else:
+            try:
+                readonly_names = frozenset(readonly())
+            except Exception:  # noqa: BLE001 — never let tool-listing dangle the action
+                _LOG.debug("readonly_tool_names() raised; F9 falls back to None", exc_info=True)
+                readonly_names = None
+        deduped, prior_id, pointer = _f9_dedupable_read(
+            action.tool_call.tool_name,
+            action.tool_call.arguments,
+            await self._host.events(),
+            readonly_names=readonly_names,
+        )
+        if not deduped:
+            return None
+        _LOG.info(
+            "F9 read-dedup: short-circuited %s (call_id=%s, prior_action_id=%s)",
+            action.tool_call.tool_name,
+            action.tool_call.call_id,
+            prior_id,
+        )
+        path = action.tool_call.arguments.get("path")
+        if isinstance(path, str) and path:
+            self._ground_read(path)
+        observation = ObservationEvent(
+            tool_result=ToolResult(
+                call_id=action.tool_call.call_id,
+                tool_name=action.tool_call.tool_name,
+                success=True,
+                content=pointer,
+            ),
+            action_id=action.id,
+        )
+        await self._host.emit(observation)
+        return BridgeOutcome(
+            decision=BridgeDecision.EXECUTED, action=action, observation=observation
+        )
+
+    def _ground_read(self, path: str) -> None:
+        """Satisfy the read-before-write gate for ``path`` via the executor when
+        the bridge supplied the file's content through a non-tool channel (K1
+        recovery / F9 pointer). Mirror of ``_ground_read`` (observe.py:45):
+        best-effort, a fake executor without ``note_grounding_read`` is a no-op."""
+        note = getattr(self._host.executor, "note_grounding_read", None)
+        if callable(note) and isinstance(path, str) and path:
+            try:
+                note(path)
+            except Exception:  # noqa: BLE001 — grounding is best-effort
+                _LOG.debug("note_grounding_read failed for %s", path, exc_info=True)
+
+    # -- dangling / missing-observation reconciliation ------------------------
+    @staticmethod
+    def reconcile_dangling_action(events: list[Event]) -> AgentErrorEvent | None:
+        """THE DANGLING-OBSERVATION DECISION (codex EPIC-D flag).
+
+        Disco's normal path guarantees exactly one observation per executed action
+        (observe.py:226 [CONTRACT]); ``route`` upholds the same invariant by
+        wrapping execution in try/except so even a raising tool yields a paired
+        ``AgentErrorEvent`` — within a single live call there is NEVER a dangling
+        action. The open case is a CRASH (process death / kill) BETWEEN appending
+        the ``ActionEvent`` and appending its observation. Codex confirmed Disco
+        DETECTS such a dangling action (test_loop_step.py:81) but core has NO
+        auto-replay wrapper.
+
+        DECISION for the Pi bridge: DETECT-AND-NEUTRALIZE, do NOT auto-replay.
+        On resume, if the log's last tool action has no paired observation/error,
+        emit a synthetic ``AgentErrorEvent`` (an "interrupted" observation) to
+        RESTORE the action↔observation pairing — but NEVER re-execute the tool. A
+        replay would risk DOUBLE side effects (a ``file_write`` / ``shell_exec`` may
+        have partially or fully applied before the crash — re-running could corrupt
+        or duplicate). Pairing the dangling action keeps the provider tool-call log
+        valid (KV stability) and hands the model a clean, recoverable signal to
+        re-issue the call itself if it still needs it — matching Disco's
+        "detectable but not auto-replayed" posture.
+
+        EXCLUSION: a confirmation-pending action is NOT dangling — the risk gate
+        emits it FOLLOWED by a ``WAITING_FOR_CONFIRMATION`` status whose ``detail``
+        is the action id (engine.py:1049-1054), and it is intentionally awaiting the
+        confirm/reject surface, which executes it. Reconciling that would race the
+        confirm path, so any action referenced by such a status is left alone.
+
+        Returns the synthetic ``AgentErrorEvent`` to append (the caller appends it
+        via the store), or ``None`` if the log is already consistent.
+        """
+        order: list[ActionEvent] = []
+        paired_ids: set[str] = set()
+        pending_ids: set[str] = set()
+        for event in events:
+            if isinstance(event, ActionEvent) and event.tool_call is not None:
+                order.append(event)
+            elif isinstance(event, ObservationEvent | AgentErrorEvent):
+                if event.action_id:
+                    paired_ids.add(event.action_id)
+            elif (
+                isinstance(event, StatusEvent)
+
+codex
+I found no contract-scope enforcement in the bridge loop path either. I’ll do a final quick check of tools executor for any `in_scope` filtering so we can confirm the gap is real or already covered.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,420p' packages/tools/src/disco/tools/executor.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""The executor — fulfills the loop's `ToolExecutor` (tool-sandbox-contract.md §4).
+
+One call in, one result out. The loop calls `execute()` per proposed action and
+`available_tools()` to tell the model what it may call; it is unaware of
+sandboxing. The load-bearing guarantee: `execute()` ALWAYS returns a ToolResult
+(success or a structured, model-readable failure) and NEVER raises to the loop —
+that's what makes the loop's "exactly one observation per action" hold, and what
+turns malformed tool calls into the auto-repair loop (§3).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import types
+from typing import Any, Literal, Union, get_args, get_origin
+from uuid import uuid4
+
+from disco.core import ToolCall, ToolResult
+from disco.core.events import find_elided_arg_markers
+from disco.core.llm import ModelExecutionPolicy, ToolSpec
+from pydantic import BaseModel, ValidationError
+
+from .anatomy import ToolContext, ToolDef, ToolExecutionError
+from .builtin.files import clear_conversation_read_state, mark_read
+from .registry import ToolRegistry, ToolScope
+from .sandbox.base import SandboxError, SandboxInstance
+from .secrets import CapabilityBroker, CapabilityDenied
+
+# Module-level singleton used as the default for model_policy in DefaultToolExecutor
+# (ruff B008 forbids function calls in default args; frozen dataclass is safe as a singleton).
+_STANDARD_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
+
+# Friendly names for the common annotations so the model sees "string"/"integer"
+# rather than "<class 'str'>". Falls back to the annotation's own __name__.
+_TYPE_NAMES: dict[type, str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+    list: "array",
+    dict: "object",
+}
+
+
+def _field_type_name(annotation: Any) -> str:
+    """Best-effort friendly name for a pydantic field's annotation."""
+    if annotation in _TYPE_NAMES:
+        return _TYPE_NAMES[annotation]
+    name = getattr(annotation, "__name__", None)
+    if isinstance(name, str) and name:
+        return name
+    # Unions / generics (Optional[str], list[str], ...) — render the typing repr,
+    # trimmed of the typing/module noise so it stays readable.
+    return str(annotation).replace("typing.", "")
+
+
+def _valid_arg_keys(args_model: type[BaseModel]) -> set[str]:
+    """Every key the model legitimately may pass: field names AND any aliases
+    (pydantic accepts a field by either, depending on populate_by_name)."""
+    keys: set[str] = set()
+    for fname, finfo in args_model.model_fields.items():
+        keys.add(fname)
+        if finfo.alias:
+            keys.add(finfo.alias)
+        if finfo.validation_alias and isinstance(finfo.validation_alias, str):
+            keys.add(finfo.validation_alias)
+    return keys
+
+
+def _arg_surface(args_model: type[BaseModel]) -> str:
+    """Concise one-line summary of a tool's accepted arguments: each as
+    `name (type, required|optional)`. Small by construction — tool arg models
+    are a handful of fields — so it never dumps a huge schema."""
+    parts: list[str] = []
+    for fname, finfo in args_model.model_fields.items():
+        req = "required" if finfo.is_required() else "optional"
+        parts.append(f"{fname} ({_field_type_name(finfo.annotation)}, {req})")
+    return ", ".join(parts) if parts else "(takes no arguments)"
+
+
+def _unwrap_optional(annotation: Any) -> Any:
+    """`X | None` / `Optional[X]` -> `X` (the single non-None member). Leaves any
+    other annotation untouched. Lets the nested-shape hint see through an optional
+    nested-model field."""
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        non_none = [a for a in get_args(annotation) if a is not type(None)]
+        if len(non_none) == 1:
+            return non_none[0]
+    return annotation
+
+
+def _base_type(annotation: Any) -> type | None:
+    """The plain python type behind a (possibly Optional) annotation, or None when
+    it is not a bare type (a Literal, a generic, a model, ...)."""
+    ann = _unwrap_optional(annotation)
+    return ann if isinstance(ann, type) else None
+
+
+def _nested_model(annotation: Any) -> tuple[type[BaseModel], bool] | None:
+    """If `annotation` is a pydantic model — or a list/tuple/set of one — return
+    `(model, is_list)`; otherwise None. This is what lets the validation error show
+    the EXPECTED nested shape (e.g. `steps: list[PlanProgressItem]`) for ANY tool,
+    not just update_plan_progress."""
+    ann = _unwrap_optional(annotation)
+    if isinstance(ann, type) and issubclass(ann, BaseModel):
+        return ann, False
+    if get_origin(ann) in (list, tuple, set, frozenset):
+        for arg in get_args(ann):
+            inner = _unwrap_optional(arg)
+            if isinstance(inner, type) and issubclass(inner, BaseModel):
+                return inner, True
+    return None
+
+
+def _model_shape(model: type[BaseModel]) -> str:
+    """A concise one-line shape for a nested model: each field as `"name": <type>`,
+    with a Literal field spelled out as its allowed values (`"state":
+    "pending"|"active"|"done"`). Deterministic (model_fields order is stable)."""
+    parts: list[str] = []
+    for fname, finfo in model.model_fields.items():
+        ann = finfo.annotation
+        if get_origin(ann) is Literal:
+            allowed = "|".join(json.dumps(v) for v in get_args(ann))
+            parts.append(f'"{fname}": {allowed}')
+        else:
+            parts.append(f'"{fname}": <{_field_type_name(ann)}>')
+    return "{" + ", ".join(parts) + "}"
+
+
+def _model_example_item(model: type[BaseModel], i: int) -> dict[str, Any]:
+    """One concrete, schema-VALID example object for `model`. `i` varies values
+    across items so a list example reads as a list of distinct objects: int fields
+    count 1,2,…; a Literal cycles through its allowed values."""
+    obj: dict[str, Any] = {}
+    for fname, finfo in model.model_fields.items():
+        ann = finfo.annotation
+        if get_origin(ann) is Literal:
+            allowed = list(get_args(ann))
+            obj[fname] = allowed[i % len(allowed)]
+        else:
+            base = _base_type(ann)
+            if base is bool:
+                obj[fname] = True
+            elif base is int:
+                obj[fname] = i + 1
+            elif base is float:
+                obj[fname] = 0.0
+            else:
+                obj[fname] = "..."
+    return obj
+
+
+def _nested_shape_hint(field_name: str, model: type[BaseModel], is_list: bool) -> str:
+    """A concise, copyable hint: the expected nested shape + ONE concrete example —
+    so a model that mis-formats an array-of-objects (e.g. `steps: ["", "", ""]`)
+    can see exactly what to send instead. Never the full JSON schema (kept small)."""
+    shape = _model_shape(model)
+    if is_list:
+        example = json.dumps([_model_example_item(model, 0), _model_example_item(model, 1)])
+        return (
+            f"The {field_name!r} argument must be a list of objects, each shaped "
+            f"{shape}. Example: {field_name}={example}."
+        )
+    example = json.dumps(_model_example_item(model, 0))
+    return (
+        f"The {field_name!r} argument must be an object shaped {shape}. "
+        f"Example: {field_name}={example}."
+    )
+
+
+def describe_validation_failure(
+    tool_name: str,
+    args_model: type[BaseModel],
+    arguments: dict[str, Any],
+    errors: list[dict[str, Any]],
+) -> str:
+    """Build a SELF-CORRECTING, model-facing validation error.
+
+    The model only sees a failed ToolResult's `error`/`content` string (the
+    structured `validation_errors`/`expected_schema` are not surfaced into the
+    agent's message stream), so the actionable detail MUST live in this string.
+    It names the unexpected key(s) the caller invented (e.g. `cmd`) AND the
+    expected/required field(s) it should have used (e.g. `command`), pulled
+    generically from the pydantic model — so EVERY tool benefits, not just shell.
+
+    Deterministic for identical arguments (so byte-identical repeated bad calls
+    still trip the loop's stuck detector as before).
+    """
+    valid_keys = _valid_arg_keys(args_model)
+    unknown = sorted(k for k in arguments if k not in valid_keys)
+
+    reasons: list[str] = []
+    if unknown:
+        reasons.append(
+            f"unexpected argument(s) {unknown} — not accepted by this tool"
+        )
+    for err in errors:
+        loc = ".".join(str(p) for p in err.get("loc", ())) or "(root)"
+        etype = err.get("type", "")
+        if etype == "missing":
+            reasons.append(f"missing required argument {loc!r}")
+        elif etype in {"extra_forbidden", "unexpected_keyword_argument"}:
+            # already covered by `unknown` above; skip to avoid duplication
+            continue
+        else:
+            reasons.append(f"argument {loc!r}: {err.get('msg', etype)}")
+    if not reasons:
+        reasons.append("arguments did not match the tool's schema")
+
+    msg = (
+        f"arguments for {tool_name!r} failed validation: "
+        + "; ".join(reasons)
+        + f". Expected arguments: {_arg_surface(args_model)}."
+    )
+    if unknown:
+        # spell out the likely fix so a weaker model can self-correct next turn
+        required_names = [
+            n for n, fi in args_model.model_fields.items() if fi.is_required()
+        ]
+        if required_names:
+            msg += (
+                f" Re-call {tool_name!r} using the correct key(s) "
+                f"{required_names} instead of {unknown}."
+            )
+    # Nested-shape hints (GENERIC, all tools): when an error points at a field
+    # whose value is a model — or a list of models — but the model sent the wrong
+    # shape (e.g. `steps: ["", "", ""]` where each item must be an object), append
+    # the EXPECTED nested shape + one concrete example so the call is recoverable.
+    # Skip "missing"/unknown-key errors (already explained above) and dedupe by
+    # field so three bad list items don't repeat the same hint thrice. Deterministic.
+    seen_fields: set[str] = set()
+    for err in errors:
+        loc = err.get("loc", ())
+        if not loc:
+            continue
+        top = loc[0]
+        etype = err.get("type", "")
+        if (
+            not isinstance(top, str)
+            or top in seen_fields
+            or etype in {"missing", "extra_forbidden", "unexpected_keyword_argument"}
+        ):
+            continue
+        finfo = args_model.model_fields.get(top)
+        if finfo is None:
+            continue
+        nested = _nested_model(finfo.annotation)
+        if nested is None:
+            continue
+        seen_fields.add(top)
+        model, is_list = nested
+        msg += " " + _nested_shape_hint(top, model, is_list)
+    if arguments:
+        msg += f" You provided: {sorted(arguments)}."
+    return msg
+
+
+class DefaultToolExecutor:
+    """[CONTRACT behavior; INTERIOR code] The concrete `ToolExecutor`.
+
+    The context is built internally from injected pieces (sandbox, capability
+    broker, ownership) rather than a free `ctx_factory` — an [INTERIOR] choice;
+    the §4 illustrative `ctx_factory` is one way to spell the same thing.
+    """
+
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        scope: ToolScope,
+        *,
+        sandbox: SandboxInstance | None = None,
+        broker: CapabilityBroker | None = None,
+        owner_id: str = "local",
+        conversation_id: str | None = None,
+        default_timeout_s: int = 300,
+        model_policy: ModelExecutionPolicy = _STANDARD_POLICY,
+        driver_llm: tuple[str, str, str | None] | None = None,
+        read_char_budget: int | None = None,
+    ) -> None:
+        self._registry = registry
+        self._scope = scope
+        self._sandbox = sandbox
+        # ROOT-5: the conversation's effective (override-aware) driver endpoint,
+        # stamped onto every ToolContext for LLM-using tools (slides_generate).
+        self._driver_llm = driver_llm
+        # CW-6: the capability-derived file_read page budget, stamped onto every
+        # ToolContext so files.py can read a file that fits the snapshot pin in one
+        # shot. None ⇒ files.py uses its static default (assist-ON parity).
+        self._read_char_budget = read_char_budget
+        self._broker = broker or CapabilityBroker()
+        self._owner_id = owner_id
+        # Generate a unique per-instance id when none is given so the F3 read-state
+        # tracker never silently shares a bucket with another executor (the old "conv"
+        # default would have all unkeyed executors share one bucket).
+        self._conversation_id = (
+            conversation_id if conversation_id is not None else f"conv_{uuid4().hex}"
+        )
+        self._default_timeout_s = default_timeout_s
+        self._model_policy = model_policy  # replaces bare assist: bool; standard = no-op
+        self._killed = False
+
+    @property
+    def sandbox(self) -> SandboxInstance | None:
+        """The live sandbox instance, or None for a sandbox-less executor.
+
+        The agent loop reaches the sandbox through this duck-typed accessor
+        (getattr(executor, "sandbox", None)) — both for mid-session-recreation
+        generation tracking (engine._execute_and_observe) and for re-reading the
+        current on-disk workspace each turn (engine._workspace_snapshot_message).
+        Exposing it read-only keeps that seam working without leaking _sandbox."""
+        return self._sandbox
+
+    # ---- the ToolExecutor protocol ------------------------------------------
+
+    def tool_scope(self, tool_name: str) -> str:
+        """'sandbox' | 'in_process' | 'unknown' — where this tool executes.
+        Policy input for the blast-radius gate (DC-03)."""
+        for tool in self._registry.in_scope(self._scope):
+            if tool.definition.name == tool_name:
+                return tool.definition.runs_in
+        return "unknown"
+
+    def available_tools(self) -> list[ToolSpec]:
+        tools = self._registry.in_scope(self._scope)  # registry ∩ allowed_tools
+        if self._scope.advertised_tools is not None:
+            tools = [t for t in tools if t.definition.name in self._scope.advertised_tools]
+        # Contract #3: additionally drop any tool the model policy withholds, regardless
+        # of what the scope advertises.  For the standard tier withheld_tools is empty
+        # (frozenset()) so this branch is a no-op.  For the weak tier and !anchored_edit
+        # this is the executor-level enforcement backstop on top of the registry's scope.
+        withheld = self._model_policy.withheld_tools
+        if withheld:
+            tools = [t for t in tools if t.definition.name not in withheld]
+        return [t.definition.to_spec() for t in tools]
+
+    def callable_tool_names(self) -> frozenset[str]:
+        """Names of every tool the executor will actually run (registry ∩
+        allowed_tools), IGNORING advertised_tools. The advertise/callable split
+        (RP-05c) hides over-cap MCP tools from available_tools(), but they remain
+        callable by qualified name — callers that need to know 'can this name be
+        executed?' (e.g. the engine's unknown-tool requery gate) must use THIS,
+        not available_tools(), or they will bounce withheld-but-callable tools."""
+        return frozenset(t.definition.name for t in self._registry.in_scope(self._scope))
+
+    def readonly_tool_names(self) -> frozenset[str]:
+        """Names of in-scope tools that only OBSERVE (ToolDef.read_only). The loop
+        consults this to scope the PLANNING agent to read-only tools — a
+        capability-level backstop to any name allowlist, so a misconfigured
+        allowlist can't leak a write/exec tool to the planner (planner safety)."""
+        return frozenset(
+            t.definition.name
+            for t in self._registry.in_scope(self._scope)
+            if t.definition.read_only
+        )
+
+    async def execute(self, call: ToolCall) -> ToolResult:
+        if self._killed:
+            return self._fail(call, "sandbox_error", "executor killed; instance revoked")
+
+        # 1. resolve tool (unknown OR out-of-scope → unknown_tool, never execute)
+        tool = self._registry.get(call.tool_name, scope=self._scope)
+        if tool is None:
+            available = sorted(self._scope.allowed_tools & self._registry.names())
+            return self._fail(
+                call,
+                "unknown_tool",
+                f"unknown or out-of-scope tool {call.tool_name!r}; available: {available}",
+            )
+
+        # 1.5 K1 executor-boundary elision guard (generic; ALL tools / ALL paths).
+        # A weak model can COPY the `_snip_args` placeholder it sees in its own
+        # action history (`<N chars elided — re-issue the call or file_read …>`)
+        # back into a REAL tool argument — e.g. file_replace_lines.new_text. The
+        # Observer runs the same find_elided_arg_markers() check before it reaches
+        # here, but NOT every execution path goes through the Observer; this is the
+        # universal chokepoint every tool call funnels through, so guarding HERE
+        # makes the placeholder unable to mutate disk on ANY path (file_write,
+        # file_replace_lines, any future mutator, or a direct executor call). The
+        # detector anchors on the marker's STRUCTURE (count anchor or its signature
+        # tail prose), so a legitimate arg that merely mentions "elided" is NOT
+        # rejected. Returns a RECOVERABLE failure (invalid_arguments) — not a
+        # success, finish, or planning change — so the model can resend the FULL
+        # content; it never silently overwrites real content with the placeholder.
+        _elided = find_elided_arg_markers(call.arguments)
+        if _elided:
+            return self._fail(
+                call,
+                "invalid_arguments",
+                f"argument(s) {_elided} contain the elision placeholder text "
+                "('<N chars elided …>' / 'do not copy this placeholder into a tool "
+                "argument') instead of real content — this call was NOT executed. "
+                "Re-issue the call with the FULL content, or file_read the path "
+                "first to recover the current content, then resend.",
+            )
+
+        # 2. validate args (invalid_arguments with schema; never coerce/execute)
+        try:
+            args = tool.definition.args_model.model_validate(call.arguments)
+        except ValidationError as e:
+            errors = [dict(err) for err in e.errors()]  # ErrorDetails -> plain dict
+            return self._fail(
+                call,
+                "invalid_arguments",
+                # SELF-CORRECTING message: names the unexpected key(s) the model
+                # invented AND the expected/required field(s). The model only sees
+                # this string (not `structured`), so the fix lives here, generic
+                # across all tools — un-sticks the 5-failure gate on bad arg keys.
+                describe_validation_failure(
+                    call.tool_name,
+                    tool.definition.args_model,
+                    call.arguments if isinstance(call.arguments, dict) else {},
+                    errors,
+                ),
+                validation_errors=errors,
+                expected_schema=tool.definition.args_model.model_json_schema(),
+            )
+
+        # 3. build context (sandbox handle + scoped capabilities; NO secrets)
+
+codex
+I found execution-time unknown/out-of-scope rejection already inside `DefaultToolExecutor.execute`, but I still need to confirm the new contract scope object is actually wired into `ToolScope` creation path before calling out this PR. I’ll check that last seam quickly.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"class ToolScope|allowed_tools|advertised_tools|in_scope\\(|ToolScope\\(\" packages/tools/src/disco/tools -S && sed -n '1,280p' packages/tools/src/disco/tools/registry.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/tools/src/disco/tools/registry.py:18:class ToolScope(BaseModel):
+packages/tools/src/disco/tools/registry.py:21:    `allowed_tools` is the SECURITY allowlist — the executor only calls tools
+packages/tools/src/disco/tools/registry.py:22:    in this set. `advertised_tools` (RP-05c) is the VISIBILITY set — what
+packages/tools/src/disco/tools/registry.py:26:    always keys off allowed_tools, never the advertised subset.
+packages/tools/src/disco/tools/registry.py:30:    allowed_tools: frozenset[str]
+packages/tools/src/disco/tools/registry.py:31:    advertised_tools: frozenset[str] | None = None  # None = advertise all allowed
+packages/tools/src/disco/tools/registry.py:47:        if name not in scope.allowed_tools:
+packages/tools/src/disco/tools/registry.py:51:    def in_scope(self, scope: ToolScope) -> list[Tool]:
+packages/tools/src/disco/tools/registry.py:52:        return [t for n, t in self._tools.items() if n in scope.allowed_tools]
+packages/tools/src/disco/tools/registry.py:74:        # Callable by all agents (in allowed_tools) but WITHHELD from advertised_tools
+packages/tools/src/disco/tools/registry.py:169:    return ToolScope(allowed_tools=ARTIFACT_TOOLS, preset="artifact")
+packages/tools/src/disco/tools/registry.py:173:    return ToolScope(allowed_tools=RESEARCH_TOOLS, preset="research")
+packages/tools/src/disco/tools/registry.py:182:    tools remain in allowed_tools so the engine repair loop and the planner-
+packages/tools/src/disco/tools/registry.py:187:      • standard + anchored_edit=True  → advertised_tools=None (show all)
+packages/tools/src/disco/tools/registry.py:194:        # Standard no-op: show the complete toolset (advertised_tools=None = all allowed).
+packages/tools/src/disco/tools/registry.py:195:        return ToolScope(allowed_tools=AGENT_TOOLS, preset="agent")
+packages/tools/src/disco/tools/registry.py:196:    return ToolScope(
+packages/tools/src/disco/tools/registry.py:197:        allowed_tools=AGENT_TOOLS,
+packages/tools/src/disco/tools/registry.py:198:        advertised_tools=AGENT_TOOLS - withheld,
+packages/tools/src/disco/tools/mcp/pool.py:167:        # Build ToolDefs — only tools in allowed_tools (if set)
+packages/tools/src/disco/tools/mcp/pool.py:168:        allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None
+packages/tools/src/disco/tools/mcp/config.py:48:    allowed_tools: list[str] | None = None  # None = all
+packages/tools/src/disco/tools/executor.py:320:        for tool in self._registry.in_scope(self._scope):
+packages/tools/src/disco/tools/executor.py:326:        tools = self._registry.in_scope(self._scope)  # registry ∩ allowed_tools
+packages/tools/src/disco/tools/executor.py:327:        if self._scope.advertised_tools is not None:
+packages/tools/src/disco/tools/executor.py:328:            tools = [t for t in tools if t.definition.name in self._scope.advertised_tools]
+packages/tools/src/disco/tools/executor.py:340:        allowed_tools), IGNORING advertised_tools. The advertise/callable split
+packages/tools/src/disco/tools/executor.py:345:        return frozenset(t.definition.name for t in self._registry.in_scope(self._scope))
+packages/tools/src/disco/tools/executor.py:354:            for t in self._registry.in_scope(self._scope)
+packages/tools/src/disco/tools/executor.py:365:            available = sorted(self._scope.allowed_tools & self._registry.names())
+packages/tools/src/disco/tools/builtin/files.py:817:    Registry withholds this tool from the weak tier via advertised_tools.
+"""Tool registry & scoping — tool-sandbox-contract.md §8.
+
+The available toolset is a registry; surfaces (Research vs Agent) expose
+different *scopes* of it (BoD §8). `available_tools()` returns only in-scope
+tools, so the model is never shown — and the executor never runs (§4) — a tool
+outside the active surface's scope. Scope is the first-line capability boundary;
+the sandbox/egress/secrets rules are the hard backstops.
+"""
+
+from __future__ import annotations
+
+from disco.core.llm import ModelExecutionPolicy
+from pydantic import BaseModel, ConfigDict
+
+from .anatomy import Tool
+
+
+class ToolScope(BaseModel):
+    """[CONTRACT] The set of tools a SURFACE exposes (BoD §8).
+
+    `allowed_tools` is the SECURITY allowlist — the executor only calls tools
+    in this set. `advertised_tools` (RP-05c) is the VISIBILITY set — what
+    available_tools() returns to the LLM. None means "advertise all allowed"
+    (today's behavior). A tool that is allowed but not advertised is still
+    callable by qualified name; the planner-safety readonly_tool_names backstop
+    always keys off allowed_tools, never the advertised subset.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    allowed_tools: frozenset[str]
+    advertised_tools: frozenset[str] | None = None  # None = advertise all allowed
+    preset: str | None = None  # "research" | "agent" | custom
+
+
+class ToolRegistry:
+    """[CONTRACT] The catalogue of all tools. The executor asks it for in-scope
+    tools and to resolve a name within a scope. `get()` returns None if the name
+    is absent OR out-of-scope — the executor turns that into `unknown_tool`."""
+
+    def __init__(self) -> None:
+        self._tools: dict[str, Tool] = {}
+
+    def register(self, tool: Tool) -> None:
+        self._tools[tool.definition.name] = tool
+
+    def get(self, name: str, *, scope: ToolScope) -> Tool | None:
+        if name not in scope.allowed_tools:
+            return None  # out of scope is indistinguishable from absent (§4)
+        return self._tools.get(name)
+
+    def in_scope(self, scope: ToolScope) -> list[Tool]:
+        return [t for n, t in self._tools.items() if n in scope.allowed_tools]
+
+    def names(self) -> frozenset[str]:
+        return frozenset(self._tools)
+
+
+# Surface presets (BoD §8). Research excludes world-affecting tools; Agent gets
+# the full toolset. These name the tools; the actual registered set may be a
+# subset in v1 (browser/deploy deferred) — scoping intersects with what exists.
+RESEARCH_TOOLS = frozenset({"search", "extract", "file_read", "file_list", "code_exec"})
+AGENT_TOOLS = frozenset(
+    {
+        "search",
+        "extract",
+        "file_read",
+        "file_write",
+        "file_append",
+        "file_edit",
+        # line-number-targeted edits — the reliable way to edit LARGE files (any model)
+        "file_replace_lines",
+        "file_insert_lines",
+        # W4 — anchored str-replace for capable models (anchored_edit capability).
+        # Callable by all agents (in allowed_tools) but WITHHELD from advertised_tools
+        # when model_policy.anchored_edit is False; see agent_scope() below.
+        "file_str_replace",
+        "file_list",
+        "shell",
+        "shell_exec",
+        "shell_view",
+        "shell_wait",
+        "shell_write_to_process",
+        "shell_kill_process",
+        "code_exec",
+        "browser",
+        # W-45 — verify_web_app: structured web-app self-test → the finish gate's
+        # clean pass/fail verdict (kills the 25-40× browser reload verify-loop).
+        "verify_web_app",
+        # EPIC F — platform-owned preview surface. These four SUPERSEDE the old
+        # `deploy_preview` placeholder (which was a deferred, never-registered name):
+        # the model declares intent (dir/framework/command) and the platform owns
+        # the port/serving/health. They are REGISTERED (build_default_registry), so
+        # they must be in scope here or the agent resolves them as unknown_tool.
+        "preview_start",
+        "preview_status",
+        "preview_logs",
+        "preview_stop",
+        "server_status",
+        # plan-mode meta tools: propose a plan (planning) + report capstones (execution).
+        "submit_plan",
+        "plan_step",
+        # runthru-v2 (#3): declarative full-state progress snapshot. plan_step is now
+        # RETIRED from the advertised surface for ALL tiers (it caused plan-state drift);
+        # capable models report progress via this instead. Prompt-gated, never gates finish.
+        "update_plan_progress",
+        "think",  # NO-OP reasoning scratchpad — let a small model "say" things without side effects
+        # CXT-2: durable .disco/context/* working memory (read any kind; write narrative kinds).
+        "context_memory",
+        "sheet_generate",
+        "slides_generate",
+        "audio_overview",
+        "image_generate",
+        # C-EDIT-4: deck_patch — targeted RFC-6902 edits to authored deck JSON
+        "deck_patch",
+        # C20 — `delegate_explore`: EXECUTION-only. It is NOT a pure read — the
+        # call DISPATCHES a subagent (an action that yields an observation), so
+        # it does NOT belong in the PLANNING surface. The engine appends it via
+        # its virtual-singleton path in execution mode (and never in the
+        # planning branch), so the planner never sees it; the capability
+        # backstop also excludes it (`read_only=False` on the tool def).
+        "delegate_explore",
+    }
+)
+
+
+# W4: backward-compat constants kept for external imports (e.g. agent-server tests).
+# The new agent_scope() uses model_policy.withheld_tools instead of these directly.
+# Do NOT use these constants in new code — derive from ModelExecutionPolicy.withheld_tools.
+_ANCHORED_EDIT_TOOLS: frozenset[str] = frozenset({"file_str_replace"})
+_WEAK_TIER_ADVERTISED: frozenset[str] = AGENT_TOOLS - _ANCHORED_EDIT_TOOLS
+
+# C6: artifact_mode tool scope — a STRICT SUBSET of AGENT_TOOLS with NO shell/browser/
+# preview/plan-gate/code_exec/file_str_replace/delegate_explore. Includes line-edit tools
+# (file_replace_lines / file_insert_lines) so artifacts remain editable post-creation.
+ARTIFACT_TOOLS: frozenset[str] = frozenset(
+    {
+        "file_read",
+        "file_write",
+        "file_append",
+        "file_edit",
+        # line-number-targeted edits — present so artifacts are editable without shell
+        "file_replace_lines",
+        "file_insert_lines",
+        "file_list",
+        "search",
+        "extract",
+        "sheet_generate",
+        "slides_generate",
+        "image_generate",
+        "audio_overview",
+        "think",
+        # CXT-2: durable context memory is safe in artifact scope (workspace FS only)
+        "context_memory",
+        # C-EDIT-4: deck editing is safe in artifact scope (no shell/browser)
+        "deck_patch",
+    }
+)
+
+
+def artifact_scope() -> ToolScope:
+    """Return the ToolScope for artifact mode (C6) — NO shell/browser/plan-gate.
+
+    ARTIFACT_TOOLS is a strict subset of AGENT_TOOLS: file writers + asset
+    generators + search/extract + think. Excludes shell*, browser, preview_*,
+    server_status, submit_plan, plan_step, code_exec, file_str_replace,
+    delegate_explore. The INTERACTIVE/NeverConfirm loop is low-risk by design;
+    the boundary is the intersection: artifact mode must NOT silently grant
+    shell or browser access."""
+    return ToolScope(allowed_tools=ARTIFACT_TOOLS, preset="artifact")
+
+
+def research_scope() -> ToolScope:
+    return ToolScope(allowed_tools=RESEARCH_TOOLS, preset="research")
+
+
+def agent_scope(*, model_policy: ModelExecutionPolicy) -> ToolScope:
+    """Return the ToolScope for an agent surface, narrowed by model_policy.
+
+    Contract #4: ONE exact keyword signature (not "policy or withheld_tools").
+    AGENT_TOOLS is the security allowlist (what is *callable*); the advertised
+    set shown to the LLM is narrowed by model_policy.withheld_tools.  Withheld
+    tools remain in allowed_tools so the engine repair loop and the planner-
+    safety backstop (readonly_tool_names) continue to key off the full
+    allowed set — they must never see a narrower boundary than the security one.
+
+    Tier / capability behaviour (driven entirely by the policy object):
+      • standard + anchored_edit=True  → advertised_tools=None (show all)
+      • standard + anchored_edit=False → file_str_replace withheld
+      • weak    + anchored_edit=True   → plan_step, update_plan_progress withheld
+      • weak    + anchored_edit=False  → all three withheld
+    """
+    withheld = model_policy.withheld_tools
+    if not withheld:
+        # Standard no-op: show the complete toolset (advertised_tools=None = all allowed).
+        return ToolScope(allowed_tools=AGENT_TOOLS, preset="agent")
+    return ToolScope(
+        allowed_tools=AGENT_TOOLS,
+        advertised_tools=AGENT_TOOLS - withheld,
+        preset="agent",
+    )
+
+codex
+REVISE
+
+REASONS
+1. (a) PASS: the projection itself is correct and pure. `compile_tool_scopes` cleanly projects `bootstrap/tools`, `edit_tools`, `repair_tools`, `verify.finalizer`, and leaves `export` empty, and `allowed()` is a strict membership check over per-phase `frozenset`s (no additive fallback logic).
+2. (b) PASS: with current domain (`ExportContract.pipeline` is stages, not tool names), `export=frozenset()` is the right placeholder, and `verify={finalizer}` matches the contract model and invariant that finalization is a single host-owned finalizer token.
+3. (c) CONDITIONAL: the compiler is hard-only data. It does not itself enforce execution. I found no consumer callsite using `allowed()`/`ContractToolScopes` yet, so this PR does not yet close the actual out-of-scope execution path. That is acceptable only if the campaign explicitly accepts deferred enforcement in a follow-up integration milestone.
+4. (d) PARTIAL: bootstrap-hard-exclusion is only validated for `file_write` in tests. The “generic file/shell during bootstrap unless permitted” invariant is not directly proven for `shell` in `test_contract_scopes.py`, so the hard-exclusion claim is under-covered.
+
+REQUIRED_REVISIONS
+1. Add a focused test that bootstraps a contract without `shell` and asserts `s.allowed(Phase.BOOTSTRAP, "shell") is False`, plus a positive paired case where `shell` is explicitly in bootstrap tools and is allowed.
+2. Add/extend an integration-level test for the runtime seam that proves out-of-scope tools are actually denied before execution (the next PR stage), or explicitly gate this PR as “compiler-only” with a clear follow-up ticket in the review notes.
+
+Open question
+- Assumption: this milestone intentionally owns only compile-time projection and schema exports, with executor hard-enforcement slated for the next phase; if not, this is a security gap and should be upgraded to BLOCKED.
+tokens used
+51,715
+REVISE
+
+REASONS
+1. (a) PASS: the projection itself is correct and pure. `compile_tool_scopes` cleanly projects `bootstrap/tools`, `edit_tools`, `repair_tools`, `verify.finalizer`, and leaves `export` empty, and `allowed()` is a strict membership check over per-phase `frozenset`s (no additive fallback logic).
+2. (b) PASS: with current domain (`ExportContract.pipeline` is stages, not tool names), `export=frozenset()` is the right placeholder, and `verify={finalizer}` matches the contract model and invariant that finalization is a single host-owned finalizer token.
+3. (c) CONDITIONAL: the compiler is hard-only data. It does not itself enforce execution. I found no consumer callsite using `allowed()`/`ContractToolScopes` yet, so this PR does not yet close the actual out-of-scope execution path. That is acceptable only if the campaign explicitly accepts deferred enforcement in a follow-up integration milestone.
+4. (d) PARTIAL: bootstrap-hard-exclusion is only validated for `file_write` in tests. The “generic file/shell during bootstrap unless permitted” invariant is not directly proven for `shell` in `test_contract_scopes.py`, so the hard-exclusion claim is under-covered.
+
+REQUIRED_REVISIONS
+1. Add a focused test that bootstraps a contract without `shell` and asserts `s.allowed(Phase.BOOTSTRAP, "shell") is False`, plus a positive paired case where `shell` is explicitly in bootstrap tools and is allowed.
+2. Add/extend an integration-level test for the runtime seam that proves out-of-scope tools are actually denied before execution (the next PR stage), or explicitly gate this PR as “compiler-only” with a clear follow-up ticket in the review notes.
+
+Open question
+- Assumption: this milestone intentionally owns only compile-time projection and schema exports, with executor hard-enforcement slated for the next phase; if not, this is a security gap and should be upgraded to BLOCKED.

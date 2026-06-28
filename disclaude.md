@@ -994,3 +994,28 @@ frontend+agent-server stack — real ops, not a stub). Promotion to mainline sti
 - Tests: 19 passed (CONTRACT-1+2). basedpyright strict: 0 errors.
 - NEXT: CONTRACT-3 — Contract→ToolScope compiler (compile a BuildContract into hard executor allowlists per
   phase: bootstrap/edit/repair/verify/export; appkit bootstrap can't file_write etc.).
+
+## PR CONTRACT-3 — Contract→ToolScope compiler (P2) — COMPLETE
+- Codex (CODE, binding): APPROVE (after 1 round). Projection correct + pure; allowed() is a genuine hard
+  allowlist (no leak path); export=∅-until-P10 + verify={finalizer} correct modeling.
+- NEW contract/scopes.py: Phase enum + ContractToolScopes (frozen, per-phase frozensets) +
+  compile_tool_scopes(contract) → bootstrap/edit/repair/verify/export hard allowlists + allowed(phase,tool).
+  Pure projection of the contract's tool packs; no tool-runtime import.
+- Tests: 28 passed (full contract suite). Invariants proven incl. the done-when: a bootstrap pack lacking
+  shell/file_write hard-excludes them (allowed False), declared → allowed; edit can't rewrite via file_write;
+  repair bounded; verify==finalizer.
+
+### >>> TRACKED FOLLOW-UP (binding) — CONTRACT-3 executor-side ENFORCEMENT <<<
+CONTRACT-3 is COMPILER-ONLY by design (pure projection + hard-allowlist data). It does NOT yet DENY an
+out-of-scope tool call at execution. The enforcement integration MUST: in the tools executor, before
+running a tool, resolve the run's BuildContract (CONTRACT-2 get_for_brief) → compile_tool_scopes → and
+REJECT a call whose tool is not allowed() in the current phase (bootstrap/edit/repair/verify/export),
+returning a structured "tool_out_of_contract_scope" outcome (mirror the existing tool-scope deny path).
+This closes the "model cannot use generic file/shell during bootstrap unless the contract permits it"
+done-when at runtime. Belongs with the P4 specialized-mutation-tools wiring (when app_* tools + per-phase
+execution land) OR a dedicated CONTRACT-ENFORCE PR. Until then: contracts are declared + compiled but not
+runtime-enforced — this is an explicit, tracked gap, NOT a silent one.
+
+### P2 CONTRACT RUNTIME (CONTRACT-1/2/3) CORE COMPLETE.
+Models + registry + scope compiler all green + Codex-gated. Next P2-adjacent: the executor enforcement
+follow-up above, then P3 (WorkflowPromptPack) / P4 (specialized mutation tools incl. app_*).

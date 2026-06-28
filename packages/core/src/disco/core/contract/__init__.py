@@ -23,15 +23,19 @@ from .models import (
     VerificationLevel,
 )
 from .registry import BuildContractRegistry
+from .scopes import ContractToolScopes, Phase, compile_tool_scopes
 
 __all__ = [
     "ArtifactContract",
     "BuildContract",
     "BuildContractRegistry",
     "ContractKind",
+    "ContractToolScopes",
     "EditContract",
     "ExportContract",
+    "Phase",
     "ToolPack",
     "VerificationContract",
     "VerificationLevel",
+    "compile_tool_scopes",
 ]
