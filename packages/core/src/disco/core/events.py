@@ -55,6 +55,8 @@ class EventKind(str, Enum):
     SCHEDULE = "schedule"  # a schedule was created or deleted (RP-08)
     SCHEDULE_RUN = "schedule_run"  # a scheduled run fired (RP-08)
     CLARIFY = "clarify"  # pre-plan typed clarification questions (RP-13)
+    CONTEXT_RESOLVED = "context_resolved"  # CXT-3: agent's DEFERRED snip mark (resolved range)
+    CONTEXT_SUMMARY = "context_summary"  # CXT-3: durable summary written for a resolved range
 
 
 def _new_id() -> str:
@@ -843,6 +845,43 @@ class ClarifyEvent(BaseEvent):
     items: list[ClarifyQuestionItem]
 
 
+class ContextResolvedEvent(BaseEvent):
+    """CXT-3 — the agent's DEFERRED 'snip' mark: a seq range [start,end] the agent
+    has declared resolved (an exploration concluded, stale tool chatter) and that
+    MAY be forgotten from the model view later — but ONLY once a durable summary
+    exists and context pressure warrants it (context_compact_if_needed). On its
+    own this event changes nothing: it does not tombstone, so View.of is unaffected
+    until a CondensationEvent is actually emitted for the range.
+
+    NOT LLMConvertible — pure intent/bookkeeping. The model only ever sees the
+    inline summary of the CondensationEvent that eventually executes the snip."""
+
+    kind: Literal[EventKind.CONTEXT_RESOLVED] = EventKind.CONTEXT_RESOLVED
+    source: EventSource = EventSource.AGENT
+    range_id: str = Field(default_factory=lambda: f"cxr_{uuid.uuid4().hex}")
+    forgotten_start_seq: int
+    forgotten_end_seq: int
+    reason: str = "resolved"
+    # Set once a durable summary file has been written for this range (CXT-2 SUMMARY).
+    summary_ref_path: str | None = None
+
+
+class ContextSummaryEvent(BaseEvent):
+    """CXT-3 — records that a durable summary was written for a resolved range
+    (the 'state exists elsewhere' precondition for compaction). The non-empty
+    `summary` is the content that will replace the forgotten span when the snip
+    executes, so its presence + non-emptiness is the durability proof.
+
+    NOT LLMConvertible — internal context-compaction marker."""
+
+    kind: Literal[EventKind.CONTEXT_SUMMARY] = EventKind.CONTEXT_SUMMARY
+    source: EventSource = EventSource.SYSTEM
+    range_id: str
+    rel_path: str
+    summary: str
+    artifact_kind: str = "summary"
+
+
 # ---- the discriminated union the store/serde use ----------------------------
 
 Event = Annotated[
@@ -861,7 +900,9 @@ Event = Annotated[
     | ErrorEvent
     | ScheduleEvent
     | ScheduleRunEvent
-    | ClarifyEvent,
+    | ClarifyEvent
+    | ContextResolvedEvent
+    | ContextSummaryEvent,
     Field(discriminator="kind"),
 ]
 

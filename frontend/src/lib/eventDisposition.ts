@@ -44,6 +44,8 @@ export const KNOWN_EVENT_KINDS = [
   "schedule",
   "schedule_run",
   "clarify",
+  "context_resolved",
+  "context_summary",
 ] as const;
 
 export type KnownEventKind = (typeof KNOWN_EVENT_KINDS)[number];
@@ -85,5 +87,13 @@ export const EVENT_DISPOSITION: Record<
   datasource: {
     disposition: "suppressed",
     where: "Internal durable API/schema docs, condensation-immune (Cluster 7). Model-context only, not a user card.",
+  },
+  context_resolved: {
+    disposition: "suppressed",
+    where: "CXT-3 internal deferred-snip mark (agent resolves a context range). Never user-facing — harness memory mechanics.",
+  },
+  context_summary: {
+    disposition: "suppressed",
+    where: "CXT-3 internal record that a durable summary was written for a resolved range. Model-context/audit only, not a user card.",
   },
 };

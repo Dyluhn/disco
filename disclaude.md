@@ -370,3 +370,143 @@ Recorded as a tracked dependency in the CXT-7 section + the campaign open-items 
 - CXT-3 — Context resolve / snip equivalent (ContextResolvedEvent/SummaryEvent/CompactionEvent +
   context_mark_resolved/context_write_summary/context_compact_if_needed; audit log never deleted).
 
+## PR CXT-3 — Context resolve / snip equivalent
+
+### Status
+PLANNING → CODEX_REVIEW
+
+### Dependencies
+- CXT-1 (ResolvedContextRange, CompactionPolicy, ArtifactMemoryRef), CXT-2 (SUMMARY artifact via store).
+
+### Key finding (drives the design)
+disco ALREADY has reversible span-tombstoning: `CondensationEvent` (seq range [start,end] + inline
+summary + reason∈{request,tokens,events,hard_reset}, SYSTEM-sourced, NOT LLMConvertible) applied by
+`View.of` (drops forgotten seqs, emits summary in place) and reversed by `View.recover_span`. Plus
+`microcompact()` (deterministic system NO-OP tombstoning). These are IMMEDIATE + SYSTEM-driven.
+The campaign's `snip` is DEFERRED + AGENT-driven (mark now → execute removal together later, only once
+durable state exists). → ADDITIVE-BUT-REUSING design: add the agent-intent layer; REUSE CondensationEvent
+as the actual tombstone so View filtering + recovery are inherited (NO second way to forget).
+
+### Plan
+(A) THREE NEW EVENTS in events.py (add to EventKind, define class, add to Event union, export in __init__):
+- `ContextResolvedEvent` (source=AGENT, NOT LLMConvertible): the DEFERRED snip mark. Fields:
+  range_id:str (default cxr_ via a factory), forgotten_start_seq:int, forgotten_end_seq:int, reason:str,
+  summary_ref_path:str|None=None (set once a durable summary is written). Does NOT itself change the View.
+- `ContextSummaryEvent` (source=SYSTEM, NOT LLMConvertible): records that a durable summary file was
+  written for a range. Fields: range_id:str, artifact_kind:Literal[...]=summary, rel_path:str, summary:str.
+  This is the "durable state exists elsewhere" precondition record.
+- `ContextCompactionEvent` (source=SYSTEM, NOT LLMConvertible): execution bookkeeping — which resolved
+  range_ids were converted to CondensationEvent tombstones. Fields: range_ids:tuple[str,...],
+  reason:str="resolved". (The actual forgetting is the emitted CondensationEvent; this records the decision.)
+All three NOT LLMConvertible (audit/bookkeeping); the model never sees raw snip metadata — it sees the
+CondensationEvent's inline summary once compaction executes (existing View behavior).
+
+(B) THREE PURE FUNCTIONS in context/compaction.py (extend; pure over event lists — return events to append,
+no store/loop calls; CXT-7 wires them, same deferral pattern as CXT-1/CXT-2):
+- `context_mark_resolved(start_seq, end_seq, reason, *, range_id=None) -> ContextResolvedEvent`.
+- `context_write_summary(range_id, rel_path, summary) -> ContextSummaryEvent`.
+- `context_compact_if_needed(events, policy, *, protected_seqs=frozenset(), pressure_chars=None)
+   -> list[Event]`: scans events for pending ContextResolvedEvents NOT yet executed (no later
+   ContextCompactionEvent naming them). For each, compacts ONLY IF:
+     (1) a ContextSummaryEvent exists for that range_id (durable summary precondition — NEVER compact
+         without state elsewhere), AND
+     (2) the range [start,end] does NOT overlap any protected_seq (unresolved failures never compacted),
+         AND
+     (3) pressure warrants it: pressure_chars is None (caller forces) OR pressure_chars >
+         policy.max_history_chars.
+   Returns a CondensationEvent (reason="request", summary=the durable summary, range=[start,end]) per
+   eligible range + ONE ContextCompactionEvent listing the executed range_ids. Ineligible ranges are
+   left pending (deferred). Idempotent: already-executed ranges are skipped.
+
+(C) ContextLedger linkage (so CXT-4 can surface): add a pure helper
+`resolved_ranges_from_events(events) -> tuple[ResolvedContextRange,...]` mapping ContextResolvedEvents
+(with their summary_ref) into CXT-1 ResolvedContextRange objects. (Read-only projection; no new ledger field.)
+
+NO new filtering logic, NO context_builder.py (doesn't exist; CXT-4 introduces the assembler). View.of is
+untouched — it already filters the CondensationEvents we emit.
+
+### Scope boundaries (for the gate)
+- Pure events + pure functions only. Wiring into the live loop (emit on agent snip tool-call, call
+  context_compact_if_needed under real token pressure) is CXT-7. Flagging.
+- "Resolved ranges omitted from ContextPack / model view" is satisfied via the emitted CondensationEvent +
+  existing View.of (tested through View.of, the REAL model context). "Summary path included" via
+  ContextSummaryEvent.rel_path + resolved_ranges_from_events → ResolvedContextRange.summary_ref.
+
+### Tests (packages/core/tests/test_context_compaction.py)
+- new events roundtrip through EventAdapter (union integrity); each is NOT LLMConvertible.
+- context_mark_resolved produces a deferred mark that ALONE does NOT change View.of(events).messages.
+- context_compact_if_needed WITHOUT a ContextSummaryEvent → returns [] (never compact w/o durable state).
+- with a summary + pressure → returns a CondensationEvent([start,end]) + ContextCompactionEvent; after
+  appending, View.of omits the range's messages BUT View.recover_span returns them (audit complete).
+- protected_seqs overlap → that range is NOT compacted (unresolved failures never compacted away).
+- idempotent: re-running after execution returns [] for the same range.
+- resolved_ranges_from_events maps marks → ResolvedContextRange with summary_ref set after a summary.
+
+### Codex review (round 1)
+- verdict: REVISE. (a) reuse-CondensationEvent APPROVED. Substance: tighten guards (idempotence via
+  existing tombstones not a bookkeeping event; non-empty summary as durability proof; overlap skip +
+  deterministic order); ContextCompactionEvent likely redundant; FRONTEND eventDisposition mirror MUST be
+  updated or its contract test breaks. Log: .claude/cxt3-codex-r1.log.
+
+### PR CXT-3 — plan REVISION 1 (post-Codex round 1)
+
+DROP ContextCompactionEvent (Codex c). Only TWO new events: `ContextResolvedEvent` (deferred mark) +
+`ContextSummaryEvent` (durable-summary record). Execution is INFERRED from existing CondensationEvents
+(a resolved range is "already executed" iff an existing CondensationEvent's [start,end] covers it) — no
+separate bookkeeping event, smaller union surface.
+
+HARDENED context_compact_if_needed(events, policy, *, protected_seqs=frozenset(), pressure_chars=None):
+- Collect existing forgotten ranges from ALL CondensationEvents → `already_forgotten`.
+- Collect pending ContextResolvedEvents; map range_id → its ContextSummaryEvent (if any).
+- Process candidates in DETERMINISTIC order: ascending forgotten_start_seq, then range_id.
+- Emit a CondensationEvent for a candidate ONLY IF ALL hold:
+  (1) a ContextSummaryEvent exists for range_id AND its `summary` is NON-EMPTY (stripped) — this is the
+      durability proof: the non-empty summary is the very content inlined into the tombstone, so the
+      forgotten span is provably replaced by real content (strongest pure precondition, no FS needed);
+  (2) [start,end] does NOT overlap any protected_seq (unresolved failures never compacted);
+  (3) [start,end] is NOT already covered by `already_forgotten` NOR by a range emitted earlier in THIS
+      pass (idempotence + no overlapping double-forget);
+  (4) pressure: pressure_chars is None (caller forces) OR pressure_chars > policy.max_history_chars.
+- Returns list[CondensationEvent] (reason="request", summary=durable summary). Re-running after execution
+  returns [] (the new CondensationEvents now appear in already_forgotten). Idempotent by construction.
+
+FRONTEND MIRROR (Codex e): add "context_resolved","context_summary" to frontend KNOWN_EVENT_KINDS +
+EVENT_DISPOSITION as `suppressed` (internal context-compaction markers, exactly like `condensation`) so
+the enforced disposition contract test stays green and these never leak as user cards. Also keep the
+Python↔TS EventKind contract test green (locate + update if it pins the TS list against the enum).
+
+EVENTS (final): ContextResolvedEvent(source=AGENT, NOT LLMConvertible; range_id, forgotten_start_seq,
+forgotten_end_seq, reason, summary_ref_path:str|None=None); ContextSummaryEvent(source=SYSTEM, NOT
+LLMConvertible; range_id, rel_path, summary, artifact_kind default "summary").
+
+Tests unchanged from above MINUS the ContextCompactionEvent assertions PLUS: non-empty-summary guard
+(empty summary → not compacted); overlap-with-existing-CondensationEvent skip; frontend disposition test
+still green (run vitest on eventDisposition.test.ts if feasible, else assert via the python contract test).
+
+### Codex review (CODE, binding) — APPROVE
+- verdict: APPROVE, REQUIRED_REVISIONS: None. Verified in code: 2 new events in union + serde unaffected,
+  both guards (non-empty-summary durability + protected-seq) hole-free, idempotence/overlap correct,
+  ContextCompactionEvent dropped, frontend mirror + python contract green, View omission/recovery
+  inherited. Log: .claude/cxt3-codex-code.log. Status → COMPLETE.
+
+### Implementation notes
+- events.py: +EventKind.CONTEXT_RESOLVED/CONTEXT_SUMMARY, +ContextResolvedEvent (AGENT, deferred mark) +
+  ContextSummaryEvent (SYSTEM, durable-summary record), both NOT LLMConvertible, both in Event union.
+- compaction.py: context_mark_resolved / context_write_summary / context_compact_if_needed (reuses
+  CondensationEvent as the tombstone) / resolved_ranges_from_events (→ CXT-1 ResolvedContextRange).
+- exports in context/__init__ + core/__init__; frontend eventDisposition.ts mirror (2 kinds, suppressed).
+- DESIGN: additive-but-reusing — no second forgetting path; View.of omission + recover_span inherited.
+
+### Tests
+- 48 passed: test_context_compaction.py + test_event_kind_frontend_contract.py (lockstep) + CXT-1/2 +
+  cluster1_context + cluster7_knowledge regressions. basedpyright strict: 0 errors.
+
+### Remaining risk / tracked follow-up
+- Loop wiring deferred to CXT-7: emit ContextResolvedEvent on an agent snip tool-call; call
+  context_compact_if_needed under real token pressure with protected_seqs = unresolved-failure seqs;
+  write the durable SUMMARY file (CXT-2 store) alongside ContextSummaryEvent.
+
+### Next PR
+- CXT-4 — ContextPack prompt assembler (stop feeding raw event history as primary context; assemble
+  stable prefix + ContextPack + recent turns + recoverable refs + tool schema).
+

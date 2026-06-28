@@ -20,6 +20,12 @@ from .ledger import (
     Severity,
     VerifierFailureRef,
 )
+from .compaction import (
+    context_compact_if_needed,
+    context_mark_resolved,
+    context_write_summary,
+    resolved_ranges_from_events,
+)
 from .pack import ContextPack
 from .source_priority import SourceKind, SourcePriority
 from .store import (
@@ -50,4 +56,8 @@ __all__ = [
     "SourcePriority",
     "VerifierFailureRef",
     "WorkspaceFS",
+    "context_compact_if_needed",
+    "context_mark_resolved",
+    "context_write_summary",
+    "resolved_ranges_from_events",
 ]

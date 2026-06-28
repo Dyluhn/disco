@@ -1,0 +1,2953 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.3-codex-spark
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f0c47-dca8-7a10-8227-0c0dd2c507ec
+--------
+user
+# Codex PLAN Review — PR CXT-3 (context resolve/snip)
+
+This is a DESIGN/PLAN review. The code is intentionally NOT written yet — judge the DESIGN, not file
+presence. CXT-1 and CXT-2 are merged. Inspect packages/core/src/disco/core/events.py and view.py to
+ground your judgment. Return exactly: APPROVE | REVISE | BLOCKED_CODEX_UNAVAILABLE.
+
+The central design decision to judge:
+disco already has CondensationEvent (reversible seq-range tombstone + inline summary, applied by View.of,
+reversed by recover_span) and microcompact (system NO-OP tombstoning). The campaign wants an AGENT-driven
+DEFERRED snip layer (mark now, execute later, only once durable state exists). The plan ADDS 3 events for
+the intent layer (ContextResolvedEvent=deferred mark, ContextSummaryEvent=durable-summary record,
+ContextCompactionEvent=execution bookkeeping) but REUSES CondensationEvent as the actual tombstone so
+View.of filtering + recover_span are inherited (no second forgetting path).
+
+Judge specifically:
+(a) Is reusing CondensationEvent for the actual forgetting (rather than a new filtering path) correct and
+    safe, or does it conflate agent-snip with system-condensation in a harmful way?
+(b) Are the compaction guards sufficient to honor the campaign invariants "never compact until durable
+    state exists elsewhere" (require a ContextSummaryEvent) and "unresolved failures never compacted"
+    (caller-supplied protected_seqs)? Any hole?
+(c) Are the 3 new events genuinely additive, or is one redundant with CondensationEvent?
+(d) Is keeping the functions PURE (return events to append; loop-wiring deferred to CXT-7) acceptable?
+(e) Union/adapter integrity risk from adding 3 event types?
+
+## PR Plan
+## PR CXT-3 — Context resolve / snip equivalent
+
+### Status
+PLANNING → CODEX_REVIEW
+
+### Dependencies
+- CXT-1 (ResolvedContextRange, CompactionPolicy, ArtifactMemoryRef), CXT-2 (SUMMARY artifact via store).
+
+### Key finding (drives the design)
+disco ALREADY has reversible span-tombstoning: `CondensationEvent` (seq range [start,end] + inline
+summary + reason∈{request,tokens,events,hard_reset}, SYSTEM-sourced, NOT LLMConvertible) applied by
+`View.of` (drops forgotten seqs, emits summary in place) and reversed by `View.recover_span`. Plus
+`microcompact()` (deterministic system NO-OP tombstoning). These are IMMEDIATE + SYSTEM-driven.
+The campaign's `snip` is DEFERRED + AGENT-driven (mark now → execute removal together later, only once
+durable state exists). → ADDITIVE-BUT-REUSING design: add the agent-intent layer; REUSE CondensationEvent
+as the actual tombstone so View filtering + recovery are inherited (NO second way to forget).
+
+### Plan
+(A) THREE NEW EVENTS in events.py (add to EventKind, define class, add to Event union, export in __init__):
+- `ContextResolvedEvent` (source=AGENT, NOT LLMConvertible): the DEFERRED snip mark. Fields:
+  range_id:str (default cxr_ via a factory), forgotten_start_seq:int, forgotten_end_seq:int, reason:str,
+  summary_ref_path:str|None=None (set once a durable summary is written). Does NOT itself change the View.
+- `ContextSummaryEvent` (source=SYSTEM, NOT LLMConvertible): records that a durable summary file was
+  written for a range. Fields: range_id:str, artifact_kind:Literal[...]=summary, rel_path:str, summary:str.
+  This is the "durable state exists elsewhere" precondition record.
+- `ContextCompactionEvent` (source=SYSTEM, NOT LLMConvertible): execution bookkeeping — which resolved
+  range_ids were converted to CondensationEvent tombstones. Fields: range_ids:tuple[str,...],
+  reason:str="resolved". (The actual forgetting is the emitted CondensationEvent; this records the decision.)
+All three NOT LLMConvertible (audit/bookkeeping); the model never sees raw snip metadata — it sees the
+CondensationEvent's inline summary once compaction executes (existing View behavior).
+
+(B) THREE PURE FUNCTIONS in context/compaction.py (extend; pure over event lists — return events to append,
+no store/loop calls; CXT-7 wires them, same deferral pattern as CXT-1/CXT-2):
+- `context_mark_resolved(start_seq, end_seq, reason, *, range_id=None) -> ContextResolvedEvent`.
+- `context_write_summary(range_id, rel_path, summary) -> ContextSummaryEvent`.
+- `context_compact_if_needed(events, policy, *, protected_seqs=frozenset(), pressure_chars=None)
+   -> list[Event]`: scans events for pending ContextResolvedEvents NOT yet executed (no later
+   ContextCompactionEvent naming them). For each, compacts ONLY IF:
+     (1) a ContextSummaryEvent exists for that range_id (durable summary precondition — NEVER compact
+         without state elsewhere), AND
+     (2) the range [start,end] does NOT overlap any protected_seq (unresolved failures never compacted),
+         AND
+     (3) pressure warrants it: pressure_chars is None (caller forces) OR pressure_chars >
+         policy.max_history_chars.
+   Returns a CondensationEvent (reason="request", summary=the durable summary, range=[start,end]) per
+   eligible range + ONE ContextCompactionEvent listing the executed range_ids. Ineligible ranges are
+   left pending (deferred). Idempotent: already-executed ranges are skipped.
+
+(C) ContextLedger linkage (so CXT-4 can surface): add a pure helper
+`resolved_ranges_from_events(events) -> tuple[ResolvedContextRange,...]` mapping ContextResolvedEvents
+(with their summary_ref) into CXT-1 ResolvedContextRange objects. (Read-only projection; no new ledger field.)
+
+NO new filtering logic, NO context_builder.py (doesn't exist; CXT-4 introduces the assembler). View.of is
+untouched — it already filters the CondensationEvents we emit.
+
+### Scope boundaries (for the gate)
+- Pure events + pure functions only. Wiring into the live loop (emit on agent snip tool-call, call
+  context_compact_if_needed under real token pressure) is CXT-7. Flagging.
+- "Resolved ranges omitted from ContextPack / model view" is satisfied via the emitted CondensationEvent +
+  existing View.of (tested through View.of, the REAL model context). "Summary path included" via
+  ContextSummaryEvent.rel_path + resolved_ranges_from_events → ResolvedContextRange.summary_ref.
+
+### Tests (packages/core/tests/test_context_compaction.py)
+- new events roundtrip through EventAdapter (union integrity); each is NOT LLMConvertible.
+- context_mark_resolved produces a deferred mark that ALONE does NOT change View.of(events).messages.
+- context_compact_if_needed WITHOUT a ContextSummaryEvent → returns [] (never compact w/o durable state).
+- with a summary + pressure → returns a CondensationEvent([start,end]) + ContextCompactionEvent; after
+  appending, View.of omits the range's messages BUT View.recover_span returns them (audit complete).
+- protected_seqs overlap → that range is NOT compacted (unresolved failures never compacted away).
+- idempotent: re-running after execution returns [] for the same range.
+- resolved_ranges_from_events maps marks → ResolvedContextRange with summary_ref set after a summary.
+
+### Codex review
+- verdict: (pending)
+
+
+## Required response format
+VERDICT: APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE
+REASONS:
+- ...
+REQUIRED_REVISIONS:
+- ...
+codex
+I’ll quickly validate the existing `CondensationEvent`/`View` mechanics and adapter unions in `events.py` and `view.py` so I can judge whether the proposed event-split design is safe and complete, then return one of the three required verdicts.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,320p' packages/core/src/disco/core/view.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/events.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Memory: View + Condensation — event-state-contract.md §5.
+
+The tension: an append-only log grows without bound, but the LLM context window
+is finite. Resolution (BoD §7.3): never delete; to "forget", append a
+`CondensationEvent` tombstone recording a span to drop and a summary to insert.
+The `View` computes, at read time, "what the LLM currently sees" by applying
+those tombstones. The agent loop and LLM router consume `View.messages` — never
+the raw log.
+
+The View's behavior and tombstone semantics are [CONTRACT]. The *condensation
+strategy* (when/how much to summarize) is a swappable [INTERIOR] `Condenser`;
+Phase 0 ships only the no-op condenser (the real LLMSummarizingCondenser is a
+Phase 1 deliverable, BoD §22).
+
+Reversible-compaction tier (C11): the tombstone is a MARKER, not a delete —
+the dropped events stay on the append-only log. `recover_span(events,
+tombstone)` (and `View.recover_span`) re-materializes the originals on demand.
+The default `View.messages` is UNCHANGED by this tier: recovery is an explicit
+accessor, not an automatic un-tombstone. The recovered events are returned to
+the caller; nothing is re-injected into the live context.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from typing import Literal, Protocol
+
+from pydantic import BaseModel
+
+from .env import disco_env
+from .events import (
+    ActionEvent,
+    AgentErrorEvent,
+    CondensationEvent,
+    DatasourceEvent,
+    Event,
+    KnowledgeEvent,
+    LLMConvertible,
+    LLMMessage,
+    ObservationEvent,
+    PlanEvent,
+)
+
+# BP-06 observation masking (arXiv 2508.21433): old tool-output bodies elide to a
+# restorable stub; reasoning/actions stay verbatim. Render-time only — the event
+# log always keeps full bodies.
+_MASK_KEEP_RECENT = 8  # newest N observation events render in full
+_MASK_MIN_CHARS = 600  # smaller bodies are never masked (cheap, often load-bearing)
+
+
+# Tools that DO change durable state (the workspace / the plan), so their turns are
+# never microcompacted even when an attempt failed — a failed file write still may
+# have left partial state, and plan_step turns carry progress meaning.
+_DURABLE_TOOLS = frozenset({"file_write", "file_append", "file_edit", "plan_step"})
+
+
+def microcompact(events: list[Event]) -> list[CondensationEvent]:
+    """S3 Microcompact (GAP A) — a NO-MODEL, deterministic pass that tombstones
+    NO-OP turns: a tool call that FAILED and was later SUPERSEDED by an IDENTICAL
+    (same tool + same arguments) call that SUCCEEDED. The failed attempt holds no
+    durable state and no information the successful retry doesn't — so it just eats
+    context. Drop it (reversibly — the bytes stay on the log) with a one-line
+    tombstone.
+
+    Conservative by construction (dropping something useful would corrupt the
+    model's context):
+      - only EXACT retries (same tool_name + same arguments) count as a supersession;
+      - durable-state tools (file writes, plan_step) are never touched;
+      - only the action+observation pair when they are ADJACENT (obs.seq ==
+        action.seq + 1) — so we never sweep an unrelated event caught between them;
+      - spans already covered by a tombstone are skipped (idempotent — safe to run
+        every step).
+    Returns the tombstones to append (possibly empty)."""
+    # Already-forgotten seqs — never re-tombstone them.
+    forgotten: list[tuple[int, int]] = [
+        (e.forgotten_start_seq, e.forgotten_end_seq)
+        for e in events
+        if isinstance(e, CondensationEvent)
+    ]
+
+    def already_forgotten(seq: int) -> bool:
+        return any(a <= seq <= b for a, b in forgotten)
+
+    # Pair each action with its observation (by action_id), keyed by (tool, args).
+    obs_by_action: dict[str, ObservationEvent] = {
+        e.action_id: e for e in events if isinstance(e, ObservationEvent) and e.action_id
+    }
+    # Which (tool, args) keys later SUCCEEDED — the supersession signal.
+    succeeded_keys: set[str] = set()
+    for a in events:
+        if not isinstance(a, ActionEvent) or a.tool_call is None:
+            continue
+        o = obs_by_action.get(a.id)
+        if o is not None and o.tool_result.success:
+            succeeded_keys.add(_call_key(a))
+
+    tombstones: list[CondensationEvent] = []
+    for a in events:
+        if not isinstance(a, ActionEvent) or a.tool_call is None:
+            continue
+        if a.tool_call.tool_name in _DURABLE_TOOLS:
+            continue
+        o = obs_by_action.get(a.id)
+        if o is None or o.tool_result.success:
+            continue  # only FAILED attempts are candidates
+        if a.seq is None or o.seq is None or o.seq != a.seq + 1:
+            continue  # require adjacency — never sweep an event caught between
+        if already_forgotten(a.seq):
+            continue
+        if _call_key(a) not in succeeded_keys:
+            continue  # not superseded → the failure still carries information; keep it
+        tombstones.append(
+            CondensationEvent(
+                forgotten_start_seq=a.seq,
+                forgotten_end_seq=o.seq,
+                summary=(
+                    f"[microcompacted: a failed `{a.tool_call.tool_name}` attempt was "
+                    "dropped — an identical call succeeded later]"
+                ),
+                summary_role="user",
+            )
+        )
+    return tombstones
+
+
+def _call_key(a: ActionEvent) -> str:
+    """A stable identity for a tool call: tool name + canonical args. Two calls with
+    the same key are 'the same call' for supersession purposes."""
+    return a.tool_call.tool_name + "\x00" + json.dumps(
+        a.tool_call.arguments or {}, sort_keys=True, default=str
+    )
+
+
+def recover_span(events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+    """C11 — Reversible-compaction tier: re-materialize the ORIGINAL events a
+    tombstone dropped from `View.messages`.
+
+    Background: a `CondensationEvent` does NOT delete the events it covers — it is
+    a MARKER on the append-only log (BoD Principle 3, event-state-contract §3)
+    that records a seq range + a summary. `View.of` uses the range to FILTER
+    events out of what the LLM sees; the bytes themselves stay on disk. This
+    function is the mirror of that filter: it walks the log and returns the
+    events whose seq falls in `[tombstone.forgotten_start_seq,
+    tombstone.forgotten_end_seq]` (inclusive), in their original form and
+    insertion order. The summary that replaced them in the View is NOT
+    returned — this returns the dropped originals, not their substitute.
+
+    On-demand + EXPLICIT only. The function does not mutate the event log, the
+    View, the tombstone, or any other state. The default `View.messages` is
+    unaffected. Recovery is an ACCESSOR for callers that need the originals
+    (e.g. a debug/audit surface, a "what did the model forget?" explainer, a
+    re-derivation tool that wants to re-evaluate a span against fresh context).
+    The recovered events are returned to the caller; nothing is re-injected
+    into the live context (no bloat, no accidental un-tombstone).
+
+    Edge cases:
+      - Degenerate range (start > end) → `[]`.
+      - No events in `events` match the range (e.g. a tombstone whose range
+        predates the log, or whose events were never persisted) → `[]`.
+      - A tombstone inside the range (an OVERLAPPING or NESTED tombstone) is
+        itself returned as a `CondensationEvent`; the log is the source of
+        truth, and re-running the function on the inner tombstone re-walks
+        the same log to resolve its span. The original events are NEVER
+        destroyed, so they remain retrievable regardless of how many later
+        tombstones also "forget" the same seq."""
+    start, end = tombstone.forgotten_start_seq, tombstone.forgotten_end_seq
+    if start > end:
+        return []
+    return [e for e in events if e.seq is not None and start <= e.seq <= end]
+
+
+def _latest_plan(events: list[Event]) -> PlanEvent | None:
+    """The maximal-revision PlanEvent — the plan the agent is currently executing.
+    A re-plan supersedes prior ones."""
+    plan: PlanEvent | None = None
+    for e in events:
+        if isinstance(e, PlanEvent) and (plan is None or e.revision >= plan.revision):
+            plan = e
+    return plan
+
+
+def effective_plan_progress(
+    events: list[Event],
+) -> tuple[PlanEvent | None, dict[int, str]]:
+    """The SINGLE source of truth for per-step plan completion. Merges BOTH progress
+    channels: incremental `plan_step(index, state)` marks (small models) AND declarative
+    `update_plan_progress({steps:[{index,state}...]})` full-state snapshots (capable
+    models — the #3 redesign). Returns (latest_plan, {1-based index: effective state}).
+
+    Why this exists: capable models report progress ONLY via update_plan_progress; the
+    old plan_step-only readers saw 0/N done for them, so a finished build PAUSED on the
+    actionless valve and the model's own recap kept showing the plan incomplete (it kept
+    verifying). Every completion/recap reader now flows through this one function so the
+    valve, the tail recap, the recitation drift-gate, and resume all agree.
+
+    Resolution: only events AFTER the latest plan count (a re-plan starts a fresh
+    checklist). Marks/snapshots apply in event order — by `seq`, falling back to LIST
+    POSITION when seqs are absent/zero (seqless fixtures) — and LATEST WINS, so a step can
+    move done→active if a later event says so. A `plan_step` sets ONE index; an
+    `update_plan_progress` applies the states it LISTS; indices a snapshot omits RETAIN
+    their prior known state (a partial snapshot never silently un-completes an omitted
+    step). Indices are bounded to the current plan (1..N); out-of-range marks are ignored.
+    Steps never mentioned have no entry (callers treat absent as not-done)."""
+    plan: PlanEvent | None = None
+    plan_pos = -1
+    for i, e in enumerate(events):
+        if isinstance(e, PlanEvent) and (plan is None or e.revision >= plan.revision):
+            plan, plan_pos = e, i
+    if plan is None or not plan.steps:
+        return (None, {})
+    plan_seq = plan.seq or 0
+    total = len(plan.steps)
+    states: dict[int, str] = {}
+
+    def _set(idx_raw: object, state_raw: object) -> None:
+        idx = int(idx_raw)  # type: ignore[arg-type]
+        if 1 <= idx <= total:  # bound to the current plan; ignore stale out-of-range
+            states[idx] = str(state_raw)
+
+    for i, e in enumerate(events):
+        if not isinstance(e, ActionEvent) or e.tool_call is None:
+            continue
+        eseq = e.seq or 0
+        # Scope to AFTER the current plan: prefer seq; fall back to list position when
+        # either seq is absent/zero (so seqless fixtures don't carry pre-replan marks).
+        if eseq and plan_seq:
+            if eseq < plan_seq:
+                continue
+        elif i < plan_pos:
+            continue
+        name = e.tool_call.tool_name
+        args = e.tool_call.arguments or {}
+        if name == "plan_step":
+            try:
+                _set(args.get("index"), args.get("state"))
+            except (TypeError, ValueError):
+                continue
+        elif name == "update_plan_progress":
+            for s in args.get("steps") or []:
+                try:
+                    _set(s.get("index"), s.get("state"))
+                except (TypeError, ValueError, AttributeError):
+                    continue
+    return (plan, states)
+
+
+def _pinned_seqs(events: list[Event]) -> set[int]:
+    """Seqs that condensation must NEVER forget: the latest PlanEvent (GAP D) plus
+    every KnowledgeEvent and DatasourceEvent (Cluster 7 — standing guidance and
+    durable API contracts must survive verbatim across a long run instead of
+    dissolving into a lossy summary). The head user message is already protected
+    by `keep_head`."""
+    pinned: set[int] = set()
+    plan = _latest_plan(events)
+    if plan is not None and plan.seq is not None:
+        pinned.add(plan.seq)
+    seen_knowledge: set[tuple[str, str]] = set()
+    for e in events:
+        if isinstance(e, KnowledgeEvent):
+            # Decision 3: KnowledgeEvent spam is exempted from pinning protection
+            # ONLY when the events are exact duplicates (same scope + same snippet).
+            # The first instance stays pinned; subsequent ones are forgettable.
+            h = hashlib.sha256(e.snippet.strip().encode()).hexdigest()
+            key = (e.scope, h)
+            if key in seen_knowledge:
+                continue
+            seen_knowledge.add(key)
+            if e.seq is not None:
+                pinned.add(e.seq)
+        elif isinstance(e, DatasourceEvent) and e.seq is not None:
+            pinned.add(e.seq)
+    return pinned
+
+
+def _recitation_message(events: list[Event]) -> LLMMessage | None:
+    """GAP D recency recitation: an EPHEMERAL objective + step checklist appended
+    at the View TAIL so the goal stays in the high-attention recent window even
+    after dozens of tool calls drift the plan toward the forgettable middle.
+    Built purely from the log (latest plan + plan_step actions) — no model call,
+    regenerated every materialization, never stored (preserves append-only)."""
+    # Merged truth-source (plan_step + update_plan_progress) so the tail recap reflects a
+    # capable model's DECLARATIVE progress, not just plan_step marks (the #3 redesign).
+    # A re-plan starts a fresh checklist (effective_plan_progress scopes to the latest
+    # PlanEvent — counting a prior plan's "done" marks would show every step done on the
+    # new plan: observed live as "all 5 done" → confused → STUCK).
+    plan, states = effective_plan_progress(events)
+    if plan is None or not plan.steps:
+        return None
+    done = {i for i, st in states.items() if st == "done"}
+    active = {i for i, st in states.items() if st == "active"}
+    lines = []
+    next_pending = None
+    for i, step in enumerate(plan.steps, start=1):
+        if i in done:
+            mark = "✓"
+        elif i in active:
+            mark = "→"
+        else:
+            mark = "□"
+            if next_pending is None:
+                next_pending = i
+        lines.append(f"  {mark} {i}. {step.title}")
+    nxt = (
+        f"\nNext incomplete step: {next_pending}. {plan.steps[next_pending - 1].title}"
+        if next_pending is not None
+        else "\nAll steps marked done — verify, then finish."
+    )
+    body = (
+        "<current-objective>\n"
+        f"Goal: {plan.summary}\n"
+        f"Plan progress ({len(done)}/{len(plan.steps)} done):\n"
+        + "\n".join(lines)
+        + nxt
+        + "\n</current-objective>"
+    )
+    return LLMMessage(role="user", content=body)
+
+
+
+ succeeded in 0ms:
+"""The Event type hierarchy — event-state-contract.md §2.
+
+Events are the atomic unit of all conversation and agent state. The log of
+events is append-only and the single source of truth (BoD Principle 3); State
+(state.py) and the LLM View (view.py) are *pure functions* of the ordered log.
+
+Field names, types, and method signatures here are **normative** (the contract
+marks them [CONTRACT]); other subsystems deserialize and compare these shapes
+without further coordination. Method *bodies* are implementation.
+"""
+
+from __future__ import annotations
+
+import re
+import uuid
+from contextvars import ContextVar
+from datetime import UTC, datetime
+from enum import Enum
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+from .dod import DoDPredicate
+
+# Bump on a *breaking* change to any event shape. Adding an optional field with
+# a default is backward-compatible and does NOT require a bump (§4 rule 2).
+SCHEMA_VERSION = 1
+
+
+class EventSource(str, Enum):
+    """Who/what produced an event. Security and UI both depend on this (§1.6)."""
+
+    USER = "user"
+    AGENT = "agent"
+    ENVIRONMENT = "environment"  # tool results, injected feedback, hooks
+    SYSTEM = "system"  # lifecycle/status, condensation, errors
+
+
+class EventKind(str, Enum):
+    """Discriminator for the Event union. Serialized by value (§4 rule 4)."""
+
+    MESSAGE = "message"
+    ACTION = "action"
+    OBSERVATION = "observation"
+    AGENT_ERROR = "agent_error"
+    CONDENSATION = "condensation"
+    STATUS = "status"
+    ERROR = "error"  # conversation-level error (distinct from agent_error)
+    PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
+    REPORT = "report"  # a finished Deep Research multi-section grounded report
+    ALTERNATIVES = "alternatives"  # 2–3 user-choosable options after repeated tool failure
+    KNOWLEDGE = "knowledge"  # a scoped best-practice snippet (Cluster 7)
+    DATASOURCE = "datasource"  # durable API/schema docs, condensation-immune (Cluster 7)
+    DELIVERABLE = "deliverable"  # the agent's finished-artifact handoff signal
+    SCHEDULE = "schedule"  # a schedule was created or deleted (RP-08)
+    SCHEDULE_RUN = "schedule_run"  # a scheduled run fired (RP-08)
+    CLARIFY = "clarify"  # pre-plan typed clarification questions (RP-13)
+
+
+def _new_id() -> str:
+    return f"evt_{uuid.uuid4().hex}"
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class BaseEvent(BaseModel):
+    """Common envelope for every event. Subtypes add a typed payload.
+
+    [CONTRACT] These fields exist on every event and never change meaning.
+
+    `frozen=True` makes events immutable at the type level (invariant #1):
+    accidental mutation becomes a runtime error, not a silent bug. The only
+    field "filled in later" is `seq`, set by the store via `model_copy` (a new
+    instance), never by in-place mutation.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(default_factory=_new_id)
+    # The `kind` discriminator is declared on each concrete subclass as a
+    # `Literal[EventKind.X]` (the idiomatic Pydantic discriminated-union shape;
+    # see `Event` below with `Field(discriminator="kind")`). Every concrete event
+    # therefore carries `kind` — BaseEvent is the never-instantiated envelope.
+    source: EventSource
+    timestamp: datetime = Field(default_factory=_now)  # VOLATILE (§6.3)
+    schema_version: int = Field(default=SCHEMA_VERSION)
+
+    # Assigned by the EventStore at append time. None before persistence.
+    # [CONTRACT] Monotonic, gap-free, per-conversation. Do NOT set manually.
+    seq: int | None = Field(default=None)
+
+    # Free-form, non-semantic metadata (tracing ids, UI hints). VOLATILE.
+    # Never load-bearing for reconstruction or equality.
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMConvertible:
+    """Marker mixin. Events that subclass this can be rendered into an LLM
+    message via `to_llm_message()`. The View (§5) only ever materializes
+    LLMConvertible events. [CONTRACT]
+
+    Deliberately a plain class with no fields so it composes with the frozen
+    Pydantic BaseEvent without disturbing the model.
+    """
+
+    def to_llm_message(self) -> LLMMessage:
+        raise NotImplementedError
+
+
+# ---- payload value objects --------------------------------------------------
+
+
+class LLMMessage(BaseModel):
+    """Provider-neutral message shape. The LLM router (separate subsystem) maps
+    this to/from provider formats. [CONTRACT at the router boundary.]"""
+
+    model_config = ConfigDict(frozen=True)
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+    # Optional structured content (tool calls/results) carried opaquely; the
+    # router owns provider-specific shaping.
+    tool_calls: list[dict[str, Any]] | None = None
+    tool_call_id: str | None = None  # VOLATILE
+    images: list[str] | None = None  # data-URL base64 (data:image/png;base64,...)
+
+
+class ToolCall(BaseModel):
+    """A request to execute one tool. Produced by the agent, consumed by the
+    tool subsystem (separate contract)."""
+
+    model_config = ConfigDict(frozen=True)
+    tool_name: str
+    arguments: dict[str, Any]
+    call_id: str = Field(default_factory=lambda: f"call_{uuid.uuid4().hex}")  # VOLATILE
+
+
+class ToolResult(BaseModel):
+    """The outcome of executing a ToolCall. Produced by the tool subsystem."""
+
+    model_config = ConfigDict(frozen=True)
+    call_id: str  # VOLATILE (correlates to ToolCall)
+    tool_name: str
+    success: bool
+    content: str  # human/LLM-readable result text
+    structured: dict[str, Any] | None = None  # optional machine payload
+    error: str | None = None  # populated iff success is False
+
+
+class PlanStep(BaseModel):
+    """One capstone in a proposed plan. The agent emits a list of these via the
+    `submit_plan` tool; the UI tracks each one's progress during the build."""
+
+    model_config = ConfigDict(frozen=True)
+    title: str  # short, plain-language capstone ("Scaffold the page + styles")
+    detail: str | None = None  # optional elaboration
+    # C18 / C1c — the step's optional machine-checkable done_condition, PERSISTED on the
+    # event so it survives resume (the in-memory `_plan_step_predicates` map is lost on a
+    # restart between submit_plan and approval; reading the predicate back off the durable
+    # PlanEvent is what lets the C1c DoD gate re-arm after a crash).
+    done_condition: DoDPredicate | None = None
+
+
+class ReportSection(BaseModel):
+    """One section of a Deep Research report — a section of the long-form output
+    grounded in a specific subset of the per-run corpus. `cited_passage_ids` are
+    the stable passage ids the citation UI resolves to source cards (mirror of
+    the per-block citations in the existing GroundedAnswer shape). `confidence`
+    + `disputed_notes` carry the honesty-at-scale signal: when sources agree
+    cleanly the section is "high"; when they disagree the conflict is named."""
+
+    model_config = ConfigDict(frozen=True)
+    id: str  # stable identifier ("s0", "s1", ... — for ToC anchoring)
+    title: str  # section heading the report renders verbatim
+    markdown: str  # the section body — markdown with inline [[passage_id]] citations
+    cited_passage_ids: list[str] = Field(default_factory=list)
+    confidence: Literal["high", "mixed", "low"] = "high"
+    # Plain-language notes naming any conflicts between sources for this section.
+    # When sources contradict on a claim, the model writes a short note here so
+    # the reader sees the disagreement, not a falsely-confident synthesis.
+    disputed_notes: list[str] = Field(default_factory=list)
+    unsupported_count: int = 0  # claims that failed NLI verification for this section
+
+
+class SecurityRisk(str, Enum):
+    """Mirrors §17 / the security contract. UNKNOWN is non-comparable."""
+
+    UNKNOWN = "UNKNOWN"
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class ConversationStatus(str, Enum):
+    """The loop's explicit execution state machine (BoD §12.1)."""
+
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+    STUCK = "STUCK"
+    WAITING_FOR_CONFIRMATION = "WAITING_FOR_CONFIRMATION"
+    # The agent proposed a plan and the loop is halted until the human approves
+    # it (Build plan-mode). Mirrors WAITING_FOR_CONFIRMATION but gates the whole
+    # plan up front, not one risky action.
+    AWAITING_PLAN_APPROVAL = "AWAITING_PLAN_APPROVAL"
+    # The run is halted for the user to decide. Reached two ways: (1) the agent
+    # itself calls `ask_user` with options; (2) the harness circuit breaker fires
+    # after `_circuit_breaker_threshold` consecutive failures and hands off rather
+    # than grinding. The user clicks an option (when present) or steers via
+    # send_message. (There is no `propose_alternatives` tool — the model uses
+    # `ask_user`; the breaker is harness-driven.)
+    AWAITING_USER_DECISION = "AWAITING_USER_DECISION"
+    # The agent called `ask_user` with a FREE-FORM question (no options) and the
+    # loop is halted until the user TYPES an answer. The two-way Ask-gate: unlike
+    # AWAITING_USER_DECISION (pick a card), this is an open question the user
+    # answers in prose. The user's reply (send_message / steer) IS the resume
+    # signal — same re-kick semantics as AWAITING_USER_DECISION, just a different
+    # surface (AskPanel, not the alternatives cards).
+    AWAITING_USER_QUESTION = "AWAITING_USER_QUESTION"
+    FINISHED = "FINISHED"
+    ERROR = "ERROR"
+
+
+# ---- concrete event types ---------------------------------------------------
+
+
+class MessageEvent(BaseEvent, LLMConvertible):
+    """A message from user, agent, or environment."""
+
+    kind: Literal[EventKind.MESSAGE] = EventKind.MESSAGE
+    message: LLMMessage
+
+    def to_llm_message(self) -> LLMMessage:
+        return self.message
+
+
+class ActionEvent(BaseEvent, LLMConvertible):
+    """The agent chose to take one tool action. One action per event
+    (Principle 6). Carries the agent's reasoning and self-assessed risk."""
+
+    kind: Literal[EventKind.ACTION] = EventKind.ACTION
+    source: EventSource = EventSource.AGENT
+    thought: str  # the agent's reasoning for this action
+    tool_call: ToolCall
+    # Agent's self-assessed risk; the independent analyzer may override
+    # downstream (security contract). Part of the event for audit.
+    self_assessed_risk: SecurityRisk = SecurityRisk.UNKNOWN
+    # VOLATILE: correlates to the model completion that produced this action.
+    llm_response_id: str | None = None
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(
+            role="assistant",
+            content=self.thought,
+            tool_calls=[
+                {
+                    "id": self.tool_call.call_id,
+                    "name": self.tool_call.tool_name,
+                    "arguments": _snip_args(self.tool_call.arguments),
+
+codex
+I’ve got the core definitions loaded; next I’m pulling the exact `CondensationEvent` and `View.of` paths so the review addresses behavior rather than assumptions.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"class CondensationEvent|Event =|EventKind|class EventAdapter|TypeAdapter\\(|Union\\[\" packages/core/src/disco/core/events.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "rg -n \"class View|def of\\(|CONDENSE|CondensationEvent|recover_span|microcompact|_pinned_seqs|messages\" packages/core/src/disco/core/view.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+39:class EventKind(str, Enum):
+83:    # `Literal[EventKind.X]` (the idiomatic Pydantic discriminated-union shape;
+231:    kind: Literal[EventKind.MESSAGE] = EventKind.MESSAGE
+242:    kind: Literal[EventKind.ACTION] = EventKind.ACTION
+499:    kind: Literal[EventKind.OBSERVATION] = EventKind.OBSERVATION
+542:    kind: Literal[EventKind.AGENT_ERROR] = EventKind.AGENT_ERROR
+557:class CondensationEvent(BaseEvent):
+562:    kind: Literal[EventKind.CONDENSATION] = EventKind.CONDENSATION
+578:    kind: Literal[EventKind.STATUS] = EventKind.STATUS
+594:    kind: Literal[EventKind.PLAN] = EventKind.PLAN
+624:    kind: Literal[EventKind.REPORT] = EventKind.REPORT
+681:    kind: Literal[EventKind.ALTERNATIVES] = EventKind.ALTERNATIVES
+709:    kind: Literal[EventKind.KNOWLEDGE] = EventKind.KNOWLEDGE
+730:    kind: Literal[EventKind.DATASOURCE] = EventKind.DATASOURCE
+758:    kind: Literal[EventKind.DELIVERABLE] = EventKind.DELIVERABLE
+782:    kind: Literal[EventKind.ERROR] = EventKind.ERROR
+792:    kind: Literal[EventKind.SCHEDULE] = EventKind.SCHEDULE
+807:    kind: Literal[EventKind.SCHEDULE_RUN] = EventKind.SCHEDULE_RUN
+840:    kind: Literal[EventKind.CLARIFY] = EventKind.CLARIFY
+848:Event = Annotated[
+871:EventAdapter: TypeAdapter[Event] = TypeAdapter(Event)
+
+ succeeded in 0ms:
+5:`CondensationEvent` tombstone recording a span to drop and a summary to insert.
+7:those tombstones. The agent loop and LLM router consume `View.messages` — never
+16:the dropped events stay on the append-only log. `recover_span(events,
+17:tombstone)` (and `View.recover_span`) re-materializes the originals on demand.
+18:The default `View.messages` is UNCHANGED by this tier: recovery is an explicit
+36:    CondensationEvent,
+54:# never microcompacted even when an attempt failed — a failed file write still may
+59:def microcompact(events: list[Event]) -> list[CondensationEvent]:
+80:        if isinstance(e, CondensationEvent)
+99:    tombstones: list[CondensationEvent] = []
+115:            CondensationEvent(
+119:                    f"[microcompacted: a failed `{a.tool_call.tool_name}` attempt was "
+136:def recover_span(events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+138:    tombstone dropped from `View.messages`.
+140:    Background: a `CondensationEvent` does NOT delete the events it covers — it is
+151:    View, the tombstone, or any other state. The default `View.messages` is
+163:        itself returned as a `CondensationEvent`; the log is the source of
+249:def _pinned_seqs(events: list[Event]) -> set[int]:
+321:class View(BaseModel):
+325:    [CONTRACT] View.of(events) is pure: same events -> same messages, every
+329:    `View.recover_span(events, tombstone)` (and the module-level
+330:    `recover_span`) returns the original events a tombstone dropped, on
+331:    explicit demand. The default `View.messages` is NOT affected by recovery —
+337:    messages: list[LLMMessage]
+344:    def of(cls, events: list[Event]) -> View:
+347:        #    body, which emits the summary when it reaches the CondensationEvent
+349:        #    forgets, that would place an old summary after recent messages. The
+355:        summary_at_start: dict[int, CondensationEvent] = {}
+357:            if isinstance(e, CondensationEvent):
+364:        pinned = _pinned_seqs(events)
+416:            if isinstance(e, CondensationEvent):
+493:            messages=msgs,
+502:        content-parts vs plain string — so it MUST change the hash; messages without
+508:            for m in self.messages
+512:    def recover_span(cls, events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+514:        events the tombstone dropped from `View.of(events).messages`, in their
+516:        View, or any other state. The default `View.messages` is unaffected.
+518:        Thin wrapper over the module-level `recover_span`; provided for
+521:        See `recover_span` for the full contract."""
+522:        return recover_span(events, tombstone)
+534:    """Produces summary text for a span of messages. [CONTRACT at the LLM
+538:    async def summarize(self, messages: list[LLMMessage]) -> str: ...
+621:    [INTERIOR] and swappable. condense() returns at most one CondensationEvent to
+653:    ) -> CondensationEvent | None: ...
+674:    ) -> CondensationEvent | None:
+681:    instruction) and a RECENT TAIL untouched — into ONE `CondensationEvent` tombstone.
+768:    ) -> CondensationEvent | None:
+772:            if isinstance(e, CondensationEvent)
+849:            return CondensationEvent(
+857:        # HS-02: hand the FULL `view.messages` to the summarizer (not just the
+866:        # remain in `view.messages` because View.of exempts them from forgetting
+868:        summary = await summarizer.summarize(view.messages)
+871:        return CondensationEvent(
+
+codex
+I found where the relevant classes and filtering logic live; I’ll pull the exact event union and `View.of` range-filter code next, then finalize verdict against each (a)–(e).
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '520,930p' packages/core/src/disco/core/events.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+        return LLMMessage(
+            role="tool",
+            content=snip_content(
+                self.tool_result.content,
+                max_chars=max_chars,
+                head=head,
+                tail=tail,
+            ),
+            tool_call_id=self.tool_result.call_id,
+        )
+
+
+class AgentErrorEvent(BaseEvent, LLMConvertible):
+    """An error observation — tool failed, action invalid, execution raised, or
+    the human declined the proposed action. Distinct from ErrorEvent (which is
+    conversation-fatal).
+
+    `tool_call_id` carries the proposed action's call_id when the event is paired
+    with an ActionEvent; this lets the provider adapter (OpenAI etc.) properly
+    pair the assistant's tool_calls with their resulting messages. Required for
+    refused / rejected actions where no real tool result exists."""
+
+    kind: Literal[EventKind.AGENT_ERROR] = EventKind.AGENT_ERROR
+    source: EventSource = EventSource.ENVIRONMENT
+    error: str
+    action_id: str | None = None  # the action that failed, if any
+    tool_call_id: str | None = None  # for pairing with the assistant tool_call
+
+    def to_llm_message(self) -> LLMMessage:
+        # Pre-formatted content (e.g. wrapped in <system-reminder>...</…>) is
+        # rendered as-is; raw error strings get the "ERROR:" prefix for the
+        # model's parse. This lets the rejection path inject ambient reminders
+        # without the user-tone framing of a tool-failure message.
+        content = self.error if self.error.startswith("<") else f"ERROR: {self.error}"
+        return LLMMessage(role="tool", content=content, tool_call_id=self.tool_call_id)
+
+
+class CondensationEvent(BaseEvent):
+    """A TOMBSTONE. Marks a span of prior events as forgotten and records the
+    summary that replaces them. NOT LLMConvertible — the View applies it (§5).
+    [CONTRACT: this is how forgetting is represented.]"""
+
+    kind: Literal[EventKind.CONDENSATION] = EventKind.CONDENSATION
+    source: EventSource = EventSource.SYSTEM
+    # The seq range [start, end] (inclusive) this condensation forgets. The View
+    # drops events whose seq falls in any active range.
+    forgotten_start_seq: int
+    forgotten_end_seq: int
+    # The summary inserted in place of the span (inline, for atomicity).
+    summary: str
+    summary_role: Literal["system", "user"] = "user"
+    reason: Literal["request", "tokens", "events", "hard_reset"] = "tokens"
+
+
+class StatusEvent(BaseEvent):
+    """A lifecycle/status transition. NOT LLMConvertible. Drives the UI and the
+    loop's state machine reconstruction (§3)."""
+
+    kind: Literal[EventKind.STATUS] = EventKind.STATUS
+    source: EventSource = EventSource.SYSTEM
+    status: ConversationStatus
+    detail: str | None = None
+
+
+class PlanEvent(BaseEvent, LLMConvertible):
+    """A structured plan the agent proposed (in PLANNING mode) and the human is
+    asked to approve before any work runs. LLMConvertible so the committed plan
+    stays in the agent's context during execution — it renders as an assistant
+    message restating the steps it agreed to carry out.
+
+    `context` is an optional markdown body carrying the planner's findings from
+    exploring the workspace + web (Claude-Code-style: explain WHY this plan, what
+    you learned, the trade-offs). Empty by default for backward compatibility."""
+
+    kind: Literal[EventKind.PLAN] = EventKind.PLAN
+    source: EventSource = EventSource.AGENT
+    summary: str  # one or two sentences: what this plan delivers
+    steps: list[PlanStep]
+    revision: int = 1  # bumps each time the user sends the plan back for changes
+    context: str = ""  # optional markdown rationale + exploration findings
+
+    def to_llm_message(self) -> LLMMessage:
+        lines = [f"{i}. {s.title}" for i, s in enumerate(self.steps, start=1)]
+        body = "\n".join(lines)
+        # Include the context so the executing agent has its own findings in-View
+        # — same role Claude Code's plan-file markdown plays during execution.
+        ctx = f"\n\nContext:\n{self.context}" if self.context else ""
+        return LLMMessage(
+            role="assistant",
+            content=f"Plan (revision {self.revision}): {self.summary}\n{body}{ctx}",
+        )
+
+
+class ReportEvent(BaseEvent, LLMConvertible):
+    """A finished Deep Research report — the multi-section grounded synthesis
+    produced from the per-run corpus. LLMConvertible so a follow-up turn in the
+    same conversation has the committed report headers + summary in its View
+    (the long body would blow the context window; we render headers only).
+
+    `bounded_by` names the hard-cap that terminated the run, if any: "sources"
+    (max_sources hit), "rounds" (max_rounds_per_subq hit on all sub-questions),
+    "wall_clock" (max_wall_clock_s hit), or "subquestions" (decompose produced
+    more than max_subquestions). None means the run completed naturally."""
+
+    kind: Literal[EventKind.REPORT] = EventKind.REPORT
+    source: EventSource = EventSource.AGENT
+    query: str  # the original user question this report answers
+    summary: str  # executive summary (one or two paragraphs, top-of-report)
+    sections: list[ReportSection]
+    # The cited subset (only passages actually referenced by some section). The UI
+    # resolves [[passage_id]] markers against this list to render source cards.
+    # Plain dict[str, Any] to keep `core` free of any `retrieval` import — the
+    # producer (deep_research engine) populates with Passage.model_dump().
+    passages: list[dict[str, Any]] = Field(default_factory=list)
+    # The full discovery set (URL, title, snippet, status). All_hits for the
+    # All-Searched / Cited tabs at report scale. Same plain-dict reason.
+    all_hits: list[dict[str, Any]] = Field(default_factory=list)
+    unsupported_count: int = 0  # whole-report total (sum across sections)
+    bounded_by: str | None = None  # named cap if hit, else None (natural finish)
+    # The depth tier the run used ("quick" / "standard_deep" / "exhaustive"),
+    # surfaced for the UI's cost/time honesty + audit. Optional for backward-compat.
+    depth_tier: str | None = None
+
+    def to_llm_message(self) -> LLMMessage:
+        # Render headers + summary only — the full body is too large for the View
+        # and the citations would resolve to ids the model can't look up anyway.
+        # This keeps the committed report present in-context for a follow-up turn
+        # ("expand section 3") without bloating the window.
+        headers = "\n".join(f"## {s.title}" for s in self.sections)
+        bound = f"\n\n(Bounded by: {self.bounded_by}.)" if self.bounded_by else ""
+        return LLMMessage(
+            role="assistant",
+            content=f"Research report for: {self.query}\n\n{self.summary}\n\n{headers}{bound}",
+        )
+
+
+class AlternativeOption(BaseModel):
+    """One concrete next-step option the agent proposed after exhausting retries.
+    Each option carries a human-readable description + a structured ToolCall the
+    loop will execute as the next action if the user picks it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str  # stable id for the user's pick_alternative frame
+    title: str  # short label rendered on the option card (e.g. "Try with sudo")
+    description: str  # one or two sentences: why this might work / what changes
+    tool_name: str  # the tool the loop will call if this option is picked
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class AlternativesEvent(BaseEvent, LLMConvertible):
+    """The structured recovery hand-off. Emitted when the agent voluntarily calls
+    `ask_user` WITH options — it enumerates 2–3 concrete next-step alternatives,
+    those become this event, the loop halts at AWAITING_USER_DECISION, and the
+    user picks one (or steers explicitly). The picked option's ToolCall becomes
+    the next action. (The harness circuit breaker reaches the same status but with
+    a free-form question, no clickable options.)
+
+    Mirrors PlanEvent's shape (gate event + LLMConvertible so the proposed
+    options stay in-context for any follow-up turn). `failed_action_id`
+    correlates this gate with the action that triggered the recovery."""
+
+    kind: Literal[EventKind.ALTERNATIVES] = EventKind.ALTERNATIVES
+    source: EventSource = EventSource.AGENT
+    failed_action_id: str  # the original ActionEvent.id that exhausted retries
+    summary: str  # what we're choosing between, one sentence
+    options: list[AlternativeOption]
+
+    def to_llm_message(self) -> LLMMessage:
+        lines = [
+            f"{i}. {o.title} — {o.description}"
+            for i, o in enumerate(self.options, start=1)
+        ]
+        body = "\n".join(lines)
+        return LLMMessage(
+            role="assistant",
+            content=(
+                f"After repeated failures on the prior step, I proposed these "
+                f"alternatives: {self.summary}\n{body}"
+            ),
+        )
+
+
+class KnowledgeEvent(BaseEvent, LLMConvertible):
+    """A scoped best-practice snippet injected into the agent's context (Cluster
+    7). `scope` is an optional applicability hint (a task keyword or path glob)
+    the View can use to inject only relevant knowledge; `snippet` is the
+    guidance. LLMConvertible so it renders into the model context, and pinned
+    against condensation so standing guidance survives a long run."""
+
+    kind: Literal[EventKind.KNOWLEDGE] = EventKind.KNOWLEDGE
+    source: EventSource = EventSource.SYSTEM
+    scope: str = ""
+    snippet: str
+
+    def to_llm_message(self) -> LLMMessage:
+        scope = f" (applies to: {self.scope})" if self.scope else ""
+        return LLMMessage(
+            role="user",
+            content=f"<knowledge{scope}>\n{self.snippet}\n</knowledge>",
+        )
+
+
+class DatasourceEvent(BaseEvent, LLMConvertible):
+    """Durable data-API / schema documentation the agent learned or was given
+    (Cluster 7). The long-horizon hazard this fixes: an API contract learned
+    mid-run lives only in an Observation's inline text, which condensation later
+    compresses into lossy prose → the agent hallucinates an endpoint. A
+    DatasourceEvent is condensation-IMMUNE, so the exact contract stays verbatim
+    across an arbitrarily long build."""
+
+    kind: Literal[EventKind.DATASOURCE] = EventKind.DATASOURCE
+    source: EventSource = EventSource.SYSTEM
+    name: str  # the data source / API name
+    docs: str  # endpoint shape, auth, params, example response — verbatim
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(
+            role="user",
+            content=f"<datasource name=\"{self.name}\">\n{self.docs}\n</datasource>",
+        )
+
+
+class DeliverableEvent(BaseEvent, LLMConvertible):
+    """The agent's explicit 'here is the finished thing' handoff (Build). It names
+    WHAT was produced and WHERE, so the UI can present a real handoff (open the
+    live app / download the files) instead of leaving the user to guess what the
+    run made. Distinct from the live preview (which shows work-in-progress): a
+    DeliverableEvent is the agent affirming a result is ready.
+
+    `kind`:
+      • "app"   — a runnable result the user opens in the live preview (a built
+                  site / running dev server rooted at `path`).
+      • "files" — one or more workspace artifacts to download/inspect (`path` is
+                  the file or directory).
+
+    LLMConvertible so the agent's own context reflects what it has already handed
+    off (it shouldn't re-deliver the same thing); the body stays terse."""
+
+    kind: Literal[EventKind.DELIVERABLE] = EventKind.DELIVERABLE
+    source: EventSource = EventSource.AGENT
+    title: str  # short human label, e.g. "Landing page" / "Sales report"
+    path: str  # workspace-relative path (dir for an app root, file/dir for files)
+    artifact_kind: Literal["app", "files"] = "app"
+    # Optional canonical URL the deliverable is reachable at (a deploy target, a
+    # tunnel, or the live preview). When the agent serves to a known address it
+    # passes it on `serve(url=…)`; the UI surfaces an "Open deployed app" link.
+    deployment_url: str = ""
+
+    def to_llm_message(self) -> LLMMessage:
+        return LLMMessage(
+            role="user",
+            content=(
+                f"<deliverable kind=\"{self.artifact_kind}\" path=\"{self.path}\">\n"
+                f"{self.title}\n</deliverable>"
+            ),
+        )
+
+
+class ErrorEvent(BaseEvent):
+    """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
+    NOT LLMConvertible."""
+
+    kind: Literal[EventKind.ERROR] = EventKind.ERROR
+    source: EventSource = EventSource.SYSTEM
+    code: str
+    detail: str
+
+
+class ScheduleEvent(BaseEvent):
+    """A schedule was created or deleted for this conversation (RP-08).
+    NOT LLMConvertible — it is a system lifecycle event."""
+
+    kind: Literal[EventKind.SCHEDULE] = EventKind.SCHEDULE
+    source: EventSource = EventSource.SYSTEM
+    action: Literal["created", "deleted"]
+    schedule_id: str
+    rrule: str  # cron expression
+    description: str
+
+
+class ScheduleRunEvent(BaseEvent):
+    """A scheduled run fired and was appended to this conversation (RP-08).
+    NOT LLMConvertible — it is a system lifecycle event.
+
+    `coalesced` is True when the server was down across N missed fires and this
+    single run stands in for all of them (run-once-coalesced policy)."""
+
+    kind: Literal[EventKind.SCHEDULE_RUN] = EventKind.SCHEDULE_RUN
+    source: EventSource = EventSource.SYSTEM
+    schedule_id: str
+    coalesced: bool = False
+
+
+class ClarifyQuestionItem(BaseModel):
+    """One typed question in a ClarifyEvent. Each item has a stable id, the
+    question text, a type that drives the UI input, and (after the user answers)
+    the user's answer."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str  # stable id for this question within the clarify card
+    question: str  # the question text (rendered as Markdown)
+    type: Literal["short_text", "long_text", "choice"] = "short_text"
+    # For choice-type questions: the allowed options.
+    options: list[str] = Field(default_factory=list)
+    # Populated by the user's response; empty until answered.
+    answer: str = ""
+
+
+class ClarifyEvent(BaseEvent):
+    """Pre-plan clarification gate (RP-13). When the request is ambiguous and
+    the planner needs structured user input before committing to a plan, it
+    calls the `clarify` virtual tool. The loop intercepts the call, emits this
+    event carrying MULTIPLE typed questions, and halts at
+    AWAITING_USER_QUESTION. The user answers each question; the answers are
+    re-injected as context and planning proceeds.
+
+    NOT LLMConvertible — the clarify card is a UI gate, not a model-facing event.
+    The user's answers are re-injected as a regular USER MessageEvent, which the
+    model reads on its next View."""
+
+    kind: Literal[EventKind.CLARIFY] = EventKind.CLARIFY
+    source: EventSource = EventSource.AGENT
+    question: str  # overarching question / summary of what needs clarification
+    items: list[ClarifyQuestionItem]
+
+
+# ---- the discriminated union the store/serde use ----------------------------
+
+Event = Annotated[
+    MessageEvent
+    | ActionEvent
+    | ObservationEvent
+    | AgentErrorEvent
+    | CondensationEvent
+    | StatusEvent
+    | PlanEvent
+    | ReportEvent
+    | AlternativesEvent
+    | KnowledgeEvent
+    | DatasourceEvent
+    | DeliverableEvent
+    | ErrorEvent
+    | ScheduleEvent
+    | ScheduleRunEvent
+    | ClarifyEvent,
+    Field(discriminator="kind"),
+]
+
+# Single shared validator/serializer for the union. Consumers parse arbitrary
+# event dicts (post-migration) through this; the `kind` field selects the
+# concrete type. (§4 serialization contract.)
+EventAdapter: TypeAdapter[Event] = TypeAdapter(Event)
+
+
+def event_to_json_dict(event: Event) -> dict[str, Any]:
+    """Serialize one event to a JSON-safe dict (§4 rule 1): ISO datetimes,
+    enums by value. The inverse is `event_from_json_dict`."""
+    return event.model_dump(mode="json")
+
+
+def event_from_json_dict(raw: dict[str, Any]) -> Event:
+    """Deserialize a (already-migrated) JSON dict back into the concrete event
+    type via the discriminated union. Callers should run `migrate_event` first
+    (see migration.py) so old persisted events stay readable forever."""
+    return EventAdapter.validate_python(raw)
+
+exec
+/bin/bash -lc "sed -n '320,560p' packages/core/src/disco/core/view.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+
+class View(BaseModel):
+    """The materialized "what the LLM sees right now", computed from the raw
+    event log by applying condensation tombstones.
+
+    [CONTRACT] View.of(events) is pure: same events -> same messages, every
+    time. Computing it has no side effects and never appends.
+
+    The C11 reversible-compaction tier adds a RECOVERY ACCESSOR:
+    `View.recover_span(events, tombstone)` (and the module-level
+    `recover_span`) returns the original events a tombstone dropped, on
+    explicit demand. The default `View.messages` is NOT affected by recovery —
+    it still omits the tombstoned span. Recovery is for callers that need the
+    originals (audit, debug, re-derivation); the live LLM context is never
+    re-injected with the recovered bytes.
+    """
+
+    messages: list[LLMMessage]
+    # seqs of events currently visible (post-condensation), for diagnostics.
+    visible_seqs: list[int]
+    total_events: int
+    forgotten_count: int
+
+    @classmethod
+    def of(cls, events: list[Event]) -> View:
+        # 1. Collect forgotten seq ranges + a map of where each summary belongs.
+        #    NOTE: we intentionally diverge from the contract's *illustrative*
+        #    body, which emits the summary when it reaches the CondensationEvent
+        #    in append order. Because a tombstone is appended *after* the span it
+        #    forgets, that would place an old summary after recent messages. The
+        #    [CONTRACT] behavior (§7.3) is "replace the first half with a single
+        #    summary, leave the back half untouched" — i.e. the summary takes the
+        #    *position of the forgotten span*. So we key summaries by
+        #    forgotten_start_seq and emit them in chronological place.
+        forgotten: list[tuple[int, int]] = []
+        summary_at_start: dict[int, CondensationEvent] = {}
+        for e in events:
+            if isinstance(e, CondensationEvent):
+                forgotten.append((e.forgotten_start_seq, e.forgotten_end_seq))
+                # First tombstone for a given start_seq wins its slot.
+                summary_at_start.setdefault(e.forgotten_start_seq, e)
+
+        # GAP D: the latest PlanEvent is pinned — never forgotten even if a
+        # tombstone range covers it.
+        pinned = _pinned_seqs(events)
+
+        def is_forgotten(seq: int | None) -> bool:
+            if seq is not None and seq in pinned:
+                return False
+            return seq is not None and any(a <= seq <= b for a, b in forgotten)
+
+        # BP-00: when the driver has VISION, only the LATEST browser screenshot
+        # renders as an image; older ones render as text only to save context.
+        # Computed on the post-condensation sequence.
+        driver_has_vision = disco_env("DRIVER_VISION") == "1"
+        latest_screenshot_seq = None
+        if driver_has_vision:
+            for e in reversed(events):
+                if (
+                    isinstance(e, ObservationEvent)
+                    and e.seq is not None
+                    and not is_forgotten(e.seq)
+                    and e.tool_result.tool_name == "browser"
+                    and (e.tool_result.structured or {}).get("screenshot_b64")
+                ):
+                    latest_screenshot_seq = e.seq
+                    break
+
+        # BP-06: the newest _MASK_KEEP_RECENT visible observations render in
+        # full; every older one above _MASK_MIN_CHARS elides to a restorable
+        # stub. Computed on the post-condensation sequence, so the window never
+        # counts forgotten events.
+        visible_obs = [
+            e.seq
+            for e in events
+            if isinstance(e, ObservationEvent)
+            and e.seq is not None
+            and not is_forgotten(e.seq)
+        ]
+        recent_obs_seqs = set(visible_obs[-_MASK_KEEP_RECENT:])
+
+        # 2. Walk events in seq order. When we reach the start of a forgotten
+        #    span, emit its summary (once) in place; drop forgotten and
+        #    non-LLMConvertible events; keep the rest.
+        msgs: list[LLMMessage] = []
+        visible: list[int] = []
+        emitted_summary_for: set[int] = set()
+        for e in events:
+            # Emit a span's summary at the chronological position it replaces.
+            if e.seq is not None and e.seq in summary_at_start:
+                key = e.seq
+                if key not in emitted_summary_for:
+                    tomb = summary_at_start[key]
+                    msgs.append(LLMMessage(role=tomb.summary_role, content=tomb.summary))
+                    emitted_summary_for.add(key)
+
+            if isinstance(e, CondensationEvent):
+                continue  # bookkeeping; its summary is emitted in-place above
+            if not isinstance(e, LLMConvertible):
+                continue  # status/error: never shown to the LLM
+            if is_forgotten(e.seq):
+                continue  # forgotten by a tombstone
+
+            if (
+                isinstance(e, ObservationEvent)  # exact class — AgentErrorEvent is NOT masked (B4)
+                and e.seq is not None
+                and e.seq not in recent_obs_seqs
+                and e.seq not in pinned
+                and len(e.tool_result.content) > _MASK_MIN_CHARS
+            ):
+                digest = hashlib.sha256(e.tool_result.content.encode()).hexdigest()[:12]
+                msgs.append(
+                    LLMMessage(
+                        role="tool",
+                        content=(
+                            f"[masked output: {e.tool_result.tool_name} #{e.seq} — "
+                            f"{len(e.tool_result.content):,} chars, sha256:{digest}. "
+                            "Re-run the tool (or file_read the same path) to see it again.]"
+                        ),
+                        # keep the pairing valid: provider-side tool_call ↔ tool message
+                        tool_call_id=e.tool_result.call_id,
+                    )
+                )
+                visible.append(e.seq)
+            else:
+                msg = e.to_llm_message()
+                # BP-00: attach image ONLY to the latest browser screenshot.
+                if (
+                    isinstance(e, ObservationEvent)
+                    and e.seq == latest_screenshot_seq
+                    and latest_screenshot_seq is not None
+                ):
+                    # latest_screenshot_seq is only set (above) for an observation
+                    # whose structured payload carried a screenshot_b64, so the
+                    # seq-matched event here provably has a non-None `structured`.
+                    assert e.tool_result.structured is not None
+                    b64 = e.tool_result.structured.get("screenshot_b64")
+                    msg = msg.model_copy(update={"images": [f"data:image/png;base64,{b64}"]})
+
+                msgs.append(msg)
+                if e.seq is not None:
+                    # B3: Deterministic-by-seq tail variation (arXiv 2407.10912).
+                    # Rotate the surface form of AGENT thoughts and TOOL results
+                    # to prevent the model from over-fitting to a single fixed
+                    # template, while maintaining KV-cache stability (B5) by
+                    # pinning the form to the seq.
+                    if isinstance(e, ActionEvent):
+                        variants = [
+                            lambda t: t,
+                            lambda t: f"Reasoning: {t}",
+                            lambda t: f"Thought: {t}",
+                        ]
+                        f = variants[e.seq % len(variants)]
+                        msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
+                    elif isinstance(e, ObservationEvent):
+                        variants = [
+                            lambda c: c,
+                            lambda c: f"Observation: {c}",
+                            lambda c: f"Output: {c}",
+                        ]
+                        f = variants[e.seq % len(variants)]
+                        msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
+
+                    visible.append(e.seq)
+
+        # GAP D recency recitation: append the ephemeral objective+checklist at
+        # the TAIL so the goal sits in the high-attention recent window.
+        recitation = _recitation_message(events)
+        if recitation is not None:
+            msgs.append(recitation)
+
+        forgotten_n = sum(b - a + 1 for a, b in forgotten)
+        return cls(
+            messages=msgs,
+            visible_seqs=visible,
+            total_events=len(events),
+            forgotten_count=forgotten_n,
+        )
+
+    def fingerprint(self) -> list[str]:
+        """[CONTRACT BP-06/B5] Stable per-message hashes for KV-prefix verification.
+        Role + content + images (BP-00: an attached image changes the wire shape —
+        content-parts vs plain string — so it MUST change the hash; messages without
+        images hash exactly as before). Pure and deterministic across processes."""
+        return [
+            hashlib.sha256(
+                f"{m.role}{m.content}{''.join(m.images) if m.images else ''}".encode()
+            ).hexdigest()[:16]
+            for m in self.messages
+        ]
+
+    @classmethod
+    def recover_span(cls, events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+        """C11 — Reverse of condensation for a single tombstone. Returns the
+        events the tombstone dropped from `View.of(events).messages`, in their
+        original form and insertion order. PURE: no mutation of the log, the
+        View, or any other state. The default `View.messages` is unaffected.
+
+        Thin wrapper over the module-level `recover_span`; provided for
+        discoverability and to sit alongside `View.of` as a paired
+        "materialize the condensed view" / "recover a dropped span" surface.
+        See `recover_span` for the full contract."""
+        return recover_span(events, tombstone)
+
+
+# ---- Condenser / Summarizer seams (§5.2) ------------------------------------
+
+
+class CondensationRequest(BaseModel):
+    soft: bool  # soft = maintain a bound; hard = must condense now
+    reason: Literal["tokens", "events", "request", "hard_reset"]
+
+
+class Summarizer(Protocol):
+    """Produces summary text for a span of messages. [CONTRACT at the LLM
+    boundary] — implemented by the LLM router using a CHEAP model, separate
+    from the agent model (BoD §7.3, §15)."""
+
+    async def summarize(self, messages: list[LLMMessage]) -> str: ...
+
+
+def _build_pointer_manifest(
+    span: list[Event], artifact_paths: list[str]
+) -> str:
+    """C16 — pointer-only summary used by the hard_reset path. Categorize the
+    paths the engine collected so the model sees what kind of artifact each
+    pointer is (deliverable / spill / memory) without having to guess. Pure:
+    no model call, deterministic per input list. The summarizer is unused on
+    this path — the dropped span is too large to re-ingest verbatim anyway, and
+    a lossy prose recap would be worse than pointing to the bytes on disk.
+
+    `span` is the LIVE span (events about to be forgotten) — used only to put
+    a concrete seq range in the header so the model can refer to the drop
+    ('the drop covering seq 7–42'). The manifest's RECOVERABILITY comes from
+    `artifact_paths`: the engine has already verified every one of them
+    resolves on disk before passing them in, so the manifest is honest."""
+    start_seq = span[0].seq
+    end_seq = span[-1].seq
+    n = len(span)
+    # Categorize — these prefixes are the public surface area the engine +
+    # tools layer already use (see engine.py:1787 + the .pmx/ directory).
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "EventKind.CONDENSATION|EventKind.MESSAGE|LLMConvertible|EventAdapter|event_to_json_dict|event_from_json_dict" packages/core/src/disco/core/events.py' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+99:class LLMConvertible:
+102:    LLMConvertible events. [CONTRACT]
+228:class MessageEvent(BaseEvent, LLMConvertible):
+231:    kind: Literal[EventKind.MESSAGE] = EventKind.MESSAGE
+238:class ActionEvent(BaseEvent, LLMConvertible):
+496:class ObservationEvent(BaseEvent, LLMConvertible):
+532:class AgentErrorEvent(BaseEvent, LLMConvertible):
+559:    summary that replaces them. NOT LLMConvertible — the View applies it (§5).
+562:    kind: Literal[EventKind.CONDENSATION] = EventKind.CONDENSATION
+575:    """A lifecycle/status transition. NOT LLMConvertible. Drives the UI and the
+584:class PlanEvent(BaseEvent, LLMConvertible):
+586:    asked to approve before any work runs. LLMConvertible so the committed plan
+613:class ReportEvent(BaseEvent, LLMConvertible):
+615:    produced from the per-run corpus. LLMConvertible so a follow-up turn in the
+669:class AlternativesEvent(BaseEvent, LLMConvertible):
+677:    Mirrors PlanEvent's shape (gate event + LLMConvertible so the proposed
+702:class KnowledgeEvent(BaseEvent, LLMConvertible):
+706:    guidance. LLMConvertible so it renders into the model context, and pinned
+722:class DatasourceEvent(BaseEvent, LLMConvertible):
+742:class DeliverableEvent(BaseEvent, LLMConvertible):
+755:    LLMConvertible so the agent's own context reflects what it has already handed
+780:    NOT LLMConvertible."""
+790:    NOT LLMConvertible — it is a system lifecycle event."""
+802:    NOT LLMConvertible — it is a system lifecycle event.
+836:    NOT LLMConvertible — the clarify card is a UI gate, not a model-facing event.
+871:EventAdapter: TypeAdapter[Event] = TypeAdapter(Event)
+874:def event_to_json_dict(event: Event) -> dict[str, Any]:
+876:    enums by value. The inverse is `event_from_json_dict`."""
+880:def event_from_json_dict(raw: dict[str, Any]) -> Event:
+884:    return EventAdapter.validate_python(raw)
+
+exec
+/bin/bash -lc "rg -n \"CondensationEvent|summary_role|reason\\s*==|reason=\" packages/core/src/disco/core -g '"'!**/__pycache__/**'"'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/__init__.py:40:    CondensationEvent,
+packages/core/src/disco/core/__init__.py:89:    "CondensationEvent",
+packages/core/src/disco/core/view.py:5:`CondensationEvent` tombstone recording a span to drop and a summary to insert.
+packages/core/src/disco/core/view.py:36:    CondensationEvent,
+packages/core/src/disco/core/view.py:59:def microcompact(events: list[Event]) -> list[CondensationEvent]:
+packages/core/src/disco/core/view.py:80:        if isinstance(e, CondensationEvent)
+packages/core/src/disco/core/view.py:99:    tombstones: list[CondensationEvent] = []
+packages/core/src/disco/core/view.py:115:            CondensationEvent(
+packages/core/src/disco/core/view.py:122:                summary_role="user",
+packages/core/src/disco/core/view.py:136:def recover_span(events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+packages/core/src/disco/core/view.py:140:    Background: a `CondensationEvent` does NOT delete the events it covers — it is
+packages/core/src/disco/core/view.py:163:        itself returned as a `CondensationEvent`; the log is the source of
+packages/core/src/disco/core/view.py:347:        #    body, which emits the summary when it reaches the CondensationEvent
+packages/core/src/disco/core/view.py:355:        summary_at_start: dict[int, CondensationEvent] = {}
+packages/core/src/disco/core/view.py:357:            if isinstance(e, CondensationEvent):
+packages/core/src/disco/core/view.py:413:                    msgs.append(LLMMessage(role=tomb.summary_role, content=tomb.summary))
+packages/core/src/disco/core/view.py:416:            if isinstance(e, CondensationEvent):
+packages/core/src/disco/core/view.py:512:    def recover_span(cls, events: list[Event], tombstone: CondensationEvent) -> list[Event]:
+packages/core/src/disco/core/view.py:621:    [INTERIOR] and swappable. condense() returns at most one CondensationEvent to
+packages/core/src/disco/core/view.py:653:    ) -> CondensationEvent | None: ...
+packages/core/src/disco/core/view.py:674:    ) -> CondensationEvent | None:
+packages/core/src/disco/core/view.py:681:    instruction) and a RECENT TAIL untouched — into ONE `CondensationEvent` tombstone.
+packages/core/src/disco/core/view.py:755:            return CondensationRequest(soft=False, reason="tokens")  # must condense now
+packages/core/src/disco/core/view.py:757:            return CondensationRequest(soft=True, reason="tokens")  # maintain the bound
+packages/core/src/disco/core/view.py:768:    ) -> CondensationEvent | None:
+packages/core/src/disco/core/view.py:772:            if isinstance(e, CondensationEvent)
+packages/core/src/disco/core/view.py:837:        # The soft path (reason="tokens", the default) is byte-unchanged: it
+packages/core/src/disco/core/view.py:846:        if reason == "hard_reset":
+packages/core/src/disco/core/view.py:849:            return CondensationEvent(
+packages/core/src/disco/core/view.py:853:                summary_role="user",
+packages/core/src/disco/core/view.py:854:                reason="hard_reset",
+packages/core/src/disco/core/view.py:871:        return CondensationEvent(
+packages/core/src/disco/core/view.py:875:            summary_role="user",
+packages/core/src/disco/core/view.py:876:            reason="tokens",
+packages/core/src/disco/core/loop/turn_control.py:1211:        (`finish_reason=="length"`) with no tool call. Persist the partial text
+packages/core/src/disco/core/loop/boundaries.py:46:    # (finish_reason=="length") with no tool call. The loop must NOT surface it
+packages/core/src/disco/core/loop/stuck.py:200:            reason=reason,
+packages/core/src/disco/core/loop/agent.py:87:    deep inside the block, yet NOT report ``finish_reason=="length"`` — so the
+packages/core/src/disco/core/loop/agent.py:254:        # W-31 — TRUNCATION GUARD. `finish_reason=="length"` means the provider
+packages/core/src/disco/core/loop/agent.py:265:        # `finish_reason=="length"`, so the check above misses it and the
+packages/core/src/disco/core/loop/agent.py:275:        truncated = resp.finish_reason == "length" or _has_unclosed_think(resp.text)
+packages/core/src/disco/core/loop/observe.py:249:        changes (it now passes reason="hard_reset" + the collected paths)."""
+packages/core/src/disco/core/loop/observe.py:255:            reason="hard_reset",
+packages/core/src/disco/core/loop/engine.py:1416:                # off mid-sentence (finish_reason=="length") with no tool call —
+packages/core/src/disco/core/llm/routing.py:244:                    reason=f"assigned model '{key}' is not in the catalogue",
+packages/core/src/disco/core/llm/routing.py:267:                        reason=f"model '{key}' does not support vision",
+packages/core/src/disco/core/llm/routing.py:374:                    reason=reason,
+packages/core/src/disco/core/llm/routing.py:406:                reason=reason,
+packages/core/src/disco/core/llm/routing.py:453:                reason=f"terminal failure: {kind} ({reason})",
+packages/core/src/disco/core/llm/routing.py:481:#             provider="", path="local", reason="no eligible model for requirements",
+packages/core/src/disco/core/llm/openai_provider.py:524:            finish_reason=finish_reason,
+packages/core/src/disco/core/llm/openai_provider.py:797:            finish_reason=finish_reason,
+packages/core/src/disco/core/events.py:557:class CondensationEvent(BaseEvent):
+packages/core/src/disco/core/events.py:570:    summary_role: Literal["system", "user"] = "user"
+packages/core/src/disco/core/events.py:853:    | CondensationEvent
+packages/core/src/disco/core/dod_evaluator.py:293:    deny_reason=…)` with `exit_code=None` — the predicate is "not run", not
+packages/core/src/disco/core/dod_evaluator.py:305:            deny_reason=deny,
+packages/core/src/disco/core/dod_evaluator.py:385:            egress_reason=reason,
+packages/core/src/disco/core/dod_evaluator.py:602:                reason=f"path escapes workspace: {exc}",
+packages/core/src/disco/core/dod_evaluator.py:625:                    reason=f"file exists at {resolved} ({stat.st_size} bytes)",
+packages/core/src/disco/core/dod_evaluator.py:637:                reason=(
+packages/core/src/disco/core/dod_evaluator.py:653:            reason=f"file does not exist: {predicate.path} (resolved {resolved})",
+packages/core/src/disco/core/dod_evaluator.py:680:                reason=f"command exited {result.exit_code} as expected",
+packages/core/src/disco/core/dod_evaluator.py:709:            reason=reason,
+packages/core/src/disco/core/dod_evaluator.py:740:                reason=f"HTTP {result.status_code} as expected",
+packages/core/src/disco/core/dod_evaluator.py:768:            reason=reason,
+packages/core/src/disco/core/dod_evaluator.py:800:                reason=(
+packages/core/src/disco/core/dod_evaluator.py:820:                reason=f"subjective judge raised: {type(exc).__name__}: {exc}",
+packages/core/src/disco/core/dod_evaluator.py:830:            reason=v.reason,
+packages/core/src/disco/core/dod_evaluator.py:943:            reason=rest.strip() or first.strip(),
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '600,920p' packages/core/src/disco/core/view.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+    if spills:
+        lines.append("")
+        lines.append("Spill logs (shell-output overflow; head/tail preserved):")
+        for p in spills:
+            lines.append(f"  • {p}")
+    if memory:
+        lines.append("")
+        lines.append("Standing memory (recorded this run):")
+        for p in memory:
+            lines.append(f"  • {p}")
+    if other:
+        lines.append("")
+        lines.append("Other on-disk artifacts (uncategorized):")
+        for p in other:
+            lines.append(f"  • {p}")
+    return "\n".join(lines)
+
+
+class Condenser(Protocol):
+    """Decides whether/how to condense. The loop calls should_condense() (sync,
+    pure over the View) then awaits condense() (async); the strategy is
+    [INTERIOR] and swappable. condense() returns at most one CondensationEvent to
+    append, or None (no-op). No event is ever deleted.
+
+    Async rationale (event-state-contract v1.2 §5.2): condense() must be async
+    because the only correct summarizer makes an async router call, invoked from
+    the loop's running asyncio loop. should_condense stays sync (pure).
+
+    `reason` (C16) tells the condenser WHICH call site invoked it:
+      - "tokens"      → soft/maintain-bound path (the default; what
+                        should_condense → condense produces). UNCHANGED: a
+                        prose summary from the summarizer.
+      - "hard_reset"  → the loop's context-overflow escape hatch. The dropped
+                        span is too large to re-summarize usefully, so the
+                        tombstone is a pointer manifest of on-disk artifacts
+                        the model can re-read selectively (NOT a prose recap).
+                        Caller supplies `artifact_paths` (verified to exist
+                        on disk); without them the condenser makes no
+                        progress and returns None (same as an empty prose
+                        summary on the soft path)."""
+
+    def should_condense(
+        self, view: View, *, token_count: int | None
+    ) -> CondensationRequest | None: ...
+
+    async def condense(
+        self,
+        events: list[Event],
+        view: View,
+        *,
+        summarizer: Summarizer,
+        reason: str = "tokens",
+        artifact_paths: list[str] | None = None,
+    ) -> CondensationEvent | None: ...
+
+
+class NoOpCondenser:
+    """Phase 0 placeholder satisfying the `Condenser` protocol: never condenses.
+
+    This lets the View/loop wire up against the real interface now; the
+    `LLMSummarizingCondenser` is the real strategy used on the Agent surface.
+    """
+
+    def should_condense(self, view: View, *, token_count: int | None) -> CondensationRequest | None:
+        return None
+
+    async def condense(
+        self,
+        events: list[Event],
+        view: View,
+        *,
+        summarizer: Summarizer,
+        reason: str = "tokens",
+        artifact_paths: list[str] | None = None,
+    ) -> CondensationEvent | None:
+        return None
+
+
+class LLMSummarizingCondenser:
+    """[INTERIOR] The real condenser (§5.2). When the View grows past a token bound,
+    summarize the OLDEST forgettable span — keeping an anchoring HEAD (the initial
+    instruction) and a RECENT TAIL untouched — into ONE `CondensationEvent` tombstone.
+    `View.of` places the summary at the span's chronological position, so the loop
+    keeps going coherently instead of overflowing the context window.
+
+    - Triggers: SOFT at `max_tokens` (maintain the bound), HARD at `hard_max_tokens`.
+    - Guards: `keep_head` + `keep_recent` events are never forgotten; `min_forget`
+      ensures each condensation makes real PROGRESS (no churn on tiny spans).
+
+    `should_condense` is sync/pure over the View's token estimate; `condense` awaits the
+    SUMMARIZER-role model (a cheap, separate model — BoD §7.3/§15) and never deletes an
+    event (it appends a tombstone). It also self-computes its span, so the loop's
+    hard-reset path (`_hard_reset`, which calls `condense` directly) works too.
+    """
+
+    def __init__(
+        self,
+        *,
+        context_window: int | None = None,
+        soft_frac: float = 0.65,
+        hard_frac: float = 0.80,
+        max_tokens: int | None = None,
+        hard_max_tokens: int | None = None,
+        keep_head: int = 1,
+        keep_recent: int = 6,
+        min_forget: int = 2,
+        budget_tokens: int = 24_000,
+        hard_budget_tokens: int = 32_000,
+    ) -> None:
+        # C9 — honor the LIVE context window, not a fixed ~24k cap.
+        #
+        # Derive trigger thresholds from the ROUTED model's context window
+        # (soft=65%, hard=80%). When `window × frac` already fits UNDER the working
+        # budget, use it unchanged (small-window path: 16k→10.4k, 32k→20.8k, etc.).
+        # When the window-fraction EXCEEDS the budget, grow above the budget UP TO a
+        # sane ceiling (4× working budget = 96k soft / 128k hard by default) — a
+        # 128k-window model now condenses at 83k (its 65% point), a 200k model caps
+        # at 96k, a 1M model still caps at 96k. Cost scales with input tokens PER
+        # CALL so we still cap growth — but the cap is no longer so tight that a
+        # big-window model never gets to use its room. The budget is the FLOOR
+        # (anything below it stays at the window-fraction) and the ceiling is the
+        # CEILING (a 1M model can't bloat to 681k and re-send 60k+ every action).
+        #
+        # Unknown window → the working budget IS the bound (unchanged). Explicit
+        # max_tokens / hard_max_tokens still override (tests). The small-window
+        # branch is byte-identical to the previous formula for any model whose
+        # window × frac ≤ budget (preserves H1 contract for that range).
+        soft_ceiling = budget_tokens * 4  # 96_000 by default — well above 24k, well below 1M
+        hard_ceiling = hard_budget_tokens * 4  # 128_000 by default
+        if context_window is not None:
+            window_soft = int(context_window * soft_frac)
+            window_hard = int(context_window * hard_frac)
+            if window_soft <= budget_tokens:
+                derived_soft = window_soft  # small-window path: unchanged from before
+            else:
+                derived_soft = min(window_soft, soft_ceiling)  # grow above budget, bounded
+            if window_hard <= hard_budget_tokens:
+                derived_hard = window_hard
+            else:
+                derived_hard = min(window_hard, hard_ceiling)
+        else:
+            # No window known → the working budget IS the bound.
+            derived_soft, derived_hard = budget_tokens, hard_budget_tokens
+        self._max = max_tokens if max_tokens is not None else derived_soft
+        self._hard = hard_max_tokens if hard_max_tokens is not None else derived_hard
+        self._keep_head = keep_head
+        self._keep_recent = keep_recent
+        self._min_forget = min_forget
+
+    def should_condense(
+        self, view: View, *, token_count: int | None
+    ) -> CondensationRequest | None:
+        if token_count is None:
+            return None
+        if token_count >= self._hard:
+            return CondensationRequest(soft=False, reason="tokens")  # must condense now
+        if token_count >= self._max:
+            return CondensationRequest(soft=True, reason="tokens")  # maintain the bound
+        return None
+
+    async def condense(
+        self,
+        events: list[Event],
+        view: View,
+        *,
+        summarizer: Summarizer,
+        reason: str = "tokens",
+        artifact_paths: list[str] | None = None,
+    ) -> CondensationEvent | None:
+        forgotten = [
+            (e.forgotten_start_seq, e.forgotten_end_seq)
+            for e in events
+            if isinstance(e, CondensationEvent)
+        ]
+
+        def is_forgotten(seq: int | None) -> bool:
+            return seq is not None and any(a <= seq <= b for a, b in forgotten)
+
+        # The still-live, LLM-visible events in seq order (already-forgotten dropped).
+        live: list[Event] = [
+            e
+            for e in events
+            if isinstance(e, LLMConvertible) and e.seq is not None and not is_forgotten(e.seq)
+        ]
+
+        # C10 — `keep_recent` counts TOOL-TURNS, not raw events.
+        #
+        # A "turn" is a maximal contiguous group of events that all belong to one
+        # tool call: an ActionEvent paired with its observation/agent_error (the
+        # normal 2-event case), a free-standing observation/agent_error whose
+        # action is not in `live` (action was already forgotten — single-event
+        # turn), or another LLMConvertible event (user/agent message, knowledge,
+        # plan, … — also single-event turn). Slicing the keep boundary at a turn
+        # start means the boundary NEVER falls between an action and its
+        # observation: retaining `keep_recent=k` keeps k COMPLETE turns, never
+        # half a turn. (`keep_head` semantics are unchanged — head is still
+        # exactly `keep_head` events from the start of `live`.)
+        last_action: ActionEvent | None = None
+        turn_starts: list[int] = [0]
+        for i in range(1, len(live)):
+            e = live[i]
+            if isinstance(e, ActionEvent):
+                turn_starts.append(i)
+                last_action = e
+            elif isinstance(e, (ObservationEvent, AgentErrorEvent)):
+                if last_action is not None and e.action_id == last_action.id:
+                    continue  # observation/agent_error pairs with the current turn's action
+                turn_starts.append(i)  # orphan — its action isn't in `live`
+                last_action = None
+            else:
+                # MessageEvent / KnowledgeEvent / PlanEvent / … — standalone turn
+                turn_starts.append(i)
+                last_action = None
+
+        # Need a non-empty head, at least K complete turns in the recent tail, and
+        # at least `min_forget` events in the middle — else there's nothing worth
+        # forgetting yet (the minimum-progress guard).
+        n_turns = len(turn_starts)
+        if len(live) < self._keep_head + self._min_forget:
+            return None
+        if n_turns <= self._keep_recent:
+            return None  # the K tail turns would consume every turn — no middle
+        # The recent tail starts at the K-th-from-last turn. The middle is
+        # everything between the head and that turn, sliced at a turn boundary.
+        tail_start = turn_starts[n_turns - self._keep_recent]
+        if tail_start <= self._keep_head:
+            return None  # the head reaches (or overlaps) the tail — no middle
+        span = live[self._keep_head : tail_start]
+        if len(span) < self._min_forget:
+            return None
+
+        start_seq, end_seq = span[0].seq, span[-1].seq
+        if start_seq is None or end_seq is None:  # filtered above; assertion for the type
+            return None
+
+        # C16 — `hard_reset` is a POINTER-ONLY flush, not a prose recap.
+        #
+        # The soft path (reason="tokens", the default) is byte-unchanged: it
+        # calls the summarizer and produces a prose summary. The hard_reset
+        # path is the loop's context-overflow escape hatch — the span is
+        # already too big to re-ingest verbatim, so a lossy prose recap is
+        # WORSE than pointing the model at the bytes on disk. The engine has
+        # already verified every path in `artifact_paths` exists before
+        # passing them in, so the manifest is honest (every pointer resolves).
+        # Without artifacts there's nothing to point to → no progress → None
+        # (same shape as an empty prose summary on the soft path).
+        if reason == "hard_reset":
+            if not artifact_paths:
+                return None  # no recoverable artifacts — the soft path's empty-summary behavior
+            return CondensationEvent(
+                forgotten_start_seq=start_seq,
+                forgotten_end_seq=end_seq,
+                summary=_build_pointer_manifest(span, list(artifact_paths)),
+                summary_role="user",
+                reason="hard_reset",
+            )
+
+        # HS-02: hand the FULL `view.messages` to the summarizer (not just the
+        # slice) so the prior anchored summary — which View.of already placed
+        # at the chronological position of the forgotten span — is visible to
+        # it. The summarizer scans for the `GOAL:` marker and selects
+        # UPDATE-in-place vs CREATE-fresh accordingly; passing the slice would
+        # strip the prior summary and force a fresh recap on every condensation.
+        # The instructions themselves tell the model to leave the recent tail
+        # out of the structured summary, so the extra context is a feature, not
+        # noise. Pinned plans / knowledge / datasources (GAP D / Cluster 7)
+        # remain in `view.messages` because View.of exempts them from forgetting
+        # — the summarizer can read them and decide what to surface in PROGRESS.
+        summary = await summarizer.summarize(view.messages)
+        if not summary.strip():
+            return None  # an empty summary would forget context for nothing
+        return CondensationEvent(
+            forgotten_start_seq=start_seq,
+            forgotten_end_seq=end_seq,
+            summary=summary,
+            summary_role="user",
+            reason="tokens",
+        )
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,180p' packages/core/src/disco/core/__init__.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""disco.core — the brain (no server, no UI).
+
+Phase 0 surfaces the Event & State spine (event-state-contract.md). Later phases
+add the agent loop, the real condenser, the LLM router, and security here.
+"""
+
+from __future__ import annotations
+
+from .dod import (
+    DoDPredicate,
+    DoDSpec,
+    DoDSpecAlreadySet,
+    predicate_from_obj,
+    predicate_to_dict,
+)
+from .dod_evaluator import (
+    CommandResult,
+    DoDEvaluator,
+    DoDPredicateResult,
+    DoDVerdict,
+    HttpProbeResult,
+    LLMSubjectiveJudge,
+    PathEscapeError,
+    SubjectiveJudge,
+    SubjectiveJudgeRequest,
+    SubjectiveVerdict,
+    resolve_under_workspace,
+    spec_fingerprint,
+)
+from .equality import event_content_eq
+from .events import (
+    SCHEMA_VERSION,
+    ActionEvent,
+    AgentErrorEvent,
+    AlternativeOption,
+    AlternativesEvent,
+    BaseEvent,
+    ClarifyEvent,
+    ClarifyQuestionItem,
+    CondensationEvent,
+    ConversationStatus,
+    DatasourceEvent,
+    DeliverableEvent,
+    ErrorEvent,
+    Event,
+    EventAdapter,
+    EventKind,
+    EventSource,
+    KnowledgeEvent,
+    LLMConvertible,
+    LLMMessage,
+    MessageEvent,
+    ObservationEvent,
+    PlanEvent,
+    PlanStep,
+    ReportEvent,
+    ReportSection,
+    SecurityRisk,
+    StatusEvent,
+    ToolCall,
+    ToolResult,
+    event_from_json_dict,
+    event_to_json_dict,
+)
+from .migration import migrate_event
+from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
+from .state import ConversationState
+from .store.base import ConversationSummary, EventFilter, EventStore, Page
+from .store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
+from .view import (
+    CondensationRequest,
+    Condenser,
+    LLMSummarizingCondenser,
+    NoOpCondenser,
+    Summarizer,
+    View,
+)
+from .wire import WSClientFrame, WSServerFrame
+
+__all__ = [
+    "SCHEMA_VERSION",
+    "ActionEvent",
+    "AgentErrorEvent",
+    "AlternativeOption",
+    "AlternativesEvent",
+    "BaseEvent",
+    "ClarifyEvent",
+    "ClarifyQuestionItem",
+    "CondensationEvent",
+    "CondensationRequest",
+    "Condenser",
+    "ConversationState",
+    "ConversationStatus",
+    "ConversationSummary",
+    "DEFAULT_OWNER_ID",
+    "DoDPredicate",
+    "DoDEvaluator",
+    "DoDPredicateResult",
+    "DoDSpec",
+    "DoDSpecAlreadySet",
+    "DoDVerdict",
+    "DatasourceEvent",
+    "DeliverableEvent",
+    "ErrorEvent",
+    "Event",
+    "EventAdapter",
+    "EventFilter",
+    "EventKind",
+    "EventSource",
+    "EventStore",
+    "HttpProbeResult",
+    "KnowledgeEvent",
+    "LLMConvertible",
+    "LLMMessage",
+    "LLMSubjectiveJudge",
+    "MessageEvent",
+    "MessageEvent",
+    "LLMSummarizingCondenser",
+    "NoOpCondenser",
+    "ObservationEvent",
+    "Page",
+    "PathEscapeError",
+    "PlanEvent",
+    "PlanStep",
+    "ReportEvent",
+    "SubjectiveJudge",
+    "SubjectiveJudgeRequest",
+    "SubjectiveVerdict",
+    "predicate_from_obj",
+    "predicate_to_dict",
+    "ReportSection",
+    "CommandResult",
+    "SecurityRisk",
+    "Skill",
+    "SkillStore",
+    "SqliteEventStore",
+    "render_skills_for_prompt",
+    "slugify",
+    "StatusEvent",
+    "Summarizer",
+    "ToolCall",
+    "ToolResult",
+    "View",
+    "WSClientFrame",
+    "WSServerFrame",
+    "event_content_eq",
+    "event_from_json_dict",
+    "event_to_json_dict",
+    "migrate_event",
+    "resolve_under_workspace",
+    "spec_fingerprint",
+]
+
+codex
+I’ve confirmed the current filter/recovery path; I’m doing one lightweight check for existing `ResolvedContextRange` shape so I can verify the proposed projection helper’s behavior is coherent with current contracts.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"class ResolvedContextRange|ResolvedContextRange\" packages/core/src/disco -g '*.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/context/__init__.py:18:    ResolvedContextRange,
+packages/core/src/disco/core/context/__init__.py:46:    "ResolvedContextRange",
+packages/core/src/disco/core/context/ledger.py:36:class ResolvedContextRange(BaseModel):
+packages/core/src/disco/core/context/ledger.py:108:    resolved_ranges: tuple[ResolvedContextRange, ...] = ()
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,180p' packages/core/src/disco/core/context/ledger.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""ContextLedger + its small reference value objects.
+
+The ledger is the durable, in-memory representation of a Build run's context:
+goal, contract, version, the live todo pointer, resolved (omittable) ranges,
+unresolved verifier failures, user direct edits, imported resources, and handoff
+packages. CXT-2 populates it from ``.disco/context/*`` files; CXT-4 projects it
+into a model-facing ContextPack. This module is pure value objects — no I/O, no
+event/runtime imports.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ._util import _mk_id, _now
+from .artifact_memory import ArtifactMemoryRef
+
+
+class Severity(str, Enum):
+    BLOCKER = "blocker"
+    ERROR = "error"
+    WARNING = "warning"
+    INFO = "info"
+
+
+class DirectEditKind(str, Enum):
+    TEXT = "text"
+    STYLE = "style"
+    STRUCTURE = "structure"
+    DELETE = "delete"
+
+
+class ResolvedContextRange(BaseModel):
+    """A span of event history marked resolved → omittable from the model view
+    (but never deleted from the audit log; that invariant is enforced in CXT-3)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    range_id: str = Field(default_factory=lambda: _mk_id("cxr_"))
+    reason: str
+    event_ids: tuple[str, ...] = ()
+    summary_ref: ArtifactMemoryRef | None = None
+
+
+class DirectEditRef(BaseModel):
+    """A user's direct edit to an artifact. ``target_id`` is a caller-supplied
+    stable anchor (e.g. a ``data-disco-*`` id), NOT auto-generated, so the agent
+    can reconcile against the same target later."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    target_id: str
+    rel_path: str
+    kind: DirectEditKind
+    summary: str = ""
+    at: datetime = Field(default_factory=_now)
+
+
+class VerifierFailureRef(BaseModel):
+    """A compact, actionable verifier failure surfaced to the model."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure_id: str = Field(default_factory=lambda: _mk_id("vf_"))
+    kind: str
+    message: str
+    rel_path: str | None = None
+    severity: Severity = Severity.ERROR
+    resolved: bool = False
+
+
+class ResourceRef(BaseModel):
+    """An external resource copied into the workspace, with provenance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rel_path: str
+    source: str
+    sha256: str | None = None
+    license: str | None = None
+    copied_at: datetime | None = None
+
+
+class HandoffRef(BaseModel):
+    """A pointer to a produced handoff package (owner/developer/deployment)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: str
+    rel_path: str
+
+
+class ContextLedger(BaseModel):
+    """The durable, structured context for a single Build conversation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    conversation_id: str
+    workspace_root: str | None = None
+    active_goal: str | None = None
+    active_contract: str | None = None
+    current_version: int = 0
+    todo_ref: ArtifactMemoryRef | None = None
+    retained_refs: tuple[ArtifactMemoryRef, ...] = ()
+    resolved_ranges: tuple[ResolvedContextRange, ...] = ()
+    latest_verifier_failures: tuple[VerifierFailureRef, ...] = ()
+    unresolved_comments: tuple[str, ...] = ()
+    direct_edits: tuple[DirectEditRef, ...] = ()
+    resource_manifest: tuple[ResourceRef, ...] = ()
+    handoff_refs: tuple[HandoffRef, ...] = ()
+
+    @classmethod
+    def empty(cls, conversation_id: str, workspace_root: str | None = None) -> ContextLedger:
+        return cls(conversation_id=conversation_id, workspace_root=workspace_root)
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,240p' packages/core/src/disco/core/migration.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Schema evolution — event-state-contract.md §4.1.
+
+Every reader runs a persisted event dict through `migrate_event` *before*
+validation, so old events stay readable forever as schemas evolve (invariant
+#4). Migrations are forward-only and never lose information; an event is never
+rewritten in the store (append-only, invariant #1) — it is upgraded on read.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def migrate_event(raw: dict[str, Any]) -> dict[str, Any]:
+    """Upgrade a persisted event dict to the current SCHEMA_VERSION before
+    validation. Pure, idempotent, append-only migrations.
+
+    [CONTRACT] Every reader runs raw dicts through this before Event validation.
+
+    No migrations exist at v1; the structure shows where future ones slot in::
+
+        v = raw.get("schema_version", 1)
+        if v < 2:
+            raw = _v1_to_v2(raw)
+            v = 2
+        # ... and so on, each step forward-only and lossless.
+        return raw
+    """
+    # Defensive copy so callers' inputs are never mutated (purity).
+    raw = dict(raw)
+    _ = raw.get("schema_version", 1)
+    return raw
+
+codex
+I’ve got the surrounding contracts. I’ll quickly check existing compaction tests to ensure the proposed behavior aligns with current expectations around ids and event filtering before I finalize.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/tests/test_context_compaction.py" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+sed: can't read packages/core/tests/test_context_compaction.py: No such file or directory
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg --files packages/core | rg \"context_compaction|view\\.py|events\\.py|compaction\"" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/tests/test_view.py
+packages/core/tests/test_hs02_compaction_template.py
+packages/core/src/disco/core/context/compaction.py
+packages/core/src/disco/core/view.py
+packages/core/src/disco/core/events.py
+
+codex
+There isn’t an existing `test_context_compaction.py` in-tree, so I’ll use `test_view.py` plus current `context/compaction.py` shape as the behavioral baseline.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,320p' packages/core/src/disco/core/context/compaction.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,340p' packages/core/tests/test_view.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""CompactionPolicy — pure policy data governing what context may be omitted.
+
+The ACT of compacting (emitting events, rewriting state) lands in CXT-3. This is
+only the knobs + the per-kind limit lookup, so CXT-1's ContextPack.from_ledger
+and later assemblers share one source of truth for caps.
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict
+
+from .source_priority import SourceKind
+
+# Kinds that anchor the run and must never be dropped to make room.
+_NEVER_COMPACT: tuple[SourceKind, ...] = (
+    SourceKind.GOAL,
+    SourceKind.CONTRACT,
+    SourceKind.VERIFIER_FAILURE,
+    SourceKind.DIRECT_EDIT,
+)
+
+
+class CompactionPolicy(BaseModel):
+    """Thresholds for omitting omittable context. Immutable."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_history_chars: int = 20_000
+    max_retained_refs: int = 50
+    max_resource_refs: int = 30
+    max_recoverable_refs: int = 30
+    max_comments: int = 30
+    never_compact: tuple[SourceKind, ...] = _NEVER_COMPACT
+
+    @classmethod
+    def default(cls) -> CompactionPolicy:
+        return cls()
+
+    def limit_for(self, kind: SourceKind) -> int | None:
+        """The max number of items to retain for ``kind``.
+
+        Returns ``None`` (unbounded) for never-compact kinds and for kinds that
+        are not count-capped here; otherwise the configured cap.
+        """
+        if kind in self.never_compact:
+            return None
+        return {
+            SourceKind.RESOURCE: self.max_resource_refs,
+            SourceKind.RECOVERABLE_REF: self.max_recoverable_refs,
+            SourceKind.COMMENT: self.max_comments,
+        }.get(kind)
+
+ succeeded in 0ms:
+"""View + condensation tests — event-state-contract.md §8.3.
+
+The View is the materialized "what the LLM sees", computed by applying
+condensation tombstones to the raw log. Phase 0 ships the View and a no-op
+condenser; the real LLMSummarizingCondenser (first-half/keep_first/
+minimum_progress/hard-reset strategy) is a Phase 1 deliverable (BoD §22), so its
+strategy-specific tests are deferred. Here we test the View's tombstone
+*application* directly (which is the [CONTRACT] half) plus the no-op condenser.
+"""
+
+from __future__ import annotations
+
+from disco.core import (
+    ActionEvent,
+    CondensationEvent,
+    ConversationStatus,
+    MessageEvent,
+    NoOpCondenser,
+    ObservationEvent,
+    View,
+)
+from disco.core.view import microcompact, recover_span
+from event_fakes import (
+    action,
+    agent_msg,
+    fatal,
+    observation,
+    status,
+    tombstone,
+    user_msg,
+    with_seqs,
+)
+
+# ---- S3 Microcompact (GAP A) — drop no-op turns -----------------------------
+
+
+def _failed_then_retried_ok():
+    """A failed `shell` call superseded by an IDENTICAL successful retry. Returns the
+    seq-assigned event list (with_seqs copies, so seqs are populated)."""
+    a1 = action(tool="shell", args={"command": "pip install x"})
+    o1 = observation(action_id=a1.id, tool="shell", success=False, content="network error")
+    a2 = action(tool="shell", args={"command": "pip install x"})  # identical call
+    o2 = observation(action_id=a2.id, tool="shell", success=True, content="installed")
+    return with_seqs([user_msg("go"), a1, o1, a2, o2])
+
+
+def test_microcompact_tombstones_a_failed_then_superseded_turn():
+    events = _failed_then_retried_ok()
+    a1_seq, o1_seq = events[1].seq, events[2].seq  # the failed action + its observation
+    tombs = microcompact(events)
+    assert len(tombs) == 1
+    assert (tombs[0].forgotten_start_seq, tombs[0].forgotten_end_seq) == (a1_seq, o1_seq)
+    # applying it: the failed turn is gone from the View, the success remains, and a
+    # one-line tombstone marks the drop.
+    view = View.of(events + tombs)
+    blob = "\n".join(m.content for m in view.messages)
+    assert "network error" not in blob  # the failed attempt is forgotten
+    assert "installed" in blob  # the superseding success stays
+    assert "microcompacted" in blob  # the one-liner marks it
+
+
+def test_microcompact_keeps_an_unsuperseded_failure():
+    """A failure NOT followed by an identical success still carries information — keep it."""
+    a1 = action(tool="shell", args={"command": "pip install x"})
+    o1 = observation(action_id=a1.id, tool="shell", success=False, content="network error")
+    events = with_seqs([user_msg("go"), a1, o1])
+    assert microcompact(events) == []
+
+
+def test_microcompact_never_touches_durable_tools():
+    """A failed file_write superseded by an identical success is NOT microcompacted
+    (write tools may have left partial state; plan_step carries progress)."""
+    a1 = action(tool="file_write", args={"path": "a.txt", "content": "hi"})
+    o1 = observation(action_id=a1.id, tool="file_write", success=False, content="disk full")
+    a2 = action(tool="file_write", args={"path": "a.txt", "content": "hi"})
+    o2 = observation(action_id=a2.id, tool="file_write", success=True, content="wrote 2 bytes")
+    events = with_seqs([user_msg("go"), a1, o1, a2, o2])
+    assert microcompact(events) == []
+
+
+def test_microcompact_is_idempotent():
+    """Re-running after the tombstone is applied finds nothing new (safe every step)."""
+    events = _failed_then_retried_ok()
+    tombs = microcompact(events)
+    assert microcompact(events + tombs) == []
+
+
+def test_view_is_deterministic():
+    events = with_seqs([user_msg(), action(), observation("evt_a")])
+    assert View.of(events).messages == View.of(events).messages
+
+
+def test_non_convertibles_never_appear():
+    """StatusEvent / ErrorEvent / CondensationEvent are never in View.messages."""
+    events = with_seqs(
+        [
+            user_msg("q"),
+            status(ConversationStatus.RUNNING),
+            agent_msg("working"),
+            fatal(),
+        ]
+    )
+    view = View.of(events)
+    # Only the two LLMConvertible messages (user + agent) survive.
+    assert [m.role for m in view.messages] == ["user", "assistant"]
+    assert [m.content for m in view.messages] == ["q", "working"]
+
+
+def test_tombstone_drops_span_and_inserts_summary_once():
+    """A tombstone over a span hides those events and shows its summary exactly
+    once in their place."""
+    events = with_seqs(
+        [
+            user_msg("first"),  # seq 1
+            agent_msg("early-1"),  # seq 2  (forgotten)
+            agent_msg("early-2"),  # seq 3  (forgotten)
+            agent_msg("recent"),  # seq 4  (kept)
+            tombstone(2, 3, "[earlier discussion]"),  # seq 5  (the tombstone)
+        ]
+    )
+    view = View.of(events)
+    contents = [m.content for m in view.messages]
+    # first (kept) -> summary (in place of 2,3) -> recent (kept).
+    assert contents == ["first", "[earlier discussion]", "recent"]
+    assert contents.count("[earlier discussion]") == 1  # summary emitted once
+    assert view.forgotten_count == 2
+    assert 2 not in view.visible_seqs and 3 not in view.visible_seqs
+
+
+def test_forgotten_events_never_appear_even_with_overlapping_tombstones():
+    events = with_seqs(
+        [
+            user_msg("first"),  # 1
+            agent_msg("a"),  # 2
+            agent_msg("b"),  # 3
+            agent_msg("c"),  # 4
+            tombstone(2, 3, "S1"),  # 5
+            tombstone(3, 4, "S2"),  # 6  (overlaps on 3)
+        ]
+    )
+    view = View.of(events)
+    # 2,3,4 are all forgotten by the union of ranges; neither survives.
+    assert all(s not in view.visible_seqs for s in (2, 3, 4))
+    assert "a" not in [m.content for m in view.messages]
+
+
+def test_back_half_is_preserved_byte_identical_after_condensation():
+    """First-half-style condensation leaves the back half untouched (the
+    property the real condenser relies on; tested here at the View level)."""
+    raw = with_seqs([user_msg("u"), agent_msg("m1"), agent_msg("m2"), agent_msg("m3")])
+    before = View.of(raw)
+    back_half_before = [m.content for m in before.messages if m.content in ("m2", "m3")]
+
+    condensed = raw + with_seqs([tombstone(1, 2, "[summary of u, m1]")], start=5)
+    after = View.of(condensed)
+    back_half_after = [m.content for m in after.messages if m.content in ("m2", "m3")]
+
+    assert back_half_before == back_half_after == ["m2", "m3"]
+
+
+# ---- the no-op condenser (real one deferred to Phase 1) ---------------------
+
+
+async def test_noop_condenser_never_condenses():
+    events = with_seqs([user_msg()] + [agent_msg(f"m{i}") for i in range(300)])
+    view = View.of(events)
+    cond = NoOpCondenser()
+    assert cond.should_condense(view, token_count=10_000_000) is None  # sync (v1.2)
+    assert await cond.condense(events, view, summarizer=_FakeSummarizer()) is None  # async
+
+
+class _FakeSummarizer:
+    """Stand-in Summarizer (no real LLM) — the Phase 1 condenser tests will use
+    a fake like this to assert the tombstone summary equals its output (§8.3).
+    Async per event-state-contract v1.2 §5.2."""
+
+    async def summarize(self, messages):
+        return "[fake summary]"
+
+
+def test_recitation_scopes_plan_steps_to_the_current_plan():
+    """After a re-plan, the recitation must NOT count the PRIOR plan's done marks —
+    else every step shows done on the new plan and the model gets confused (observed
+    live → STUCK). Only plan_steps after the latest PlanEvent count."""
+    from disco.core import PlanEvent
+    from disco.core.view import _recitation_message
+
+    def act(tool, args):
+        return action(tool=tool, args=args)
+
+    evs = with_seqs([
+        user_msg("build"),
+        PlanEvent(summary="v1", steps=[{"title": "a"}, {"title": "b"}], revision=1),
+        act("plan_step", {"index": 1, "state": "done"}),
+        act("plan_step", {"index": 2, "state": "done"}),  # v1 fully done
+        PlanEvent(summary="v2", steps=[{"title": "x"}, {"title": "y"}, {"title": "z"}], revision=2),
+        act("plan_step", {"index": 1, "state": "done"}),  # only step 1 of v2 done
+    ])
+    msg = _recitation_message(evs)
+    assert msg is not None
+    # the new plan is 1/3 done — NOT 3/3 (v1's marks excluded)
+    assert "1/3 done" in msg.content
+
+
+# ---- C11 — Reversible-compaction tier (on-demand recovery) ------------------
+#
+# A tombstone is a MARKER on the append-only log, not a delete. The dropped
+# events stay addressable on disk; `recover_span` (and `View.recover_span`)
+# re-materializes them on demand. The default `View.messages` is NOT
+# affected — recovery is an explicit accessor, not an un-tombstone. Nothing
+# is re-injected into the live context (no bloat).
+
+
+def test_c11_recover_span_returns_original_dropped_events():
+    """The accessor returns the events a tombstone dropped from View.messages —
+    the originals in their original Event form (not the summary that replaced
+    them, not the rendered LLMMessage). The originals are NOT destroyed; the
+    tombstone is a marker on the log, not a delete."""
+    events = with_seqs(
+        [
+            user_msg("first"),  # seq 1 (kept)
+            agent_msg("early-1"),  # seq 2 (forgotten)
+            agent_msg("early-2"),  # seq 3 (forgotten)
+            agent_msg("recent"),  # seq 4 (kept)
+            tombstone(2, 3, "[earlier discussion]"),  # seq 5
+        ]
+    )
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    recovered = recover_span(events, t)
+    # Originals in seq order, raw Event objects.
+    assert [e.seq for e in recovered] == [2, 3]
+    assert [
+        e.message.content for e in recovered if isinstance(e, MessageEvent)
+    ] == ["early-1", "early-2"]
+    # The summary that replaced them is NOT returned (we recover the originals,
+    # not the substitute).
+    assert all(
+        e.message.content != "[earlier discussion]"
+        for e in recovered
+        if isinstance(e, MessageEvent)
+    )
+
+
+def test_c11_recover_does_not_change_default_view_messages():
+    """Calling recover_span does NOT mutate the event log and does NOT change
+    `View.messages`. The default condensed view still omits the tombstoned
+    span; the recovered events are returned to the caller, never re-injected."""
+    events = with_seqs(
+        [
+            user_msg("first"),  # seq 1
+            agent_msg("early-1"),  # seq 2 (forgotten)
+            agent_msg("early-2"),  # seq 3 (forgotten)
+            agent_msg("recent"),  # seq 4 (kept)
+            tombstone(2, 3, "[earlier discussion]"),  # seq 5
+        ]
+    )
+    # Snapshot the default View BEFORE recovery.
+    view_before = View.of(events)
+    contents_before = [m.content for m in view_before.messages]
+    # Default view: span is gone, summary sits in its place, recent message
+    # follows.
+    assert contents_before == ["first", "[earlier discussion]", "recent"]
+    assert view_before.forgotten_count == 2
+    assert 2 not in view_before.visible_seqs
+    assert 3 not in view_before.visible_seqs
+
+    # Invoke recovery — this is the explicit on-demand accessor.
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    recovered = recover_span(events, t)
+    # Recovery worked: we got the dropped originals back.
+    assert [e.seq for e in recovered] == [2, 3]
+    assert "early-1" in [e.message.content for e in recovered if isinstance(e, MessageEvent)]
+    assert "early-2" in [e.message.content for e in recovered if isinstance(e, MessageEvent)]
+
+    # The default View is UNCHANGED. Recovery did not un-tombstone, did not
+    # re-inject, did not mutate the log.
+    view_after = View.of(events)
+    assert [m.content for m in view_after.messages] == contents_before
+    assert view_after.forgotten_count == 2
+    assert "early-1" not in [m.content for m in view_after.messages]
+    assert "early-2" not in [m.content for m in view_after.messages]
+    # And the View's fingerprint is byte-identical — recovery has no side
+    # effects on what the LLM sees.
+    assert view_before.fingerprint() == view_after.fingerprint()
+
+
+def test_c11_recover_returns_empty_for_unmatched_range():
+    """A tombstone whose seq range matches no events in the log returns [].
+    Reversible doesn't mean indestructible — it means addressable. An empty
+    result is the honest answer when the range doesn't resolve."""
+    events = with_seqs([user_msg("u")])  # only seq 1
+    t = CondensationEvent(
+        forgotten_start_seq=99,
+        forgotten_end_seq=100,
+        summary="phantom span (was never persisted)",
+    )
+    assert recover_span(events, t) == []
+
+
+def test_c11_recover_handles_degenerate_range():
+    """start > end is a degenerate tombstone; the accessor must not raise —
+    it returns []. View.of already tolerates such ranges (a tombstone with
+    start > end forgets nothing), so the recovery mirrors that."""
+    t = CondensationEvent(forgotten_start_seq=10, forgotten_end_seq=5, summary="empty")
+    assert recover_span(with_seqs([user_msg(), agent_msg()]), t) == []
+
+
+def test_c11_recover_works_on_microcompact_tombstones():
+    """Microcompact (S3) emits its own CondensationEvent for no-op turns. The
+    original (action, observation) pair is STILL on the log — recovery returns
+    them. This is the dominant real-world case: a failed `pip install` that
+    was retried successfully, dropped as a microcompact tombstone. Recovery
+    lets a debugging surface see the original failure verbatim."""
+    a1 = action(tool="shell", args={"command": "pip install x"})
+    o1 = observation(
+        action_id=a1.id, tool="shell", success=False, content="network error\n" + "x" * 200
+    )
+    a2 = action(tool="shell", args={"command": "pip install x"})  # identical retry
+    o2 = observation(
+        action_id=a2.id, tool="shell", success=True, content="installed"
+    )
+    base = with_seqs([user_msg("go"), a1, o1, a2, o2])
+    tombs = microcompact(base)
+    assert len(tombs) == 1
+    t = tombs[0]
+    # The default view drops the failed turn.
+    view = View.of(base + tombs)
+    assert "network error" not in "\n".join(m.content for m in view.messages)
+    # Recovery returns the ORIGINAL failed turn — action + observation,
+    # contents intact (not snipped/masked, since we recover the Event, not
+    # the rendered LLMMessage).
+    recovered = recover_span(base, t)
+    assert len(recovered) == 2
+    a1_seq, o1_seq = base[1].seq, base[2].seq
+    assert [e.seq for e in recovered] == [a1_seq, o1_seq]
+    assert isinstance(recovered[0], ActionEvent)
+    assert recovered[0].tool_call.tool_name == "shell"
+    assert isinstance(recovered[1], ObservationEvent)
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '320,520p' packages/core/tests/test_view.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+    a2 = action(tool="shell", args={"command": "pip install x"})  # identical retry
+    o2 = observation(
+        action_id=a2.id, tool="shell", success=True, content="installed"
+    )
+    base = with_seqs([user_msg("go"), a1, o1, a2, o2])
+    tombs = microcompact(base)
+    assert len(tombs) == 1
+    t = tombs[0]
+    # The default view drops the failed turn.
+    view = View.of(base + tombs)
+    assert "network error" not in "\n".join(m.content for m in view.messages)
+    # Recovery returns the ORIGINAL failed turn — action + observation,
+    # contents intact (not snipped/masked, since we recover the Event, not
+    # the rendered LLMMessage).
+    recovered = recover_span(base, t)
+    assert len(recovered) == 2
+    a1_seq, o1_seq = base[1].seq, base[2].seq
+    assert [e.seq for e in recovered] == [a1_seq, o1_seq]
+    assert isinstance(recovered[0], ActionEvent)
+    assert recovered[0].tool_call.tool_name == "shell"
+    assert isinstance(recovered[1], ObservationEvent)
+    assert recovered[1].tool_result.success is False
+    assert recovered[1].tool_result.content == o1.tool_result.content  # full body, not masked
+    # And the default view is STILL condensed: recovery did not un-tombstone.
+    view2 = View.of(base + tombs)
+    assert view.fingerprint() == view2.fingerprint()
+
+
+def test_c11_recover_returns_nested_tombstones_as_typed_events():
+    """An inner tombstone (a CondensationEvent inside the recovered range) is
+    returned as a typed CondensationEvent — the log is the source of truth,
+    and a nested tombstone IS an event in the range. Re-running recover_span
+    on it re-walks the same log to resolve its own span. This is the
+    expected, correct behavior for a multi-stage condensation history."""
+    inner = tombstone(2, 3, "inner summary")
+    outer = tombstone(1, 5, "outer summary")
+    events = with_seqs(
+        [
+            user_msg("first"),  # 1
+            agent_msg("a"),  # 2
+            agent_msg("b"),  # 3
+            agent_msg("c"),  # 4
+            agent_msg("d"),  # 5
+            inner,  # 6
+            outer,  # 7
+        ]
+    )
+    # Recover the outer tombstone's range: events with seq in [1, 5] (5 of them)
+    # — the user msg, three agent msgs, and the agent msg at seq 5. The inner
+    # tombstone is at seq 6, OUTSIDE the outer's range, so it is NOT included.
+    out = recover_span(events, outer)
+    assert [e.seq for e in out] == [1, 2, 3, 4, 5]
+    # Now recover the inner tombstone's range: events with seq in [2, 3].
+    inn = recover_span(events, inner)
+    assert [e.seq for e in inn] == [2, 3]
+
+
+def test_c11_recover_is_pure_does_not_mutate_inputs():
+    """The accessor is a pure read: it does not append, delete, or modify the
+    event list or the tombstone. (Both are frozen Pydantic models so a
+    mutation would raise — but the function itself must not assign.)"""
+    a1 = action(tool="shell", args={"command": "echo"})
+    o1 = observation(action_id=a1.id, tool="shell", success=True, content="ok")
+    events = with_seqs([user_msg("u"), a1, o1, tombstone(2, 3, "drop")])
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    # Snapshot pre-call state.
+    pre_events_len = len(events)
+    pre_t_summary = t.summary
+    pre_t_seq = t.seq
+    recovered = recover_span(events, t)
+    # Post-call: nothing changed.
+    assert len(events) == pre_events_len
+    assert t.summary == pre_t_summary
+    assert t.seq == pre_t_seq
+    # Recovered is a fresh list of the same Event objects (not a re-render).
+    assert all(e in events for e in recovered)
+
+
+def test_c11_view_recover_span_classmethod_matches_module_function():
+    """`View.recover_span` is a paired accessor to `View.of`; it must return
+    the same thing the module-level `recover_span` returns. Both forms work
+    so callers can pick the surface that fits their code."""
+    events = with_seqs(
+        [
+            user_msg("u"),
+            agent_msg("a1"),
+            agent_msg("a2"),
+            agent_msg("kept"),
+            tombstone(2, 3, "S"),
+        ]
+    )
+    t = events[-1]
+    assert isinstance(t, CondensationEvent)
+    assert View.recover_span(events, t) == recover_span(events, t)
+
+codex
+I can now map the design to existing test expectations; I’ll do one final search for event-adapter/union coverage and then produce the verdict.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"EventAdapter|event_from_json_dict|event_to_json_dict|Llm|EventKind|Union\" packages/core/tests -g '*.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/tests/test_store_filters.py:16:    EventKind,
+packages/core/tests/test_store_filters.py:64:    only_actions = await store.get_events(CID, EventFilter(kinds=[EventKind.ACTION]))
+packages/core/tests/test_store_filters.py:77:        CID, EventFilter(kinds=[EventKind.MESSAGE, EventKind.ACTION])
+packages/core/tests/test_serialization.py:13:    EventAdapter,
+packages/core/tests/test_serialization.py:16:    event_from_json_dict,
+packages/core/tests/test_serialization.py:17:    event_to_json_dict,
+packages/core/tests/test_serialization.py:66:    raw = event_to_json_dict(event)
+packages/core/tests/test_serialization.py:67:    restored = event_from_json_dict(migrate_event(raw))
+packages/core/tests/test_serialization.py:74:    raw = event_to_json_dict(status(ConversationStatus.PAUSED))
+packages/core/tests/test_serialization.py:82:    raw_list = [event_to_json_dict(e) for e in ALL_EVENT_SAMPLES]
+packages/core/tests/test_serialization.py:83:    decoded = [event_from_json_dict(migrate_event(r)) for r in raw_list]
+packages/core/tests/test_serialization.py:90:    raw = event_to_json_dict(status(ConversationStatus.IDLE))
+packages/core/tests/test_serialization.py:93:    restored = event_from_json_dict(migrate_event(raw))
+packages/core/tests/test_serialization.py:101:    raw = event_to_json_dict(user_msg())
+packages/core/tests/test_serialization.py:104:        EventAdapter.validate_python(raw)
+packages/core/tests/test_serialization.py:109:    raw = event_to_json_dict(user_msg())
+packages/core/tests/test_build_plan_contract.py:13:from disco.core.events import ConversationStatus, EventKind
+packages/core/tests/test_build_plan_contract.py:113:    assert EventKind.PLAN  # import smoke
+packages/core/tests/test_build_loop_simulated_failures.py:23:from disco.core.events import event_to_json_dict  # noqa: E402
+packages/core/tests/test_build_loop_simulated_failures.py:68:    return [event_to_json_dict(e) for e in await store.get_events(cid)]
+packages/core/tests/test_cluster7_knowledge.py:68:    from disco.core import EventAdapter
+packages/core/tests/test_cluster7_knowledge.py:75:        restored = EventAdapter.validate_python(dumped)
+packages/core/tests/test_event_kind_frontend_contract.py:4:The backend (events.py :: EventKind) and the frontend (a hand-maintained TS
+packages/core/tests/test_event_kind_frontend_contract.py:10:frontend/src/lib/eventDisposition.ts) must equal the backend EventKind value set.
+packages/core/tests/test_event_kind_frontend_contract.py:21:from disco.core.events import EventKind
+packages/core/tests/test_event_kind_frontend_contract.py:36:    backend = {e.value for e in EventKind}
+packages/core/tests/test_event_kind_frontend_contract.py:43:        "backend EventKind(s) with NO frontend disposition — they would be "
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,200p' packages/core/tests/test_serialization.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Serialization contract — event-state-contract.md §8.5.
+
+The serialization boundary is hard: events are persisted, streamed, and read by
+future code. These tests pin round-trip fidelity, discriminated-union decoding,
+and forward-compatibility.
+"""
+
+from __future__ import annotations
+
+import pytest
+from disco.core import (
+    ConversationStatus,
+    EventAdapter,
+    LLMMessage,
+    StatusEvent,
+    event_from_json_dict,
+    event_to_json_dict,
+    migrate_event,
+)
+from event_fakes import (
+    action,
+    agent_error,
+    fatal,
+    observation,
+    status,
+    tombstone,
+    user_msg,
+)
+from pydantic import ValidationError
+
+
+def test_llm_message_serialization_with_images():
+    """LLMMessage with images survives round-trip (model_dump -> model_validate)."""
+    m = LLMMessage(role="user", content="look", images=["data:image/png;base64,abc"])
+    raw = m.model_dump(mode="json")
+    assert raw["images"] == ["data:image/png;base64,abc"]
+    restored = LLMMessage.model_validate(raw)
+    assert restored == m
+
+
+def test_llm_message_serialization_defaults():
+    """LLMMessage images default to None."""
+    m = LLMMessage(role="user", content="hello")
+    raw = m.model_dump(mode="json")
+    assert "images" in raw
+    assert raw["images"] is None
+    restored = LLMMessage.model_validate(raw)
+    assert restored.images is None
+
+
+# One instance of every concrete event type.
+ALL_EVENT_SAMPLES = [
+    user_msg("a question"),
+    action("reason", "shell", {"cmd": "ls"}),
+    observation("evt_a", "files listed"),
+    agent_error("tool exploded", action_id="evt_a"),
+    tombstone(1, 4, "earlier work summarized"),
+    status(ConversationStatus.RUNNING),
+    fatal("MaxIterationsReached", "500 hit"),
+]
+
+
+@pytest.mark.parametrize("event", ALL_EVENT_SAMPLES, ids=lambda e: type(e).__name__)
+def test_round_trip(event):
+    """Every event survives dump -> migrate -> validate, equal to the original."""
+    raw = event_to_json_dict(event)
+    restored = event_from_json_dict(migrate_event(raw))
+    assert restored == event
+    assert type(restored) is type(event)
+
+
+def test_round_trip_is_json_safe():
+    """model_dump(mode='json') yields ISO datetimes and enum *values* (§4)."""
+    raw = event_to_json_dict(status(ConversationStatus.PAUSED))
+    assert raw["status"] == "PAUSED"  # enum by value, not name/index
+    assert raw["source"] == "system"
+    assert isinstance(raw["timestamp"], str)  # ISO string, not a datetime
+
+
+def test_discriminator_decodes_heterogeneous_list():
+    """A mixed JSON list deserializes to the correct concrete types via `kind`."""
+    raw_list = [event_to_json_dict(e) for e in ALL_EVENT_SAMPLES]
+    decoded = [event_from_json_dict(migrate_event(r)) for r in raw_list]
+    assert [type(d).__name__ for d in decoded] == [type(e).__name__ for e in ALL_EVENT_SAMPLES]
+
+
+def test_forward_compat_missing_optional_field_with_default():
+    """An event dict missing a field that has a default still validates
+    (backward-compatible field addition, §4 rule 2)."""
+    raw = event_to_json_dict(status(ConversationStatus.IDLE))
+    del raw["meta"]  # optional, has a default_factory
+    del raw["detail"]  # optional, default None
+    restored = event_from_json_dict(migrate_event(raw))
+    assert isinstance(restored, StatusEvent)
+    assert restored.meta == {}
+    assert restored.detail is None
+
+
+def test_unknown_future_kind_fails_loudly():
+    """An unknown future `kind` raises, never silently mis-decodes (§8.5)."""
+    raw = event_to_json_dict(user_msg())
+    raw["kind"] = "telepathy_from_the_future"
+    with pytest.raises(ValidationError):
+        EventAdapter.validate_python(raw)
+
+
+def test_migrate_event_is_pure_and_idempotent():
+    """migrate_event must not mutate its input and must be a fixed point at v1."""
+    raw = event_to_json_dict(user_msg())
+    snapshot = dict(raw)
+    once = migrate_event(raw)
+    twice = migrate_event(once)
+    assert raw == snapshot  # input untouched
+    assert once == twice  # idempotent
+
+codex
+I’ve finished the read pass for the current contracts and will now assess the 5 design questions directly against this behavior.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' packages/core/tests/test_event_kind_frontend_contract.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Cross-language contract: the frontend has a UI disposition for every backend
+event kind.
+
+The backend (events.py :: EventKind) and the frontend (a hand-maintained TS
+mirror, no codegen) drift independently. The historical failure mode: the backend
+appends an event kind the frontend has no render path for, and it's silently
+dropped (the RP-13 follow-up answer was generated server-side but never shown).
+
+This test pins the two together: the frontend's KNOWN_EVENT_KINDS list (in
+frontend/src/lib/eventDisposition.ts) must equal the backend EventKind value set.
+Add a backend kind → this goes red until the frontend classifies it (rendered or
+suppressed). The companion vitest (eventDisposition.test.ts) enforces that every
+listed kind actually has a disposition entry.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from disco.core.events import EventKind
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_DISPOSITION_TS = _REPO_ROOT / "frontend" / "src" / "lib" / "eventDisposition.ts"
+
+
+def _frontend_known_kinds() -> set[str]:
+    """Parse KNOWN_EVENT_KINDS = [ "...", ... ] out of the TS source."""
+    text = _DISPOSITION_TS.read_text(encoding="utf-8")
+    m = re.search(r"KNOWN_EVENT_KINDS\s*=\s*\[(.*?)\]\s*as const", text, re.DOTALL)
+    assert m, "could not find KNOWN_EVENT_KINDS array in eventDisposition.ts"
+    return set(re.findall(r'"([a-z_]+)"', m.group(1)))
+
+
+def test_frontend_classifies_every_backend_event_kind() -> None:
+    backend = {e.value for e in EventKind}
+    frontend = _frontend_known_kinds()
+
+    missing_in_frontend = backend - frontend
+    extra_in_frontend = frontend - backend
+
+    assert not missing_in_frontend, (
+        "backend EventKind(s) with NO frontend disposition — they would be "
+        f"silently dropped by the UI: {sorted(missing_in_frontend)}. "
+        "Classify them in frontend/src/lib/eventDisposition.ts (rendered or suppressed)."
+    )
+    assert not extra_in_frontend, (
+        "frontend KNOWN_EVENT_KINDS lists kind(s) the backend no longer emits: "
+        f"{sorted(extra_in_frontend)}. Remove them from eventDisposition.ts."
+    )
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"reason=\\\"request\\\"|reason ==\\s*\\\"|\\.reason\\b.*CondensationEvent|reason: Literal\\[\\\"request\\\"|CondensationEvent\\(.*reason\" packages/core packages/frontend -g '"'!**/.venv/**'"'" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+rg: packages/frontend: No such file or directory (os error 2)
+packages/core/tests/test_router_routing.py:73:        assert resp.routing.reason == "config"
+packages/core/tests/test_router_routing.py:87:    assert resp.routing.reason == "config"
+packages/core/tests/test_openai_provider.py:64:    assert r.finish_reason == "stop"
+packages/core/tests/test_openai_provider.py:84:    assert r.text == "" and r.finish_reason == "length"
+packages/core/tests/test_openai_provider.py:154:    assert final.finish_reason == "stop"
+packages/core/tests/test_loop_stuck.py:476:    assert r1.reason == "repeated_action_observation"
+packages/core/tests/test_loop_stuck.py:485:    assert r2.reason == "repeated_action_error"
+packages/core/tests/test_loop_stuck.py:491:    assert r3.reason == "agent_monologue"
+packages/core/tests/test_f1_provider_recovery.py:83:    assert r.finish_reason == "tool_calls"
+packages/core/tests/test_f1_provider_recovery.py:114:    assert r.finish_reason == "tool_calls"
+packages/core/tests/test_f1_provider_recovery.py:143:    assert final.finish_reason == "tool_calls"
+packages/core/tests/test_f1_provider_recovery.py:176:    assert final.finish_reason == "tool_calls"
+packages/core/tests/test_f1_provider_recovery.py:210:    assert r.finish_reason == "stop"
+packages/core/tests/test_f1_provider_recovery.py:237:    assert final.finish_reason == "stop"
+packages/core/tests/test_f1_provider_recovery.py:293:    assert r.finish_reason == "tool_calls"
+packages/core/tests/test_f1_provider_recovery.py:354:    assert final.finish_reason == "tool_calls"
+packages/core/tests/test_c16_hard_reset_pointer_flush.py:107:    assert tomb.reason == "hard_reset"
+packages/core/tests/test_c16_hard_reset_pointer_flush.py:248:    assert tomb.reason == "tokens"
+packages/core/tests/test_c16_hard_reset_pointer_flush.py:268:    assert tomb.reason == "tokens"
+packages/core/tests/test_c16_hard_reset_pointer_flush.py:393:    assert tomb.reason == "hard_reset"
+packages/core/src/disco/core/view.py:846:        if reason == "hard_reset":
+packages/core/src/disco/core/loop/agent.py:275:        truncated = resp.finish_reason == "length" or _has_unclosed_think(resp.text)
+packages/core/src/disco/core/events.py:571:    reason: Literal["request", "tokens", "events", "hard_reset"] = "tokens"
+
+codex
+VERDICT: REVISE
+REASONS:
+- (a) Reusing `CondensationEvent` is the right direction: the existing `View.of` filtering + `recover_span` contract already gives reversible, append-only forgetting behavior, so this avoids a second forget mechanism.
+- (b) The compact guards are directionally correct but incomplete: idempotence based only on a later `ContextCompactionEvent` is brittle if compaction events and CondensationEvents are not appended atomically, and there is no explicit skip for already-forgotten spans already covered by existing `CondensationEvent`s (plus existing `View.of` uses first-summary-at-start semantics for shared starts).
+- (b) Also, “durable state exists elsewhere” should be treated more robustly than presence-only of `ContextSummaryEvent`; the plan should specify validation of summary payload/ artifact existence (or non-empty summary) before emitting a tombstone.
+- (c) `ContextResolvedEvent` + `ContextSummaryEvent` are genuinely additive; `ContextCompactionEvent` is not strictly necessary for correctness (execution can be inferred from emitted `CondensationEvent`s) and adds union/adapter surface area unless explicitly justified for audit.
+- (e) Union/adapter risk is real: adding 3 kinds requires consistent updates to `EventKind`, `Event` union, `EventAdapter`, and downstream contracts (frontend `EventKind` disposition contract will break unless mirrored).
+
+REQUIRED_REVISIONS:
+- Add idempotence protection against both repeated attempts and overlaps:
+  - skip already-forgotten ranges already covered by existing `CondensationEvent`s, and define deterministic tie-break/order handling for overlapping candidate spans.
+- Decide explicit durability verification strategy for compaction precondition:
+  - either prove `ContextSummaryEvent.summary` is non-empty and trusted durable content, or verify referenced artifact availability/path validity before emitting `CondensationEvent`.
+- Clarify or remove redundant bookkeeping:
+  - if keeping `ContextCompactionEvent`, justify why it cannot be inferred; otherwise fold idempotence/audit using existing events and simplify the event model.
+
+tokens used
+56,023
+VERDICT: REVISE
+REASONS:
+- (a) Reusing `CondensationEvent` is the right direction: the existing `View.of` filtering + `recover_span` contract already gives reversible, append-only forgetting behavior, so this avoids a second forget mechanism.
+- (b) The compact guards are directionally correct but incomplete: idempotence based only on a later `ContextCompactionEvent` is brittle if compaction events and CondensationEvents are not appended atomically, and there is no explicit skip for already-forgotten spans already covered by existing `CondensationEvent`s (plus existing `View.of` uses first-summary-at-start semantics for shared starts).
+- (b) Also, “durable state exists elsewhere” should be treated more robustly than presence-only of `ContextSummaryEvent`; the plan should specify validation of summary payload/ artifact existence (or non-empty summary) before emitting a tombstone.
+- (c) `ContextResolvedEvent` + `ContextSummaryEvent` are genuinely additive; `ContextCompactionEvent` is not strictly necessary for correctness (execution can be inferred from emitted `CondensationEvent`s) and adds union/adapter surface area unless explicitly justified for audit.
+- (e) Union/adapter risk is real: adding 3 kinds requires consistent updates to `EventKind`, `Event` union, `EventAdapter`, and downstream contracts (frontend `EventKind` disposition contract will break unless mirrored).
+
+REQUIRED_REVISIONS:
+- Add idempotence protection against both repeated attempts and overlaps:
+  - skip already-forgotten ranges already covered by existing `CondensationEvent`s, and define deterministic tie-break/order handling for overlapping candidate spans.
+- Decide explicit durability verification strategy for compaction precondition:
+  - either prove `ContextSummaryEvent.summary` is non-empty and trusted durable content, or verify referenced artifact availability/path validity before emitting `CondensationEvent`.
+- Clarify or remove redundant bookkeeping:
+  - if keeping `ContextCompactionEvent`, justify why it cannot be inferred; otherwise fold idempotence/audit using existing events and simplify the event model.
+
