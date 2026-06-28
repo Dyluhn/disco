@@ -58,6 +58,7 @@ from .boundaries import (
     SecurityAnalyzer,
     StopHook,
     ToolExecutor,
+    is_finish_tool_name,  # P6 — re-exported; canonical def lives in boundaries
 )
 from .control import Disp
 from .driver import Driver
@@ -350,6 +351,15 @@ def _finish_tool_spec():
     )
 
 
+def _finish_alias_tool_spec(alias: str):
+    """A FRESH ToolSpec for the contract finalizer alias — same schema/description as
+    `finish`, contract-specific name. Built per-alias; never mutates the cached finish
+    singleton."""
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(name=alias, description=_FINISH_DESCRIPTION, parameters_schema=_FINISH_SCHEMA)
+
+
 def _remember_tool_spec():
     from ..llm.types import ToolSpec
 
@@ -506,6 +516,12 @@ class AgentLoop:
         execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
         autonomous: bool = False,
         model_policy: ModelExecutionPolicy = _DEFAULT_MODEL_POLICY,
+        # P6 — the active Build contract's verification finalizer name (e.g.
+        # "ready_for_app_verification"). When set, it is advertised + recognized as a
+        # per-kind ALIAS of the `finish` virtual tool, routed through the SAME host-truth
+        # finish gate (no self-cert). None ⇒ no contract governs ⇒ only plain `finish`
+        # (a plain/CUSTOM build NEVER fabricates a finalizer alias).
+        finish_alias: str | None = None,
         # C6 — cadence for the plan/objective tail-recap (default: every 5
         # model turns). Set to 1 to recover the old "recite every step"
         # behavior; 0 / negative are clamped to 1. The smolagents math is
@@ -537,6 +553,8 @@ class AgentLoop:
         # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
         # instead of an indefinite AWAITING_USER_DECISION stall.
         self._autonomous = autonomous
+        # P6 — the contract finalizer alias for `finish` (None when no contract governs).
+        self._finish_alias = finish_alias
         # Execution policy (T1): the SINGLE source of truth for model-tier execution.
         # `_assist` is a read-only property delegating to `_model_policy.assist`.
         self._model_policy = model_policy
@@ -1401,7 +1419,17 @@ class AgentLoop:
                     if await self._meta.handle_delegate_explore(step, events) is Disp.HALT:
                         return await self.get_state()
                     continue
-                if step.tool_call is not None and step.tool_call.tool_name == "finish":
+                if step.tool_call is not None and is_finish_tool_name(
+                    step.tool_call.tool_name, self._finish_alias
+                ):
+                    # P6 — a contract finalizer alias (ready_for_*_verification) IS the
+                    # finish signal: normalize the name to "finish" so the host-truth gate
+                    # + every downstream reader behaves byte-identically regardless of the
+                    # contract-specific name (the gate is name-agnostic; this is defensive).
+                    if step.tool_call.tool_name != "finish":
+                        step = step.model_copy(
+                            update={"tool_call": step.tool_call.model_copy(update={"tool_name": "finish"})}
+                        )
                     step, disp = await self._finish.normalize_finish_step(step, events)
                     if disp is Disp.CONTINUE:
                         continue

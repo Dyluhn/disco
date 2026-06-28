@@ -65,6 +65,23 @@ def test_set_build_kind_none_resets_to_custom() -> None:
     assert rt._build_trackers["c4"][0].kind is ContractKind.CUSTOM
 
 
+def test_finalizer_alias_only_for_non_custom_declared_kind() -> None:
+    rt = _runtime()
+    # no declared kind → no alias (a plain build)
+    assert rt._finalizer_alias_for("none") is None
+    # a declared "custom" kind → no alias (never fabricate ready_for_artifact_verification)
+    rt.set_build_kind("cust", "custom")
+    assert rt._finalizer_alias_for("cust") is None
+    # an unknown kind falls back to CUSTOM → still no alias
+    rt.set_build_kind("unk", "totally.unknown.kind")
+    assert rt._finalizer_alias_for("unk") is None
+    # a real declared kind → its finalizer
+    rt.set_build_kind("app", "appkit.leadgen")
+    assert rt._finalizer_alias_for("app") == "ready_for_app_verification"
+    rt.set_build_kind("doc", "document")
+    assert rt._finalizer_alias_for("doc") == "ready_for_document_verification"
+
+
 def test_note_verify_result_advances_export_and_repair() -> None:
     rt = _runtime()
     rt.set_build_kind("c5", "appkit.leadgen")

@@ -252,6 +252,7 @@ class Driver:
         # module-load circular import (engine imports this module).
         from .engine import (
             _delegate_explore_tool_singleton,
+            _finish_alias_tool_spec,
             _finish_tool_singleton,
             _remember_tool_singleton,
             _serve_tool_singleton,
@@ -355,6 +356,13 @@ class Driver:
         # auto-recovery affordance: when its current plan is wrong, it proposes
         # a revision and the user accepts/refines via the plan-approval gate.
         virtuals = [_finish_tool_singleton()]
+        # P6 — when a Build contract governs the run, ALSO advertise its verification
+        # finalizer (ready_for_*_verification) as a per-kind alias of `finish` (the name
+        # the prompt pack instructs the model to call). Advertised next to plain `finish`
+        # (kept for compatibility) and, like `finish`, survives meta-tool suppression
+        # since both route to the same host-truth finish gate.
+        if self._loop._finish_alias:
+            virtuals.append(_finish_alias_tool_spec(self._loop._finish_alias))
         if not suppress_meta_tools:
             # Autonomous mode withholds the ask gates (no human to answer); the model
             # is told to assume + proceed. The rest stay — propose_plan_update is the
@@ -405,6 +413,10 @@ class Driver:
             # NOT via schema suppression.
             "delegate_explore",
         }
+        # P6 — the contract finalizer alias is a recognized finish signal, so a call to
+        # it must not be bounced as unknown by the Rung-7 invalid-tool requery.
+        if self._loop._finish_alias:
+            virtual_names.add(self._loop._finish_alias)
         # Include mode-scoped virtuals (planning tools) so
         # we don't requery for valid exploration turns.
         all_known_names = (

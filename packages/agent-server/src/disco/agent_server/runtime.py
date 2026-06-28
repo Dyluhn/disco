@@ -29,6 +29,7 @@ from disco.core.contract import (
     BuildContract,
     BuildContractRegistry,
     BuildPhaseTracker,
+    ContractKind,
     ContractScopeGuard,
 )
 from disco.core import (
@@ -1191,6 +1192,19 @@ class ConversationRuntime:
             entry = self._build_trackers.get(conversation_id)
         return entry[0].artifact.delivery_mode if entry is not None else None
 
+    def _finalizer_alias_for(self, conversation_id: str) -> str | None:
+        """P6: the contract's verification finalizer to advertise as a `finish` alias —
+        ONLY for a RESOLVED, NON-CUSTOM contract. A plain build, a declared "custom" kind,
+        or an unknown kind that falls back to CUSTOM gets None (never fabricate the generic
+        ready_for_artifact_verification finalizer)."""
+        if conversation_id not in self._build_kind:
+            return None
+        self._build_scope_guard(conversation_id)  # resolve + cache (contract, tracker)
+        resolved = self._build_trackers[conversation_id][0]
+        if resolved.kind is ContractKind.CUSTOM:
+            return None
+        return resolved.verify.finalizer
+
     def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None:
         """Advance the build-phase tracker on a host VERIFY outcome (pass → EXPORT, fail
         → REPAIR so the model may use the repair tools to fix). The BOOTSTRAP→EDIT→VERIFY
@@ -1625,6 +1639,13 @@ class ConversationRuntime:
             except Exception:
                 pass  # best-effort; WS frame emission is not critical
         self._executors[conversation_id] = executor
+        # P6: the contract's verification finalizer, advertised as a per-kind alias of
+        # `finish`. Bound on BOTH the loop (dispatch/advertisement/requery) and the agent
+        # (batched-call selection); guard the agent hook for test fakes that don't have it.
+        _finish_alias = self._finalizer_alias_for(conversation_id)
+        _set_alias = getattr(agent, "set_finish_alias", None)
+        if callable(_set_alias):
+            _set_alias(_finish_alias)
         if _art_mode:
             # C6: artifact mode — low-friction authoring path:
             #   • NeverConfirm: artifacts are low-risk; no per-action approval.
@@ -1650,6 +1671,7 @@ class ConversationRuntime:
                 # No planning_tools (submit_plan/plan_step not in ARTIFACT_TOOLS scope).
                 autonomous=self._effective_autonomous(conversation_id),
                 model_policy=model_policy,
+                finish_alias=_finish_alias,  # P6 contract finalizer alias
             )
         return AgentLoop(
             conversation_id,
@@ -1687,6 +1709,7 @@ class ConversationRuntime:
             # from the prompt prefix.
             autonomous=self._effective_autonomous(conversation_id),
             model_policy=model_policy,
+            finish_alias=_finish_alias,  # P6 contract finalizer alias
         )
 
     # ---- deep research surface ---------------------------------------------

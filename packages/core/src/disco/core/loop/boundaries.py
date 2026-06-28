@@ -29,6 +29,17 @@ from ..view import View
 StreamHook = Callable[[StreamChunk], Awaitable[None]]
 
 
+def is_finish_tool_name(name: str, finish_alias: str | None) -> bool:
+    """P6 — THE single source of truth for "is this the finish signal?", shared by every
+    surface that must treat the contract verification finalizer (ready_for_*_verification)
+    identically to the `finish` virtual tool: the Agent's batched-call selection, the
+    engine dispatch, the driver advertisement/requery, and planning suppression. Lives in
+    boundaries (a low-level shared module) so engine.py AND agent.py can import it without
+    a circular import. Plain "finish" is always the signal; the contract finalizer is too
+    when a contract governs the run (finish_alias set)."""
+    return name == "finish" or (finish_alias is not None and name == finish_alias)
+
+
 class AgentStep(BaseModel):
     """The product of one `Agent.step()`. The loop converts this into events.
 

@@ -194,9 +194,19 @@ def test_constructing_agent_flavor_does_not_mutate_module_constants():
 # That is the point: any scope change must touch this file, making it a
 # deliberate, code-reviewed decision rather than silent drift.
 _EXPECTED_AGENT_TOOLS = [
+    # P4/TOOL-1: AppKit semantic mutation tools
+    "app_add_section",
+    "app_create",
+    "app_remove_section",
+    "app_reorder_section",
+    "app_set_design",
+    "app_set_tweak",
+    "app_snapshot_version",
+    "app_update_content",
     "audio_overview",
     "browser",
     "code_exec",
+    "context_memory",  # CXT-2: durable .disco/context working memory
     "deck_patch",   # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
     "extract",

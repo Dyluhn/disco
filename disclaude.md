@@ -1246,3 +1246,75 @@ Follow-ups (tracked): P5-PORT (port-8000 reconcile) + the reject-wire (handle_se
   BOTH turn_control.handle_serve AND the lifecycle synthetic app-deliverable path (artifact_kind="app" for any
   index.html regardless of contract). Both read delivery_mode when wired.
 - NEXT: P6-FINALIZERS (plan queued; fixes the ready_for_*_verification false affordance).
+
+### PR P6-FINALIZERS — PLAN (refined post-scout)
+ARCHITECTURE FOUND: `finish` is a VIRTUAL tool (engine.py _finish_tool_spec/_FINISH_SCHEMA; advertised via
+driver.py _finish_tool_singleton in `virtuals`; engine intercepts tool_name=="finish" → finish.py
+normalize_finish_step → handle_finish_path = the HOST-TRUTH gate: verify-on-finish + verify_web_app + DoD).
+Other virtuals: serve/remember/notify_user/ask_user/clarify/propose_plan_update. There is NO `finish` registry
+tool and NO ready_for_*_verification tool → the contract/pack finalizer names are a LIVE FALSE AFFORDANCE
+(a model that follows the pack calls an unrecognized tool).
+DESIGN (minimal + SAFE — reuse the proven gate, add NO new verification logic):
+1. Make the active contract's finalizer name a RECOGNIZED + ADVERTISED virtual finalizer that routes through
+   the EXISTING finish gate. When a Build run declares a contract, the engine (a) advertises the finish
+   virtual under the contract's finalizer name (ready_for_<kind>_verification) — same schema/description,
+   contract-named; (b) recognizes that name in the finish-dispatch branch (engine.py:1404) exactly like
+   "finish" → normalize_finish_step/handle_finish_path. The finalizer is the agent's "I claim ready" SIGNAL;
+   the HOST gate adjudicates (no self-cert). Zero new verify logic — the host-truth path is unchanged.
+2. COHERENCE (no false affordance): a test asserting every built-in contract's finalizer name is recognized
+   by the finish-dispatch (the inverse of the P2 tools-exist test, for finalizers). Plus: with NO contract,
+   plain "finish" still works (unchanged).
+3. SCOPED OUT (tracked follow-ups, to keep this sensitive finish.py/engine change minimal + safe):
+   - VerificationLevel escalation (STRICT requires the lead-persist/render evidence) — a gate refinement.
+   - The cross-layer tracker wire (finalizer→note_finalizer_called, gate verdict→note_build_verify_result):
+     finish is engine-level (core/loop) but the tracker lives in agent-server runtime; this is the SAME
+     cross-layer signal as the build-surface verify edge — wire both together in a focused follow-up.
+RISK: engine finish-dispatch + virtual-tool advertisement. MANDATORY: full agent-server + loop suite green;
+adversarial Codex review; the no-contract "finish" path must be byte-unchanged.
+
+### PR P6-FINALIZERS — PLAN REVISION 1 (post gpt-5.5: aliasing concept APPROVED, 6 required fixes)
+Confirmed surfaces: dispatch engine.py:1404 (tool_name=="finish"); advertisement driver.py:357 virtuals;
+known_tool_names_for_requery driver.py:382; planning-mode virtual suppression driver.py:~234 ("finish stays");
+AgentLoop engine.py:484 (constructed runtime.py:1346/1636/1654 _compose_build_loop); Pi fixed finish allowlists
+pi-kernel/src/tools.ts:54/302 + routes/pi_tools.py:75.
+DESIGN (all 6 revisions):
+1. CORE SEAM: AgentLoop(..., finish_alias: str | None = None), stored self._finish_alias. Passed by
+   _compose_build_loop ONLY when a real contract kind is DECLARED (conversation_id in self._build_kind) →
+   contract.verify.finalizer; else None. NEVER fabricate ready_for_artifact_verification for a plain/CUSTOM
+   build (the CUSTOM default must NOT trigger an alias).
+2. CENTRAL HELPER: is_finish_tool_name(name, finish_alias) = name=="finish" or (finish_alias and name==
+   finish_alias). Used by ALL surfaces: dispatch, advertisement, known_tool_names_for_requery, planning
+   suppression (alias behaves EXACTLY like finish — stays when finish stays, blocked when finish blocked).
+3. FRESH ALIAS ToolSpec: _finish_alias_tool_spec(alias) builds a NEW ToolSpec(name=alias, desc=_FINISH_
+   DESCRIPTION, schema=_FINISH_SCHEMA) — do NOT mutate the cached _FINISH_TOOL_SPEC singleton.
+4. VISIBILITY: when finish_alias set, ADVERTISE the contract finalizer (the name the pack tells the model to
+   call) AND keep plain "finish" advertised+recognized as a compatibility alias (documented). Both route to
+   the same gate.
+5. PI SCOPED OUT (tracked → P15 PiKernel Product Integration): Pi's fixed "finish" allowlists are NOT touched
+   here; the finalizer false affordance persists ONLY on the Pi path until P15 wires it. Documented, not silent.
+6. TESTS: every builtin finalizer recognized by is_finish_tool_name; active-contract alias advertised; alias
+   routes through the finish gate (normalize_finish_step); no-contract plain "finish" byte-unchanged; alias
+   blocked in planning mode like finish; alias present in known_tool_names_for_requery.
+NOT claimed complete: VerificationLevel STRICT escalation + the cross-layer phase-tracker verify edges (both
+explicit tracked follow-ups). MANDATORY: full agent-server+loop suite green; no-contract finish path unchanged.
+
+## PR P6-FINALIZERS — Verification Finalizers (host-truth, contract finalizer = finish-alias) — COMPLETE
+- Codex (CODE, gpt-5.5, binding): APPROVE (plan APPROVE after 1 round; code APPROVE after 1 round fixing 3
+  real bugs gpt-5.5 caught — planning-gate alias leak, batched-call discard, CUSTOM fabrication).
+- FIXED the live FALSE AFFORDANCE: the per-kind ready_for_*_verification finalizers (named in every contract/
+  pack) are now REAL — recognized + advertised as a per-kind ALIAS of the `finish` virtual tool, routed
+  through the EXISTING host-truth finish gate (no self-cert, no new verify logic).
+- is_finish_tool_name centralized in boundaries.py (single source) → engine (dispatch+re-export) + agent
+  (selection). _finish_alias_tool_spec = fresh ToolSpec (never mutates the finish singleton). AgentLoop +
+  RouterAgent gain finish_alias. driver advertises the alias next to finish (survives suppression) + requery
+  knows it. runtime._finalizer_alias_for: alias ONLY for a resolved NON-CUSTOM declared kind.
+- KEY FIX (bugs 1+2): the AGENT canonicalizes the alias→"finish" in _pick_tool_call BEFORE any engine
+  processing — a batched [alias, real-action] keeps the real action, and the alias name never reaches the
+  planning gate / dispatch / signals / event log.
+- Tests: 12 (helper, advertisement, requery, planning, no-contract, batched-keeps-action, alias-canonicalize,
+  CUSTOM/declared/no-contract gating) + AGENT_TOOLS snapshot fixed (app_*+context_memory TOOL-1/CXT-2
+  leftover). 233 agent/driver/finish/turn regression green; core-loop suite fully green; agent-server green
+  except 4 pre-existing env failures (Pi-needs-node + verify-config). 0 new pyright errors.
+- SCOPED OUT (tracked): VerificationLevel STRICT escalation; the cross-layer phase-tracker verify edges; Pi
+  finalizer wiring → P15 (pi-kernel fixed finish allowlists untouched; Pi-path false affordance persists till P15).
+- NEXT: P7 Starter/Brand/UI Kits.

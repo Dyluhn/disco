@@ -47,7 +47,7 @@ from ..llm import (
 )
 from ..obs import log_span
 from ..view import View
-from .boundaries import AgentStep, StreamHook
+from .boundaries import AgentStep, StreamHook, is_finish_tool_name
 
 # The View feeds the model's own prior thoughts back into context with a rotating
 # surface-form prefix ("Reasoning: …" / "Thought: …" — a deterministic-by-seq
@@ -96,6 +96,22 @@ def _has_unclosed_think(text: str) -> bool:
     return text.lower().count("<think>") > text.lower().count("</think>")
 
 
+def _pick_tool_call(tool_calls, finish_alias):  # noqa: ANN001 — duck-typed provider calls
+    """P6/W-32 — pick the single action from a (possibly batched) response. Prefer the
+    first NON-finish call so a batched [finish/finalizer, real action] still executes the
+    real work (the finish/finalizer must then come on its own turn, where the gates run).
+    The contract finalizer alias counts as finish — so it can't shadow a real action — and
+    the chosen name is CANONICALIZED to "finish" when it is the finish signal, so the alias
+    name never reaches the engine/event log; every downstream surface sees plain "finish".
+    Returns (tool_name, arguments)."""
+    pc = next(
+        (c for c in tool_calls if not is_finish_tool_name(c.tool_name, finish_alias)),
+        tool_calls[0],
+    )
+    name = "finish" if is_finish_tool_name(pc.tool_name, finish_alias) else pc.tool_name
+    return name, pc.arguments
+
+
 class RouterAgent:
     """[CONTRACT] An `Agent` that wraps the LLM router."""
 
@@ -122,10 +138,21 @@ class RouterAgent:
         # BuildAgent below; this base default (True) matches the original v1
         # convention so direct RouterAgent(router) callers are unchanged.
         self._prose_finishes = prose_finishes
+        # P6 — the active Build contract's verification finalizer (ready_for_*_verification),
+        # treated identically to `finish` in batched-call selection so the model can't
+        # discard a real action by batching it with the finalizer, and so the canonical
+        # "finish" name flows to every downstream surface. None ⇒ no contract governs.
+        # Set post-construction by the runtime (set_finish_alias) once the contract resolves.
+        self._finish_alias: str | None = None
         # v1.2 model-pill hook: the driver model key chosen for THIS conversation,
         # overriding the settings assignment. None → follow settings. Set by the
         # app/agent server from the per-conversation pill selection.
         self._model_override = model_override
+
+    def set_finish_alias(self, alias: str | None) -> None:
+        """P6 — bind the active Build contract's verification finalizer (or None). Set by
+        the runtime once the contract resolves, so the agent treats that name as `finish`."""
+        self._finish_alias = alias
 
     async def step(
         self,
@@ -232,13 +259,10 @@ class RouterAgent:
             # batched [finish, real_action] still executes the work; the
             # affirmative finish must then come on its own turn (where the finish
             # gates run). All-finish / single-finish falls back to the first call.
-            pc = next(
-                (c for c in resp.tool_calls if c.tool_name != "finish"),
-                resp.tool_calls[0],
-            )
+            _name, _args = _pick_tool_call(resp.tool_calls, self._finish_alias)
             return AgentStep(
                 thought=_clean_thought(resp.text),
-                tool_call=ToolCall(tool_name=pc.tool_name, arguments=pc.arguments),
+                tool_call=ToolCall(tool_name=_name, arguments=_args),
                 finished=False,
                 llm_response_id=resp.request_id,
             )
