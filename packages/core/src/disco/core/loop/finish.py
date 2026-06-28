@@ -1595,6 +1595,13 @@ class FinishGate:
             marker = n0.get("status") or n0.get("failure") or "failed"
             first_error = f"{n0.get('method', 'GET')} {n0.get('url', '')} -> {marker}"
 
+        # CXT-7: record the failure to durable context (.disco/context/verifier_failures.json),
+        # best-effort — NEVER alters the gate verdict/flow. CXT-4's assembler surfaces these
+        # unresolved failures into the model's ContextPack on later turns/resume.
+        await self._record_verifier_failure_to_context(
+            message=(first_error or summary), rel_path=(screenshot or None)
+        )
+
         prior_fp = _prior_verify_marker_fp(events, since_seq)
         if prior_fp is not None and prior_fp == fp:
             # LOOP BREAKER: the SAME failure verdict has recurred since the last
@@ -1696,6 +1703,35 @@ class FinishGate:
             return bool(await sbx.file_exists("index.html"))
         except Exception:  # noqa: BLE001 — existence probe failure → cannot confirm
             return False
+
+    async def _record_verifier_failure_to_context(
+        self, *, message: str, rel_path: str | None
+    ) -> None:
+        """CXT-7 — persist a verify_web_app failure to .disco/context/verifier_failures.json
+        (best-effort; never alters the gate flow). Survives truncation/resume so the
+        CXT-4 assembler can surface the unresolved failure to the model later."""
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is None:
+            return
+        try:
+            from ..context import ArtifactMemoryStore, Severity, VerifierFailureRef
+
+            await ArtifactMemoryStore(sbx).record_verifier_failures(
+                (
+                    VerifierFailureRef(
+                        kind="verify_web_app",
+                        message=(message or "verify_web_app did not pass")[:500],
+                        rel_path=rel_path or None,
+                        severity=Severity.ERROR,
+                    ),
+                )
+            )
+        except Exception:
+            _LOG.warning(
+                "CXT-7 verifier-failure context write failed for %s",
+                self._loop.conversation_id,
+                exc_info=True,
+            )
 
     async def _maybe_honest_unverifiable_static_finish(self, verdict: dict) -> Disp | None:
         """Bug 6 — when a web build's verify FAILS ONLY because nothing is serving

@@ -901,7 +901,7 @@ class AgentLoop:
                         )
                     )
                     await self._arm_dod_from_plan()
-                    await self._seed_todo_from_plan()  # CXT-6: same as interactive approve_plan
+                    await self._seed_context_from_plan()  # CXT-6: same as interactive approve_plan
                     return Disp.CONTINUE
                 await self._emit(
                     StatusEvent(
@@ -1744,14 +1744,15 @@ class AgentLoop:
                 StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
             )
             await self._arm_dod_from_plan()
-            await self._seed_todo_from_plan()
+            await self._seed_context_from_plan()
         return await self.get_state()
 
-    async def _seed_todo_from_plan(self) -> None:
-        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
-        execution memory. Best-effort: a seeding error never blocks approval. A
-        revised plan re-approval re-seeds (so todo.md tracks the current contract);
-        minor in-build updates are the agent's via the context_memory tool."""
+    async def _seed_context_from_plan(self) -> None:
+        """CXT-6/CXT-7 — seed durable context from the approved plan: current_goal.md
+        (= plan.summary) and todo.md (the step checklist), the live execution memory.
+        Best-effort: a seeding error never blocks approval. A revised-plan re-approval
+        re-seeds (so the durable context tracks the current contract); minor in-build
+        updates are the agent's via the context_memory tool."""
         sbx = getattr(self.executor, "sandbox", None)
         if sbx is None:
             return
@@ -1763,10 +1764,13 @@ class AgentLoop:
             plan = _latest_plan(await self._events())
             if plan is None or not getattr(plan, "steps", None):
                 return
-            await ArtifactMemoryStore(sbx).seed_todo(render_plan_as_todo_markdown(plan))
+            store = ArtifactMemoryStore(sbx)
+            if plan.summary:
+                await store.write_goal(plan.summary)
+            await store.seed_todo(render_plan_as_todo_markdown(plan))
         except Exception:
             _LOG.warning(
-                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+                "CXT-7 context seed from plan failed for %s", self.conversation_id, exc_info=True
             )
 
     async def pick_alternative(self, option_id: str) -> ConversationState:
