@@ -845,8 +845,39 @@ PLANNING → EXECUTING → COMPLETE (LIFE-1/2/4/5 verified-as-done; LIFE-3 imple
 === P0B COMPLETE. Both P0 + P0B done → P1 (Product Harness) is the next gate before any P2+ promotion. ===
 
 ### Next: P1 — Product Harness and Zero-Opinion Oracles
-- HARN-1 browser product harness · HARN-2 product oracles (incl the CXT-5 OutputTruthOracle elision rule
-  already wired) · HARN-3 promotion policy. NOTE: a build_soak harness + oracles ALREADY EXIST
-  (harness/build_soak/oracles/*) — P1 likely = AUDIT + fill gaps (browser WS/preview/cleanup oracles), same
-  "verify-what-exists-then-fill" pattern that made P0B one real PR. Scout first.
+
+## P1 — scout map (durable; the basis for P1 scoping)
+FOUNDATION (SOLID, reuse as-is): harness/build_soak/ is a HEADLESS HTTP/WS runner (run.py +
+adapters/disco_api.py acting AS THE USER). OracleResult schema + classify.py (first-broken-link) +
+evidence.py (hash-locked dossier) + failure_codes.py + 5 strong oracles
+(Contract/HarnessValidity/EventChain/ToolScope/Revision) all exist + unit-tested. OutputTruthOracle exists
+(+ CXT-5 elision rule wired). Frontend e2e (frontend/e2e-live/*.spec.ts, playwright.config.ts) is
+INSPECTION-ONLY ("DRIVES NO BUILD").
+
+GAPS by PR:
+- HARN-1 (browser product harness): MISSING entirely. No module drives the real UI end-to-end
+  (open Build→prompt→BuildBrief→approve→WS→preview→show→ready_for_verification→download→cleanup). Needs a
+  Playwright driver + evidence streams: browser-ws.jsonl, network.jsonl, console.jsonl,
+  provider-call-ledger.jsonl, screenshots/, downloads/ (NONE exist; events/workspace-manifest/preview DO).
+- HARN-2 (oracles): 1 of 10 exist (OutputTruth). MISSING 9: BrowserWS, Lifecycle, SidecarStop,
+  ProviderLedger, PreviewOwnership, ShowToUser, VerificationGate, ExportDownload, Cleanup.
+  ACHIEVABLE NOW on headless evidence (no browser needed): LifecycleOracle (status-sequence from
+  events.jsonl) + ProviderLedgerOracle (metadata-level: manifest.provider==minimax-direct +
+  model==MiniMax-M3 + zero openrouter — serves the HARD constraint). The 7 browser/WS/download/cleanup
+  oracles REQUIRE HARN-1's new evidence first.
+- HARN-3 (promotion policy): MISSING as a PRODUCT gate (bakeoff.py is kernel-only). Needs a centralized
+  policy composing: headless soak green + product harness green + zero provider calls after terminal +
+  preview visible + download verified + no UNKNOWN_FAILURE/INVALID_RUN + MiniMax-only/no-OpenRouter.
+
+SUGGESTED P1 ORDER (verify-what-exists-then-fill): (1) LifecycleOracle + ProviderLedgerOracle (headless,
+now) + unit tests; (2) HARN-3 promotion-policy module composing existing+new oracles (headless gate first);
+(3) HARN-1 Playwright product harness + its evidence streams; (4) the 7 browser-evidence oracles; (5) wire
+HARN-3 to require both gates. Each PR: plan→Codex→implement→test→commit.
+
+### Campaign progress snapshot (durable)
+- DONE: bootstrap + P0 (CXT-1..7) + P0B (LIFE-1..5). Commits 5d281625 → edc71501, all pushed, all
+  Codex-gated, basedpyright strict 0 errors. MiniMax/OpenRouter NOT yet exercised (soak=P17).
+- NEXT: P1 (per map above) → then P2+ (gated open by P0/P0B/P1).
+- Deferred (tracked, surface-bound): CXT-4 prompt-wiring + C6 recitation de-dup (routing seam);
+  context_compact_if_needed live firing (condenser); direct-edit record hook (P8).
 
