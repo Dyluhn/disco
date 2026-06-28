@@ -110,6 +110,9 @@ class BuildContract(BaseModel):
     export: ExportContract | None = None
     prompt_pack: str | None = None  # workflow prompt pack id (P3)
     ui_card: str | None = None  # the UI card that renders this contract's state
+    # WPP-3: the skills/MCP this contract mounts. Skills mount ONLY via a contract —
+    # there is no global skill soup in the Build/Agent base context. Empty = none.
+    skills: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _kind_coherent(self) -> BuildContract:

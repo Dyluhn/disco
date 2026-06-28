@@ -18,11 +18,14 @@ from .prompt_pack import (
     PromptPackRegistry,
     parse_prompt_pack,
 )
+from .skill_mount import is_skill_mountable, resolve_mounted_skills
 
 __all__ = [
     "REQUIRED_SECTIONS",
     "PromptPack",
     "PromptPackRegistry",
     "assemble_workflow_prompt",
+    "is_skill_mountable",
     "parse_prompt_pack",
+    "resolve_mounted_skills",
 ]

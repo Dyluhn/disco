@@ -60,6 +60,7 @@ def _appkit_leadgen() -> BuildContract:
         export=ExportContract(name="cloudflare_project", pipeline=("preflight", "bundle", "validate", "deliver")),
         prompt_pack="build_appkit_leadgen",
         ui_card="AppCard",
+        skills=("appkit.leadgen", "cloudflare_export", "design_recipe"),
     )
 
 

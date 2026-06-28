@@ -1051,3 +1051,28 @@ follow-up above, then P3 (WorkflowPromptPack) / P4 (specialized mutation tools i
 ### CAMPAIGN TALLY: 18 substantive PRs (bootstrap + P0×7 + P0B + P1×4 + P2×3 + P3×2), all Codex-gated,
 ### all green, all pushed on the isolated disclaude branch. Live-stack items (HARN-1b Playwright, kernel
 ### prompt-wiring, executor scope-enforcement, CXT live-wiring) are explicitly tracked, not silently dropped.
+
+## PR WPP-3 — skill mount policy (P3) — COMPLETE
+- Codex (CODE, binding): APPROVE on the policy + (3) registry invariant; (1)+(2) gated POLICY-ONLY with the
+  tracked follow-up below.
+- NEW workflows/skill_mount.py: resolve_mounted_skills(contract, *, base_skills=()) → frozenset (base default
+  EMPTY → a contract gets ONLY its declared skills; no global soup) + is_skill_mountable hard check. Added
+  BuildContract.skills: tuple[str,...]=() (additive); appkit.leadgen declares its 3 skills, all others none.
+- Tests: 7 (no-skills→empty, appkit exact set, NO global soup, undeclared not mountable, base-union/default-
+  empty, skills roundtrip, registry invariant: only appkit declares skills). 0 pyright errors.
+
+### >>> TRACKED FOLLOW-UP (binding) — WPP-3 runtime mount-path ENFORCEMENT <<<
+WPP-3 is POLICY-ONLY. The pure policy (resolve_mounted_skills/is_skill_mountable) is NOT yet wired into the
+LIVE skill/MCP mount path. The integration MUST: at run/build setup, where skills/MCP are mounted
+(SkillStore in core/skills.py + the mount path in agent-server/runtime.py), resolve the run's BuildContract
+(CONTRACT-2) → resolve_mounted_skills → and mount ONLY those (refuse an undeclared skill), with an
+integration test that an undeclared skill is not mounted for a contract that didn't declare it. This closes
+"no global skill soup" at runtime. Same deferral discipline as CONTRACT-3 executor enforcement + CXT
+live-wiring + WPP-2 kernel-wiring — an explicit, tracked gap, NOT a silent one.
+
+### P3 WorkflowPromptPack COMPLETE (WPP-1 format+packs / WPP-2 assembler / WPP-3 skill mount).
+### CAMPAIGN: 19 substantive PRs (bootstrap + P0×7 + P0B + P1×4 + P2×3 + P3×3), all Codex-gated + pushed.
+### RUNTIME-INTEGRATION FOLLOW-UPS (all tracked, none silent): HARN-1b live Playwright harness + provider-
+### ledger population; CXT-4 ContextPack live prompt-wiring + C6 recitation de-dup; context_compact_if_needed
+### live firing; direct-edit record hook (P8); CONTRACT-3 executor scope-enforcement; WPP-2 kernel prompt-
+### wiring; WPP-3 skill mount-path enforcement. These need the live stack / deeper runtime surface.

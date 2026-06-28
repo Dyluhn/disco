@@ -1,0 +1,1408 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.3-codex-spark
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f0f0e-0ae4-7753-8e61-eadb85842c3a
+--------
+user
+# Codex CODE Review — P3 / WPP-3 (skill mount policy) — IMPLEMENTED
+
+Inspect packages/core/src/disco/core/workflows/skill_mount.py + contract/models.py (new skills field) +
+contract/registry.py (appkit declares skills) + tests/test_skill_mount.py.
+
+WPP-3 enforces "skills mount ONLY via the active contract — no global skill soup in the Build/Agent base
+context." Added BuildContract.skills: tuple[str,...] = () (additive, default empty). resolve_mounted_skills
+(contract, *, base_skills=()) → frozenset: the mounted set is base_skills ∪ contract.skills, base default
+EMPTY (a contract gets ONLY what it declares). is_skill_mountable(skill, contract) hard-checks against it.
+appkit.leadgen declares ("appkit.leadgen","cloudflare_export","design_recipe"); others declare none.
+
+Tests: 6 (no-skills→empty mount; appkit mounts exactly its declared set; NO global soup [cloudflare_export
+mountable under appkit, NOT under static.site]; undeclared skill not mountable; base_skills unioned but
+default empty; skills field round-trips on the frozen contract). Full contract/workflows suite green (42).
+basedpyright strict 0 errors.
+
+Judge: (a) does this genuinely enforce "no global soup" (a skill not declared by the contract is never
+mountable)? (b) is base_skills default-empty + union the right host-escape posture (no silent broadening)?
+(c) is the additive skills field on BuildContract sound (no invariant break)? (d) test sufficiency. Return
+APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE + REASONS + REQUIRED_REVISIONS.
+codex
+I’m going to verify the WPP-3 changes directly in the four files you listed, then check whether they enforce contract-only skill mounts, handle `base_skills` safely, and keep `BuildContract` backward-compatible. After that I’ll return a verdict with required revisions only if needed.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/workflows/skill_mount.py && sed -n '1,360p' packages/core/src/disco/contract/models.py && sed -n '1,320p' packages/core/src/disco/contract/registry.py && sed -n '1,260p' tests/test_skill_mount.py" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+"""Skill mount policy (WPP-3).
+
+Skills (and MCP servers) mount ONLY via the active contract — there is NO global skill
+soup in the Build/Agent base context. The mounted set for a run is the contract's
+declared ``skills`` (optionally unioned with an explicit, small base set the host
+configures). A skill the contract did not declare is NOT mountable.
+
+Pure policy over the CONTRACT-1 BuildContract; no runtime/MCP imports.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from ..contract import BuildContract
+
+
+def resolve_mounted_skills(
+    contract: BuildContract, *, base_skills: Iterable[str] = ()
+) -> frozenset[str]:
+    """The skills mounted for a run under ``contract``.
+
+    Default ``base_skills`` is EMPTY — a contract gets ONLY the skills it declares (no
+    global soup). A host may pass a small explicit base set (e.g. an always-on safety
+    skill); it is unioned in, never inferred."""
+    return frozenset(base_skills) | frozenset(contract.skills)
+
+
+def is_skill_mountable(
+    skill: str, contract: BuildContract, *, base_skills: Iterable[str] = ()
+) -> bool:
+    """True iff ``skill`` is permitted for a run under ``contract`` — a hard check
+    against the resolved mount set (the model can't pull in an undeclared skill)."""
+    return skill in resolve_mounted_skills(contract, base_skills=base_skills)
+sed: can't read packages/core/src/disco/contract/models.py: No such file or directory
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg --files | rg 'contract/(models|registry)\\.py"'$|test_skill_mount'"\\.py"'$|disco/core/workflows/skill_mount'"\\.py"'$'"'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/tests/test_skill_mount.py
+packages/core/src/disco/core/workflows/skill_mount.py
+packages/core/src/disco/core/contract/registry.py
+packages/core/src/disco/core/contract/models.py
+
+codex
+I found the files under `packages/core/src/disco/core/contract/`. I’ll read those plus the test file now to evaluate enforcement behavior and compatibility against WPP-3.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/workflows/skill_mount.py; sed -n '1,360p' packages/core/src/disco/core/contract/models.py; sed -n '1,360p' packages/core/src/disco/core/contract/registry.py; sed -n '1,260p' packages/core/tests/test_skill_mount.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Skill mount policy (WPP-3).
+
+Skills (and MCP servers) mount ONLY via the active contract — there is NO global skill
+soup in the Build/Agent base context. The mounted set for a run is the contract's
+declared ``skills`` (optionally unioned with an explicit, small base set the host
+configures). A skill the contract did not declare is NOT mountable.
+
+Pure policy over the CONTRACT-1 BuildContract; no runtime/MCP imports.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from ..contract import BuildContract
+
+
+def resolve_mounted_skills(
+    contract: BuildContract, *, base_skills: Iterable[str] = ()
+) -> frozenset[str]:
+    """The skills mounted for a run under ``contract``.
+
+    Default ``base_skills`` is EMPTY — a contract gets ONLY the skills it declares (no
+    global soup). A host may pass a small explicit base set (e.g. an always-on safety
+    skill); it is unioned in, never inferred."""
+    return frozenset(base_skills) | frozenset(contract.skills)
+
+
+def is_skill_mountable(
+    skill: str, contract: BuildContract, *, base_skills: Iterable[str] = ()
+) -> bool:
+    """True iff ``skill`` is permitted for a run under ``contract`` — a hard check
+    against the resolved mount set (the model can't pull in an undeclared skill)."""
+    return skill in resolve_mounted_skills(contract, base_skills=base_skills)
+"""Core Build Artifact Contract models (CONTRACT-1).
+
+Pure, frozen, serializable Pydantic v2 value objects (house style: `BaseModel` +
+`ConfigDict(frozen=True, extra="forbid")`, `model_dump(mode="json")` round-trip). No
+runtime/tool/frontend imports.
+"""
+
+from __future__ import annotations
+
+import re
+from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+# Host finalizers are the ready_for_*_verification family (§3.2). Pinning the shape
+# keeps minimal()/manual contracts from naming a finalizer the platform can't route.
+_FINALIZER_RE = re.compile(r"^ready_for_[a-z0-9_]+_verification$")
+
+
+class ContractKind(str, Enum):
+    """The artifact kinds a Build run can declare. Values are the on-the-wire ids."""
+
+    APPKIT_LEADGEN = "appkit.leadgen"
+    STATIC_SITE = "static.site"
+    INTERACTIVE_PROTOTYPE = "interactive.prototype"
+    DECK = "deck"
+    DOCUMENT = "document"
+    WORKFLOW_OUTPUT = "workflow.output"
+    CUSTOM = "custom"
+
+
+class VerificationLevel(str, Enum):
+    """How hard the finalizer verifies before a contract is 'done'."""
+
+    LOAD_ONLY = "load_only"  # small copy change → just confirm it still loads
+    STANDARD = "standard"  # feature/data change → route + console + verify
+    STRICT = "strict"  # export/deploy → full check
+
+
+class ToolPack(BaseModel):
+    """A named, ordered allowlist of tool names available in a contract phase."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    tools: tuple[str, ...] = ()
+    description: str = ""
+
+
+class EditContract(BaseModel):
+    """How a contract's artifact may be MUTATED. Targeted, semantic edits are the
+    norm; a raw rewrite is available only when ``rewrite_allowed`` (repair/custom)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    edit_tools: tuple[str, ...] = ()
+    repair_tools: tuple[str, ...] = ()
+    rewrite_allowed: bool = False
+
+
+class VerificationContract(BaseModel):
+    """The host-owned finalizer that decides a contract is done (NOT the model)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    finalizer: str  # e.g. "ready_for_app_verification"
+    level: VerificationLevel = VerificationLevel.STANDARD
+
+    @field_validator("finalizer")
+    @classmethod
+    def _finalizer_shape(cls, v: str) -> str:
+        if not _FINALIZER_RE.match(v):
+            raise ValueError(
+                f"finalizer {v!r} must match the host ready_for_*_verification convention"
+            )
+        return v
+
+
+class ExportContract(BaseModel):
+    """A host-owned export pipeline (preflight → bundle → validate → deliver)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    pipeline: tuple[str, ...] = ()
+
+
+class ArtifactContract(BaseModel):
+    """WHAT the deliverable is: its kind, the files it must produce, and the starter
+    kit it scaffolds from (host-owned, so the model doesn't hand-draw common frames)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: ContractKind
+    required_files: tuple[str, ...] = ()
+    starter_kit: str | None = None
+
+
+class BuildContract(BaseModel):
+    """The full contract a Build run declares before execution. Binds the artifact to
+    its bootstrap/edit/verify/export rails + the prompt pack and UI card."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: ContractKind
+    artifact: ArtifactContract
+    bootstrap: ToolPack
+    edit: EditContract
+    verify: VerificationContract
+    export: ExportContract | None = None
+    prompt_pack: str | None = None  # workflow prompt pack id (P3)
+    ui_card: str | None = None  # the UI card that renders this contract's state
+    # WPP-3: the skills/MCP this contract mounts. Skills mount ONLY via a contract —
+    # there is no global skill soup in the Build/Agent base context. Empty = none.
+    skills: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _kind_coherent(self) -> BuildContract:
+        if self.kind != self.artifact.kind:
+            raise ValueError(
+                f"BuildContract.kind ({self.kind.value}) != artifact.kind ({self.artifact.kind.value})"
+            )
+        return self
+
+    @classmethod
+    def minimal(cls, kind: ContractKind, *, finalizer: str = "ready_for_artifact_verification") -> BuildContract:
+        """A minimal well-formed contract for ``kind`` (no required files, empty packs).
+        Real contracts come from the BuildContractRegistry (CONTRACT-2)."""
+        return cls(
+            kind=kind,
+            artifact=ArtifactContract(kind=kind),
+            bootstrap=ToolPack(name=f"{kind.value}.bootstrap"),
+            edit=EditContract(),
+            verify=VerificationContract(finalizer=finalizer),
+        )
+"""BuildContractRegistry (CONTRACT-2).
+
+Declares the concrete BuildContract for each artifact kind — its required files,
+starter kit, bootstrap/edit tool packs, verification finalizer, export pipeline,
+prompt pack, and UI card — and looks one up by kind or from a BuildBrief. Both kernels
+(DiscoKernel/PiKernel) resolve the same contract here, so a Build run has a declared,
+host-owned contract before execution. Pure data + lookup; no runtime imports.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
+
+from .models import (
+    ArtifactContract,
+    BuildContract,
+    ContractKind,
+    EditContract,
+    ExportContract,
+    ToolPack,
+    VerificationContract,
+    VerificationLevel,
+)
+
+
+def _static_site() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.STATIC_SITE,
+        artifact=ArtifactContract(
+            kind=ContractKind.STATIC_SITE, required_files=("index.html",), starter_kit="app_shell"
+        ),
+        bootstrap=ToolPack(name="static.site.bootstrap", tools=("file_write", "preview_start")),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",)),
+        verify=VerificationContract(finalizer="ready_for_static_site_verification"),
+        export=ExportContract(name="static_standalone", pipeline=("preflight", "bundle", "validate", "deliver")),
+        prompt_pack="build_static_site",
+        ui_card="SiteCard",
+    )
+
+
+def _appkit_leadgen() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.APPKIT_LEADGEN,
+        artifact=ArtifactContract(
+            kind=ContractKind.APPKIT_LEADGEN,
+            required_files=(".disco/appspec.json", "index.html"),
+            starter_kit="lead_form",
+        ),
+        # NOTE: the specialized app_* mutation tools (app_create/app_update_content/…)
+        # ship in P4 (Specialized Mutation Tools). Until then this contract uses the
+        # real, registered generic file tools so it is coherent with the live tool
+        # surface (no false affordance); P4 will swap these for the semantic app_* tools.
+        bootstrap=ToolPack(name="appkit.leadgen.bootstrap", tools=("file_write",)),
+        edit=EditContract(
+            edit_tools=("file_edit", "file_replace_lines"),
+            repair_tools=("file_write",),
+        ),
+        verify=VerificationContract(finalizer="ready_for_app_verification", level=VerificationLevel.STRICT),
+        export=ExportContract(name="cloudflare_project", pipeline=("preflight", "bundle", "validate", "deliver")),
+        prompt_pack="build_appkit_leadgen",
+        ui_card="AppCard",
+        skills=("appkit.leadgen", "cloudflare_export", "design_recipe"),
+    )
+
+
+def _deck() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.DECK,
+        artifact=ArtifactContract(kind=ContractKind.DECK, required_files=("deck.json",), starter_kit="deck_stage"),
+        bootstrap=ToolPack(name="deck.bootstrap", tools=("slides_generate",)),
+        edit=EditContract(edit_tools=("deck_patch",)),
+        verify=VerificationContract(finalizer="ready_for_deck_verification"),
+        export=ExportContract(name="deck_export", pipeline=("bundle", "validate", "deliver")),
+        prompt_pack="build_deck",
+        ui_card="DeckCard",
+    )
+
+
+def _document() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.DOCUMENT,
+        artifact=ArtifactContract(kind=ContractKind.DOCUMENT, required_files=("report.md",)),
+        bootstrap=ToolPack(name="document.bootstrap", tools=("file_write",)),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+        verify=VerificationContract(finalizer="ready_for_document_verification"),
+        export=ExportContract(name="document_pdf", pipeline=("preflight", "bundle", "validate", "deliver")),
+        prompt_pack="build_document",
+        ui_card="DocumentCard",
+    )
+
+
+def _interactive_prototype() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.INTERACTIVE_PROTOTYPE,
+        artifact=ArtifactContract(
+            kind=ContractKind.INTERACTIVE_PROTOTYPE, required_files=("index.html",), starter_kit="app_shell"
+        ),
+        bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=("file_write", "preview_start")),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+        verify=VerificationContract(finalizer="ready_for_prototype_verification"),
+        prompt_pack="build_interactive_prototype",
+        ui_card="PrototypeCard",
+    )
+
+
+def _workflow_output() -> BuildContract:
+    return BuildContract(
+        kind=ContractKind.WORKFLOW_OUTPUT,
+        artifact=ArtifactContract(kind=ContractKind.WORKFLOW_OUTPUT),
+        bootstrap=ToolPack(name="workflow.output.bootstrap"),
+        edit=EditContract(),
+        verify=VerificationContract(finalizer="ready_for_workflow_output_verification"),
+        ui_card="WorkflowCard",
+    )
+
+
+def _custom() -> BuildContract:
+    # the escape hatch: broad tools + rewrite allowed; the generic artifact finalizer.
+    return BuildContract(
+        kind=ContractKind.CUSTOM,
+        artifact=ArtifactContract(kind=ContractKind.CUSTOM),
+        bootstrap=ToolPack(name="custom.bootstrap", tools=("file_write", "file_edit", "shell")),
+        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",), rewrite_allowed=True),
+        verify=VerificationContract(finalizer="ready_for_artifact_verification"),
+        ui_card="ArtifactCard",
+    )
+
+
+_BUILTINS = (
+    _static_site,
+    _appkit_leadgen,
+    _deck,
+    _document,
+    _interactive_prototype,
+    _workflow_output,
+    _custom,
+)
+
+
+class BuildContractRegistry:
+    """Maps a ContractKind → its BuildContract."""
+
+    def __init__(self) -> None:
+        self._by_kind: dict[ContractKind, BuildContract] = {}
+
+    def register(self, contract: BuildContract) -> None:
+        self._by_kind[contract.kind] = contract
+
+    def get(self, kind: ContractKind) -> BuildContract | None:
+        return self._by_kind.get(kind)
+
+    def kinds(self) -> frozenset[ContractKind]:
+        return frozenset(self._by_kind)
+
+    def _custom(self) -> BuildContract:
+        """The CUSTOM contract — registered one, else a deterministic minimal fallback
+        (so a partial registry never KeyErrors). A run always gets a contract."""
+        return self._by_kind.get(ContractKind.CUSTOM) or BuildContract.minimal(ContractKind.CUSTOM)
+
+    def get_for_brief(
+        self, brief: Mapping[str, Any] | None, *, strict_kind: bool = True
+    ) -> BuildContract:
+        """Resolve the contract for a BuildBrief from ``brief['kind']``.
+
+        A MISSING kind (no 'kind' key) → the CUSTOM contract (the legitimate default: a
+        brief that declares no kind is a custom build). A PRESENT-but-unknown/malformed
+        kind (a typo, wrong type) is a bad input: with ``strict_kind=True`` (default) it
+        raises ValueError rather than silently broadening to CUSTOM; ``strict_kind=False``
+        opts into the compatibility fallback. Never returns None / KeyErrors on a partial
+        registry."""
+        raw = (brief or {}).get("kind")
+        if raw is None:
+            return self._custom()
+        try:
+            kind = ContractKind(raw)
+        except (ValueError, TypeError) as exc:
+            if strict_kind:
+                raise ValueError(f"BuildBrief declares an unknown contract kind: {raw!r}") from exc
+            return self._custom()
+        return self._by_kind.get(kind) or self._custom()
+
+    @classmethod
+    def default(cls) -> BuildContractRegistry:
+        """A registry with every built-in contract registered."""
+        reg = cls()
+        for factory in _BUILTINS:
+            reg.register(factory())
+        return reg
+"""WPP-3 tests: skill mount policy — skills mount only via contract, no global soup."""
+
+from __future__ import annotations
+
+from disco.core.contract import BuildContractRegistry, ContractKind
+from disco.core.workflows import is_skill_mountable, resolve_mounted_skills
+
+
+def test_contract_without_skills_mounts_nothing() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.STATIC_SITE)
+    assert c is not None
+    assert resolve_mounted_skills(c) == frozenset()
+
+
+def test_appkit_mounts_only_its_declared_skills() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.APPKIT_LEADGEN)
+    assert c is not None
+    assert resolve_mounted_skills(c) == frozenset({"appkit.leadgen", "cloudflare_export", "design_recipe"})
+
+
+def test_no_global_skill_soup() -> None:
+    # a skill declared by one contract is NOT mountable under another
+    reg = BuildContractRegistry.default()
+    static = reg.get(ContractKind.STATIC_SITE)
+    appkit = reg.get(ContractKind.APPKIT_LEADGEN)
+    assert static is not None and appkit is not None
+    assert is_skill_mountable("cloudflare_export", appkit) is True
+    assert is_skill_mountable("cloudflare_export", static) is False  # not declared → not mountable
+
+
+def test_undeclared_skill_is_not_mountable() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.APPKIT_LEADGEN)
+    assert c is not None
+    assert is_skill_mountable("some_random_skill", c) is False
+
+
+def test_base_skills_union_but_default_empty() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.DECK)
+    assert c is not None
+    # default: only the contract's (deck declares none)
+    assert resolve_mounted_skills(c) == frozenset()
+    # an explicit host base set is unioned in (never inferred)
+    assert resolve_mounted_skills(c, base_skills=("safety_always_on",)) == frozenset({"safety_always_on"})
+    assert is_skill_mountable("safety_always_on", c, base_skills=("safety_always_on",)) is True
+
+
+def test_skills_field_roundtrips_on_contract() -> None:
+    from disco.core.contract import BuildContract
+
+    c = BuildContractRegistry.default().get(ContractKind.APPKIT_LEADGEN)
+    assert c is not None
+    assert BuildContract.model_validate(c.model_dump(mode="json")) == c
+    assert "appkit.leadgen" in c.skills
+
+codex
+I’ve reviewed the core implementation and test file. Next I’m checking callsites of the policy helpers to confirm there isn’t still any implicit “default mount all” behavior outside contracts.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"resolve_mounted_skills\\(|is_skill_mountable\\(|\\.skills\\b|BuildContract\\(\" packages/core/src packages/core/tests" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/workflows/skill_mount.py:18:def resolve_mounted_skills(
+packages/core/src/disco/core/workflows/skill_mount.py:26:    return frozenset(base_skills) | frozenset(contract.skills)
+packages/core/src/disco/core/workflows/skill_mount.py:29:def is_skill_mountable(
+packages/core/src/disco/core/workflows/skill_mount.py:34:    return skill in resolve_mounted_skills(contract, base_skills=base_skills)
+packages/core/tests/test_skill_mount.py:12:    assert resolve_mounted_skills(c) == frozenset()
+packages/core/tests/test_skill_mount.py:18:    assert resolve_mounted_skills(c) == frozenset({"appkit.leadgen", "cloudflare_export", "design_recipe"})
+packages/core/tests/test_skill_mount.py:27:    assert is_skill_mountable("cloudflare_export", appkit) is True
+packages/core/tests/test_skill_mount.py:28:    assert is_skill_mountable("cloudflare_export", static) is False  # not declared → not mountable
+packages/core/tests/test_skill_mount.py:34:    assert is_skill_mountable("some_random_skill", c) is False
+packages/core/tests/test_skill_mount.py:41:    assert resolve_mounted_skills(c) == frozenset()
+packages/core/tests/test_skill_mount.py:43:    assert resolve_mounted_skills(c, base_skills=("safety_always_on",)) == frozenset({"safety_always_on"})
+packages/core/tests/test_skill_mount.py:44:    assert is_skill_mountable("safety_always_on", c, base_skills=("safety_always_on",)) is True
+packages/core/tests/test_skill_mount.py:53:    assert "appkit.leadgen" in c.skills
+packages/core/tests/test_contract_scopes.py:20:    return BuildContract(
+packages/core/tests/test_contract_models.py:26:    bc = BuildContract(
+packages/core/tests/test_contract_models.py:92:        BuildContract(
+packages/core/src/disco/core/contract/registry.py:28:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:43:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:68:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:81:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:94:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:108:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:120:    return BuildContract(
+packages/core/src/disco/core/contract/models.py:99:class BuildContract(BaseModel):
+packages/core/src/disco/core/__init__.py:68:from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,240p' packages/core/tests/test_contract_scopes.py; sed -n '1,260p' packages/core/tests/test_contract_models.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""CONTRACT-3 tests: Contract→ToolScope compiler — hard per-phase allowlists."""
+
+from __future__ import annotations
+
+from disco.core.contract import (
+    ArtifactContract,
+    BuildContract,
+    BuildContractRegistry,
+    ContractKind,
+    ContractToolScopes,
+    EditContract,
+    Phase,
+    ToolPack,
+    VerificationContract,
+    compile_tool_scopes,
+)
+
+
+def _contract(*, bootstrap=(), edit=(), repair=(), rewrite=False, finalizer="ready_for_artifact_verification"):
+    return BuildContract(
+        kind=ContractKind.CUSTOM,
+        artifact=ArtifactContract(kind=ContractKind.CUSTOM),
+        bootstrap=ToolPack(name="b", tools=bootstrap),
+        edit=EditContract(edit_tools=edit, repair_tools=repair, rewrite_allowed=rewrite),
+        verify=VerificationContract(finalizer=finalizer),
+    )
+
+
+def test_scopes_project_the_packs_per_phase() -> None:
+    c = _contract(bootstrap=("app_create",), edit=("app_update_content",), repair=("file_write",))
+    s = compile_tool_scopes(c)
+    assert s.bootstrap == frozenset({"app_create"})
+    assert s.edit == frozenset({"app_update_content"})
+    assert s.repair == frozenset({"file_write"})
+    assert s.verify == frozenset({"ready_for_artifact_verification"})
+    assert s.export == frozenset()
+
+
+def test_tool_absent_from_phase_is_hard_excluded() -> None:
+    # the campaign invariant: a bootstrap pack of ONLY app_create cannot file_write
+    s = compile_tool_scopes(_contract(bootstrap=("app_create",), edit=("app_update_content",)))
+    assert s.allowed(Phase.BOOTSTRAP, "app_create") is True
+    assert s.allowed(Phase.BOOTSTRAP, "file_write") is False  # not in the bootstrap pack
+    assert s.allowed(Phase.EDIT, "app_update_content") is True
+    assert s.allowed(Phase.EDIT, "file_write") is False
+
+
+def test_repair_scope_is_bounded_to_repair_tools() -> None:
+    s = compile_tool_scopes(_contract(edit=("file_edit",), repair=("file_write",)))
+    assert s.allowed(Phase.REPAIR, "file_write") is True
+    assert s.allowed(Phase.REPAIR, "file_edit") is False  # edit tool is not a repair tool
+    assert s.allowed(Phase.EDIT, "file_write") is False  # rewrite stays out of edit
+
+
+def test_verify_scope_is_the_finalizer() -> None:
+    s = compile_tool_scopes(_contract(finalizer="ready_for_app_verification"))
+    assert s.verify == frozenset({"ready_for_app_verification"})
+    assert s.allowed(Phase.VERIFY, "ready_for_app_verification") is True
+    assert s.allowed(Phase.VERIFY, "file_write") is False
+
+
+def test_static_site_contract_cannot_rewrite_during_edit() -> None:
+    # a real built-in: editing must use file_edit/file_replace_lines, NOT file_write
+    c = BuildContractRegistry.default().get(ContractKind.STATIC_SITE)
+    assert c is not None
+    s = compile_tool_scopes(c)
+    assert s.allowed(Phase.BOOTSTRAP, "file_write") is True  # bootstrap may create files
+    assert s.allowed(Phase.EDIT, "file_edit") is True
+    assert s.allowed(Phase.EDIT, "file_write") is False  # cannot clobber-rewrite during edit
+
+
+def test_custom_contract_permits_broad_repair_only_as_declared() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.CUSTOM)
+    assert c is not None and c.edit.rewrite_allowed is True
+    s = compile_tool_scopes(c)
+    # custom DECLARED file_write as a repair tool → allowed in repair, still not in edit
+    assert s.allowed(Phase.REPAIR, "file_write") is True
+    assert s.allowed(Phase.EDIT, "file_write") is False
+
+
+def test_shell_hard_excluded_from_bootstrap_unless_declared() -> None:
+    # the done-when invariant: generic file/shell are NOT available during bootstrap
+    # unless the contract's bootstrap pack explicitly declares them.
+    without = compile_tool_scopes(_contract(bootstrap=("app_create",)))
+    assert without.allowed(Phase.BOOTSTRAP, "shell") is False
+    assert without.allowed(Phase.BOOTSTRAP, "file_write") is False
+    # paired positive: a contract that DOES declare shell in bootstrap allows it
+    with_shell = compile_tool_scopes(_contract(bootstrap=("shell", "file_write")))
+    assert with_shell.allowed(Phase.BOOTSTRAP, "shell") is True
+    assert with_shell.allowed(Phase.BOOTSTRAP, "file_write") is True
+
+
+def test_scopes_roundtrip() -> None:
+    s = compile_tool_scopes(_contract(bootstrap=("a", "b"), edit=("c",)))
+    assert ContractToolScopes.model_validate(s.model_dump(mode="json")) == s
+
+
+def test_every_builtin_compiles() -> None:
+    reg = BuildContractRegistry.default()
+    for kind in ContractKind:
+        c = reg.get(kind)
+        assert c is not None
+        s = compile_tool_scopes(c)
+        # verify phase always carries exactly the finalizer
+        assert s.verify == frozenset({c.verify.finalizer})
+"""CONTRACT-1 tests: artifact-contract domain models — roundtrip, immutability,
+validation, and the minimal() factory."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from disco.core.contract import (
+    ArtifactContract,
+    BuildContract,
+    ContractKind,
+    EditContract,
+    ExportContract,
+    ToolPack,
+    VerificationContract,
+    VerificationLevel,
+)
+
+
+def _roundtrip(m: BaseModel) -> None:
+    assert type(m).model_validate(m.model_dump(mode="json")) == m
+
+
+def test_all_models_roundtrip() -> None:
+    bc = BuildContract(
+        kind=ContractKind.APPKIT_LEADGEN,
+        artifact=ArtifactContract(
+            kind=ContractKind.APPKIT_LEADGEN,
+            required_files=("index.html", ".disco/appspec.json"),
+            starter_kit="lead_form",
+        ),
+        bootstrap=ToolPack(name="appkit.bootstrap", tools=("app_create",)),
+        edit=EditContract(edit_tools=("app_update_content",), rewrite_allowed=False),
+        verify=VerificationContract(finalizer="ready_for_app_verification", level=VerificationLevel.STRICT),
+        export=ExportContract(name="cloudflare", pipeline=("preflight", "bundle", "validate", "deliver")),
+        prompt_pack="build_appkit_leadgen",
+        ui_card="AppCard",
+    )
+    for m in (bc, bc.artifact, bc.bootstrap, bc.edit, bc.verify, bc.export):
+        _roundtrip(m)  # type: ignore[arg-type]
+
+
+def test_contract_kind_wire_values() -> None:
+    assert ContractKind.APPKIT_LEADGEN.value == "appkit.leadgen"
+    assert ContractKind.STATIC_SITE.value == "static.site"
+    assert {k.value for k in ContractKind} >= {
+        "appkit.leadgen", "static.site", "interactive.prototype", "deck", "document",
+        "workflow.output", "custom",
+    }
+
+
+def test_extra_field_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ToolPack.model_validate({"name": "x", "bogus": 1})
+
+
+def test_bad_enum_rejected() -> None:
+    with pytest.raises(ValidationError):
+        VerificationContract.model_validate({"finalizer": "f", "level": "nonsense"})
+
+
+def test_frozen_immutable() -> None:
+    ac = ArtifactContract(kind=ContractKind.DECK)
+    with pytest.raises(ValidationError):
+        ac.kind = ContractKind.DOCUMENT  # type: ignore[misc]
+
+
+def test_minimal_factory_is_well_formed() -> None:
+    for kind in ContractKind:
+        bc = BuildContract.minimal(kind)
+        assert bc.kind is kind
+        assert bc.artifact.kind is kind
+        assert bc.bootstrap.name == f"{kind.value}.bootstrap"
+        assert bc.verify.finalizer == "ready_for_artifact_verification"
+        assert bc.verify.level is VerificationLevel.STANDARD
+        assert bc.export is None
+        _roundtrip(bc)
+
+
+def test_defaults() -> None:
+    bc = BuildContract.minimal(ContractKind.STATIC_SITE)
+    assert bc.edit.rewrite_allowed is False
+    assert bc.artifact.required_files == ()
+    assert bc.artifact.starter_kit is None
+    assert bc.prompt_pack is None and bc.ui_card is None
+
+
+# --- semantic invariants (Codex round 1) --------------------------------------
+def test_build_contract_kind_must_match_artifact_kind() -> None:
+    with pytest.raises(ValidationError):
+        BuildContract(
+            kind=ContractKind.DECK,
+            artifact=ArtifactContract(kind=ContractKind.DOCUMENT),  # mismatch
+            bootstrap=ToolPack(name="b"),
+            edit=EditContract(),
+            verify=VerificationContract(finalizer="ready_for_deck_verification"),
+        )
+
+
+def test_finalizer_must_follow_convention() -> None:
+    for bad in ("finish", "verify_now", "ready_for_app", "app_verification", ""):
+        with pytest.raises(ValidationError):
+            VerificationContract(finalizer=bad)
+    # valid forms accepted
+    for good in ("ready_for_app_verification", "ready_for_static_site_verification",
+                 "ready_for_artifact_verification", "ready_for_workflow_output_verification"):
+        assert VerificationContract(finalizer=good).finalizer == good
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' packages/core/src/disco/core/workflows/__init__.py && sed -n '1,260p' packages/core/src/disco/core/contract/__init__.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""disco.core.workflows — WorkflowPromptPacks (P3).
+
+A WorkflowPromptPack is the mode-specific operating manual the model runs inside for a
+given artifact contract: its role, the workflow steps, the allowed/forbidden tools, the
+targeted-edit law, preview/verify/export rules, context policy, and done criteria. Both
+kernels (DiscoKernel/PiKernel) consume the SAME pack, so product behavior can't diverge.
+
+WPP-1 ships the pack FORMAT (parsed from markdown section headers) + a loader/registry
+over the bundled ``prompt_packs/*.md`` files. Pure; no runtime imports.
+"""
+
+from __future__ import annotations
+
+from .assembly import assemble_workflow_prompt
+from .prompt_pack import (
+    REQUIRED_SECTIONS,
+    PromptPack,
+    PromptPackRegistry,
+    parse_prompt_pack,
+)
+from .skill_mount import is_skill_mountable, resolve_mounted_skills
+
+__all__ = [
+    "REQUIRED_SECTIONS",
+    "PromptPack",
+    "PromptPackRegistry",
+    "assemble_workflow_prompt",
+    "is_skill_mountable",
+    "parse_prompt_pack",
+    "resolve_mounted_skills",
+]
+"""disco.core.contract — the Build Artifact Contract runtime (P2).
+
+A Build run declares an ARTIFACT CONTRACT before execution: what kind of deliverable
+it produces (a lead-gen app, a static site, a deck, …), the required files, the tool
+packs it may use at each phase (bootstrap/edit/repair), how it is verified, and how it
+is exported. The host owns truth; the model operates inside these rails.
+
+CONTRACT-1 ships the pure, serializable domain models. The registry (CONTRACT-2) and
+the Contract→ToolScope compiler (CONTRACT-3) consume them. No frontend/tool/loop
+runtime dependencies — stable value objects only (same discipline as disco.core.context).
+"""
+
+from __future__ import annotations
+
+from .models import (
+    ArtifactContract,
+    BuildContract,
+    ContractKind,
+    EditContract,
+    ExportContract,
+    ToolPack,
+    VerificationContract,
+    VerificationLevel,
+)
+from .registry import BuildContractRegistry
+from .scopes import ContractToolScopes, Phase, compile_tool_scopes
+
+__all__ = [
+    "ArtifactContract",
+    "BuildContract",
+    "BuildContractRegistry",
+    "ContractKind",
+    "ContractToolScopes",
+    "EditContract",
+    "ExportContract",
+    "Phase",
+    "ToolPack",
+    "VerificationContract",
+    "VerificationLevel",
+    "compile_tool_scopes",
+]
+
+codex
+I confirmed workflow exports are wired through `__init__` and currently there’s no additional helper logic here. I’m doing one broader search now to ensure no code still calls mount checks with stale assumptions.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"is_skill_mountable\\(|resolve_mounted_skills\\(\" ." in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+./packages/core/tests/test_skill_mount.py:12:    assert resolve_mounted_skills(c) == frozenset()
+./packages/core/tests/test_skill_mount.py:18:    assert resolve_mounted_skills(c) == frozenset({"appkit.leadgen", "cloudflare_export", "design_recipe"})
+./packages/core/tests/test_skill_mount.py:27:    assert is_skill_mountable("cloudflare_export", appkit) is True
+./packages/core/tests/test_skill_mount.py:28:    assert is_skill_mountable("cloudflare_export", static) is False  # not declared → not mountable
+./packages/core/tests/test_skill_mount.py:34:    assert is_skill_mountable("some_random_skill", c) is False
+./packages/core/tests/test_skill_mount.py:41:    assert resolve_mounted_skills(c) == frozenset()
+./packages/core/tests/test_skill_mount.py:43:    assert resolve_mounted_skills(c, base_skills=("safety_always_on",)) == frozenset({"safety_always_on"})
+./packages/core/tests/test_skill_mount.py:44:    assert is_skill_mountable("safety_always_on", c, base_skills=("safety_always_on",)) is True
+./packages/core/src/disco/core/workflows/skill_mount.py:18:def resolve_mounted_skills(
+./packages/core/src/disco/core/workflows/skill_mount.py:29:def is_skill_mountable(
+./packages/core/src/disco/core/workflows/skill_mount.py:34:    return skill in resolve_mounted_skills(contract, base_skills=base_skills)
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"cloudflare_export|design_recipe|appkit\\.leadgen|global.*skill|mount.*skill|skill\" packages/core/src/disco | head -n 200" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/workflows/__init__.py:21:from .skill_mount import is_skill_mountable, resolve_mounted_skills
+packages/core/src/disco/core/workflows/__init__.py:28:    "is_skill_mountable",
+packages/core/src/disco/core/workflows/__init__.py:30:    "resolve_mounted_skills",
+packages/core/src/disco/core/workflows/skill_mount.py:3:Skills (and MCP servers) mount ONLY via the active contract — there is NO global skill
+packages/core/src/disco/core/workflows/skill_mount.py:5:declared ``skills`` (optionally unioned with an explicit, small base set the host
+packages/core/src/disco/core/workflows/skill_mount.py:6:configures). A skill the contract did not declare is NOT mountable.
+packages/core/src/disco/core/workflows/skill_mount.py:18:def resolve_mounted_skills(
+packages/core/src/disco/core/workflows/skill_mount.py:19:    contract: BuildContract, *, base_skills: Iterable[str] = ()
+packages/core/src/disco/core/workflows/skill_mount.py:21:    """The skills mounted for a run under ``contract``.
+packages/core/src/disco/core/workflows/skill_mount.py:23:    Default ``base_skills`` is EMPTY — a contract gets ONLY the skills it declares (no
+packages/core/src/disco/core/workflows/skill_mount.py:25:    skill); it is unioned in, never inferred."""
+packages/core/src/disco/core/workflows/skill_mount.py:26:    return frozenset(base_skills) | frozenset(contract.skills)
+packages/core/src/disco/core/workflows/skill_mount.py:29:def is_skill_mountable(
+packages/core/src/disco/core/workflows/skill_mount.py:30:    skill: str, contract: BuildContract, *, base_skills: Iterable[str] = ()
+packages/core/src/disco/core/workflows/skill_mount.py:32:    """True iff ``skill`` is permitted for a run under ``contract`` — a hard check
+packages/core/src/disco/core/workflows/skill_mount.py:33:    against the resolved mount set (the model can't pull in an undeclared skill)."""
+packages/core/src/disco/core/workflows/skill_mount.py:34:    return skill in resolve_mounted_skills(contract, base_skills=base_skills)
+packages/core/src/disco/core/workflows/prompt_packs/build_appkit_leadgen.md:9:An `appkit.leadgen` deliverable. Required files: `.disco/appspec.json` and `index.html`.
+packages/core/src/disco/core/contract/registry.py:54:        bootstrap=ToolPack(name="appkit.leadgen.bootstrap", tools=("file_write",)),
+packages/core/src/disco/core/contract/registry.py:63:        skills=("appkit.leadgen", "cloudflare_export", "design_recipe"),
+packages/core/src/disco/core/contract/models.py:23:    APPKIT_LEADGEN = "appkit.leadgen"
+packages/core/src/disco/core/contract/models.py:113:    # WPP-3: the skills/MCP this contract mounts. Skills mount ONLY via a contract —
+packages/core/src/disco/core/contract/models.py:114:    # there is no global skill soup in the Build/Agent base context. Empty = none.
+packages/core/src/disco/core/contract/models.py:115:    skills: tuple[str, ...] = ()
+packages/core/src/disco/core/__init__.py:68:from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
+packages/core/src/disco/core/__init__.py:141:    "render_skills_for_prompt",
+packages/core/src/disco/core/skills.py:6:for React components"). Enabled skills are injected into the Build agent's system
+packages/core/src/disco/core/skills.py:9:Persisted as one `.md` file per skill in a directory (`PMX_SKILLS_DIR`, default
+packages/core/src/disco/core/skills.py:10:`./skills`), so they survive restarts AND can be hand-edited / version-controlled
+packages/core/src/disco/core/skills.py:27:_DEFAULT_DIR = "skills"
+packages/core/src/disco/core/skills.py:33:    """A filesystem-safe id from a skill name. Stable + readable."""
+packages/core/src/disco/core/skills.py:35:    return slug or "skill"
+packages/core/src/disco/core/skills.py:49:    # "**/*.css"). When set, the skill's FULL body is injected only when the
+packages/core/src/disco/core/skills.py:53:    # Which SURFACES this skill applies to (e.g. ["build"], ["agent"], or both).
+packages/core/src/disco/core/skills.py:54:    # EMPTY = applies to all surfaces (back-compat: a skill file with no surfaces
+packages/core/src/disco/core/skills.py:55:    # line keeps its old "everywhere" behavior). Lets a "house style" skill target
+packages/core/src/disco/core/skills.py:56:    # the agent while a "screenshot this page hourly" skill targets build, instead
+packages/core/src/disco/core/skills.py:61:        """True if this skill should be injected for `surface`. Empty `surfaces`
+packages/core/src/disco/core/skills.py:82:    """Split a skill .md into (frontmatter dict, body). Tolerant: a file with no
+packages/core/src/disco/core/skills.py:99:    """CRUD over skill `.md` files in a directory. One file per skill, named
+packages/core/src/disco/core/skills.py:102:    # Hard cap on a skill body's size — these are injected verbatim into every
+packages/core/src/disco/core/skills.py:115:    def _path_for(self, skill_id: str) -> Path | None:
+packages/core/src/disco/core/skills.py:116:        """Resolve a skill id to its file path, REFUSING any id that would escape
+packages/core/src/disco/core/skills.py:117:        the skills directory (path traversal). The id must be a clean slug —
+packages/core/src/disco/core/skills.py:121:        # A valid skill id is its own slug — reject ../, slashes, dots, etc.
+packages/core/src/disco/core/skills.py:122:        if not skill_id or slugify(skill_id) != skill_id:
+packages/core/src/disco/core/skills.py:124:        candidate = (self._dir / f"{skill_id}.md").resolve()
+packages/core/src/disco/core/skills.py:129:        # The resolved path must live directly under the skills directory.
+packages/core/src/disco/core/skills.py:135:        """All skills, sorted by name. Missing directory → empty list (not an error)."""
+packages/core/src/disco/core/skills.py:138:        skills: list[Skill] = []
+packages/core/src/disco/core/skills.py:140:            skill = self._read_file(f)
+packages/core/src/disco/core/skills.py:141:            if skill is not None:
+packages/core/src/disco/core/skills.py:142:                skills.append(skill)
+packages/core/src/disco/core/skills.py:143:        skills.sort(key=lambda s: s.name.lower())
+packages/core/src/disco/core/skills.py:144:        return skills
+packages/core/src/disco/core/skills.py:146:    def get(self, skill_id: str) -> Skill | None:
+packages/core/src/disco/core/skills.py:147:        f = self._path_for(skill_id)  # rejects path-traversal ids → None
+packages/core/src/disco/core/skills.py:151:        """Only the enabled skills — what the agent's context injection reads."""
+packages/core/src/disco/core/skills.py:154:    def save(self, skill: Skill) -> Skill:
+packages/core/src/disco/core/skills.py:155:        """Create or overwrite a skill file (atomic write). Returns the saved skill.
+packages/core/src/disco/core/skills.py:157:        f = self._path_for(skill.id)
+packages/core/src/disco/core/skills.py:159:            raise ValueError(f"unsafe skill id {skill.id!r}")
+packages/core/src/disco/core/skills.py:160:        body = (skill.body or "")[: self.MAX_BODY_BYTES]
+packages/core/src/disco/core/skills.py:161:        skill = skill.model_copy(update={"body": body})
+packages/core/src/disco/core/skills.py:165:        tmp = f.with_suffix(f".md.{os.getpid()}.{id(skill)}.tmp")
+packages/core/src/disco/core/skills.py:166:        tmp.write_text(skill.to_markdown(), encoding="utf-8")
+packages/core/src/disco/core/skills.py:168:        return skill
+packages/core/src/disco/core/skills.py:178:        """Create a new skill, deriving a unique id from the name."""
+packages/core/src/disco/core/skills.py:180:        skill_id = base
+packages/core/src/disco/core/skills.py:182:        while (self._dir / f"{skill_id}.md").exists():
+packages/core/src/disco/core/skills.py:183:            skill_id = f"{base}-{i}"
+packages/core/src/disco/core/skills.py:187:                id=skill_id,
+packages/core/src/disco/core/skills.py:196:    def delete(self, skill_id: str) -> bool:
+packages/core/src/disco/core/skills.py:197:        """Delete a skill file. Returns True if it existed. Refuses unsafe ids."""
+packages/core/src/disco/core/skills.py:198:        f = self._path_for(skill_id)  # rejects path-traversal ids → None
+packages/core/src/disco/core/skills.py:222:def render_skills_for_prompt(
+packages/core/src/disco/core/skills.py:223:    skills: list[Skill], *, surface: str | None = None, active_paths: list[str] | None = None
+packages/core/src/disco/core/skills.py:225:    """Render enabled skills as a system-prompt block. Empty string when there
+packages/core/src/disco/core/skills.py:228:    `surface` filters to skills that apply to it (a skill's `surfaces` list; empty
+packages/core/src/disco/core/skills.py:229:    = everywhere). None → no surface filter (every enabled skill), the back-compat
+packages/core/src/disco/core/skills.py:232:    Cluster 4 LAZY injection: a SCOPED skill (with a `scope` glob) shows only a
+packages/core/src/disco/core/skills.py:236:    path-triggered detail pattern). UNSCOPED skills always show their full body
+packages/core/src/disco/core/skills.py:238:    currently touching; None/empty → only unscoped skills render in full.
+packages/core/src/disco/core/skills.py:243:        s for s in skills if s.enabled and s.body.strip() and s.applies_to_surface(surface)
+packages/core/src/disco/core/skills.py:274:            "Other skills available (their detail loads when you work on a matching "
+packages/core/src/disco/core/llm/prompts.py:478:    `skills_block` is an optional rendered block of the user's enabled SKILLS
+packages/core/src/disco/core/llm/prompts.py:481:    planning and execution. Empty by default — users with no skills see the
+packages/core/src/disco/core/llm/prompts.py:491:        skills_block: str = "",
+packages/core/src/disco/core/llm/prompts.py:537:        self._skills_block = skills_block.strip()
+packages/core/src/disco/core/llm/prompts.py:539:    def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
+packages/core/src/disco/core/llm/prompts.py:549:        if not self._skills_block:
+packages/core/src/disco/core/llm/prompts.py:552:            return f"{self._skills_block}\n\n---\n\n{vision_bullet}\n{prompt}"
+packages/core/src/disco/core/llm/prompts.py:553:        return f"{self._skills_block}\n\n---\n\n{prompt}"
+packages/core/src/disco/core/llm/prompts.py:569:                return self._with_skills(self._planning, capabilities)
+packages/core/src/disco/core/llm/prompts.py:572:            # byte-identical (no skills block re-formatting, no flavor side-effects).
+packages/core/src/disco/core/llm/prompts.py:574:            return self._with_skills(base, capabilities)
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"BuildContract\\(|model_dump\\(mode=\\\"json\\\"\\)|BuildContract\\.model_validate\\(\" packages/core/tests packages/core/src/disco/core | head -n 200" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/contract/registry.py:28:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:43:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:68:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:81:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:94:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:108:    return BuildContract(
+packages/core/src/disco/core/contract/registry.py:120:    return BuildContract(
+packages/core/src/disco/core/contract/models.py:4:`ConfigDict(frozen=True, extra="forbid")`, `model_dump(mode="json")` round-trip). No
+packages/core/src/disco/core/contract/models.py:99:class BuildContract(BaseModel):
+packages/core/tests/test_skill_mount.py:52:    assert BuildContract.model_validate(c.model_dump(mode="json")) == c
+packages/core/src/disco/core/events.py:918:    return event.model_dump(mode="json")
+packages/core/tests/test_contract_scopes.py:20:    return BuildContract(
+packages/core/tests/test_contract_scopes.py:95:    assert ContractToolScopes.model_validate(s.model_dump(mode="json")) == s
+packages/core/tests/test_contract_registry.py:24:        assert BuildContract.model_validate(c.model_dump(mode="json")) == c
+packages/core/tests/test_contract_models.py:22:    assert type(m).model_validate(m.model_dump(mode="json")) == m
+packages/core/tests/test_contract_models.py:26:    bc = BuildContract(
+packages/core/tests/test_contract_models.py:92:        BuildContract(
+packages/core/src/disco/core/context/store.py:170:            ArtifactMemoryKind.RESOURCE_MANIFEST, [r.model_dump(mode="json") for r in resources]
+packages/core/src/disco/core/context/store.py:188:            ArtifactMemoryKind.DIRECT_EDITS, [e.model_dump(mode="json") for e in edits]
+packages/core/src/disco/core/context/store.py:206:            ArtifactMemoryKind.VERIFIER_FAILURES, [f.model_dump(mode="json") for f in failures]
+packages/core/src/disco/core/context/store.py:239:        return await self._write_json(ArtifactMemoryKind.SOURCE_PRIORITY, sp.model_dump(mode="json"))
+packages/core/tests/test_context_compaction.py:42:        assert EventAdapter.validate_python(e.model_dump(mode="json")) == e
+packages/core/tests/test_context_pack.py:101:    assert ContextPack.model_validate(pack.model_dump(mode="json")) == pack
+packages/core/tests/test_context_ledger.py:27:    restored = type(m).model_validate(m.model_dump(mode="json"))
+packages/core/tests/test_view_kv_stability.py:69:    # Serialize events to JSON using model_dump(mode="json")
+packages/core/tests/test_view_kv_stability.py:70:    events_json = json.dumps([e.model_dump(mode="json") for e in events])
+packages/core/tests/test_serialization.py:35:    raw = m.model_dump(mode="json")
+packages/core/tests/test_serialization.py:44:    raw = m.model_dump(mode="json")
+packages/core/src/disco/core/loop/engine.py:1078:                "risk_assessment": assessment.model_dump(mode="json"),
+packages/core/tests/test_evidence_schema.py:82:    as_json_dict = rec.model_dump(mode="json")
+packages/core/src/disco/core/llm/config_store.py:126:                self._write(cfg.model_dump(mode="json"))
+packages/core/src/disco/core/llm/config_store.py:167:        self._write(config.model_dump(mode="json"))
+packages/core/tests/test_config_store.py:81:    data = default_config().model_dump(mode="json")
+packages/core/tests/test_config_store.py:288:    (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
+packages/core/tests/test_config_store.py:301:    (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
+packages/core/tests/test_config_store.py:318:    (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
+packages/core/src/disco/core/dod.py:162:        return p.model_dump(mode="json")
+packages/core/src/disco/core/dod.py:197:        return self.model_dump(mode="json")
+packages/core/tests/test_cluster7_knowledge.py:74:        dumped = e.model_dump(mode="json")
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/tests/test_contract_registry.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""CONTRACT-2 tests: BuildContractRegistry — every kind resolvable + coherent,
+brief lookup, and the custom fallback."""
+
+from __future__ import annotations
+
+from disco.core.contract import BuildContract, BuildContractRegistry, ContractKind
+
+
+def test_default_registry_has_every_kind() -> None:
+    reg = BuildContractRegistry.default()
+    assert reg.kinds() == frozenset(ContractKind)
+    for kind in ContractKind:
+        c = reg.get(kind)
+        assert c is not None and c.kind is kind
+
+
+def test_every_builtin_contract_is_coherent_and_serializable() -> None:
+    reg = BuildContractRegistry.default()
+    for kind in ContractKind:
+        c = reg.get(kind)
+        assert c is not None
+        # kind/artifact coherence + finalizer convention are enforced by the models;
+        # a successful round-trip proves the built-in is well-formed.
+        assert BuildContract.model_validate(c.model_dump(mode="json")) == c
+        assert c.verify.finalizer.startswith("ready_for_") and c.verify.finalizer.endswith("_verification")
+
+
+def test_get_for_brief_by_kind() -> None:
+    reg = BuildContractRegistry.default()
+    c = reg.get_for_brief({"kind": "static.site"})
+    assert c.kind is ContractKind.STATIC_SITE
+    assert "index.html" in c.artifact.required_files
+
+
+def test_get_for_brief_missing_kind_is_custom() -> None:
+    reg = BuildContractRegistry.default()
+    # a brief that declares NO kind is a legitimate custom build
+    assert reg.get_for_brief({}).kind is ContractKind.CUSTOM
+    assert reg.get_for_brief(None).kind is ContractKind.CUSTOM
+
+
+def test_get_for_brief_unknown_kind_raises_by_default() -> None:
+    reg = BuildContractRegistry.default()
+    import pytest
+
+    for bad in ("nonsense", "static_site", 123, ["x"]):
+        with pytest.raises(ValueError):
+            reg.get_for_brief({"kind": bad})  # type: ignore[dict-item]
+    # opt-in compatibility fallback
+    assert reg.get_for_brief({"kind": "nonsense"}, strict_kind=False).kind is ContractKind.CUSTOM
+
+
+def test_get_for_brief_partial_registry_never_keyerrors() -> None:
+    reg = BuildContractRegistry()  # empty — no CUSTOM registered
+    c = reg.get_for_brief({})
+    assert c.kind is ContractKind.CUSTOM  # deterministic minimal fallback, no KeyError
+    c2 = reg.get_for_brief({"kind": "deck"})
+    assert c2.kind is ContractKind.CUSTOM  # deck unregistered → custom fallback
+
+
+def test_all_builtin_contract_tools_are_registered() -> None:
+    # every tool a built-in contract references MUST exist in the live tool registry
+    # (no false affordance — a contract can't scope a tool that doesn't ship).
+    from disco.tools.builtin import build_default_registry
+
+    registered = build_default_registry().names()
+    reg = BuildContractRegistry.default()
+    for kind in ContractKind:
+        c = reg.get(kind)
+        assert c is not None
+        tools = set(c.bootstrap.tools) | set(c.edit.edit_tools) | set(c.edit.repair_tools)
+        missing = tools - registered
+        assert not missing, f"{kind.value} contract references unregistered tools: {sorted(missing)}"
+
+
+def test_appkit_leadgen_contract_shape() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.APPKIT_LEADGEN)
+    assert c is not None
+    assert ".disco/appspec.json" in c.artifact.required_files
+    # app_* semantic tools ship in P4; until then the contract uses real generic tools
+    assert "file_write" in c.bootstrap.tools
+    assert "file_edit" in c.edit.edit_tools
+    assert c.verify.finalizer == "ready_for_app_verification"
+    assert c.export is not None and c.export.name == "cloudflare_project"
+    assert c.prompt_pack == "build_appkit_leadgen"
+    assert c.ui_card == "AppCard"
+
+
+def test_custom_contract_allows_rewrite() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.CUSTOM)
+    assert c is not None and c.edit.rewrite_allowed is True
+
+
+def test_register_overrides() -> None:
+    reg = BuildContractRegistry()
+    assert reg.get(ContractKind.DECK) is None  # empty registry
+    custom_deck = BuildContract.minimal(ContractKind.DECK, finalizer="ready_for_deck_verification")
+    reg.register(custom_deck)
+    assert reg.get(ContractKind.DECK) == custom_deck
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "render_skills_for_prompt|SkillStore|get_enabled|enabled_skills|skills_block" packages/core/src/disco | head -n 200' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/__init__.py:68:from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
+packages/core/src/disco/core/__init__.py:139:    "SkillStore",
+packages/core/src/disco/core/__init__.py:141:    "render_skills_for_prompt",
+packages/core/src/disco/core/skills.py:98:class SkillStore:
+packages/core/src/disco/core/skills.py:222:def render_skills_for_prompt(
+packages/core/src/disco/core/llm/prompts.py:478:    `skills_block` is an optional rendered block of the user's enabled SKILLS
+packages/core/src/disco/core/llm/prompts.py:491:        skills_block: str = "",
+packages/core/src/disco/core/llm/prompts.py:537:        self._skills_block = skills_block.strip()
+packages/core/src/disco/core/llm/prompts.py:549:        if not self._skills_block:
+packages/core/src/disco/core/llm/prompts.py:552:            return f"{self._skills_block}\n\n---\n\n{vision_bullet}\n{prompt}"
+packages/core/src/disco/core/llm/prompts.py:553:        return f"{self._skills_block}\n\n---\n\n{prompt}"
+
+codex
+I didn’t find any current usage of the policy helpers beyond the new tests, so I’m checking whether runtime still injects skills from global configuration elsewhere, which would indicate remaining “global soup” behavior.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '420,620p' packages/core/src/disco/core/llm/prompts.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+    "plan. Do NOT try to ask the user anything (the ask tools are not available). "
+    "When a detail is missing or ambiguous, choose the most reasonable default, "
+    "state the assumption with `notify_user`, and proceed. Do not end your turns "
+    "with questions. You must drive the task to `finish` yourself; if something is "
+    "genuinely impossible, call `finish` and explain what is blocked in the summary.\n\n"
+)
+
+# [E5] Agent-surface planning: capability-awareness block.
+#
+# During planning the engine exposes ONLY read-only tools (search, extract,
+# file_read, file_list, ask_user, clarify, submit_plan, think).  Without this
+# block the model may falsely deny owning a browser, shell, slides generator,
+# etc. — because those tools are literally absent from its tool list.  Appending
+# this note to the planning prompt lets the model plan steps that use execution
+# tools freely while the engine gate stays closed until approval. [R6] Applied to
+# BOTH build and agent flavors — the build planner hides write tools too, so a
+# build-flavor plan (e.g. the DR→slides handoff) otherwise refuses slides_generate.
+_AGENT_PLANNING_CAPABILITY_BLOCK = (
+    "\n\nEXECUTION TOOLS — available AFTER plan approval (NOT callable yet — "
+    "locked until approval):\n"
+    "Once the user approves your plan the engine unlocks the full execution tool-set.  "
+    "Plan steps that rely on any of these freely; you simply cannot call them right now:\n"
+    "  • `browser` — navigate to URLs and capture screenshots of real pages.\n"
+    "  • `shell` / `shell_exec` / `shell_view` / `shell_write_to_process` / "
+    "`shell_kill_process` / `shell_wait` — persistent shell sessions in a "
+    "sandboxed Linux workspace.\n"
+    "  • `file_write`, `file_edit`, `file_append`, `file_insert_lines`, `file_replace_lines` "
+    "— create and modify files in the workspace.\n"
+    "  • `code_exec` — run Python in a persistent IPython kernel.\n"
+    "  • `slides_generate` — produce presentation slides (html / pdf / pptx).\n"
+    "  • `sheet_generate` — produce spreadsheets (xlsx).\n"
+    "  • `image_generate` — decorative / illustrative images (slide art, website "
+    "backgrounds). Requires a configured image backend (ComfyUI / OpenAI / OpenRouter "
+    "in Settings); if it returns NOT CONFIGURED, no backend is connected — do NOT "
+    "retry, proceed without the image. Use chart / table / sheet tools for data, "
+    "never this.\n"
+    "  • `audio_overview` — produce an audio summary of the deliverable.\n"
+    "  • `preview_start`, `serve`, `server_status`, and other execution meta-tools.\n"
+    "Plan confidently against this full capability set.  The engine, not you, decides when a "
+    "tool becomes callable — approval unlocks all of the above at once."
+)
+
+# [runthru-v2 #3] `plan_step` is RETIRED from the advertised tool surface for ALL
+# tiers (it caused plan-state drift; the declarative `update_plan_progress` replaced
+# it for capable models).  It is therefore named in NO planning block — the single
+# capability block above already omits it, so weak and standard share one block.
+# update_plan_progress is not mentioned in any planning block either, so no per-tier
+# variant is needed.
+
+
+class DriverPrompts:
+    """[CONTRACT role] A PromptProvider that gives the AGENT_DRIVER role phase-aware
+    system prompts: a PLANNING prompt (propose a plan via `submit_plan`, take no
+    action) and an EXECUTION prompt (carry out the approved plan, report progress
+    via the declarative `update_plan_progress`). Every other role/mode defers to a
+    wrapped base provider, so
+    Research and the non-driver roles are unaffected.
+
+    `skills_block` is an optional rendered block of the user's enabled SKILLS
+    (reusable instructions, Claude-Code style). When present it is prepended to
+    BOTH driver prompts so the agent follows the user's standing guidance during
+    planning and execution. Empty by default — users with no skills see the
+    unchanged prompts."""
+
+    def __init__(
+        self,
+        base: PromptProvider | None = None,
+        *,
+        planning_prompt: str = _PLANNING_DRIVER_PROMPT,
+        execution_prompt: str = _EXECUTION_DRIVER_PROMPT,
+        execution_prompt_small: str = _EXECUTION_DRIVER_PROMPT_SMALL,
+        skills_block: str = "",
+        flavor: str = "build",
+        autonomous: bool = False,
+    ) -> None:
+        self._base = base or StaticPromptProvider()
+        # Autonomous mode (issue A): reinforce the tool-level suppression of ask_user
+        # with an explicit instruction to assume + proceed (OpenHands "never ask for
+        # human help" + Cline "make reasonable assumptions, don't end with questions").
+        # The prefix applies to BOTH execution variants (capable + small-model) so
+        # the assist gate stays orthogonal to autonomous behavior.
+        if autonomous:
+            planning_prompt = _AUTONOMOUS_PROMPT_PREFIX + planning_prompt
+            execution_prompt = _AUTONOMOUS_PROMPT_PREFIX + execution_prompt
+            execution_prompt_small = _AUTONOMOUS_PROMPT_PREFIX + execution_prompt_small
+        # `flavor` reframes the driver's IDENTITY for the agent surface — a general
+        # task agent rather than a software builder — while keeping every mechanic
+        # (plan→approve→execute, the meta-tools, the finish/verify gates) byte-
+        # identical. v1 is an identity-only swap; a deeper task-framed rewrite is
+        # deferred (it needs eval passes). "build" leaves the prompts untouched.
+        # Applied to BOTH execution variants so the small-model prompt is also
+        # identity-consistent with the surface it is rendering.
+        if flavor == "agent":
+            planning_prompt = planning_prompt.replace(
+                "autonomous build agent", "autonomous task agent"
+            )
+            execution_prompt = execution_prompt.replace(
+                "autonomous build agent", "autonomous task agent"
+            )
+            execution_prompt_small = execution_prompt_small.replace(
+                "autonomous build agent", "autonomous task agent"
+            )
+        # [E5/R6] Tell the planning model about execution tools it gains on approval
+        # so it doesn't falsely deny owning browser/shell/slides/etc. The planner hides
+        # write tools (read_only=False) from the PLANNING schema for BOTH the build and
+        # agent flavors, so BOTH need this hint — appending it agent-only made build-flavor
+        # plans (e.g. the DR→slides handoff) insist they "can't use slides_generate".
+        # [runthru-v2 #3] One capability block for both tiers: `plan_step` is retired
+        # from the advertised tool surface for ALL tiers, so it is named in NO planning
+        # prompt (no per-tier variant needed — prompting a tool that isn't in the tool
+        # list causes the model to call a tool it can't).
+        self._planning = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
+        self._execution = execution_prompt
+        # [C21] Tightened execution prompt for small open models. Selected ONLY
+        # when the assist gate is ON (req.assist=True) at prompt-injection time.
+        # Capable-model (assist OFF) path keeps using self._execution verbatim.
+        self._execution_small = execution_prompt_small
+        self._skills_block = skills_block.strip()
+
+    def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
+        # [BP-00] Vision bullet: rendered ONLY when the driver has VISION.
+        vision_bullet = ""
+        if capabilities and Requirement.VISION in capabilities:
+            vision_bullet = (
+                "  • You can SEE your latest browser screenshot. After navigating, look at it: "
+                "check layout, styling, and that the page is not blank or broken before "
+                "moving on.\n"
+            )
+
+        if not self._skills_block:
+            return f"{vision_bullet}\n{prompt}" if vision_bullet else prompt
+        if vision_bullet:
+            return f"{self._skills_block}\n\n---\n\n{vision_bullet}\n{prompt}"
+        return f"{self._skills_block}\n\n---\n\n{prompt}"
+
+    def system_prompt(
+        self,
+        *,
+        model_family: str,
+        mode: OperatingMode | None,
+        role: ModelRole,
+        capabilities: frozenset[Requirement] | None = None,
+        assist: bool = False,
+    ) -> str:
+        if role == ModelRole.AGENT_DRIVER:
+            if mode == OperatingMode.PLANNING:
+                # [runthru-v2 #3] `plan_step` is retired from the advertised tool
+                # surface for ALL tiers, so the single planning prompt names it for
+                # NEITHER tier — weak and standard share self._planning.
+                return self._with_skills(self._planning, capabilities)
+            # [C21] assist gate: ON → small-model variant (crisper tool-use rules
+            # for weak open models); OFF → original capable-model prompt, returned
+            # byte-identical (no skills block re-formatting, no flavor side-effects).
+            base = self._execution_small if assist else self._execution
+            return self._with_skills(base, capabilities)
+        return self._base.system_prompt(
+            model_family=model_family,
+            mode=mode,
+            role=role,
+            capabilities=capabilities,
+            assist=assist,
+        )
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"contract\\.skills|\\.skills\\s*\\)|skills\\b\" packages/core/src/disco/core | head -n 200" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/workflows/__init__.py:21:from .skill_mount import is_skill_mountable, resolve_mounted_skills
+packages/core/src/disco/core/workflows/__init__.py:30:    "resolve_mounted_skills",
+packages/core/src/disco/core/workflows/skill_mount.py:5:declared ``skills`` (optionally unioned with an explicit, small base set the host
+packages/core/src/disco/core/workflows/skill_mount.py:18:def resolve_mounted_skills(
+packages/core/src/disco/core/workflows/skill_mount.py:19:    contract: BuildContract, *, base_skills: Iterable[str] = ()
+packages/core/src/disco/core/workflows/skill_mount.py:21:    """The skills mounted for a run under ``contract``.
+packages/core/src/disco/core/workflows/skill_mount.py:23:    Default ``base_skills`` is EMPTY — a contract gets ONLY the skills it declares (no
+packages/core/src/disco/core/workflows/skill_mount.py:26:    return frozenset(base_skills) | frozenset(contract.skills)
+packages/core/src/disco/core/workflows/skill_mount.py:30:    skill: str, contract: BuildContract, *, base_skills: Iterable[str] = ()
+packages/core/src/disco/core/workflows/skill_mount.py:34:    return skill in resolve_mounted_skills(contract, base_skills=base_skills)
+packages/core/src/disco/core/skills.py:6:for React components"). Enabled skills are injected into the Build agent's system
+packages/core/src/disco/core/skills.py:10:`./skills`), so they survive restarts AND can be hand-edited / version-controlled
+packages/core/src/disco/core/skills.py:27:_DEFAULT_DIR = "skills"
+packages/core/src/disco/core/skills.py:117:        the skills directory (path traversal). The id must be a clean slug —
+packages/core/src/disco/core/skills.py:129:        # The resolved path must live directly under the skills directory.
+packages/core/src/disco/core/skills.py:135:        """All skills, sorted by name. Missing directory → empty list (not an error)."""
+packages/core/src/disco/core/skills.py:138:        skills: list[Skill] = []
+packages/core/src/disco/core/skills.py:142:                skills.append(skill)
+packages/core/src/disco/core/skills.py:143:        skills.sort(key=lambda s: s.name.lower())
+packages/core/src/disco/core/skills.py:144:        return skills
+packages/core/src/disco/core/skills.py:151:        """Only the enabled skills — what the agent's context injection reads."""
+packages/core/src/disco/core/skills.py:223:    skills: list[Skill], *, surface: str | None = None, active_paths: list[str] | None = None
+packages/core/src/disco/core/skills.py:225:    """Render enabled skills as a system-prompt block. Empty string when there
+packages/core/src/disco/core/skills.py:228:    `surface` filters to skills that apply to it (a skill's `surfaces` list; empty
+packages/core/src/disco/core/skills.py:236:    path-triggered detail pattern). UNSCOPED skills always show their full body
+packages/core/src/disco/core/skills.py:238:    currently touching; None/empty → only unscoped skills render in full.
+packages/core/src/disco/core/skills.py:243:        s for s in skills if s.enabled and s.body.strip() and s.applies_to_surface(surface)
+packages/core/src/disco/core/skills.py:274:            "Other skills available (their detail loads when you work on a matching "
+packages/core/src/disco/core/contract/registry.py:63:        skills=("appkit.leadgen", "cloudflare_export", "design_recipe"),
+packages/core/src/disco/core/contract/models.py:113:    # WPP-3: the skills/MCP this contract mounts. Skills mount ONLY via a contract —
+packages/core/src/disco/core/contract/models.py:115:    skills: tuple[str, ...] = ()
+packages/core/src/disco/core/__init__.py:68:from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
+packages/core/src/disco/core/llm/prompts.py:481:    planning and execution. Empty by default — users with no skills see the
+packages/core/src/disco/core/llm/prompts.py:539:    def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
+packages/core/src/disco/core/llm/prompts.py:569:                return self._with_skills(self._planning, capabilities)
+packages/core/src/disco/core/llm/prompts.py:572:            # byte-identical (no skills block re-formatting, no flavor side-effects).
+packages/core/src/disco/core/llm/prompts.py:574:            return self._with_skills(base, capabilities)
+
+codex
+I’m at a decision point: behavior in the touched files is correct, but I still want to confirm there isn’t an existing runtime call that’s bypassing this policy. I’ll do one broad search for skill-mount checks outside this module before finalizing.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"render_skills|skills.*allow|allowed_skills|mount|mcp|skill store|skill\\)\" packages/core/src/disco tests | head -n 300" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/workflows/__init__.py:21:from .skill_mount import is_skill_mountable, resolve_mounted_skills
+packages/core/src/disco/core/workflows/__init__.py:28:    "is_skill_mountable",
+packages/core/src/disco/core/workflows/__init__.py:30:    "resolve_mounted_skills",
+packages/core/src/disco/core/workflows/skill_mount.py:1:"""Skill mount policy (WPP-3).
+packages/core/src/disco/core/workflows/skill_mount.py:3:Skills (and MCP servers) mount ONLY via the active contract — there is NO global skill
+packages/core/src/disco/core/workflows/skill_mount.py:4:soup in the Build/Agent base context. The mounted set for a run is the contract's
+packages/core/src/disco/core/workflows/skill_mount.py:6:configures). A skill the contract did not declare is NOT mountable.
+packages/core/src/disco/core/workflows/skill_mount.py:18:def resolve_mounted_skills(
+packages/core/src/disco/core/workflows/skill_mount.py:21:    """The skills mounted for a run under ``contract``.
+packages/core/src/disco/core/workflows/skill_mount.py:25:    skill); it is unioned in, never inferred."""
+packages/core/src/disco/core/workflows/skill_mount.py:29:def is_skill_mountable(
+packages/core/src/disco/core/workflows/skill_mount.py:33:    against the resolved mount set (the model can't pull in an undeclared skill)."""
+packages/core/src/disco/core/workflows/skill_mount.py:34:    return skill in resolve_mounted_skills(contract, base_skills=base_skills)
+packages/core/src/disco/core/skills.py:142:                skills.append(skill)
+packages/core/src/disco/core/skills.py:165:        tmp = f.with_suffix(f".md.{os.getpid()}.{id(skill)}.tmp")
+packages/core/src/disco/core/skills.py:222:def render_skills_for_prompt(
+packages/core/src/disco/core/skills.py:229:    = everywhere). None → no surface filter (every enabled skill), the back-compat
+packages/core/src/disco/core/contract/models.py:113:    # WPP-3: the skills/MCP this contract mounts. Skills mount ONLY via a contract —
+packages/core/src/disco/core/loop/finish.py:432:            # BLANK render — the page served but nothing a user would see mounted
+packages/core/src/disco/core/loop/finish.py:515:    never mounted, or an empty shell. `_browser_verified` (console-errors only)
+packages/core/src/disco/core/loop/finish.py:1938:                # with a clean console yet mount nothing). Degrades to the prior
+packages/core/src/disco/core/__init__.py:68:from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
+packages/core/src/disco/core/__init__.py:141:    "render_skills_for_prompt",
+packages/core/src/disco/core/wire.py:25:        "event", "token", "file_stream", "state", "error", "pong", "mcp_approval_required"
+packages/core/src/disco/core/wire.py:43:    # type == "mcp_approval_required": MCP server needs re-approval (RP-05 D3).
+packages/core/src/disco/core/wire.py:45:    mcp_approval: dict[str, Any] | None = None
+packages/core/src/disco/core/store/sqlite.py:117:CREATE TABLE IF NOT EXISTS mcp_approvals (
+packages/core/src/disco/core/store/sqlite.py:128:CREATE TABLE IF NOT EXISTS mcp_approval_pending (
+packages/core/src/disco/core/store/sqlite.py:130:    -- live pool detects a description_hash mismatch against mcp_approvals at
+packages/core/src/disco/core/store/sqlite.py:132:    -- (NOT a recompute). The app-server reads this on GET /api/mcp to
+packages/core/src/disco/core/store/sqlite.py:135:    -- POST /api/mcp/servers/{name}/approve (create_mcp_approval deletes it
+packages/core/src/disco/core/store/sqlite.py:137:    -- STORED (old) hash from mcp_approvals and the diff is useless (or
+packages/core/src/disco/core/store/sqlite.py:140:    old_hash        TEXT NOT NULL,  -- the LAST APPROVED hash (mcp_approvals.description_hash)
+packages/core/src/disco/core/llm/secrets.py:241:        with contextlib.suppress(OSError):  # best-effort on non-POSIX / odd mounts
+packages/core/src/disco/core/llm/config.py:217:    # host dir bind-mounted to the container workspace (gVisor); local uses a named volume.
+packages/core/src/disco/core/llm/config.py:377:    The explicit McpServerConfig typed dict lives in tools/mcp; this is the
+packages/core/src/disco/core/llm/config.py:422:    mcp: McpSettings = Field(default_factory=McpSettings)
+
+codex
+REVISE
+
+REASONS
+1. [a] The contract-level policy is correct in principle: `resolve_mounted_skills`/`is_skill_mountable` now gate by `contract.skills` and default `base_skills=()` is empty.  
+2. [b] Default-empty + union is the right “host escape hatch” posture (no implicit broadening).  
+3. [c] The additive `BuildContract.skills: tuple[str, ...] = ()` is sound for a frozen, serializable model and keeps existing behavior unchanged by default.  
+4. [d] Test coverage validates the helper semantics, but it does not yet prove end-to-end enforcement in the actual Build/Agent mount pipeline, and does not lock down “all other built-ins default-empty” invariants centrally.
+
+REQUIRED_REVISIONS
+1. Wire `resolve_mounted_skills`/`is_skill_mountable` into the actual skill-MCP mount path used at run/build setup (if not already done elsewhere) so this is enforced, not just unit-tested.
+2. Add an integration test for the mount path that uses real available skills plus an undeclared contract and verifies the undeclared skill is not mounted.
+3. Add a contract-registry-level regression test asserting all non-appkit builtins have empty `skills` unless explicitly declared.
+tokens used
+43,865
+REVISE
+
+REASONS
+1. [a] The contract-level policy is correct in principle: `resolve_mounted_skills`/`is_skill_mountable` now gate by `contract.skills` and default `base_skills=()` is empty.  
+2. [b] Default-empty + union is the right “host escape hatch” posture (no implicit broadening).  
+3. [c] The additive `BuildContract.skills: tuple[str, ...] = ()` is sound for a frozen, serializable model and keeps existing behavior unchanged by default.  
+4. [d] Test coverage validates the helper semantics, but it does not yet prove end-to-end enforcement in the actual Build/Agent mount pipeline, and does not lock down “all other built-ins default-empty” invariants centrally.
+
+REQUIRED_REVISIONS
+1. Wire `resolve_mounted_skills`/`is_skill_mountable` into the actual skill-MCP mount path used at run/build setup (if not already done elsewhere) so this is enforced, not just unit-tested.
+2. Add an integration test for the mount path that uses real available skills plus an undeclared contract and verifies the undeclared skill is not mounted.
+3. Add a contract-registry-level regression test asserting all non-appkit builtins have empty `skills` unless explicitly declared.
