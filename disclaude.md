@@ -706,3 +706,37 @@ TRULY DESTRUCTIVE (the CXT-5 target — NO recover path):
 - CXT-6 — todo.md as active working memory (PlanEvent=approved contract; todo.md=live execution memory;
   todo_update tool; scope-change still needs revised PlanEvent).
 
+## PR CXT-6 — todo.md as active working memory — COMPLETE
+
+### Design (scout-confirmed): NO new tool
+- Reuse `context_memory(action=write, kind=todo)` for the agent's MINOR in-build todo updates (already
+  shipped in CXT-2). CXT-6 adds only: (1) pure `render_plan_as_todo_markdown(plan)` in context_builder.py;
+  (2) an approval HOOK `_seed_todo_from_plan()` that auto-seeds .disco/context/todo.md from the approved plan.
+- PlanEvent stays the approved CONTRACT (unchanged). todo.md = durable live execution memory.
+- Scope-change detection (signals.is_revision_intent → _enter_revision_planning) is ALREADY correct and is
+  NOT touched — minor follow-ups skip replan; scope changes require a revised PlanEvent (then re-approval
+  re-seeds todo.md). No conflict with update_plan_progress (event-log/UI; independent).
+
+### Codex review (CODE, binding) — APPROVE (after 1 fix)
+- code review caught a real gap: BOTH approval paths must seed. I'd only hooked interactive approve_plan();
+  the AUTONOMOUS inline approval (_gate_planning_mode, `if self._autonomous:`) also arms DoD → must also
+  seed. Fixed (added _seed_todo_from_plan after _arm_dod_from_plan there) + added
+  test_autonomous_approval_also_seeds_todo_md. Targeted re-review → APPROVE. Logs: .claude/cxt6-codex-code.log.
+
+### Implementation notes
+- context_builder.py: render_plan_as_todo_markdown (pure; # summary + context + ## Steps checklist).
+- engine.py: _seed_todo_from_plan (best-effort: skip if executor.sandbox is None; try/except so a seed
+  error NEVER blocks approval); called from BOTH approve_plan() and the autonomous _gate_planning_mode path.
+- engine.py: also fixed a PRE-EXISTING (git-stash-confirmed) reportAssignmentType in _arm_dod_from_plan
+  (narrowed file_preds through a local) while touching the file → engine.py now basedpyright-clean.
+
+### Tests
+- 7 CXT-6 (render unit + interactive-seed + no-sandbox-no-crash + autonomous-seed) + plan_approval +
+  dod_gate + autonomous_loop regressions. basedpyright strict: 0 errors.
+
+### Next PR
+- CXT-7 — Context runtime integration tests (fresh build creates context; plan approval writes todo [now
+  live!]; tool failure writes verifier_failures; resume reconstructs ContextPack; large logs compacted
+  recoverably). ALSO discharges the CXT-2/CXT-3/CXT-4 deferred-wiring obligations + the CXT-4 carried note
+  (don't duplicate the C6 recitation). NO P2+ PR may proceed until CXT-7 green.
+

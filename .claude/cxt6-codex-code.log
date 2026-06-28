@@ -1,0 +1,2306 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.3-codex-spark
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f0c6e-6f00-75c3-b836-8a5f47290a8c
+--------
+user
+# Codex CODE Review — PR CXT-6 (todo.md as active working memory) — IMPLEMENTED
+
+Review the ACTUAL CODE. CXT-1..5 merged. Design (from a scout): NO new tool — reuse the existing
+context_memory(write, kind=todo) for minor agent updates; CXT-6 adds (1) a pure helper
+render_plan_as_todo_markdown(plan) and (2) an approval hook that auto-seeds .disco/context/todo.md.
+Scope-change detection (signals.is_revision_intent → _enter_revision_planning) is already correct and is
+NOT changed; a revised-plan re-approval re-seeds todo.md.
+
+Inspect:
+- packages/core/src/disco/core/loop/context_builder.py (render_plan_as_todo_markdown)
+- packages/core/src/disco/core/loop/engine.py (approve_plan now calls _seed_todo_from_plan AFTER
+  _arm_dod_from_plan; _seed_todo_from_plan is best-effort: skips when executor.sandbox is None, wraps in
+  try/except so a seed error NEVER blocks approval; uses ArtifactMemoryStore(sbx).seed_todo). ALSO fixed a
+  PRE-EXISTING (confirmed via git-stash) reportAssignmentType in _arm_dod_from_plan's file_preds
+  comprehension by narrowing through a local.
+- packages/core/tests/test_todo_memory.py
+
+PlanEvent stays the approved contract (unchanged); todo.md is the durable execution memory. update_plan_progress
+(event-log/UI progress) is independent and untouched — no conflict.
+
+Test status: 18 passed (CXT-6 + plan_approval + dod_gate regressions); basedpyright strict 0 errors on
+engine.py + context_builder.py. Judge: correctness, best-effort safety (approval never blocked), no conflict
+with update_plan_progress, the pre-existing-fix is behavior-preserving, no false affordance. Return
+APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE + REASONS + REQUIRED_REVISIONS.
+codex
+Reviewing CXT-6 as requested against the three specified files and associated behavior in `approve_plan`/`_seed_todo_from_plan`. I’m checking for correctness, regression risk, and whether best-effort seeding could still impact approval or progress tracking, then I’ll return a concise verdict with required revisions if any.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/loop/context_builder.py; echo '---'; sed -n '1,360p' packages/core/src/disco/core/loop/engine.py; echo '---'; sed -n '1,320p' packages/core/tests/test_todo_memory.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""CXT-4 — the ContextPack assembler + renderer.
+
+Builds a compact, structured ContextPack from the event log (overlaying the
+durable ledger from CXT-2) and renders it as a deterministic, byte-stable
+`<context-pack>` block — the model-facing context that replaces feeding raw event
+history. PURE functions: no loop/runtime/IO. Live prompt wiring (and unifying with
+the existing C6 `<current-objective>` recitation) is CXT-7.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+from ..context import (
+    CompactionPolicy,
+    ContextLedger,
+    ContextPack,
+    SourceKind,
+    SourcePriority,
+    VerifierFailureRef,
+)
+from ..context.compaction import resolved_ranges_from_events
+from ..events import Event, EventSource, MessageEvent, PlanEvent
+
+_BLOCK_OPEN = "<context-pack>"
+_BLOCK_CLOSE = "</context-pack>"
+
+
+def _latest_plan(events: Sequence[Event]) -> PlanEvent | None:
+    latest: PlanEvent | None = None
+    for e in events:
+        if isinstance(e, PlanEvent):
+            latest = e
+    return latest
+
+
+def _head_user_text(events: Sequence[Event]) -> str | None:
+    for e in events:
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            content = e.message.content
+            return content if isinstance(content, str) and content.strip() else None
+    return None
+
+
+def build_context_pack(
+    events: Sequence[Event],
+    *,
+    base_ledger: ContextLedger | None = None,
+    policy: CompactionPolicy | None = None,
+    todo_text: str | None = None,
+    failures: tuple[VerifierFailureRef, ...] | None = None,
+    allowed_next_actions: tuple[str, ...] = (),
+) -> ContextPack:
+    """Assemble a ContextPack from the event log, overlaid on the durable ledger.
+
+    Goal/version come from the latest PlanEvent (fallback: head USER message);
+    resolved-range summary refs are folded into recoverable refs; `failures` is
+    caller-supplied (from the CXT-2 store/ledger) rather than mined from events.
+    Pass `failures=()` to explicitly clear; `None` (default) keeps the ledger's.
+    """
+    led = base_ledger if base_ledger is not None else ContextLedger.empty("")
+
+    plan = _latest_plan(events)
+    goal = plan.summary if plan is not None else _head_user_text(events)
+    if goal is None:
+        goal = led.active_goal
+    version = plan.revision if plan is not None else led.current_version
+
+    resolved = resolved_ranges_from_events(events)
+    extra_refs = tuple(r.summary_ref for r in resolved if r.summary_ref is not None)
+
+    merged = led.model_copy(
+        update={
+            "active_goal": goal,
+            "current_version": version,
+            "resolved_ranges": resolved,
+            "retained_refs": (*led.retained_refs, *extra_refs),
+            "latest_verifier_failures": (
+                failures if failures is not None else led.latest_verifier_failures
+            ),
+        }
+    )
+    return ContextPack.from_ledger(
+        merged, policy=policy, todo_text=todo_text, allowed_next_actions=allowed_next_actions
+    )
+
+
+def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
+    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+    execution memory the agent reads/updates (via context_memory) as it works."""
+    lines: list[str] = [f"# {plan.summary}"]
+    context = (plan.context or "").strip()
+    if context:
+        lines += ["", context]
+    lines += ["", "## Steps"]
+    for i, step in enumerate(plan.steps, start=1):
+        lines.append(f"- [ ] {i}. {step.title}")
+        detail = (getattr(step, "detail", "") or "").strip()
+        if detail:
+            lines.append(f"  {detail}")
+    return "\n".join(lines) + "\n"
+
+
+def _failure_line(f: VerifierFailureRef) -> str:
+    loc = f" ({f.rel_path})" if f.rel_path else ""
+    return f"- [{f.severity.value}] {f.kind}: {f.message}{loc}"
+
+
+def render_context_pack(pack: ContextPack, *, priority: SourcePriority | None = None) -> str:
+    """Render the pack as a deterministic, byte-stable `<context-pack>` block.
+
+    Sections are emitted in SourcePriority order; empty sections are omitted. No
+    event history / raw tool chatter — only the structured anchors. Stable across
+    turns for identical input (KV-cache-friendly prefix)."""
+    order = (priority or SourcePriority.default()).order
+    sections: dict[SourceKind, list[str]] = {}
+
+    if pack.active_goal:
+        head = f"Goal (v{pack.current_version}): {pack.active_goal}"
+        sections[SourceKind.GOAL] = [head]
+    if pack.active_contract:
+        sections[SourceKind.CONTRACT] = [f"Contract: {pack.active_contract}"]
+    if pack.current_todo:
+        sections[SourceKind.TODO] = ["Todo:", pack.current_todo]
+    if pack.latest_failures:
+        sections[SourceKind.VERIFIER_FAILURE] = [
+            "Unresolved verifier failures:",
+            *[_failure_line(f) for f in pack.latest_failures],
+        ]
+    if pack.direct_edits_summary:
+        sections[SourceKind.DIRECT_EDIT] = [
+            "User direct edits:",
+            *[f"- {e.rel_path}: {e.kind.value}{(' — ' + e.summary) if e.summary else ''}" for e in pack.direct_edits_summary],
+        ]
+    if pack.unresolved_comments:
+        sections[SourceKind.COMMENT] = [
+            "Unresolved comments:",
+            *[f"- {c}" for c in pack.unresolved_comments],
+        ]
+    if pack.resource_refs:
+        sections[SourceKind.RESOURCE] = [
+            "Resources:",
+            *[f"- {r.rel_path}" for r in pack.resource_refs],
+        ]
+    if pack.recoverable_refs:
+        sections[SourceKind.RECOVERABLE_REF] = [
+            "Recoverable references (read on demand):",
+            *[f"- {r.kind.value}: {r.rel_path}" for r in pack.recoverable_refs],
+        ]
+
+    lines: list[str] = [_BLOCK_OPEN]
+    for kind in order:
+        block = sections.get(kind)
+        if block:
+            lines.extend(block)
+    if pack.allowed_next_actions:
+        lines.append(f"Allowed next actions: {', '.join(pack.allowed_next_actions)}")
+    lines.append(_BLOCK_CLOSE)
+    return "\n".join(lines)
+---
+"""The agent loop — agent-loop-contract.md §2, §4, §5, §7, §8.
+
+A bounded iteration over `Agent.step()`. The loop's correctness *is* the
+product's reliability (BoD §1.1). It is transport-agnostic and drivable headless:
+it produces events and consumes control operations, nothing more.
+
+Key invariants (principles §1):
+- One action per iteration, observed before the next.
+- Status is reconstructed from the log, never held privately.
+- A per-conversation FIFO lock guards every status read/mutation; stepping holds
+  it EXCEPT during tool execution, so pause/steer/confirm land between steps and
+  concurrent user input is never dropped.
+- `max_iterations` is the ultimate backstop beneath stuck detection.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from ..security import RiskAssessment
+    from .boundaries import StreamHook
+
+from ..dod import DoDPredicate, DoDSpec, DoDSpecAlreadySet
+from ..dod_evaluator import DoDEvaluator
+from ..events import (
+    ActionEvent,
+    AgentErrorEvent,
+    AlternativesEvent,
+    ConversationStatus,
+    ErrorEvent,
+    Event,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
+    PlanEvent,
+    StatusEvent,
+    ToolCall,
+    ToolResult,
+)
+from ..llm import (
+    LLMRouter,
+    ModelExecutionPolicy,
+    OperatingMode,
+)
+from ..state import ConversationState
+from ..store.base import EventStore
+from ..view import Condenser, Summarizer, View
+from . import signals, view_render
+from .boundaries import (
+    Agent,
+    AgentStep,
+    ConfirmationPolicy,
+    SecurityAnalyzer,
+    StopHook,
+    ToolExecutor,
+)
+from .control import Disp
+from .driver import Driver
+from .finish import (  # noqa: F401 — finish helpers/consts re-exported for back-compat
+    _DOD_REFUSAL_CAP,
+    _EXECUTION_NUDGE,
+    _FINISH_VERIFY_CAP,
+    FinishGate,
+    _app_verify_command,
+    _browser_verified,
+    _DoDWorkspaceUnavailable,
+    _is_web_deliverable,
+    _last_productive_seq,
+    _latest_browser_error,
+    _static_verify_command,
+)
+from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for back-compat
+    _FANOUT_INPUT_MAX_CHARS,
+    Observer,
+)
+from .plan_conditions import PlanStepConditions
+from .plans import Planner
+from .recitation import (  # noqa: F401 — _RECITATION_SENTINEL re-exported for back-compat
+    _RECITATION_SENTINEL,
+    RecitationRegrounder,
+)
+from .signals import (  # noqa: F401 — re-exported for back-compat (moved to signals.py)
+    _BOOKKEEPING_TOOLS,
+    _NON_PRODUCTIVE_TOOLS,
+)
+from .stuck import StuckDetector, StuckThresholds
+from .turn_control import (  # noqa: F401 — _CONTINUE_OPTION_ID re-exported for back-compat
+    _CONTINUE_OPTION_ID,
+    MetaToolHandlers,
+    Valve,
+)
+from .view_render import (  # noqa: F401 — re-exported for back-compat (moved to view_render.py)
+    _WS_MAX_FILES,
+    _WS_PER_FILE_CHARS,
+    _WS_READ_TIMEOUT_S,
+    _WS_TOTAL_CHARS,
+)
+
+_LOG = logging.getLogger("disco.loop")
+
+# _sleep / _DRIVER_RETRY_BACKOFFS_S / _STUCK_ESCAPE_TEMP moved to loop/driver.py
+# (with the drive step that uses them).
+
+
+# `_BOOKKEEPING_TOOLS` + `_NON_PRODUCTIVE_TOOLS` now live in loop/signals.py
+# (the pure log-derived signal helpers that use them moved there too).
+
+
+# _BOOKKEEPING_STREAK_* / _BOOKKEEPING_PLAN_SLACK / _PROPOSE_PLAN_UPDATE_REPEAT_CAP /
+# _CONTINUE_OPTION_ID moved to loop/turn_control.py (with the valves + meta-tool
+# handlers that use them); _CONTINUE_OPTION_ID re-exported above for back-compat.
+# _FINISH_VERIFY_CAP / _DOD_REFUSAL_CAP moved to loop/finish.py (re-exported above).
+# _WS_* snapshot budget constants moved to loop/view_render.py with the snapshot fn.
+
+_DEFAULT_VETO_FEEDBACK = (
+    "<system-reminder>\n"
+    "The goal does not appear complete yet. Continue working toward it — a stop "
+    "hook refused the FINISHED transition.\n"
+    "</system-reminder>"
+)
+
+# Module-level constant so `ModelExecutionPolicy.standard()` is evaluated once
+# and the per-parameter call doesn't trip ruff's B008 rule (function call in
+# default). The policy is a frozen dataclass — safe to share as a singleton.
+_DEFAULT_MODEL_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
+
+# C6 — recitation cadence (Manus telemetry: re-emitting the plan/objective
+# tail-recap on every iteration wastes ~1/3 of actions with no behavior
+# change). Borrow the cadence math from smolagents' `planning_interval` ONLY:
+# fire on a fixed interval, e.g. `(step_number - 1) % interval == 0`. We do
+# NOT borrow smolagents' re-planning/steering behavior — Disco has a STRICT
+# no-automatic-nudge invariant (commit c97c1b3) and the recap is a passive
+# PASSIVE re-render of the SAME plan/checklist, never new instructions/goals.
+# The content (built in view.py:_recitation_message) is unchanged — only the
+# FREQUENCY of emission changes here.
+_RECITATION_CADENCE_DEFAULT = 5
+# _RECITATION_SENTINEL moved to loop/recitation.py (with the gate that uses it);
+# re-exported via the import at the top of this module for back-compat.
+
+# HS-03 — scheduled facts re-grounding (assist tier only). A weak model that
+# has drifted through dozens of actions can lose track of the stable facts
+# (goal, plan state, recently-touched files). The fix mirrors the smolagents
+# `planning_interval` pattern: every N actions, re-anchor with a short
+# RECAP. The recap is FACTS ONLY — no imperative/steer language — so the
+# no-automatic-nudge invariant (commit c97c1b3) survives. Assist OFF
+# (capable-model default) is byte-identical to today: the gate is closed
+# and the helper is never called. Post-resume the recap fires ONCE on the
+# very first step (a pause may have lost context). Cadence thereafter:
+# `_HS03_REGROUND_INTERVAL` actions since the last resume. A per-boundary
+# guard (the last-emitted action count) prevents re-firing on consecutive
+# steps at the same boundary. Interval chosen at 12 (vs. C6's 5) so the
+# recaps don't pile up: the C6 recap fires every 5 steps for plan state;
+# the HS-03 recap fires every 12 steps and carries the broader
+# goal/files/constraints anchors a drifted model most often loses.
+_HS03_REGROUND_INTERVAL = 12
+
+# Statuses at which the loop yields control back to the caller at a checkpoint.
+_TERMINAL_FOR_NOW = frozenset(
+    {
+        ConversationStatus.PAUSED,
+        ConversationStatus.IDLE,
+        ConversationStatus.FINISHED,
+        ConversationStatus.STUCK,
+        ConversationStatus.ERROR,
+        ConversationStatus.WAITING_FOR_CONFIRMATION,
+        ConversationStatus.AWAITING_PLAN_APPROVAL,
+        # ask_user halts the loop — kicks must not race past the gate. Both the
+        # pick-a-card (DECISION) and the free-form (QUESTION) Ask-gates re-kick
+        # only on the user's reply.
+        ConversationStatus.AWAITING_USER_DECISION,
+        ConversationStatus.AWAITING_USER_QUESTION,
+    }
+)
+
+# Injected (as an implicit system-reminder) when the planner answers in prose
+# instead of calling submit_plan: in PLANNING mode the terminal moves are to
+# PROPOSE a structured plan OR ask the user for a detail you genuinely need
+# first. Reads (file_list/file_read/search/extract) fall through and never
+# trigger this — only a tool-less prose response does.
+_PLAN_NUDGE = (
+    "<system-reminder>\n"
+    "Still in PLANNING mode — no plan has been proposed yet. To advance, either "
+    "(a) call the `submit_plan` tool with a summary, ordered steps, and a markdown "
+    "`context` block, or (b) if required details are genuinely missing and you "
+    "cannot plan well without them (the user named something only they know — a "
+    "color, a credential, a target, a file that isn't here), call `ask_user` with "
+    "a clear `question` (for ONE missing detail) or `clarify` (for SEVERAL) to get "
+    "them BEFORE planning. Prefer asking over guessing on "
+    "details the user explicitly required. You may also keep reading (file_list, "
+    "file_read, search, extract) for more context, but a prose reply alone doesn't "
+    "advance the conversation.\n"
+    "</system-reminder>"
+)
+
+# Emitted when a REVISION re-plan has been narrated >= _REVISION_FORCE_SUBMIT_K times
+# without a submit_plan call (the soft _PLAN_NUDGE was ignored). This is paired with a
+# durable StatusEvent(detail="force_submit_plan") marker so the NEXT planning step's tool
+# set is narrowed to submit_plan ONLY (driver.tools_for_step reads the marker) — the model
+# must submit the plan it has already described instead of looping in prose. The marker is
+# in the event log, so a RESUMED build replays it and stays forced (no soft-nudge loop).
+_FORCE_SUBMIT_DIRECTIVE = (
+    "<system-reminder>\n"
+    "You have already DESCRIBED the revised plan but have not SUBMITTED it. Stop "
+    "narrating: call the `submit_plan` tool NOW with the revised plan (summary, ordered "
+    "steps, and a markdown `context` block). It is the only available action — do not "
+    "reply in prose.\n"
+    "</system-reminder>"
+)
+# After this many consecutive prose-only nudges during a REVISION re-plan, escalate to the
+# forced-submit recovery (narrow tools to submit_plan). Gated default-ON; kill switch
+# DISCO_REVISION_FORCE_SUBMIT=0.
+_REVISION_FORCE_SUBMIT_K = 2
+
+# Bug 12 (§11.4) — refusal for a mutating tool that reaches the apply boundary
+# AFTER a change/revision steer landed mid-step (the in-flight write-through race).
+# The build has been put back into PLANNING; the model must submit a revised plan.
+_MIDSTEP_STEER_REFUSAL = (
+    "<system-reminder>\n"
+    "REFUSED: `{tool}` was not applied. A change request arrived while you were "
+    "mid-step, so this action would have landed on the OLD, now-stale plan. The "
+    "build has re-entered PLANNING. Fold the new request into a REVISED plan and "
+    "call `submit_plan`; once it is approved you can apply the change. You may also "
+    "read (file_read/file_list/search/extract) or ask/clarify first.\n"
+    "</system-reminder>"
+)
+
+# _STUCK_ESCAPE_TEMP moved to loop/driver.py (with the drive step that applies it).
+
+# _EXECUTION_NUDGE moved to loop/finish.py (with the execution-nudge gate).
+
+# GAP B turn-taking tools — notify (non-blocking progress / mid-run reply) and
+# finish (the explicit, affirmative terminal move). Both are intercepted by the
+# loop and never reach the executor.
+# The `remember` virtual tool — durable memory. When the agent learns a fact it
+# will need LATER in the SAME run (a chosen library version, a discovered build
+# command, a constraint the user stated, a dead-end to avoid), it records it
+# here. The loop intercepts the call and emits a pinned KnowledgeEvent: pinned
+# means the fact is EXEMPT from condensation, so it survives even after the raw
+# transcript that taught it is summarized away. This is the standing-memory
+# channel that backs MEMORY.md-style recall without a separate store — the View
+# already injects KnowledgeEvents back into context every step.
+_REMEMBER_DESCRIPTION = (
+    "Record a durable fact you will need LATER in this run — a decision you made "
+    "(a chosen library/version), something you discovered (the build command, an "
+    "API shape, a path), a constraint the user stated, or a dead-end to avoid. "
+    "Unlike normal observations, a remembered fact is PINNED: it survives context "
+    "condensation, so you won't forget it on a long run. Keep each `fact` to one "
+    "or two sentences. Optionally set `scope` to a keyword/path the fact applies "
+    "to. This does NOT stop the run — you keep working right after."
+)
+_REMEMBER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "fact": {
+            "type": "string",
+            "description": "The durable fact to remember (one or two sentences).",
+        },
+        "scope": {
+            "type": "string",
+            "description": "Optional applicability hint — a keyword or path the fact applies to.",
+        },
+    },
+    "required": ["fact"],
+}
+# The `serve` virtual tool — the finished-artifact HANDOFF. When the agent has
+# produced something the user should see/use (a built site, a running app, a
+# generated report/file), it calls `serve` to mark the deliverable. The loop
+# intercepts the call and emits a DeliverableEvent that the UI renders as a real
+# handoff (Open the live app / Download the files) — the difference between "the
+# run ended" and "here is your thing." Non-blocking: the agent keeps working (it
+# usually serves, then verifies, then finishes).
+_SERVE_DESCRIPTION = (
+    "Hand off a finished deliverable to the user. Call this when you've produced "
+    "something they should open or download. Set `kind`='app' for a runnable "
+    "result they open in the live preview (a built site / running dev server "
+    "rooted at `path`) — make sure your server is serving on port 8000 (the "
+    "workspace auto-serves the 'preview' session there by default). Set "
+    "`kind`='files' for artifacts to download (`path` = the file or folder). "
+    "Give a short human `title`. This does NOT end the run — serve the "
+    "deliverable, verify it, THEN call finish."
+)
+_SERVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {
+            "type": "string",
+            "description": "Short human label, e.g. 'Landing page' or 'Sales report'.",
+        },
+        "path": {
+            "type": "string",
+            "description": "Workspace-relative path: app root (kind=app) or file/folder (files).",
+        },
+        "kind": {
+            "type": "string",
+            "enum": ["app", "files"],
+            "description": "'app' = open in live preview; 'files' = download. Default 'app'.",
+        },
+        "url": {
+            "type": "string",
+            "description": (
+                "Optional: the canonical URL the deliverable is reachable at (a deploy "
+                "target / tunnel / live address). Surfaced as an 'Open deployed app' link."
+            ),
+        },
+    },
+    "required": ["title", "path"],
+}
+_FINISH_DESCRIPTION = (
+    "Declare the task COMPLETE and end the run. Call this ONLY when every plan "
+    "step is done and verified — it is the single affirmative way to finish. A "
+    "plain message without this tool does NOT end the run. Provide a short "
+    "`summary` of what you built / accomplished. STRONGLY PREFERRED: attach a "
+    "`verify` shell command that proves the deliverable works (the build "
+    "compiles, the tests pass, the server responds) — exit 0 means good. If it "
+    "fails you'll see exactly what broke and should fix it before finishing; after "
+    "a few failures the run finishes anyway with a warning, so make your check real "
+    "and your fix correct rather than relying on a broken verify to pass."
+)
+_FINISH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string", "description": "Short summary of what was accomplished."},
+        "verify": {
+            "type": "string",
+            "description": (
+                "Optional check that proves completion (exit 0 = success). One of: a "
+                "shell command (`npm test`, `python -m pytest -q`); for a STATIC page "
+                "the literal `static` (checks index.html exists + parses) or "
+                "`static:<path>`; or for a RUNNING web app the literal `app` (GETs "
+                "http://localhost:8000/ and requires HTTP 200 + a non-empty body) or "
+                "`app:<url>` for another address — make sure your server is serving on "
+                "port 8000 first. If it fails, the finish is refused and you must fix the problem."
+            ),
+        },
+    },
+    "required": [],
+}
+
+
+def _finish_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="finish", description=_FINISH_DESCRIPTION, parameters_schema=_FINISH_SCHEMA
+    )
+
+
+def _remember_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name="remember", description=_REMEMBER_DESCRIPTION, parameters_schema=_REMEMBER_SCHEMA
+    )
+
+
+---
+"""CXT-6 tests: render_plan_as_todo_markdown + plan-approval seeds .disco/context/todo.md."""
+
+from __future__ import annotations
+
+import pytest
+
+from disco.core.context import ArtifactMemoryStore
+from disco.core.events import PlanEvent, PlanStep
+from disco.core.loop.context_builder import render_plan_as_todo_markdown
+
+from _buildsoak_fakes import build_plan_loop
+from loop_fakes import ScriptedAgent, action_step
+
+
+class _MemFS:
+    """Minimal in-memory WorkspaceFS (read of a missing path raises)."""
+
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
+
+    async def read_file(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self.files[path] = data
+
+
+# --- render helper ------------------------------------------------------------
+def test_render_plan_as_todo_markdown() -> None:
+    plan = PlanEvent(
+        summary="Build a roofing lead site",
+        steps=[PlanStep(title="hero", detail="big headline"), PlanStep(title="lead form")],
+        context="Static site, no backend.",
+    )
+    md = render_plan_as_todo_markdown(plan)
+    assert md.startswith("# Build a roofing lead site")
+    assert "Static site, no backend." in md
+    assert "## Steps" in md
+    assert "- [ ] 1. hero" in md
+    assert "  big headline" in md
+    assert "- [ ] 2. lead form" in md
+
+
+def test_render_plan_no_context_or_detail() -> None:
+    plan = PlanEvent(summary="g", steps=[PlanStep(title="only step")])
+    md = render_plan_as_todo_markdown(plan)
+    assert "- [ ] 1. only step" in md
+    assert md.endswith("\n")
+
+
+# --- approval seeds todo.md ---------------------------------------------------
+def _submit_plan_step():
+    return action_step("submit_plan", {"summary": "p", "steps": [{"title": "do the thing"}]})
+
+
+async def _planned(cid: str):
+    agent = ScriptedAgent([_submit_plan_step()])
+    loop, store = build_plan_loop(agent, conversation_id=cid)
+    await loop.send_message("build the thing")
+    await loop.run()
+    return loop, store
+
+
+@pytest.mark.asyncio
+async def test_approval_seeds_todo_md() -> None:
+    loop, _store = await _planned("cxt6-seed")
+    # inject a workspace FS so the best-effort seed has somewhere to write
+    loop.executor.sandbox = _MemFS()  # type: ignore[attr-defined]
+    await loop.approve_plan()
+    todo = await ArtifactMemoryStore(loop.executor.sandbox).read_todo()  # type: ignore[arg-type]
+    assert todo is not None
+    assert "## Steps" in todo
+    assert "- [ ] 1. do the thing" in todo
+
+
+@pytest.mark.asyncio
+async def test_approval_without_sandbox_does_not_crash() -> None:
+    # no sandbox on the fake executor → seed is a best-effort no-op, approval still works
+    loop, _store = await _planned("cxt6-nosbx")
+    state = await loop.approve_plan()
+    assert state is not None
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"def _arm_dod_from_plan|def _seed_todo_from_plan|def approve_plan|reportAssignmentType|is_revision_intent|_enter_revision_planning\" packages/core/src/disco/core/loop/engine.py; echo '---'; sed -n '520,760p' packages/core/src/disco/core/loop/engine.py; echo '---'; sed -n '760,980p' packages/core/src/disco/core/loop/engine.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+1589:            # owned by confirm/reject/approve). Q&A is exempt (`is_revision_intent`).
+1598:                and signals.is_revision_intent(text)
+1605:                    await self._enter_revision_planning(text)
+1664:    async def _arm_dod_from_plan(self) -> None:
+1704:        # reportAssignmentType, fixed while touching this file for CXT-6.)
+1733:    async def approve_plan(self) -> ConversationState:
+1749:    async def _seed_todo_from_plan(self) -> None:
+1998:        (`signals.is_revision_intent`). A pure Q&A follow-up ("what font did you
+2017:            await self._enter_revision_planning(signals.latest_user_text(events) or "")
+2023:        if not signals.is_revision_intent(text):
+2025:        await self._enter_revision_planning(text)
+2028:    async def _enter_revision_planning(self, text: str) -> None:
+2068:        A pure Q&A follow-up is exempt (`signals.is_revision_intent`). Lock-free
+---
+        # value to keep the test loop tight. Set to 1 to recover the
+        # "re-ground on every step" behavior (NOT recommended — a
+        # re-ground on every step would be a token-bloat disaster; the
+        # point of the cadence is the throttling). 0 / negative are
+        # clamped to 1.
+        reground_cadence: int = _HS03_REGROUND_INTERVAL,
+        # C1c — DoD evaluator factory (test seam; see _finish_dod_gate_passed).
+        # The default (None) builds a DoDEvaluator over the executor's sandbox
+        # workspace_root; tests inject a fake-seamed evaluator.
+        dod_evaluator_factory: (
+            Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
+        ) = None,
+    ) -> None:
+        # Autonomous mode (issue A): no human is available to answer questions or
+        # approve plans (headless / unattended runs). Default False = today's
+        # interactive behavior, fully unchanged. When True: ask_user/clarify are
+        # withheld from the tool schema, the plan is auto-approved inline, and the
+        # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
+        # instead of an indefinite AWAITING_USER_DECISION stall.
+        self._autonomous = autonomous
+        # Execution policy (T1): the SINGLE source of truth for model-tier execution.
+        # `_assist` is a read-only property delegating to `_model_policy.assist`.
+        self._model_policy = model_policy
+        self.conversation_id = conversation_id
+        self.store = store
+        self.agent = agent
+        self.executor = executor
+        self._router = router  # held for wiring symmetry; the Agent wraps it
+        self.analyzer = analyzer
+        self.policy = policy
+        self.condenser = condenser
+        self.summarizer = summarizer
+        self.mode = mode
+        self.max_iterations = max_iterations
+        # Plan-mode wiring (Build). Defaults are inert: with no planning_tools the
+        # mode filter and the plan intercept never fire, so Research and existing
+        # tests behave exactly as before.
+        self._planning_tools = planning_tools  # tools visible ONLY while planning
+        self._plan_tool = plan_tool  # the structured-plan signal, intercepted
+        self._execution_mode = execution_mode  # the mode an approved plan runs in
+        self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
+        # Forced-submit recovery for revision re-plans (default ON; kill switch).
+        self._revision_force_submit_enabled = (
+            os.environ.get("DISCO_REVISION_FORCE_SUBMIT", "1").strip().lower()
+            not in ("0", "false", "no", "off")
+        )
+        self._plan_explore_reads = 0  # (B2/B6) consecutive PLANNING reads w/o a plan
+        self._execution_nudges = 0  # consecutive "you must act" nudges in execution
+        self._browser_verify_refusals = 0  # consecutive browser-verification refusals
+        self._identical_plan_revisions = 0  # C8 (T11): consecutive identical-steps
+                                            # propose_plan_update auto-approvals in
+                                            # autonomous mode. Increments when the
+                                            # new plan's steps match the immediately
+                                            # prior plan's; resets on a different
+                                            # (incl. appended) plan. The cap lives
+                                            # at module-level so tests can pin it.
+        self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
+        self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
+        # C20 — `delegate_explore` count, per run segment. Reset in run() so a
+        # resume/steer gets a fresh budget (mirror `_finish_verify_refusals`).
+        # The cap is module-level so tests can pin it. The cap bounds the
+        # fan-out — a model cannot recurse (the helper is read-only and the
+        # call site is always the loop's intercept path).
+        self._fanout_count = 0
+        self._fanout_max = _FANOUT_MAX_PER_RUN
+        # Actionless-step breaker cap (DEFECT-4)
+        self._ACTIONLESS_BREAK_CAP: int = 3
+        # Steps consumed with NOTHING persisted to the log (empty-args serve,
+        # blank remember fact, empty-thought noop, duplicate deliverable) —
+        # invisible to every event-derived detector incl. the stuck detector,
+        # so an instance counter is the only honest way to see the spin.
+        # Reset when a real ActionEvent is built (site h) and at run() entry.
+        self._invisible_steps = 0
+        # GAP B backstop: max tool-less prose turns in a row before the loop ends
+        # the run (a talking-without-acting model can't advance max_iterations).
+        self._max_consecutive_noops = 6
+        # Circuit breaker (Cluster 2): after this many consecutive failures the
+        # harness hands off to the user (AWAITING_USER_DECISION) instead of
+        # grinding. Set above StuckDetector's identical-repeat threshold (3) so
+        # identical loops still STUCK first; this catches the DISTINCT-failure case.
+        self._circuit_breaker_threshold = 4
+        # Auto-continue cap: when the agent declares finished but the plan
+        # isn't done, the loop re-kicks itself this many times before landing
+        # FINISHED with partial-plan detail. The user shouldn't have to poke
+        # the model to keep going; this is the harness driving the loop forward.
+        self._auto_continue_cap = 3
+        self._stop_hooks = list(stop_hooks or [])
+        self._stuck = StuckDetector(stuck_thresholds, assist=model_policy.assist)
+        # C6/HS-03/C5 collaborator: recitation cadence, scheduled re-grounding,
+        # and the MEMORY write-through mirror. Reads the loop's cadence counters.
+        self._recit = RecitationRegrounder(self)
+        # View materialization collaborator (microcompact → condense → recap
+        # gate → F8 → snapshot append). Reads condenser/summarizer + self._recit.
+        self._view = view_render.ViewBuilder(self)
+        # C18 advisory plan-step done-condition collaborator.
+        self._plan_cond = PlanStepConditions(self)
+        # Execute-and-observe (§4.1) + §8 hard-reset + C20 fan-out collaborator.
+        self._observe = Observer(self)
+        # The model-driving step collaborator (tool visibility + agent.step +
+        # requery ladder + transient backoff + context-window hard-reset).
+        self._driver = Driver(self)
+        # The finish pipeline collaborator (verify-on-finish, C1c DoD gate,
+        # execution nudge, browser-verify gate, auto-continue finalizer).
+        self._finish = FinishGate(self)
+        # Turn-taking control collaborators (co-located: both poke the shared
+        # _invisible_steps counter). Valve = spin/stuck/circuit-breaker guards;
+        # MetaToolHandlers = the virtual meta-tool run-loop intercepts.
+        self._valve = Valve(self)
+        self._meta = MetaToolHandlers(self)
+        # Plan / alternatives builders (submit_plan → PlanEvent + C18 harvest;
+        # ask_user options → AlternativesEvent).
+        self._planner = Planner(self)
+        self._veto_feedback = veto_feedback
+        # C1c — DoD evaluator gate (wires the C1b fresh-context judge into the
+        # finish branch). The factory returns a fully-configured evaluator; the
+        # default builds one over the executor's sandbox workspace_root. Tests
+        # inject a fake-seamed evaluator via the same hook. None means "use the
+        # default factory" (the evaluator is still wired when a DoD spec exists).
+        # When no DoD spec exists for the conversation, the gate is a no-op
+        # (legacy byte-identical path) — see _finish_dod_gate_passed.
+        self._dod_evaluator_factory: (
+            Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
+        ) = dod_evaluator_factory
+        # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
+        # loop's max_iterations + the user's kill switch are the ultimate exit,
+        # same as the browser-verify and execution-nudge gates).
+        self._dod_refusals = 0
+        self._lock = asyncio.Lock()
+        # WALK-18 — cooperative pause flag. pause() SETS it WITHOUT taking
+        # self._lock (so a pause lands while the in-flight turn holds the lock,
+        # unlike cancel() which must take the lock to emit IDLE); the run() loop
+        # observes it at its next step boundary, emits PAUSED, and returns.
+        self._pause_requested = asyncio.Event()
+        # Watch-it-write sink (optional). The runtime wires this to the store's
+        # ephemeral broadcast; when set, the driver's streamed tool-call arg
+        # fragments are decoded into growing file-content frames and published
+        # live (display-only, never persisted). None → no streaming (tests, CLI).
+        self.stream_sink: Callable[[dict], None] | None = None
+        # C6 — recitation cadence state. Per-run counters / fingerprints
+        # used to decide whether the view.py tail-recap is appended on this
+        # iteration. Reset in run() at the start of every run segment so a
+        # resume/steer starts a fresh cadence. The signature is a stable
+        # hash of (plan + per-step checklist) — DRIFT fires when the plan
+        # is replaced OR the agent marks a step done/active.
+        self._recitation_cadence = max(1, int(recitation_cadence))
+        self._recitation_step_count = 0
+        self._recitation_last_signature: str | None = None
+        # HS-03 — scheduled facts re-grounding cadence. Mirrors the
+        # C6 seam (testable, defaulted to the production constant).
+        # The instance attribute is what the predicate inspects so a
+        # test can pin a small cadence without monkey-patching the
+        # module constant. Clamped to >= 1 (a cadence of 0 would
+        # mean "every step" modulo zero, undefined; 1 is the
+        # degenerate "fire on every step" case which the brief
+        # explicitly disclaims as not the intent).
+        self._hs03_reground_cadence = max(1, int(reground_cadence))
+        # C18 — per-(plan_revision, step_index) advisory done-condition
+        # predicates, populated in `_plan_from_args` from the optional
+        # `done_condition` field on each `PlanStepInput`. The map is keyed
+        # by (plan_revision, 1-based step index) so a re-plan (new
+        # revision) cleanly supersedes the prior predicate set without a
+        # stale match. Lookup happens in
+        # `_maybe_emit_plan_step_done_condition_note` whenever a
+        # `plan_step(idx, 'done')` ActionEvent is observed. Empty by
+        # default — steps without a predicate behave exactly as today
+        # (back-compat). Cleared on `approve_plan` reset (fresh segment).
+        self._plan_step_predicates: dict[tuple[int, int], DoDPredicate] = {}
+        # F4 — gated bootstrap observation. Fires at most ONCE per
+        # conversation when assist is ON and we're about to make the first
+        # model call. The flag persists across run() segments so a resume
+        # never re-emits it (the model already saw it; re-firing would
+        # be a redundant system reminder and a context-window penalty).
+        # Assist OFF (default) leaves this flag dead — the gate is closed
+        # before the detector is ever called.
+        self._bootstrap_emitted: bool = False
+        # HS-03 — scheduled facts re-grounding. Two pieces of state,
+        # both assist-gated. Both are reset in run() so a fresh
+        # run segment (which is what a resume/restart starts) gets a
+        # fresh budget — the brief asks for "once right after a
+        # resume" and that "once" is per-resume, not per-conversation.
+        #   * _hs03_reground_post_resume_emitted: ONE-SHOT guard for
+        #     the post-resume recap. Mirrors _bootstrap_emitted's
+        #     shape (a boolean, flipped after the first eligible
+        #     step), but RESET in run() (where _bootstrap_emitted is
+        #     NOT reset) — a resume IS the moment we want to re-fire.
+        #   * _hs03_reground_last_action_count: PER-BOUNDARY guard
+        #     keyed off the action count. A boundary is
+        #     `actions_since_last_resume % N == 0` (N ==
+        #     _HS03_REGROUND_INTERVAL). The guard compares the
+        #     CURRENT count to the last one and skips emit when
+        #     equal — so two consecutive steps at the same boundary
+        #     (e.g. count 12 on two steps in a row, which can happen
+        #     if a step is a no-op) never produce two recap messages.
+        #     Reset in run() so a fresh segment starts the count
+        #     from -1 (no boundary yet).
+        self._hs03_reground_post_resume_emitted: bool = False
+        self._hs03_reground_last_action_count: int = -1
+
+    # ---- policy accessors ---------------------------------------------------
+
+    @property
+    def _assist(self) -> bool:
+        """Read-only shim for the legacy weak-model gate. All collaborators
+        that read `self._loop._assist` continue to work without changes because
+        this property exposes the same name they already access. The SINGLE
+        source of truth is `_model_policy.assist`."""
+        return self._model_policy.assist
+
+    # ---- emission + small helpers -------------------------------------------
+
+    # Tools whose streamed arguments carry a file body worth watching assemble.
+    _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file")
+    # Coalesce threshold: don't publish a frame until this many new content chars
+    # have accrued (or a newline appears) — keeps the type-out smooth without
+    # firing a WS frame per 3-char model token. The trailing remainder below the
+    # threshold is delivered by the authoritative ActionEvent, so nothing is lost.
+    _STREAM_FLUSH_CHARS = 24
+
+    def _build_stream_hook(self) -> StreamHook | None:
+        """Delegates to Driver.build_stream_hook (self._driver). Kept as an
+        instance method for tests."""
+        return self._driver.build_stream_hook()
+
+    async def _emit(self, event: Event) -> Event:
+        return await self.store.append(self.conversation_id, event)
+
+    async def _events(self) -> list[Event]:
+        return await self.store.get_events(self.conversation_id)
+
+    async def get_state(self) -> ConversationState:
+        return await self.store.get_state(self.conversation_id)
+
+    async def _event_by_id(self, event_id: str) -> Event | None:
+        for e in await self._events():
+            if e.id == event_id:
+                return e
+        return None
+
+    def _recent(self, events: list[Event]) -> list[Event]:
+        return events[-self._stuck.t.scan_window :]
+
+---
+
+
+    # ---- plan-mode helpers (Build) ------------------------------------------
+
+    def _readonly_tool_names(self) -> frozenset[str] | None:
+        """Delegates to Driver.readonly_tool_names (used by the Observer F9 gate)."""
+        return self._driver.readonly_tool_names()
+
+    def _tools_for_step(self, *, suppress_meta_tools: bool = False) -> list:
+        """Delegates to Driver.tools_for_step. Kept as an instance method for tests."""
+        return self._driver.tools_for_step(suppress_meta_tools=suppress_meta_tools)
+
+    def _plan_from_args(self, arguments: dict, events: list[Event]) -> PlanEvent:
+        """Delegates to Planner.plan_from_args (planning gate + propose intercept)."""
+        return self._planner.plan_from_args(arguments, events)
+
+    def _alternatives_from_args(
+        self, arguments: dict, events: list[Event]
+    ) -> AlternativesEvent | None:
+        """Delegates to Planner.alternatives_from_args (the ask_user intercept)."""
+        return self._planner.alternatives_from_args(arguments, events)
+
+    async def _workspace_snapshot_message(self, events: list[Event]) -> LLMMessage | None:
+        """Delegates to view_render.workspace_snapshot_message over the executor's
+        sandbox. Kept as an instance method for tests + the ViewBuilder."""
+        return await view_render.workspace_snapshot_message(
+            getattr(self.executor, "sandbox", None), events
+        )
+
+    # ---- C6: recitation cadence + drift gate ---------------------------------
+
+    # ---- C6 / HS-03 delegators → RecitationRegrounder (self._recit) ----------
+
+    def _recitation_signature(self, events: list[Event]) -> str | None:
+        return self._recit.recitation_signature(events)
+
+    def _should_emit_recitation(self, events: list[Event]) -> bool:
+        return self._recit.should_emit_recitation(events)
+
+    def _gate_recitation(self, view: View, events: list[Event]) -> View:
+        return self._recit.gate_recitation(view, events)
+
+    def _should_emit_reground(self, events: list[Event]) -> bool:
+        return self._recit.should_emit_reground(events)
+
+    async def _maybe_emit_reground(self, events: list[Event]) -> list[Event]:
+        return await self._recit.maybe_emit_reground(events)
+
+    async def _materialize_view(self, events: list[Event]) -> View:
+        """Delegates to ViewBuilder.build (self._view). Kept as an instance
+        method for tests + run()."""
+        return await self._view.build(events)
+
+    def _f8_shrink_file_write_args(
+        self, messages: list[LLMMessage], events: list[Event]
+    ) -> list[LLMMessage]:
+        """Delegates to view_render.f8_shrink_file_write_args (pure transform).
+        Kept as an instance method for tests + the ViewBuilder."""
+        return view_render.f8_shrink_file_write_args(messages, events)
+
+    async def _hard_reset(self, events: list[Event]) -> bool:
+        """Delegates to Observer.hard_reset (self._observe). Kept as an instance
+        method for the driver-step call site."""
+        return await self._observe.hard_reset(events)
+
+    # ---- C5: MEMORY write-through + rehydrate-recovery ---------------------
+
+    # Path of the on-disk mirror that survives a hard filesystem reset. The
+    # directory is the harness's own — never written by the agent's tools
+    # directly — so a hostile model can't tamper with the View's source of
+    # truth by overwriting it.
+    _MEMORY_PATH = ".disco/MEMORY.md"  # write target (renamed from legacy .pmx/)
+    # A pre-rename workspace (resumed mid-upgrade) may still carry the old path;
+    # the read-back + the write's read-existing fall back to it so the standing
+    # memory migrates forward instead of being lost.
+    _LEGACY_MEMORY_PATH = ".pmx/MEMORY.md"
+
+    async def _write_pmx_memory_fact(self, scope: str, fact: str) -> None:
+        await self._recit.write_pmx_memory_fact(scope, fact)
+
+    # ---- execute-and-observe (§4.1) -----------------------------------------
+
+    async def _execute_and_observe(self, action: ActionEvent) -> None:
+        """Delegates to Observer.execute_and_observe (self._observe). Kept as an
+        instance method for run()/confirm()/pick_alternative()/verify + tests."""
+        await self._observe.execute_and_observe(action)
+
+    async def _run_fanout(
+        self, args: dict, events: list[Event], *, call_id: str = ""
+    ) -> ToolResult:
+        """Delegates to Observer.run_fanout. Kept as an instance method so tests
+        can override the fan-out seam (`loop._run_fanout = ...`)."""
+        return await self._observe.run_fanout(args, events, call_id=call_id)
+
+    # ---- C18: advisory plan-step done-condition ----------------------------
+
+    async def _maybe_emit_plan_step_done_condition_note(self, action: ActionEvent) -> None:
+        """Delegates to PlanStepConditions (self._plan_cond). Kept as an instance
+        method for the execute-and-observe call site."""
+        await self._plan_cond.maybe_emit_plan_step_done_condition_note(action)
+
+    async def _finish_dod_gate_passed(self) -> bool:
+        """Delegates to FinishGate.finish_dod_gate_passed (self._finish). Kept as an
+        instance method for tests."""
+        return await self._finish.finish_dod_gate_passed()
+
+    async def _stop_allowed(self, state: ConversationState, events: list[Event]) -> bool:
+        for hook in self._stop_hooks:
+            if not await hook.allow_stop(state, events):
+                return False
+        return True
+
+    # ---- the run loop (§4) --------------------------------------------------
+
+    async def _post_noop_valve(self) -> Disp:
+        """Delegates to Valve.post_noop_valve (self._valve). Called by FinishGate
+        and the planning-mode gate."""
+        return await self._valve.post_noop_valve()
+
+    async def _gate_planning_mode(self, step: AgentStep, events: list[Event]) -> Disp:
+        # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
+        #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
+        #   2. Any OTHER tool in planning_tools (e.g. file_read, file_list, search,
+        #      extract) → fall through to the normal action path; the planner explores
+        #      before proposing (the Claude-Code-style "Phase 1: gather context").
+        #   3. No tool call at all (a prose answer) → nudge back to planning.
+        # The plan tool itself is NEVER executed.
+        if self.mode == OperatingMode.PLANNING:
+            tc = step.tool_call
+            if tc is not None and tc.tool_name == self._plan_tool:
+                self._plan_explore_reads = 0  # (B2/B6) a plan was proposed
+                plan = self._plan_from_args(tc.arguments, events)
+                await self._emit(plan)
+                if self._autonomous:
+                    # No human to approve → auto-approve INLINE, emitting the
+                    # exact same events approve_plan() would, so the event log
+                    # is identical whether a human or the harness approved.
+                    self.mode = self._execution_mode
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING, detail="plan_approved"
+                        )
+                    )
+                    await self._arm_dod_from_plan()
+                    return Disp.CONTINUE
+                await self._emit(
+                    StatusEvent(
+                        status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+                        detail=plan.id,
+                    )
+                )
+                return Disp.HALT
+            if tc is None:
+                # The planner spoke without calling a tool. PRESERVE the
+                # prose first — this is how the agent acknowledges the
+                # user's request conversationally before it starts
+                # exploring/planning ("Got it — you want X; let me look
+                # at the available APIs and think through the
+                # architecture."). Without this the acknowledgment was
+                # silently discarded and the user heard nothing back.
+                # THEN append the nudge to keep it moving toward
+                # submit_plan. No cap, no error — the loop's
+                # max_iterations and the user's kill switch are the
+                # ultimate exits. The counter stays for telemetry.
+                if step.thought.strip():
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.AGENT,
+                            message=LLMMessage(
+                                role="assistant", content=step.thought
+                            ),
+                        )
+                    )
+                # FORCED-SUBMIT RECOVERY (revision re-plan). When a REVISION re-plan
+                # has been narrated >= K times without calling submit_plan, the soft
+                # _PLAN_NUDGE is being ignored and the actionless valve would pause →
+                # STUCK, with resume re-entering the same prose loop. Escalate ONCE to a
+                # DURABLE marker (StatusEvent detail="force_submit_plan") + a hard
+                # directive: the marker lives in the event log, so driver.tools_for_step
+                # narrows the NEXT step's tools to submit_plan ONLY and a RESUMED build
+                # replays the marker and stays forced (no soft-nudge loop). This is the
+                # ENGINE recovery for the misclassified-as-actionless revision plan — not
+                # a model fix. Gated default-ON; revision-only (in_planning_for_revision)
+                # so the initial-plan / non-revision stall path is untouched.
+                if (
+                    self._revision_force_submit_enabled
+                    and signals.in_planning_for_revision(events)
+                    and self._plan_nudges >= _REVISION_FORCE_SUBMIT_K
+                    and not signals.revision_force_submit(events)  # escalate once
+                ):
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.RUNNING,
+                            detail="force_submit_plan",
+                        )
+                    )
+                    await self._emit(
+                        MessageEvent(
+                            source=EventSource.ENVIRONMENT,
+                            message=LLMMessage(
+                                role="user", content=_FORCE_SUBMIT_DIRECTIVE
+                            ),
+                        )
+                    )
+                    self._plan_nudges = 0  # fresh runway for the forced-submit step
+                    return Disp.CONTINUE
+                self._plan_nudges += 1
+                await self._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=_PLAN_NUDGE),
+                    )
+                )
+                if await self._post_noop_valve() is Disp.HALT:
+                    return Disp.HALT
+                return Disp.CONTINUE
+            # tc is a tool call that is NEITHER submit_plan NOR no-tool prose.
+            # Only the planning allowlist may run before plan approval. That
+            # allowlist is DERIVED FROM THE SAME read-only-capability ∩ name
+            # intersection used for tool VISIBILITY (Driver.planning_allowed_tool_
+            # names ↔ tools_for_step), so the gate and the advertised tools can
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1628,1778p' packages/core/src/disco/core/loop/engine.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+        """Deny the pending action: record the denial (so the model sees it next
+        View) and resume to RUNNING without executing (§5).
+
+        The rejection is recorded as an `AgentErrorEvent` whose content is wrapped
+        in an implicit `<system-reminder>` — the action did not produce an error,
+        the human declined it. Paired with the proposed action's call_id so the
+        provider adapter sees a properly-correlated tool result."""
+        async with self._lock:
+            state = await self.get_state()
+            if state.execution_status != ConversationStatus.WAITING_FOR_CONFIRMATION:
+                return state
+            pending = (
+                await self._event_by_id(state.pending_action_id)
+                if state.pending_action_id
+                else None
+            )
+            call_id: str | None = None
+            if isinstance(pending, ActionEvent) and pending.tool_call:
+                call_id = pending.tool_call.call_id
+            reminder = (
+                "<system-reminder>\n"
+                f"The user reviewed the proposed action and did not approve it "
+                f"({reason}). The action was NOT executed. Pick a different "
+                "approach.\n"
+                "</system-reminder>"
+            )
+            await self._emit(
+                AgentErrorEvent(
+                    error=reminder,
+                    action_id=state.pending_action_id,
+                    tool_call_id=call_id,
+                )
+            )
+            await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
+        return await self.get_state()
+
+    async def _arm_dod_from_plan(self) -> None:
+        """C1c WIRING — on plan approval, arm the (previously dark) Definition-of-Done
+        finish gate from the plan's OWN committed, machine-checkable `file_exists`
+        done_conditions, so `finish` is blocked until the deliverables the model said it
+        would create actually exist. This closes "declare a step then skip it" by
+        construction (the strongest anti-gaming the agentic-builder literature found that
+        needs no human — Devin/Kiro/Terminal-Bench all anchor 'done' to externally-checkable
+        state, never to the model's free-text self-assessment).
+
+        Scoped deliberately for a SAFE first slice:
+          * file_exists ONLY. command/http_ok carry infra-false-block ambiguity (a gated
+            command or a probe timeout reads as FAIL) — deferred until the evaluator grows an
+            explicit infra-vs-task channel.
+          * Empty-guard: no file_exists predicate ⇒ DO NOT set a spec. An empty spec makes the
+            evaluator return passed=False (a deterministic block loop), so a plan that declared
+            no checkable deliverable must leave the gate dark, not armed-and-failing.
+          * Write-once (by store design): the FIRST approved plan captures the DoD; a later
+            revision's re-arm raises DoDSpecAlreadySet and is swallowed. Extending the DoD with
+            steer-added scope is a separate MONOTONIC slice (may only ADD predicates, never
+            weaken) — not done here, so we never let a revision relax its own acceptance gate.
+        Only the build loop reaches this (PLANNING + submit_plan); research/chat loops never
+        approve a plan, so the gate stays inert for them."""
+        # Read the predicates off the PERSISTED PlanEvent (resume-durable), NOT the
+        # in-memory `_plan_step_predicates` map: a restart between submit_plan and approval
+        # loses the map, but the PlanEvent — with `done_condition` now persisted on each
+        # step — survives, so the gate still arms after a crash (codex backstop P1).
+        from ..view import _latest_plan
+
+        events = await self._events()
+        plan = _latest_plan(events)
+        if plan is None or not getattr(plan, "steps", None):
+            return
+        # v1 armed file_exists only; v2.1 includes command + http_ok now that the evaluator
+        # has an infra-vs-task channel (a denied command / unprobeable server RELEASES the
+        # gate instead of false-blocking — only a command that RAN-and-failed or a server
+        # that SERVED-the-wrong-status blocks). file_exists stays the deterministic anchor;
+        # command/http_ok add real build/test + runtime-serve verification.
+        _GATEABLE_KINDS = ("file_exists", "command", "http_ok")
+        # Narrow via a local (pyright cannot narrow through getattr) so the list is
+        # typed list[DoDPredicate], not list[DoDPredicate | None]. (pre-existing
+        # reportAssignmentType, fixed while touching this file for CXT-6.)
+        file_preds: list[DoDPredicate] = []
+        for s in plan.steps:
+            dc = getattr(s, "done_condition", None)
+            if dc is not None and getattr(dc, "kind", None) in _GATEABLE_KINDS:
+                file_preds.append(dc)
+        if not file_preds:
+            return
+        try:
+            # replace_dod_spec = write-once BOOTSTRAP on the first arm + MONOTONIC
+            # extension on a revision: a steer that ADDS scope (e.g. "also add a
+            # Contact page") tightens the bar to require contact.html; a revision that
+            # would DROP a committed deliverable (without an explicit rename) is
+            # rejected store-side and the existing, stronger bar holds.
+            await self.store.replace_dod_spec(
+                self.conversation_id,
+                DoDSpec(predicates=file_preds),
+                actor="system:plan_approval",
+            )
+        except DoDSpecAlreadySet:
+            # The revised plan would WEAKEN the DoD (a committed deliverable was
+            # dropped without an explicit rename). Keep the stronger existing bar —
+            # the model cannot relax its own acceptance criteria mid-build.
+            _LOG.warning(
+                "DoD revision for %s rejected as a weakening; existing acceptance "
+                "bar preserved.",
+                self.conversation_id,
+            )
+
+    async def approve_plan(self) -> ConversationState:
+        """Approve the pending plan: flip into execution mode (full tools restored)
+        and resume to RUNNING. The caller then re-runs the loop. The per-action
+        risk gate still governs the build that follows (defense in depth)."""
+        async with self._lock:
+            state = await self.get_state()
+            if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
+                return state
+            self.mode = self._execution_mode
+            await self._emit(
+                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+            )
+            await self._arm_dod_from_plan()
+            await self._seed_todo_from_plan()
+        return await self.get_state()
+
+    async def _seed_todo_from_plan(self) -> None:
+        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+        execution memory. Best-effort: a seeding error never blocks approval. A
+        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+        minor in-build updates are the agent's via the context_memory tool."""
+        sbx = getattr(self.executor, "sandbox", None)
+        if sbx is None:
+            return
+        try:
+            from ..context import ArtifactMemoryStore
+            from ..view import _latest_plan
+            from .context_builder import render_plan_as_todo_markdown
+
+            plan = _latest_plan(await self._events())
+            if plan is None or not getattr(plan, "steps", None):
+                return
+            await ArtifactMemoryStore(sbx).seed_todo(render_plan_as_todo_markdown(plan))
+        except Exception:
+            _LOG.warning(
+                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+            )
+
+    async def pick_alternative(self, option_id: str) -> ConversationState:
+        """Resume from AWAITING_USER_DECISION by selecting one of the agent's
+        proposed alternatives. Pulls the option's ToolCall, synthesizes an
+        ActionEvent under EventSource.AGENT (the loop "speaks for" the agent
+        here — the option WAS the agent's own proposal, the user is just
+        choosing which one), and transitions to RUNNING. The loop's next
+        iteration sees the dangling ActionEvent and executes it via the normal
+        _execute_and_observe path (including the risk gate).
+
+codex
+I’ve confirmed the new approval/seed path exists and reads cleanly. I’ll quickly check the memory store path (`seed_todo`) for path semantics and any blocking/error behavior so the best-effort claim and “no false affordance” checks are fully grounded.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "class ArtifactMemoryStore|def seed_todo|TODO_PATH|todo.md|context/todo" packages/core/src/disco/core/context.py packages/core/src/disco/core | head -n 40' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+rg: packages/core/src/disco/core/context.py: No such file or directory (os error 2)
+packages/core/src/disco/core/context/store.py:91:class ArtifactMemoryStore:
+packages/core/src/disco/core/context/store.py:142:    async def seed_todo(self, markdown: str) -> ArtifactMemoryRef:
+packages/core/src/disco/core/context/pack.py:7:``todo.md`` and assembles the final prompt lands in CXT-2/CXT-4.
+packages/core/src/disco/core/loop/engine.py:1750:        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+packages/core/src/disco/core/loop/engine.py:1752:        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+packages/core/src/disco/core/loop/engine.py:1768:                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+packages/core/src/disco/core/loop/context_builder.py:89:    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+packages/core/src/disco/core/loop/context_builder.py:90:    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,240p' packages/core/src/disco/core/context/store.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""ArtifactMemoryStore — file-backed durable context under ``.disco/context/``.
+
+Survives transcript truncation / conversation replay: writes the run's structured
+context to a small set of canonical files and reconstructs a ContextLedger from
+them without replaying the chat. Pure of tool/runtime/Sandbox imports — it talks
+to a minimal ``WorkspaceFS`` protocol that the real Sandbox already satisfies.
+
+MISSING vs CORRUPT (the durability contract):
+  • a file the FS refuses to read (absent) → SAFE DEFAULT (None / empty), no error;
+  • a file that is PRESENT but unparseable → ``ContextRecoveryError`` on the direct
+    read path, captured as a ``RecoveryNote`` (with safe default) in ``reconstruct``.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
+from .artifact_memory import ArtifactMemoryKind, ArtifactMemoryRef
+from .ledger import ContextLedger, DirectEditRef, ResourceRef, VerifierFailureRef
+from .source_priority import SourcePriority
+
+# --- Durable kind matrix (codified so it cannot silently drift) ----------------
+# 9 durable SINGLETONS (exactly one canonical file each). SUMMARY is intentionally
+# NOT here: it is a multi-instance, on-demand kind (per-resolved-range summaries
+# created in CXT-3, referenced by ArtifactMemoryRef.rel_path).
+_MD_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
+    {
+        ArtifactMemoryKind.GOAL,
+        ArtifactMemoryKind.TODO,
+        ArtifactMemoryKind.DECISIONS,
+        ArtifactMemoryKind.ASSUMPTIONS,
+    }
+)
+_JSON_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
+    {
+        ArtifactMemoryKind.RESOURCE_MANIFEST,
+        ArtifactMemoryKind.DIRECT_EDITS,
+        ArtifactMemoryKind.UNRESOLVED_COMMENTS,
+        ArtifactMemoryKind.SOURCE_PRIORITY,
+        ArtifactMemoryKind.VERIFIER_FAILURES,
+    }
+)
+_SINGLETON_KINDS: frozenset[ArtifactMemoryKind] = _MD_KINDS | _JSON_KINDS
+
+_RESOURCE_ADAPTER = TypeAdapter(list[ResourceRef])
+_DIRECT_EDIT_ADAPTER = TypeAdapter(list[DirectEditRef])
+_FAILURE_ADAPTER = TypeAdapter(list[VerifierFailureRef])
+_COMMENTS_ADAPTER = TypeAdapter(list[str])
+
+
+@runtime_checkable
+class WorkspaceFS(Protocol):
+    """The minimal async filesystem the store needs (Sandbox satisfies it)."""
+
+    async def read_file(self, path: str) -> bytes: ...
+    async def write_file(self, path: str, data: bytes) -> None: ...
+
+
+class ContextRecoveryError(Exception):
+    """A durable context file is present but could not be parsed."""
+
+    def __init__(self, kind: ArtifactMemoryKind, rel_path: str, detail: str) -> None:
+        self.kind = kind
+        self.rel_path = rel_path
+        self.detail = detail
+        super().__init__(f"{kind.value} @ {rel_path}: {detail}")
+
+
+class RecoveryNote(BaseModel):
+    """A non-fatal recovery record produced when reconstruct() hits a corrupt file."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: ArtifactMemoryKind
+    rel_path: str
+    detail: str
+
+
+class ReconstructResult(BaseModel):
+    """The reconstructed ledger plus any recovery notes for corrupt files."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ledger: ContextLedger
+    recovery_errors: tuple[RecoveryNote, ...] = ()
+
+
+class ArtifactMemoryStore:
+    """Reads/writes the durable ``.disco/context/*`` files over a WorkspaceFS."""
+
+    def __init__(self, fs: WorkspaceFS, *, base: str = ".disco/context") -> None:
+        self._fs = fs
+        self._base = base.rstrip("/")
+
+    # --- paths -----------------------------------------------------------------
+    def path_for(self, kind: ArtifactMemoryKind) -> str:
+        if kind not in _SINGLETON_KINDS:
+            raise ValueError(f"{kind.value} is not a durable singleton kind")
+        ext = "md" if kind in _MD_KINDS else "json"
+        return f"{self._base}/{kind.value}.{ext}"
+
+    @staticmethod
+    def _ref(kind: ArtifactMemoryKind, rel_path: str) -> ArtifactMemoryRef:
+        return ArtifactMemoryRef(kind=kind, rel_path=rel_path)
+
+    # --- low-level read --------------------------------------------------------
+    async def _read_opt(self, path: str) -> bytes | None:
+        """Return file bytes, or None if the file is absent/unreadable (the FS
+        raises on a missing path; that is treated as 'absent' → safe default)."""
+        try:
+            return await self._fs.read_file(path)
+        except Exception:
+            return None
+
+    # --- markdown (narrative) kinds -------------------------------------------
+    async def write_markdown(self, kind: ArtifactMemoryKind, text: str) -> ArtifactMemoryRef:
+        if kind not in _MD_KINDS:
+            raise ValueError(f"{kind.value} is not a markdown kind")
+        path = self.path_for(kind)
+        body = text if text.endswith("\n") else text + "\n"
+        await self._fs.write_file(path, body.encode("utf-8"))
+        return self._ref(kind, path)
+
+    async def read_markdown(self, kind: ArtifactMemoryKind) -> str | None:
+        if kind not in _MD_KINDS:
+            raise ValueError(f"{kind.value} is not a markdown kind")
+        data = await self._read_opt(self.path_for(kind))
+        if data is None:
+            return None
+        text = data.decode("utf-8", errors="replace").rstrip("\n")
+        return text or None
+
+    async def write_goal(self, text: str) -> ArtifactMemoryRef:
+        return await self.write_markdown(ArtifactMemoryKind.GOAL, text)
+
+    async def read_goal(self) -> str | None:
+        return await self.read_markdown(ArtifactMemoryKind.GOAL)
+
+    async def seed_todo(self, markdown: str) -> ArtifactMemoryRef:
+        return await self.write_markdown(ArtifactMemoryKind.TODO, markdown)
+
+    async def read_todo(self) -> str | None:
+        return await self.read_markdown(ArtifactMemoryKind.TODO)
+
+    # --- json (structured) kinds ----------------------------------------------
+    async def _write_json(self, kind: ArtifactMemoryKind, payload: object) -> ArtifactMemoryRef:
+        path = self.path_for(kind)
+        body = json.dumps(payload, indent=2) + "\n"
+        await self._fs.write_file(path, body.encode("utf-8"))
+        return self._ref(kind, path)
+
+    async def read_json_raw(self, kind: ArtifactMemoryKind) -> object | None:
+        """Parsed JSON, None if absent, ContextRecoveryError if present-but-corrupt."""
+        if kind not in _JSON_KINDS:
+            raise ValueError(f"{kind.value} is not a json kind")
+        path = self.path_for(kind)
+        data = await self._read_opt(path)
+        if data is None:
+            return None
+        try:
+            return json.loads(data)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ContextRecoveryError(kind, path, f"invalid JSON: {exc}") from exc
+
+    async def record_resources(self, resources: tuple[ResourceRef, ...]) -> ArtifactMemoryRef:
+        return await self._write_json(
+            ArtifactMemoryKind.RESOURCE_MANIFEST, [r.model_dump(mode="json") for r in resources]
+        )
+
+    async def read_resources(self) -> tuple[ResourceRef, ...]:
+        raw = await self.read_json_raw(ArtifactMemoryKind.RESOURCE_MANIFEST)
+        if raw is None:
+            return ()
+        try:
+            return tuple(_RESOURCE_ADAPTER.validate_python(raw))
+        except ValidationError as exc:
+            raise ContextRecoveryError(
+                ArtifactMemoryKind.RESOURCE_MANIFEST,
+                self.path_for(ArtifactMemoryKind.RESOURCE_MANIFEST),
+                f"schema mismatch: {exc}",
+            ) from exc
+
+    async def record_direct_edits(self, edits: tuple[DirectEditRef, ...]) -> ArtifactMemoryRef:
+        return await self._write_json(
+            ArtifactMemoryKind.DIRECT_EDITS, [e.model_dump(mode="json") for e in edits]
+        )
+
+    async def read_direct_edits(self) -> tuple[DirectEditRef, ...]:
+        raw = await self.read_json_raw(ArtifactMemoryKind.DIRECT_EDITS)
+        if raw is None:
+            return ()
+        try:
+            return tuple(_DIRECT_EDIT_ADAPTER.validate_python(raw))
+        except ValidationError as exc:
+            raise ContextRecoveryError(
+                ArtifactMemoryKind.DIRECT_EDITS,
+                self.path_for(ArtifactMemoryKind.DIRECT_EDITS),
+                f"schema mismatch: {exc}",
+            ) from exc
+
+    async def record_verifier_failures(self, failures: tuple[VerifierFailureRef, ...]) -> ArtifactMemoryRef:
+        return await self._write_json(
+            ArtifactMemoryKind.VERIFIER_FAILURES, [f.model_dump(mode="json") for f in failures]
+        )
+
+    async def read_verifier_failures(self) -> tuple[VerifierFailureRef, ...]:
+        raw = await self.read_json_raw(ArtifactMemoryKind.VERIFIER_FAILURES)
+        if raw is None:
+            return ()
+        try:
+            return tuple(_FAILURE_ADAPTER.validate_python(raw))
+        except ValidationError as exc:
+            raise ContextRecoveryError(
+                ArtifactMemoryKind.VERIFIER_FAILURES,
+                self.path_for(ArtifactMemoryKind.VERIFIER_FAILURES),
+                f"schema mismatch: {exc}",
+            ) from exc
+
+    async def record_comments(self, comments: tuple[str, ...]) -> ArtifactMemoryRef:
+        return await self._write_json(ArtifactMemoryKind.UNRESOLVED_COMMENTS, list(comments))
+
+    async def read_comments(self) -> tuple[str, ...]:
+        raw = await self.read_json_raw(ArtifactMemoryKind.UNRESOLVED_COMMENTS)
+        if raw is None:
+            return ()
+        try:
+            return tuple(_COMMENTS_ADAPTER.validate_python(raw))
+        except ValidationError as exc:
+            raise ContextRecoveryError(
+                ArtifactMemoryKind.UNRESOLVED_COMMENTS,
+                self.path_for(ArtifactMemoryKind.UNRESOLVED_COMMENTS),
+                f"schema mismatch: {exc}",
+            ) from exc
+
+    async def write_source_priority(self, sp: SourcePriority) -> ArtifactMemoryRef:
+        return await self._write_json(ArtifactMemoryKind.SOURCE_PRIORITY, sp.model_dump(mode="json"))
+
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"def update_plan_progress|todo\" packages/core/src/disco/core/loop -g'*.py' | head -n 80; echo '---'; sed -n '1,240p' packages/core/src/disco/core/loop/recitation.py; echo '---'; rg -n \"update_plan_progress|todo.md|context/todo\" packages/core/src/disco/core -g'*.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/loop/engine.py:1746:            await self._seed_todo_from_plan()
+packages/core/src/disco/core/loop/engine.py:1749:    async def _seed_todo_from_plan(self) -> None:
+packages/core/src/disco/core/loop/engine.py:1750:        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+packages/core/src/disco/core/loop/engine.py:1752:        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+packages/core/src/disco/core/loop/engine.py:1760:            from .context_builder import render_plan_as_todo_markdown
+packages/core/src/disco/core/loop/engine.py:1765:            await ArtifactMemoryStore(sbx).seed_todo(render_plan_as_todo_markdown(plan))
+packages/core/src/disco/core/loop/engine.py:1768:                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+packages/core/src/disco/core/loop/context_builder.py:50:    todo_text: str | None = None,
+packages/core/src/disco/core/loop/context_builder.py:84:        merged, policy=policy, todo_text=todo_text, allowed_next_actions=allowed_next_actions
+packages/core/src/disco/core/loop/context_builder.py:88:def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
+packages/core/src/disco/core/loop/context_builder.py:89:    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+packages/core/src/disco/core/loop/context_builder.py:90:    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+packages/core/src/disco/core/loop/context_builder.py:124:    if pack.current_todo:
+packages/core/src/disco/core/loop/context_builder.py:125:        sections[SourceKind.TODO] = ["Todo:", pack.current_todo]
+---
+"""Recitation cadence (C6) + scheduled re-grounding (HS-03) + MEMORY write-through.
+
+Extracted from engine.py as a stateful collaborator: `RecitationRegrounder`
+holds a back-reference to its `AgentLoop` and reads/writes the loop's cadence
+counters (`_recitation_*`, `_hs03_reground_*`) and emits through the loop's
+primitives. Method bodies are byte-identical to the former AgentLoop methods,
+with `self.` mechanically rewritten to `self._loop.`.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from ..events import (
+    Event,
+    EventSource,
+    KnowledgeEvent,
+    MessageEvent,
+)
+from ..llm import OperatingMode
+from ..view import View, effective_plan_progress
+from . import signals
+from .messages import _hs03_reground_message, _latest_user_instruction
+
+if TYPE_CHECKING:
+    from .boundaries import Sandbox
+    from .engine import AgentLoop
+
+# The view.py tag for the tail recitation. We look at the last rendered
+# message to decide whether to keep it — if it starts with this sentinel it
+# IS the recap, otherwise there is no plan to recite yet (no recap to gate).
+_RECITATION_SENTINEL = "<current-objective>"
+
+
+class RecitationRegrounder:
+    def __init__(self, loop: AgentLoop) -> None:
+        self._loop = loop
+
+    def recitation_signature(self, events: list[Event]) -> str | None:
+        """C6 — stable signature of (latest plan + effective checklist), the
+        inputs the view.py tail-recap renders. None iff there is no plan to
+        recite (a re-plan or a pre-plan run has no signature).
+
+        Mirrors view.py:_recitation_message's accounting exactly: the MERGED
+        per-step state (plan_step + update_plan_progress, via
+        effective_plan_progress), split into done vs active (the recap's
+        "✓" / "→" / "□" markers). Any change in plan.summary, plan.steps, or the
+        done/active set flips the signature → DRIFT fires the next
+        materialization (once).
+
+        Returned as a string (not bytes) so the comparison in
+        `_should_emit_recitation` is cheap and order-insensitive (sorted
+        tuples). Hashing is unnecessary — the content is short and we
+        never re-hash for any other purpose.
+        """
+        # Shared truth-source — done/active from BOTH plan_step AND update_plan_progress,
+        # so the signature DRIFTS when a capable model marks progress declaratively. If
+        # this stayed plan_step-only while view.py reads the merged state, an
+        # update_plan_progress change would render once then get dropped as "no drift".
+        plan, states = effective_plan_progress(events)
+        if plan is None or not plan.steps:
+            return None
+        done = sorted(i for i, st in states.items() if st == "done")
+        active = sorted(i for i, st in states.items() if st == "active")
+        steps_t = tuple((s.title, s.detail) for s in plan.steps)
+        return (
+            f"plan:{plan.id}:{plan.revision}:{plan.summary}|"
+            f"steps:{steps_t}|"
+            f"done:{done}|active:{active}"
+        )
+
+    def should_emit_recitation(self, events: list[Event]) -> bool:
+        """C6 — return True iff the view.py tail-recap should be appended on
+        THIS step. Pure predicate (no mutation, no logging); the side
+        effects (signature update, step counter increment) live in
+        `_materialize_view` so a test can call this in isolation.
+
+        Fires when ANY of:
+        - The plan is new or has changed since the last recap (DRIFT). The
+          first eligible step ALWAYS drifts (signature is None).
+        - The current step is a cadence boundary. The step counter is
+          1-indexed by the time we get here (incremented in
+          `_materialize_view`); the smolagents math is
+          `(step_number - 1) % interval == 0` → fires on steps 1, 1+N,
+          1+2N, … (the first step is always a boundary, regardless of
+          cadence value).
+        Returns False when no plan exists yet (view.py already returns
+        None for the recap; nothing to gate) or when neither signal
+        fires (drop the message — the model still sees the underlying
+        PlanEvent + plan_step ActionEvents in the prior messages).
+        """
+        sig = self._loop._recitation_signature(events)
+        if sig is None:
+            return False
+        on_cadence = ((self._loop._recitation_step_count - 1) % self._loop._recitation_cadence) == 0
+        drift = sig != self._loop._recitation_last_signature
+        return on_cadence or drift
+
+    def gate_recitation(self, view: View, events: list[Event]) -> View:
+        """C6 — drop the tail-recap message unless this step is a cadence
+        boundary or the plan/checklist has drifted. The recap CONTENT is
+        unchanged (the underlying PlanEvent + plan_step actions remain
+        visible earlier in the messages list, so the model never loses
+        the goal — just the redundant every-step re-render). No new
+        steering text is added; this is a passive recap cadence, not a
+        steer (no-automatic-nudge invariant c97c1b3).
+        """
+        # C6: count the step (0-indexed) — one increment per materialize
+        # call, regardless of whether a re-projection happened inside
+        # (e.g. after a condensation). That keeps the cadence tied to
+        # MODEL TURNS, not View re-materializations.
+        self._loop._recitation_step_count += 1
+        if not (
+            view.messages and view.messages[-1].content.startswith(_RECITATION_SENTINEL)
+        ):
+            # No tail recap in the rendered View (no plan yet) — nothing
+            # to gate. Don't touch the signature: the next step with a
+            # plan will drift on signature != None.
+            return view
+        if self._loop._should_emit_recitation(events):
+            # The View already has a tail-recap; the gate fired (cadence
+            # boundary or drift). Record the signature so the NEXT step
+            # can detect drift.
+            self._loop._recitation_last_signature = self._loop._recitation_signature(events)
+            return view
+        # Gate fires: drop the tail-recap. The model still has the
+        # PlanEvent + plan_step events in the prior messages list, so
+        # the plan info is not lost — just not redundantly re-rendered.
+        return view.model_copy(update={"messages": view.messages[:-1]})
+
+    def should_emit_reground(self, events: list[Event]) -> bool:
+        """HS-03 — pure predicate: should this step emit the re-ground
+        recap? Fires when EITHER of:
+          * POST-RESUME: this is the first eligible step of a fresh run
+            segment (actions_since_last_resume == 0) AND the post-resume
+            one-shot has not already fired. Mirrors the F4 _bootstrap_emitted
+            shape, but is reset on every run() so a resume gets a fresh
+            one-shot (the brief is explicit: "ONCE immediately after a
+            restart/resume"). The recap is anchored to the fresh
+            post-resume state so a model that lost context across the
+            pause re-anchors.
+          * CADENCE: the current action count is a multiple of
+            `self._hs03_reground_cadence` (default
+            `_HS03_REGROUND_INTERVAL` = 12; tests inject a smaller
+            value) AND we did not already emit at this exact boundary.
+            The per-boundary guard
+            (`_hs03_reground_last_action_count`) prevents re-firing on
+            consecutive steps at the same boundary — e.g. two steps
+            in a row both seeing count==12 (a noop interleaved) would
+            otherwise emit twice. Only actions since the last resume
+            count toward cadence (the brief's wording); a long-running
+            session that survives a resume restarts the count.
+
+        Pure predicate: no emission, no side effects on the store. The
+        caller is responsible for the actual emit and for updating the
+        flags. Returns False when assist is OFF (caller does not need to
+        check `self._assist` — this is the gate; the closed-end-to-end
+        guarantee lives here), or when the brief's preconditions
+        aren't met (no plan yet, no boundary yet, already-fired).
+
+        A no-plan conversation returns False even when the gate
+        conditions match: there is no goal to anchor to. The recap is
+        a re-ground on the existing plan, not a free-floating
+        "remember what we're doing" prompt.
+        """
+        if not self._loop._assist:
+            return False  # closed end-to-end — capable-model default is byte-identical
+        if _hs03_reground_message(events) is None:
+            return False  # no plan → nothing to recap
+        actions = signals.actions_since_last_resume(events)
+        if actions == 0 and not self._loop._hs03_reground_post_resume_emitted:
+            return True  # first eligible step of a fresh segment
+        if actions > 0 and (actions % self._loop._hs03_reground_cadence) == 0:
+            # Per-boundary guard: don't re-emit at the same boundary
+            # on two consecutive steps. The first time we see a
+            # boundary we emit; subsequent steps at the same count
+            # are silent.
+            return actions != self._loop._hs03_reground_last_action_count
+        return False
+
+    async def maybe_emit_reground(self, events: list[Event]) -> list[Event]:
+        """HS-03 — gate, build, emit. Returns the (possibly refreshed)
+        event list: when an emit fires, the caller should re-poll
+        `self._events()` so the materialize step on the same turn
+        sees the recap in the View. Mirrors the F4 bootstrap idiom
+        (emit + `events = await self._events()`).
+
+        Assist OFF → no-op, the input list is returned unchanged. The
+        gate is closed at `_should_emit_reground`; this method is a
+        thin wrapper that handles the emit + flag update + event-list
+        refresh so the run() call site stays one line.
+
+        Why a MessageEvent (not a separate RecapEvent): the existing
+        `MessageEvent` with `source=ENVIRONMENT` + role=user is the
+        contract for harness-injected system-reminders across F4
+        (bootstrap), F8 (file-write args), C7 (stuck escape), and the
+        actionless-valve. A new event type would be a new contract;
+        the sentinel-tagged body is enough to identify the recap in
+        tests + in the View.
+
+        Why a fresh MessageEvent (not a View-side append like C6): C6
+        drops a recap the View ALREADY rendered (the tail-recap is
+        built into view.py:_recitation_message and gated at materialize
+        time). HS-03 needs a recap that is independent of the View's
+        current render — it must persist to the event log so a future
+        View materialization includes it, and so tests can assert the
+        emit happened (the persisted event IS the test's evidence).
+        """
+        if not self._loop._should_emit_reground(events):
+            return events
+        # (B2/B6) While RE-planning (mode flipped back to PLANNING after a build),
+        # anchor the recap to the LATEST user instruction, not the old plan's
+        # GOAL — re-injecting the original build goal reinforces "execute the old
+        # plan" and the model never proposes a revision. Execution mode is
+        # unchanged (no override → the plan summary stays the GOAL).
+        goal_override: str | None = None
+        if self._loop.mode == OperatingMode.PLANNING:
+            goal_override = _latest_user_instruction(events)
+        recap = _hs03_reground_message(events, goal_override=goal_override)
+        if recap is None:  # defensive: the predicate already checked
+            return events
+        # _actions_since_last_resume is computed again to keep the
+        # per-boundary flag precise (the predicate saw the same
+        # number; storing it here is the single point of truth).
+        actions = signals.actions_since_last_resume(events)
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=recap,
+            )
+        )
+        if actions == 0:
+            # Post-resume one-shot fired. Mark so subsequent steps
+            # with actions == 0 (e.g. a tool-less first turn) don't
+            # re-emit. Cadence still applies once actions > 0.
+            self._loop._hs03_reground_post_resume_emitted = True
+        # Record the boundary we just emitted at. Even on the
+        # post-resume one-shot we record (at count 0) so a step that
+        # somehow also hit the cadence condition (count % N == 0
+        # trivially when count is 0) doesn't double-fire — though
+---
+packages/core/src/disco/core/context/pack.py:7:``todo.md`` and assembles the final prompt lands in CXT-2/CXT-4.
+packages/core/src/disco/core/view.py:189:    `update_plan_progress({steps:[{index,state}...]})` full-state snapshots (capable
+packages/core/src/disco/core/view.py:192:    Why this exists: capable models report progress ONLY via update_plan_progress; the
+packages/core/src/disco/core/view.py:202:    `update_plan_progress` applies the states it LISTS; indices a snapshot omits RETAIN
+packages/core/src/disco/core/view.py:240:        elif name == "update_plan_progress":
+packages/core/src/disco/core/view.py:283:    # Merged truth-source (plan_step + update_plan_progress) so the tail recap reflects a
+packages/core/src/disco/core/security/analyzers.py:175:    # `update_plan_progress` only report capstone progress. Pin them LOW so a progress
+packages/core/src/disco/core/security/analyzers.py:177:    _META_TOOLS = frozenset({"submit_plan", "plan_step", "update_plan_progress"})
+packages/core/src/disco/core/loop/engine.py:1750:        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+packages/core/src/disco/core/loop/engine.py:1752:        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+packages/core/src/disco/core/loop/engine.py:1768:                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+packages/core/src/disco/core/loop/context_builder.py:89:    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+packages/core/src/disco/core/loop/context_builder.py:90:    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+packages/core/src/disco/core/loop/turn_control.py:288:            # declarative update_plan_progress) + spamming notify_user must NOT
+packages/core/src/disco/core/loop/stuck.py:75:    {"submit_plan", "propose_plan_update", "plan_step", "update_plan_progress", "finish"}
+packages/core/src/disco/core/loop/stuck.py:373:        # EXCEPTION: a NONCRITICAL declarative bookkeeping tool (update_plan_progress,
+packages/core/src/disco/core/loop/signals.py:36:    {"submit_plan", "propose_plan_update", "plan_step", "update_plan_progress", "finish"}
+packages/core/src/disco/core/loop/signals.py:50:        "update_plan_progress",  # declarative progress snapshot — pure UI signal, no work
+packages/core/src/disco/core/loop/signals.py:113:# circuit-breaker streak. `update_plan_progress` UPDATES the plan tracker but performs
+packages/core/src/disco/core/loop/signals.py:119:_NONCRITICAL_FAILURE_TOOLS = frozenset({"update_plan_progress"})
+packages/core/src/disco/core/loop/signals.py:283:    update_plan_progress — see `effective_plan_progress`) is "done". If there's no plan,
+packages/core/src/disco/core/loop/signals.py:545:    plan_step/update_plan_progress bookkeeping). Used to keep the actionless valve's
+packages/core/src/disco/core/loop/signals.py:548:    otherwise FINISH an empty workspace (the `update_plan_progress` path made this
+packages/core/src/disco/core/loop/signals.py:581:        OR update_plan_progress)
+packages/core/src/disco/core/loop/signals.py:598:    last_tracker_seq = -1  # last plan_step OR update_plan_progress (either tracker)
+packages/core/src/disco/core/loop/signals.py:606:            if name in ("plan_step", "update_plan_progress"):
+packages/core/src/disco/core/loop/signals.py:620:    # Done-count from BOTH channels (a capable model tracks via update_plan_progress —
+packages/core/src/disco/core/loop/recitation.py:45:        per-step state (plan_step + update_plan_progress, via
+packages/core/src/disco/core/loop/recitation.py:56:        # Shared truth-source — done/active from BOTH plan_step AND update_plan_progress,
+packages/core/src/disco/core/loop/recitation.py:59:        # update_plan_progress change would render once then get dropped as "no drift".
+packages/core/src/disco/core/loop/plan_conditions.py:44:          * `update_plan_progress({steps:[...]})` — the declarative full-state snapshot
+packages/core/src/disco/core/loop/plan_conditions.py:62:        if tc is None or tc.tool_name not in ("plan_step", "update_plan_progress"):
+packages/core/src/disco/core/loop/plan_conditions.py:86:        else:  # update_plan_progress — only steps that transitioned to done now
+packages/core/src/disco/core/loop/messages.py:225:    # (plan_step + update_plan_progress, see effective_plan_progress), FACTS ONLY —
+packages/core/src/disco/core/loop/finish.py:1998:            # models only, via the declarative update_plan_progress tool) is
+packages/core/src/disco/core/llm/prompts.py:226:    "SHOW PROGRESS. As you work, call `update_plan_progress` to report where you are — "
+packages/core/src/disco/core/llm/prompts.py:463:# tiers (it caused plan-state drift; the declarative `update_plan_progress` replaced
+packages/core/src/disco/core/llm/prompts.py:466:# update_plan_progress is not mentioned in any planning block either, so no per-tier
+packages/core/src/disco/core/llm/prompts.py:474:    via the declarative `update_plan_progress`). Every other role/mode defers to a
+packages/core/src/disco/core/llm/exec_policy.py:52:          • weak tier → ALSO withhold `update_plan_progress` (weak models get the honest
+packages/core/src/disco/core/llm/exec_policy.py:57:        ALL models (capable and small alike). The declarative `update_plan_progress`
+packages/core/src/disco/core/llm/exec_policy.py:60:        `plan_step` and `update_plan_progress` and picked between them inconsistently. The
+packages/core/src/disco/core/llm/exec_policy.py:71:            out.add("update_plan_progress")
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba packages/core/src/disco/core/loop/context_builder.py | sed -n '72,150p'; echo '---'; nl -ba packages/core/src/disco/core/loop/engine.py | sed -n '1660,1790p'; echo '---'; nl -ba packages/core/tests/test_todo_memory.py | sed -n '1,220p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+    72	    merged = led.model_copy(
+    73	        update={
+    74	            "active_goal": goal,
+    75	            "current_version": version,
+    76	            "resolved_ranges": resolved,
+    77	            "retained_refs": (*led.retained_refs, *extra_refs),
+    78	            "latest_verifier_failures": (
+    79	                failures if failures is not None else led.latest_verifier_failures
+    80	            ),
+    81	        }
+    82	    )
+    83	    return ContextPack.from_ledger(
+    84	        merged, policy=policy, todo_text=todo_text, allowed_next_actions=allowed_next_actions
+    85	    )
+    86	
+    87	
+    88	def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
+    89	    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+    90	    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+    91	    execution memory the agent reads/updates (via context_memory) as it works."""
+    92	    lines: list[str] = [f"# {plan.summary}"]
+    93	    context = (plan.context or "").strip()
+    94	    if context:
+    95	        lines += ["", context]
+    96	    lines += ["", "## Steps"]
+    97	    for i, step in enumerate(plan.steps, start=1):
+    98	        lines.append(f"- [ ] {i}. {step.title}")
+    99	        detail = (getattr(step, "detail", "") or "").strip()
+   100	        if detail:
+   101	            lines.append(f"  {detail}")
+   102	    return "\n".join(lines) + "\n"
+   103	
+   104	
+   105	def _failure_line(f: VerifierFailureRef) -> str:
+   106	    loc = f" ({f.rel_path})" if f.rel_path else ""
+   107	    return f"- [{f.severity.value}] {f.kind}: {f.message}{loc}"
+   108	
+   109	
+   110	def render_context_pack(pack: ContextPack, *, priority: SourcePriority | None = None) -> str:
+   111	    """Render the pack as a deterministic, byte-stable `<context-pack>` block.
+   112	
+   113	    Sections are emitted in SourcePriority order; empty sections are omitted. No
+   114	    event history / raw tool chatter — only the structured anchors. Stable across
+   115	    turns for identical input (KV-cache-friendly prefix)."""
+   116	    order = (priority or SourcePriority.default()).order
+   117	    sections: dict[SourceKind, list[str]] = {}
+   118	
+   119	    if pack.active_goal:
+   120	        head = f"Goal (v{pack.current_version}): {pack.active_goal}"
+   121	        sections[SourceKind.GOAL] = [head]
+   122	    if pack.active_contract:
+   123	        sections[SourceKind.CONTRACT] = [f"Contract: {pack.active_contract}"]
+   124	    if pack.current_todo:
+   125	        sections[SourceKind.TODO] = ["Todo:", pack.current_todo]
+   126	    if pack.latest_failures:
+   127	        sections[SourceKind.VERIFIER_FAILURE] = [
+   128	            "Unresolved verifier failures:",
+   129	            *[_failure_line(f) for f in pack.latest_failures],
+   130	        ]
+   131	    if pack.direct_edits_summary:
+   132	        sections[SourceKind.DIRECT_EDIT] = [
+   133	            "User direct edits:",
+   134	            *[f"- {e.rel_path}: {e.kind.value}{(' — ' + e.summary) if e.summary else ''}" for e in pack.direct_edits_summary],
+   135	        ]
+   136	    if pack.unresolved_comments:
+   137	        sections[SourceKind.COMMENT] = [
+   138	            "Unresolved comments:",
+   139	            *[f"- {c}" for c in pack.unresolved_comments],
+   140	        ]
+   141	    if pack.resource_refs:
+   142	        sections[SourceKind.RESOURCE] = [
+   143	            "Resources:",
+   144	            *[f"- {r.rel_path}" for r in pack.resource_refs],
+   145	        ]
+   146	    if pack.recoverable_refs:
+   147	        sections[SourceKind.RECOVERABLE_REF] = [
+   148	            "Recoverable references (read on demand):",
+   149	            *[f"- {r.kind.value}: {r.rel_path}" for r in pack.recoverable_refs],
+   150	        ]
+---
+  1660	            )
+  1661	            await self._emit(StatusEvent(status=ConversationStatus.RUNNING))
+  1662	        return await self.get_state()
+  1663	
+  1664	    async def _arm_dod_from_plan(self) -> None:
+  1665	        """C1c WIRING — on plan approval, arm the (previously dark) Definition-of-Done
+  1666	        finish gate from the plan's OWN committed, machine-checkable `file_exists`
+  1667	        done_conditions, so `finish` is blocked until the deliverables the model said it
+  1668	        would create actually exist. This closes "declare a step then skip it" by
+  1669	        construction (the strongest anti-gaming the agentic-builder literature found that
+  1670	        needs no human — Devin/Kiro/Terminal-Bench all anchor 'done' to externally-checkable
+  1671	        state, never to the model's free-text self-assessment).
+  1672	
+  1673	        Scoped deliberately for a SAFE first slice:
+  1674	          * file_exists ONLY. command/http_ok carry infra-false-block ambiguity (a gated
+  1675	            command or a probe timeout reads as FAIL) — deferred until the evaluator grows an
+  1676	            explicit infra-vs-task channel.
+  1677	          * Empty-guard: no file_exists predicate ⇒ DO NOT set a spec. An empty spec makes the
+  1678	            evaluator return passed=False (a deterministic block loop), so a plan that declared
+  1679	            no checkable deliverable must leave the gate dark, not armed-and-failing.
+  1680	          * Write-once (by store design): the FIRST approved plan captures the DoD; a later
+  1681	            revision's re-arm raises DoDSpecAlreadySet and is swallowed. Extending the DoD with
+  1682	            steer-added scope is a separate MONOTONIC slice (may only ADD predicates, never
+  1683	            weaken) — not done here, so we never let a revision relax its own acceptance gate.
+  1684	        Only the build loop reaches this (PLANNING + submit_plan); research/chat loops never
+  1685	        approve a plan, so the gate stays inert for them."""
+  1686	        # Read the predicates off the PERSISTED PlanEvent (resume-durable), NOT the
+  1687	        # in-memory `_plan_step_predicates` map: a restart between submit_plan and approval
+  1688	        # loses the map, but the PlanEvent — with `done_condition` now persisted on each
+  1689	        # step — survives, so the gate still arms after a crash (codex backstop P1).
+  1690	        from ..view import _latest_plan
+  1691	
+  1692	        events = await self._events()
+  1693	        plan = _latest_plan(events)
+  1694	        if plan is None or not getattr(plan, "steps", None):
+  1695	            return
+  1696	        # v1 armed file_exists only; v2.1 includes command + http_ok now that the evaluator
+  1697	        # has an infra-vs-task channel (a denied command / unprobeable server RELEASES the
+  1698	        # gate instead of false-blocking — only a command that RAN-and-failed or a server
+  1699	        # that SERVED-the-wrong-status blocks). file_exists stays the deterministic anchor;
+  1700	        # command/http_ok add real build/test + runtime-serve verification.
+  1701	        _GATEABLE_KINDS = ("file_exists", "command", "http_ok")
+  1702	        # Narrow via a local (pyright cannot narrow through getattr) so the list is
+  1703	        # typed list[DoDPredicate], not list[DoDPredicate | None]. (pre-existing
+  1704	        # reportAssignmentType, fixed while touching this file for CXT-6.)
+  1705	        file_preds: list[DoDPredicate] = []
+  1706	        for s in plan.steps:
+  1707	            dc = getattr(s, "done_condition", None)
+  1708	            if dc is not None and getattr(dc, "kind", None) in _GATEABLE_KINDS:
+  1709	                file_preds.append(dc)
+  1710	        if not file_preds:
+  1711	            return
+  1712	        try:
+  1713	            # replace_dod_spec = write-once BOOTSTRAP on the first arm + MONOTONIC
+  1714	            # extension on a revision: a steer that ADDS scope (e.g. "also add a
+  1715	            # Contact page") tightens the bar to require contact.html; a revision that
+  1716	            # would DROP a committed deliverable (without an explicit rename) is
+  1717	            # rejected store-side and the existing, stronger bar holds.
+  1718	            await self.store.replace_dod_spec(
+  1719	                self.conversation_id,
+  1720	                DoDSpec(predicates=file_preds),
+  1721	                actor="system:plan_approval",
+  1722	            )
+  1723	        except DoDSpecAlreadySet:
+  1724	            # The revised plan would WEAKEN the DoD (a committed deliverable was
+  1725	            # dropped without an explicit rename). Keep the stronger existing bar —
+  1726	            # the model cannot relax its own acceptance criteria mid-build.
+  1727	            _LOG.warning(
+  1728	                "DoD revision for %s rejected as a weakening; existing acceptance "
+  1729	                "bar preserved.",
+  1730	                self.conversation_id,
+  1731	            )
+  1732	
+  1733	    async def approve_plan(self) -> ConversationState:
+  1734	        """Approve the pending plan: flip into execution mode (full tools restored)
+  1735	        and resume to RUNNING. The caller then re-runs the loop. The per-action
+  1736	        risk gate still governs the build that follows (defense in depth)."""
+  1737	        async with self._lock:
+  1738	            state = await self.get_state()
+  1739	            if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
+  1740	                return state
+  1741	            self.mode = self._execution_mode
+  1742	            await self._emit(
+  1743	                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+  1744	            )
+  1745	            await self._arm_dod_from_plan()
+  1746	            await self._seed_todo_from_plan()
+  1747	        return await self.get_state()
+  1748	
+  1749	    async def _seed_todo_from_plan(self) -> None:
+  1750	        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+  1751	        execution memory. Best-effort: a seeding error never blocks approval. A
+  1752	        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+  1753	        minor in-build updates are the agent's via the context_memory tool."""
+  1754	        sbx = getattr(self.executor, "sandbox", None)
+  1755	        if sbx is None:
+  1756	            return
+  1757	        try:
+  1758	            from ..context import ArtifactMemoryStore
+  1759	            from ..view import _latest_plan
+  1760	            from .context_builder import render_plan_as_todo_markdown
+  1761	
+  1762	            plan = _latest_plan(await self._events())
+  1763	            if plan is None or not getattr(plan, "steps", None):
+  1764	                return
+  1765	            await ArtifactMemoryStore(sbx).seed_todo(render_plan_as_todo_markdown(plan))
+  1766	        except Exception:
+  1767	            _LOG.warning(
+  1768	                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+  1769	            )
+  1770	
+  1771	    async def pick_alternative(self, option_id: str) -> ConversationState:
+  1772	        """Resume from AWAITING_USER_DECISION by selecting one of the agent's
+  1773	        proposed alternatives. Pulls the option's ToolCall, synthesizes an
+  1774	        ActionEvent under EventSource.AGENT (the loop "speaks for" the agent
+  1775	        here — the option WAS the agent's own proposal, the user is just
+  1776	        choosing which one), and transitions to RUNNING. The loop's next
+  1777	        iteration sees the dangling ActionEvent and executes it via the normal
+  1778	        _execute_and_observe path (including the risk gate).
+  1779	
+  1780	        Idempotent: a pick on a non-pending state is a no-op."""
+  1781	        async with self._lock:
+  1782	            state = await self.get_state()
+  1783	            if state.execution_status != ConversationStatus.AWAITING_USER_DECISION:
+  1784	                return state
+  1785	            # Find the latest AlternativesEvent + the picked option.
+  1786	            events = await self._events()
+  1787	            alt: AlternativesEvent | None = None
+  1788	            for e in reversed(events):
+  1789	                if isinstance(e, AlternativesEvent):
+  1790	                    alt = e
+---
+     1	"""CXT-6 tests: render_plan_as_todo_markdown + plan-approval seeds .disco/context/todo.md."""
+     2	
+     3	from __future__ import annotations
+     4	
+     5	import pytest
+     6	
+     7	from disco.core.context import ArtifactMemoryStore
+     8	from disco.core.events import PlanEvent, PlanStep
+     9	from disco.core.loop.context_builder import render_plan_as_todo_markdown
+    10	
+    11	from _buildsoak_fakes import build_plan_loop
+    12	from loop_fakes import ScriptedAgent, action_step
+    13	
+    14	
+    15	class _MemFS:
+    16	    """Minimal in-memory WorkspaceFS (read of a missing path raises)."""
+    17	
+    18	    def __init__(self) -> None:
+    19	        self.files: dict[str, bytes] = {}
+    20	
+    21	    async def read_file(self, path: str) -> bytes:
+    22	        if path not in self.files:
+    23	            raise FileNotFoundError(path)
+    24	        return self.files[path]
+    25	
+    26	    async def write_file(self, path: str, data: bytes) -> None:
+    27	        self.files[path] = data
+    28	
+    29	
+    30	# --- render helper ------------------------------------------------------------
+    31	def test_render_plan_as_todo_markdown() -> None:
+    32	    plan = PlanEvent(
+    33	        summary="Build a roofing lead site",
+    34	        steps=[PlanStep(title="hero", detail="big headline"), PlanStep(title="lead form")],
+    35	        context="Static site, no backend.",
+    36	    )
+    37	    md = render_plan_as_todo_markdown(plan)
+    38	    assert md.startswith("# Build a roofing lead site")
+    39	    assert "Static site, no backend." in md
+    40	    assert "## Steps" in md
+    41	    assert "- [ ] 1. hero" in md
+    42	    assert "  big headline" in md
+    43	    assert "- [ ] 2. lead form" in md
+    44	
+    45	
+    46	def test_render_plan_no_context_or_detail() -> None:
+    47	    plan = PlanEvent(summary="g", steps=[PlanStep(title="only step")])
+    48	    md = render_plan_as_todo_markdown(plan)
+    49	    assert "- [ ] 1. only step" in md
+    50	    assert md.endswith("\n")
+    51	
+    52	
+    53	# --- approval seeds todo.md ---------------------------------------------------
+    54	def _submit_plan_step():
+    55	    return action_step("submit_plan", {"summary": "p", "steps": [{"title": "do the thing"}]})
+    56	
+    57	
+    58	async def _planned(cid: str):
+    59	    agent = ScriptedAgent([_submit_plan_step()])
+    60	    loop, store = build_plan_loop(agent, conversation_id=cid)
+    61	    await loop.send_message("build the thing")
+    62	    await loop.run()
+    63	    return loop, store
+    64	
+    65	
+    66	@pytest.mark.asyncio
+    67	async def test_approval_seeds_todo_md() -> None:
+    68	    loop, _store = await _planned("cxt6-seed")
+    69	    # inject a workspace FS so the best-effort seed has somewhere to write
+    70	    loop.executor.sandbox = _MemFS()  # type: ignore[attr-defined]
+    71	    await loop.approve_plan()
+    72	    todo = await ArtifactMemoryStore(loop.executor.sandbox).read_todo()  # type: ignore[arg-type]
+    73	    assert todo is not None
+    74	    assert "## Steps" in todo
+    75	    assert "- [ ] 1. do the thing" in todo
+    76	
+    77	
+    78	@pytest.mark.asyncio
+    79	async def test_approval_without_sandbox_does_not_crash() -> None:
+    80	    # no sandbox on the fake executor → seed is a best-effort no-op, approval still works
+    81	    loop, _store = await _planned("cxt6-nosbx")
+    82	    state = await loop.approve_plan()
+    83	    assert state is not None
+
+codex
+I’ve spotted one likely gap to confirm before finalizing: whether autonomous plan approval follows the same seeding path (currently only `approve_plan()` includes seeding). I’m quickly validating `context_memory(kind=todo)` writes the same artifact path so there’s no contract mismatch.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"kind=\\s*\\\"todo\\\"|todo\\\"\\s*:\\s*\\\"TODO\\\"|ArtifactMemoryKind.TODO|todo\\.md|context_memory\" packages/core/src/disco/core/loop packages/core/src/disco/core | head -n 120" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/loop/engine.py:1750:        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+packages/core/src/disco/core/loop/engine.py:1752:        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+packages/core/src/disco/core/loop/engine.py:1753:        minor in-build updates are the agent's via the context_memory tool."""
+packages/core/src/disco/core/loop/engine.py:1768:                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+packages/core/src/disco/core/loop/context_builder.py:89:    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+packages/core/src/disco/core/loop/context_builder.py:90:    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+packages/core/src/disco/core/loop/context_builder.py:91:    execution memory the agent reads/updates (via context_memory) as it works."""
+packages/core/src/disco/core/context/store.py:32:        ArtifactMemoryKind.TODO,
+packages/core/src/disco/core/context/store.py:143:        return await self.write_markdown(ArtifactMemoryKind.TODO, markdown)
+packages/core/src/disco/core/context/store.py:146:        return await self.read_markdown(ArtifactMemoryKind.TODO)
+packages/core/src/disco/core/context/store.py:321:        todo_ref = self._ref(ArtifactMemoryKind.TODO, self.path_for(ArtifactMemoryKind.TODO)) if todo is not None else None
+packages/core/src/disco/core/context/pack.py:7:``todo.md`` and assembles the final prompt lands in CXT-2/CXT-4.
+packages/core/src/disco/core/loop/engine.py:1750:        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+packages/core/src/disco/core/loop/engine.py:1752:        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+packages/core/src/disco/core/loop/engine.py:1753:        minor in-build updates are the agent's via the context_memory tool."""
+packages/core/src/disco/core/loop/engine.py:1768:                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+packages/core/src/disco/core/loop/context_builder.py:89:    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+packages/core/src/disco/core/loop/context_builder.py:90:    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+packages/core/src/disco/core/loop/context_builder.py:91:    execution memory the agent reads/updates (via context_memory) as it works."""
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"if self._autonomous|StatusEvent\\(status=ConversationStatus.RUNNING, detail=\\\"plan_approved\\\"\\)|_gate_planning_mode\" packages/core/src/disco/core/loop/engine.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+879:    async def _gate_planning_mode(self, step: AgentStep, events: list[Event]) -> Disp:
+893:                if self._autonomous:
+1368:                disp = await self._gate_planning_mode(step, events)
+1582:            # MOMENT it arrives, so the next write is gated by `_gate_planning_mode` until
+1743:                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+1984:        a write is REJECTED by `_gate_planning_mode` until a revised plan is
+2066:            `_gate_planning_mode` until a revised plan is approved.
+2084:        # planning gate allows) may proceed harmlessly — _gate_planning_mode now
+
+codex
+I found the key potential gap and will anchor it with exact source lines before finalizing the verdict so the required revision is precise and minimal.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba packages/core/src/disco/core/loop/engine.py | sed -n '872,915p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+   872	    # ---- the run loop (§4) --------------------------------------------------
+   873	
+   874	    async def _post_noop_valve(self) -> Disp:
+   875	        """Delegates to Valve.post_noop_valve (self._valve). Called by FinishGate
+   876	        and the planning-mode gate."""
+   877	        return await self._valve.post_noop_valve()
+   878	
+   879	    async def _gate_planning_mode(self, step: AgentStep, events: list[Event]) -> Disp:
+   880	        # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
+   881	        #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
+   882	        #   2. Any OTHER tool in planning_tools (e.g. file_read, file_list, search,
+   883	        #      extract) → fall through to the normal action path; the planner explores
+   884	        #      before proposing (the Claude-Code-style "Phase 1: gather context").
+   885	        #   3. No tool call at all (a prose answer) → nudge back to planning.
+   886	        # The plan tool itself is NEVER executed.
+   887	        if self.mode == OperatingMode.PLANNING:
+   888	            tc = step.tool_call
+   889	            if tc is not None and tc.tool_name == self._plan_tool:
+   890	                self._plan_explore_reads = 0  # (B2/B6) a plan was proposed
+   891	                plan = self._plan_from_args(tc.arguments, events)
+   892	                await self._emit(plan)
+   893	                if self._autonomous:
+   894	                    # No human to approve → auto-approve INLINE, emitting the
+   895	                    # exact same events approve_plan() would, so the event log
+   896	                    # is identical whether a human or the harness approved.
+   897	                    self.mode = self._execution_mode
+   898	                    await self._emit(
+   899	                        StatusEvent(
+   900	                            status=ConversationStatus.RUNNING, detail="plan_approved"
+   901	                        )
+   902	                    )
+   903	                    await self._arm_dod_from_plan()
+   904	                    return Disp.CONTINUE
+   905	                await self._emit(
+   906	                    StatusEvent(
+   907	                        status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+   908	                        detail=plan.id,
+   909	                    )
+   910	                )
+   911	                return Disp.HALT
+   912	            if tc is None:
+   913	                # The planner spoke without calling a tool. PRESERVE the
+   914	                # prose first — this is how the agent acknowledges the
+   915	                # user's request conversationally before it starts
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"context_memory|ContextMemory|ArtifactMemoryKind.TODO|kind\\\":\\ \" todo\" packages/core/src/disco/core/loop packages/core/src/disco/core/llm packages/core/src/disco/core -g'*.py'" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+/bin/bash: -c: line 1: unexpected EOF while looking for matching `"'
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"context_memory|ArtifactMemoryKind.TODO|context memory|TODO\" packages/core/src/disco/core -g'*.py' | head -n 120" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/context/store.py:32:        ArtifactMemoryKind.TODO,
+packages/core/src/disco/core/context/store.py:143:        return await self.write_markdown(ArtifactMemoryKind.TODO, markdown)
+packages/core/src/disco/core/context/store.py:146:        return await self.read_markdown(ArtifactMemoryKind.TODO)
+packages/core/src/disco/core/context/store.py:321:        todo_ref = self._ref(ArtifactMemoryKind.TODO, self.path_for(ArtifactMemoryKind.TODO)) if todo is not None else None
+packages/core/src/disco/core/context/artifact_memory.py:21:    TODO = "todo"
+packages/core/src/disco/core/context/source_priority.py:20:    TODO = "todo"
+packages/core/src/disco/core/context/source_priority.py:37:    SourceKind.TODO,
+packages/core/src/disco/core/loop/engine.py:1753:        minor in-build updates are the agent's via the context_memory tool."""
+packages/core/src/disco/core/loop/context_builder.py:91:    execution memory the agent reads/updates (via context_memory) as it works."""
+packages/core/src/disco/core/loop/context_builder.py:125:        sections[SourceKind.TODO] = ["Todo:", pack.current_todo]
+
+codex
+REVISE
+
+REASONS
+- High: Autonomous plan approval still bypasses todo seeding. The `_autonomous` branch in planning mode emits `plan_approved` and calls `_arm_dod_from_plan()` inline, but never calls `_seed_todo_from_plan()`. This leaves `.disco/context/todo.md` uninitialized in autonomous flows, creating a behavior gap versus interactive approval where seeding happens in `approve_plan()`.
+  - [engine.py:893](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/loop/engine.py:893)
+
+- Medium: There is no automated coverage for this branch in the new tests; regression risk remains that autonomous approval diverges from contract without signal until runtime.
+  - [test_todo_memory.py:66](/var/home/dylan/projects/disclaude/packages/core/tests/test_todo_memory.py:66)
+
+REQUIRED_REVISIONS
+1. Seed todo on autonomous approval too by adding `_seed_todo_from_plan()` in the `_autonomous` plan-approval path (right after `_arm_dod_from_plan()`).
+   - [engine.py:893-904](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/loop/engine.py#L893)
+2. Add/extend a test to cover autonomous mode plan approval seeding `.disco/context/todo.md` so both approval paths are behavior-equivalent.
+   - [test_todo_memory.py](/var/home/dylan/projects/disclaude/packages/core/tests/test_todo_memory.py:66)
+tokens used
+50,074
+REVISE
+
+REASONS
+- High: Autonomous plan approval still bypasses todo seeding. The `_autonomous` branch in planning mode emits `plan_approved` and calls `_arm_dod_from_plan()` inline, but never calls `_seed_todo_from_plan()`. This leaves `.disco/context/todo.md` uninitialized in autonomous flows, creating a behavior gap versus interactive approval where seeding happens in `approve_plan()`.
+  - [engine.py:893](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/loop/engine.py:893)
+
+- Medium: There is no automated coverage for this branch in the new tests; regression risk remains that autonomous approval diverges from contract without signal until runtime.
+  - [test_todo_memory.py:66](/var/home/dylan/projects/disclaude/packages/core/tests/test_todo_memory.py:66)
+
+REQUIRED_REVISIONS
+1. Seed todo on autonomous approval too by adding `_seed_todo_from_plan()` in the `_autonomous` plan-approval path (right after `_arm_dod_from_plan()`).
+   - [engine.py:893-904](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/loop/engine.py#L893)
+2. Add/extend a test to cover autonomous mode plan approval seeding `.disco/context/todo.md` so both approval paths are behavior-equivalent.
+   - [test_todo_memory.py](/var/home/dylan/projects/disclaude/packages/core/tests/test_todo_memory.py:66)

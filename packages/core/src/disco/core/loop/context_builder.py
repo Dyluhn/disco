@@ -85,6 +85,23 @@ def build_context_pack(
     )
 
 
+def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
+    """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
+    pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
+    execution memory the agent reads/updates (via context_memory) as it works."""
+    lines: list[str] = [f"# {plan.summary}"]
+    context = (plan.context or "").strip()
+    if context:
+        lines += ["", context]
+    lines += ["", "## Steps"]
+    for i, step in enumerate(plan.steps, start=1):
+        lines.append(f"- [ ] {i}. {step.title}")
+        detail = (getattr(step, "detail", "") or "").strip()
+        if detail:
+            lines.append(f"  {detail}")
+    return "\n".join(lines) + "\n"
+
+
 def _failure_line(f: VerifierFailureRef) -> str:
     loc = f" ({f.rel_path})" if f.rel_path else ""
     return f"- [{f.severity.value}] {f.kind}: {f.message}{loc}"

@@ -901,6 +901,7 @@ class AgentLoop:
                         )
                     )
                     await self._arm_dod_from_plan()
+                    await self._seed_todo_from_plan()  # CXT-6: same as interactive approve_plan
                     return Disp.CONTINUE
                 await self._emit(
                     StatusEvent(
@@ -1699,12 +1700,14 @@ class AgentLoop:
         # that SERVED-the-wrong-status blocks). file_exists stays the deterministic anchor;
         # command/http_ok add real build/test + runtime-serve verification.
         _GATEABLE_KINDS = ("file_exists", "command", "http_ok")
-        file_preds: list[DoDPredicate] = [
-            s.done_condition
-            for s in plan.steps
-            if getattr(s, "done_condition", None) is not None
-            and getattr(s.done_condition, "kind", None) in _GATEABLE_KINDS
-        ]
+        # Narrow via a local (pyright cannot narrow through getattr) so the list is
+        # typed list[DoDPredicate], not list[DoDPredicate | None]. (pre-existing
+        # reportAssignmentType, fixed while touching this file for CXT-6.)
+        file_preds: list[DoDPredicate] = []
+        for s in plan.steps:
+            dc = getattr(s, "done_condition", None)
+            if dc is not None and getattr(dc, "kind", None) in _GATEABLE_KINDS:
+                file_preds.append(dc)
         if not file_preds:
             return
         try:
@@ -1741,7 +1744,30 @@ class AgentLoop:
                 StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
             )
             await self._arm_dod_from_plan()
+            await self._seed_todo_from_plan()
         return await self.get_state()
+
+    async def _seed_todo_from_plan(self) -> None:
+        """CXT-6 — seed .disco/context/todo.md from the approved plan as the live
+        execution memory. Best-effort: a seeding error never blocks approval. A
+        revised plan re-approval re-seeds (so todo.md tracks the current contract);
+        minor in-build updates are the agent's via the context_memory tool."""
+        sbx = getattr(self.executor, "sandbox", None)
+        if sbx is None:
+            return
+        try:
+            from ..context import ArtifactMemoryStore
+            from ..view import _latest_plan
+            from .context_builder import render_plan_as_todo_markdown
+
+            plan = _latest_plan(await self._events())
+            if plan is None or not getattr(plan, "steps", None):
+                return
+            await ArtifactMemoryStore(sbx).seed_todo(render_plan_as_todo_markdown(plan))
+        except Exception:
+            _LOG.warning(
+                "CXT-6 todo.md seed from plan failed for %s", self.conversation_id, exc_info=True
+            )
 
     async def pick_alternative(self, option_id: str) -> ConversationState:
         """Resume from AWAITING_USER_DECISION by selecting one of the agent's
