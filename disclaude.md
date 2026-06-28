@@ -962,3 +962,21 @@ frontend+agent-server stack). Then flip require_product_harness=True in the rele
   promotion policy + validated evidence writer, all wired into classify/classify_run_folder + Codex-gated.
   The ONLY remaining P1 work is HARN-1b's LIVE Playwright spec that drives the real UI and calls these
   writers — it needs a running frontend+agent-server stack (deliberately NOT written as an unrunnable stub).
+
+## PR CONTRACT-1 — core artifact-contract models (P2) — COMPLETE
+- Codex (CODE, binding): APPROVE (after 1 invariant round). Dependency-free base layer confirmed.
+- NEW packages/core/src/disco/core/contract/{__init__,models.py}: ContractKind (7 wire ids),
+  VerificationLevel, ToolPack, EditContract, VerificationContract (finalizer pinned to
+  ready_for_*_verification), ExportContract, ArtifactContract, BuildContract (+ minimal() factory +
+  @model_validator enforcing kind == artifact.kind). Pure frozen Pydantic, same house style as CXT-1.
+- round-1 fix: kind/artifact.kind coherence validator + finalizer-convention field_validator + tests.
+- Tests: 9 passed. basedpyright strict: 0 errors.
+- NEXT: CONTRACT-2 (BuildContractRegistry: look up a contract by BuildBrief; declares required files /
+  starter kits / tool packs / verify / export / UI card / prompt pack) → CONTRACT-3 (Contract→ToolScope
+  compiler: hard executor allowlists per phase bootstrap/edit/repair/verify/export).
+
+### SEQUENCING NOTE (durable)
+P2+ is being built FORWARD on the isolated disclaude branch (nothing promoted to mainline). The campaign's
+"no P2+ PROMOTION until P0/P0B/P1 green" is a RELEASE gate, not a build-order stop. P0+P0B complete; P1's
+entire HEADLESS harness layer green+gated; only HARN-1b's LIVE Playwright spec remains (needs a running
+frontend+agent-server stack — real ops, not a stub). Promotion to mainline still waits on that + the P17 soak.
