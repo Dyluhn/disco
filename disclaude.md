@@ -596,3 +596,113 @@ harness yet. Same deferral pattern Codex APPROVED for CXT-1/2/3. Flagging for AP
 - CXT-5 — Recoverable compression (remove destructive elision from source-like observations; recoverable
   excerpts with path/range/sha256 + a harness scan for forbidden elision strings).
 
+## PR CXT-5 — Recoverable compression (no destructive elision)
+
+### Status
+PLANNING → CODEX_REVIEW
+
+### Dependencies
+- CXT-2 (store/SUMMARY artifact patterns), CXT-3 (recover patterns). Independent of CXT-4 wiring.
+
+### ELISION SITE MAP (scout — durable; the basis for scope)
+ALREADY RECOVERABLE (marker names a recover path — DO NOT churn these, they're tested):
+- events.py snip_content (obs truncation): "… [snipped N chars — re-run the tool or use file_read …] …"
+- view_render.py snapshot file head/tail: "… [N more chars — file_read(path, offset, limit) …] …"
+- files.py FileReadTool paging: header "[lines X-Y of N; read more with offset=Z]"
+- system.py shell HS-01 spill: full stdout → .disco-spill-*.log + "full output at <path> — file_read/grep"
+- dedup.py F8/F9/W2: all name a recover path / earlier result.
+- events.py _snip_args ARG marker: destructive-looking BUT defended by K1 guard + K1 recovery from the
+  event log (history placeholder, not final-file content). Leave as-is (already mitigated).
+
+TRULY DESTRUCTIVE (the CXT-5 target — NO recover path):
+- browser.py console/network/stack truncation: "... (console truncated to N lines)",
+  "... (stack truncated to 6 lines)", "... (N more network failures)" — content lost; re-run is expensive.
+
+### Plan (narrow + high-value; no broad rewrite of working recoverable sites)
+1. NEW `packages/core/src/disco/core/observations.py` (campaign names it): a small pure
+   `recoverable_excerpt(content, *, path, shown_start, shown_end, recover_tool, recover_args) -> dict`
+   producing the campaign's structured form {kind:"file_excerpt", path, complete:bool, shown_ranges,
+   omitted_ranges, sha256, recover:{tool,args}} + `DESTRUCTIVE_ELISION_MARKERS` (the forbidden strings)
+   + `scan_for_destructive_elision(text) -> list[str]` (finds forbidden markers NOT accompanied by a
+   recover hint). Pure, fully unit-tested. This is the canonical pattern + the scan engine.
+2. FIX browser.py destructive truncation → recoverable: when console/network/stack exceed caps, write the
+   FULL rendered diagnostics to a spill file (mirror shell HS-01: `.disco-spill-browser-*.log` via
+   ctx.sandbox.write_file in run()) and change the markers to name it
+   ("… N more — full diagnostics at <path>; file_read it"). The truncated head stays for at-a-glance;
+   nothing is lost. structured payload carries the spill path.
+3. HARNESS SCAN: a test (packages/core/tests/test_recoverable_excerpts.py) that
+   scan_for_destructive_elision flags the forbidden strings, PASSES the already-recoverable markers
+   (they name a path / "file_read" / "re-run"), and that the browser markers post-fix are recoverable.
+   (Final-file scan over built deliverables is a product-harness concern → P1; here we ship + unit-test
+   the scan engine and document the P1 hook.)
+
+### Scope boundaries (for the gate)
+- Do NOT rewrite the already-recoverable sites (snip_content/snapshot/file_read/shell-spill) — they
+  already satisfy "recoverable" and are tested; churning them is risk without benefit. Flag this.
+- The structured recoverable_excerpt format is introduced + available; retrofitting every tool to emit it
+  is deferred (the existing prose markers already carry recovery). Browser is fixed because it's the only
+  DESTRUCTIVE site.
+- Final-deliverable elision scan (fail builds containing forbidden strings) = P1 product-harness; CXT-5
+  ships the scan engine + unit tests + documents the hook.
+
+### Tests (packages/core/tests/test_recoverable_excerpts.py + packages/tools/tests/test_browser*.py)
+- recoverable_excerpt: roundtrips, sha256 stable, complete=False when omitted, recover ref present;
+  shown/omitted ranges correct.
+- scan_for_destructive_elision: flags "...(elided)...", "[trimmed]", "content omitted",
+  "truncated for brevity"; does NOT flag a snip marker that names file_read/re-run/a path.
+- browser fix: when diagnostics exceed caps, a spill file is written, markers name it, head retained,
+  nothing lost; assert no destructive (no-recover) marker remains.
+
+### Codex review (round 1)
+- verdict: REVISE. Scope affirmed (no-churn correct; browser is the real destructive site). Codex CAUGHT
+  a MISSED destructive site: bootstrap.py:246 "... (truncated)" (prose-only recovery). 5 required revisions.
+  Log: .claude/cxt5-codex-r1.log.
+
+### PR CXT-5 — plan REVISION 1 (post-Codex round 1)
+1. bootstrap.py:246 — FIX now (not defer): change "... (truncated)" → name the recover path explicitly
+   ("… N more — read the full manifest at <path>") so it carries a recover cue and the scan won't flag it.
+2. scan_for_destructive_elision SEMANTICS (precise, to avoid false-positives on legacy recoverable markers):
+   - DESTRUCTIVE_ELISION_MARKERS (exact, case-insensitive substrings): "(elided)", "[trimmed]",
+     "content omitted", "truncated for brevity", "[content omitted]".
+   - RECOVER_CUES (tokens that make a truncation recoverable): "file_read", "re-run", "rerun", "offset=",
+     "grep", "read the full", "full output at", "full diagnostics at", "read the manifest", "read more".
+   - A text segment (split on lines) is DESTRUCTIVE iff it contains a DESTRUCTIVE marker AND contains NO
+     RECOVER_CUE on that line. (So the existing recoverable markers — which all carry a cue — never flag;
+     the browser/bootstrap destructive forms — pre-fix — DO flag.)
+   - NOTE: the bare "…"/"..." ellipsis is NOT in the destructive set (too common as a head/tail separator);
+     we flag only the explicit phrases above. Documented exception policy.
+3. browser fix: structured payload field `diagnostics_spill_path` + prose marker naming it (mirror shell
+   HS-01's structured["spill_path"] + marker), not marker text alone.
+4. scan tests: explicit POS (flags the 4 forbidden phrases w/o cue) + NEG (does NOT flag snip_content's
+   "snipped … file_read", shell spill's "full output at <path>", file_read header "read more with offset=",
+   bootstrap post-fix marker) pairs.
+5. P1 HOOK (named): the final-deliverable scan is owned by the P1 Product Harness `OutputTruthOracle`
+   (HARN-2), rule set = DESTRUCTIVE_ELISION_MARKERS v1 (from observations.py), acceptance = 0 destructive
+   markers in built deliverable files unless the user explicitly requested elision. CXT-5 ships the engine
+   + constants; HARN-2 imports and enforces them. Tracked in the P1 section.
+
+### Codex review (CODE, binding) — APPROVE (after 3 fixes)
+- round-1 code review REVISE → 3 fixes: (1) WIRED the scan into the real harness OutputTruthOracle
+  (not deferred) — new fc.DESTRUCTIVE_ELISION (P1) + per-deliverable scan + allow_elision waiver;
+  (2) browser spill-failure fallback now carries full diagnostics in structured + a non-recoverable note
+  (no false recoverability claim); (3) harness oracle regression tests. Targeted re-review → APPROVE.
+  Logs: .claude/cxt5-codex-code.log. Status → COMPLETE.
+
+### Implementation notes
+- new: core/observations.py (recoverable_excerpt, DESTRUCTIVE_ELISION_MARKERS, RECOVER_CUES,
+  scan_for_destructive_elision). FIXED destructive sites: browser.py (spill full console+network →
+  .disco-spill-browser-*.json + structured path + prose pointer; failure fallback keeps diagnostics),
+  bootstrap.py (truncation marker now names file_read+manifest). WIRED: harness OutputTruthOracle scans
+  asserted deliverables → fc.DESTRUCTIVE_ELISION (P1), waivable. Other truncation sites already
+  recoverable (documented; not churned).
+
+### Tests
+- 9 core+tools + 21 harness oracle (incl 3 new) + browser regression. basedpyright strict: 0 errors.
+
+### Codex CAUGHT (credit): a destructive site the scout MISSED (bootstrap.py) + that the P1 oracle
+  already existed (so enforcement should be wired now, not deferred). Both addressed.
+
+### Next PR
+- CXT-6 — todo.md as active working memory (PlanEvent=approved contract; todo.md=live execution memory;
+  todo_update tool; scope-change still needs revised PlanEvent).
+

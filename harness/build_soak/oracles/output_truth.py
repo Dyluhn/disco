@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from disco.core.observations import scan_for_destructive_elision
+
 from .. import failure_codes as fc
 from ..events import terminal_status
 from .schema import OracleResult, failing, passing, skipping
@@ -191,6 +193,26 @@ class OutputTruthOracle:
                 })
         if content_mismatches:
             return [_fold_content_mismatches(content_mismatches)]
+
+        # --- CXT-5: destructive-elision scan over final deliverables (rule set v1) ---
+        # A finished deliverable must not contain unrecoverable elision placeholder text
+        # ("(elided)" / "[trimmed]" / "content omitted" / "truncated for brevity" with no
+        # recover cue). Scoped to the asserted deliverables; waivable per scenario.
+        if not workspace_assert.get("allow_elision"):
+            for spec in workspace_assert.get("files") or []:
+                path = spec.get("path")
+                if path is None or path not in files:
+                    continue
+                hits = scan_for_destructive_elision(files[path])
+                if hits:
+                    return [
+                        failing(
+                            _ORACLE,
+                            fc.DESTRUCTIVE_ELISION,
+                            first_broken_link="finish -> deliverable_recoverable",
+                            facts={"path": path, "offending_lines": hits[:5]},
+                        )
+                    ]
 
         # --- preview truth ---
         if preview_assert.get("required"):

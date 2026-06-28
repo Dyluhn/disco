@@ -197,3 +197,51 @@ def test_not_finished_without_output_assertion_still_skips():
     unfinished = clean_smoke_log()[:-1]
     results = _run(scenario={"id": "x", "assertions": {}}, events=unfinished)
     assert results[0].skipped
+
+
+# ---- CXT-5: destructive-elision scan over final deliverables ------------------
+
+_SCN_ELISION = {
+    "id": "elision",
+    "assertions": {
+        "workspace": {"files": [{"path": "index.html", "must_contain": ["Build Smoke OK"]}]},
+        "terminal_status_in": ["FINISHED", "VERIFIED"],
+    },
+}
+
+_SCN_ELISION_WAIVED = {
+    "id": "elision_waived",
+    "assertions": {
+        "workspace": {
+            "allow_elision": True,
+            "files": [{"path": "index.html", "must_contain": ["Build Smoke OK"]}],
+        },
+        "terminal_status_in": ["FINISHED", "VERIFIED"],
+    },
+}
+
+
+def test_destructive_elision_in_deliverable_fails():
+    results = _run(
+        scenario=_SCN_ELISION,
+        workspace={"index.html": "<h1>Build Smoke OK</h1>\n<!-- ...(elided)... -->"},
+    )
+    assert results[0].code == "DESTRUCTIVE_ELISION", results[0].to_dict()
+    assert results[0].facts["path"] == "index.html"
+
+
+def test_recoverable_marker_in_deliverable_passes():
+    # a destructive phrase paired with a recover cue on the same line is fine
+    results = _run(
+        scenario=_SCN_ELISION,
+        workspace={"index.html": "<h1>Build Smoke OK</h1>\n<!-- content omitted — file_read app.js -->"},
+    )
+    assert results[0].passed, results[0].to_dict()
+
+
+def test_elision_waiver_allows_marker():
+    results = _run(
+        scenario=_SCN_ELISION_WAIVED,
+        workspace={"index.html": "<h1>Build Smoke OK</h1>\n<!-- truncated for brevity -->"},
+    )
+    assert results[0].passed, results[0].to_dict()

@@ -243,7 +243,10 @@ def _detect_project_bootstrap(workspace_path: str | os.PathLike[str]) -> str | N
 
     body = "\n".join(sections)
     if len(body) > _F4_MAX_CHARS:
-        body = body[: _F4_MAX_CHARS] + "\n  ... (truncated)"
+        body = (
+            body[:_F4_MAX_CHARS]
+            + "\n  … (truncated — file_read the manifest files directly for the full body)"
+        )
     return (
         "<system-reminder>\n"
         "F4 bootstrap: detected project commands from workspace manifests. "

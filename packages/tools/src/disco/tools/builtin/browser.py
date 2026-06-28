@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from html.parser import HTMLParser
 from typing import Any, Literal
 
@@ -280,11 +281,41 @@ class BrowserTool:
                     success=False, content="", error=f"browser error: {data.get('error')}"
                 )
 
-            return ToolOutcome(
-                success=True,
-                content=self._render_observation(data),
-                structured=data,
-            )
+            content = self._render_observation(data)
+            structured: dict[str, Any] = data
+            # CXT-5: console/network rendering is capped (_MAX_CONSOLE_LINES /
+            # _MAX_NETWORK_LINES); without a recover path those omitted entries
+            # would be DESTRUCTIVELY lost (re-running the browser is expensive).
+            # Mirror shell HS-01: spill the FULL diagnostics to a workspace file
+            # and name it (prose pointer + structured field) so nothing is lost.
+            console = data.get("console") or []
+            network = data.get("network") or []
+            if len(console) > _MAX_CONSOLE_LINES or len(network) > _MAX_NETWORK_LINES:
+                spill_path = f".disco-spill-browser-{uuid.uuid4().hex}.json"
+                full = json.dumps({"console": console, "network": network}, indent=2)
+                try:
+                    await ctx.sandbox.write_file(spill_path, full.encode("utf-8"))
+                    content += (
+                        f"\n[full browser diagnostics ({len(console)} console, "
+                        f"{len(network)} network entries) at {spill_path} — "
+                        f"file_read it for the omitted entries]"
+                    )
+                    structured = {**data, "diagnostics_spill_path": spill_path}
+                except Exception:
+                    # spill failed — DO NOT claim recoverability. Carry the full
+                    # diagnostics in the structured payload (not lost) and flag the
+                    # truncation as non-recoverable so it can't be mistaken for clean.
+                    content += (
+                        f"\n[NOTE: {len(console)} console / {len(network)} network entries; "
+                        f"diagnostics spill failed — full entries are in this tool's structured "
+                        f"payload; re-run the browser to regenerate]"
+                    )
+                    structured = {
+                        **data,
+                        "diagnostics_spill_failed": True,
+                        "diagnostics_full": {"console": console, "network": network},
+                    }
+            return ToolOutcome(success=True, content=content, structured=structured)
         except BrowserUnavailableError as e:
             # ROOT-3 — terminal, non-retryable: this backend has no browser. Carry a
             # structured flag so verify_web_app can degrade gracefully, and a clearly
