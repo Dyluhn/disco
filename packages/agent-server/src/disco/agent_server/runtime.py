@@ -1175,6 +1175,22 @@ class ConversationRuntime:
             self._build_kind.pop(conversation_id, None)
         self._build_trackers.pop(conversation_id, None)
 
+    def expected_delivery_mode(self, conversation_id: str) -> str | None:
+        """P5: the host-owned delivery SHAPE ("app"|"files") the conversation's build
+        contract declares — the agent-server deliverable surface reads this to label /
+        validate a handoff (so a deck run can't be handed off as a runnable app).
+        Resolves the contract on first use; None when no build contract governs the run
+        (a plain chat conversation has no delivery shape)."""
+        entry = self._build_trackers.get(conversation_id)
+        if entry is None:
+            # only a build/artifact run has a delivery shape — don't fabricate a
+            # contract for an ordinary conversation.
+            if not (self._effective_artifact_mode(conversation_id) or conversation_id in self._build_kind):
+                return None
+            self._build_scope_guard(conversation_id)  # resolves + caches the contract
+            entry = self._build_trackers.get(conversation_id)
+        return entry[0].artifact.delivery_mode if entry is not None else None
+
     def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None:
         """Advance the build-phase tracker on a host VERIFY outcome (pass → EXPORT, fail
         → REPAIR so the model may use the repair tools to fix). The BOOTSTRAP→EDIT→VERIFY

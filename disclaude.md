@@ -1200,3 +1200,49 @@ PLAN: make the contract finalizers REAL host-truth gates (non-negotiable: "no fi
    clean console.
 RISK: touches the finish gate (finish.py) — high-care, full-suite verify + adversarial review required.
 NEXT after P6: P7 Starter/Brand/UI Kits.
+
+### GATE RESTORED — 2026-06-28: my "gate down" call was WRONG. The model id has NO "-codex" suffix.
+`gpt-5.5` (and gpt-5.4) work via `codex exec --sandbox read-only --model gpt-5.5`; only the spark variant is
+usage-limited. Binding gate now runs on **gpt-5.5** (verified: real reasoning, 17+25→42, not a prompt echo).
+Resuming the normal per-PR loop immediately (P5-DELIVERY plan review first). No idle-poll needed.
+
+### PR P5-DELIVERY — PLAN REVISION 1 (post gpt-5.5 round 1; audit+mapping APPROVED, 3 required fixes)
+Codex validated: audit correct (no rebuild), delivery_mode derived property campaign-coherent, the app|files
+mapping right (custom→files safer). Revisions applied:
+1. SCOPE WORDING: P5 is "contract delivery SHAPE + validator/accessor", NOT runtime enforcement. Reworded:
+   the validator MAKES shape enforceable; runtime enforcement (reject a wrong-shape handoff) follows in the
+   handle_serve wire. No overclaim.
+2. PORT-8000 RECONCILE (tracked follow-up, NOT a hasty edit): engine.py:281/335/337 tell the model to "serve
+   on port 8000 / http://localhost:8000/" in the serve+finish guidance, which conflicts with the host-owned
+   preview rule (preview.py: "NEVER a fixed :8000 — the platform chooses it"). NUANCE confirmed: 8000 is
+   Disco's CANONICAL USER-VISIBLE proxy port (verify_app.py:42, server.py:18) but the SANDBOX bind port is
+   host-chosen. So the fix is to reconcile the serve/finish text to "let the platform own the port (preview_
+   start); 8000 is only the user-visible proxy" WITHOUT breaking the canonical-port contract — a careful
+   engine.py finish-gate edit, tracked as its own small PR (P5-PORT) with full finish-gate regression, not
+   bolted onto this delivery-shape PR.
+3. SYNTHETIC DELIVERABLE: the reject-wire follow-up now explicitly covers BOTH (a) turn_control.handle_serve
+   AND (b) the lifecycle synthetic app-deliverable path (emits artifact_kind="app" for any index.html
+   snapshot regardless of the active contract — would violate custom/deck/document→files). Both read
+   ArtifactContract.delivery_mode when wired. (Verify exact symbol at impl time — grep found the concept;
+   confirm name in lifecycle.py.)
+This PR (P5-DELIVERY) ships ONLY: delivery_mode_for_kind + ArtifactContract.delivery_mode property +
+deliverable_kind_matches_contract validator + runtime expected_delivery_mode accessor + tests + audit note.
+Follow-ups (tracked): P5-PORT (port-8000 reconcile) + the reject-wire (handle_serve + synthetic deliverable).
+
+## PR P5-DELIVERY — Preview/Show/Delivery: contract delivery shape — COMPLETE
+- Codex (CODE, gpt-5.5, binding): APPROVE (plan APPROVE after 1 revision; code APPROVE clean).
+- AUDIT: preview/show/deliver substrate already present + hardened (host-owned preview, serve→DeliverableEvent
+  with dedup/post-resume/false-URL guards, HARN-2 ShowToUserOracle). NO rebuild.
+- NEW core/contract/models.py: DeliveryMode=Literal["app","files"]; delivery_mode_for_kind (app =
+  appkit.leadgen/static.site/interactive.prototype; files = deck/document/workflow.output/custom);
+  ArtifactContract.delivery_mode @property (derived, can't drift); deliverable_kind_matches_contract validator
+  (no wrong-shape handoff — a deck can't deliver as a runnable app).
+- NEW runtime.expected_delivery_mode(conversation_id) → app|files|None (only for build/artifact runs; never
+  fabricates a contract for a plain chat).
+- Tests: 8 (6 core + 2 runtime) ; 32 green incl. contract regression. contract tree pyright 0; runtime 0 new.
+- TRACKED FOLLOW-UPS (Codex-approved scoping): (1) P5-PORT — reconcile engine.py serve/finish port-8000
+  guidance with host-owned preview (8000 = canonical user-visible proxy ONLY; sandbox port host-chosen);
+  careful finish-gate edit w/ full regression. (2) reject-wire — enforce deliverable_kind_matches_contract in
+  BOTH turn_control.handle_serve AND the lifecycle synthetic app-deliverable path (artifact_kind="app" for any
+  index.html regardless of contract). Both read delivery_mode when wired.
+- NEXT: P6-FINALIZERS (plan queued; fixes the ready_for_*_verification false affordance).

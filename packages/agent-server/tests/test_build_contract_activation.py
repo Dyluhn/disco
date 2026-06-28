@@ -79,6 +79,18 @@ def test_note_verify_result_advances_export_and_repair() -> None:
     rt.note_build_verify_result("unknown", passed=True)
 
 
+def test_expected_delivery_mode_reflects_contract() -> None:
+    rt = _runtime()
+    # a plain (non-build) conversation has no delivery shape
+    assert rt.expected_delivery_mode("plain") is None
+    # a declared appkit run → "app" (open in preview)
+    rt.set_build_kind("d1", "appkit.leadgen")
+    assert rt.expected_delivery_mode("d1") == "app"
+    # a declared deck run → "files" (download)
+    rt.set_build_kind("d2", "deck")
+    assert rt.expected_delivery_mode("d2") == "files"
+
+
 @pytest.mark.asyncio
 async def test_forget_conversation_evicts_build_state() -> None:
     rt = _runtime()

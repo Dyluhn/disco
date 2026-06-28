@@ -16,11 +16,14 @@ from .models import (
     ArtifactContract,
     BuildContract,
     ContractKind,
+    DeliveryMode,
     EditContract,
     ExportContract,
     ToolPack,
     VerificationContract,
     VerificationLevel,
+    delivery_mode_for_kind,
+    deliverable_kind_matches_contract,
 )
 from .enforce import (
     DANGEROUS_TOOLS,
@@ -41,6 +44,7 @@ __all__ = [
     "ContractKind",
     "ContractScopeGuard",
     "ContractToolScopes",
+    "DeliveryMode",
     "EditContract",
     "ExportContract",
     "Phase",
@@ -50,4 +54,6 @@ __all__ = [
     "VerificationLevel",
     "compile_tool_scopes",
     "decide_tool_in_scope",
+    "deliverable_kind_matches_contract",
+    "delivery_mode_for_kind",
 ]

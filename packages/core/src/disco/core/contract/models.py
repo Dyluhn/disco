@@ -9,12 +9,20 @@ from __future__ import annotations
 
 import re
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 # Host finalizers are the ready_for_*_verification family (§3.2). Pinning the shape
 # keeps minimal()/manual contracts from naming a finalizer the platform can't route.
 _FINALIZER_RE = re.compile(r"^ready_for_[a-z0-9_]+_verification$")
+
+# P5: the host-owned delivery SHAPE. A DeliverableEvent is either an "app" (a runnable
+# result the user opens in the live preview) or "files" (workspace artifacts to download/
+# inspect). A contract's kind fixes which shape its handoff must take — so a deck/document
+# can't be handed off as a runnable app, and an appkit/site/prototype isn't dumped as raw
+# files. Kinds NOT in the app set deliver as files (custom defaults to the safer "files").
+DeliveryMode = Literal["app", "files"]
 
 
 class ContractKind(str, Enum):
@@ -27,6 +35,23 @@ class ContractKind(str, Enum):
     DOCUMENT = "document"
     WORKFLOW_OUTPUT = "workflow.output"
     CUSTOM = "custom"
+
+
+_APP_DELIVERY_KINDS: frozenset[ContractKind] = frozenset(
+    {ContractKind.APPKIT_LEADGEN, ContractKind.STATIC_SITE, ContractKind.INTERACTIVE_PROTOTYPE}
+)
+
+
+def delivery_mode_for_kind(kind: ContractKind) -> DeliveryMode:
+    """The host-owned delivery shape for an artifact kind: "app" (open in preview) for
+    appkit.leadgen / static.site / interactive.prototype; "files" (download) otherwise."""
+    return "app" if kind in _APP_DELIVERY_KINDS else "files"
+
+
+def deliverable_kind_matches_contract(contract: BuildContract, artifact_kind: str) -> bool:
+    """True iff a DeliverableEvent's artifact_kind ("app"/"files") matches the shape the
+    contract declares — the "no wrong-shape handoff" check a deliver gate enforces."""
+    return artifact_kind == contract.artifact.delivery_mode
 
 
 class VerificationLevel(str, Enum):
@@ -94,6 +119,12 @@ class ArtifactContract(BaseModel):
     kind: ContractKind
     required_files: tuple[str, ...] = ()
     starter_kit: str | None = None
+
+    @property
+    def delivery_mode(self) -> DeliveryMode:
+        """The host-owned delivery shape ("app"|"files") for this artifact — derived
+        from kind, so it can never drift out of coherence with the contract."""
+        return delivery_mode_for_kind(self.kind)
 
 
 class BuildContract(BaseModel):
