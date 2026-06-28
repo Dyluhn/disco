@@ -22,20 +22,30 @@ from .models import (
     VerificationContract,
     VerificationLevel,
 )
+from .enforce import (
+    DANGEROUS_TOOLS,
+    ContractScopeGuard,
+    ScopeDecision,
+    decide_tool_in_scope,
+)
 from .registry import BuildContractRegistry
 from .scopes import ContractToolScopes, Phase, compile_tool_scopes
 
 __all__ = [
+    "DANGEROUS_TOOLS",
     "ArtifactContract",
     "BuildContract",
     "BuildContractRegistry",
     "ContractKind",
+    "ContractScopeGuard",
     "ContractToolScopes",
     "EditContract",
     "ExportContract",
     "Phase",
+    "ScopeDecision",
     "ToolPack",
     "VerificationContract",
     "VerificationLevel",
     "compile_tool_scopes",
+    "decide_tool_in_scope",
 ]

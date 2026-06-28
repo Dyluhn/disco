@@ -17,6 +17,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 from uuid import uuid4
 
 from disco.core import ToolCall, ToolResult
+from disco.core.contract import ContractScopeGuard
 from disco.core.events import find_elided_arg_markers
 from disco.core.llm import ModelExecutionPolicy, ToolSpec
 from pydantic import BaseModel, ValidationError
@@ -278,10 +279,16 @@ class DefaultToolExecutor:
         model_policy: ModelExecutionPolicy = _STANDARD_POLICY,
         driver_llm: tuple[str, str, str | None] | None = None,
         read_char_budget: int | None = None,
+        scope_guard: ContractScopeGuard | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
         self._sandbox = sandbox
+        # CONTRACT-ENFORCE: optional per-phase contract scope guard. When a Build run
+        # is governed by a BuildContract, this denies a tool call that is out of the
+        # current phase's allowlist (e.g. file_write during an appkit EDIT phase).
+        # None ⇒ a plain agent run ⇒ no contract enforcement (unchanged behavior).
+        self._scope_guard = scope_guard
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -368,6 +375,23 @@ class DefaultToolExecutor:
                 "unknown_tool",
                 f"unknown or out-of-scope tool {call.tool_name!r}; available: {available}",
             )
+
+        # 1.4 CONTRACT-ENFORCE — per-phase contract scope. When a BuildContract governs
+        # this run, the guard hard-denies a tool that is out of the CURRENT phase's
+        # allowlist BEFORE it executes (e.g. raw file_write during an appkit EDIT phase,
+        # which must use the semantic app_* tools — raw rewrite is repair-only). A
+        # recoverable failure (not a crash): the model is told what is permitted here so
+        # it can re-issue with an in-contract tool. No guard ⇒ no enforcement.
+        if self._scope_guard is not None:
+            # metadata-driven: a non-read_only tool is a mutator and is gated whatever
+            # its name (no bypass via an unlisted writer/exec).
+            _scope_decision = self._scope_guard.check(
+                call.tool_name, is_mutating=not tool.definition.read_only
+            )
+            if not _scope_decision.allowed:
+                # 'denied' is the policy-denial kind; the message names the contract
+                # phase + what is permitted here so the model can re-issue in-scope.
+                return self._fail(call, "denied", _scope_decision.reason)
 
         # 1.5 K1 executor-boundary elision guard (generic; ALL tools / ALL paths).
         # A weak model can COPY the `_snip_args` placeholder it sees in its own

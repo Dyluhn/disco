@@ -1095,3 +1095,29 @@ live-wiring + WPP-2 kernel-wiring — an explicit, tracked gap, NOT a silent one
 - NEXT: CONTRACT-ENFORCE — wire compile_tool_scopes into tool dispatch so a contract's per-phase allowlist
   is HARD-enforced (appkit EDIT can't file_write; bootstrap can't shell) + the integration test. Retires
   the CONTRACT-3 / TOOL-1#4 / WPP-3 enforcement follow-ups in one real integration.
+
+## PR CONTRACT-ENFORCE — executor-side per-phase scope enforcement (MECHANISM) — COMPLETE
+- Codex (CODE, binding): APPROVE (after 1 round; both blocking items addressed). Quote: "mechanism is now
+  pure and bounded (metadata-first gating with fallback, executor hook optional/default-none), while runtime
+  still lacks phase-state so deferring wire-up to CONTRACT-ACTIVATE is the only correct way to avoid fake
+  enforcement."
+- NEW core/contract/enforce.py: ScopeDecision + decide_tool_in_scope(scopes, phase, tool, *, is_mutating) +
+  ContractScopeGuard(scopes, phase_provider).check(tool, is_mutating). METADATA-DRIVEN: governed = a MUTATING
+  tool (not read_only) OR a tool the contract scopes to bootstrap/edit/repair/export; verify finalizer always
+  passes (control signal). No name-list bypass (DANGEROUS_TOOLS is fallback-only).
+- CHANGED tools/executor.py: optional scope_guard param; the universal execute() chokepoint denies an
+  out-of-phase tool (kind 'denied', message names the phase + permitted tools) BEFORE it runs; passes
+  is_mutating = not tool.definition.read_only. guard=None ⇒ unchanged (plain agent run).
+- Tests: 13 (7 core decisions incl. metadata-mutator gating + 5 executor integration: file_write DENIED in
+  appkit EDIT and never lands / allowed in REPAIR / semantic+utility+finalizer pass / no-guard unchanged) +
+  the full executor regression (elision/scope/assist/validation) still green. basedpyright strict 0 errors.
+
+### >>> NEXT PR: CONTRACT-ACTIVATE (the activation, building its substrate) <<<
+The runtime tracks artifact_mode as a bare bool (runtime.py:1479); there is NO per-conversation BuildContract
+and NO build-phase signal. CONTRACT-ACTIVATE must BUILD that substrate: (1) per-conversation contract
+resolution (kind → BuildContractRegistry.get_for_brief); (2) a build-phase state machine
+(bootstrap→edit→repair→verify→export) driven by observable loop signals (artifact created? verify failure
+pending? finalizer called?); (3) pass scope_guard=ContractScopeGuard.for_contract(contract, phase_provider)
+at the runtime.py:1489 executor construction (artifact mode); (4) an e2e test that the RUNTIME-built executor
+blocks an out-of-scope call. This RETIRES the CONTRACT-3 + TOOL-1#4 + WPP-2 kernel-wiring + WPP-3 mount
+follow-ups (all are "needs the contract↔loop phase integration", which this builds).
