@@ -950,3 +950,15 @@ On scoping P1's first PR, two issues surfaced that reshape it:
 Remaining for P1: HARN-1b — the Playwright product harness that DRIVES the real UI and WRITES the
 product-evidence.json + provider-call-ledger.jsonl streams these oracles consume (needs a LIVE
 frontend+agent-server stack). Then flip require_product_harness=True in the release gate.
+
+## PR HARN-1b (evidence side) — validated product-evidence writer — COMPLETE
+- Codex (CODE, binding): APPROVE, none blocking (+ optional hardening tests added).
+- NEW harness/build_soak/product_evidence.py: validate_product_evidence (schema problems list; bool-where-int
+  rejected; unknown keys forward-compat) + write_product_evidence(strict=True → validate-before-write, no
+  malformed evidence persisted) + write_provider_ledger. The verified PRODUCER of the HARN-2 oracle contract.
+- Tests: 12 (validation + strict-refusal + the writer→classify_run_folder→oracle LOOP: green PASS,
+  preview-owner FAIL, provider openrouter FAIL). Full HARN suite 105+ green. basedpyright strict: 0 errors.
+- P1 NOW: the entire headlessly-buildable harness layer is DONE — provider ledger + 8 browser oracles +
+  promotion policy + validated evidence writer, all wired into classify/classify_run_folder + Codex-gated.
+  The ONLY remaining P1 work is HARN-1b's LIVE Playwright spec that drives the real UI and calls these
+  writers — it needs a running frontend+agent-server stack (deliberately NOT written as an unrunnable stub).

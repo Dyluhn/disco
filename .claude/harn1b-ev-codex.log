@@ -1,0 +1,1422 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.3-codex-spark
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f0ef0-046d-7f93-abec-8b64f76df6b0
+--------
+user
+# Codex CODE Review — P1 / HARN-1b (evidence side: validated product-evidence writer) — IMPLEMENTED
+
+Inspect harness/build_soak/product_evidence.py + tests/test_product_evidence_writer.py.
+
+This is the verified PRODUCER side of the HARN-2 oracle contract (the oracles READ product_evidence +
+provider-call-ledger; this WRITES them, validated, so the harness can't emit evidence an oracle would
+mis-adjudicate). Pure; does NOT drive a browser (that's HARN-1b's live Playwright spec, which needs a live
+stack and is intentionally not written here — writing an unrunnable spec would be a stub).
+
+- validate_product_evidence(ev) → list[str] problems: known slices must be dicts; declared fields when
+  present must be well-typed; bool-where-int rejected (a bool count is a capture bug); unknown top-level keys
+  allowed (forward-compat).
+- write_product_evidence(folder, ev, strict=True): validates BEFORE writing; strict raises ValueError on a
+  schema problem and writes NOTHING.
+- write_provider_ledger(folder, records): one JSON record per line.
+- Tests (10): validation clean/bool/wrong-type/non-dict/unknown-key; strict-refuses-malformed +
+  non-strict-persists; and the LOOP — writer → classify_run_folder → oracle verdict (green PASS,
+  preview-owner violation FAIL, provider openrouter FAIL).
+
+Tests: 105 passed across the full HARN suite (writer + 8 browser oracles + provider + promotion + classifier
++ output_truth). basedpyright strict 0 errors. (Note: test_bakeoff.py has a PRE-EXISTING import-path quirk
+`from build_soak.bakeoff` unrelated to this PR.)
+
+Judge: (a) is the validate→write-strict contract correct + does it actually prevent malformed evidence from
+reaching the oracles? (b) is bool-where-int rejection + unknown-key tolerance the right strictness? (c) test
+sufficiency. Return APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE + REASONS + REQUIRED_REVISIONS.
+codex
+I’m going to inspect `harness/build_soak/product_evidence.py` and `tests/test_product_evidence_writer.py`, then do a focused review of contract correctness, edge cases around `bool`/`int` typing, forward-compat handling, and whether writes are prevented before persistence. I’ll flag severity-ranked findings and required revisions only.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,240p' harness/build_soak/product_evidence.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""HARN-1b (evidence side) — the validated producer of the product-harness dossier.
+
+The HARN-2 oracles READ a ``product_evidence`` dict + a provider-call ledger. This
+module is the verified WRITER: it validates a captured dossier against the schema the
+oracles expect BEFORE writing it, so a harness bug can't emit malformed evidence that
+an oracle would silently mis-adjudicate. The live Playwright harness captures the raw
+browser data and calls these to serialize ``product-evidence.json`` and
+``provider-call-ledger.jsonl`` into the run folder.
+
+This is pure + unit-tested; it does not drive a browser (that is HARN-1b's live spec).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+# The expected slices and their field types. Each slice is optional (a run that did
+# not export has no "export" slice → the ExportDownload oracle SKIPs), but when a slice
+# IS present its fields must be well-typed so the oracle reads it fail-closed-correctly.
+_SLICE_FIELDS: dict[str, dict[str, type]] = {
+    "browser_ws": {"connections": int},
+    "lifecycle": {"terminal": str},
+    "sidecar": {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
+    "preview": {"owner": str, "manual_port": bool},
+    "shown": {"artifact_shown": bool, "preview_shown": bool},
+    "verification": {"ready_for_verification_called": bool, "passed": bool},
+    "export": {"requested": bool},
+    "cleanup": {"orphans": int, "workspace_released": bool},
+}
+
+PRODUCT_EVIDENCE_NAME = "product-evidence.json"
+PROVIDER_LEDGER_NAME = "provider-call-ledger.jsonl"
+
+
+def validate_product_evidence(ev: dict[str, Any]) -> list[str]:
+    """Return a list of schema problems (empty = valid). Unknown top-level keys are
+    allowed (forward-compat); a known slice must be a dict whose declared fields, when
+    present, carry the right type. ``bool`` is rejected where ``int`` is required (a
+    bool count is a capture bug)."""
+    problems: list[str] = []
+    if not isinstance(ev, dict):
+        return ["product_evidence is not a dict"]
+    for slice_name, fields in _SLICE_FIELDS.items():
+        if slice_name not in ev:
+            continue
+        slice_val = ev[slice_name]
+        if not isinstance(slice_val, dict):
+            problems.append(f"{slice_name}: not a dict")
+            continue
+        for field, typ in fields.items():
+            if field not in slice_val:
+                continue
+            val = slice_val[field]
+            if typ is int and isinstance(val, bool):
+                problems.append(f"{slice_name}.{field}: bool where int expected")
+            elif not isinstance(val, typ):
+                problems.append(f"{slice_name}.{field}: {type(val).__name__} where {typ.__name__} expected")
+    return problems
+
+
+def write_product_evidence(folder: str | Path, ev: dict[str, Any], *, strict: bool = True) -> Path:
+    """Validate then write ``product-evidence.json`` into ``folder``. With
+    ``strict=True`` (default) a schema problem raises ValueError BEFORE writing, so the
+    harness never persists evidence the oracles can't trust."""
+    problems = validate_product_evidence(ev)
+    if problems and strict:
+        raise ValueError(f"product_evidence failed schema validation: {problems}")
+    out = Path(folder) / PRODUCT_EVIDENCE_NAME
+    out.write_text(json.dumps(ev, indent=2, sort_keys=True), encoding="utf-8")
+    return out
+
+
+def write_provider_ledger(folder: str | Path, records: list[dict[str, Any]]) -> Path:
+    """Write ``provider-call-ledger.jsonl`` (one JSON record per line). Each record
+    should carry at least a ``host``; the ProviderLedgerOracle fail-closes on a hostless
+    record, so a non-dict / hostless entry here would surface as an evidence gap."""
+    out = Path(folder) / PROVIDER_LEDGER_NAME
+    lines = [json.dumps(r, sort_keys=True) for r in records]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out
+
+exec
+/bin/bash -lc "sed -n '1,260p' tests/test_product_evidence_writer.py" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+sed: can't read tests/test_product_evidence_writer.py: No such file or directory
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg --files | rg 'test_product_evidence_writer.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/tests/test_product_evidence_writer.py
+
+codex
+I found the implementation file and located the test under `harness/build_soak/tests`; I’ll inspect that test next and then review behavior against your contract criteria.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,320p' harness/build_soak/tests/test_product_evidence_writer.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""HARN-1b (evidence side) tests: the validated product-evidence writer closes the
+loop with the HARN-2 oracles (write → classify_run_folder → verdict)."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from _eventlog import clean_smoke_log
+
+from harness.build_soak.classify import classify_run_folder
+from harness.build_soak.product_evidence import (
+    validate_product_evidence,
+    write_product_evidence,
+    write_provider_ledger,
+)
+
+
+def _green():
+    return {
+        "browser_ws": {"connections": 1},
+        "lifecycle": {"terminal": "FINISHED"},
+        "sidecar": {"stopped_at_terminal": True, "provider_calls_after_terminal": 0},
+        "preview": {"owner": "platform", "manual_port": False},
+        "shown": {"artifact_shown": True, "preview_shown": True},
+        "verification": {"ready_for_verification_called": True, "passed": True},
+        "export": {"requested": False},
+        "cleanup": {"orphans": 0, "workspace_released": True},
+    }
+
+
+def _scn():
+    return {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+
+
+# --- validation ---------------------------------------------------------------
+def test_green_evidence_validates_clean():
+    assert validate_product_evidence(_green()) == []
+
+
+def test_bool_where_int_is_a_problem():
+    ev = _green(); ev["browser_ws"]["connections"] = True
+    probs = validate_product_evidence(ev)
+    assert any("browser_ws.connections" in p and "bool" in p for p in probs)
+
+
+def test_wrong_type_is_a_problem():
+    ev = _green(); ev["sidecar"]["provider_calls_after_terminal"] = "n/a"
+    probs = validate_product_evidence(ev)
+    assert any("sidecar.provider_calls_after_terminal" in p for p in probs)
+
+
+def test_non_dict_slice_is_a_problem():
+    ev = _green(); ev["preview"] = ["not", "a", "dict"]
+    assert any("preview: not a dict" == p for p in validate_product_evidence(ev))
+
+
+def test_unknown_top_level_key_allowed():
+    ev = _green(); ev["future_slice"] = {"anything": 1}
+    assert validate_product_evidence(ev) == []
+
+
+# --- strict write refuses malformed evidence ----------------------------------
+def test_strict_write_raises_on_malformed(tmp_path):
+    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+    with pytest.raises(ValueError):
+        write_product_evidence(tmp_path, ev)
+    assert not (tmp_path / "product-evidence.json").exists()  # nothing written
+
+
+def test_non_strict_write_persists_anyway(tmp_path):
+    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+    p = write_product_evidence(tmp_path, ev, strict=False)
+    assert p.exists()
+
+
+# --- the loop: writer → classify_run_folder → oracle verdict ------------------
+def test_written_green_evidence_classifies_pass(tmp_path):
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    write_product_evidence(tmp_path, _green())
+    assert classify_run_folder(tmp_path, scenario=_scn())["status"] == "PASS"
+
+
+def test_written_violation_classifies_fail(tmp_path):
+    ev = _green(); ev["preview"]["owner"] = "model"
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    write_product_evidence(tmp_path, ev)
+    c = classify_run_folder(tmp_path, scenario=_scn())
+    assert c["status"] == "FAIL" and c["code"] == "PREVIEW_OWNERSHIP_VIOLATION"
+
+
+# --- provider ledger writer round-trips through the ProviderLedgerOracle -------
+def test_provider_ledger_writer_round_trip(tmp_path):
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    write_provider_ledger(tmp_path, [{"host": "openrouter.ai", "model": "MiniMax-M3"}])
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax", "model": "MiniMax-M3"},
+        },
+    }
+    c = classify_run_folder(tmp_path, scenario=scenario)
+    assert c["status"] == "FAIL" and c["code"] == "PROVIDER_FORBIDDEN"
+
+codex
+I’ve confirmed the two target files; next I’m checking how `classify_run_folder` consumes these artifacts to validate that strict mode truly gates malformed evidence before oracle evaluation.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "product-evidence|product_evidence|provider-call-ledger|validate_product_evidence|PROVIDER_FORBIDDEN|PREVIEW_OWNERSHIP" harness/build_soak | head -n 80' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/product_evidence.py:3:The HARN-2 oracles READ a ``product_evidence`` dict + a provider-call ledger. This
+harness/build_soak/product_evidence.py:7:browser data and calls these to serialize ``product-evidence.json`` and
+harness/build_soak/product_evidence.py:8:``provider-call-ledger.jsonl`` into the run folder.
+harness/build_soak/product_evidence.py:33:PRODUCT_EVIDENCE_NAME = "product-evidence.json"
+harness/build_soak/product_evidence.py:34:PROVIDER_LEDGER_NAME = "provider-call-ledger.jsonl"
+harness/build_soak/product_evidence.py:37:def validate_product_evidence(ev: dict[str, Any]) -> list[str]:
+harness/build_soak/product_evidence.py:44:        return ["product_evidence is not a dict"]
+harness/build_soak/product_evidence.py:63:def write_product_evidence(folder: str | Path, ev: dict[str, Any], *, strict: bool = True) -> Path:
+harness/build_soak/product_evidence.py:64:    """Validate then write ``product-evidence.json`` into ``folder``. With
+harness/build_soak/product_evidence.py:67:    problems = validate_product_evidence(ev)
+harness/build_soak/product_evidence.py:69:        raise ValueError(f"product_evidence failed schema validation: {problems}")
+harness/build_soak/product_evidence.py:76:    """Write ``provider-call-ledger.jsonl`` (one JSON record per line). Each record
+harness/build_soak/classify.py:84:    product_evidence: dict[str, Any] | None = None,
+harness/build_soak/classify.py:153:        # slice, so a headless run (product_evidence is None) is unaffected; a product-
+harness/build_soak/classify.py:156:            results += _oracle_cls().check(product_evidence=product_evidence)
+harness/build_soak/classify.py:238:    ledger_path = base / "provider-call-ledger.jsonl"
+harness/build_soak/classify.py:240:        ledger_path = next(iter(base.rglob("provider-call-ledger.jsonl")), ledger_path)
+harness/build_soak/classify.py:246:    product_evidence: dict[str, Any] | None = None
+harness/build_soak/classify.py:247:    pe_path = base / "product-evidence.json"
+harness/build_soak/classify.py:249:        pe_path = next(iter(base.rglob("product-evidence.json")), pe_path)
+harness/build_soak/classify.py:253:            product_evidence = loaded if isinstance(loaded, dict) else None
+harness/build_soak/classify.py:255:            product_evidence = None
+harness/build_soak/classify.py:266:        product_evidence=product_evidence,
+harness/build_soak/classify.py:284:    """Tolerant provider-call-ledger reader: never crashes on a malformed line and
+harness/build_soak/run.py:633:        product_evidence=getattr(run, "product_evidence", None),
+harness/build_soak/failure_codes.py:71:# rule from the provider-call-ledger evidence. All P0.
+harness/build_soak/failure_codes.py:72:PROVIDER_FORBIDDEN = "PROVIDER_FORBIDDEN"
+harness/build_soak/failure_codes.py:80:PREVIEW_OWNERSHIP_VIOLATION = "PREVIEW_OWNERSHIP_VIOLATION"  # model owned a port/url, not the platform
+harness/build_soak/failure_codes.py:176:    PROVIDER_FORBIDDEN: P0,
+harness/build_soak/failure_codes.py:182:    PREVIEW_OWNERSHIP_VIOLATION: P0,
+harness/build_soak/promotion.py:12:- the PROVIDER constraint holds: no PROVIDER_FORBIDDEN / PROVIDER_WRONG_MODEL /
+harness/build_soak/promotion.py:30:    {fc.PROVIDER_FORBIDDEN, fc.PROVIDER_WRONG_MODEL, fc.PROVIDER_CALL_AFTER_TERMINAL}
+harness/build_soak/provider_ledger.py:3:A provider-call-ledger is the per-run record of every LLM provider request the build
+harness/build_soak/tests/test_product_evidence_writer.py:1:"""HARN-1b (evidence side) tests: the validated product-evidence writer closes the
+harness/build_soak/tests/test_product_evidence_writer.py:12:from harness.build_soak.product_evidence import (
+harness/build_soak/tests/test_product_evidence_writer.py:13:    validate_product_evidence,
+harness/build_soak/tests/test_product_evidence_writer.py:14:    write_product_evidence,
+harness/build_soak/tests/test_product_evidence_writer.py:38:    assert validate_product_evidence(_green()) == []
+harness/build_soak/tests/test_product_evidence_writer.py:43:    probs = validate_product_evidence(ev)
+harness/build_soak/tests/test_product_evidence_writer.py:49:    probs = validate_product_evidence(ev)
+harness/build_soak/tests/test_product_evidence_writer.py:55:    assert any("preview: not a dict" == p for p in validate_product_evidence(ev))
+harness/build_soak/tests/test_product_evidence_writer.py:60:    assert validate_product_evidence(ev) == []
+harness/build_soak/tests/test_product_evidence_writer.py:67:        write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_product_evidence_writer.py:68:    assert not (tmp_path / "product-evidence.json").exists()  # nothing written
+harness/build_soak/tests/test_product_evidence_writer.py:73:    p = write_product_evidence(tmp_path, ev, strict=False)
+harness/build_soak/tests/test_product_evidence_writer.py:82:    write_product_evidence(tmp_path, _green())
+harness/build_soak/tests/test_product_evidence_writer.py:91:    write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_product_evidence_writer.py:93:    assert c["status"] == "FAIL" and c["code"] == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_product_evidence_writer.py:110:    assert c["status"] == "FAIL" and c["code"] == "PROVIDER_FORBIDDEN"
+harness/build_soak/tests/test_browser_evidence_oracles.py:39:        r = cls().check(product_evidence=None)
+harness/build_soak/tests/test_browser_evidence_oracles.py:50:        r = cls().check(product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:57:    assert BrowserWSOracle().check(product_evidence=ev)[0].code == "BROWSER_WS_NOT_CONNECTED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:62:    assert LifecycleOracle().check(product_evidence=ev)[0].code == "LIFECYCLE_SEQUENCE_INVALID"
+harness/build_soak/tests/test_browser_evidence_oracles.py:67:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:72:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:77:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:82:    assert ShowToUserOracle().check(product_evidence=ev)[0].code == "ARTIFACT_NOT_SHOWN_TO_USER"
+harness/build_soak/tests/test_browser_evidence_oracles.py:87:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:92:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:97:    assert ExportDownloadOracle().check(product_evidence=ev)[0].skipped
+harness/build_soak/tests/test_browser_evidence_oracles.py:102:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:110:def test_classify_unaffected_without_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:111:    # headless run: product_evidence None → all browser oracles SKIP → still PASS
+harness/build_soak/tests/test_browser_evidence_oracles.py:115:def test_classify_passes_with_green_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:116:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=_green_evidence())
+harness/build_soak/tests/test_browser_evidence_oracles.py:122:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:131:    r = BrowserWSOracle().check(product_evidence=ev)  # must not raise
+harness/build_soak/tests/test_browser_evidence_oracles.py:137:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:142:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:147:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:152:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:157:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:160:# --- classify_run_folder reads product-evidence.json --------------------------
+harness/build_soak/tests/test_browser_evidence_oracles.py:161:def test_run_folder_reads_product_evidence_green(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:168:    (tmp_path / "product-evidence.json").write_text(_json.dumps(_green_evidence()), encoding="utf-8")
+harness/build_soak/tests/test_browser_evidence_oracles.py:173:def test_run_folder_product_evidence_violation_fails(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:181:    (tmp_path / "product-evidence.json").write_text(_json.dumps(ev), encoding="utf-8")
+harness/build_soak/tests/test_browser_evidence_oracles.py:186:def test_run_folder_corrupt_product_evidence_does_not_crash(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:192:    (tmp_path / "product-evidence.json").write_text("{ not valid json", encoding="utf-8")
+harness/build_soak/tests/test_promotion.py:50:    r = evaluate_product_promotion([_fail(code="PROVIDER_FORBIDDEN")])
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '220,320p' harness/build_soak/classify.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+
+    events_raw: list[Any] = []
+    events_rel = (manifest.evidence_files.get("events") if manifest else None) or "events.jsonl"
+    events_path = base / events_rel
+    if not events_path.is_file():
+        # try the conventional conversation-scoped path
+        for candidate in base.rglob("events.jsonl"):
+            events_path = candidate
+            break
+    if events_path.is_file():
+        events_raw = _read_jsonl(events_path)
+
+    # HARN-1a: the provider-call ledger (MiniMax-only / no-OpenRouter enforcement).
+    # Read it if present anywhere in the run folder; absent → the oracle SKIPs (or
+    # fails closed if the scenario requires it). A malformed line is NOT silently
+    # dropped (that would under-report a forbidden call) nor crashes classification —
+    # it becomes a hostless record the ProviderLedgerOracle fails on as an evidence gap.
+    provider_ledger: list[dict[str, Any]] | None = None
+    ledger_path = base / "provider-call-ledger.jsonl"
+    if not ledger_path.is_file():
+        ledger_path = next(iter(base.rglob("provider-call-ledger.jsonl")), ledger_path)
+    if ledger_path.is_file():
+        provider_ledger = _read_ledger(ledger_path)
+
+    # HARN-2: the browser product-harness evidence dossier (a single JSON object).
+    # Absent → the browser oracles SKIP (headless run unaffected).
+    product_evidence: dict[str, Any] | None = None
+    pe_path = base / "product-evidence.json"
+    if not pe_path.is_file():
+        pe_path = next(iter(base.rglob("product-evidence.json")), pe_path)
+    if pe_path.is_file():
+        try:
+            loaded = json.loads(pe_path.read_text(encoding="utf-8"))
+            product_evidence = loaded if isinstance(loaded, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            product_evidence = None
+
+    classification = classify(
+        events_raw,
+        scenario=scenario,
+        run_id=manifest.run_id if manifest else base.name,
+        commit=manifest.repo_commit if manifest else "",
+        seed=manifest.seed if manifest else None,
+        evidence_intact=evidence_intact,
+        autonomous=manifest.autonomous if manifest else None,
+        provider_ledger=provider_ledger,
+        product_evidence=product_evidence,
+    )
+    (base / CLASSIFICATION_NAME).write_text(
+        json.dumps(classification, indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return classification
+
+
+def _read_jsonl(path: str | Path) -> list[Any]:
+    out: list[Any] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            out.append(json.loads(line))
+    return out
+
+
+def _read_ledger(path: str | Path) -> list[dict[str, Any]]:
+    """Tolerant provider-call-ledger reader: never crashes on a malformed line and
+    never silently drops one. A non-JSON / non-dict line becomes a hostless
+    ``{"__malformed__": ...}`` record so the ProviderLedgerOracle surfaces it as an
+    evidence gap (rather than under-reporting a possibly-forbidden call)."""
+    out: list[dict[str, Any]] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            out.append({"__malformed__": line[:160]})
+            continue
+        out.append(obj if isinstance(obj, dict) else {"__malformed__": str(obj)[:160]})
+    return out
+
+
+# ---- §17 no-fluke replay policy (pure function) -----------------------------
+
+
+def intermittent_classification(
+    original: dict[str, Any],
+    *,
+    replay_status: str,
+    replay_code: str | None = None,
+    replay_run_id: str | None = None,
+) -> dict[str, Any]:
+    """Apply the no-fluke replay policy (§17) to an originally-FAILED run.
+
+    A failed run that PASSES on exact replay is NOT a pass — it is an intermittent
+    failure: status stays FAIL, code becomes INTERMITTENT_<original_code> with the
+    SAME severity. A replay that fails the same way is a deterministic failure
+    (unchanged). The word "fluke" never yields PASS.
+
+    Returns a NEW classification dict; the input is not mutated."""
+    if original.get("status") != fc.FAIL:
+
+codex
+I confirmed `classify_run_folder` already parses malformed JSON as `None` and tolerates malformed ledger lines as explicit hostless evidence gaps. I’ll quickly inspect a representative oracle to see whether malformed field types are currently tolerated or could be mis-evaluated.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/oracles.py" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+sed: can't read harness/build_soak/oracles.py: No such file or directory
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg --files harness/build_soak | rg 'oracle|oracles'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/tests/test_browser_evidence_oracles.py
+harness/build_soak/tests/test_provider_ledger_oracle.py
+harness/build_soak/tests/test_revision_oracle.py
+harness/build_soak/tests/test_output_truth_oracle.py
+harness/build_soak/tests/test_oracle_schema.py
+harness/build_soak/tests/test_event_chain_oracle.py
+harness/build_soak/oracles/browser_evidence.py
+harness/build_soak/oracles/__init__.py
+harness/build_soak/oracles/provider_ledger.py
+harness/build_soak/oracles/output_truth.py
+harness/build_soak/oracles/tool_scope.py
+harness/build_soak/oracles/schema.py
+harness/build_soak/oracles/revision.py
+harness/build_soak/oracles/harness_validity.py
+harness/build_soak/oracles/event_chain.py
+harness/build_soak/oracles/contract.py
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,320p' harness/build_soak/oracles/browser_evidence.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""HARN-2 — the browser product-harness oracles.
+
+These eight zero-opinion oracles judge the REAL product path (not just that the
+engine wrote files) over the browser evidence HARN-1b captures into a single
+``product_evidence`` dict. Each oracle reads its own slice; when the slice is absent
+(a headless run, or HARN-1b not yet wired) it SKIPS — so these never affect headless
+classification until a product-harness run supplies the evidence.
+
+product_evidence (the HARN-1b dossier, all keys optional):
+    {
+      "browser_ws":   {"connections": int, "closes": [{"code": int, "reason": str}]},
+      "lifecycle":    {"statuses": ["RUNNING", ...], "terminal": "FINISHED"|...},
+      "sidecar":      {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
+      "preview":      {"owner": "platform"|"model", "manual_port": bool,
+                       "shown_to_user": bool, "url": str},
+      "shown":        {"artifact_shown": bool, "preview_shown": bool},
+      "verification": {"ready_for_verification_called": bool, "passed": bool},
+      "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
+      "cleanup":      {"orphans": int, "workspace_released": bool},
+    }
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from .schema import OracleResult, failing, passing, skipping
+
+_TERMINAL_OK = frozenset({"FINISHED", "VERIFIED"})
+
+
+def _slice(product_evidence: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+    if not product_evidence:
+        return None
+    val = product_evidence.get(key)
+    return val if isinstance(val, dict) else None
+
+
+def _int(v: Any) -> int | None:
+    """Safe int coercion: returns None for a missing/non-numeric/bool value so a
+    malformed count can be handled fail-closed instead of crashing classification."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+class BrowserWSOracle:
+    """The real browser opened (and kept) a build WebSocket — the 'silently dropped'
+    bug class where the UI never connects yet the engine runs blind."""
+
+    _NAME = "browser_ws"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ws = _slice(product_evidence, "browser_ws")
+        if ws is None:
+            return [skipping(self._NAME, reason="no browser_ws evidence (headless run)")]
+        conns = _int(ws.get("connections"))
+        if conns is None or conns <= 0:  # missing/malformed/zero → fail-closed
+            return [
+                failing(
+                    self._NAME,
+                    fc.BROWSER_WS_NOT_CONNECTED,
+                    first_broken_link="build -> browser_ws_connected",
+                    facts={"connections": ws.get("connections")},
+                )
+            ]
+        return [passing(self._NAME, facts={"connections": conns})]
+
+
+class LifecycleOracle:
+    """The conversation status progressed to a clean terminal (no RUNNING-forever,
+    no missing terminal)."""
+
+    _NAME = "lifecycle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        lc = _slice(product_evidence, "lifecycle")
+        if lc is None:
+            return [skipping(self._NAME, reason="no lifecycle evidence (headless run)")]
+        terminal = str(lc.get("terminal") or "")
+        if terminal not in _TERMINAL_OK:
+            return [
+                failing(
+                    self._NAME,
+                    fc.LIFECYCLE_SEQUENCE_INVALID,
+                    first_broken_link="build -> clean_terminal",
+                    facts={"terminal": terminal or None, "statuses": lc.get("statuses")},
+                )
+            ]
+        return [passing(self._NAME, facts={"terminal": terminal})]
+
+
+class SidecarStopOracle:
+    """The Pi sidecar (and provider calls) stopped at the terminal state — no runaway
+    token burn."""
+
+    _NAME = "sidecar_stop"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        sc = _slice(product_evidence, "sidecar")
+        if sc is None:
+            return [skipping(self._NAME, reason="no sidecar evidence (headless run)")]
+        calls_after = _int(sc.get("provider_calls_after_terminal", 0))
+        # require an EXPLICIT stop + a well-formed zero post-terminal call count.
+        if sc.get("stopped_at_terminal", False) is not True or calls_after is None or calls_after > 0:
+            return [
+                failing(
+                    self._NAME,
+                    fc.SIDECAR_NOT_STOPPED,
+                    first_broken_link="terminal -> sidecar_stopped",
+                    facts={
+                        "stopped_at_terminal": sc.get("stopped_at_terminal"),
+                        "provider_calls_after_terminal": sc.get("provider_calls_after_terminal"),
+                    },
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class PreviewOwnershipOracle:
+    """The PLATFORM owned the preview port/URL — the model never hand-served a port."""
+
+    _NAME = "preview_ownership"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        pv = _slice(product_evidence, "preview")
+        if pv is None:
+            return [skipping(self._NAME, reason="no preview evidence (headless run)")]
+        # fail-closed: require the owner to be EXPLICITLY "platform" (a missing/unknown
+        # owner cannot prove the platform owned the port) and manual_port not set.
+        if pv.get("owner") != "platform" or pv.get("manual_port", False) is True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.PREVIEW_OWNERSHIP_VIOLATION,
+                    first_broken_link="preview -> platform_owned",
+                    facts={"owner": pv.get("owner"), "manual_port": pv.get("manual_port")},
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class ShowToUserOracle:
+    """The artifact/preview was actually SHOWN to the user — file existence is not the
+    same as the UI presenting it."""
+
+    _NAME = "show_to_user"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        shown = _slice(product_evidence, "shown")
+        if shown is None:
+            return [skipping(self._NAME, reason="no shown evidence (headless run)")]
+        if not (shown.get("artifact_shown", False) or shown.get("preview_shown", False)):
+            return [
+                failing(
+                    self._NAME,
+                    fc.ARTIFACT_NOT_SHOWN_TO_USER,
+                    first_broken_link="finish -> shown_to_user",
+                    facts={k: bool(shown.get(k, False)) for k in ("artifact_shown", "preview_shown")},
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class VerificationGateOracle:
+    """Completion went THROUGH the host-owned verification finalizer (ready_for_*_
+    verification), not a model self-declared finish."""
+
+    _NAME = "verification_gate"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        vf = _slice(product_evidence, "verification")
+        if vf is None:
+            return [skipping(self._NAME, reason="no verification evidence (headless run)")]
+        # fail-closed: require BOTH flags explicitly True.
+        if vf.get("ready_for_verification_called", False) is not True or vf.get("passed", False) is not True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.VERIFICATION_GATE_BYPASSED,
+                    first_broken_link="finish -> verification_gate",
+                    facts={
+                        "ready_for_verification_called": bool(vf.get("ready_for_verification_called", False)),
+                        "passed": bool(vf.get("passed", False)),
+                    },
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class ExportDownloadOracle:
+    """When an export was requested, a real download was delivered (non-empty)."""
+
+    _NAME = "export_download"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ex = _slice(product_evidence, "export")
+        if ex is None:
+            return [skipping(self._NAME, reason="no export evidence (headless run)")]
+        if not ex.get("requested", False):
+            return [skipping(self._NAME, reason="no export requested")]
+        nbytes = _int(ex.get("download_bytes", 0))
+        if ex.get("download_present", False) is not True or nbytes is None or nbytes <= 0:
+            return [
+                failing(
+                    self._NAME,
+                    fc.EXPORT_DOWNLOAD_MISSING,
+                    first_broken_link="export -> download_delivered",
+                    facts={
+                        "download_present": ex.get("download_present"),
+                        "download_bytes": ex.get("download_bytes"),
+                    },
+                )
+            ]
+        return [passing(self._NAME, facts={"download_bytes": nbytes})]
+
+
+class CleanupOracle:
+    """No orphan container/sandbox/preview survived the terminal state."""
+
+    _NAME = "cleanup"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        cu = _slice(product_evidence, "cleanup")
+        if cu is None:
+            return [skipping(self._NAME, reason="no cleanup evidence (headless run)")]
+        orphans = _int(cu.get("orphans", 0))
+        # fail-closed: malformed orphan count, any orphan, or a non-explicit release.
+        if orphans is None or orphans > 0 or cu.get("workspace_released", False) is not True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.WORKSPACE_NOT_CLEANED,
+                    first_broken_link="terminal -> resources_released",
+                    facts={"orphans": cu.get("orphans"), "workspace_released": cu.get("workspace_released")},
+                )
+            ]
+        return [passing(self._NAME, facts={"orphans": 0})]
+
+
+# The ordered family the classifier runs (each SKIPs without its evidence slice).
+BROWSER_EVIDENCE_ORACLES = (
+    BrowserWSOracle,
+    LifecycleOracle,
+    SidecarStopOracle,
+    PreviewOwnershipOracle,
+    ShowToUserOracle,
+    VerificationGateOracle,
+    ExportDownloadOracle,
+    CleanupOracle,
+)
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/oracles/provider_ledger.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""ProviderLedgerOracle (HARN-1a / HARN-2) — enforces the soak provider constraint
+over the provider-call-ledger evidence.
+
+Zero-opinion: it reads the ledger (the list of provider calls made during the run)
+and the scenario's provider assertion, and fails on a concrete, observed violation:
+- a call to a FORBIDDEN host (default: openrouter) or a host that isn't the required one
+  → PROVIDER_FORBIDDEN
+- a call using the WRONG model (not the pinned soak model) → PROVIDER_WRONG_MODEL
+- a call that fired AFTER the conversation went terminal (runaway burn)
+  → PROVIDER_CALL_AFTER_TERMINAL
+
+Enforcement is OPT-IN per scenario: it runs only when the scenario declares
+``assertions.provider`` (so ordinary dev scenarios are not failed for using other
+providers). When enforcement is required but no ledger was captured, it SKIPS with a
+reason rather than passing or failing — absent evidence is not a verdict. (The final
+P17 soak requires the ledger present + enforcement on.)
+
+scenario.assertions.provider (all keys optional):
+    {"forbid_host_substr": ["openrouter"],   # default ["openrouter"] if provider asserted
+     "require_host_substr": "minimax",        # every call's host must contain this
+     "model": "MiniMax-M3"}                    # every call must use exactly this model
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from .schema import OracleResult, failing, passing, skipping
+
+_ORACLE = "provider_ledger"
+_DEFAULT_FORBID = ("openrouter",)
+
+
+class ProviderLedgerOracle:
+    def check(
+        self,
+        events: list[dict[str, Any]],
+        *,
+        scenario: dict[str, Any] | None = None,
+        provider_ledger: list[dict[str, Any]] | None = None,
+    ) -> list[OracleResult]:
+        prov = (scenario or {}).get("assertions", {}).get("provider")
+        if not prov:
+            return [skipping(_ORACLE, reason="scenario asserts no provider enforcement")]
+
+        # FAIL-CLOSED evidence posture (default). When provider enforcement is asserted
+        # the ledger is REQUIRED evidence: absent (None = no file), empty (captured zero
+        # records), or malformed (a record missing a host) is an adjudication gap, NOT a
+        # silent pass — it maps to MISSING_REQUIRED_EVIDENCE → INVALID_RUN. A scenario may
+        # opt out with `require_ledger: false` (then absent/empty → SKIP).
+        require_ledger = prov.get("require_ledger", True)
+
+        if provider_ledger is None:
+            if require_ledger:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.MISSING_REQUIRED_EVIDENCE,
+                        first_broken_link="soak -> provider_ledger_captured",
+                        facts={"captured": False, "reason": "no provider-call ledger file"},
+                    )
+                ]
+            return [skipping(_ORACLE, reason="no provider-call ledger captured (require_ledger=false)")]
+
+        if len(provider_ledger) == 0:
+            if require_ledger:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.MISSING_REQUIRED_EVIDENCE,
+                        first_broken_link="soak -> provider_ledger_nonempty",
+                        facts={"captured": True, "records": 0},
+                    )
+                ]
+            return [skipping(_ORACLE, reason="provider-call ledger captured but empty (require_ledger=false)")]
+
+        # Validate record shape: a non-dict or hostless record means corrupt/under-captured
+        # evidence — fail-closed rather than under-report a possibly-forbidden call.
+        for i, rec in enumerate(provider_ledger):
+            if not isinstance(rec, dict) or not str(rec.get("host", "")).strip():
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.MISSING_REQUIRED_EVIDENCE,
+                        first_broken_link="soak -> provider_ledger_wellformed",
+                        facts={
+                            "bad_index": i,
+                            "record": rec if isinstance(rec, dict) else str(type(rec).__name__),
+                        },
+                    )
+                ]
+
+        forbid = [s.lower() for s in (prov.get("forbid_host_substr") or _DEFAULT_FORBID)]
+        require_host = prov.get("require_host_substr")
+        require_host = require_host.lower() if isinstance(require_host, str) else None
+        model = prov.get("model")
+
+        for rec in provider_ledger:
+            host = str(rec.get("host", "")).lower()
+            if rec.get("after_terminal"):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PROVIDER_CALL_AFTER_TERMINAL,
+                        first_broken_link="terminal -> no_provider_calls",
+                        facts={"host": host, "model": rec.get("model"), "ts": rec.get("ts")},
+                    )
+                ]
+            for bad in forbid:
+                if bad in host:
+                    return [
+                        failing(
+                            _ORACLE,
+                            fc.PROVIDER_FORBIDDEN,
+                            first_broken_link="soak -> provider_allowed",
+                            facts={"host": host, "forbidden_substr": bad},
+                        )
+                    ]
+            if require_host is not None and require_host not in host:
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PROVIDER_FORBIDDEN,
+                        first_broken_link="soak -> provider_allowed",
+                        facts={"host": host, "required_substr": require_host},
+                    )
+                ]
+            if model and str(rec.get("model", "")) != str(model):
+                return [
+                    failing(
+                        _ORACLE,
+                        fc.PROVIDER_WRONG_MODEL,
+                        first_broken_link="soak -> model_pinned",
+                        facts={"model": rec.get("model"), "expected": model, "host": host},
+                    )
+                ]
+
+        return [passing(_ORACLE, facts={"calls": len(provider_ledger)})]
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '150,240p' harness/build_soak/tests/test_browser_evidence_oracles.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+def test_verification_missing_passed_is_fail_closed():
+    ev = _green_evidence(); ev["verification"] = {"ready_for_verification_called": True}
+    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+
+
+def test_export_malformed_bytes_fail_closed():
+    ev = _green_evidence(); ev["export"] = {"requested": True, "download_present": True, "download_bytes": "big"}
+    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+
+
+# --- classify_run_folder reads product-evidence.json --------------------------
+def test_run_folder_reads_product_evidence_green(tmp_path):
+    import json as _json
+    from harness.build_soak.classify import classify_run_folder
+
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(_json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    (tmp_path / "product-evidence.json").write_text(_json.dumps(_green_evidence()), encoding="utf-8")
+    c = classify_run_folder(tmp_path, scenario=_scn())
+    assert c["status"] == "PASS", c
+
+
+def test_run_folder_product_evidence_violation_fails(tmp_path):
+    import json as _json
+    from harness.build_soak.classify import classify_run_folder
+
+    ev = _green_evidence(); ev["sidecar"]["provider_calls_after_terminal"] = 5
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(_json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    (tmp_path / "product-evidence.json").write_text(_json.dumps(ev), encoding="utf-8")
+    c = classify_run_folder(tmp_path, scenario=_scn())
+    assert c["status"] == "FAIL" and c["code"] == "SIDECAR_NOT_STOPPED"
+
+
+def test_run_folder_corrupt_product_evidence_does_not_crash(tmp_path):
+    from harness.build_soak.classify import classify_run_folder
+
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(__import__("json").dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    (tmp_path / "product-evidence.json").write_text("{ not valid json", encoding="utf-8")
+    c = classify_run_folder(tmp_path, scenario=_scn())  # corrupt → ignored (None) → oracles SKIP
+    assert c["status"] == "PASS", c
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/tests/test_provider_ledger_oracle.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""HARN-1a tests: ProviderLedgerOracle (MiniMax-only / no-OpenRouter /
+zero-calls-after-terminal) + the relay-log parser."""
+
+from __future__ import annotations
+
+import json
+
+from _eventlog import clean_smoke_log
+
+from harness.build_soak.classify import classify
+from harness.build_soak.oracles.provider_ledger import ProviderLedgerOracle
+from harness.build_soak.provider_ledger import parse_relay_log, parse_relay_log_lines
+
+_PROV = {
+    "id": "minimax_soak",
+    "assertions": {
+        "provider": {"require_host_substr": "minimax", "model": "MiniMax-M3"},
+    },
+}
+
+
+def _run(ledger, scenario=_PROV):
+    return ProviderLedgerOracle().check([], scenario=scenario, provider_ledger=ledger)
+
+
+# --- opt-in / skip ------------------------------------------------------------
+def test_skips_when_no_provider_assertion():
+    r = ProviderLedgerOracle().check([], scenario={"id": "x", "assertions": {}}, provider_ledger=[])
+    assert r[0].skipped
+
+
+def test_absent_ledger_fails_closed_by_default():
+    # provider asserted + ledger absent (None) + require_ledger default True → fail-closed
+    r = _run(None)
+    assert r[0].failed
+    assert r[0].code == "MISSING_REQUIRED_EVIDENCE"
+    assert r[0].facts["captured"] is False
+
+
+def test_absent_ledger_skips_when_require_ledger_false():
+    scenario = {"id": "x", "assertions": {"provider": {"model": "MiniMax-M3", "require_ledger": False}}}
+    r = _run(None, scenario=scenario)
+    assert r[0].skipped
+
+
+def test_empty_ledger_fails_closed_distinct_from_absent():
+    r = _run([])
+    assert r[0].failed
+    assert r[0].code == "MISSING_REQUIRED_EVIDENCE"
+    assert r[0].facts["captured"] is True and r[0].facts["records"] == 0
+
+
+def test_malformed_record_fails_closed():
+    # a hostless / non-dict record is corrupt evidence → fail-closed, never under-report
+    r = _run([{"host": "api.minimaxi.com", "model": "MiniMax-M3"}, {"__malformed__": "junk line"}])
+    assert r[0].failed
+    assert r[0].code == "MISSING_REQUIRED_EVIDENCE"
+    assert r[0].facts["bad_index"] == 1
+
+
+# --- pass ---------------------------------------------------------------------
+def test_passes_all_minimax_calls():
+    ledger = [
+        {"host": "api.minimaxi.com", "model": "MiniMax-M3", "after_terminal": False},
+        {"host": "api.minimaxi.com", "model": "MiniMax-M3", "after_terminal": False},
+    ]
+    r = _run(ledger)
+    assert r[0].passed, r[0].to_dict()
+    assert r[0].facts["calls"] == 2
+
+
+# --- the HARD constraint: no OpenRouter --------------------------------------
+def test_openrouter_call_fails():
+    ledger = [
+        {"host": "api.minimaxi.com", "model": "MiniMax-M3"},
+        {"host": "openrouter.ai", "model": "MiniMax-M3"},
+    ]
+    r = _run(ledger)
+    assert r[0].code == "PROVIDER_FORBIDDEN"
+    assert "openrouter" in r[0].facts["host"]
+
+
+def test_non_required_host_fails():
+    ledger = [{"host": "api.openai.com", "model": "MiniMax-M3"}]
+    r = _run(ledger)
+    assert r[0].code == "PROVIDER_FORBIDDEN"
+
+
+def test_wrong_model_fails():
+    ledger = [{"host": "api.minimaxi.com", "model": "gpt-4o"}]
+    r = _run(ledger)
+    assert r[0].code == "PROVIDER_WRONG_MODEL"
+    assert r[0].facts["expected"] == "MiniMax-M3"
+
+
+def test_call_after_terminal_fails():
+    ledger = [
+        {"host": "api.minimaxi.com", "model": "MiniMax-M3", "after_terminal": False},
+        {"host": "api.minimaxi.com", "model": "MiniMax-M3", "after_terminal": True},
+    ]
+    r = _run(ledger)
+    assert r[0].code == "PROVIDER_CALL_AFTER_TERMINAL"
+
+
+def test_default_forbid_is_openrouter_even_without_require_host():
+    scenario = {"id": "x", "assertions": {"provider": {"model": "MiniMax-M3"}}}
+    r = _run([{"host": "openrouter.ai", "model": "MiniMax-M3"}], scenario=scenario)
+    assert r[0].code == "PROVIDER_FORBIDDEN"
+
+
+# --- relay-log parser ---------------------------------------------------------
+def test_parser_jsonl_records():
+    text = '\n'.join([
+        '{"ts": "t1", "host": "api.minimaxi.com", "model": "MiniMax-M3"}',
+        '{"url": "https://openrouter.ai/api/v1/chat", "model": "x"}',
+    ])
+    recs = parse_relay_log(text)
+    assert len(recs) == 2
+    assert recs[0]["host"] == "api.minimaxi.com"
+    assert recs[1]["host"] == "openrouter.ai"  # host derived from url
+
+
+def test_parser_loose_lines():
+    lines = [
+        'POST https://api.minimaxi.com/v1/text/chatcompletion model="MiniMax-M3" 200',
+        'noise line with no url',
+        'GET https://openrouter.ai/api model=foo',
+    ]
+    recs = parse_relay_log_lines(lines)
+    assert [r["host"] for r in recs] == ["api.minimaxi.com", "openrouter.ai"]
+    assert recs[0]["model"] == "MiniMax-M3"
+
+
+def test_parser_skips_hostless_lines():
+    assert parse_relay_log_lines(["", "just text", "  "]) == []
+
+
+# --- end-to-end through classify() --------------------------------------------
+def test_classify_fails_on_openrouter_in_ledger():
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax", "model": "MiniMax-M3"},
+        },
+    }
+    ledger = [{"host": "openrouter.ai", "model": "MiniMax-M3"}]
+    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=ledger)
+    assert c["status"] == "FAIL"
+    assert c["code"] == "PROVIDER_FORBIDDEN"
+    assert c["severity"] == "P0"
+
+
+def test_classify_passes_with_minimax_ledger():
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax", "model": "MiniMax-M3"},
+        },
+    }
+    ledger = [{"host": "api.minimaxi.com", "model": "MiniMax-M3"}]
+    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=ledger)
+    assert c["status"] == "PASS", c
+
+
+def test_classify_required_ledger_absent_is_invalid_run():
+    # provider asserted, require_ledger default True, no ledger → fail-closed INVALID_RUN
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax"},
+        },
+    }
+    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=None)
+    assert c["status"] == "INVALID_RUN", c
+    assert c["code"] == "MISSING_REQUIRED_EVIDENCE"
+
+
+def test_classify_provider_opt_out_passes_without_ledger():
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax", "require_ledger": False},
+        },
+    }
+    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=None)
+    assert c["status"] == "PASS", c  # opted out → SKIP → run passes on the rest
+
+
+# --- classify_run_folder ledger ingestion (tolerant, no crash, no silent drop) ----
+def test_run_folder_reads_ledger_and_enforces(tmp_path):
+    from harness.build_soak.classify import classify_run_folder
+
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    (tmp_path / "provider-call-ledger.jsonl").write_text(
+        '{"host": "openrouter.ai", "model": "MiniMax-M3"}\n', encoding="utf-8"
+    )
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax", "model": "MiniMax-M3"},
+        },
+    }
+    c = classify_run_folder(tmp_path, scenario=scenario)
+    assert c["status"] == "FAIL"
+    assert c["code"] == "PROVIDER_FORBIDDEN"
+
+
+def test_run_folder_malformed_ledger_line_is_evidence_gap_not_crash(tmp_path):
+    from harness.build_soak.classify import classify_run_folder
+
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    # a valid minimax call followed by a corrupt (non-JSON) line — must NOT crash and
+    # must NOT silently drop the bad line (which could hide a forbidden call)
+    (tmp_path / "provider-call-ledger.jsonl").write_text(
+        '{"host": "api.minimaxi.com", "model": "MiniMax-M3"}\n{ this is not json\n',
+        encoding="utf-8",
+    )
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax", "model": "MiniMax-M3"},
+        },
+    }
+    c = classify_run_folder(tmp_path, scenario=scenario)
+    assert c["status"] == "INVALID_RUN"  # corrupt evidence → fail-closed, no crash
+    assert c["code"] == "MISSING_REQUIRED_EVIDENCE"
+
+
+# --- parser edge cases --------------------------------------------------------
+def test_parser_empty_and_blank_input():
+    assert parse_relay_log("") == []
+    assert parse_relay_log("\n\n  \n") == []
+
+
+def test_parser_invalid_json_with_url_falls_back_to_regex():
+    # a non-JSON line that still carries a URL must yield a record (not be dropped)
+    recs = parse_relay_log_lines(['{bad json but https://openrouter.ai/x model=foo'])
+    assert len(recs) == 1 and recs[0]["host"] == "openrouter.ai"
+
+
+def test_parser_after_terminal_defaults_false():
+    recs = parse_relay_log('{"host": "api.minimaxi.com"}')
+    assert recs[0]["after_terminal"] is False
+    assert recs[0]["model"] == ""
+
+codex
+I’ve confirmed the downstream consumer behavior: malformed product evidence currently gets dropped to `None` in `classify_run_folder`, and malformed provider-ORCALE ledger lines become evidence gaps. I’ll now sanity-check schema docs to ensure validation strictness here matches intended contract expectations.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/tests/test_oracle_schema.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""OracleResult schema round-trips + validates (guidelines §10, PR S1)."""
+
+from __future__ import annotations
+
+import pytest
+
+from harness.build_soak.oracles.schema import (
+    FAILED,
+    OK,
+    SKIPPED,
+    OracleResult,
+    failing,
+    passing,
+    skipping,
+)
+
+
+def test_pass_result_round_trips():
+    r = passing("EventChainOracle", facts={"action_count": 2})
+    d = r.to_dict()
+    assert d["oracle"] == "EventChainOracle"
+    assert d["status"] == OK
+    assert OracleResult.from_dict(d) == r
+
+
+def test_fail_result_round_trips_with_link():
+    r = failing(
+        "RevisionOracle",
+        "NO_REPLAN_AFTER_REVISION",
+        first_broken_link="followup_user_event -> revised_plan_event",
+        facts={"followup_user_event_seq": 42},
+    )
+    d = r.to_dict()
+    assert d["status"] == FAILED
+    assert d["code"] == "NO_REPLAN_AFTER_REVISION"
+    assert d["first_broken_link"] == "followup_user_event -> revised_plan_event"
+    assert OracleResult.from_dict(d) == r
+
+
+def test_skip_result_round_trips_with_reason():
+    r = skipping("ToolScopeOracle", reason="needs captured tool scope")
+    d = r.to_dict()
+    assert d["status"] == SKIPPED
+    assert d["reason"] == "needs captured tool scope"
+    assert OracleResult.from_dict(d) == r
+
+
+def test_fail_without_code_is_rejected():
+    with pytest.raises(ValueError):
+        OracleResult(oracle="X", status=FAILED, code=None)
+
+
+def test_bad_status_is_rejected():
+    with pytest.raises(ValueError):
+        OracleResult(oracle="X", status="MAYBE")
+
+
+def test_from_dict_requires_keys():
+    with pytest.raises(ValueError):
+        OracleResult.from_dict({"status": "PASS"})
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "product-evidence|product evidence|browser_ws|preview_ownership|_SLICE_FIELDS|known slices|product_evidence" harness/build_soak | head -n 120' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/product_evidence.py:3:The HARN-2 oracles READ a ``product_evidence`` dict + a provider-call ledger. This
+harness/build_soak/product_evidence.py:7:browser data and calls these to serialize ``product-evidence.json`` and
+harness/build_soak/product_evidence.py:22:_SLICE_FIELDS: dict[str, dict[str, type]] = {
+harness/build_soak/product_evidence.py:23:    "browser_ws": {"connections": int},
+harness/build_soak/product_evidence.py:33:PRODUCT_EVIDENCE_NAME = "product-evidence.json"
+harness/build_soak/product_evidence.py:37:def validate_product_evidence(ev: dict[str, Any]) -> list[str]:
+harness/build_soak/product_evidence.py:44:        return ["product_evidence is not a dict"]
+harness/build_soak/product_evidence.py:45:    for slice_name, fields in _SLICE_FIELDS.items():
+harness/build_soak/product_evidence.py:63:def write_product_evidence(folder: str | Path, ev: dict[str, Any], *, strict: bool = True) -> Path:
+harness/build_soak/product_evidence.py:64:    """Validate then write ``product-evidence.json`` into ``folder``. With
+harness/build_soak/product_evidence.py:67:    problems = validate_product_evidence(ev)
+harness/build_soak/product_evidence.py:69:        raise ValueError(f"product_evidence failed schema validation: {problems}")
+harness/build_soak/classify.py:84:    product_evidence: dict[str, Any] | None = None,
+harness/build_soak/classify.py:153:        # slice, so a headless run (product_evidence is None) is unaffected; a product-
+harness/build_soak/classify.py:156:            results += _oracle_cls().check(product_evidence=product_evidence)
+harness/build_soak/classify.py:246:    product_evidence: dict[str, Any] | None = None
+harness/build_soak/classify.py:247:    pe_path = base / "product-evidence.json"
+harness/build_soak/classify.py:249:        pe_path = next(iter(base.rglob("product-evidence.json")), pe_path)
+harness/build_soak/classify.py:253:            product_evidence = loaded if isinstance(loaded, dict) else None
+harness/build_soak/classify.py:255:            product_evidence = None
+harness/build_soak/classify.py:266:        product_evidence=product_evidence,
+harness/build_soak/run.py:633:        product_evidence=getattr(run, "product_evidence", None),
+harness/build_soak/promotion.py:35:    "browser_ws_connected",
+harness/build_soak/tests/test_product_evidence_writer.py:1:"""HARN-1b (evidence side) tests: the validated product-evidence writer closes the
+harness/build_soak/tests/test_product_evidence_writer.py:12:from harness.build_soak.product_evidence import (
+harness/build_soak/tests/test_product_evidence_writer.py:13:    validate_product_evidence,
+harness/build_soak/tests/test_product_evidence_writer.py:14:    write_product_evidence,
+harness/build_soak/tests/test_product_evidence_writer.py:21:        "browser_ws": {"connections": 1},
+harness/build_soak/tests/test_product_evidence_writer.py:38:    assert validate_product_evidence(_green()) == []
+harness/build_soak/tests/test_product_evidence_writer.py:42:    ev = _green(); ev["browser_ws"]["connections"] = True
+harness/build_soak/tests/test_product_evidence_writer.py:43:    probs = validate_product_evidence(ev)
+harness/build_soak/tests/test_product_evidence_writer.py:44:    assert any("browser_ws.connections" in p and "bool" in p for p in probs)
+harness/build_soak/tests/test_product_evidence_writer.py:49:    probs = validate_product_evidence(ev)
+harness/build_soak/tests/test_product_evidence_writer.py:55:    assert any("preview: not a dict" == p for p in validate_product_evidence(ev))
+harness/build_soak/tests/test_product_evidence_writer.py:60:    assert validate_product_evidence(ev) == []
+harness/build_soak/tests/test_product_evidence_writer.py:65:    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+harness/build_soak/tests/test_product_evidence_writer.py:67:        write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_product_evidence_writer.py:68:    assert not (tmp_path / "product-evidence.json").exists()  # nothing written
+harness/build_soak/tests/test_product_evidence_writer.py:72:    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+harness/build_soak/tests/test_product_evidence_writer.py:73:    p = write_product_evidence(tmp_path, ev, strict=False)
+harness/build_soak/tests/test_product_evidence_writer.py:82:    write_product_evidence(tmp_path, _green())
+harness/build_soak/tests/test_product_evidence_writer.py:91:    write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:22:        "browser_ws": {"connections": 1, "closes": [{"code": 1000, "reason": "done"}]},
+harness/build_soak/tests/test_browser_evidence_oracles.py:39:        r = cls().check(product_evidence=None)
+harness/build_soak/tests/test_browser_evidence_oracles.py:50:        r = cls().check(product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:55:def test_browser_ws_not_connected_fails():
+harness/build_soak/tests/test_browser_evidence_oracles.py:56:    ev = _green_evidence(); ev["browser_ws"]["connections"] = 0
+harness/build_soak/tests/test_browser_evidence_oracles.py:57:    assert BrowserWSOracle().check(product_evidence=ev)[0].code == "BROWSER_WS_NOT_CONNECTED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:62:    assert LifecycleOracle().check(product_evidence=ev)[0].code == "LIFECYCLE_SEQUENCE_INVALID"
+harness/build_soak/tests/test_browser_evidence_oracles.py:67:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:72:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:77:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:82:    assert ShowToUserOracle().check(product_evidence=ev)[0].code == "ARTIFACT_NOT_SHOWN_TO_USER"
+harness/build_soak/tests/test_browser_evidence_oracles.py:87:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:92:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:97:    assert ExportDownloadOracle().check(product_evidence=ev)[0].skipped
+harness/build_soak/tests/test_browser_evidence_oracles.py:102:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:110:def test_classify_unaffected_without_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:111:    # headless run: product_evidence None → all browser oracles SKIP → still PASS
+harness/build_soak/tests/test_browser_evidence_oracles.py:115:def test_classify_passes_with_green_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:116:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=_green_evidence())
+harness/build_soak/tests/test_browser_evidence_oracles.py:120:def test_classify_fails_on_browser_ws_not_connected():
+harness/build_soak/tests/test_browser_evidence_oracles.py:121:    ev = _green_evidence(); ev["browser_ws"]["connections"] = 0
+harness/build_soak/tests/test_browser_evidence_oracles.py:122:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:130:    ev = _green_evidence(); ev["browser_ws"]["connections"] = "n/a"
+harness/build_soak/tests/test_browser_evidence_oracles.py:131:    r = BrowserWSOracle().check(product_evidence=ev)  # must not raise
+harness/build_soak/tests/test_browser_evidence_oracles.py:137:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:142:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:147:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:152:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:157:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:160:# --- classify_run_folder reads product-evidence.json --------------------------
+harness/build_soak/tests/test_browser_evidence_oracles.py:161:def test_run_folder_reads_product_evidence_green(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:168:    (tmp_path / "product-evidence.json").write_text(_json.dumps(_green_evidence()), encoding="utf-8")
+harness/build_soak/tests/test_browser_evidence_oracles.py:173:def test_run_folder_product_evidence_violation_fails(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:181:    (tmp_path / "product-evidence.json").write_text(_json.dumps(ev), encoding="utf-8")
+harness/build_soak/tests/test_browser_evidence_oracles.py:186:def test_run_folder_corrupt_product_evidence_does_not_crash(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:192:    (tmp_path / "product-evidence.json").write_text("{ not valid json", encoding="utf-8")
+harness/build_soak/tests/test_promotion.py:77:        "browser_ws_connected": True,
+harness/build_soak/tests/test_promotion.py:89:        "browser_ws_connected": True,
+harness/build_soak/oracles/browser_evidence.py:5:``product_evidence`` dict. Each oracle reads its own slice; when the slice is absent
+harness/build_soak/oracles/browser_evidence.py:9:product_evidence (the HARN-1b dossier, all keys optional):
+harness/build_soak/oracles/browser_evidence.py:11:      "browser_ws":   {"connections": int, "closes": [{"code": int, "reason": str}]},
+harness/build_soak/oracles/browser_evidence.py:33:def _slice(product_evidence: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+harness/build_soak/oracles/browser_evidence.py:34:    if not product_evidence:
+harness/build_soak/oracles/browser_evidence.py:36:    val = product_evidence.get(key)
+harness/build_soak/oracles/browser_evidence.py:55:    _NAME = "browser_ws"
+harness/build_soak/oracles/browser_evidence.py:57:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:58:        ws = _slice(product_evidence, "browser_ws")
+harness/build_soak/oracles/browser_evidence.py:60:            return [skipping(self._NAME, reason="no browser_ws evidence (headless run)")]
+harness/build_soak/oracles/browser_evidence.py:67:                    first_broken_link="build -> browser_ws_connected",
+harness/build_soak/oracles/browser_evidence.py:80:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:81:        lc = _slice(product_evidence, "lifecycle")
+harness/build_soak/oracles/browser_evidence.py:103:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:104:        sc = _slice(product_evidence, "sidecar")
+harness/build_soak/oracles/browser_evidence.py:127:    _NAME = "preview_ownership"
+harness/build_soak/oracles/browser_evidence.py:129:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:130:        pv = _slice(product_evidence, "preview")
+harness/build_soak/oracles/browser_evidence.py:153:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:154:        shown = _slice(product_evidence, "shown")
+harness/build_soak/oracles/browser_evidence.py:175:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:176:        vf = _slice(product_evidence, "verification")
+harness/build_soak/oracles/browser_evidence.py:200:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:201:        ex = _slice(product_evidence, "export")
+harness/build_soak/oracles/browser_evidence.py:227:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:228:        cu = _slice(product_evidence, "cleanup")
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"write_product_evidence\\(|write_provider_ledger\\(\" harness/build_soak | head -n 80" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/product_evidence.py:63:def write_product_evidence(folder: str | Path, ev: dict[str, Any], *, strict: bool = True) -> Path:
+harness/build_soak/product_evidence.py:75:def write_provider_ledger(folder: str | Path, records: list[dict[str, Any]]) -> Path:
+harness/build_soak/tests/test_product_evidence_writer.py:67:        write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_product_evidence_writer.py:73:    p = write_product_evidence(tmp_path, ev, strict=False)
+harness/build_soak/tests/test_product_evidence_writer.py:82:    write_product_evidence(tmp_path, _green())
+harness/build_soak/tests/test_product_evidence_writer.py:91:    write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_product_evidence_writer.py:101:    write_provider_ledger(tmp_path, [{"host": "openrouter.ai", "model": "MiniMax-M3"}])
+
+codex
+APPROVE
+
+REASONS:
+- `validate_product_evidence` enforces the intended schema checks: top-level must be a dict; known slices must be dicts; each declared field is type-checked when present; `bool` is explicitly rejected for `int` fields via the guard, matching the capture-bug prevention requirement. `unknown top-level keys are ignored` by design. See `[harness/build_soak/product_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/product_evidence.py:1)`.
+- `write_product_evidence(..., strict=True)` calls validation first and raises before any write, so malformed input cannot be emitted under default usage. The strict failure/no-write behavior is explicitly covered by tests. See `[harness/build_soak/product_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/product_evidence.py:63)` and `[harness/build_soak/tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:67)`.
+- `write_provider_ledger` writes one JSON object per line as required, and line format is stable/read-consumable by the tolerant ledger reader used by the oracle path. See `[harness/build_soak/product_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/product_evidence.py:75)` and `[harness/build_soak/tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:101)`.
+- The loop tests correctly validate end-to-end semantics through `classify_run_folder` and oracle verdicts for PASS, PREVIEW ownership failure, and provider failure paths, which aligns with contract intent. See `[harness/build_soak/tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:82)` and `[.../tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:101)`.
+
+REQUIRED_REVISIONS:
+- None required for correctness of this PR.
+- Optional hardening (non-blocking): add tests for `validate_product_evidence` with non-dict root input and malformed-but-type-confusable fields across all int fields, to reduce future regression risk.
+tokens used
+32,611
+APPROVE
+
+REASONS:
+- `validate_product_evidence` enforces the intended schema checks: top-level must be a dict; known slices must be dicts; each declared field is type-checked when present; `bool` is explicitly rejected for `int` fields via the guard, matching the capture-bug prevention requirement. `unknown top-level keys are ignored` by design. See `[harness/build_soak/product_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/product_evidence.py:1)`.
+- `write_product_evidence(..., strict=True)` calls validation first and raises before any write, so malformed input cannot be emitted under default usage. The strict failure/no-write behavior is explicitly covered by tests. See `[harness/build_soak/product_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/product_evidence.py:63)` and `[harness/build_soak/tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:67)`.
+- `write_provider_ledger` writes one JSON object per line as required, and line format is stable/read-consumable by the tolerant ledger reader used by the oracle path. See `[harness/build_soak/product_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/product_evidence.py:75)` and `[harness/build_soak/tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:101)`.
+- The loop tests correctly validate end-to-end semantics through `classify_run_folder` and oracle verdicts for PASS, PREVIEW ownership failure, and provider failure paths, which aligns with contract intent. See `[harness/build_soak/tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:82)` and `[.../tests/test_product_evidence_writer.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_product_evidence_writer.py:101)`.
+
+REQUIRED_REVISIONS:
+- None required for correctness of this PR.
+- Optional hardening (non-blocking): add tests for `validate_product_evidence` with non-dict root input and malformed-but-type-confusable fields across all int fields, to reduce future regression risk.
