@@ -7,6 +7,7 @@ All driven through sweep_idle_once() — no sleeping required.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -374,3 +375,69 @@ async def test_http_state_route_overlays_sandbox_state():
 
     assert resp.status_code == 200
     assert resp.json()["extras"]["sandbox"] == "active"
+
+
+# ---- LIFE-3: auto-suspend active-work guard ----------------------------------
+
+
+async def test_live_run_task_blocks_suspend(tmp_path):
+    """A live (not-done) run task means in-flight work — suspend must skip it even
+    when the durable status is idle-ish (PAUSED) and no UI is connected."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime_with_storage(store, str(tmp_path))
+    cid = await _make_conversation(store, ConversationStatus.PAUSED)
+    fake_executor = MagicMock()
+    fake_executor.kill = AsyncMock()
+    rt._executors[cid] = fake_executor
+
+    async def _never() -> None:
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(_never())
+    rt._tasks[cid] = task
+    try:
+        with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
+            count = await rt.sweep_idle_once()
+        assert count == 0
+        assert cid in rt._executors  # NOT suspended — a live run task is active work
+    finally:
+        task.cancel()
+
+
+async def test_live_pi_sidecar_blocks_suspend(tmp_path):
+    """A live Pi sidecar session means in-flight work — suspend must skip it."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime_with_storage(store, str(tmp_path))
+    cid = await _make_conversation(store, ConversationStatus.PAUSED)
+    fake_executor = MagicMock()
+    fake_executor.kill = AsyncMock()
+    rt._executors[cid] = fake_executor
+    rt._pi_kernel._sessions[cid] = MagicMock()  # a live sidecar session
+    try:
+        with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
+            count = await rt.sweep_idle_once()
+        assert count == 0
+        assert cid in rt._executors
+    finally:
+        rt._pi_kernel._sessions.pop(cid, None)
+
+
+async def test_done_run_task_does_not_block_suspend(tmp_path):
+    """A COMPLETED task is not in-flight — it must NOT block suspend."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime_with_storage(store, str(tmp_path))
+    cid = await _make_conversation(store, ConversationStatus.PAUSED)
+    fake_executor = MagicMock()
+    fake_executor.kill = AsyncMock()
+    rt._executors[cid] = fake_executor
+
+    async def _noop() -> None:
+        return None
+
+    t = asyncio.create_task(_noop())
+    await t  # let it finish
+    rt._tasks[cid] = t
+    with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
+        count = await rt.sweep_idle_once()
+    assert count == 1
+    assert cid not in rt._executors  # a done task does not block suspend

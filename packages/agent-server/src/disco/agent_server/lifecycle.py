@@ -286,12 +286,25 @@ class LifecycleManager:
             await self._rt._suspend(conversation_id)
         self._rt._suspend_tasks.pop(conversation_id, None)
 
+    def _has_active_work(self, conversation_id: str) -> bool:
+        """LIFE-3 — True when a suspend would KILL in-flight work even though the
+        durable status is not RUNNING: a live (not-done) run task — the loop is
+        mid-turn / mid-tool-call — or a live Pi sidecar session. (A preview server
+        lives INSIDE the sandbox and is restored from the snapshot on resume, so it
+        does not by itself block suspend.) Disconnect must never destroy active work."""
+        task = self._rt._tasks.get(conversation_id)
+        if task is not None and not task.done():
+            return True
+        pi = getattr(self._rt, "_pi_kernel", None)
+        sessions = getattr(pi, "_sessions", None)
+        return isinstance(sessions, dict) and conversation_id in sessions
+
     async def _suspend(self, conversation_id: str) -> None:
         """Free an IDLE build's sandbox (its last UI closed): snapshot first, then
         tear down the container/port/memory/preview-server. Skips when there's no
         live sandbox, when storage isn't ready (no durable snapshot → keep the
-        sandbox so nothing is lost), or when the loop is actively RUNNING (don't
-        interrupt in-flight work — that run continues in the background). Resume (or
+        sandbox so nothing is lost), when the loop is actively RUNNING, or when there
+        is other in-flight work — a live run task or Pi sidecar (LIFE-3). Resume (or
         the next message) re-creates the sandbox and rehydrates from the snapshot."""
         if conversation_id not in self._rt._executors:
             return
@@ -299,6 +312,8 @@ class LifecycleManager:
             return
         state = await self._rt._store.get_state(conversation_id)
         if state.execution_status is ConversationStatus.RUNNING:
+            return
+        if self._has_active_work(conversation_id):
             return
         with contextlib.suppress(Exception):
             await self._rt._maybe_snapshot(conversation_id)
@@ -339,6 +354,8 @@ class LifecycleManager:
                 if state.execution_status is ConversationStatus.RUNNING:
                     continue
                 if self._rt._connections.get(cid, 0) > 0:
+                    continue
+                if self._has_active_work(cid):  # LIFE-3: never suspend in-flight work
                     continue
                 # Use the last event's timestamp from the store — no parallel clock.
                 events = await self._rt._store.get_events(

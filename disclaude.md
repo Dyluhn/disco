@@ -804,3 +804,49 @@ DEFERRED (surface absent — documented, store method unit-tested, NOT a gate ga
 - LIFE-1 terminal-state sidecar kill · LIFE-2 browser WS truth · LIFE-3 auto-suspend active-work guard ·
   LIFE-4 eager sandbox teardown · LIFE-5 provider gateway final-boundary clamp. Then P1 Product Harness.
 
+## P0B — scout verdict: MOSTLY ALREADY DONE in this clone (Disco-Pi build-kernel had the hardening)
+
+ALREADY SATISFIED (FULL, with tests — VERIFY + document, do NOT rebuild):
+- LIFE-1 sidecar kill + token revoke: pi_kernel.py:382-421 `_conclude` is the single chokepoint →
+  `_revoke_pi_tokens` (runtime.py:2709) + `proc.aclose()`; gateway 401s revoked tokens
+  (routes/pi_inference.py:500). Tests: test_pi_inference_revoke_lifecycle.py (every end-path + 401 live).
+- LIFE-2 WS truth: runtime._connections ledger (runtime.py:691); on_connect/on_disconnect
+  (lifecycle.py:256-288); canonical WS builder agentWsUrl (frontend/src/api/client.ts:59). Tests exist.
+- LIFE-4 eager teardown + snapshot: _maybe_snapshot then _teardown_sandbox (lifecycle.py:612-689 / 75-112);
+  orphan sweep on startup. Tests: test_lifecycle.py.
+- LIFE-5 provider gateway clamp: 3-layer max_tokens clamp + budget reserve (routes/pi_inference.py:327-612).
+  Tests: test_pi_inference_gateway.py.
+
+THE REAL GAP — LIFE-3 (auto-suspend active-work guard): `_suspend` (lifecycle.py:289-307) only refuses
+when status==RUNNING. MISSING guards: active PiKernel sidecar session, parked confirm/plan/ask gates,
+active preview process. → a disconnect during active (non-RUNNING-status but live-work) build could suspend
+and kill in-flight work. Test harness: test_lifecycle.py (_runtime_with_storage + fake executor + sweep).
+
+## PR LIFE-3 — auto-suspend active-work guard
+
+### Status
+PLANNING → EXECUTING → COMPLETE (LIFE-1/2/4/5 verified-as-done; LIFE-3 implemented).
+
+### Codex review (CODE, binding) — APPROVE
+- verdict: APPROVE, no required revisions. LIFE-3 active-work signal (live run task OR live Pi sidecar)
+  correct + sufficient; preview-exclusion correct (sandbox-internal, snapshot-restored); LIFE-1/2/4/5
+  pre-satisfied verdict sound. Log: .claude/p0b-codex-code.log.
+
+### Implementation notes
+- lifecycle.py: NEW `_has_active_work` (live not-done run task in _rt._tasks OR live Pi session in
+  _rt._pi_kernel._sessions); guarded in BOTH `_suspend` and `sweep_idle_once`. The only NEW code in P0B.
+- LIFE-1/2/4/5 were already FULL in this clone (Disco-Pi build-kernel hardening) — VERIFIED by running their
+  suites green, documented above with file:line.
+
+### Tests
+- 89 passed (test_lifecycle.py incl 3 new LIFE-3 + test_pi_inference_revoke_lifecycle + test_pi_inference_gateway).
+  basedpyright strict: 0 errors on lifecycle.py.
+
+=== P0B COMPLETE. Both P0 + P0B done → P1 (Product Harness) is the next gate before any P2+ promotion. ===
+
+### Next: P1 — Product Harness and Zero-Opinion Oracles
+- HARN-1 browser product harness · HARN-2 product oracles (incl the CXT-5 OutputTruthOracle elision rule
+  already wired) · HARN-3 promotion policy. NOTE: a build_soak harness + oracles ALREADY EXIST
+  (harness/build_soak/oracles/*) — P1 likely = AUDIT + fill gaps (browser WS/preview/cleanup oracles), same
+  "verify-what-exists-then-fill" pattern that made P0B one real PR. Scout first.
+
