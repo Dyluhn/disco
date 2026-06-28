@@ -98,7 +98,7 @@ def _interactive_prototype() -> BuildContract:
         bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=("file_write", "preview_start")),
         edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
         verify=VerificationContract(finalizer="ready_for_prototype_verification"),
-        prompt_pack="build_static_site",
+        prompt_pack="build_interactive_prototype",
         ui_card="PrototypeCard",
     )
 

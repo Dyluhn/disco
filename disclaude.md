@@ -1019,3 +1019,18 @@ runtime-enforced — this is an explicit, tracked gap, NOT a silent one.
 ### P2 CONTRACT RUNTIME (CONTRACT-1/2/3) CORE COMPLETE.
 Models + registry + scope compiler all green + Codex-gated. Next P2-adjacent: the executor enforcement
 follow-up above, then P3 (WorkflowPromptPack) / P4 (specialized mutation tools incl. app_*).
+
+## PR WPP-1 — WorkflowPromptPack format + packs (P3) — COMPLETE
+- Codex (CODE, binding): APPROVE (after 1 hardening round — all 5 points resolved).
+- NEW workflows/{__init__,prompt_pack.py} + prompt_packs/*.md (5 packs: build_static_site /
+  build_appkit_leadgen / build_deck / build_document / build_interactive_prototype). PromptPack (frozen,
+  slugged sections + raw) + REQUIRED_SECTIONS(11) + parse_prompt_pack (fence-aware, raises on duplicate
+  section) + PromptPackRegistry (importlib.resources loader, get/require/ids).
+- round-1 fixes: pyproject artifacts ships the .md in the wheel + importlib.resources loader (+ test);
+  interactive.prototype gets its OWN pack (finalizer coherence); appkit pack lists only registered tools
+  (app_* = P4); parser fence/duplicate hardening; finalizer-in-pack coherence test.
+- COHERENCE INVARIANTS proven: every contract's prompt_pack resolves to a COMPLETE pack AND the pack
+  instructs that contract's exact finalizer (no mismatch).
+- Tests: 12 WPP-1 + contract regression. basedpyright strict: 0 errors.
+- NEXT: WPP-2 (kernel-neutral prompt assembly: both kernels consume stable prefix + ContextPack +
+  WorkflowPromptPack + recent turns + tool schema) → WPP-3 (skill mount policy).

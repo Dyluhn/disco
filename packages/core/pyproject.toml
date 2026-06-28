@@ -23,3 +23,6 @@ build-backend = "hatchling.build"
 # namespace dir and hatch packages everything beneath it.
 [tool.hatch.build.targets.wheel]
 packages = ["src/disco"]
+# WPP-1: ship the bundled workflow prompt packs (markdown) in the wheel so the
+# PromptPackRegistry can load them from an installed package, not just from src.
+artifacts = ["src/disco/core/workflows/prompt_packs/*.md"]
