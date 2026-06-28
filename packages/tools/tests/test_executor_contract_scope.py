@@ -12,7 +12,13 @@ from __future__ import annotations
 
 import pytest
 
-from disco.core.contract import BuildContractRegistry, ContractKind, ContractScopeGuard, Phase
+from disco.core.contract import (
+    BuildContractRegistry,
+    BuildPhaseTracker,
+    ContractKind,
+    ContractScopeGuard,
+    Phase,
+)
 from disco.core.events import ToolResult
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
@@ -78,6 +84,31 @@ async def test_file_write_allowed_in_repair_phase() -> None:
     res = await ex.execute(call("file_write", path="index.html", content="<h1>fix</h1>"))
     assert not _scope_denied(res)  # repair permits raw write
     assert res.success and sbx._fs.get("index.html")
+
+
+@pytest.mark.asyncio
+async def test_live_phase_advance_then_block_end_to_end() -> None:
+    # CONTRACT-ACTIVATE end-to-end: a real bootstrap tool succeeds → the tracker
+    # advances BOOTSTRAP→EDIT via the executor's on_tool_success → a subsequent raw
+    # file_write is then denied. This is exactly the runtime's wiring.
+    sbx = FakeSandboxInstance()
+    tracker = BuildPhaseTracker(_appkit())
+    ex = DefaultToolExecutor(
+        build_default_registry(),
+        agent_scope(model_policy=_STANDARD),
+        sandbox=sbx,
+        scope_guard=ContractScopeGuard.for_contract(_appkit(), tracker.current),
+        on_tool_success=tracker.note_tool_success,
+    )
+    assert tracker.current() is Phase.BOOTSTRAP
+    # file_write is blocked even in BOOTSTRAP (appkit bootstrap = app_create only)
+    assert _scope_denied(await ex.execute(call("file_write", path="index.html", content="x")))
+    # the real bootstrap tool runs + succeeds → advances the phase to EDIT
+    created = await ex.execute(call("app_create", title="Acme"))
+    assert created.success and tracker.current() is Phase.EDIT
+    assert ".disco/appspec.json" in sbx._fs
+    # now in EDIT: raw file_write is denied (must use the semantic app_* tools)
+    assert _scope_denied(await ex.execute(call("file_write", path="index.html", content="y")))
 
 
 @pytest.mark.asyncio

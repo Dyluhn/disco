@@ -28,6 +28,7 @@ from .enforce import (
     ScopeDecision,
     decide_tool_in_scope,
 )
+from .phase import BuildPhaseTracker
 from .registry import BuildContractRegistry
 from .scopes import ContractToolScopes, Phase, compile_tool_scopes
 
@@ -36,6 +37,7 @@ __all__ = [
     "ArtifactContract",
     "BuildContract",
     "BuildContractRegistry",
+    "BuildPhaseTracker",
     "ContractKind",
     "ContractScopeGuard",
     "ContractToolScopes",

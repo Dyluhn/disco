@@ -25,6 +25,12 @@ from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
+from disco.core.contract import (
+    BuildContract,
+    BuildContractRegistry,
+    BuildPhaseTracker,
+    ContractScopeGuard,
+)
 from disco.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
@@ -578,6 +584,13 @@ class ConversationRuntime:
         # C6: per-conversation artifact_mode flag. In-memory only — set at create
         # time from the body; artifact sessions are short-lived, no sidecar needed.
         self._artifact_mode: dict[str, bool] = {}
+        # CONTRACT-ACTIVATE: per-conversation Build contract + live phase tracker. In an
+        # artifact-mode run the executor's ContractScopeGuard reads the tracker's phase
+        # to gate tools (e.g. no raw rewrite during the edit phase). Default contract is
+        # CUSTOM (permissive but real); an optional declared kind narrows it.
+        self._build_contract_registry = BuildContractRegistry.default()
+        self._build_kind: dict[str, str] = {}
+        self._build_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
         # P3 — global last-selected driver model (single-value sidecar). Persisted
         # so a new conversation seeds from whatever the user picked last; falls back
         # to RouterConfig.default_model when never set. B0 pattern (atomic writes).
@@ -1150,6 +1163,43 @@ class ConversationRuntime:
 
     def _effective_artifact_mode(self, conversation_id: str) -> bool:
         return self._settings._effective_artifact_mode(conversation_id)
+
+    # ---- CONTRACT-ACTIVATE: build contract + live phase ---------------------
+
+    def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
+        """Declare the build contract kind for a conversation (e.g. 'appkit.leadgen').
+        Unset/None ⇒ the CUSTOM contract. Resets any existing tracker for the run."""
+        if kind:
+            self._build_kind[conversation_id] = kind
+        else:
+            self._build_kind.pop(conversation_id, None)
+        self._build_trackers.pop(conversation_id, None)
+
+    def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None:
+        """Advance the build-phase tracker on a host VERIFY outcome (pass → EXPORT, fail
+        → REPAIR so the model may use the repair tools to fix). The BOOTSTRAP→EDIT→VERIFY
+        edges are driven automatically by tool success (on_tool_success); this is the
+        entry point the verification gate calls for the VERIFY→EXPORT/REPAIR edge.
+        No-op if the conversation has no active build tracker."""
+        entry = self._build_trackers.get(conversation_id)
+        if entry is not None:
+            entry[1].note_verifier_result(passed=passed)
+
+    def _build_scope_guard(
+        self, conversation_id: str
+    ) -> tuple[ContractScopeGuard | None, Callable[[str], None] | None]:
+        """The (guard, on_tool_success) pair governing tools for an artifact run, or
+        (None, None). Resolves+caches the conversation's contract and a fresh phase
+        tracker on first use; the guard reads the tracker's LIVE phase per call."""
+        entry = self._build_trackers.get(conversation_id)
+        if entry is None:
+            kind = self._build_kind.get(conversation_id)
+            brief = {"kind": kind} if kind else None
+            contract = self._build_contract_registry.get_for_brief(brief, strict_kind=False)
+            entry = (contract, BuildPhaseTracker(contract))
+            self._build_trackers[conversation_id] = entry
+        contract, tracker = entry
+        return ContractScopeGuard.for_contract(contract, tracker.current), tracker.note_tool_success
     # ---- last-selected model (P3) — delegators to RuntimeSettings -----------
 
     def get_last_selected_model(self) -> str | None:
@@ -1486,6 +1536,12 @@ class ConversationRuntime:
             assist=model_policy.assist,
             context_window=self._driver_context_window(),
         ).read_char_budget
+        # CONTRACT-ACTIVATE: in artifact mode, govern tools by the conversation's build
+        # contract + live phase (no raw rewrite during the edit phase, etc.). Plain
+        # (non-artifact) runs pass (None, None) → unchanged behavior.
+        _scope_guard, _on_tool_success = (
+            self._build_scope_guard(conversation_id) if _art_mode else (None, None)
+        )
         executor = DefaultToolExecutor(
             build_default_registry(),
             _scope,
@@ -1504,6 +1560,9 @@ class ConversationRuntime:
             driver_llm=self._effective_driver_endpoint(conversation_id),
             # CW-6: capability-derived file_read page budget (see above).
             read_char_budget=_read_char_budget,
+            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only).
+            scope_guard=_scope_guard,
+            on_tool_success=_on_tool_success,
         )
         # RP-05 rung A+B: extend the registry with MCP tools from the pool
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
@@ -2951,6 +3010,9 @@ class ConversationRuntime:
             self._upload_passages,
             self._last_sessions,
             self._mcp_approval_pending,
+            # CONTRACT-ACTIVATE: the per-conversation build contract kind + phase tracker.
+            self._build_kind,
+            self._build_trackers,
         ):
             cache.pop(conversation_id, None)
 

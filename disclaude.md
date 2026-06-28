@@ -1121,3 +1121,27 @@ pending? finalizer called?); (3) pass scope_guard=ContractScopeGuard.for_contrac
 at the runtime.py:1489 executor construction (artifact mode); (4) an e2e test that the RUNTIME-built executor
 blocks an out-of-scope call. This RETIRES the CONTRACT-3 + TOOL-1#4 + WPP-2 kernel-wiring + WPP-3 mount
 follow-ups (all are "needs the contract↔loop phase integration", which this builds).
+
+## PR CONTRACT-ACTIVATE — build-phase substrate + LIVE guard wiring — COMPLETE
+- Codex (CODE, binding): APPROVE (both revisions). Quote: "artifact_mode deliberately uses ARTIFACT_TOOLS
+  (which excludes verify_web_app) and the runtime wires ContractScopeGuard there only for bootstrap/edit/
+  finalizer transitions via on_tool_success, so VERIFY→EXPORT/REPAIR belongs to the build-surface verify
+  path... not this artifact-mode PR." Enforcement is now LIVE in artifact mode (was the big tracked deferral).
+- NEW core/contract/phase.py: BuildPhaseTracker — deterministic state machine. BOOTSTRAP--(bootstrap-tool
+  success)-->EDIT; *--(finalizer)-->VERIFY; VERIFY--(verifier pass/fail)-->EXPORT/REPAIR. Conservative.
+- CHANGED tools/executor.py: on_tool_success callback (best-effort) so a successful tool advances the tracker.
+- CHANGED agent-server/runtime.py: per-conversation (BuildContract, BuildPhaseTracker) + _build_scope_guard
+  (resolves contract via get_for_brief, default CUSTOM; returns guard wired to tracker.current +
+  note_tool_success) wired at the artifact-mode executor construction (scope_guard + on_tool_success);
+  set_build_kind() to declare a kind; note_build_verify_result() entry point for the build-surface verify
+  edge; forget_conversation evicts the build state.
+- Tests: 16 (phase machine 6 + executor e2e live-loop 6 + runtime resolver/verify/cleanup 6 incl. a real
+  app_create→EDIT→file_write-DENIED end-to-end through the runtime-built executor). 45 green across the whole
+  contract/executor/runtime surface. 0 new typecheck errors (1 pre-existing fire_now, stash-confirmed).
+- LIVE RESULT: in artifact mode a contract-governed run now enforces its per-phase tool allowlist at the
+  dispatch boundary — no raw rewrite during the edit phase, etc. RETIRES the CONTRACT-3 / TOOL-1#4 executor-
+  enforcement deferral. Remaining (tracked, build-surface, NOT artifact-mode): wire finish.py's verify_web_app
+  verdict → note_build_verify_result when the guard is later wired to DiscoKernel build runs.
+
+### CONTRACT PILLAR COMPLETE + ACTIVATED: P2 (models/registry/scopes/enforce/phase) + P3 (packs/assembler/
+### skills) + P4/TOOL-1 (app_* tools) + CONTRACT-ENFORCE + CONTRACT-ACTIVATE. Enforcement is LIVE, not decorative.

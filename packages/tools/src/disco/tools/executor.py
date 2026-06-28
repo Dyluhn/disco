@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import types
+from collections.abc import Callable
 from typing import Any, Literal, Union, get_args, get_origin
 from uuid import uuid4
 
@@ -280,6 +281,7 @@ class DefaultToolExecutor:
         driver_llm: tuple[str, str, str | None] | None = None,
         read_char_budget: int | None = None,
         scope_guard: ContractScopeGuard | None = None,
+        on_tool_success: Callable[[str], None] | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -289,6 +291,10 @@ class DefaultToolExecutor:
         # current phase's allowlist (e.g. file_write during an appkit EDIT phase).
         # None ⇒ a plain agent run ⇒ no contract enforcement (unchanged behavior).
         self._scope_guard = scope_guard
+        # CONTRACT-ACTIVATE: notified with the tool name after each SUCCESSFUL call so a
+        # build-phase tracker can advance (bootstrap-tool success → edit; finalizer →
+        # verify). None ⇒ no tracking. Best-effort: a callback error never fails the call.
+        self._on_tool_success = on_tool_success
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -455,6 +461,14 @@ class DefaultToolExecutor:
             return self._fail(call, "sandbox_error", str(e))
         except Exception as e:  # noqa: BLE001 — the tool's own failure is an observation
             return self._fail(call, "execution_error", str(e))
+
+        # CONTRACT-ACTIVATE: advance the build-phase tracker on a successful call
+        # (best-effort — a tracker error must never fail an otherwise-good tool run).
+        if outcome.success and self._on_tool_success is not None:
+            try:
+                self._on_tool_success(call.tool_name)
+            except Exception:  # noqa: BLE001 — tracking is advisory, never fatal
+                pass
 
         return ToolResult(
             call_id=call.call_id,
