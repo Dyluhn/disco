@@ -1,0 +1,862 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.3-codex-spark
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f0edd-05ce-7ed0-bf65-1f2907577ff3
+--------
+user
+# Codex CODE Review — P1 / HARN-3 (centralized product promotion policy) — IMPLEMENTED
+
+Inspect harness/build_soak/promotion.py + tests/test_promotion.py.
+
+evaluate_product_promotion(classifications, *, product_harness=None, require_product_harness=False)
+→ {eligible, checks:[{check, ok, detail}]} (mirrors bakeoff.evaluate_gate's shape/convention: ok=None is
+informational/non-blocking; eligible iff no check is False). Headless gates enforced now: runs present;
+all runs PASS; no INVALID_RUN; no UNKNOWN_FAILURE; provider constraint (no PROVIDER_FORBIDDEN/_WRONG_MODEL/
+_CALL_AFTER_TERMINAL). Product-harness gate (browser_ws_connected/preview_visible/download_verified/
+cleanup_ok/zero_provider_calls_after_terminal) is enforced only when require_product_harness=True (default
+False until HARN-1b exists → reports ok=None, not blocking). bakeoff.py (kernel Pi-vs-Disco) is untouched
+and separate.
+
+Tests: 11 passed (eligible/all-pass, no-runs, failing-run, INVALID_RUN, UNKNOWN_FAILURE, provider violations,
+product-harness not-required/required-absent/green/failed-subgate). basedpyright strict 0 errors.
+
+Judge: (a) is the gate composition correct + free of a false-ELIGIBLE hole (could a non-promotable run slip
+through)? (b) is the ok=None non-blocking convention + the require_product_harness default-False posture
+right (so HARN-1b's absence doesn't block, but a real soak can require it)? (c) test sufficiency. Return
+APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE + REASONS + REQUIRED_REVISIONS.
+codex
+Understood. I’ll inspect only `harness/build_soak/promotion.py` and `tests/test_promotion.py`, then assess gate logic for false-eligible paths, the `ok=None` non-blocking behavior, and test coverage against the scenarios you listed.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg --files harness/build_soak tests | rg 'promotion\\.py|test_promotion\\.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/promotion.py
+harness/build_soak/tests/test_promotion.py
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/tests/test_promotion.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/promotion.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""HARN-3 — the centralized PRODUCT promotion policy.
+
+Distinct from bakeoff.py (which compares the Pi vs Disco KERNELS). This composes a
+set of run classifications (plus, later, the browser product-harness result) into a
+single promotion verdict: a build surface is promotable only when EVERY gate holds.
+
+Gates (headless, enforceable now):
+- at least one run classified
+- every run is PASS (no FAIL)
+- no INVALID_RUN (an adjudication gap is not a pass)
+- no UNKNOWN_FAILURE (an unexplained failure blocks promotion)
+- the PROVIDER constraint holds: no PROVIDER_FORBIDDEN / PROVIDER_WRONG_MODEL /
+  PROVIDER_CALL_AFTER_TERMINAL (MiniMax-only / no-OpenRouter / zero-calls-after-terminal)
+
+Gates pending HARN-1b (browser product harness):
+- the product harness ran green: browser WS connected, preview visible, download
+  verified, cleanup ok, zero provider calls after terminal. Enforced only when
+  ``require_product_harness=True`` (default False until HARN-1b exists, so this gate
+  reports as not-yet-required rather than blocking on absent browser evidence).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from . import failure_codes as fc
+
+# Provider-ledger violation codes that must never appear in a promotable run.
+_PROVIDER_VIOLATIONS = frozenset(
+    {fc.PROVIDER_FORBIDDEN, fc.PROVIDER_WRONG_MODEL, fc.PROVIDER_CALL_AFTER_TERMINAL}
+)
+
+# The product-harness sub-gates HARN-1b must report all True.
+_PRODUCT_HARNESS_KEYS = (
+    "browser_ws_connected",
+    "preview_visible",
+    "download_verified",
+    "cleanup_ok",
+    "zero_provider_calls_after_terminal",
+)
+
+
+def evaluate_product_promotion(
+    classifications: list[dict[str, Any]],
+    *,
+    product_harness: dict[str, Any] | None = None,
+    require_product_harness: bool = False,
+) -> dict[str, Any]:
+    """Return ``{"eligible": bool, "checks": [{"check", "ok", "detail"}]}``.
+
+    A check with ``ok is None`` is informational (not blocking), matching the
+    bakeoff gate convention. ``eligible`` is True only when no check is False.
+    """
+    checks: list[dict[str, Any]] = []
+
+    def chk(name: str, ok: bool | None, detail: str) -> None:
+        checks.append({"check": name, "ok": ok, "detail": detail})
+
+    runs = list(classifications or [])
+    chk("runs present", len(runs) > 0, f"{len(runs)} run(s) classified")
+
+    if runs:
+        non_pass = [c for c in runs if c.get("status") != fc.PASS]
+        chk("all runs PASS", not non_pass, f"{len(non_pass)} non-PASS run(s)")
+
+        invalid = [c for c in runs if c.get("status") == fc.INVALID_RUN]
+        chk("no INVALID_RUN", not invalid, f"{len(invalid)} invalid run(s)")
+
+        unknown = [c for c in runs if c.get("code") == fc.UNKNOWN_FAILURE]
+        chk("no UNKNOWN_FAILURE", not unknown, f"{len(unknown)} unknown-failure run(s)")
+
+        provider_bad = [c for c in runs if c.get("code") in _PROVIDER_VIOLATIONS]
+        chk(
+            "provider constraint (MiniMax-only / no-OpenRouter / no calls after terminal)",
+            not provider_bad,
+            (
+                "clean"
+                if not provider_bad
+                else f"{len(provider_bad)} provider violation(s): "
+                + ", ".join(sorted({str(c.get('code')) for c in provider_bad}))
+            ),
+        )
+
+    # product harness gate
+    if require_product_harness:
+        if not product_harness:
+            chk("product harness green", False, "required but no product-harness result supplied")
+        else:
+            failed_keys = [k for k in _PRODUCT_HARNESS_KEYS if not product_harness.get(k)]
+            chk(
+                "product harness green",
+                not failed_keys,
+                "all sub-gates green" if not failed_keys else f"failed: {failed_keys}",
+            )
+    else:
+        chk(
+            "product harness green",
+            None,
+            "not required yet (HARN-1b browser harness pending)",
+        )
+
+    eligible = all(c["ok"] for c in checks if c["ok"] is not None) and not any(
+        c["ok"] is False for c in checks
+    )
+    return {"eligible": eligible, "checks": checks}
+
+ succeeded in 0ms:
+"""HARN-3 tests: the centralized product promotion policy."""
+
+from __future__ import annotations
+
+from harness.build_soak.promotion import evaluate_product_promotion
+
+
+def _pass(**extra):
+    return {"status": "PASS", "code": None, **extra}
+
+
+def _fail(code="ARTIFACT_TRUTH_MISMATCH"):
+    return {"status": "FAIL", "code": code}
+
+
+def _check(result, name):
+    return next(c for c in result["checks"] if c["check"] == name)
+
+
+def test_all_pass_is_eligible():
+    r = evaluate_product_promotion([_pass(), _pass()])
+    assert r["eligible"] is True
+
+
+def test_no_runs_is_not_eligible():
+    r = evaluate_product_promotion([])
+    assert r["eligible"] is False
+    assert _check(r, "runs present")["ok"] is False
+
+
+def test_a_failing_run_blocks():
+    r = evaluate_product_promotion([_pass(), _fail()])
+    assert r["eligible"] is False
+    assert _check(r, "all runs PASS")["ok"] is False
+
+
+def test_invalid_run_blocks():
+    r = evaluate_product_promotion([{"status": "INVALID_RUN", "code": "WORKSPACE_SNAPSHOT_NOT_READY"}])
+    assert r["eligible"] is False
+    assert _check(r, "no INVALID_RUN")["ok"] is False
+
+
+def test_unknown_failure_blocks():
+    r = evaluate_product_promotion([_fail(code="UNKNOWN_FAILURE")])
+    assert r["eligible"] is False
+    assert _check(r, "no UNKNOWN_FAILURE")["ok"] is False
+
+
+def test_provider_violation_blocks():
+    r = evaluate_product_promotion([_fail(code="PROVIDER_FORBIDDEN")])
+    assert r["eligible"] is False
+    pc = _check(r, "provider constraint (MiniMax-only / no-OpenRouter / no calls after terminal)")
+    assert pc["ok"] is False and "PROVIDER_FORBIDDEN" in pc["detail"]
+
+
+def test_provider_call_after_terminal_blocks():
+    r = evaluate_product_promotion([_fail(code="PROVIDER_CALL_AFTER_TERMINAL")])
+    assert r["eligible"] is False
+
+
+# --- product-harness gate -----------------------------------------------------
+def test_product_harness_not_required_is_informational():
+    r = evaluate_product_promotion([_pass()])
+    ph = _check(r, "product harness green")
+    assert ph["ok"] is None  # not blocking
+    assert r["eligible"] is True
+
+
+def test_product_harness_required_but_absent_blocks():
+    r = evaluate_product_promotion([_pass()], require_product_harness=True)
+    assert r["eligible"] is False
+    assert _check(r, "product harness green")["ok"] is False
+
+
+def test_product_harness_required_and_green_passes():
+    ph = {
+        "browser_ws_connected": True,
+        "preview_visible": True,
+        "download_verified": True,
+        "cleanup_ok": True,
+        "zero_provider_calls_after_terminal": True,
+    }
+    r = evaluate_product_promotion([_pass()], product_harness=ph, require_product_harness=True)
+    assert r["eligible"] is True
+
+
+def test_product_harness_required_with_failed_subgate_blocks():
+    ph = {
+        "browser_ws_connected": True,
+        "preview_visible": False,  # the build never showed the user a preview
+        "download_verified": True,
+        "cleanup_ok": True,
+        "zero_provider_calls_after_terminal": True,
+    }
+    r = evaluate_product_promotion([_pass()], product_harness=ph, require_product_harness=True)
+    assert r["eligible"] is False
+    assert "preview_visible" in _check(r, "product harness green")["detail"]
+
+codex
+I’ve got both target files. I’ll quickly check `failure_codes` definitions to confirm status/code comparisons are using canonical constants before judging edge cases.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/failure_codes.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""The Build Soak failure taxonomy (guidelines §12) + run outcomes (§8).
+
+Every `FAIL` must carry a code that lives here, with a known severity. No generic
+"failed" bucket is allowed in promotion runs. `UNKNOWN_FAILURE` exists for
+development only and is P0 until the classifier learns the case (§13).
+
+Codes are plain string constants (not an enum) so a frozen evidence
+`classification.json` round-trips byte-for-byte without enum-name coupling, and so
+this module stays import-free / disco-free.
+"""
+
+from __future__ import annotations
+
+# ---- run outcomes (§8) ------------------------------------------------------
+
+PASS = "PASS"
+FAIL = "FAIL"
+INVALID_RUN = "INVALID_RUN"
+INFRA_FAILURE = "INFRA_FAILURE"
+
+OUTCOMES = frozenset({PASS, FAIL, INVALID_RUN, INFRA_FAILURE})
+
+# ---- severities (§12) -------------------------------------------------------
+
+P0 = "P0"  # release blocker
+P1 = "P1"  # major reliability bug
+P2 = "P2"  # quality bug
+NONE = "NONE"  # PASS / no failure
+
+SEVERITIES = frozenset({P0, P1, P2, NONE})
+
+# ---- P0 — release blockers (§12) --------------------------------------------
+
+NO_USER_EVENT_AFTER_SUBMIT = "NO_USER_EVENT_AFTER_SUBMIT"
+NO_PLAN_AFTER_USER_TURN = "NO_PLAN_AFTER_USER_TURN"
+NO_REPLAN_AFTER_REVISION = "NO_REPLAN_AFTER_REVISION"
+WRITE_TOOL_ALLOWED_IN_PLANNING = "WRITE_TOOL_ALLOWED_IN_PLANNING"
+WRITE_TOOL_ATTEMPTED_IN_PLANNING = "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
+WRONG_TOOL_REJECTION_ABORTS_LOOP = "WRONG_TOOL_REJECTION_ABORTS_LOOP"
+APPROVE_PLAN_NO_EXECUTION = "APPROVE_PLAN_NO_EXECUTION"
+DUPLICATE_EXECUTION_AFTER_APPROVAL = "DUPLICATE_EXECUTION_AFTER_APPROVAL"
+EXECUTION_NO_ACTION = "EXECUTION_NO_ACTION"
+ACTION_NO_OBSERVATION = "ACTION_NO_OBSERVATION"
+FALSE_FINISH_NO_OUTPUT = "FALSE_FINISH_NO_OUTPUT"
+FALSE_FINISH_PREVIEW_BROKEN = "FALSE_FINISH_PREVIEW_BROKEN"
+DUPLICATE_KICK_ON_RESUME = "DUPLICATE_KICK_ON_RESUME"
+EVENT_LOG_STATE_DIVERGENCE = "EVENT_LOG_STATE_DIVERGENCE"
+WS_FRAME_DROPPED_NO_ERROR = "WS_FRAME_DROPPED_NO_ERROR"
+UI_ENABLED_DEAD_CONTROL = "UI_ENABLED_DEAD_CONTROL"
+UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+
+# ---- P1 — major reliability bugs (§12) --------------------------------------
+
+PLAN_REVISION_NOT_INCREMENTED = "PLAN_REVISION_NOT_INCREMENTED"
+STALE_PLAN_USED_AFTER_FOLLOWUP = "STALE_PLAN_USED_AFTER_FOLLOWUP"
+PLAN_APPROVED_STATUS_MISSING = "PLAN_APPROVED_STATUS_MISSING"
+TOOL_SCOPE_MISMATCH = "TOOL_SCOPE_MISMATCH"
+TOOL_REJECTION_NOT_VISIBLE_TO_MODEL = "TOOL_REJECTION_NOT_VISIBLE_TO_MODEL"
+MODEL_TOLD_WRONG_MODE = "MODEL_TOLD_WRONG_MODE"
+STUCK_RUNNING_NO_EVENTS = "STUCK_RUNNING_NO_EVENTS"
+PREVIEW_TRUTH_MISMATCH = "PREVIEW_TRUTH_MISMATCH"
+ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
+# CXT-5: a final deliverable contains DESTRUCTIVE elision (an "(elided)"/"[trimmed]"/
+# "content omitted"/"truncated for brevity" marker with NO recover cue) — unrecoverable
+# placeholder text shipped into a deliverable. Rule set v1 (disco.core.observations).
+DESTRUCTIVE_ELISION = "DESTRUCTIVE_ELISION"
+# P1/HARN-1a: provider-ledger violations of the soak constraint. A provider call went
+# to a FORBIDDEN host (e.g. openrouter) or a host that isn't the required one; used the
+# WRONG model (not the pinned soak model); or fired AFTER the conversation went terminal
+# (runaway burn). These enforce the MiniMax-only / no-OpenRouter / zero-calls-after-terminal
+# rule from the provider-call-ledger evidence. All P0.
+PROVIDER_FORBIDDEN = "PROVIDER_FORBIDDEN"
+PROVIDER_WRONG_MODEL = "PROVIDER_WRONG_MODEL"
+PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
+NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
+OBSERVATION_WITHOUT_ACTION = "OBSERVATION_WITHOUT_ACTION"
+WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
+# The run was required to FINISH and deliver output (scenario asserts
+# workspace/preview output and/or terminal_status_in) but ended at a non-finished,
+# non-required terminal — e.g. a no-progress / actionless PAUSE, or never reached a
+# terminal at all. NOT a "false finish" (nothing claimed finished); a "never
+# finished". Fail-closed: a build that does not complete is not a PASS even if some
+# files happen to exist (migration 2026_06_24_paused_incomplete_not_pass).
+BUILD_DID_NOT_FINISH = "BUILD_DID_NOT_FINISH"
+
+# ---- P2 — quality bugs (§12) ------------------------------------------------
+
+SLOW_FIRST_PLAN = "SLOW_FIRST_PLAN"
+EXCESSIVE_READS_BEFORE_PLAN = "EXCESSIVE_READS_BEFORE_PLAN"
+MISSING_DONE_CONDITIONS = "MISSING_DONE_CONDITIONS"
+LOW_QUALITY_PLAN = "LOW_QUALITY_PLAN"
+MISSING_PROGRESS_EVENTS = "MISSING_PROGRESS_EVENTS"
+WEAK_FINAL_SUMMARY = "WEAK_FINAL_SUMMARY"
+
+# ---- harness-validity codes (§8 INVALID_RUN) --------------------------------
+# These do NOT describe a product failure; they say the harness did not collect
+# enough durable evidence to adjudicate. The classifier maps them to INVALID_RUN.
+
+NO_EVENTS = "NO_EVENTS"
+UNPARSEABLE_EVENTS = "UNPARSEABLE_EVENTS"
+EVIDENCE_HASH_MISMATCH = "EVIDENCE_HASH_MISMATCH"
+MISSING_REQUIRED_EVIDENCE = "MISSING_REQUIRED_EVIDENCE"
+SCENARIO_CONTRACT_UNSATISFIABLE = "SCENARIO_CONTRACT_UNSATISFIABLE"
+# A POST-create runner-side outcome that is NOT adjudicable as a product result: the
+# runner could not obtain a terminal verdict. RUN_INTERRUPTED — a mid-run transport loss
+# (server crashed / network dropped). RUN_TIMEOUT_WHILE_PROGRESSING (Bug 15) — the hard
+# cap was hit while the build was STILL actively progressing (a slow-but-advancing build
+# cut off mid-flight), so it must NOT be recorded as a product BUILD_DID_NOT_FINISH; §17
+# re-runs an INVALID_RUN instead of freezing a false product failure.
+RUN_INTERRUPTED = "RUN_INTERRUPTED"
+RUN_TIMEOUT_WHILE_PROGRESSING = "RUN_TIMEOUT_WHILE_PROGRESSING"
+# The host ProjectStore workspace snapshot never reached the build's AGENT-FINAL state
+# within the snapshot-wait budget — i.e. the snapshot's on-disk bytes for a declared file
+# never matched what the agent last wrote to it (a stale/slow flush, or a multi-revision
+# build whose later-revision bytes had not yet flushed). This is NOT a product
+# ARTIFACT_TRUTH_MISMATCH (the harness read the snapshot before it settled): the collect
+# FAILS FAST here rather than laundering a stale capture into a false product failure or a
+# silent best-effort pass, so §17 re-runs it. Bounded — never hangs.
+WORKSPACE_SNAPSHOT_NOT_READY = "WORKSPACE_SNAPSHOT_NOT_READY"
+# A content (must_contain / must_not_contain / exact) assertion mismatched, but EVERY
+# mismatching file was captured on a NON-AUTHORITATIVE basis (`unproven_extended_stability`
+# / `unknown` — accepted via extended content-stability, with NO file_write raw-sha and no
+# qualifying full readback to prove the bytes). The captured snapshot may be a stale
+# pre-flush copy while the ProjectStore is actually correct, so the mismatch is UNRELIABLE
+# and must NOT be reported as a definitive product ARTIFACT_TRUTH_MISMATCH. It is recorded
+# as harness-validity evidence → INVALID_RUN so §17 re-runs it. A mismatch on a PROVEN basis
+# (raw_sha / rendered_readback / absent) in the SAME run always WINS this fold and stays a
+# hard ARTIFACT_TRUTH_MISMATCH (a proven regression is NEVER masked by an unproven one).
+WORKSPACE_SNAPSHOT_UNVERIFIED = "WORKSPACE_SNAPSHOT_UNVERIFIED"
+
+HARNESS_VALIDITY_CODES = frozenset(
+    {
+        NO_EVENTS,
+        UNPARSEABLE_EVENTS,
+        EVIDENCE_HASH_MISMATCH,
+        MISSING_REQUIRED_EVIDENCE,
+        SCENARIO_CONTRACT_UNSATISFIABLE,
+        RUN_INTERRUPTED,
+        RUN_TIMEOUT_WHILE_PROGRESSING,
+        WORKSPACE_SNAPSHOT_NOT_READY,
+        WORKSPACE_SNAPSHOT_UNVERIFIED,
+    }
+)
+
+
+# The severity of every product failure code. (Harness-validity codes are not in
+# here — they resolve to INVALID_RUN, which has its own outcome, not a severity.)
+SEVERITY_BY_CODE: dict[str, str] = {
+    # P0
+    NO_USER_EVENT_AFTER_SUBMIT: P0,
+    NO_PLAN_AFTER_USER_TURN: P0,
+    NO_REPLAN_AFTER_REVISION: P0,
+    WRITE_TOOL_ALLOWED_IN_PLANNING: P0,
+    WRITE_TOOL_ATTEMPTED_IN_PLANNING: P0,
+    WRONG_TOOL_REJECTION_ABORTS_LOOP: P0,
+    APPROVE_PLAN_NO_EXECUTION: P0,
+    DUPLICATE_EXECUTION_AFTER_APPROVAL: P0,
+    EXECUTION_NO_ACTION: P0,
+    ACTION_NO_OBSERVATION: P0,
+    FALSE_FINISH_NO_OUTPUT: P0,
+    FALSE_FINISH_PREVIEW_BROKEN: P0,
+    DUPLICATE_KICK_ON_RESUME: P0,
+    EVENT_LOG_STATE_DIVERGENCE: P0,
+    WS_FRAME_DROPPED_NO_ERROR: P0,
+    UI_ENABLED_DEAD_CONTROL: P0,
+    PROVIDER_FORBIDDEN: P0,
+    PROVIDER_WRONG_MODEL: P0,
+    PROVIDER_CALL_AFTER_TERMINAL: P0,
+    UNKNOWN_FAILURE: P0,
+    # P1
+    PLAN_REVISION_NOT_INCREMENTED: P1,
+    STALE_PLAN_USED_AFTER_FOLLOWUP: P1,
+    PLAN_APPROVED_STATUS_MISSING: P1,
+    TOOL_SCOPE_MISMATCH: P1,
+    TOOL_REJECTION_NOT_VISIBLE_TO_MODEL: P1,
+    MODEL_TOLD_WRONG_MODE: P1,
+    STUCK_RUNNING_NO_EVENTS: P1,
+    PREVIEW_TRUTH_MISMATCH: P1,
+    ARTIFACT_TRUTH_MISMATCH: P1,
+    DESTRUCTIVE_ELISION: P1,
+    NO_CLEAR_FAILURE_TO_USER: P1,
+    OBSERVATION_WITHOUT_ACTION: P1,
+    WRITE_BEFORE_REVISION_APPROVAL: P1,
+    BUILD_DID_NOT_FINISH: P1,
+    # P2
+    SLOW_FIRST_PLAN: P2,
+    EXCESSIVE_READS_BEFORE_PLAN: P2,
+    MISSING_DONE_CONDITIONS: P2,
+    LOW_QUALITY_PLAN: P2,
+    MISSING_PROGRESS_EVENTS: P2,
+    WEAK_FINAL_SUMMARY: P2,
+}
+
+# Every product failure code, for validation.
+PRODUCT_FAILURE_CODES = frozenset(SEVERITY_BY_CODE)
+
+# The "intermittent" prefix (§17): a run that failed once then passed on exact
+# replay is recorded as FAIL with code INTERMITTENT_<original_code>, same severity.
+INTERMITTENT_PREFIX = "INTERMITTENT_"
+
+
+def severity_for(code: str) -> str:
+    """Severity for a (possibly INTERMITTENT_-prefixed) failure code. Unknown
+    codes are treated as P0 (§13: an unclassified failure is a release blocker)."""
+    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    return SEVERITY_BY_CODE.get(base, P0)
+
+
+def is_known_code(code: str) -> bool:
+    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    return base in PRODUCT_FAILURE_CODES or base in HARNESS_VALIDITY_CODES
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"def evaluate_gate|ok is None|bakeoff\" harness -g '*.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/promotion.py:3:Distinct from bakeoff.py (which compares the Pi vs Disco KERNELS). This composes a
+harness/build_soak/promotion.py:51:    A check with ``ok is None`` is informational (not blocking), matching the
+harness/build_soak/promotion.py:52:    bakeoff gate convention. ``eligible`` is True only when no check is False.
+harness/build_soak/tests/test_bakeoff.py:3:from build_soak.bakeoff import evaluate_gate, tally
+harness/build_soak/bakeoff.py:12:    python -m build_soak.bakeoff --runs test-record/build-soak
+harness/build_soak/bakeoff.py:13:    python -m build_soak.bakeoff --runs test-record/build-soak --scenario static_html_minimal --json
+harness/build_soak/bakeoff.py:107:def evaluate_gate(tallies: dict[str, KernelTally]) -> dict[str, Any]:
+
+codex
+I also need to verify parity with the bakeoff gate convention directly, so I’ll check `build_soak/bakeoff.py`’s gate composition next.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/bakeoff.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""EPIC K bake-off scorecard — group Build-Soak runs by kernel and evaluate the
+PiKernel-vs-DiscoKernel promotion gate (campaign §K3) from frozen run evidence.
+
+Reads every run folder under a runs-root: ``manifest.json`` (``kernel`` +
+``scenario_id``, stamped by run.py) + ``classification.json`` (the deterministic
+oracle ``status`` ∈ {PASS, FAIL, INVALID_RUN, INFRA_FAILURE} + ``severity``). Pure
+analysis over frozen evidence — it NEVER re-adjudicates; it only counts. INVALID_RUN
+/ INFRA_FAILURE are inconclusive and excluded from the pass-rate denominator (a soak
+infra hiccup is not a product failure — guidelines §3).
+
+Usage:
+    python -m build_soak.bakeoff --runs test-record/build-soak
+    python -m build_soak.bakeoff --runs test-record/build-soak --scenario static_html_minimal --json
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+# Outcomes that COUNT toward a product pass rate (a build either worked or didn't).
+# INVALID_RUN / INFRA_FAILURE are inconclusive — excluded from the denominator.
+_CONCLUSIVE = ("PASS", "FAIL")
+
+
+@dataclass
+class KernelTally:
+    kernel: str
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    invalid: int = 0
+    infra: int = 0
+    p0: int = 0
+    p1: int = 0
+    # scenario -> {"pass": n, "fail": n, "invalid": n, "infra": n}
+    by_scenario: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    @property
+    def conclusive(self) -> int:
+        return self.passed + self.failed
+
+    @property
+    def pass_rate(self) -> float | None:
+        return (self.passed / self.conclusive) if self.conclusive else None
+
+    def add(self, scenario: str, status: str, severity: str | None) -> None:
+        self.total += 1
+        bucket = {"PASS": "passed", "FAIL": "failed", "INVALID_RUN": "invalid"}.get(
+            status, "infra"
+        )
+        setattr(self, bucket, getattr(self, bucket) + 1)
+        if status == "FAIL" and severity == "P0":
+            self.p0 += 1
+        if status == "FAIL" and severity == "P1":
+            self.p1 += 1
+        sc = self.by_scenario.setdefault(
+            scenario, {"pass": 0, "fail": 0, "invalid": 0, "infra": 0}
+        )
+        sc[{"passed": "pass", "failed": "fail", "invalid": "invalid"}.get(bucket, "infra")] += 1
+
+
+def _load_run(run_dir: Path) -> dict[str, Any] | None:
+    try:
+        man = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        cls = json.loads((run_dir / "classification.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return {
+        # kernel field added by run.py for EPIC K; pre-K runs default to disco.
+        "kernel": str(man.get("kernel") or "disco"),
+        "scenario": str(man.get("scenario_id") or "?"),
+        "status": str(cls.get("status") or "?"),
+        "severity": cls.get("severity"),
+        "run_id": str(man.get("run_id") or run_dir.name),
+    }
+
+
+def scan_runs(runs_root: Path, scenario: str | None = None) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    if not runs_root.is_dir():
+        return runs
+    for d in sorted(runs_root.iterdir()):
+        if not (d.is_dir() and (d / "classification.json").exists()):
+            continue
+        r = _load_run(d)
+        if r is None:
+            continue
+        if scenario and r["scenario"] != scenario:
+            continue
+        runs.append(r)
+    return runs
+
+
+def tally(runs: list[dict[str, Any]]) -> dict[str, KernelTally]:
+    out: dict[str, KernelTally] = {}
+    for r in runs:
+        t = out.setdefault(r["kernel"], KernelTally(kernel=r["kernel"]))
+        t.add(r["scenario"], r["status"], r["severity"])
+    return out
+
+
+def evaluate_gate(tallies: dict[str, KernelTally]) -> dict[str, Any]:
+    """The §K3 criteria computable from soak evidence. (Security/no-key/no-user-
+    packages/process-backend criteria are SEPARATE audits, not soak counts — listed
+    as manual.) PiKernel is promotion-ELIGIBLE on these only if it ties-or-beats
+    DiscoKernel on pass rate and carries no P0/P1."""
+    pi, disco = tallies.get("pi"), tallies.get("disco")
+    checks: list[dict[str, Any]] = []
+
+    def chk(name: str, ok: bool | None, detail: str) -> None:
+        checks.append({"check": name, "ok": ok, "detail": detail})
+
+    if pi is None or disco is None:
+        chk(
+            "both kernels present",
+            False,
+            f"need pi AND disco runs; have {sorted(tallies)}",
+        )
+        return {"eligible": False, "checks": checks}
+
+    chk("pi: zero P0", pi.p0 == 0, f"{pi.p0} P0 failures")
+    chk("pi: zero P1", pi.p1 == 0, f"{pi.p1} P1 failures")
+    pr_pi, pr_d = pi.pass_rate, disco.pass_rate
+    if pr_pi is None or pr_d is None:
+        chk("pass-rate comparable", None, "a kernel has no conclusive runs")
+    else:
+        chk(
+            "pi pass-rate >= disco (bare build)",
+            pr_pi >= pr_d,
+            f"pi {pr_pi:.1%} vs disco {pr_d:.1%}",
+        )
+    eligible = all(c["ok"] for c in checks if c["ok"] is not None) and not any(
+        c["ok"] is False for c in checks
+    )
+    return {"eligible": eligible, "checks": checks}
+
+
+def _fmt_rate(t: KernelTally) -> str:
+    pr = t.pass_rate
+    return f"{pr:.1%}" if pr is not None else "n/a"
+
+
+def render(tallies: dict[str, KernelTally], gate: dict[str, Any]) -> str:
+    lines = ["EPIC K — Build-Soak bake-off scorecard", "=" * 42]
+    if not tallies:
+        lines.append("no runs found.")
+        return "\n".join(lines)
+    for k in sorted(tallies):
+        t = tallies[k]
+        lines.append(
+            f"\n[{k}]  pass-rate {_fmt_rate(t)}  "
+            f"(PASS {t.passed} / FAIL {t.failed} / INVALID {t.invalid} / INFRA {t.infra}"
+            f"  · P0 {t.p0} · P1 {t.p1} · n={t.total})"
+        )
+        for sc in sorted(t.by_scenario):
+            c = t.by_scenario[sc]
+            lines.append(f"    {sc:30} P{c['pass']} F{c['fail']} I{c['invalid']} X{c['infra']}")
+    lines.append("\n— §K3 promotion gate (soak-computable criteria) —")
+    for c in gate["checks"]:
+        mark = {True: "PASS", False: "FAIL", None: "n/a "}[c["ok"]]
+        lines.append(f"  [{mark}] {c['check']}: {c['detail']}")
+    lines.append(
+        f"\nPiKernel promotion-eligible (soak criteria): "
+        f"{'YES' if gate['eligible'] else 'NO'}"
+    )
+    lines.append(
+        "  (manual/separate: no raw provider keys, no user Pi packages, no process-"
+        "backend prod runs, AppKit + preview + event-mapping suites)"
+    )
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description="EPIC K bake-off scorecard (PiKernel vs DiscoKernel).")
+    p.add_argument("--runs", default="test-record/build-soak", help="run-folder root")
+    p.add_argument("--scenario", default=None, help="restrict to one scenario id")
+    p.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    args = p.parse_args(argv)
+
+    runs = scan_runs(Path(args.runs), args.scenario)
+    tallies = tally(runs)
+    gate = evaluate_gate(tallies)
+    if args.json:
+        payload = {
+            "runs": len(runs),
+            "kernels": {
+                k: {
+                    "total": t.total,
+                    "pass": t.passed,
+                    "fail": t.failed,
+                    "invalid": t.invalid,
+                    "infra": t.infra,
+                    "p0": t.p0,
+                    "p1": t.p1,
+                    "pass_rate": t.pass_rate,
+                    "by_scenario": t.by_scenario,
+                }
+                for k, t in tallies.items()
+            },
+            "gate": gate,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render(tallies, gate))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+codex
+I’m checking one more place: whether provider violation codes can appear as `INTERMITTENT_*` wrappers, since that changes whether a failing run could slip through as eligible.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"INTERMITTENT_|PROVIDER_FORBIDDEN|PROVIDER_WRONG_MODEL|PROVIDER_CALL_AFTER_TERMINAL\" harness -g '*.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/promotion.py:12:- the PROVIDER constraint holds: no PROVIDER_FORBIDDEN / PROVIDER_WRONG_MODEL /
+harness/build_soak/promotion.py:13:  PROVIDER_CALL_AFTER_TERMINAL (MiniMax-only / no-OpenRouter / zero-calls-after-terminal)
+harness/build_soak/promotion.py:30:    {fc.PROVIDER_FORBIDDEN, fc.PROVIDER_WRONG_MODEL, fc.PROVIDER_CALL_AFTER_TERMINAL}
+harness/build_soak/classify.py:15:INTERMITTENT_<original_code> (same severity), never PASS — "fluke" has no
+harness/build_soak/classify.py:290:    failure: status stays FAIL, code becomes INTERMITTENT_<original_code> with the
+harness/build_soak/classify.py:301:        intermittent_code = fc.INTERMITTENT_PREFIX + original_code
+harness/build_soak/failure_codes.py:72:PROVIDER_FORBIDDEN = "PROVIDER_FORBIDDEN"
+harness/build_soak/failure_codes.py:73:PROVIDER_WRONG_MODEL = "PROVIDER_WRONG_MODEL"
+harness/build_soak/failure_codes.py:74:PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
+harness/build_soak/failure_codes.py:166:    PROVIDER_FORBIDDEN: P0,
+harness/build_soak/failure_codes.py:167:    PROVIDER_WRONG_MODEL: P0,
+harness/build_soak/failure_codes.py:168:    PROVIDER_CALL_AFTER_TERMINAL: P0,
+harness/build_soak/failure_codes.py:198:# replay is recorded as FAIL with code INTERMITTENT_<original_code>, same severity.
+harness/build_soak/failure_codes.py:199:INTERMITTENT_PREFIX = "INTERMITTENT_"
+harness/build_soak/failure_codes.py:203:    """Severity for a (possibly INTERMITTENT_-prefixed) failure code. Unknown
+harness/build_soak/failure_codes.py:205:    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+harness/build_soak/failure_codes.py:210:    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+harness/build_soak/tests/test_promotion.py:50:    r = evaluate_product_promotion([_fail(code="PROVIDER_FORBIDDEN")])
+harness/build_soak/tests/test_promotion.py:53:    assert pc["ok"] is False and "PROVIDER_FORBIDDEN" in pc["detail"]
+harness/build_soak/tests/test_promotion.py:57:    r = evaluate_product_promotion([_fail(code="PROVIDER_CALL_AFTER_TERMINAL")])
+harness/build_soak/tests/test_provider_ledger_oracle.py:79:    assert r[0].code == "PROVIDER_FORBIDDEN"
+harness/build_soak/tests/test_provider_ledger_oracle.py:86:    assert r[0].code == "PROVIDER_FORBIDDEN"
+harness/build_soak/tests/test_provider_ledger_oracle.py:92:    assert r[0].code == "PROVIDER_WRONG_MODEL"
+harness/build_soak/tests/test_provider_ledger_oracle.py:102:    assert r[0].code == "PROVIDER_CALL_AFTER_TERMINAL"
+harness/build_soak/tests/test_provider_ledger_oracle.py:108:    assert r[0].code == "PROVIDER_FORBIDDEN"
+harness/build_soak/tests/test_provider_ledger_oracle.py:150:    assert c["code"] == "PROVIDER_FORBIDDEN"
+harness/build_soak/tests/test_provider_ledger_oracle.py:212:    assert c["code"] == "PROVIDER_FORBIDDEN"
+harness/build_soak/tests/test_no_fluke_policy.py:2:replay is FAIL/INTERMITTENT_<code>, never PASS; "fluke" never yields a pass."""
+harness/build_soak/tests/test_no_fluke_policy.py:38:    assert updated["code"] == "INTERMITTENT_NO_REPLAN_AFTER_REVISION"
+harness/build_soak/oracles/provider_ledger.py:7:  → PROVIDER_FORBIDDEN
+harness/build_soak/oracles/provider_ledger.py:8:- a call using the WRONG model (not the pinned soak model) → PROVIDER_WRONG_MODEL
+harness/build_soak/oracles/provider_ledger.py:10:  → PROVIDER_CALL_AFTER_TERMINAL
+harness/build_soak/oracles/provider_ledger.py:105:                        fc.PROVIDER_CALL_AFTER_TERMINAL,
+harness/build_soak/oracles/provider_ledger.py:115:                            fc.PROVIDER_FORBIDDEN,
+harness/build_soak/oracles/provider_ledger.py:124:                        fc.PROVIDER_FORBIDDEN,
+harness/build_soak/oracles/provider_ledger.py:133:                        fc.PROVIDER_WRONG_MODEL,
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '250,340p' harness/build_soak/classify.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+    out: list[Any] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            out.append(json.loads(line))
+    return out
+
+
+def _read_ledger(path: str | Path) -> list[dict[str, Any]]:
+    """Tolerant provider-call-ledger reader: never crashes on a malformed line and
+    never silently drops one. A non-JSON / non-dict line becomes a hostless
+    ``{"__malformed__": ...}`` record so the ProviderLedgerOracle surfaces it as an
+    evidence gap (rather than under-reporting a possibly-forbidden call)."""
+    out: list[dict[str, Any]] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            out.append({"__malformed__": line[:160]})
+            continue
+        out.append(obj if isinstance(obj, dict) else {"__malformed__": str(obj)[:160]})
+    return out
+
+
+# ---- §17 no-fluke replay policy (pure function) -----------------------------
+
+
+def intermittent_classification(
+    original: dict[str, Any],
+    *,
+    replay_status: str,
+    replay_code: str | None = None,
+    replay_run_id: str | None = None,
+) -> dict[str, Any]:
+    """Apply the no-fluke replay policy (§17) to an originally-FAILED run.
+
+    A failed run that PASSES on exact replay is NOT a pass — it is an intermittent
+    failure: status stays FAIL, code becomes INTERMITTENT_<original_code> with the
+    SAME severity. A replay that fails the same way is a deterministic failure
+    (unchanged). The word "fluke" never yields PASS.
+
+    Returns a NEW classification dict; the input is not mutated."""
+    if original.get("status") != fc.FAIL:
+        raise ValueError("no-fluke policy only applies to an originally-FAILED run")
+    original_code = str(original.get("code"))
+    updated = dict(original)
+
+    if replay_status == fc.PASS:
+        intermittent_code = fc.INTERMITTENT_PREFIX + original_code
+        updated["status"] = fc.FAIL
+        updated["code"] = intermittent_code
+        updated["severity"] = fc.severity_for(intermittent_code)
+        updated["replay"] = {
+            "attempted": True,
+            "result": "passed",
+            "run_id": replay_run_id,
+        }
+        return updated
+
+    if replay_status == fc.FAIL and replay_code == original_code:
+        updated["replay"] = {"attempted": True, "result": "same_failure", "run_id": replay_run_id}
+        return updated
+
+    if replay_status == fc.FAIL:
+        updated["replay"] = {
+            "attempted": True,
+            "result": "different_failure",
+            "run_id": replay_run_id,
+        }
+        return updated
+
+    # INVALID_RUN / INFRA_FAILURE on replay: cannot prove a pass; keep the failure
+    # and record the inconclusive replay.
+    updated["replay"] = {"attempted": True, "result": "not_attempted", "run_id": replay_run_id}
+    return updated
+
+codex
+APPROVE
+
+REASONS
+- `evaluate_product_promotion` composition in [harness/build_soak/promotion.py](/var/home/dylan/projects/disclaude/harness/build_soak/promotion.py) is conservative against false-eligible cases: a run must pass `runs present`, `all runs PASS`, `no INVALID_RUN`, `no UNKNOWN_FAILURE`, and provider checks before eligibility can be true.
+- The eligibility calculation is effectively “eligible iff no check is `False`” while preserving informational checks (`ok is None`), matching bakeoff-style convention used in [harness/build_soak/bakeoff.py](/var/home/dylan/projects/disclaude/harness/build_soak/bakeoff.py).
+- Default posture is correct for HARN-1b dependency gating: when `require_product_harness=False`, product harness appears as `ok=None` and does not block, while setting it True enforces the sub-gates as blocking (`False` on missing/failed sub-gate).
+- Tests in [harness/build_soak/tests/test_promotion.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_promotion.py) exercise the stated scenarios and confirm the check-shape and blocking behavior.
+
+REQUIRED_REVISIONS
+- None (blocking).
+tokens used
+23,634
+APPROVE
+
+REASONS
+- `evaluate_product_promotion` composition in [harness/build_soak/promotion.py](/var/home/dylan/projects/disclaude/harness/build_soak/promotion.py) is conservative against false-eligible cases: a run must pass `runs present`, `all runs PASS`, `no INVALID_RUN`, `no UNKNOWN_FAILURE`, and provider checks before eligibility can be true.
+- The eligibility calculation is effectively “eligible iff no check is `False`” while preserving informational checks (`ok is None`), matching bakeoff-style convention used in [harness/build_soak/bakeoff.py](/var/home/dylan/projects/disclaude/harness/build_soak/bakeoff.py).
+- Default posture is correct for HARN-1b dependency gating: when `require_product_harness=False`, product harness appears as `ok=None` and does not block, while setting it True enforces the sub-gates as blocking (`False` on missing/failed sub-gate).
+- Tests in [harness/build_soak/tests/test_promotion.py](/var/home/dylan/projects/disclaude/harness/build_soak/tests/test_promotion.py) exercise the stated scenarios and confirm the check-shape and blocking behavior.
+
+REQUIRED_REVISIONS
+- None (blocking).

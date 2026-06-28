@@ -920,3 +920,15 @@ On scoping P1's first PR, two issues surfaced that reshape it:
 - HARN-1b Playwright product harness + browser evidence streams (ws/network/console/screenshots/downloads).
 - HARN-2 the 7 browser-evidence oracles. HARN-3 centralized product promotion policy (provider clause now
   enforceable).
+
+## PR HARN-3 — centralized product promotion policy — COMPLETE
+- Codex review (CODE, binding): APPROVE, none blocking. Composition conservative (no false-ELIGIBLE hole);
+  ok=None informational convention matches bakeoff; require_product_harness default-False posture correct.
+- NEW harness/build_soak/promotion.py: evaluate_product_promotion(classifications, *, product_harness,
+  require_product_harness) → {eligible, checks}. Headless gates ON now (runs present / all PASS /
+  no INVALID_RUN / no UNKNOWN_FAILURE / provider constraint). Product-harness gate (browser_ws/preview/
+  download/cleanup/zero-calls-after-terminal) blocks only when require_product_harness=True (default False
+  until HARN-1b). bakeoff.py (kernel) untouched + separate.
+- Tests: 11 passed. basedpyright strict: 0 errors.
+- P1 REMAINING: HARN-1b Playwright product harness + browser evidence streams; HARN-2 the 7 browser-evidence
+  oracles; then flip require_product_harness=True in the release gate + wire live provider-ledger population.
