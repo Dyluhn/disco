@@ -932,3 +932,21 @@ On scoping P1's first PR, two issues surfaced that reshape it:
 - Tests: 11 passed. basedpyright strict: 0 errors.
 - P1 REMAINING: HARN-1b Playwright product harness + browser evidence streams; HARN-2 the 7 browser-evidence
   oracles; then flip require_product_harness=True in the release gate + wire live provider-ledger population.
+
+## PR HARN-2 — 8 browser product-harness oracles — COMPLETE
+- Codex (CODE, binding): APPROVE (after 1 hardening round). Grouping (one cohesive module) accepted.
+- NEW oracles/browser_evidence.py: BrowserWS/Lifecycle/SidecarStop/PreviewOwnership/ShowToUser/
+  VerificationGate/ExportDownload/Cleanup over a single product_evidence dossier. Each SKIPs without its
+  slice (headless runs unaffected); FAIL-CLOSED on malformed/partial (safe _int, explicit-positive reads).
+- CHANGED failure_codes.py (8 new P0 codes); classify.py (product_evidence param → family as step 8 +
+  classify_run_folder reads product-evidence.json tolerantly); run.py classify_dossier threads
+  product_evidence; oracles/__init__.py (exports).
+- round-1 fixes: wired into live dossier path; safe numeric coercion (no crash on 'n/a'); closed false-PASS
+  holes (owner=='platform'/workspace_released is True/both verification flags/stopped_at_terminal explicit).
+- Tests: 40 passed (per-oracle skip/pass/violation + malformed/partial fail-closed + classify_run_folder
+  green/violation/corrupt). basedpyright strict: 0 errors.
+
+### P1 STATUS: HARN-1a + HARN-2 + HARN-3 oracle/policy layer COMPLETE.
+Remaining for P1: HARN-1b — the Playwright product harness that DRIVES the real UI and WRITES the
+product-evidence.json + provider-call-ledger.jsonl streams these oracles consume (needs a LIVE
+frontend+agent-server stack). Then flip require_product_harness=True in the release gate.

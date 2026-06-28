@@ -26,6 +26,7 @@ from . import failure_codes as fc
 from .events import NormalizationError, normalize_events
 from .evidence import EvidenceManifest, load_manifest, verify_evidence_unchanged
 from .oracles import (
+    BROWSER_EVIDENCE_ORACLES,
     ContractOracle,
     EventChainOracle,
     HarnessValidityOracle,
@@ -80,6 +81,7 @@ def classify(
     autonomous: bool | None = None,
     revision_meta: dict[str, Any] | None = None,
     provider_ledger: list[dict[str, Any]] | None = None,
+    product_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Classify one run from its raw event log (full-event dicts OR DB rows) plus
     optional captured evidence. Returns the §13 classification dict.
@@ -146,6 +148,15 @@ def classify(
             events, scenario=scenario, provider_ledger=provider_ledger
         )
         first_fail = _first_fail(results)
+    if first_fail is None:
+        # 8. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
+        # slice, so a headless run (product_evidence is None) is unaffected; a product-
+        # harness run enforces the real UI path.
+        for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
+            results += _oracle_cls().check(product_evidence=product_evidence)
+            first_fail = _first_fail(results)
+            if first_fail is not None:
+                break
 
     required_evidence_present = not any(
         r.failed and r.code in fc.HARNESS_VALIDITY_CODES for r in results
@@ -230,6 +241,19 @@ def classify_run_folder(
     if ledger_path.is_file():
         provider_ledger = _read_ledger(ledger_path)
 
+    # HARN-2: the browser product-harness evidence dossier (a single JSON object).
+    # Absent → the browser oracles SKIP (headless run unaffected).
+    product_evidence: dict[str, Any] | None = None
+    pe_path = base / "product-evidence.json"
+    if not pe_path.is_file():
+        pe_path = next(iter(base.rglob("product-evidence.json")), pe_path)
+    if pe_path.is_file():
+        try:
+            loaded = json.loads(pe_path.read_text(encoding="utf-8"))
+            product_evidence = loaded if isinstance(loaded, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            product_evidence = None
+
     classification = classify(
         events_raw,
         scenario=scenario,
@@ -239,6 +263,7 @@ def classify_run_folder(
         evidence_intact=evidence_intact,
         autonomous=manifest.autonomous if manifest else None,
         provider_ledger=provider_ledger,
+        product_evidence=product_evidence,
     )
     (base / CLASSIFICATION_NAME).write_text(
         json.dumps(classification, indent=2, sort_keys=True), encoding="utf-8"
