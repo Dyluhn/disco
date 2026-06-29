@@ -360,4 +360,6 @@ def test_tool_context_has_no_secret_field():
         "driver_llm",
         # CW-6: the capability-derived file_read page budget (an int, not a secret).
         "read_char_budget",
+        # P7: the active contract's starter_kit name (e.g. "app_shell") — a str, not a secret.
+        "starter_kit",
     }

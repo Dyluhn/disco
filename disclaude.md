@@ -1444,3 +1444,76 @@ brand kit clean projection. Required fixes:
    the active starter contract + advances phase.
 NOTE: Codex couldn't run tests (openpyxl missing in registry import) — install before the gate.
 P7 NOT accepted. Fixing now, then retest + re-review before acceptance. P8 untouched.
+
+---
+
+# HEARTBEAT AUDIT — 2026-06-29 (compliance repair pass)
+
+**Expected heartbeats since bootstrap:** 219 (interval 600s, bootstrap 2026-06-28T02:56:13Z → now
+2026-06-29T15:21Z = 2185 min / 36.4 h).
+**Observed (`.claude/heartbeat.log` HEARTBEAT_DUE lines):** 105.
+**Missed:** 114 — ALL concentrated in a SINGLE outage gap: **06-28 19:46 → 06-29 15:01 (1155 min / ~19 h,
+~115 missed)**. Outside that window the logger ticked regularly.
+
+**heartbeat.log status:** ALIVE. `heartbeat.py` (pid 122882, `--interval 600`) SURVIVED — the GPU memory
+leak crashed the desktop/Wayland compositor but the box did NOT fully reboot, so the background logger kept
+running; it simply could not advance while the system was wedged/OOM. Resumed at 06-29 15:01; last tick 15:21.
+
+**Missed-heartbeat explanation (two distinct issues):**
+1. *The 19h gap* = the documented R9700 GPU-memory-leak crash (orphaned amdgpu VRAM+GTT after a ROCm/vLLM
+   compute hang on the shared display+compute card → 15.4 GB pinned host RAM → OOM/freeze → desktop down for
+   ~19 h until recovery). NOT a logging defect — the host was effectively offline. Root cause + mitigation are
+   recorded in the user's memory note `r9700-gpu-memory-leak.md`.
+2. *Ledger-discipline gap (the real compliance miss):* heartbeats were written to `.claude/heartbeat.log` (a
+   passive timestamp file) but were NEVER converted into spine ledger sections. The campaign ledger has 33
+   `##` sections — all PER-PR, none PER-HEARTBEAT. `heartbeat.py` is a logger, not an actuator; the actual
+   loop driver was `ScheduleWakeup` + per-PR commits. Honest record-keeping should have appended a heartbeat
+   ledger entry at each turn/heartbeat boundary.
+
+**Corrective procedure (now in force):**
+- `heartbeat.py` confirmed running; log intact.
+- **STRICT HEARTBEAT LEDGER resumed:** from here, every heartbeat / turn boundary appends a real
+  `### HEARTBEAT <UTC ts>` section below with: what was done, test/gate status, and next action. No silent
+  heartbeats.
+- If a future gap >2 intervals appears, the next heartbeat entry must state the cause (crash/idle/blocked),
+  mirroring this audit.
+
+---
+
+# P1 STATUS RECLASSIFIED (compliance repair pass)
+
+The prior "P1 Product Harness COMPLETE" was OVERCLAIMED. Corrected:
+- **P1A — headless zero-opinion oracles: COMPLETE.** provider-call ledger + ProviderLedgerOracle (MiniMax-only
+  fail-closed), 8 browser-evidence oracles (pure, over a product_evidence dict), promotion policy, validated
+  evidence writer, failure codes. All unit-tested headlessly, Codex-gated.
+- **P1B — browser product harness: PENDING.** The LIVE Playwright/UI/WS/PreviewPane evidence that actually
+  drives the running frontend+agent-server stack and POPULATES product_evidence (browser WS connected,
+  PreviewPane render, show-to-user, export download, cleanup) does NOT exist yet. The oracles are written but
+  have no live producer.
+- **>>> Product Harness is NOT marked complete until P1B exists. <<<** No "Product Harness complete" claim is
+  valid without Playwright/UI/WS/PreviewPane evidence. P1B requires the running stack (deferred until then).
+
+---
+
+# STRICT HEARTBEAT LEDGER (resumed 2026-06-29)
+
+### HEARTBEAT 2026-06-29T15:2x Z — compliance repair pass
+- Step 1 DONE: P7-KITS Codex CODE review ran on gpt-5.5 → REVISE (5 findings) → all fixed → re-review APPROVE.
+  P7 ACCEPTED. Commit `ab06dee2`. Fixes: scaffold_starter wired into static.site/prototype contracts+packs
+  (was a partial false affordance); clobber-safe via ctx.sandbox.file_exists; active-contract binding proven
+  end-to-end (executor→ToolContext.starter_kit) + runtime resolver test; deck filename pinned (deck.authored.json).
+- Steps 2-5 DONE: this HEARTBEAT AUDIT + P1A/P1B reclassification + strict heartbeat ledger resumed (this entry).
+- NEXT: Step 6 — run the full test gate after P7 approval; then HALT before P8 per the "Do not start P8" directive.
+
+### HEARTBEAT 2026-06-29T15:3x Z — test gate complete; HALT before P8
+- Step 6 DONE: full test gate re-run after P7 approval. core ✅, tools ✅ (fixed the ToolContext field-set
+  snapshot to include the additive P7 `starter_kit` field — the no-secret guard correctly caught it),
+  harness/build_soak ✅ (124 green, 1 skip), agent-server contract/activation+lifecycle ✅. basedpyright strict
+  0 new errors. Pre-existing-only failures remain: test_bakeoff.py import quirk, test_pi_process (needs node),
+  test_verify config, fire_now + driver.py:291 pyright (all stash-confirmed pre-existing).
+- COMPLIANCE REPAIR PASS COMPLETE (steps 1-6). P7 ACCEPTED. P1 reclassified P1A-done/P1B-pending. Heartbeat
+  audit recorded + strict heartbeat ledger in force. Product Harness NOT marked complete (no P1B browser
+  evidence).
+- HALT: per the "Do not start P8" directive, NOT starting P8. Next action when authorized: P8 Semantic Direct
+  Manipulation (scout → plan → Codex gpt-5.5 gate → implement). P1B (live Playwright/UI/WS/PreviewPane harness)
+  remains the open evidence gap for any "Product Harness complete" claim.
