@@ -2110,3 +2110,33 @@ wrapper + tests; live capture = P1B-LIVE-3.
   observations→write_dossier; the FLAGGED live run). Scope driver availability first (~/.config/disco/secrets.json
   encrypted — needs DISCO_SECRET_KEY); if no driver, live run stays pending + surfaced to Dylan, Product Harness
   NOT complete.
+
+## P1B-LIVE driver = MiniMax (Dylan directive 2026-06-29) — LIVE-VERIFIED + protocol finding
+DECISION: the P1B-LIVE (and P17) build driver is MiniMax-M3 via the DIRECT minimax.io API (the opencode
+minimax-coding-plan token at ~/.local/share/opencode/auth.json, type api, sk-cp-…). NOT OpenRouter, NOT Pi.
+LIVE PROBE (2026-06-29): MiniMax-M3 returns HTTP 200 "OK" at POST https://api.minimax.io/anthropic/v1/messages
+(headers x-api-key + anthropic-version: 2023-06-01; ANTHROPIC protocol). The OpenAI endpoint
+api.minimaxi.com/v1/chat/completions returns 401 "invalid api key" — the coding-plan token is ANTHROPIC-PROTOCOL
+ONLY. So MiniMax-M3 is confirmed reachable + working as the direct driver.
+WIRING WRINKLE: disco's build driver is OpenAI-only (core/llm/openai_provider.py; no anthropic provider). The
+coding-plan token speaks Anthropic /messages. => need an OpenAI→Anthropic RELAY (accept disco's OpenAI
+/v1/chat/completions, translate to MiniMax /anthropic/v1/messages with the token, translate the response back).
+This is the relay the harness used via Pi (now down). P1B-LIVE-3 plan: (1) minimal OpenAI→Anthropic MiniMax relay
+(local, holds the token); (2) disco-config.json build model → {base_url: local relay, model_id: MiniMax-M3,
+api_key_env}; (3) bring up the disclaude stack + ONE real browser build run → evidence dossier → classify_dossier
+PASS, with Playwright screenshots as proof. The token NEVER goes into the repo/ledger (env / encrypted store only).
+
+### P1B-LIVE driver — CORRECTION (further probe): OpenAI protocol WORKS, existing relay is enough
+The coding-plan token DOES work via OpenAI protocol — HTTP 200 MiniMax-M3 at api.minimaxi.chat/v1/chat/completions
+AND api.minimax.io/v1/chat/completions (Bearer). Only the WRONG host api.minimaxi.com 401s. So NO Anthropic
+translation needed — the existing /home/dylan/projects/disco-pi-dev/minimax_relay.py (OpenAI passthrough → UPSTREAM
+default api.minimaxi.chat/v1, Bearer KEY, maps minimax-m3→MiniMax-M3, clamps max_tokens, SSE) works AS-IS with the
+coding-plan token. P1B-LIVE-3: (1) copy the relay into the disclaude repo as its permanent home (+ a tiny unit
+test of the model-map/clamp logic); run it with MINIMAX_API_KEY (sk-cp- from opencode auth.json — env ONLY, never
+in repo) + MINIMAX_MODEL=MiniMax-M3 + MINIMAX_UPSTREAM=https://api.minimaxi.chat/v1 on a local port; (2)
+disco-config.json build model driver-minimax → {base_url: http://localhost:<port>/v1, model_id: minimax-m3};
+(3) bring up the disclaude stack + ONE real browser build → dossier → classify_dossier PASS + Playwright
+screenshots. PROVIDER-LEDGER (P17): record the REAL upstream host (minimaxi.chat), not localhost relay, so the
+MiniMax-only/no-OpenRouter proof is honest — source from the relay's RELAY-REQ log or disco's configured upstream.
+MEMORY: save a note that MiniMax coding-plan (sk-cp-) works OpenAI-compat on api.minimaxi.chat/v1 + api.minimax.io
+/v1 (NOT api.minimaxi.com), so the relay needs no Anthropic adapter.
