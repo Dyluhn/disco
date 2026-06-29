@@ -1,0 +1,2244 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f150d-2dca-7c42-860e-5b2efc0436b1
+--------
+user
+# Codex PLAN review — P8D Targeted-edit & manual-edit oracles (disclaude). See "## PR P8D" in disclaude.md.
+
+PATH DEVIATION: the plan lists harness/oracles/ but the real zero-opinion oracle layer is harness/build_soak/
+oracles/ (OracleResult + schema.passing/failing/skipping + failure_codes/SEVERITY_BY_CODE), tested in
+harness/build_soak/tests/. I propose reusing that infra (not a parallel framework). 5 pure oracles over plain-dict
+evidence: TargetedEditOracle (edited ⊆ expected), RewriteAvoidanceOracle (small-edit churn ratio bound),
+ManualEditPreservationOracle (override snippets survive), CommentAnchorOracle (anchors_before ⊆ anchors_after,
+survive reorder), ScreenLabelOracle (unedited sections' labels stable). New failure codes registered with
+severity. The live evidence PRODUCER (a real targeted-edit run) is P1B-LIVE — these oracles are pure + unit-tested
+on synthetic evidence now (mirroring the P1A browser-evidence oracles).
+
+Judge: (a) is reusing harness/build_soak/oracles the right call vs the literal harness/oracles path? (b) are the 5
+oracle predicates correct + truly zero-opinion (no LLM, structured facts), especially "anchor survives reorder" =
+set membership not position, and RewriteAvoidance only adjudicating when edit_scope=="small"? (c) the churn-ratio
+threshold — what value, and should it be evidence-supplied/gated rather than hardcoded? (d) SKIP semantics — each
+oracle SKIPs (never silent-passes) when its evidence is absent? (e) is deferring the live evidence producer to
+P1B-LIVE acceptable? (f) failure-code severities (P1/P1/P1/P1/P2) sane? Return APPROVE|REVISE|BLOCKED + REASONS +
+REQUIRED_REVISIONS.
+codex
+I’ll verify the existing plan text and the current oracle layer before judging, so the review is grounded in the repo’s actual structure rather than the path in the plan.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "PR P8D|P8D|harness/oracles|build_soak/oracles|OracleResult|SEVERITY_BY_CODE" disclaude.md harness -S' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+disclaude.md:851:adapters/disco_api.py acting AS THE USER). OracleResult schema + classify.py (first-broken-link) +
+disclaude.md:1585:6. Scope: model + pure resolver + tests ONLY (P8B/P8C/P8D separate). Confirmed.
+disclaude.md:1621:SCOPE: vocabulary+emit+validate+renderer-wiring ONLY. P8C frontend resolver + P8D oracles separate.
+disclaude.md:1704:- NEXT: P8D (targeted-edit + manual-edit-preservation oracles) → completes P8.
+disclaude.md:1706:## PR P8D — Targeted-edit & manual-edit oracles — PLAN
+disclaude.md:1707:PATH DEVIATION (flag for gate): plan says harness/oracles/ + harness/tests/, but the real oracle layer is
+disclaude.md:1708:harness/build_soak/oracles/ (zero-opinion OracleResult via schema.passing/failing/skipping + failure_codes with
+disclaude.md:1709:SEVERITY_BY_CODE) tested in harness/build_soak/tests/. Reuse that infra (no parallel oracle framework). Files:
+disclaude.md:1710:harness/build_soak/oracles/targeted_edit.py + manual_edit_preservation.py; tests in harness/build_soak/tests/.
+disclaude.md:1722:New codes added to failure_codes.py + registered in SEVERITY_BY_CODE. Exported from oracles/__init__.py.
+harness/build_soak/classify.py:38:from .oracles.schema import OracleResult
+harness/build_soak/classify.py:116:    results: list[OracleResult] = []
+harness/build_soak/classify.py:198:def _first_fail(results: list[OracleResult]) -> OracleResult | None:
+harness/build_soak/failure_codes.py:158:SEVERITY_BY_CODE: dict[str, str] = {
+harness/build_soak/failure_codes.py:213:PRODUCT_FAILURE_CODES = frozenset(SEVERITY_BY_CODE)
+harness/build_soak/failure_codes.py:224:    return SEVERITY_BY_CODE.get(base, P0)
+harness/build_soak/migrations/2026_06_24_paused_incomplete_not_pass.md:4:**Tracked files changed (§19):** `harness/build_soak/oracles/output_truth.py`,
+harness/build_soak/tests/test_oracle_schema.py:1:"""OracleResult schema round-trips + validates (guidelines §10, PR S1)."""
+harness/build_soak/tests/test_oracle_schema.py:11:    OracleResult,
+harness/build_soak/tests/test_oracle_schema.py:23:    assert OracleResult.from_dict(d) == r
+harness/build_soak/tests/test_oracle_schema.py:37:    assert OracleResult.from_dict(d) == r
+harness/build_soak/tests/test_oracle_schema.py:45:    assert OracleResult.from_dict(d) == r
+harness/build_soak/tests/test_oracle_schema.py:50:        OracleResult(oracle="X", status=FAILED, code=None)
+harness/build_soak/tests/test_oracle_schema.py:55:        OracleResult(oracle="X", status="MAYBE")
+harness/build_soak/tests/test_oracle_schema.py:60:        OracleResult.from_dict({"status": "PASS"})
+harness/build_soak/oracles/provider_ledger.py:29:from .schema import OracleResult, failing, passing, skipping
+harness/build_soak/oracles/provider_ledger.py:42:    ) -> list[OracleResult]:
+harness/build_soak/oracles/schema.py:3:Each oracle returns `OracleResult` objects — structured facts, never prose. The
+harness/build_soak/oracles/schema.py:29:class OracleResult:
+harness/build_soak/oracles/schema.py:54:                f"OracleResult.status must be one of {sorted(_STATUSES)}, got {self.status!r}"
+harness/build_soak/oracles/schema.py:57:            raise ValueError("a FAIL OracleResult must carry a failure code")
+harness/build_soak/oracles/schema.py:59:            raise TypeError("OracleResult.facts must be a dict")
+harness/build_soak/oracles/schema.py:88:    def from_dict(cls, raw: dict[str, Any]) -> OracleResult:
+harness/build_soak/oracles/schema.py:90:            raise TypeError("OracleResult.from_dict expects a dict")
+harness/build_soak/oracles/schema.py:93:            raise ValueError(f"OracleResult dict missing keys: {sorted(missing)}")
+harness/build_soak/oracles/schema.py:106:) -> OracleResult:
+harness/build_soak/oracles/schema.py:107:    return OracleResult(oracle=oracle, status=OK, code=code, facts=facts or {})
+harness/build_soak/oracles/schema.py:116:) -> OracleResult:
+harness/build_soak/oracles/schema.py:117:    return OracleResult(
+harness/build_soak/oracles/schema.py:126:def skipping(oracle: str, *, reason: str, facts: dict[str, Any] | None = None) -> OracleResult:
+harness/build_soak/oracles/schema.py:127:    return OracleResult(oracle=oracle, status=SKIPPED, code=None, facts=facts or {}, reason=reason)
+harness/build_soak/oracles/output_truth.py:29:from .schema import OracleResult, failing, passing, skipping
+harness/build_soak/oracles/output_truth.py:116:    ) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:28:from .schema import OracleResult, failing, passing, skipping
+harness/build_soak/oracles/browser_evidence.py:57:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:80:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:103:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:129:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:153:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:175:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:200:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/browser_evidence.py:227:    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+harness/build_soak/oracles/revision.py:51:from .schema import OracleResult, failing, passing, skipping
+harness/build_soak/oracles/revision.py:158:    ) -> list[OracleResult]:
+harness/build_soak/oracles/tool_scope.py:41:from .schema import OracleResult, failing, passing, skipping
+harness/build_soak/oracles/tool_scope.py:82:    ) -> list[OracleResult]:
+harness/build_soak/oracles/tool_scope.py:83:        results: list[OracleResult] = []
+harness/build_soak/oracles/tool_scope.py:144:    def _check_allowed(self, tool_scope: list[dict[str, Any]]) -> OracleResult | None:
+harness/build_soak/oracles/harness_validity.py:23:from .schema import OracleResult, failing, passing
+harness/build_soak/oracles/harness_validity.py:35:    ) -> list[OracleResult]:
+harness/build_soak/oracles/__init__.py:1:"""Objective oracle layers (guidelines §10). Each emits structured OracleResult
+harness/build_soak/oracles/__init__.py:28:from .schema import OracleResult, failing, passing, skipping
+harness/build_soak/oracles/__init__.py:40:    "OracleResult",
+harness/build_soak/oracles/event_chain.py:42:from .schema import OracleResult, failing, passing
+harness/build_soak/oracles/event_chain.py:66:    ) -> list[OracleResult]:
+harness/build_soak/oracles/event_chain.py:200:    def _check_pairing(self, events: list[dict[str, Any]]) -> OracleResult | None:
+harness/build_soak/oracles/contract.py:25:from .schema import OracleResult, failing, passing, skipping
+harness/build_soak/oracles/contract.py:36:    ) -> list[OracleResult]:
+
+exec
+/bin/bash -lc 'rg --files harness | sort' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/__init__.py
+harness/_capture_loop_demo.py
+harness/_capture_research_demo.py
+harness/build_loop_metrics.py
+harness/build_soak/__init__.py
+harness/build_soak/adapters/__init__.py
+harness/build_soak/adapters/disco_api.py
+harness/build_soak/bakeoff.py
+harness/build_soak/classify.py
+harness/build_soak/events.py
+harness/build_soak/evidence.py
+harness/build_soak/failure_codes.py
+harness/build_soak/fixtures/__init__.py
+harness/build_soak/fixtures/fake_model.py
+harness/build_soak/fixtures/fake_tools.py
+harness/build_soak/infra_signatures.yaml
+harness/build_soak/migrations/2026_06_24_paused_incomplete_not_pass.md
+harness/build_soak/oracles/__init__.py
+harness/build_soak/oracles/browser_evidence.py
+harness/build_soak/oracles/contract.py
+harness/build_soak/oracles/event_chain.py
+harness/build_soak/oracles/harness_validity.py
+harness/build_soak/oracles/output_truth.py
+harness/build_soak/oracles/provider_ledger.py
+harness/build_soak/oracles/revision.py
+harness/build_soak/oracles/schema.py
+harness/build_soak/oracles/tool_scope.py
+harness/build_soak/product_evidence.py
+harness/build_soak/promotion.py
+harness/build_soak/provider_ledger.py
+harness/build_soak/run.py
+harness/build_soak/scenarios.yaml
+harness/build_soak/tests/_eventlog.py
+harness/build_soak/tests/conftest.py
+harness/build_soak/tests/test_api_runner.py
+harness/build_soak/tests/test_bakeoff.py
+harness/build_soak/tests/test_browser_evidence_oracles.py
+harness/build_soak/tests/test_classifier.py
+harness/build_soak/tests/test_event_chain_oracle.py
+harness/build_soak/tests/test_evidence_lock.py
+harness/build_soak/tests/test_fail_closed.py
+harness/build_soak/tests/test_live_api_smoke.py
+harness/build_soak/tests/test_no_fluke_policy.py
+harness/build_soak/tests/test_oracle_schema.py
+harness/build_soak/tests/test_output_truth_oracle.py
+harness/build_soak/tests/test_product_evidence_writer.py
+harness/build_soak/tests/test_promotion.py
+harness/build_soak/tests/test_provider_ledger_oracle.py
+harness/build_soak/tests/test_revision_oracle.py
+harness/canary.py
+harness/capture.py
+harness/cassette.py
+harness/cassettes/demo.jsonl
+harness/cassettes/loop_demo.cassette.jsonl
+harness/cassettes/loop_demo.events.jsonl
+harness/cassettes/research_demo.jsonl
+harness/eval_runner.py
+harness/faults.py
+harness/live_build_acceptance.py
+harness/logcap.py
+harness/marathon/README.md
+harness/marathon/_or_key.py
+harness/marathon/common.py
+harness/marathon/conftest.py
+harness/marathon/data/PROVENANCE.md
+harness/marathon/data/sensor_readings.csv
+harness/marathon/drive.py
+harness/marathon/make_csv.py
+harness/marathon/provenance.json
+harness/marathon/sensor_readings.csv
+harness/marathon/test_phase_a.py
+harness/marathon/test_phase_b.py
+harness/marathon/test_phase_c.py
+harness/projection.py
+harness/providers.py
+harness/replay_runner.py
+harness/router.py
+harness/runtime.py
+harness/sandbox.py
+harness/slides_experiment/__init__.py
+harness/slides_experiment/prompts/p01_startup_pitch.json
+harness/slides_experiment/prompts/p02_data_report.json
+harness/slides_experiment/prompts/p03_tech_architecture.json
+harness/slides_experiment/prompts/p04_overflow_stress.json
+harness/slides_experiment/prompts/p05_product_launch.json
+harness/slides_experiment/prompts/p06_comparison_table.json
+harness/slides_experiment/prompts/p07_training_content.json
+harness/slides_experiment/prompts/p08_image_heavy.json
+harness/slides_experiment/prompts/p09_minimal_single.json
+harness/slides_experiment/prompts/p10_research_report.json
+harness/slides_experiment/prompts/p11_long_narrative.json
+harness/slides_experiment/prompts/p12_mixed_content.json
+harness/slides_experiment/run.py
+harness/slides_experiment/scorers.py
+harness/slides_experiment/strategies.py
+harness/tests/test_canary.py
+harness/tests/test_cassette.py
+harness/tests/test_contract.py
+harness/tests/test_eval_runner.py
+harness/tests/test_faults.py
+harness/tests/test_fuzz.py
+harness/tests/test_obs.py
+harness/tests/test_replay_runner.py
+harness/tests/test_sandbox_replay.py
+
+codex
+The repo already confirms the path deviation: `harness/build_soak/oracles` is the active OracleResult layer, and there is no separate `harness/oracles` tree in the file list. I’m reading the plan section and representative oracle implementations now to check semantics against existing conventions.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1700,1745p' disclaude.md" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+  discoSemanticResolver.ts (closest-first DOM walk → DiscoSemanticTarget|SourceRef; field fails closed; nonneg
+  index; data-oid fallback), .test.ts (10 vitest), packages/core/tests/test_semantic_attr_parity.py (drift guard).
+- ENV: frontend node_modules was missing in the clone → ran `npm ci` (582 pkgs). vitest 10/10, tsc 0 errors,
+  Python parity green. In-frame selectionAgent injection + live click deferred to P1B-LIVE (browser evidence).
+- NEXT: P8D (targeted-edit + manual-edit-preservation oracles) → completes P8.
+
+## PR P8D — Targeted-edit & manual-edit oracles — PLAN
+PATH DEVIATION (flag for gate): plan says harness/oracles/ + harness/tests/, but the real oracle layer is
+harness/build_soak/oracles/ (zero-opinion OracleResult via schema.passing/failing/skipping + failure_codes with
+SEVERITY_BY_CODE) tested in harness/build_soak/tests/. Reuse that infra (no parallel oracle framework). Files:
+harness/build_soak/oracles/targeted_edit.py + manual_edit_preservation.py; tests in harness/build_soak/tests/.
+ORACLES (pure fns over plain-dict evidence; live producer = P1B-LIVE/soak, like the P1A browser oracles):
+- TargetedEditOracle: edited_files ⊆ expected_files → else fail TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES (P1).
+- RewriteAvoidanceOracle: a SMALL-scoped edit's churn_ratio (changed_lines/total_lines) ≤ threshold → else
+  SMALL_EDIT_FULL_REWRITE (P1). (Threshold gated; only adjudicated when edit_scope=="small".)
+- ManualEditPreservationOracle: every manual_override snippet still present in the post-edit file → else
+  MANUAL_EDIT_CLOBBERED (P1).
+- CommentAnchorOracle: anchors_before ⊆ anchors_after (preserved through text edit; survive a section reorder —
+  set membership, not position) → else COMMENT_ANCHOR_LOST (P1).
+- ScreenLabelOracle: for sections NOT in the edit's targets, screen_label_before == screen_label_after (stable) →
+  else SCREEN_LABEL_UNSTABLE (P2).
+Each returns passing/skipping (no applicable evidence → SKIP, never silent pass) or failing(code, first_broken_link).
+New codes added to failure_codes.py + registered in SEVERITY_BY_CODE. Exported from oracles/__init__.py.
+TESTS (harness/build_soak/tests/): small edit touches expected files only (pass+fail); comment anchor preserved
+through a text edit; comment anchor survives a section reorder; direct override not clobbered (pass+fail); small
+CTA edit does not rewrite the whole app (pass+fail); screen-label stability; each oracle SKIPs cleanly with no
+evidence. PARALLEL: DeepSeek = edit-churn/clobber negative fixtures. SCOPE: the 5 oracles + codes + tests; the
+live evidence producer is P1B-LIVE.
+
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/oracles/browser_evidence.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""HARN-2 — the browser product-harness oracles.
+
+These eight zero-opinion oracles judge the REAL product path (not just that the
+engine wrote files) over the browser evidence HARN-1b captures into a single
+``product_evidence`` dict. Each oracle reads its own slice; when the slice is absent
+(a headless run, or HARN-1b not yet wired) it SKIPS — so these never affect headless
+classification until a product-harness run supplies the evidence.
+
+product_evidence (the HARN-1b dossier, all keys optional):
+    {
+      "browser_ws":   {"connections": int, "closes": [{"code": int, "reason": str}]},
+      "lifecycle":    {"statuses": ["RUNNING", ...], "terminal": "FINISHED"|...},
+      "sidecar":      {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
+      "preview":      {"owner": "platform"|"model", "manual_port": bool,
+                       "shown_to_user": bool, "url": str},
+      "shown":        {"artifact_shown": bool, "preview_shown": bool},
+      "verification": {"ready_for_verification_called": bool, "passed": bool},
+      "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
+      "cleanup":      {"orphans": int, "workspace_released": bool},
+    }
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from .schema import OracleResult, failing, passing, skipping
+
+_TERMINAL_OK = frozenset({"FINISHED", "VERIFIED"})
+
+
+def _slice(product_evidence: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+    if not product_evidence:
+        return None
+    val = product_evidence.get(key)
+    return val if isinstance(val, dict) else None
+
+
+def _int(v: Any) -> int | None:
+    """Safe int coercion: returns None for a missing/non-numeric/bool value so a
+    malformed count can be handled fail-closed instead of crashing classification."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+class BrowserWSOracle:
+    """The real browser opened (and kept) a build WebSocket — the 'silently dropped'
+    bug class where the UI never connects yet the engine runs blind."""
+
+    _NAME = "browser_ws"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ws = _slice(product_evidence, "browser_ws")
+        if ws is None:
+            return [skipping(self._NAME, reason="no browser_ws evidence (headless run)")]
+        conns = _int(ws.get("connections"))
+        if conns is None or conns <= 0:  # missing/malformed/zero → fail-closed
+            return [
+                failing(
+                    self._NAME,
+                    fc.BROWSER_WS_NOT_CONNECTED,
+                    first_broken_link="build -> browser_ws_connected",
+                    facts={"connections": ws.get("connections")},
+                )
+            ]
+        return [passing(self._NAME, facts={"connections": conns})]
+
+
+class LifecycleOracle:
+    """The conversation status progressed to a clean terminal (no RUNNING-forever,
+    no missing terminal)."""
+
+    _NAME = "lifecycle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        lc = _slice(product_evidence, "lifecycle")
+        if lc is None:
+            return [skipping(self._NAME, reason="no lifecycle evidence (headless run)")]
+        terminal = str(lc.get("terminal") or "")
+        if terminal not in _TERMINAL_OK:
+            return [
+                failing(
+                    self._NAME,
+                    fc.LIFECYCLE_SEQUENCE_INVALID,
+                    first_broken_link="build -> clean_terminal",
+                    facts={"terminal": terminal or None, "statuses": lc.get("statuses")},
+                )
+            ]
+        return [passing(self._NAME, facts={"terminal": terminal})]
+
+
+class SidecarStopOracle:
+    """The Pi sidecar (and provider calls) stopped at the terminal state — no runaway
+    token burn."""
+
+    _NAME = "sidecar_stop"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        sc = _slice(product_evidence, "sidecar")
+        if sc is None:
+            return [skipping(self._NAME, reason="no sidecar evidence (headless run)")]
+        calls_after = _int(sc.get("provider_calls_after_terminal", 0))
+        # require an EXPLICIT stop + a well-formed zero post-terminal call count.
+        if sc.get("stopped_at_terminal", False) is not True or calls_after is None or calls_after > 0:
+            return [
+                failing(
+                    self._NAME,
+                    fc.SIDECAR_NOT_STOPPED,
+                    first_broken_link="terminal -> sidecar_stopped",
+                    facts={
+                        "stopped_at_terminal": sc.get("stopped_at_terminal"),
+                        "provider_calls_after_terminal": sc.get("provider_calls_after_terminal"),
+                    },
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class PreviewOwnershipOracle:
+    """The PLATFORM owned the preview port/URL — the model never hand-served a port."""
+
+    _NAME = "preview_ownership"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        pv = _slice(product_evidence, "preview")
+        if pv is None:
+            return [skipping(self._NAME, reason="no preview evidence (headless run)")]
+        # fail-closed: require the owner to be EXPLICITLY "platform" (a missing/unknown
+        # owner cannot prove the platform owned the port) and manual_port not set.
+        if pv.get("owner") != "platform" or pv.get("manual_port", False) is True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.PREVIEW_OWNERSHIP_VIOLATION,
+                    first_broken_link="preview -> platform_owned",
+                    facts={"owner": pv.get("owner"), "manual_port": pv.get("manual_port")},
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class ShowToUserOracle:
+    """The artifact/preview was actually SHOWN to the user — file existence is not the
+    same as the UI presenting it."""
+
+    _NAME = "show_to_user"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        shown = _slice(product_evidence, "shown")
+        if shown is None:
+            return [skipping(self._NAME, reason="no shown evidence (headless run)")]
+        if not (shown.get("artifact_shown", False) or shown.get("preview_shown", False)):
+            return [
+                failing(
+                    self._NAME,
+                    fc.ARTIFACT_NOT_SHOWN_TO_USER,
+                    first_broken_link="finish -> shown_to_user",
+                    facts={k: bool(shown.get(k, False)) for k in ("artifact_shown", "preview_shown")},
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class VerificationGateOracle:
+    """Completion went THROUGH the host-owned verification finalizer (ready_for_*_
+    verification), not a model self-declared finish."""
+
+    _NAME = "verification_gate"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        vf = _slice(product_evidence, "verification")
+        if vf is None:
+            return [skipping(self._NAME, reason="no verification evidence (headless run)")]
+        # fail-closed: require BOTH flags explicitly True.
+        if vf.get("ready_for_verification_called", False) is not True or vf.get("passed", False) is not True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.VERIFICATION_GATE_BYPASSED,
+                    first_broken_link="finish -> verification_gate",
+                    facts={
+                        "ready_for_verification_called": bool(vf.get("ready_for_verification_called", False)),
+                        "passed": bool(vf.get("passed", False)),
+                    },
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class ExportDownloadOracle:
+    """When an export was requested, a real download was delivered (non-empty)."""
+
+    _NAME = "export_download"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ex = _slice(product_evidence, "export")
+        if ex is None:
+            return [skipping(self._NAME, reason="no export evidence (headless run)")]
+        if not ex.get("requested", False):
+            return [skipping(self._NAME, reason="no export requested")]
+        nbytes = _int(ex.get("download_bytes", 0))
+        if ex.get("download_present", False) is not True or nbytes is None or nbytes <= 0:
+            return [
+                failing(
+                    self._NAME,
+                    fc.EXPORT_DOWNLOAD_MISSING,
+                    first_broken_link="export -> download_delivered",
+                    facts={
+                        "download_present": ex.get("download_present"),
+                        "download_bytes": ex.get("download_bytes"),
+                    },
+                )
+            ]
+        return [passing(self._NAME, facts={"download_bytes": nbytes})]
+
+
+exec
+/bin/bash -lc "sed -n '1,180p' harness/build_soak/oracles/schema.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '130,245p' harness/build_soak/failure_codes.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""The structured fact every oracle emits (guidelines §10).
+
+Each oracle returns `OracleResult` objects — structured facts, never prose. The
+classifier reads these; a human reads them; nothing interprets free text. The
+result round-trips losslessly to/from a JSON-safe dict so it lands verbatim in the
+frozen `classification.json` (§13) and the evidence dossier.
+
+Plain dataclasses (no pydantic, no disco import) keep the schema standalone and the
+serialization byte-stable.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+# Oracle result status. Distinct from the run OUTCOME (PASS/FAIL/INVALID_RUN/
+# INFRA_FAILURE): an oracle PASSES, FAILS, or is SKIPPED (not applicable to this
+# scenario, or needs evidence this slice doesn't capture — e.g. the live tool
+# scope). A SKIP is never silently a pass; the classifier records it.
+OK = "PASS"
+FAILED = "FAIL"
+SKIPPED = "SKIP"
+
+_STATUSES = frozenset({OK, FAILED, SKIPPED})
+
+
+@dataclass(frozen=True)
+class OracleResult:
+    """One oracle's verdict on one predicate.
+
+    Fields:
+      oracle: the emitting oracle class name (e.g. "RevisionOracle").
+      status: PASS | FAIL | SKIP.
+      code:   a failure_codes constant when status==FAIL; for PASS/SKIP it may be
+              None or a short reason token.
+      facts:  structured, machine-readable evidence (never prose narrative).
+      first_broken_link: the "A -> B" link this result breaks (FAIL only), used by
+              the classifier's first-broken-link wins ordering (§16).
+      reason: an OPTIONAL short human token (e.g. why a SKIP) — advisory only,
+              never adjudicated on.
+    """
+
+    oracle: str
+    status: str
+    code: str | None = None
+    facts: dict[str, Any] = field(default_factory=dict)
+    first_broken_link: str | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in _STATUSES:
+            raise ValueError(
+                f"OracleResult.status must be one of {sorted(_STATUSES)}, got {self.status!r}"
+            )
+        if self.status == FAILED and not self.code:
+            raise ValueError("a FAIL OracleResult must carry a failure code")
+        if not isinstance(self.facts, dict):
+            raise TypeError("OracleResult.facts must be a dict")
+
+    @property
+    def passed(self) -> bool:
+        return self.status == OK
+
+    @property
+    def failed(self) -> bool:
+        return self.status == FAILED
+
+    @property
+    def skipped(self) -> bool:
+        return self.status == SKIPPED
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-safe dict (stable key order) for the dossier."""
+        out: dict[str, Any] = {
+            "oracle": self.oracle,
+            "status": self.status,
+            "code": self.code,
+            "facts": dict(self.facts),
+        }
+        if self.first_broken_link is not None:
+            out["first_broken_link"] = self.first_broken_link
+        if self.reason is not None:
+            out["reason"] = self.reason
+        return out
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> OracleResult:
+        if not isinstance(raw, dict):
+            raise TypeError("OracleResult.from_dict expects a dict")
+        missing = {"oracle", "status"} - set(raw)
+        if missing:
+            raise ValueError(f"OracleResult dict missing keys: {sorted(missing)}")
+        return cls(
+            oracle=str(raw["oracle"]),
+            status=str(raw["status"]),
+            code=raw.get("code"),
+            facts=dict(raw.get("facts") or {}),
+            first_broken_link=raw.get("first_broken_link"),
+            reason=raw.get("reason"),
+        )
+
+
+def passing(
+    oracle: str, *, facts: dict[str, Any] | None = None, code: str | None = None
+) -> OracleResult:
+    return OracleResult(oracle=oracle, status=OK, code=code, facts=facts or {})
+
+
+def failing(
+    oracle: str,
+    code: str,
+    *,
+    first_broken_link: str,
+    facts: dict[str, Any] | None = None,
+) -> OracleResult:
+    return OracleResult(
+        oracle=oracle,
+        status=FAILED,
+        code=code,
+        facts=facts or {},
+        first_broken_link=first_broken_link,
+    )
+
+
+def skipping(oracle: str, *, reason: str, facts: dict[str, Any] | None = None) -> OracleResult:
+    return OracleResult(oracle=oracle, status=SKIPPED, code=None, facts=facts or {}, reason=reason)
+
+ succeeded in 0ms:
+# A content (must_contain / must_not_contain / exact) assertion mismatched, but EVERY
+# mismatching file was captured on a NON-AUTHORITATIVE basis (`unproven_extended_stability`
+# / `unknown` — accepted via extended content-stability, with NO file_write raw-sha and no
+# qualifying full readback to prove the bytes). The captured snapshot may be a stale
+# pre-flush copy while the ProjectStore is actually correct, so the mismatch is UNRELIABLE
+# and must NOT be reported as a definitive product ARTIFACT_TRUTH_MISMATCH. It is recorded
+# as harness-validity evidence → INVALID_RUN so §17 re-runs it. A mismatch on a PROVEN basis
+# (raw_sha / rendered_readback / absent) in the SAME run always WINS this fold and stays a
+# hard ARTIFACT_TRUTH_MISMATCH (a proven regression is NEVER masked by an unproven one).
+WORKSPACE_SNAPSHOT_UNVERIFIED = "WORKSPACE_SNAPSHOT_UNVERIFIED"
+
+HARNESS_VALIDITY_CODES = frozenset(
+    {
+        NO_EVENTS,
+        UNPARSEABLE_EVENTS,
+        EVIDENCE_HASH_MISMATCH,
+        MISSING_REQUIRED_EVIDENCE,
+        SCENARIO_CONTRACT_UNSATISFIABLE,
+        RUN_INTERRUPTED,
+        RUN_TIMEOUT_WHILE_PROGRESSING,
+        WORKSPACE_SNAPSHOT_NOT_READY,
+        WORKSPACE_SNAPSHOT_UNVERIFIED,
+    }
+)
+
+
+# The severity of every product failure code. (Harness-validity codes are not in
+# here — they resolve to INVALID_RUN, which has its own outcome, not a severity.)
+SEVERITY_BY_CODE: dict[str, str] = {
+    # P0
+    NO_USER_EVENT_AFTER_SUBMIT: P0,
+    NO_PLAN_AFTER_USER_TURN: P0,
+    NO_REPLAN_AFTER_REVISION: P0,
+    WRITE_TOOL_ALLOWED_IN_PLANNING: P0,
+    WRITE_TOOL_ATTEMPTED_IN_PLANNING: P0,
+    WRONG_TOOL_REJECTION_ABORTS_LOOP: P0,
+    APPROVE_PLAN_NO_EXECUTION: P0,
+    DUPLICATE_EXECUTION_AFTER_APPROVAL: P0,
+    EXECUTION_NO_ACTION: P0,
+    ACTION_NO_OBSERVATION: P0,
+    FALSE_FINISH_NO_OUTPUT: P0,
+    FALSE_FINISH_PREVIEW_BROKEN: P0,
+    DUPLICATE_KICK_ON_RESUME: P0,
+    EVENT_LOG_STATE_DIVERGENCE: P0,
+    WS_FRAME_DROPPED_NO_ERROR: P0,
+    UI_ENABLED_DEAD_CONTROL: P0,
+    PROVIDER_FORBIDDEN: P0,
+    PROVIDER_WRONG_MODEL: P0,
+    PROVIDER_CALL_AFTER_TERMINAL: P0,
+    BROWSER_WS_NOT_CONNECTED: P0,
+    LIFECYCLE_SEQUENCE_INVALID: P0,
+    SIDECAR_NOT_STOPPED: P0,
+    PREVIEW_OWNERSHIP_VIOLATION: P0,
+    ARTIFACT_NOT_SHOWN_TO_USER: P0,
+    VERIFICATION_GATE_BYPASSED: P0,
+    EXPORT_DOWNLOAD_MISSING: P0,
+    WORKSPACE_NOT_CLEANED: P0,
+    UNKNOWN_FAILURE: P0,
+    # P1
+    PLAN_REVISION_NOT_INCREMENTED: P1,
+    STALE_PLAN_USED_AFTER_FOLLOWUP: P1,
+    PLAN_APPROVED_STATUS_MISSING: P1,
+    TOOL_SCOPE_MISMATCH: P1,
+    TOOL_REJECTION_NOT_VISIBLE_TO_MODEL: P1,
+    MODEL_TOLD_WRONG_MODE: P1,
+    STUCK_RUNNING_NO_EVENTS: P1,
+    PREVIEW_TRUTH_MISMATCH: P1,
+    ARTIFACT_TRUTH_MISMATCH: P1,
+    DESTRUCTIVE_ELISION: P1,
+    NO_CLEAR_FAILURE_TO_USER: P1,
+    OBSERVATION_WITHOUT_ACTION: P1,
+    WRITE_BEFORE_REVISION_APPROVAL: P1,
+    BUILD_DID_NOT_FINISH: P1,
+    # P2
+    SLOW_FIRST_PLAN: P2,
+    EXCESSIVE_READS_BEFORE_PLAN: P2,
+    MISSING_DONE_CONDITIONS: P2,
+    LOW_QUALITY_PLAN: P2,
+    MISSING_PROGRESS_EVENTS: P2,
+    WEAK_FINAL_SUMMARY: P2,
+}
+
+# Every product failure code, for validation.
+PRODUCT_FAILURE_CODES = frozenset(SEVERITY_BY_CODE)
+
+# The "intermittent" prefix (§17): a run that failed once then passed on exact
+# replay is recorded as FAIL with code INTERMITTENT_<original_code>, same severity.
+INTERMITTENT_PREFIX = "INTERMITTENT_"
+
+
+def severity_for(code: str) -> str:
+    """Severity for a (possibly INTERMITTENT_-prefixed) failure code. Unknown
+    codes are treated as P0 (§13: an unclassified failure is a release blocker)."""
+    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    return SEVERITY_BY_CODE.get(base, P0)
+
+
+def is_known_code(code: str) -> bool:
+    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    return base in PRODUCT_FAILURE_CODES or base in HARNESS_VALIDITY_CODES
+
+codex
+The existing browser-evidence oracles match the proposed pattern: optional evidence slices skip, malformed present evidence fails closed, and results carry structured facts plus first-broken-link. I’m checking classifier wiring and failure-code conventions so the review can call out any integration gaps rather than just predicate design.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+exec
+/bin/bash -lc "sed -n '1,140p' harness/build_soak/oracles/__init__.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Objective oracle layers (guidelines §10). Each emits structured OracleResult
+facts — never prose — and never calls an LLM.
+
+This foundation slice ships the deterministic, event-log-adjudicable layers:
+HarnessValidity, Contract, EventChain, ToolScope, Revision, OutputTruth. The
+UI/Transport/Runtime oracles belong to the later live/UI-runner slices.
+"""
+
+from __future__ import annotations
+
+from .browser_evidence import (
+    BROWSER_EVIDENCE_ORACLES,
+    BrowserWSOracle,
+    CleanupOracle,
+    ExportDownloadOracle,
+    LifecycleOracle,
+    PreviewOwnershipOracle,
+    ShowToUserOracle,
+    SidecarStopOracle,
+    VerificationGateOracle,
+)
+from .contract import ContractOracle
+from .event_chain import EventChainOracle
+from .harness_validity import HarnessValidityOracle
+from .output_truth import OutputTruthOracle
+from .provider_ledger import ProviderLedgerOracle
+from .revision import RevisionOracle
+from .schema import OracleResult, failing, passing, skipping
+from .tool_scope import ToolScopeOracle
+
+__all__ = [
+    "BROWSER_EVIDENCE_ORACLES",
+    "BrowserWSOracle",
+    "CleanupOracle",
+    "ContractOracle",
+    "EventChainOracle",
+    "ExportDownloadOracle",
+    "HarnessValidityOracle",
+    "LifecycleOracle",
+    "OracleResult",
+    "OutputTruthOracle",
+    "PreviewOwnershipOracle",
+    "ProviderLedgerOracle",
+    "RevisionOracle",
+    "ShowToUserOracle",
+    "SidecarStopOracle",
+    "ToolScopeOracle",
+    "VerificationGateOracle",
+    "failing",
+    "passing",
+    "skipping",
+]
+
+hook: PreToolUse Failed
+hook: PreToolUse
+exec
+/bin/bash -lc "sed -n '1,90p' harness/build_soak/failure_codes.py" in /var/home/dylan/projects/disclaude
+hook: PreToolUse Failed
+ succeeded in 0ms:
+"""The Build Soak failure taxonomy (guidelines §12) + run outcomes (§8).
+
+Every `FAIL` must carry a code that lives here, with a known severity. No generic
+"failed" bucket is allowed in promotion runs. `UNKNOWN_FAILURE` exists for
+development only and is P0 until the classifier learns the case (§13).
+
+Codes are plain string constants (not an enum) so a frozen evidence
+`classification.json` round-trips byte-for-byte without enum-name coupling, and so
+this module stays import-free / disco-free.
+"""
+
+from __future__ import annotations
+
+# ---- run outcomes (§8) ------------------------------------------------------
+
+PASS = "PASS"
+FAIL = "FAIL"
+INVALID_RUN = "INVALID_RUN"
+INFRA_FAILURE = "INFRA_FAILURE"
+
+OUTCOMES = frozenset({PASS, FAIL, INVALID_RUN, INFRA_FAILURE})
+
+# ---- severities (§12) -------------------------------------------------------
+
+P0 = "P0"  # release blocker
+P1 = "P1"  # major reliability bug
+P2 = "P2"  # quality bug
+NONE = "NONE"  # PASS / no failure
+
+SEVERITIES = frozenset({P0, P1, P2, NONE})
+
+# ---- P0 — release blockers (§12) --------------------------------------------
+
+NO_USER_EVENT_AFTER_SUBMIT = "NO_USER_EVENT_AFTER_SUBMIT"
+NO_PLAN_AFTER_USER_TURN = "NO_PLAN_AFTER_USER_TURN"
+NO_REPLAN_AFTER_REVISION = "NO_REPLAN_AFTER_REVISION"
+WRITE_TOOL_ALLOWED_IN_PLANNING = "WRITE_TOOL_ALLOWED_IN_PLANNING"
+WRITE_TOOL_ATTEMPTED_IN_PLANNING = "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
+WRONG_TOOL_REJECTION_ABORTS_LOOP = "WRONG_TOOL_REJECTION_ABORTS_LOOP"
+APPROVE_PLAN_NO_EXECUTION = "APPROVE_PLAN_NO_EXECUTION"
+DUPLICATE_EXECUTION_AFTER_APPROVAL = "DUPLICATE_EXECUTION_AFTER_APPROVAL"
+EXECUTION_NO_ACTION = "EXECUTION_NO_ACTION"
+ACTION_NO_OBSERVATION = "ACTION_NO_OBSERVATION"
+FALSE_FINISH_NO_OUTPUT = "FALSE_FINISH_NO_OUTPUT"
+FALSE_FINISH_PREVIEW_BROKEN = "FALSE_FINISH_PREVIEW_BROKEN"
+DUPLICATE_KICK_ON_RESUME = "DUPLICATE_KICK_ON_RESUME"
+EVENT_LOG_STATE_DIVERGENCE = "EVENT_LOG_STATE_DIVERGENCE"
+WS_FRAME_DROPPED_NO_ERROR = "WS_FRAME_DROPPED_NO_ERROR"
+UI_ENABLED_DEAD_CONTROL = "UI_ENABLED_DEAD_CONTROL"
+UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+
+# ---- P1 — major reliability bugs (§12) --------------------------------------
+
+PLAN_REVISION_NOT_INCREMENTED = "PLAN_REVISION_NOT_INCREMENTED"
+STALE_PLAN_USED_AFTER_FOLLOWUP = "STALE_PLAN_USED_AFTER_FOLLOWUP"
+PLAN_APPROVED_STATUS_MISSING = "PLAN_APPROVED_STATUS_MISSING"
+TOOL_SCOPE_MISMATCH = "TOOL_SCOPE_MISMATCH"
+TOOL_REJECTION_NOT_VISIBLE_TO_MODEL = "TOOL_REJECTION_NOT_VISIBLE_TO_MODEL"
+MODEL_TOLD_WRONG_MODE = "MODEL_TOLD_WRONG_MODE"
+STUCK_RUNNING_NO_EVENTS = "STUCK_RUNNING_NO_EVENTS"
+PREVIEW_TRUTH_MISMATCH = "PREVIEW_TRUTH_MISMATCH"
+ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
+# CXT-5: a final deliverable contains DESTRUCTIVE elision (an "(elided)"/"[trimmed]"/
+# "content omitted"/"truncated for brevity" marker with NO recover cue) — unrecoverable
+# placeholder text shipped into a deliverable. Rule set v1 (disco.core.observations).
+DESTRUCTIVE_ELISION = "DESTRUCTIVE_ELISION"
+# P1/HARN-1a: provider-ledger violations of the soak constraint. A provider call went
+# to a FORBIDDEN host (e.g. openrouter) or a host that isn't the required one; used the
+# WRONG model (not the pinned soak model); or fired AFTER the conversation went terminal
+# (runaway burn). These enforce the MiniMax-only / no-OpenRouter / zero-calls-after-terminal
+# rule from the provider-call-ledger evidence. All P0.
+PROVIDER_FORBIDDEN = "PROVIDER_FORBIDDEN"
+PROVIDER_WRONG_MODEL = "PROVIDER_WRONG_MODEL"
+PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
+# P1/HARN-2: browser product-harness oracle violations (judged over the HARN-1b browser
+# evidence streams). These prove the REAL UI path — not just that the engine built files.
+BROWSER_WS_NOT_CONNECTED = "BROWSER_WS_NOT_CONNECTED"  # UI never opened the build WS
+LIFECYCLE_SEQUENCE_INVALID = "LIFECYCLE_SEQUENCE_INVALID"  # bad status progression / no clean terminal
+SIDECAR_NOT_STOPPED = "SIDECAR_NOT_STOPPED"  # sidecar/provider alive after terminal
+PREVIEW_OWNERSHIP_VIOLATION = "PREVIEW_OWNERSHIP_VIOLATION"  # model owned a port/url, not the platform
+ARTIFACT_NOT_SHOWN_TO_USER = "ARTIFACT_NOT_SHOWN_TO_USER"  # file exists but UI never showed it
+VERIFICATION_GATE_BYPASSED = "VERIFICATION_GATE_BYPASSED"  # finished without ready_for_*_verification
+EXPORT_DOWNLOAD_MISSING = "EXPORT_DOWNLOAD_MISSING"  # export claimed but no real download
+WORKSPACE_NOT_CLEANED = "WORKSPACE_NOT_CLEANED"  # orphan container/sandbox/preview after terminal
+NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
+OBSERVATION_WITHOUT_ACTION = "OBSERVATION_WITHOUT_ACTION"
+WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
+# The run was required to FINISH and deliver output (scenario asserts
+# workspace/preview output and/or terminal_status_in) but ended at a non-finished,
+# non-required terminal — e.g. a no-progress / actionless PAUSE, or never reached a
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/tests/test_browser_evidence_oracles.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""HARN-2 tests: the 8 browser product-harness oracles + classify integration."""
+
+from __future__ import annotations
+
+from _eventlog import clean_smoke_log
+
+from harness.build_soak.classify import classify
+from harness.build_soak.oracles.browser_evidence import (
+    BrowserWSOracle,
+    CleanupOracle,
+    ExportDownloadOracle,
+    LifecycleOracle,
+    PreviewOwnershipOracle,
+    ShowToUserOracle,
+    SidecarStopOracle,
+    VerificationGateOracle,
+)
+
+
+def _green_evidence() -> dict:
+    return {
+        "browser_ws": {"connections": 1, "closes": [{"code": 1000, "reason": "done"}]},
+        "lifecycle": {"statuses": ["RUNNING", "FINISHED"], "terminal": "FINISHED"},
+        "sidecar": {"stopped_at_terminal": True, "provider_calls_after_terminal": 0},
+        "preview": {"owner": "platform", "manual_port": False, "shown_to_user": True, "url": "http://x"},
+        "shown": {"artifact_shown": True, "preview_shown": True},
+        "verification": {"ready_for_verification_called": True, "passed": True},
+        "export": {"requested": True, "download_present": True, "download_bytes": 4096},
+        "cleanup": {"orphans": 0, "workspace_released": True},
+    }
+
+
+# --- absent evidence → every oracle SKIPs (headless run unaffected) ------------
+def test_all_skip_without_evidence():
+    for cls in (
+        BrowserWSOracle, LifecycleOracle, SidecarStopOracle, PreviewOwnershipOracle,
+        ShowToUserOracle, VerificationGateOracle, ExportDownloadOracle, CleanupOracle,
+    ):
+        r = cls().check(product_evidence=None)
+        assert r[0].skipped, cls.__name__
+
+
+# --- green evidence → every oracle PASSes -------------------------------------
+def test_all_pass_on_green_evidence():
+    ev = _green_evidence()
+    for cls in (
+        BrowserWSOracle, LifecycleOracle, SidecarStopOracle, PreviewOwnershipOracle,
+        ShowToUserOracle, VerificationGateOracle, ExportDownloadOracle, CleanupOracle,
+    ):
+        r = cls().check(product_evidence=ev)
+        assert r[0].passed, (cls.__name__, r[0].to_dict())
+
+
+# --- each oracle's concrete violation -----------------------------------------
+def test_browser_ws_not_connected_fails():
+    ev = _green_evidence(); ev["browser_ws"]["connections"] = 0
+    assert BrowserWSOracle().check(product_evidence=ev)[0].code == "BROWSER_WS_NOT_CONNECTED"
+
+
+def test_lifecycle_no_clean_terminal_fails():
+    ev = _green_evidence(); ev["lifecycle"]["terminal"] = "PAUSED"
+    assert LifecycleOracle().check(product_evidence=ev)[0].code == "LIFECYCLE_SEQUENCE_INVALID"
+
+
+def test_sidecar_calls_after_terminal_fails():
+    ev = _green_evidence(); ev["sidecar"]["provider_calls_after_terminal"] = 3
+    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+
+
+def test_preview_model_owned_fails():
+    ev = _green_evidence(); ev["preview"]["owner"] = "model"
+    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+
+
+def test_preview_manual_port_fails():
+    ev = _green_evidence(); ev["preview"]["manual_port"] = True
+    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+
+
+def test_not_shown_to_user_fails():
+    ev = _green_evidence(); ev["shown"] = {"artifact_shown": False, "preview_shown": False}
+    assert ShowToUserOracle().check(product_evidence=ev)[0].code == "ARTIFACT_NOT_SHOWN_TO_USER"
+
+
+def test_verification_bypassed_fails():
+    ev = _green_evidence(); ev["verification"]["ready_for_verification_called"] = False
+    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+
+
+def test_export_requested_but_no_download_fails():
+    ev = _green_evidence(); ev["export"] = {"requested": True, "download_present": False, "download_bytes": 0}
+    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+
+
+def test_export_not_requested_skips():
+    ev = _green_evidence(); ev["export"] = {"requested": False}
+    assert ExportDownloadOracle().check(product_evidence=ev)[0].skipped
+
+
+def test_cleanup_orphans_fail():
+    ev = _green_evidence(); ev["cleanup"]["orphans"] = 2
+    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+
+
+# --- classify integration -----------------------------------------------------
+def _scn():
+    return {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+
+
+def test_classify_unaffected_without_product_evidence():
+    # headless run: product_evidence None → all browser oracles SKIP → still PASS
+    assert classify(clean_smoke_log(), scenario=_scn())["status"] == "PASS"
+
+
+def test_classify_passes_with_green_product_evidence():
+    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=_green_evidence())
+    assert c["status"] == "PASS", c
+
+
+def test_classify_fails_on_browser_ws_not_connected():
+    ev = _green_evidence(); ev["browser_ws"]["connections"] = 0
+    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+    assert c["status"] == "FAIL"
+    assert c["code"] == "BROWSER_WS_NOT_CONNECTED"
+    assert c["severity"] == "P0"
+
+
+# --- fail-closed on malformed / partial evidence (no crash, no false-PASS) -----
+def test_malformed_numeric_is_fail_closed_not_crash():
+    ev = _green_evidence(); ev["browser_ws"]["connections"] = "n/a"
+    r = BrowserWSOracle().check(product_evidence=ev)  # must not raise
+    assert r[0].code == "BROWSER_WS_NOT_CONNECTED"
+
+
+def test_malformed_sidecar_count_fail_closed():
+    ev = _green_evidence(); ev["sidecar"]["provider_calls_after_terminal"] = "lots"
+    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+
+
+def test_preview_missing_owner_is_fail_closed():
+    ev = _green_evidence(); ev["preview"] = {"manual_port": False}  # no owner field
+    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+
+
+def test_cleanup_missing_release_field_is_fail_closed():
+    ev = _green_evidence(); ev["cleanup"] = {"orphans": 0}  # no workspace_released
+    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+
+
+def test_verification_missing_passed_is_fail_closed():
+    ev = _green_evidence(); ev["verification"] = {"ready_for_verification_called": True}
+    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+
+
+def test_export_malformed_bytes_fail_closed():
+    ev = _green_evidence(); ev["export"] = {"requested": True, "download_present": True, "download_bytes": "big"}
+    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+
+
+# --- classify_run_folder reads product-evidence.json --------------------------
+def test_run_folder_reads_product_evidence_green(tmp_path):
+    import json as _json
+    from harness.build_soak.classify import classify_run_folder
+
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(_json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    (tmp_path / "product-evidence.json").write_text(_json.dumps(_green_evidence()), encoding="utf-8")
+    c = classify_run_folder(tmp_path, scenario=_scn())
+    assert c["status"] == "PASS", c
+
+
+def test_run_folder_product_evidence_violation_fails(tmp_path):
+    import json as _json
+    from harness.build_soak.classify import classify_run_folder
+
+    ev = _green_evidence(); ev["sidecar"]["provider_calls_after_terminal"] = 5
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(_json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    (tmp_path / "product-evidence.json").write_text(_json.dumps(ev), encoding="utf-8")
+    c = classify_run_folder(tmp_path, scenario=_scn())
+    assert c["status"] == "FAIL" and c["code"] == "SIDECAR_NOT_STOPPED"
+
+
+def test_run_folder_corrupt_product_evidence_does_not_crash(tmp_path):
+    from harness.build_soak.classify import classify_run_folder
+
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(__import__("json").dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    (tmp_path / "product-evidence.json").write_text("{ not valid json", encoding="utf-8")
+    c = classify_run_folder(tmp_path, scenario=_scn())  # corrupt → ignored (None) → oracles SKIP
+    assert c["status"] == "PASS", c
+
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/classify.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""The deterministic classifier (guidelines §13, §16).
+
+Runs the oracle layers in the §16 order; the FIRST broken link wins. The classifier
+is a pure function of durable evidence — it MUST NOT call an LLM, and it ignores any
+agent/Claude/Codex prose ("agent_comments_ignored_for_adjudication": true, §13).
+
+Outcome mapping:
+  * a HarnessValidity / Contract failure (an evidence/contract defect, not a product
+    defect) -> INVALID_RUN (§8): the harness couldn't adjudicate; never a pass.
+  * any product-oracle failure -> FAIL with the code's severity (§12).
+  * no failure -> PASS.
+
+It also implements the §17 no-fluke replay policy as a pure function: a run that
+failed once then passed on exact replay is recorded as FAIL /
+INTERMITTENT_<original_code> (same severity), never PASS — "fluke" has no
+operational meaning.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from . import failure_codes as fc
+from .events import NormalizationError, normalize_events
+from .evidence import EvidenceManifest, load_manifest, verify_evidence_unchanged
+from .oracles import (
+    BROWSER_EVIDENCE_ORACLES,
+    ContractOracle,
+    EventChainOracle,
+    HarnessValidityOracle,
+    OutputTruthOracle,
+    ProviderLedgerOracle,
+    RevisionOracle,
+    ToolScopeOracle,
+)
+from .oracles.schema import OracleResult
+
+CLASSIFICATION_NAME = "classification.json"
+
+# Default "likely files" for the most common Build chain breaks (§16 example).
+# Advisory only — surfaced to the repair loop, never adjudicated on.
+_LIKELY_FILES: dict[str, list[str]] = {
+    fc.NO_REPLAN_AFTER_REVISION: [
+        "packages/core/src/disco/core/loop/plans.py",
+        "packages/core/src/disco/core/loop/engine.py",
+        "packages/agent-server/src/disco/agent_server/control_ops.py",
+    ],
+    fc.WRITE_TOOL_ATTEMPTED_IN_PLANNING: [
+        "packages/core/src/disco/core/loop/engine.py",  # _gate_planning_mode
+        "packages/core/src/disco/core/loop/driver.py",
+    ],
+    fc.WRITE_TOOL_ALLOWED_IN_PLANNING: [
+        "packages/core/src/disco/core/loop/engine.py",
+        "packages/core/src/disco/core/loop/driver.py",
+    ],
+    fc.APPROVE_PLAN_NO_EXECUTION: [
+        "packages/core/src/disco/core/loop/finish.py",
+        "packages/core/src/disco/core/loop/engine.py",
+    ],
+    fc.ACTION_NO_OBSERVATION: [
+        "packages/core/src/disco/core/loop/observe.py",
+    ],
+}
+
+
+def classify(
+    events_raw: list[Any],
+    *,
+    scenario: dict[str, Any] | None = None,
+    run_id: str = "",
+    conversation_id: str = "",
+    commit: str = "",
+    seed: int | None = None,
+    evidence_intact: bool = True,
+    available_evidence: set[str] | None = None,
+    workspace_manifest: dict[str, Any] | None = None,
+    preview: dict[str, Any] | None = None,
+    tool_scope: list[dict[str, Any]] | None = None,
+    autonomous: bool | None = None,
+    revision_meta: dict[str, Any] | None = None,
+    provider_ledger: list[dict[str, Any]] | None = None,
+    product_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Classify one run from its raw event log (full-event dicts OR DB rows) plus
+    optional captured evidence. Returns the §13 classification dict.
+
+    `autonomous`, when given (e.g. from the run manifest), overrides the scenario's
+    autonomy: an autonomous build legitimately skips the AWAITING_PLAN_APPROVAL gate
+    (it auto-approves inline), so the event-chain approval-ordering check relaxes the
+    awaiting link for it."""
+    # An explicit autonomous flag (manifest) overrides the scenario declaration.
+    if autonomous is not None:
+        scenario = {**(scenario or {}), "autonomous": autonomous}
+
+    # Normalize the event log; a parse failure is a harness-validity defect.
+    parse_ok = True
+    try:
+        events = normalize_events(events_raw)
+    except (NormalizationError, ValueError, TypeError):
+        events, parse_ok = [], False
+
+    # The evidence categories actually captured for this run — derived from the
+    # supplied kwargs so the ContractOracle judges what we really have (a caller
+    # may also pass an explicit set, which we union in).
+    present: set[str] = set(available_evidence or set())
+    present.add("events")
+    if workspace_manifest is not None:
+        present.add("workspace")
+    if preview is not None:
+        present.add("preview")
+    if tool_scope is not None:
+        present.add("tool_scope")
+
+    results: list[OracleResult] = []
+
+    # 1. harness validity (evidence integrity + parse + presence).
+    results += HarnessValidityOracle().check(
+        events, evidence_intact=evidence_intact, parse_ok=parse_ok
+    )
+    first_fail = _first_fail(results)
+    if first_fail is None:
+        # 2. scenario contract.
+        results += ContractOracle().check(scenario, available_evidence=present)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 3. event chain.
+        results += EventChainOracle().check(events, scenario=scenario)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 4. tool scope.
+        results += ToolScopeOracle().check(events, scenario=scenario, tool_scope=tool_scope)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 5. revision.
+        results += RevisionOracle().check(events, scenario=scenario, meta=revision_meta)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 6. output truth.
+        results += OutputTruthOracle().check(
+            events, scenario=scenario, workspace_manifest=workspace_manifest, preview=preview
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 7. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
+        results += ProviderLedgerOracle().check(
+            events, scenario=scenario, provider_ledger=provider_ledger
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 8. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
+        # slice, so a headless run (product_evidence is None) is unaffected; a product-
+        # harness run enforces the real UI path.
+        for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
+            results += _oracle_cls().check(product_evidence=product_evidence)
+            first_fail = _first_fail(results)
+            if first_fail is not None:
+                break
+
+    required_evidence_present = not any(
+        r.failed and r.code in fc.HARNESS_VALIDITY_CODES for r in results
+    )
+
+    if first_fail is None:
+        status, severity, code, broken, facts = fc.PASS, fc.NONE, None, None, {}
+    elif first_fail.code in fc.HARNESS_VALIDITY_CODES:
+        status, severity = fc.INVALID_RUN, fc.NONE
+        code, broken, facts = first_fail.code, first_fail.first_broken_link, dict(first_fail.facts)
+    else:
+        status = fc.FAIL
+        code = first_fail.code or fc.UNKNOWN_FAILURE
+        severity = fc.severity_for(code)
+        broken, facts = first_fail.first_broken_link, dict(first_fail.facts)
+
+    classification: dict[str, Any] = {
+        "status": status,
+        "severity": severity,
+        "code": code,
+        "first_broken_link": broken,
+        "scenario_id": (scenario or {}).get("id") if scenario else None,
+        "run_id": run_id,
+        "conversation_id": conversation_id,
+        "commit": commit,
+        "seed": seed,
+        "facts": facts,
+        "oracle_results": [r.to_dict() for r in results],
+        "required_evidence_present": required_evidence_present,
+        "replay": {"attempted": False, "result": "not_attempted", "run_id": None},
+        "accepted_by": "oracle",
+        "agent_comments_ignored_for_adjudication": True,
+    }
+    if code and code in _LIKELY_FILES:
+        classification["likely_files"] = list(_LIKELY_FILES[code])
+    return classification
+
+
+def _first_fail(results: list[OracleResult]) -> OracleResult | None:
+    for r in results:
+        if r.failed:
+            return r
+    return None
+
+
+def classify_run_folder(
+    folder: str | Path, *, scenario: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Classify a frozen run folder: load the manifest, verify evidence integrity
+    (a mismatch -> INVALID_RUN), read the event log, classify, and write
+    classification.json into the folder. Returns the classification dict."""
+    base = Path(folder)
+    manifest: EvidenceManifest | None = None
+    evidence_intact = True
+    try:
+        manifest = load_manifest(base)
+        integrity = verify_evidence_unchanged(base, manifest)
+        evidence_intact = integrity.intact
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        manifest = None
+
+    events_raw: list[Any] = []
+    events_rel = (manifest.evidence_files.get("events") if manifest else None) or "events.jsonl"
+    events_path = base / events_rel
+    if not events_path.is_file():
+        # try the conventional conversation-scoped path
+        for candidate in base.rglob("events.jsonl"):
+            events_path = candidate
+            break
+    if events_path.is_file():
+        events_raw = _read_jsonl(events_path)
+
+    # HARN-1a: the provider-call ledger (MiniMax-only / no-OpenRouter enforcement).
+    # Read it if present anywhere in the run folder; absent → the oracle SKIPs (or
+    # fails closed if the scenario requires it). A malformed line is NOT silently
+    # dropped (that would under-report a forbidden call) nor crashes classification —
+    # it becomes a hostless record the ProviderLedgerOracle fails on as an evidence gap.
+    provider_ledger: list[dict[str, Any]] | None = None
+    ledger_path = base / "provider-call-ledger.jsonl"
+    if not ledger_path.is_file():
+        ledger_path = next(iter(base.rglob("provider-call-ledger.jsonl")), ledger_path)
+    if ledger_path.is_file():
+        provider_ledger = _read_ledger(ledger_path)
+
+    # HARN-2: the browser product-harness evidence dossier (a single JSON object).
+    # Absent → the browser oracles SKIP (headless run unaffected).
+    product_evidence: dict[str, Any] | None = None
+    pe_path = base / "product-evidence.json"
+    if not pe_path.is_file():
+        pe_path = next(iter(base.rglob("product-evidence.json")), pe_path)
+    if pe_path.is_file():
+        try:
+            loaded = json.loads(pe_path.read_text(encoding="utf-8"))
+            product_evidence = loaded if isinstance(loaded, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            product_evidence = None
+
+    classification = classify(
+        events_raw,
+        scenario=scenario,
+        run_id=manifest.run_id if manifest else base.name,
+
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "P1B-LIVE|browser evidence|targeted-edit|manual-edit|churn|anchor|screen_label|manual_override|targeted edit" disclaude.md harness packages -S' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+disclaude.md:158:  NOT auto — it maps to a data-disco-* anchor; no default_factory). Helper `_mk_id(prefix)` mirrors
+disclaude.md:608:ALREADY RECOVERABLE (marker names a recover path — DO NOT churn these, they're tested):
+disclaude.md:641:  already satisfy "recoverable" and are tested; churning them is risk without benefit. Flag this.
+disclaude.md:657:- verdict: REVISE. Scope affirmed (no-churn correct; browser is the real destructive site). Codex CAUGHT
+disclaude.md:697:  recoverable (documented; not churned).
+disclaude.md:920:- HARN-1b Playwright product harness + browser evidence streams (ws/network/console/screenshots/downloads).
+disclaude.md:933:- P1 REMAINING: HARN-1b Playwright product harness + browser evidence streams; HARN-2 the 7 browser-evidence
+disclaude.md:1087:  CSS-token-sanitized, html-escaped fields, data-disco-* anchors).
+disclaude.md:1529:never Pi. Phase order: P8 → P9 → P1B-LIVE → P10 → P11 → P12 → P13 → P14 → P15 → P16 → P17. GATES: no P10
+disclaude.md:1530:before P1B-LIVE exists; no P15 before P1B-LIVE green; no P16 before P10-P13 green; no P17 before P16 goldens green.
+disclaude.md:1553:IMPLEMENT: SemanticTargetKind (str,Enum: field/section/card/column/slide/comment_anchor/...); SemanticTarget
+disclaude.md:1556:resolve_human_reference(phrase, *, context) → ReferenceResolution; normalize_screen_label(label) → deterministic slug.
+disclaude.md:1558:unknown/ambiguous → ReferenceResolution(ambiguous=True, candidates=[...]) NOT a guess; normalize_screen_label
+disclaude.md:1561:section 3, comment anchor, ambiguous reference.
+disclaude.md:1571:   tuple[SlideEntry(id, title, ordinal)]; comment_anchors: tuple[AnchorEntry(id, label)].
+disclaude.md:1574:   anchor_id) — a discriminated union (each carries a Literal kind). SemanticTarget = that union. No invalid
+disclaude.md:1582:5. normalize_screen_label pinned: deterministic + idempotent; casefold; collapse whitespace+punctuation to single
+disclaude.md:1595:  kind-qualified identity (qualified_target_id — fixed a target_id collision that collapsed a section & anchor
+disclaude.md:1602:metadata; comment anchors can't be duplicated or invented; screen labels are deterministic (reuse P8A
+disclaude.md:1603:normalize_screen_label). Consumed by the renderer (core) + app tools + the P8C frontend resolver.
+disclaude.md:1611:"data-disco-field" ...). attr(a, value)->' data-disco-x="esc"' (html-escaped, ready to inject). screen_label_value
+disclaude.md:1612:(label)->normalize_screen_label (stable). SemanticMetadataError. extract_metadata(html)->dict[attr,list[value]].
+disclaude.md:1613:validate_no_duplicate_anchors(html)-> raise on a repeated data-disco-comment-anchor. validate_anchors_not_invented
+disclaude.md:1614:(html, declared:set)-> raise if an emitted anchor isn't declared. Renderer: _render_section emits via attr(), adds
+disclaude.md:1617:(generic/table section w/ field+metric-id), duplicate anchors rejected, anchors-not-invented rejected, screen
+disclaude.md:1620:is core. DeepSeek = duplicate/invented-anchor negative fixtures. Sonnet test scout = unused (small surface).
+disclaude.md:1631:3. DECLARED ANCHORS derived from the source of truth: declared_anchors_from_spec(spec) -> frozenset, derived
+disclaude.md:1632:   deterministically from section ids (the legitimate anchor namespace). validate_anchors_not_invented(html,
+disclaude.md:1633:   declared) raises if an EMITTED data-disco-comment-anchor is outside `declared`. Tests: (a) a real render has
+disclaude.md:1634:   zero invented anchors vs declared_anchors_from_spec; (b) synthetic HTML with an out-of-namespace anchor raises;
+disclaude.md:1635:   (c) declared_anchors_from_spec derivation itself is tested.
+disclaude.md:1640:   emitted output; duplicate DECODED anchor values caught (two encodings, same decoded value → duplicate);
+disclaude.md:1646:  declared-anchor source, TS-boundary note, escaping/ordering/version tests)→APPROVE. Code gpt-5.5 APPROVE first-pass.
+disclaude.md:1648:  for P8A IndexedLocator; attr/item_attrs/extract_metadata/validate_no_duplicate_anchors/declared_anchors_from_spec/
+disclaude.md:1649:  validate_anchors_not_invented) + models.py renderer refactored to emit THROUGH the vocab (killed hardcoded
+disclaude.md:1665:the nearest ancestor carrying a data-disco-* attr, BY PRIORITY: field > section > file > comment_anchor, with
+disclaude.md:1667:section} | {kind:'file',file} | {kind:'comment_anchor',anchor} | {kind:'source',oid,file,line} | null. A field
+disclaude.md:1669:field:'headline'}). Plus semanticEditTarget(t): a stable string id ("hero.headline" / "hero" / anchor) for the
+disclaude.md:1672:actual injection wiring is small + verified in P1B-LIVE (browser). P8C core = the pure resolver + parity, unit-tested.
+disclaude.md:1674:DOM (no data-disco, no oid) → null; comment_anchor resolved; data-oid fallback when no data-disco present; priority
+disclaude.md:1677:fixture variants. SCOPE: resolver + attrs + parity + tests. Full in-frame injection + live click → P1B-LIVE.
+disclaude.md:1683:   semantic attr wins, resolved by that node's WITHIN-NODE specificity order indexed>field>comment_anchor>section>
+disclaude.md:1684:   file. A farther section/file can NEVER mask a closer field/indexed/comment_anchor.
+disclaude.md:1687:4. TYPES split: DiscoSemanticTarget = field|section|indexed|comment_anchor|file (semantic); SourceRef stays the
+disclaude.md:1693:6. TESTS add: indexed target, invalid/negative index (rejected→fallback), comment_anchor nested in section/file
+disclaude.md:1703:  Python parity green. In-frame selectionAgent injection + live click deferred to P1B-LIVE (browser evidence).
+disclaude.md:1704:- NEXT: P8D (targeted-edit + manual-edit-preservation oracles) → completes P8.
+disclaude.md:1706:## PR P8D — Targeted-edit & manual-edit oracles — PLAN
+disclaude.md:1711:ORACLES (pure fns over plain-dict evidence; live producer = P1B-LIVE/soak, like the P1A browser oracles):
+disclaude.md:1713:- RewriteAvoidanceOracle: a SMALL-scoped edit's churn_ratio (changed_lines/total_lines) ≤ threshold → else
+disclaude.md:1715:- ManualEditPreservationOracle: every manual_override snippet still present in the post-edit file → else
+disclaude.md:1717:- CommentAnchorOracle: anchors_before ⊆ anchors_after (preserved through text edit; survive a section reorder —
+disclaude.md:1719:- ScreenLabelOracle: for sections NOT in the edit's targets, screen_label_before == screen_label_after (stable) →
+disclaude.md:1723:TESTS (harness/build_soak/tests/): small edit touches expected files only (pass+fail); comment anchor preserved
+disclaude.md:1724:through a text edit; comment anchor survives a section reorder; direct override not clobbered (pass+fail); small
+disclaude.md:1726:evidence. PARALLEL: DeepSeek = edit-churn/clobber negative fixtures. SCOPE: the 5 oracles + codes + tests; the
+disclaude.md:1727:live evidence producer is P1B-LIVE.
+packages/tools/tests/test_w3_w4_edit_safety.py:7:W4 — file_str_replace: anchored str-replace offered only to capable models
+packages/tools/tests/test_w3_w4_edit_safety.py:246:# W4 — file_str_replace: anchored str-replace
+packages/tools/tests/test_w3_w4_edit_safety.py:327:def test_w4_registry_withholds_str_replace_from_non_anchored_policy():
+packages/tools/tests/test_w3_w4_edit_safety.py:328:    """standard + anchored_edit=False: file_str_replace is in AGENT_TOOLS but
+packages/tools/tests/test_w3_w4_edit_safety.py:330:    scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
+packages/tools/tests/test_w3_w4_edit_safety.py:336:def test_w4_registry_grants_str_replace_to_standard_anchored_policy():
+packages/tools/tests/test_w3_w4_edit_safety.py:337:    """standard + anchored_edit=True: file_str_replace is in the advertised set.
+packages/tools/tests/test_w3_w4_edit_safety.py:341:    standard/anchored policy narrows the surface to AGENT_TOOLS minus plan_step. None
+packages/tools/tests/test_w3_w4_edit_safety.py:356:def test_w4_non_anchored_policy_advertised_excludes_str_replace():
+packages/tools/tests/test_w3_w4_edit_safety.py:357:    """standard + anchored_edit=False advertises AGENT_TOOLS minus file_str_replace AND
+packages/tools/tests/test_w3_w4_edit_safety.py:359:    (runthru-v2 #3, state-drift); the non-anchored capability additionally withholds
+packages/tools/tests/test_w3_w4_edit_safety.py:361:    scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
+packages/tools/tests/test_sheets.py:172:    anchored '(' immediately after the name, the call would slip past the
+harness/marathon/test_phase_b.py:160:    #     (node_modules/.pmx/cache churn is legitimate install behavior.)
+packages/tools/tests/test_preview_tools.py:222:        else ModelExecutionPolicy(tier="weak", anchored_edit=False)
+packages/tools/tests/test_policy_tool_surface.py:11:  3. standard + anchored_edit=False → withholds file_str_replace (plan_step is already
+packages/tools/tests/test_policy_tool_surface.py:31:_STANDARD = ModelExecutionPolicy.standard()  # tier="standard", anchored_edit=True
+packages/tools/tests/test_policy_tool_surface.py:32:_WEAK = ModelExecutionPolicy(tier="weak", anchored_edit=True)
+packages/tools/tests/test_policy_tool_surface.py:33:_STANDARD_NO_ANCHORED = ModelExecutionPolicy(tier="standard", anchored_edit=False)
+packages/tools/tests/test_policy_tool_surface.py:34:_WEAK_NO_ANCHORED = ModelExecutionPolicy(tier="weak", anchored_edit=False)
+packages/tools/tests/test_policy_tool_surface.py:71:def test_weak_policy_still_advertises_file_str_replace_when_anchored():
+packages/tools/tests/test_policy_tool_surface.py:72:    """Weak tier with anchored_edit=True: file_str_replace is NOT withheld
+packages/tools/tests/test_policy_tool_surface.py:73:    (only the progress tools are; anchored-edit capability is independent)."""
+packages/tools/tests/test_policy_tool_surface.py:76:        "weak + anchored_edit=True should still advertise file_str_replace"
+packages/tools/tests/test_policy_tool_surface.py:101:    """Standard tier with anchored_edit=True advertises file_str_replace."""
+packages/tools/tests/test_policy_tool_surface.py:107:# 3. standard + anchored_edit=False → withholds ONLY file_str_replace
+packages/tools/tests/test_policy_tool_surface.py:111:def test_non_anchored_standard_withholds_file_str_replace():
+packages/tools/tests/test_policy_tool_surface.py:112:    """standard + anchored_edit=False: file_str_replace is NOT in available_tools()."""
+packages/tools/tests/test_policy_tool_surface.py:117:def test_non_anchored_standard_keeps_plan_step():
+packages/tools/tests/test_policy_tool_surface.py:118:    """standard + anchored_edit=False: plan_step is withheld — it is RETIRED from the
+packages/tools/tests/test_policy_tool_surface.py:120:    anchored-edit capability. This variant additionally withholds file_str_replace."""
+packages/tools/tests/test_policy_tool_surface.py:125:def test_non_anchored_standard_keeps_update_plan_progress():
+packages/tools/tests/test_policy_tool_surface.py:126:    """standard + anchored_edit=False: update_plan_progress is NOT withheld."""
+packages/tools/tests/test_policy_tool_surface.py:131:def test_non_anchored_standard_withholds_exactly_file_str_replace():
+packages/tools/tests/test_policy_tool_surface.py:132:    """standard + anchored_edit=False withholds EXACTLY {file_str_replace} — no extras."""
+packages/tools/tests/test_policy_tool_surface.py:134:    non_anchored_names = _tool_names(_STANDARD_NO_ANCHORED)
+packages/tools/tests/test_policy_tool_surface.py:135:    dropped = standard_names - non_anchored_names
+packages/tools/tests/test_policy_tool_surface.py:137:        f"non-anchored standard should drop only file_str_replace, got: {dropped}"
+packages/tools/tests/test_policy_tool_surface.py:239:def test_non_anchored_prompt_does_not_mention_file_str_replace():
+packages/tools/tests/test_f3_read_before_write.py:488:        model_policy=ModelExecutionPolicy(tier="weak", anchored_edit=True),
+packages/tools/tests/test_executor_elision_guard.py:18:  1. file_replace_lines whose `new_text` is the (count-anchored) marker → rejected at
+packages/tools/tests/test_executor_elision_guard.py:21:  2. file_write whose `content` is a PARAPHRASED marker (no count anchor) → also
+packages/tools/tests/test_executor_elision_guard.py:37:# The paraphrased marker (count anchor dropped) the model copied live in BW-02.
+packages/tools/tests/test_executor_elision_guard.py:85:    """A non-count-anchored paraphrase is also rejected at the executor boundary."""
+packages/tools/tests/test_executor_assist.py:28:_WEAK_POLICY = ModelExecutionPolicy(tier="weak", anchored_edit=True)
+harness/build_soak/run.py:126:        # RevisionOracle anchors on it (and keeps the parallel seq/flag arrays aligned).
+harness/build_soak/run.py:185:        # decision pick) so the RevisionOracle EXCLUDES it from revision anchors. Called AFTER
+harness/build_soak/run.py:264:                # An ANSWER (send_message) appends a user turn the oracle must NOT mis-anchor as
+harness/build_soak/run.py:371:    # Revision-anchor metadata (harness-only): the DECLARED follow-ups the runner sends (seq +
+harness/build_soak/run.py:373:    # auto-answers (clarification answers / decision picks). The RevisionOracle anchors revision
+harness/build_soak/run.py:375:    # never mis-anchored as a revision follow-up (the false NO_REPLAN / WRITE_BEFORE regression).
+harness/build_soak/run.py:455:        # (parallel arrays) so the RevisionOracle anchors on it (and ONLY the declared turns).
+harness/build_soak/promotion.py:19:  reports as not-yet-required rather than blocking on absent browser evidence).
+harness/build_soak/scenarios.yaml:356:  # anchoring + snapshot readiness under the most revisions. Every marker is dictated verbatim.
+harness/build_soak/tests/test_revision_oracle.py:281:# ---- revision-anchor metadata: declared follow-ups only, injected turns excluded --------
+harness/build_soak/tests/test_revision_oracle.py:283:# user messages after the approval boundary. Without anchor metadata the oracle anchored on them
+harness/build_soak/tests/test_revision_oracle.py:285:# fix anchors revision checks on the DECLARED follow-ups only and EXCLUDES the injected turns.
+harness/build_soak/tests/test_revision_oracle.py:291:    build kept mutating (seq 17) with NO new plan — the exact shape that mis-anchored live."""
+harness/build_soak/tests/test_revision_oracle.py:310:    # WITHOUT metadata (legacy) the injected seq-16 answer mis-anchors → false NO_REPLAN.
+harness/build_soak/tests/test_revision_oracle.py:315:    # WITH metadata: anchor ONLY the declared (re-planned) follow-up; exclude the injected turn.
+harness/build_soak/tests/test_revision_oracle.py:323:    # the surviving anchor is the declared one, NOT the injected seq
+harness/build_soak/adapters/disco_api.py:315:    # Revision-anchor metadata (harness-only): the user-message seqs of the DECLARED scenario
+harness/build_soak/adapters/disco_api.py:318:    # RevisionOracle anchors revision checks on the DECLARED follow-ups ONLY and EXCLUDES the
+harness/build_soak/adapters/disco_api.py:319:    # injected turns, so an auto-answer is never mis-anchored as a revision follow-up.
+harness/build_soak/adapters/disco_api.py:784:        captured BEFORE send_followup. `max_seq` is the PRIMARY anchor (V2): pickup and the
+harness/build_soak/adapters/disco_api.py:884:        harness (revision-anchor metadata)."""
+harness/build_soak/oracles/browser_evidence.py:4:engine wrote files) over the browser evidence HARN-1b captures into a single
+harness/build_soak/tests/test_api_runner.py:568:async def test_snapshot_non_declared_churn_does_not_block_declared_set(tmp_path, monkeypatch):
+harness/build_soak/tests/test_api_runner.py:578:    def churn(step):  # would never stabilize — but it is NOT declared, so it must not matter
+harness/build_soak/tests/test_api_runner.py:581:    clock = _FakeClock(on_poll=churn)
+harness/build_soak/tests/test_api_runner.py:862:    def churn(step):
+harness/build_soak/tests/test_api_runner.py:866:    clock = _FakeClock(on_poll=churn)
+harness/build_soak/tests/test_api_runner.py:1149:# ---- revision-anchor: user-message watermark helpers ------------------------------------
+packages/agent-server/tests/test_inspect_trace.py:138:# ---- the capture mechanism (unit, no env churn beyond the flag) -------------
+packages/tools/src/disco/tools/registry.py:70:        # line-number-targeted edits — the reliable way to edit LARGE files (any model)
+packages/tools/src/disco/tools/registry.py:73:        # W4 — anchored str-replace for capable models (anchored_edit capability).
+packages/tools/src/disco/tools/registry.py:75:        # when model_policy.anchored_edit is False; see agent_scope() below.
+packages/tools/src/disco/tools/registry.py:152:        # line-number-targeted edits — present so artifacts are editable without shell
+packages/tools/src/disco/tools/registry.py:209:      • standard + anchored_edit=True  → advertised_tools=None (show all)
+packages/tools/src/disco/tools/registry.py:210:      • standard + anchored_edit=False → file_str_replace withheld
+packages/tools/src/disco/tools/registry.py:211:      • weak    + anchored_edit=True   → plan_step, update_plan_progress withheld
+packages/tools/src/disco/tools/registry.py:212:      • weak    + anchored_edit=False  → all three withheld
+packages/tools/src/disco/tools/executor.py:348:        # (frozenset()) so this branch is a no-op.  For the weak tier and !anchored_edit
+packages/tools/src/disco/tools/executor.py:415:        # detector anchors on the marker's STRUCTURE (count anchor or its signature
+packages/agent-server/tests/test_artifact_mode.py:35:    """No shell/browser/code_exec/plan-gate/anchored-str-replace in artifact scope."""
+packages/agent-server/tests/test_dr1_dr3.py:84:    # Link → anchor text only
+packages/tools/src/disco/tools/builtin/__init__.py:104:        FileStrReplaceTool(),  # W4: anchored str-replace; withheld from weak-tier advertised set
+packages/tools/src/disco/tools/builtin/appkit.py:5:so a copy/color/section change touches exactly one thing (the targeted-edit law). A raw
+packages/agent-server/tests/test_build_surface.py:584:# so file_str_replace (the anchored-edit tool) is ADVERTISED only to a driver whose
+packages/agent-server/tests/test_build_surface.py:592:def _caps_runtime(store, *, anchored: bool, tmp_path) -> ConversationRuntime:
+packages/agent-server/tests/test_build_surface.py:594:    if anchored:
+packages/agent-server/tests/test_build_surface.py:628:async def test_build_loop_advertises_file_str_replace_to_anchored_edit_driver(tmp_path):
+packages/agent-server/tests/test_build_surface.py:632:    runtime = _caps_runtime(store, anchored=True, tmp_path=tmp_path)
+packages/agent-server/tests/test_build_surface.py:644:    runtime = _caps_runtime(store, anchored=False, tmp_path=tmp_path)
+packages/tools/src/disco/tools/sandbox/kernel.py:50:# between tool calls doesn't trigger churn, short enough to free a forgotten
+packages/agent-server/tests/test_policy_consistency.py:42:    """Weak (assist) tier — no anchored-edit, both progress tools withheld."""
+packages/agent-server/tests/test_policy_consistency.py:43:    return ModelExecutionPolicy(tier="weak", anchored_edit=False)
+packages/agent-server/tests/test_policy_consistency.py:307:    withholds it. file_str_replace is withheld only by anchored_edit=False;
+packages/agent-server/tests/test_policy_consistency.py:311:    # Standard with anchored_edit → withheld set is exactly the retired plan_step
+packages/agent-server/tests/test_policy_consistency.py:313:        "standard policy (anchored_edit=True, tier=standard) must withhold exactly "
+packages/agent-server/tests/test_policy_consistency.py:318:def test_no_contamination_non_anchored_standard_withholds_str_replace_and_plan_step() -> None:
+packages/agent-server/tests/test_policy_consistency.py:319:    """Non-anchored standard withholds {plan_step, file_str_replace} — not update_plan_progress.
+packages/agent-server/tests/test_policy_consistency.py:322:    when anchored_edit=False. A capable model that can't do anchored edits still gets
+packages/agent-server/tests/test_policy_consistency.py:323:    update_plan_progress — that one is gated by tier, not by anchored_edit.
+packages/agent-server/tests/test_policy_consistency.py:325:    non_anchored = ModelExecutionPolicy(tier="standard", anchored_edit=False)
+packages/agent-server/tests/test_policy_consistency.py:326:    assert non_anchored.withheld_tools == frozenset({"plan_step", "file_str_replace"}), (
+packages/agent-server/tests/test_policy_consistency.py:327:        "non-anchored standard must withhold plan_step (retired for all tiers) and "
+packages/tools/src/disco/tools/sandbox/__init__.py:41:        # engine misreads as container death → needless sandbox recreate → builds churn/derail.
+packages/agent-server/tests/test_report_export_pdf_fixes.py:133:    assert 'id="src-1"' in html and 'id="src-2"' in html  # appendix anchors
+packages/tools/src/disco/tools/builtin/files.py:418:        # targeted edit tool (file_replace_lines / file_insert_lines / file_edit)
+packages/tools/src/disco/tools/builtin/files.py:420:        # specific lines anchored to the current content.
+packages/tools/src/disco/tools/builtin/files.py:448:                        f"targeted edit (file_replace_lines / file_insert_lines / file_edit) "
+packages/tools/src/disco/tools/builtin/files.py:568:def _nearest_anchor(text: str, old: str) -> str:
+packages/tools/src/disco/tools/builtin/files.py:587:            "pasted-in line numbers). This is the SAFEST targeted edit — it anchors on "
+packages/tools/src/disco/tools/builtin/files.py:622:                    + _nearest_anchor(text, args.old)
+packages/tools/src/disco/tools/builtin/files.py:785:# W4 — capability-gated anchored str-replace (offered to ANCHORED_EDIT models)
+packages/tools/src/disco/tools/builtin/files.py:811:    """W4 — anchored str-replace for capable models (Requirement.ANCHORED_EDIT).
+packages/tools/src/disco/tools/builtin/files.py:816:    No forgiving normalization — anchored on live disk text.
+packages/tools/src/disco/tools/builtin/_pptx_render.py:179:    / kicker frames; grouped bullet frames add margins + anchor on top of this.
+packages/tools/src/disco/tools/builtin/_pptx_render.py:621:    anchor + zero margins + small `space_after`, autofit via `_add_textbox`)
+packages/tools/src/disco/tools/builtin/_pptx_render.py:640:    tf.vertical_anchor = MSO_ANCHOR.TOP
+packages/agent-server/src/disco/agent_server/runtime.py:1561:        # Order C: resolve the policy ONCE — anchored_edit + tier/assist both come
+packages/agent-server/src/disco/agent_server/runtime.py:1563:        # (W4 anchored-edit heuristic). _effective_policy IS the single source of truth
+packages/agent-server/src/disco/agent_server/report_audio.py:164:    links (keeping the anchor text), list bullets, fenced code-blocks, inline
+packages/agent-server/src/disco/agent_server/report_audio.py:179:    # Keep link anchor text, drop the URL.
+packages/agent-server/src/disco/agent_server/redaction.py:75:    original remains). Patterns are anchored as full-string fragments; the
+packages/agent-server/src/disco/agent_server/runtime_settings.py:306:        anchored = entry is not None and Requirement.ANCHORED_EDIT in entry.capabilities
+packages/agent-server/src/disco/agent_server/runtime_settings.py:311:            anchored_edit=anchored,
+packages/agent-server/src/disco/agent_server/routes/report.py:74:    seq list.  System-plumbing messages (``<system-reminder>`` / ``<reground-anchors>``)
+packages/agent-server/src/disco/agent_server/routes/report.py:88:        and not (e.message.content or "").startswith("<reground-anchors>")
+packages/retrieval/tests/test_bundled_providers.py:92:def test_local_extractor_drops_empty_anchor_nav():
+packages/retrieval/tests/test_bundled_providers.py:93:    """Empty-anchor links (`[](url)` nav menus) are dropped — passages get real
+packages/retrieval/tests/test_bundled_providers.py:102:    assert "[](/a)" not in md  # empty anchor gone
+packages/retrieval/tests/test_bundled_providers.py:103:    assert "[Real text](/b)" in md  # anchor with text kept
+harness/build_soak/oracles/revision.py:66:def _resolve_anchors(
+harness/build_soak/oracles/revision.py:72:    """The revision-anchor follow-ups as ``(user_seq, declared_requires_revision)`` pairs in
+harness/build_soak/oracles/revision.py:75:    METADATA PATH (the runner supplied harness-anchor metadata — every live run): anchor ONLY
+harness/build_soak/oracles/revision.py:78:    auto-answer (a user message after the boundary) was mis-anchored as a revision follow-up →
+harness/build_soak/oracles/revision.py:168:        anchors = _resolve_anchors(events, boundary, followups_spec, meta)
+harness/build_soak/oracles/revision.py:169:        if not anchors:
+harness/build_soak/oracles/revision.py:176:        for fseq, declared in anchors:
+harness/build_soak/oracles/revision.py:345:                    "followup_count": len(anchors),
+packages/core/src/disco/core/semantic_refs.py:30:    COMMENT_ANCHOR = "comment_anchor"  # a stable comment anchor
+packages/core/src/disco/core/semantic_refs.py:75:    anchor_id: str
+packages/core/src/disco/core/semantic_refs.py:93:    return t.anchor_id
+packages/core/src/disco/core/semantic_refs.py:97:    """A GLOBALLY unique id: kind-qualified, so a section and a comment anchor that share an
+packages/core/src/disco/core/semantic_refs.py:98:    id string stay distinct (e.g. 'section:notes' vs 'comment_anchor:notes'). Used as the
+packages/core/src/disco/core/semantic_refs.py:150:    comment_anchors: tuple[AnchorEntry, ...] = ()
+packages/core/src/disco/core/semantic_refs.py:197:def normalize_screen_label(label: str) -> str:
+packages/core/src/disco/core/semantic_refs.py:234:    norm = normalize_screen_label(phrase)
+packages/core/src/disco/core/semantic_refs.py:265:        lt = _tokens(normalize_screen_label(lab))
+packages/core/src/disco/core/semantic_refs.py:288:    norm = normalize_screen_label(phrase)
+packages/core/src/disco/core/semantic_refs.py:341:    for a in context.comment_anchors:
+packages/core/src/disco/core/semantic_refs.py:343:            candidates.append(CommentAnchorLocator(anchor_id=a.id))
+packages/core/src/disco/core/semantic_refs.py:347:    # cross-kind matches (e.g. a section AND a comment anchor sharing a label) survive → ambiguous.
+packages/core/src/disco/core/appkit/models.py:132:        _md.DataDiscoAttr.SCREEN_LABEL, _md.screen_label_value(sec.id)
+packages/core/src/disco/core/appkit/semantic_metadata.py:8:consumes from the DOM. Pure; reuses P8A ``normalize_screen_label`` for stable labels.
+packages/core/src/disco/core/appkit/semantic_metadata.py:18:from disco.core.semantic_refs import normalize_screen_label
+packages/core/src/disco/core/appkit/semantic_metadata.py:32:    COMMENT_ANCHOR = "data-disco-comment-anchor"
+packages/core/src/disco/core/appkit/semantic_metadata.py:42:    """An AppKit output violated a metadata invariant (duplicate/invented anchor, …)."""
+packages/core/src/disco/core/appkit/semantic_metadata.py:51:def screen_label_value(label: str) -> str:
+packages/core/src/disco/core/appkit/semantic_metadata.py:53:    return normalize_screen_label(label)
+packages/core/src/disco/core/appkit/semantic_metadata.py:77:    decoded form compare equal (e.g. ``a&amp;b`` and ``a&b`` are the same anchor)."""
+packages/core/src/disco/core/appkit/semantic_metadata.py:86:def validate_no_duplicate_anchors(html_text: str) -> None:
+packages/core/src/disco/core/appkit/semantic_metadata.py:87:    """A data-disco-comment-anchor value must be unique within a document (decoded)."""
+packages/core/src/disco/core/appkit/semantic_metadata.py:88:    anchors = extract_metadata(html_text).get(DataDiscoAttr.COMMENT_ANCHOR, [])
+packages/core/src/disco/core/appkit/semantic_metadata.py:91:    for a in anchors:
+packages/core/src/disco/core/appkit/semantic_metadata.py:94:        raise SemanticMetadataError(f"duplicate comment anchors: {sorted(dups)}")
+packages/core/src/disco/core/appkit/semantic_metadata.py:97:def declared_anchors_from_spec(spec: AppSpec) -> frozenset[str]:
+packages/core/src/disco/core/appkit/semantic_metadata.py:98:    """The legitimate comment-anchor namespace for a spec — derived DETERMINISTICALLY from
+packages/core/src/disco/core/appkit/semantic_metadata.py:103:def validate_anchors_not_invented(html_text: str, declared: frozenset[str]) -> None:
+packages/core/src/disco/core/appkit/semantic_metadata.py:104:    """Every emitted data-disco-comment-anchor must be in the declared namespace — the model
+packages/core/src/disco/core/appkit/semantic_metadata.py:105:    cannot invent an anchor that doesn't trace back to the spec."""
+packages/core/src/disco/core/appkit/semantic_metadata.py:106:    anchors = set(extract_metadata(html_text).get(DataDiscoAttr.COMMENT_ANCHOR, []))
+packages/core/src/disco/core/appkit/semantic_metadata.py:107:    invented = anchors - declared
+packages/core/src/disco/core/appkit/semantic_metadata.py:109:        raise SemanticMetadataError(f"invented comment anchors not in the spec: {sorted(invented)}")
+packages/core/src/disco/core/workflows/__init__.py:5:targeted-edit law, preview/verify/export rules, context policy, and done criteria. Both
+packages/retrieval/src/disco/retrieval/bundled_providers.py:228:            self._a_mark = len(self.out)  # remember where this anchor began
+packages/retrieval/src/disco/retrieval/bundled_providers.py:242:                # empty-anchor link (nav icon / menu) → drop it entirely, no `[](url)`
+packages/retrieval/src/disco/retrieval/bundled_providers.py:262:        # (a `- ` left behind after an empty-anchor link was removed).
+packages/core/src/disco/core/workflows/prompt_packs/build_interactive_prototype.md:21:file_replace_lines (targeted edits), preview_* (the
+packages/core/src/disco/core/workflows/prompt_packs/build_static_site.md:23:file_replace_lines (targeted edits), preview_start /
+packages/core/tests/test_appkit_semantic_metadata.py:2:the anchor validators (duplicate / invented) + stable screen labels."""
+packages/core/tests/test_appkit_semantic_metadata.py:14:    declared_anchors_from_spec,
+packages/core/tests/test_appkit_semantic_metadata.py:17:    screen_label_value,
+packages/core/tests/test_appkit_semantic_metadata.py:18:    validate_anchors_not_invented,
+packages/core/tests/test_appkit_semantic_metadata.py:19:    validate_no_duplicate_anchors,
+packages/core/tests/test_appkit_semantic_metadata.py:58:def test_screen_labels_are_stable_across_renders() -> None:
+packages/core/tests/test_appkit_semantic_metadata.py:60:    assert screen_label_value("Hero Section!") == screen_label_value("hero-section")
+packages/core/tests/test_appkit_semantic_metadata.py:86:# --- anchor validators --------------------------------------------------------
+packages/core/tests/test_appkit_semantic_metadata.py:87:def test_duplicate_anchors_rejected_even_when_encoded_differently() -> None:
+packages/core/tests/test_appkit_semantic_metadata.py:88:    ok = '<a data-disco-comment-anchor="intro"></a><a data-disco-comment-anchor="body"></a>'
+packages/core/tests/test_appkit_semantic_metadata.py:89:    validate_no_duplicate_anchors(ok)  # no raise
+packages/core/tests/test_appkit_semantic_metadata.py:90:    dup = '<a data-disco-comment-anchor="note"></a><a data-disco-comment-anchor="note"></a>'
+packages/core/tests/test_appkit_semantic_metadata.py:92:        validate_no_duplicate_anchors(dup)
+packages/core/tests/test_appkit_semantic_metadata.py:94:    decoded_dup = '<a data-disco-comment-anchor="a&amp;b"></a><a data-disco-comment-anchor="a&b"></a>'
+packages/core/tests/test_appkit_semantic_metadata.py:96:        validate_no_duplicate_anchors(decoded_dup)
+packages/core/tests/test_appkit_semantic_metadata.py:99:def test_declared_anchors_derive_from_spec_section_ids() -> None:
+packages/core/tests/test_appkit_semantic_metadata.py:100:    assert declared_anchors_from_spec(SPEC) == frozenset({"hero", "lead", "feat"})
+packages/core/tests/test_appkit_semantic_metadata.py:103:def test_anchors_not_invented() -> None:
+packages/core/tests/test_appkit_semantic_metadata.py:104:    declared = declared_anchors_from_spec(SPEC)
+packages/core/tests/test_appkit_semantic_metadata.py:105:    # a real render emits no comment anchors yet → trivially none invented
+packages/core/tests/test_appkit_semantic_metadata.py:106:    validate_anchors_not_invented(render_html(SPEC), declared)
+packages/core/tests/test_appkit_semantic_metadata.py:107:    # an anchor outside the spec namespace is rejected
+packages/core/tests/test_appkit_semantic_metadata.py:108:    bad = '<a data-disco-comment-anchor="ghost"></a>'
+packages/core/tests/test_appkit_semantic_metadata.py:110:        validate_anchors_not_invented(bad, declared)
+packages/core/tests/test_appkit_semantic_metadata.py:111:    # an anchor inside the namespace is accepted
+packages/core/tests/test_appkit_semantic_metadata.py:112:    good = '<a data-disco-comment-anchor="hero"></a>'
+packages/core/tests/test_appkit_semantic_metadata.py:113:    validate_anchors_not_invented(good, declared)
+packages/core/src/disco/core/workflows/prompt_packs/build_document.md:13:2. Revise with targeted edits (file_edit / file_replace_lines).
+packages/core/tests/test_semantic_refs.py:25:    normalize_screen_label,
+packages/core/tests/test_semantic_refs.py:47:    comment_anchors=(AnchorEntry(id="cmt-intro", label="intro note"),),
+packages/core/tests/test_semantic_refs.py:83:def test_comment_anchor() -> None:
+packages/core/tests/test_semantic_refs.py:84:    assert _r("the intro note").resolved == CommentAnchorLocator(anchor_id="cmt-intro")
+packages/core/tests/test_semantic_refs.py:133:# --- normalize_screen_label (deterministic + idempotent) ----------------------
+packages/core/tests/test_semantic_refs.py:136:        n = normalize_screen_label(s)
+packages/core/tests/test_semantic_refs.py:137:        assert n == normalize_screen_label(n)  # idempotent
+packages/core/tests/test_semantic_refs.py:138:        assert n == normalize_screen_label(s)  # deterministic
+packages/core/tests/test_semantic_refs.py:139:    assert normalize_screen_label("Hero Headline!") == "hero-headline"
+packages/core/tests/test_semantic_refs.py:140:    assert normalize_screen_label("Sign Up") == normalize_screen_label("sign-up")  # case/punct fold
+packages/core/tests/test_semantic_refs.py:168:    # a section AND a comment anchor that share the SAME id string "notes" must stay distinct
+packages/core/tests/test_semantic_refs.py:172:        comment_anchors=(AnchorEntry(id="notes", label="notes"),),
+packages/core/tests/test_semantic_refs.py:175:    assert res.ambiguous and res.candidates == ("comment_anchor:notes", "section:notes")
+packages/core/tests/test_c1c_dod_gate_wiring.py:10:all anchor "done" to externally-checkable state, never to self-assessment).
+packages/core/tests/test_build_agent_isolation.py:219:    "file_str_replace",  # W4 — anchored str-replace; withheld from weak-tier advertised set
+packages/core/tests/test_contract_phase.py:62:    # EDIT: semantic edit tool allowed, raw file_write denied (targeted-edit law)
+packages/core/tests/test_c13_exec_prefill.py:241:    # different anchors (honest planning ack vs. concrete next-action).
+packages/core/tests/test_appkit_models.py:76:    assert 'data-disco-section="hero"' in html1  # semantic anchors present
+packages/core/tests/test_bug6_actionless_honest_finish.py:7:reaches the finish gate (it churns on the unsatisfiable browser-verify step), so
+packages/core/src/disco/core/events.py:176:    id: str  # stable identifier ("s0", "s1", ... — for ToC anchoring)
+packages/core/src/disco/core/events.py:333:# leading "<N chars …>" anchor while copying the marker's stable TAIL prose verbatim into
+packages/core/src/disco/core/events.py:336:# no digit anchor, `_ELISION_MARKER_RE` misses it, so K1 passed it and a 132-byte
+packages/core/src/disco/core/events.py:466:    model-PARAPHRASED placeholder that dropped the count anchor but kept the marker's
+packages/core/tests/test_context_pack.py:2:per-kind capping, never-compact exemption, anchor passthrough, roundtrip."""
+packages/core/tests/test_context_pack.py:28:def test_from_ledger_passes_through_anchors() -> None:
+packages/core/src/disco/core/context/compaction.py:28:# Kinds that anchor the run and must never be dropped to make room.
+packages/core/tests/test_context_ledger.py:90:    # documented precedence: anchors first, an unresolved failure outranks the
+packages/core/src/disco/core/context/pack.py:5:CompactionPolicy, and surface the run anchors (goal/contract/version/todo). The
+packages/core/src/disco/core/context/pack.py:35:    """What the model actually sees: anchors + unresolved failures + capped refs."""
+packages/core/src/disco/core/context/ledger.py:50:    stable anchor (e.g. a ``data-disco-*`` id), NOT auto-generated, so the agent
+packages/core/src/disco/core/context/source_priority.py:30:# The documented default precedence, most-important first. Goal/contract anchor
+packages/core/src/disco/core/view.py:680:    summarize the OLDEST forgettable span — keeping an anchoring HEAD (the initial
+packages/core/src/disco/core/view.py:687:      ensures each condensation makes real PROGRESS (no churn on tiny spans).
+packages/core/src/disco/core/view.py:858:        # slice) so the prior anchored summary — which View.of already placed
+packages/core/tests/test_vision_caps.py:576:    def test_driver_overflow_has_anchored_edit(self):
+packages/core/tests/test_vision_caps.py:582:    def test_driver_local_does_not_have_anchored_edit(self):
+packages/core/tests/test_vision_caps.py:589:    def test_local_small_models_do_not_have_anchored_edit(self):
+packages/core/tests/test_exec_policy.py:6:`plan_step` retirement (see below), and (2) the tier + anchored-edit capability live on
+packages/core/tests/test_exec_policy.py:34:    p = ModelExecutionPolicy(tier="weak", anchored_edit=True)
+packages/core/tests/test_exec_policy.py:40:def test_anchored_edit_capability_is_independent_of_tier():
+packages/core/tests/test_exec_policy.py:41:    # a capable (standard) model that still lacks anchored edit loses file_str_replace —
+packages/core/tests/test_exec_policy.py:43:    p = ModelExecutionPolicy(tier="standard", anchored_edit=False)
+packages/core/tests/test_exec_policy.py:46:    # weak + non-anchored withholds all three
+packages/core/tests/test_exec_policy.py:47:    q = ModelExecutionPolicy(tier="weak", anchored_edit=False)
+packages/core/tests/test_exec_policy.py:54:        assist_override=False, entry_tier="weak", hosting_weak_default=True, anchored_edit=True
+packages/core/tests/test_exec_policy.py:57:        assist_override=True, entry_tier="standard", hosting_weak_default=False, anchored_edit=True
+packages/core/tests/test_exec_policy.py:64:        assist_override=None, entry_tier="standard", hosting_weak_default=True, anchored_edit=True
+packages/core/tests/test_exec_policy.py:68:        assist_override=None, entry_tier=None, hosting_weak_default=True, anchored_edit=False
+packages/core/tests/test_exec_policy.py:71:        assist_override=None, entry_tier=None, hosting_weak_default=False, anchored_edit=True
+packages/core/tests/test_exec_policy.py:75:def test_anchored_edit_threaded_through_resolve():
+packages/core/tests/test_exec_policy.py:77:        assist_override=None, entry_tier="weak", hosting_weak_default=True, anchored_edit=False
+packages/core/tests/test_exec_policy.py:78:    ).anchored_edit is False
+packages/core/tests/test_condenser.py:4:first-half-summarize span selection (keep an anchoring head + a recent tail, forget the
+packages/core/tests/test_condenser.py:88:    # the forgotten span is the MIDDLE: it starts after the anchoring head (the 1st
+packages/core/tests/test_condenser.py:101:    assert any(m.content == "TASK" for m in view.messages)  # the anchoring head survived
+packages/core/tests/test_condenser.py:104:async def test_condense_makes_progress_guard_no_churn_on_tiny_history():
+packages/core/tests/test_condenser.py:357:    summarizer SAW on the second (re-)condensation. Returns an anchored,
+packages/core/tests/test_condenser.py:387:    """End-to-end (the F1 review-flag ask): condense once → its GOAL:-anchored
+packages/core/tests/test_condenser.py:394:        _has_prior_anchored_summary,
+packages/core/tests/test_condenser.py:407:    assert not _has_prior_anchored_summary(summarizer.seen[0]), (
+packages/core/tests/test_condenser.py:408:        "first condensation should NOT see a prior anchored summary"
+packages/core/tests/test_condenser.py:424:    # anchored summary, so the production directive selector picks UPDATE.
+packages/core/tests/test_condenser.py:425:    assert _has_prior_anchored_summary(summarizer.seen[1]), (
+packages/core/tests/test_snapshot_binary.py:278:    # Old 'AVOID line-number edits' instruction is gone — F1 prefers targeted edits
+packages/core/tests/test_cluster2_turntaking.py:255:    to AWAITING_USER. A real failure before the churn is still counted; genuine real
+packages/core/tests/test_cluster2_turntaking.py:272:    # a real shell failure BEFORE the upp churn is still counted (upp is transparent)
+packages/core/tests/test_k1_elision_guard.py:75:# leading "<N chars …>" count anchor while copying its stable tail prose verbatim. With
+packages/core/tests/test_k1_elision_guard.py:76:# no digit anchor the structural detector missed it; a 132-byte placeholder overwrote a
+packages/core/tests/test_k1_elision_guard.py:106:        ModelExecutionPolicy(tier="weak", anchored_edit=True)
+packages/core/tests/test_k1_elision_guard.py:259:# (2b) BW-02 — a MODEL-PARAPHRASED placeholder (no count anchor) → also rejected
+packages/core/tests/test_k1_elision_guard.py:265:    # the count anchor was dropped ("<content elided …>"), so the structural
+packages/core/tests/test_k1_elision_guard.py:367:    # BW-02 — the paraphrased placeholder (count anchor dropped) IS detected on the
+packages/core/tests/test_hs03_reground_cadence.py:3:The recap is a PASSIVE re-anchor of the stable facts (goal, plan state,
+packages/core/tests/test_hs03_reground_cadence.py:32:      the anchored headings (GOAL / CONSTRAINTS / PROGRESS / FILES)
+packages/core/tests/test_hs03_reground_cadence.py:73:# "Files" — those are anchored headings, not directives. But "you should",
+packages/core/tests/test_hs03_reground_cadence.py:600:      * carry the four anchored headings the brief calls out (GOAL,
+packages/core/tests/test_hs03_reground_cadence.py:655:            f"recap is missing the anchored heading {heading!r}; "
+packages/core/tests/test_hs03_reground_cadence.py:656:            f"the brief requires the same anchored structure HS-02 uses"
+packages/core/tests/test_hs03_reground_cadence.py:714:        assert heading in body, f"missing anchored heading {heading!r}"
+packages/core/tests/test_hs03_reground_cadence.py:722:    goal to anchor to."""
+packages/core/tests/test_preview_target.py:304:    # Bug-16 review #2 (the unwinnable-by-regex bypasses): because the matcher anchors at
+packages/core/tests/test_replan_forces_plan.py:19:  (c) re-grounding in PLANNING mode anchors to the LATEST user instruction, not
+packages/core/tests/test_replan_forces_plan.py:292:    """In PLANNING mode the HS-03 recap anchors to the latest user instruction;
+packages/core/tests/test_replan_forces_plan.py:350:        "PLANNING-mode reground must anchor to the new instruction"
+packages/core/src/disco/core/loop/engine.py:149:# `planning_interval` pattern: every N actions, re-anchor with a short
+packages/core/src/disco/core/loop/engine.py:160:# goal/files/constraints anchors a drifted model most often loses.
+packages/core/src/disco/core/loop/engine.py:1699:        needs no human — Devin/Kiro/Terminal-Bench all anchor 'done' to externally-checkable
+packages/core/src/disco/core/loop/engine.py:1728:        # that SERVED-the-wrong-status blocks). file_exists stays the deterministic anchor;
+packages/core/tests/test_hs02_compaction_template.py:4:critic reading the built CompletionRequest should see the anchored 6-heading
+packages/core/tests/test_hs02_compaction_template.py:11:  (a) Create-fresh (no prior anchored summary in `messages`): the final
+packages/core/tests/test_hs02_compaction_template.py:12:      user message in the built CompletionRequest carries all six anchored
+packages/core/tests/test_hs02_compaction_template.py:14:  (b) Update-in-place (a prior anchored summary IS in `messages`, marked
+packages/core/tests/test_hs02_compaction_template.py:34:    _has_prior_anchored_summary,
+packages/core/tests/test_hs02_compaction_template.py:39:# The six anchored headings the create-fresh directive mandates and the
+packages/core/tests/test_hs02_compaction_template.py:78:async def test_create_fresh_directive_has_all_six_anchored_headings():
+packages/core/tests/test_hs02_compaction_template.py:80:    directive. The final user message must carry all six anchored headings
+packages/core/tests/test_hs02_compaction_template.py:82:    anchored template is the new contract. Profile / temperature / role
+packages/core/tests/test_hs02_compaction_template.py:94:    # The six anchored headings must all appear, in the directive.
+packages/core/tests/test_hs02_compaction_template.py:109:async def test_prior_anchored_summary_in_messages_selects_update_in_place():
+packages/core/tests/test_hs02_compaction_template.py:110:    """When a prior anchored summary (marked by the `GOAL:` heading) is in
+packages/core/tests/test_hs02_compaction_template.py:126:        LLMMessage(role="user", content=prior),  # the prior anchored summary
+packages/core/tests/test_hs02_compaction_template.py:166:    # Arm 2: update-in-place (prior anchored summary present).
+packages/core/tests/test_hs02_compaction_template.py:220:    anchored summary MUST. This pins the marker contract on the helper."""
+packages/core/tests/test_hs02_compaction_template.py:222:    assert _has_prior_anchored_summary(
+packages/core/tests/test_hs02_compaction_template.py:226:    assert _has_prior_anchored_summary([]) is False
+packages/core/tests/test_hs02_compaction_template.py:229:    assert _has_prior_anchored_summary(
+packages/core/tests/test_hs02_compaction_template.py:237:    assert _has_prior_anchored_summary(
+packages/core/tests/test_hs02_compaction_template.py:242:    assert _has_prior_anchored_summary(
+packages/core/tests/test_hs02_compaction_template.py:252:async def test_marker_scan_uses_goal_prefix_not_other_anchored_headings():
+packages/core/tests/test_hs02_compaction_template.py:254:    any anchored heading. A message that contains CONSTRAINTS / FILES /
+packages/core/tests/test_hs02_compaction_template.py:265:    assert _has_prior_anchored_summary(
+packages/core/tests/test_hs02_compaction_template.py:270:    assert _has_prior_anchored_summary(
+packages/core/tests/test_hs02_compaction_template.py:285:    # With the prior anchored summary in the list, the update directive
+packages/core/src/disco/core/loop/messages.py:103:    instead of anchoring to the original build GOAL (the superseded plan's
+packages/core/src/disco/core/loop/messages.py:162:_HS03_REGROUND_SENTINEL = "<reground-anchors>"
+packages/core/src/disco/core/loop/messages.py:175:    re-ground without a plan has nothing to anchor to; the calling
+packages/core/src/disco/core/loop/messages.py:199:         there is no goal to anchor to.)
+packages/core/src/disco/core/loop/messages.py:219:    # LATEST user instruction so the recap anchors to the NEW task instead of the
+packages/core/src/disco/core/loop/messages.py:267:    # matches the HS-02 anchored template (which the brief cites) so a
+packages/core/src/disco/core/loop/recitation.py:139:            restart/resume"). The recap is anchored to the fresh
+packages/core/src/disco/core/loop/recitation.py:141:            pause re-anchors.
+packages/core/src/disco/core/loop/recitation.py:162:        conditions match: there is no goal to anchor to. The recap is
+packages/core/src/disco/core/loop/recitation.py:212:        # anchor the recap to the LATEST user instruction, not the old plan's
+packages/core/src/disco/core/loop/dedup.py:208:# exact-args repeat. Small and bounded (8) so a model can't re-anchor to
+packages/core/src/disco/core/loop/finish.py:193:# browserless backend the model never reaches that gate — it churns and the actionless
+packages/core/src/disco/core/loop/finish.py:1789:        does — it churns on the unsatisfiable step and the actionless valve would PAUSE
+packages/core/src/disco/core/loop/context_builder.py:114:    event history / raw tool chatter — only the structured anchors. Stable across
+packages/core/src/disco/core/loop/plan_conditions.py:75:            return  # no plan in scope — the mark is unanchored
+packages/core/src/disco/core/loop/view_render.py:308:                "To change it: file_edit with a content anchor, or "
+packages/core/src/disco/core/loop/turn_control.py:311:            # finish gate; here the model churns on an unsatisfiable browser-verify plan
+packages/core/src/disco/core/llm/config.py:547:        # W4 (§10.8): claude-3.5-sonnet benchmarks well on anchored diff edits
+packages/core/src/disco/core/llm/prompts.py:253:    "EDITING AN EXISTING FILE — prefer targeted edits over full rewrites:\n"
+packages/core/src/disco/core/llm/prompts.py:370:    "  • For LARGE files or line-targeted edits: `file_read` the region for "
+packages/core/src/disco/core/llm/exec_policy.py:14:to the pre-assist code path. The tier and the anchored-edit capability now live on ONE
+packages/core/src/disco/core/llm/exec_policy.py:34:    # Whether the model reliably performs anchored (search/replace) edits. A CAPABILITY,
+packages/core/src/disco/core/llm/exec_policy.py:35:    # distinct from tier: it governs only whether the line-anchored edit tool is
+packages/core/src/disco/core/llm/exec_policy.py:38:    anchored_edit: bool = True
+packages/core/src/disco/core/llm/exec_policy.py:50:          • no anchored-edit capability → withhold `file_str_replace` (line-anchored edit);
+packages/core/src/disco/core/llm/exec_policy.py:66:        if not self.anchored_edit:
+packages/core/src/disco/core/llm/exec_policy.py:76:        """The no-compensation default — a capable model with anchored edits and no weak-model compensations (it still withholds the universally-retired `plan_step`)."""
+packages/core/src/disco/core/llm/exec_policy.py:77:        return cls(tier="standard", anchored_edit=True)
+packages/core/src/disco/core/llm/exec_policy.py:85:    anchored_edit: bool,
+packages/core/src/disco/core/llm/exec_policy.py:93:    `anchored_edit` is the model's capability and is independent of the tier.
+packages/core/src/disco/core/llm/exec_policy.py:101:    return ModelExecutionPolicy(tier=tier, anchored_edit=anchored_edit)
+packages/core/src/disco/core/llm/types.py:52:    ANCHORED_EDIT = "anchored_edit"
+packages/core/src/disco/core/llm/summarizer.py:12:HS-02 (anchored-checkpoint compaction): the instruction is now an ANCHORED
+packages/core/src/disco/core/llm/summarizer.py:14:and `summarize()` branches on whether a prior anchored summary is already
+packages/core/src/disco/core/llm/summarizer.py:29:# HS-02: the anchored 6-heading template. These are the six headings the
+packages/core/src/disco/core/llm/summarizer.py:42:# MUST survive every condensation. The anchored template folds it under
+packages/core/src/disco/core/llm/summarizer.py:66:# HS-02 update-in-place: when a prior anchored summary is already in the
+packages/core/src/disco/core/llm/summarizer.py:77:    "1. Locate the prior summary in the messages above (it uses the anchored "
+packages/core/src/disco/core/llm/summarizer.py:96:# detect a prior anchored summary and select the UPDATE-in-place directive.
+packages/core/src/disco/core/llm/summarizer.py:103:def _has_prior_anchored_summary(messages: list[LLMMessage]) -> bool:
+packages/core/src/disco/core/llm/summarizer.py:104:    """Return True iff any message in `messages` carries the anchored-template
+packages/core/src/disco/core/llm/summarizer.py:125:    """Pick the directive: UPDATE-in-place when a prior anchored summary is
+packages/core/src/disco/core/llm/summarizer.py:128:    if _has_prior_anchored_summary(messages):
+packages/core/src/disco/core/brand/chart_svg.py:84:        f'<text x="{_W / 2:.0f}" y="22" text-anchor="middle" '
+packages/core/src/disco/core/brand/chart_svg.py:90:        f'<text x="{(_PAD_L + (_W - _PAD_R)) / 2:.0f}" y="{_H - 14:.0f}" text-anchor="middle" '
+packages/core/src/disco/core/brand/chart_svg.py:97:        f'text-anchor="middle" font-family="sans-serif" font-size="11" fill="{pal.muted}">{_esc(y_label)}</text>'
+packages/core/src/disco/core/brand/chart_svg.py:119:            f'<text x="{x0 - 6:.1f}" y="{gy + 3:.1f}" text-anchor="end" font-family="sans-serif" '
+packages/core/src/disco/core/brand/chart_svg.py:139:            f'<text x="{bx + bw / 2:.1f}" y="{y0 + 12:.1f}" text-anchor="middle" font-family="sans-serif" '
+packages/core/src/disco/core/brand/chart_svg.py:155:        f'<text x="{pts[i][0]:.1f}" y="{y0 + 12:.1f}" text-anchor="middle" font-family="sans-serif" '
+
+exec
+/bin/bash -lc "sed -n '1560,1710p' disclaude.md" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+REQUIRED CASES (from spec): hero headline, hero CTA, second service card, third pricing column, slide 5,
+section 3, comment anchor, ambiguous reference.
+PARALLEL ASSIGNMENTS: Claude primary = canonical writer; Sonnet B (Agent) = test scout (draft test cases first
+from the spec); DeepSeek (opencode) = negative/ambiguous reference fixtures; Qwen35-via-Pi (human-reference
+phrase gen) = UNAVAILABLE (Pi down) → DeepSeek covers it. agy/MiniMax = unused for P8A (pure core module).
+DONE WHEN: semantic refs deterministic + 1-index safe + reject ambiguity; Codex APPROVE plan+code; tests green.
+
+### PR P8A — PLAN REVISION 1 (post gpt-5.5: direction approved, 6 required fixes)
+1. PINNED CONTEXT: SemanticReferenceContext (frozen) = typed inventory the resolver resolves AGAINST:
+   sections: tuple[SectionEntry(id, label, aliases, ordinal)]; fields: tuple[FieldEntry(section_id, field_id,
+   labels)]; collections: tuple[CollectionEntry(id e.g. "services.cards", item_kind, length, labels)]; slides:
+   tuple[SlideEntry(id, title, ordinal)]; comment_anchors: tuple[AnchorEntry(id, label)].
+2. TYPED LOCATORS (no raw dict): FieldLocator(kind, section_id, field_id) / SectionLocator(kind, section_id) /
+   IndexedLocator(kind, collection_id, index) / SlideLocator(kind, slide_id) / CommentAnchorLocator(kind,
+   anchor_id) — a discriminated union (each carries a Literal kind). SemanticTarget = that union. No invalid
+   target shapes possible.
+3. AMBIGUITY IS AN OUTCOME, not a kind: SemanticTargetKind has NO AMBIGUOUS member. ResolutionReason(str,Enum):
+   RESOLVED / AMBIGUOUS / NO_MATCH / INVALID_ORDINAL / OUT_OF_RANGE. ReferenceResolution invariant (asserted in
+   a validator): resolved is not None ⟺ reason==RESOLVED ⟺ ambiguous is False; ambiguous ⟺ candidates non-empty.
+4. HumanIndexRef pinned: ordinal WORDS (first..tenth) + DIGITS ("5","5th","slide 5","5th slide") → human ordinal
+   (1-based) → array index (0-based, =ordinal-1). "second"→1, "third"→2. REJECT 0/"0th"/negative/non-ordinal →
+   INVALID_ORDINAL; index ≥ collection.length → OUT_OF_RANGE.
+5. normalize_screen_label pinned: deterministic + idempotent; casefold; collapse whitespace+punctuation to single
+   "-"; trim. Normalized-label COLLISIONS in the context (two entries same slug) → that reference resolves
+   AMBIGUOUS (candidates = the colliding ids), never a guess.
+6. Scope: model + pure resolver + tests ONLY (P8B/P8C/P8D separate). Confirmed.
+TESTS pin: case-insensitive matching, normalized-label collision→ambiguous, ordinal words AND digits, invalid
+ordinal (0/neg), out-of-range index, off-by-one (slide 5→index 4), every required phrase, unknown→ambiguous-not-guessed.
+
+### HEARTBEAT 2026-06-29 — P8A ACCEPTED
+- PR P8A (Semantic reference model) COMPLETE. Plan reviewed (gpt-5.5 REVISE→6 fixes→APPROVE), implemented,
+  CODE reviewed (gpt-5.5 REVISE→5 fixes→re-REVISE finding-3→fix→APPROVE; reviewer RAN the code to confirm).
+- Files: packages/core/src/disco/core/semantic_refs.py + packages/core/tests/test_semantic_refs.py (24 tests).
+- 5 code-review fixes: (1) full invariant biconditional; (2) slides/sections by EXPLICIT ordinal equality
+  (sparse/out-of-order correct, duplicate→ambiguous); (3) GLOBAL cross-tier ambiguity + subsumption +
+  kind-qualified identity (qualified_target_id — fixed a target_id collision that collapsed a section & anchor
+  sharing an id); (4) raw-negative vs normalized-zero parsing + IndexedLocator index ge=0; (5) tests for all.
+- Parallel: DeepSeek (opencode) generated 25 ambiguous negative fixtures → folded into the never-guess tests.
+- 24 tests green, basedpyright strict 0 errors. NEXT: commit P8A → P8B (data-disco-* metadata conventions).
+
+## PR P8B — data-disco-* metadata conventions — PLAN
+GOAL: ONE canonical data-disco-* vocabulary + emit helpers + validators; AppKit output carries stable semantic
+metadata; comment anchors can't be duplicated or invented; screen labels are deterministic (reuse P8A
+normalize_screen_label). Consumed by the renderer (core) + app tools + the P8C frontend resolver.
+LAYERING DEVIATION (from the plan's tools/appkit path — flagged for the gate): put the canonical module at
+packages/core/src/disco/core/appkit/semantic_metadata.py, NOT tools/appkit/, because render_html lives in core
+and core MUST NOT import tools. Putting the vocabulary in tools would create TWO sources of truth (the renderer's
+hardcoded "data-disco-section"/"data-disco-field" strings at models.py:130-156 + tools constants). Single-source
+wins: the renderer is refactored to EMIT via the vocabulary (kills the hardcoded strings). Tools/frontend import
+the core vocabulary. Test at packages/core/tests/test_appkit_semantic_metadata.py.
+API: DataDiscoAttr(str,Enum)= FIELD/SECTION/FILE/FLOW/SCREEN_LABEL/COMMENT_ANCHOR/METRIC_ID/VERSION (values
+"data-disco-field" ...). attr(a, value)->' data-disco-x="esc"' (html-escaped, ready to inject). screen_label_value
+(label)->normalize_screen_label (stable). SemanticMetadataError. extract_metadata(html)->dict[attr,list[value]].
+validate_no_duplicate_anchors(html)-> raise on a repeated data-disco-comment-anchor. validate_anchors_not_invented
+(html, declared:set)-> raise if an emitted anchor isn't declared. Renderer: _render_section emits via attr(), adds
+data-disco-screen-label (normalized section id/label) per section + data-disco-version on <html>.
+TESTS: hero metadata emitted (section+field+screen-label), contact-form metadata, admin-table metadata
+(generic/table section w/ field+metric-id), duplicate anchors rejected, anchors-not-invented rejected, screen
+labels stable (byte-identical across two renders). Existing appkit tests stay green (render output superset).
+PARALLEL: agy(Gemini) UI scout for the data-disco attr set vs frontend needs (advisory) — deferred to P8C; P8B
+is core. DeepSeek = duplicate/invented-anchor negative fixtures. Sonnet test scout = unused (small surface).
+SCOPE: vocabulary+emit+validate+renderer-wiring ONLY. P8C frontend resolver + P8D oracles separate.
+
+### PR P8B — PLAN REVISION 1 (post gpt-5.5: core placement APPROVED; 5 fixes)
+1. INDEXED-ITEM ATTRS added to the vocabulary so P8A IndexedLocator is DOM-resolvable: data-disco-collection
+   ("services.cards"), data-disco-index (0-based), data-disco-item-kind ("card"). Emit helper + unit test now.
+   RENDERER emitting collections is DEFERRED (AppKit has no collection/list section kind yet — when one lands,
+   it stamps these). Explicitly out of P8B renderer scope; the convention + emit + extract exist + are tested.
+2. ADMIN-TABLE test DROPPED (AppSection.kind is an allowlist Literal — "admin/table" is rejected by design).
+   Replaced with an existing-kind generic section (kind in the allowlist) carrying section+field+screen-label,
+   PLUS the indexed emit-helper unit test (collection+index+item-kind) standing in for repeated items.
+3. DECLARED ANCHORS derived from the source of truth: declared_anchors_from_spec(spec) -> frozenset, derived
+   deterministically from section ids (the legitimate anchor namespace). validate_anchors_not_invented(html,
+   declared) raises if an EMITTED data-disco-comment-anchor is outside `declared`. Tests: (a) a real render has
+   zero invented anchors vs declared_anchors_from_spec; (b) synthetic HTML with an out-of-namespace anchor raises;
+   (c) declared_anchors_from_spec derivation itself is tested.
+4. TS CROSS-LANGUAGE (note, addressed in P8C): the frontend (TS) cannot import Python core; P8C consumes the
+   emitted DOM attrs and/or a generated shared-constants artifact. P8B documents the 8+3 attr VALUES as the
+   cross-language contract (the string values are the API). Generation of discoSemanticAttrs.ts deferred to P8C.
+5. EXTRA TESTS: html-escaping + roundtrip extract_metadata (decode before compare); STABLE attr ordering in
+   emitted output; duplicate DECODED anchor values caught (two encodings, same decoded value → duplicate);
+   data-disco-version present on <html>. Existing appkit tests stay green (output is a metadata SUPERSET —
+   intentional byte change; P7 byte-equivalence is starter-vs-current-renderer, not old bytes).
+
+### HEARTBEAT 2026-06-29 — P8B ACCEPTED
+- PR P8B (data-disco-* metadata conventions) COMPLETE. Plan gpt-5.5 REVISE(5: indexed attrs, drop admin-table,
+  declared-anchor source, TS-boundary note, escaping/ordering/version tests)→APPROVE. Code gpt-5.5 APPROVE first-pass.
+- Files: core/appkit/semantic_metadata.py (canonical DataDiscoAttr vocab — 11 attrs incl collection/index/item-kind
+  for P8A IndexedLocator; attr/item_attrs/extract_metadata/validate_no_duplicate_anchors/declared_anchors_from_spec/
+  validate_anchors_not_invented) + models.py renderer refactored to emit THROUGH the vocab (killed hardcoded
+  data-disco strings; +data-disco-screen-label per section +data-disco-version on <html>) + test (16). Single source;
+  import-cycle dodged via TYPE_CHECKING. Existing appkit/kits/tools tests stay green (P7 byte-equiv intact).
+- NEXT: P8C frontend semantic resolver (TS: discoSemanticResolver.ts + selectionAgent.ts). agy/Gemini = frontend
+  scout. Needs the generated discoSemanticAttrs.ts cross-language constants (deferred from P8B).
+
+## PR P8C — Frontend semantic resolver — PLAN
+CONTEXT: frontend already has selectionAgent.ts (in-frame injected script), selectionBridge.ts (SourceRef{kind:
+"source",oid,file,line} from data-oid via appResolver.parseOid), EditAffordance/PreviewPane (click-to-edit). P8C
+adds a SEMANTIC resolution layer: data-disco-* → a typed target (mirroring P8A locators), with data-oid as the
+FALLBACK. vitest+jsdom test runner.
+FILES: frontend/src/lib/resolvers/discoSemanticResolver.ts (+ .test.ts), frontend/src/lib/discoSemanticAttrs.ts.
+CROSS-LANGUAGE SINGLE SOURCE: discoSemanticAttrs.ts holds the data-disco-* attribute NAME constants mirroring the
+Python core DataDiscoAttr (P8B). A Python DRIFT-GUARD test (packages/core/tests/test_semantic_attr_parity.py)
+reads the .ts file + asserts its values == DataDiscoAttr values (TS can't import Python; the test enforces parity).
+RESOLVER (pure, DOM-walking): resolveSemanticTarget(el: Element): DiscoSemanticTarget | null. Walk from el up to
+the nearest ancestor carrying a data-disco-* attr, BY PRIORITY: field > section > file > comment_anchor, with
+data-oid SOURCE as the fallback. Result = discriminated union: {kind:'field',section,field} | {kind:'section',
+section} | {kind:'file',file} | {kind:'comment_anchor',anchor} | {kind:'source',oid,file,line} | null. A field
+target ALSO resolves its enclosing data-disco-section (so "click hero headline" → {field, section:'hero',
+field:'headline'}). Plus semanticEditTarget(t): a stable string id ("hero.headline" / "hero" / anchor) for the
+app_update_content-style steer.
+SELECTIONAGENT: noted — the in-frame agent prefers resolveSemanticTarget (semantic), falls back to data-oid; the
+actual injection wiring is small + verified in P1B-LIVE (browser). P8C core = the pure resolver + parity, unit-tested.
+TESTS (vitest/jsdom): click hero headline → field hero.headline; click a section → section target; click unknown
+DOM (no data-disco, no oid) → null; comment_anchor resolved; data-oid fallback when no data-disco present; priority
+ordering (field beats an ancestor section). + Python parity test.
+PARALLEL: agy(Gemini) frontend scout (invocation fix: `agy --model "<m>" --print "<prompt>"`). DeepSeek = jsdom
+fixture variants. SCOPE: resolver + attrs + parity + tests. Full in-frame injection + live click → P1B-LIVE.
+
+### PR P8C — PLAN REVISION 1 (post gpt-5.5: 6 fixes)
+1. INDEXED target added: resolve data-disco-collection + data-disco-index (nonneg int) + optional data-disco-item-
+   kind → {kind:'indexed',collection,index,itemKind?}; beats an enclosing section.
+2. TRAVERSAL pinned CLOSEST-FIRST: walk from the clicked el upward; the FIRST ancestor carrying ANY data-disco
+   semantic attr wins, resolved by that node's WITHIN-NODE specificity order indexed>field>comment_anchor>section>
+   file. A farther section/file can NEVER mask a closer field/indexed/comment_anchor.
+3. FIELD fails closed: a field target must find a nearest enclosing data-disco-section (continue up); if none →
+   fall back to source (data-oid) or null — never emit a section-less field.
+4. TYPES split: DiscoSemanticTarget = field|section|indexed|comment_anchor|file (semantic); SourceRef stays the
+   data-oid fallback. DiscoResolvedTarget = DiscoSemanticTarget | SourceRef. semanticEditTarget() accepts ONLY
+   semantic targets. NOTE: data-disco-file is FRONTEND file-level metadata, NOT a P8A locator (don't claim parity
+   for it) — kept for file-scoped selection.
+5. CONSTANTS framing: Python core DataDiscoAttr is CANONICAL; discoSemanticAttrs.ts is a checked-in MIRROR; the
+   Python drift-guard test asserts EXACT equality of ALL 11 attr values (no missing/extra).
+6. TESTS add: indexed target, invalid/negative index (rejected→fallback), comment_anchor nested in section/file
+   (closest wins), field-without-section (fail closed), source fallback ONLY when no semantic target applies.
+
+### HEARTBEAT 2026-06-29 — P8C ACCEPTED
+- PR P8C (frontend semantic resolver) COMPLETE. Plan gpt-5.5 REVISE(6: indexed target, closest-first traversal,
+  field-fail-closed, type split, canonical/mirror framing, edge tests)→APPROVE. Code gpt-5.5 APPROVE first-pass.
+- Files: frontend/src/lib/discoSemanticAttrs.ts (TS mirror of Python DataDiscoAttr), resolvers/
+  discoSemanticResolver.ts (closest-first DOM walk → DiscoSemanticTarget|SourceRef; field fails closed; nonneg
+  index; data-oid fallback), .test.ts (10 vitest), packages/core/tests/test_semantic_attr_parity.py (drift guard).
+- ENV: frontend node_modules was missing in the clone → ran `npm ci` (582 pkgs). vitest 10/10, tsc 0 errors,
+  Python parity green. In-frame selectionAgent injection + live click deferred to P1B-LIVE (browser evidence).
+- NEXT: P8D (targeted-edit + manual-edit-preservation oracles) → completes P8.
+
+## PR P8D — Targeted-edit & manual-edit oracles — PLAN
+PATH DEVIATION (flag for gate): plan says harness/oracles/ + harness/tests/, but the real oracle layer is
+harness/build_soak/oracles/ (zero-opinion OracleResult via schema.passing/failing/skipping + failure_codes with
+SEVERITY_BY_CODE) tested in harness/build_soak/tests/. Reuse that infra (no parallel oracle framework). Files:
+harness/build_soak/oracles/targeted_edit.py + manual_edit_preservation.py; tests in harness/build_soak/tests/.
+
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,130p' packages/tools/src/disco/tools/builtin/appkit.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""AppKit specialized mutation tools (P4 / TOOL-1).
+
+Small, SEMANTIC edits to an app's structured AppSpec (`.disco/appspec.json`), each
+re-rendering a self-contained `index.html`. The model edits the spec — not raw HTML —
+so a copy/color/section change touches exactly one thing (the targeted-edit law). A raw
+file rewrite is NOT in this set; it lives only in the repair/custom contract scopes.
+
+Tools: app_create / app_update_content / app_add_section / app_remove_section /
+app_reorder_section / app_set_design / app_set_tweak / app_snapshot_version.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from typing import Any, Callable
+
+from disco.core import SecurityRisk
+from disco.core.appkit import AppSection, AppSpec, render_html
+from disco.core.kits import lead_form_appspec
+from pydantic import BaseModel, Field
+
+from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+
+_SPEC_PATH = ".disco/appspec.json"
+_HTML_PATH = "index.html"
+
+
+def _coerce_scalar(value: str) -> Any:
+    """Coerce a string tweak value to a stable scalar: bools (case-insensitive
+    true/false), ints, else the trimmed string — so the spec's tweak shape is
+    predictable rather than 'true' the string sometimes and True other times."""
+    low = value.strip().lower()
+    if low in ("true", "false"):
+        return low == "true"
+    body = value.strip()
+    if body.lstrip("-").isdigit():
+        return int(body)
+    return value
+
+
+class AppSpecStore:
+    """Reads/writes the durable AppSpec + the rendered index.html over a sandbox FS."""
+
+    def __init__(self, fs: Any) -> None:
+        self._fs = fs
+
+    async def read(self) -> AppSpec | None:
+        try:
+            data = await self._fs.read_file(_SPEC_PATH)
+        except Exception:
+            return None
+        return AppSpec.model_validate_json(data)  # raises on corrupt → caller maps to error
+
+    async def write(self, spec: AppSpec) -> None:
+        await self._fs.write_file(_SPEC_PATH, (spec.model_dump_json(indent=2) + "\n").encode("utf-8"))
+        await self._fs.write_file(_HTML_PATH, render_html(spec).encode("utf-8"))
+
+
+async def _apply(ctx: ToolContext, mutate: Callable[[AppSpec], AppSpec]) -> ToolOutcome:
+    """Load the spec, apply a pure mutation, persist spec + re-rendered HTML."""
+    assert ctx.sandbox is not None
+    store = AppSpecStore(ctx.sandbox)
+    try:
+        spec = await store.read()
+    except Exception:
+        return ToolOutcome(success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable")
+    if spec is None:
+        return ToolOutcome(success=False, error="no_app", content="no app yet — call app_create first")
+    try:
+        new_spec = mutate(spec)
+    except ValueError as exc:
+        return ToolOutcome(success=False, error="invalid_app_edit", content=str(exc))
+    await store.write(new_spec)
+    return ToolOutcome(
+        success=True,
+        content=f"updated app + re-rendered {_HTML_PATH}",
+        structured={"sections": [s.id for s in new_spec.sections]},
+    )
+
+
+def _def(name: str, desc: str, args_model: type[BaseModel]) -> ToolDef:
+    return ToolDef(
+        name=name,
+        description=desc,
+        args_model=args_model,
+        needs=frozenset({Capability.FILESYSTEM}),
+        base_risk=SecurityRisk.LOW,
+        runs_in="sandbox",
+        read_only=False,
+    )
+
+
+# --- app_create ---------------------------------------------------------------
+class _SectionArg(BaseModel):
+    id: str
+    kind: str
+    fields: dict[str, str] = {}
+
+
+class AppCreateArgs(BaseModel):
+    title: str
+    sections: list[_SectionArg] | None = Field(
+        default=None, description="optional sections; default scaffolds a hero + lead form"
+    )
+
+
+class AppCreateTool:
+    definition = _def(
+        "app_create",
+        "Create a new AppKit app (.disco/appspec.json) + render index.html. Default "
+        "scaffolds a hero + lead_form; pass sections to override. Use the semantic app_* "
+        "tools for all later edits.",
+        AppCreateArgs,
+    )
+
+    async def run(self, args: AppCreateArgs, ctx: ToolContext) -> ToolOutcome:
+        assert ctx.sandbox is not None
+        store = AppSpecStore(ctx.sandbox)
+        if args.sections is not None:
+            try:
+                sections = tuple(AppSection(id=s.id, kind=s.kind, fields=s.fields) for s in args.sections)
+            except Exception as exc:  # bad kind etc.
+                return ToolOutcome(success=False, error="invalid_app_edit", content=str(exc))
+            try:
+                spec = AppSpec(title=args.title, sections=sections)
+            except Exception as exc:
+                return ToolOutcome(success=False, error="invalid_app_edit", content=str(exc))
+        else:
+            # P7: scaffold the default from the host-owned lead_form starter (single
+            # source — the StarterKit and app_create can't drift).
+
+exec
+/bin/bash -lc 'rg -n "targeted-edit law|small edit|full rewrite|RewriteAvoidance|manual override|manual_override|screen label" disclaude.md packages/core packages/tools packages/agent-server harness -S' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+disclaude.md:1602:metadata; comment anchors can't be duplicated or invented; screen labels are deterministic (reuse P8A
+disclaude.md:1713:- RewriteAvoidanceOracle: a SMALL-scoped edit's churn_ratio (changed_lines/total_lines) ≤ threshold → else
+disclaude.md:1715:- ManualEditPreservationOracle: every manual_override snippet still present in the post-edit file → else
+disclaude.md:1723:TESTS (harness/build_soak/tests/): small edit touches expected files only (pass+fail); comment anchor preserved
+packages/core/tests/test_appkit_semantic_metadata.py:2:the anchor validators (duplicate / invented) + stable screen labels."""
+packages/core/tests/test_contract_phase.py:62:    # EDIT: semantic edit tool allowed, raw file_write denied (targeted-edit law)
+packages/core/tests/test_snapshot_binary.py:275:        "preamble must tell the model to call file_read before a full rewrite"
+packages/core/tests/test_router_routing.py:76:# ---- the per-conversation model pill (manual override) ----------------------
+packages/core/tests/test_loop_stuck.py:667:# A weak model can patch-spiral one file: try a small edit, fail, try a
+packages/core/tests/test_cw_p1_codex.py:42:    "the line numbers shown below). For a full rewrite, use `file_write` with "
+packages/core/tests/test_c21_assist_prompt.py:226:        "file_edit",  # small edit
+packages/tools/src/disco/tools/builtin/appkit.py:5:so a copy/color/section change touches exactly one thing (the targeted-edit law). A raw
+packages/core/src/disco/core/appkit/models.py:130:    vocabulary (P8B) so the names live in ONE place, plus a stable screen label."""
+packages/core/src/disco/core/workflows/__init__.py:5:targeted-edit law, preview/verify/export rules, context policy, and done criteria. Both
+packages/core/src/disco/core/llm/prompts.py:251:    "a full rewrite. Do NOT regenerate a file from memory — stale memory causes "
+packages/core/src/disco/core/llm/prompts.py:253:    "EDITING AN EXISTING FILE — prefer targeted edits over full rewrites:\n"
+packages/core/src/disco/core/llm/prompts.py:367:    "be REFUSED. Always `file_read` an existing file before a full rewrite. "
+packages/core/src/disco/core/workflows/prompt_packs/build_interactive_prototype.md:29:file_replace_lines), never a full rewrite.
+packages/core/src/disco/core/loop/stuck.py:88:    # patch a few more lines at a time, watch it fail, repeat → a full rewrite
+packages/core/src/disco/core/loop/stuck.py:253:    # A weak model can patch-spiral a single file: try a small edit, watch it
+packages/core/src/disco/core/loop/stuck.py:257:    # a threshold yields a "switch to a full rewrite of <file>" signal. The
+packages/core/src/disco/core/workflows/prompt_packs/build_static_site.md:28:preview_start. No raw file rewrite to make a small edit (use file_edit).
+packages/core/src/disco/core/loop/view_render.py:205:            "the line numbers shown for each file in this block). For a full rewrite, "
+packages/core/src/disco/core/loop/view_render.py:223:            "the line numbers shown below). For a full rewrite, use `file_write` with "
+packages/core/src/disco/core/workflows/prompt_packs/build_deck.md:25:No raw file rewrite of the deck JSON for a small edit (use deck_patch). No manual server.
+packages/core/src/disco/core/workflows/prompt_packs/build_document.md:25:range), never a full rewrite for a localized change.
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+exec
+/bin/bash -lc "sed -n '240,270p' packages/core/src/disco/core/llm/prompts.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '20,35p' packages/core/src/disco/core/workflows/prompt_packs/build_static_site.md" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+    "syntax fault); (3) if the same fix fails, try a DIFFERENT approach (another tool, "
+    "another command) — not a near-identical retry; (4) only after several distinct "
+    "attempts fail, call `ask_user` to explain the blocker and ask how to proceed. Do not "
+    "silently repeat a failing command.\n"
+    "</error_handling>\n\n"
+    "<file_rules>\n"
+    "Author and edit files with the FILE TOOLS, never with the shell. "
+    "`file_write` creates/overwrites a whole file; `file_append` adds to the end.\n"
+    "READ BEFORE REWRITING — the engine enforces this: if you call `file_write` on a "
+    "file you have already written without first calling `file_read` on it, the write "
+    "will be REFUSED. Always `file_read` an existing file to ground yourself before "
+    "a full rewrite. Do NOT regenerate a file from memory — stale memory causes "
+    "non-converging thrash (the file fluctuates and never settles).\n"
+    "EDITING AN EXISTING FILE — prefer targeted edits over full rewrites:\n"
+    "  • For a SMALL change: `file_edit` (old → new). Matching is forgiving (indentation / "
+    "trailing-space drift and pasted line numbers are tolerated), but you still supply the text.\n"
+    "  • For a LARGE file or a change by line number: `file_read` the region to get LINE "
+    "NUMBERS, then `file_replace_lines(path, start_line, end_line, new_text)` to replace a "
+    "range, or `file_insert_lines(path, after_line, text)` to ADD a block without replacing. "
+    "These target by line number, so they work reliably regardless of file size. This is the "
+    "right way to add a feature to a big existing file: read → find the lines → replace/insert.\n"
+    "  • For a FULL REWRITE: `file_read` the file first, then `file_write` with the complete "
+    "new content. Skipping the read will be refused.\n"
+    "Do NOT write files with shell redirection — no `cat <<EOF`, no `>`/`>>`, no in-place "
+    "`sed`/`awk`/`tee` (they corrupt on quotes, `$`, backticks, newlines). Shell is for "
+    "running things (installs, builds, tests, git).\n"
+    "Do NOT create a single monolithic file — split large outputs into focused modules "
+    "(separate HTML/CSS/JS files, small Python modules, etc.).\n"
+    "</file_rules>\n\n"
+    "<artifact_tools>\n"
+    "For PRESENTATIONS use `slides_generate` — do NOT hand-author HTML or "
+
+ succeeded in 0ms:
+
+## Allowed tools
+scaffold_starter (materialize the app_shell starter frame), file_write (scaffold), file_edit /
+file_replace_lines (targeted edits), preview_start /
+preview_status / preview_logs / preview_stop, ready_for_static_site_verification.
+
+## Forbidden tools
+No manual port selection or `python -m http.server` — the platform owns the port via
+preview_start. No raw file rewrite to make a small edit (use file_edit).
+
+## Targeted edit law
+Change the smallest thing. To change copy/color, file_edit the exact region — do NOT
+rewrite the whole file. A rewrite during edit is a contract violation.
+
+## Preview rule
+Always preview through preview_start (never a hand-rolled server). Treat the canonical
+
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '245,270p' packages/core/src/disco/core/loop/stuck.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+            if event_content_eq(x, last, ignore_thought=True):
+                run += 1
+            else:
+                break
+        return run >= threshold
+
+    # -- F6 pattern 5: per-file patch-spiral → rewrite directive --------------
+    #
+    # A weak model can patch-spiral a single file: try a small edit, watch it
+    # fail, try a slightly different edit, watch it fail, … — none of those
+    # cycles is byte-identical (so patterns 1–4 don't fire), but the file is
+    # clearly stuck. Counting failures + total attempts PER FILE and crossing
+    # a threshold yields a "switch to a full rewrite of <file>" signal. The
+    # directive is a recommendation, not an automatic edit — the engine (or
+    # a future Rung consumer) decides how to act on it.
+
+    def _per_file_rewrite_directive(
+        self, events: list[Event]
+    ) -> RewriteDirective | None:
+        # Gate closed at the threshold level (e.g. 0 ⇒ disabled) and at the
+        # call site (assist ON). A 0 in either knob short-circuits the
+        # bookkeeping, so a misconfigured threshold can't silently do work.
+        if self.t.per_file_rewrite_failures <= 0:
+            return None
+        if self.t.per_file_rewrite_min_attempts <= 0:
+            return None
+
+codex
+REVISE
+
+**Reasons**
+(a) Reusing `harness/build_soak/oracles` is the right call. That is the real zero-opinion oracle layer: [schema.py](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/schema.py:1), classifier wiring, failure-code severity registry, and tests already live there. Do not create `harness/oracles`.
+
+(b) The five predicates are directionally correct and zero-opinion if they consume only structured evidence:
+- `edited_files ⊆ expected_files`: correct.
+- anchors survive reorder as set membership, not position: correct.
+- `RewriteAvoidanceOracle` only when `edit_scope == "small"`: correct.
+- manual snippets present post-edit: correct, assuming exact structured snippets, no LLM fuzzy match.
+- unedited section screen labels stable: correct, lower severity.
+
+(c) Churn threshold should not be a hidden hardcoded oracle opinion. Use evidence/scenario-supplied policy, e.g. `max_churn_ratio`. I’d start with `0.20` for small edits, but only adjudicate when the evidence includes both the scope and the threshold. Include the actual threshold and ratio in `facts`.
+
+(d) SKIP semantics are right for absent evidence, matching the browser-evidence pattern in [browser_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/browser_evidence.py:1). But distinguish absent slice from malformed applicable evidence: absent slice SKIPs; present-but-malformed evidence should fail closed or be classified as harness validity, not silently pass.
+
+(e) Deferring the live producer to `P1B-LIVE` is acceptable, same pattern as browser evidence, provided P8D stays pure and unit-tested on synthetic evidence.
+
+(f) Severities P1/P1/P1/P1/P2 are sane. Screen-label instability as P2 is reasonable unless later evidence proves it breaks semantic targeting.
+
+**Required Revisions**
+1. Pin the evidence schema for each oracle, including required keys and malformed-field behavior.
+2. Make churn threshold evidence/scenario supplied, not buried in the oracle. Recommended initial value: `max_churn_ratio = 0.20`.
+3. Add explicit tests for absent evidence SKIP versus present malformed applicable evidence.
+4. State whether these oracles are wired into `classify()` now as skip-safe or deferred with the producer to `P1B-LIVE`; don’t leave that integration boundary implicit.
+tokens used
+58,464
+REVISE
+
+**Reasons**
+(a) Reusing `harness/build_soak/oracles` is the right call. That is the real zero-opinion oracle layer: [schema.py](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/schema.py:1), classifier wiring, failure-code severity registry, and tests already live there. Do not create `harness/oracles`.
+
+(b) The five predicates are directionally correct and zero-opinion if they consume only structured evidence:
+- `edited_files ⊆ expected_files`: correct.
+- anchors survive reorder as set membership, not position: correct.
+- `RewriteAvoidanceOracle` only when `edit_scope == "small"`: correct.
+- manual snippets present post-edit: correct, assuming exact structured snippets, no LLM fuzzy match.
+- unedited section screen labels stable: correct, lower severity.
+
+(c) Churn threshold should not be a hidden hardcoded oracle opinion. Use evidence/scenario-supplied policy, e.g. `max_churn_ratio`. I’d start with `0.20` for small edits, but only adjudicate when the evidence includes both the scope and the threshold. Include the actual threshold and ratio in `facts`.
+
+(d) SKIP semantics are right for absent evidence, matching the browser-evidence pattern in [browser_evidence.py](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/browser_evidence.py:1). But distinguish absent slice from malformed applicable evidence: absent slice SKIPs; present-but-malformed evidence should fail closed or be classified as harness validity, not silently pass.
+
+(e) Deferring the live producer to `P1B-LIVE` is acceptable, same pattern as browser evidence, provided P8D stays pure and unit-tested on synthetic evidence.
+
+(f) Severities P1/P1/P1/P1/P2 are sane. Screen-label instability as P2 is reasonable unless later evidence proves it breaks semantic targeting.
+
+**Required Revisions**
+1. Pin the evidence schema for each oracle, including required keys and malformed-field behavior.
+2. Make churn threshold evidence/scenario supplied, not buried in the oracle. Recommended initial value: `max_churn_ratio = 0.20`.
+3. Add explicit tests for absent evidence SKIP versus present malformed applicable evidence.
+4. State whether these oracles are wired into `classify()` now as skip-safe or deferred with the producer to `P1B-LIVE`; don’t leave that integration boundary implicit.

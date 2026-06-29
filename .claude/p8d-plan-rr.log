@@ -1,0 +1,2511 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f150f-cbe6-79c2-84ea-9e8b23d50574
+--------
+user
+Re-review the 4 P8D plan revisions (see "PLAN REVISION 1" in disclaude.md):
+1. Per-oracle evidence schema pinned (one named slice each); absent slice → SKIP; present-but-malformed (missing
+key/wrong type) → FAIL shared EDIT_ORACLE_EVIDENCE_MALFORMED (P1), never silent pass.
+2. RewriteAvoidance churn threshold is evidence-supplied (max_churn_ratio in the slice; default 0.20 documented);
+adjudicate only edit_scope=="small"; total_lines==0 → MALFORMED (no div0); facts carry threshold+ratio.
+3. Tests: each oracle SKIPs on absent slice AND FAILs MALFORMED on present-but-malformed slice.
+4. Wire TARGETED_EDIT_ORACLES into classify.py like BROWSER_EVIDENCE_ORACLES (skip-safe now; producer=P1B-LIVE);
+test that classify() with no edit evidence yields SKIPs not FAILs and doesn't regress existing classification.
+Confirm all 4 resolved + APPROVE-able. Return exactly APPROVE or REVISE + one line each.
+codex
+I’ll inspect the plan text and nearby implementation notes, then check whether each of the four stated revisions is actually reflected and internally consistent.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "PLAN REVISION 1|P8D|TARGETED_EDIT_ORACLES|BROWSER_EVIDENCE_ORACLES|RewriteAvoidance|EDIT_ORACLE_EVIDENCE_MALFORMED|max_churn_ratio|edit_scope|total_lines" disclaude.md' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+1209:### PR P5-DELIVERY — PLAN REVISION 1 (post gpt-5.5 round 1; audit+mapping APPROVED, 3 required fixes)
+1275:### PR P6-FINALIZERS — PLAN REVISION 1 (post gpt-5.5: aliasing concept APPROVED, 6 required fixes)
+1348:### PR P7-KITS — PLAN REVISION 1 (post gpt-5.5: audit confirmed, 5 required fixes)
+1567:### PR P8A — PLAN REVISION 1 (post gpt-5.5: direction approved, 6 required fixes)
+1585:6. Scope: model + pure resolver + tests ONLY (P8B/P8C/P8D separate). Confirmed.
+1621:SCOPE: vocabulary+emit+validate+renderer-wiring ONLY. P8C frontend resolver + P8D oracles separate.
+1623:### PR P8B — PLAN REVISION 1 (post gpt-5.5: core placement APPROVED; 5 fixes)
+1679:### PR P8C — PLAN REVISION 1 (post gpt-5.5: 6 fixes)
+1704:- NEXT: P8D (targeted-edit + manual-edit-preservation oracles) → completes P8.
+1706:## PR P8D — Targeted-edit & manual-edit oracles — PLAN
+1713:- RewriteAvoidanceOracle: a SMALL-scoped edit's churn_ratio (changed_lines/total_lines) ≤ threshold → else
+1714:  SMALL_EDIT_FULL_REWRITE (P1). (Threshold gated; only adjudicated when edit_scope=="small".)
+1729:### PR P8D — PLAN REVISION 1 (post gpt-5.5: 4 fixes; path/predicate/SKIP/severity approved)
+1732:   - RewriteAvoidanceOracle ev["rewrite_avoidance"]={"edit_scope":str,"changed_lines":int,"total_lines":int,
+1733:     "max_churn_ratio":float}.
+1738:   / wrong type → FAIL with shared code EDIT_ORACLE_EVIDENCE_MALFORMED (P1, a harness-validity-class failure) —
+1740:2. CHURN THRESHOLD evidence-supplied: max_churn_ratio comes from ev["rewrite_avoidance"] (scenario sets it;
+1741:   recommended default 0.20 documented). Adjudicate ONLY when edit_scope=="small"; ratio=changed/total; facts
+1742:   carry {edit_scope, changed_lines, total_lines, churn_ratio, max_churn_ratio}. Missing max_churn_ratio →
+1743:   MALFORMED. total_lines==0 → MALFORMED (no divide-by-zero).
+1744:3. TESTS add: every oracle SKIPs on absent slice; every oracle FAILs EDIT_ORACLE_EVIDENCE_MALFORMED on a present-
+1745:   but-malformed slice (missing key / wrong type / total_lines 0).
+1746:4. CLASSIFY() BOUNDARY explicit: export TARGETED_EDIT_ORACLES tuple + wire it into classify.py exactly like
+1747:   BROWSER_EVIDENCE_ORACLES (the loop at classify.py:155) — SKIP-safe, so wiring is safe NOW (they SKIP without
+
+exec
+/bin/bash -lc 'rg --files' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+disclaude.md
+disclaude-changed-files.zip
+DISCLAUDE_CAMPAIGN_SUMMARY.md
+uv.lock
+ui-implementation.md
+tool-sandbox-contract.md
+tmux-client-3.log
+tests/unbiased_gate/test_authorB_models_imagegen.py
+tests/unbiased_gate/test_authorA_sandbox_browser_slides.py
+tests/unbiased_gate/test_authorA_report_audio_exports.py
+tests/unbiased_gate/test_authorA_preflight_lifecycle.py
+source-accuracy-testing.md
+security-analyzer-contract.md
+scripts/vm201-pw.sh
+scripts/trace_conversation.py
+scripts/spec-draft.sh
+scripts/seed_config.py
+scripts/screenshot-triage.sh
+scripts/orchestrate.sh
+scripts/gen_arch_diagram.py
+scripts/extract_grounding.py
+scripts/diff-prefilter.sh
+scripts/check_arch_budget.py
+retrieval-grounding-contract.md
+pyproject.toml
+prompts/screenshot-triage.txt
+prompts/diff-prefilter.txt
+packages/tools/tests/test_validation_executor.py
+packages/tools/tests/test_scaffold_starter.py
+packages/tools/tests/test_executor_contract_scope.py
+packages/tools/tests/test_appkit_tools.py
+packages/tools/tests/test_browser_spill.py
+packages/tools/tests/test_context_memory.py
+packages/tools/tests/tool_fakes.py
+packages/tools/tests/test_write_loop_gate_recovery.py
+packages/tools/tests/test_w3_w4_edit_safety.py
+packages/tools/tests/test_verify_app.py
+packages/tools/tests/test_tools_integration.py
+packages/tools/tests/test_tool_markdown.py
+packages/tools/tests/test_think_tool.py
+packages/tools/tests/test_sweep_stale_roots.py
+packages/tools/tests/test_slides_procedural_contract.py
+packages/tools/tests/test_slides_pipeline.py
+packages/tools/tests/test_slides.py
+packages/tools/tests/test_shell_spill.py
+packages/tools/tests/test_shell_sessions.py
+packages/tools/tests/test_sheets.py
+packages/tools/tests/test_session_diagnostics.py
+packages/tools/tests/test_server_status.py
+packages/tools/tests/test_security.py
+packages/tools/tests/test_scope_advertise_split.py
+packages/tools/tests/test_sandbox_wedge_and_hotapply.py
+packages/tools/tests/test_sandbox_resource_and_egress_leaks.py
+packages/tools/tests/test_sandbox_read_guardrail.py
+packages/tools/tests/test_sandbox_integration.py
+packages/tools/tests/test_sandbox_healthcheck.py
+packages/tools/tests/test_sandbox_exception_contract.py
+packages/tools/tests/test_sandbox.py
+packages/tools/tests/test_root2_workspace_path.py
+packages/tools/tests/test_resource_bounds.py
+packages/tools/tests/test_rematerialize_servers.py
+packages/tools/tests/test_projects.py
+packages/tools/tests/test_production_validity.py
+packages/tools/tests/test_preview_tools.py
+packages/tools/tests/test_preview_session.py
+packages/tools/tests/test_preview.py
+packages/tools/tests/test_pptx_render.py
+packages/tools/tests/test_policy_tool_surface.py
+packages/tools/tests/test_podman.py
+packages/tools/tests/test_planner_readonly.py
+packages/tools/tests/test_multi_service_tracking.py
+packages/tools/tests/test_mcp_transport.py
+packages/tools/tests/test_mcp_tool_search.py
+packages/tools/tests/test_mcp_naming.py
+packages/tools/tests/test_mcp_approval.py
+packages/tools/tests/test_local.py
+packages/tools/tests/test_live_view.py
+packages/tools/tests/test_kernel_session.py
+packages/tools/tests/test_kernel_idle_cull.py
+packages/tools/tests/test_kernel_gateway_auth.py
+packages/tools/tests/test_inclusive_editing.py
+packages/tools/tests/test_image_gen_binary.py
+packages/tools/tests/test_heavy_validators.py
+packages/tools/tests/test_gvisor.py
+packages/tools/tests/test_fix6_inbound_forward.py
+packages/tools/tests/test_fetch_inside.py
+packages/tools/tests/test_f7_pressure_aware_head_only.py
+packages/tools/tests/test_f3_read_before_write.py
+packages/tools/tests/test_executor_scope.py
+packages/tools/tests/test_executor_elision_guard.py
+packages/tools/tests/test_executor_assist.py
+packages/tools/tests/test_escape_suite.py
+packages/tools/tests/test_egress_proxy.py
+packages/tools/tests/test_egress_mode.py
+packages/tools/tests/test_edit_guards.py
+packages/tools/tests/test_e8_filtered_egress_proxy_wiring.py
+packages/tools/tests/test_e4_default_projects_root.py
+packages/tools/tests/test_deck_validators.py
+packages/tools/tests/test_deck_schema.py
+packages/tools/tests/test_deck_patch.py
+packages/tools/tests/test_cw6_read_budget.py
+packages/tools/tests/test_cluster4_filesystem.py
+packages/tools/tests/test_c8_chart_layouts.py
+packages/tools/tests/test_builtin_extra.py
+packages/tools/tests/test_browser_daemon.py
+packages/tools/tests/test_browser.py
+packages/tools/tests/test_bp_g10_filtered_default.py
+packages/tools/tests/test_audio_overview_tool.py
+packages/tools/tests/test_audio_overview_three_modes.py
+packages/tools/tests/test_audio_overview_integration.py
+packages/tools/tests/test_audio_mixer_robustness.py
+packages/tools/tests/test_artifact_validators.py
+packages/tools/tests/test_agent_tools.py
+packages/tools/tests/mcp_fakes.py
+packages/tools/tests/fixtures/artifacts/sample_report.pdf
+orders.yaml
+llm-router-contract.md
+packages/tools/src/disco/tools/registry.py
+packages/tools/src/disco/tools/executor.py
+packages/tools/src/disco/tools/anatomy.py
+SECURITY.md
+README.md
+Makefile
+LICENSE
+packages/tools/src/disco/tools/verify/heavy_validators.py
+CONTRIBUTING.md
+packages/tools/src/disco/tools/verify/artifact_validators.py
+CLAUDE.md
+packages/tools/src/disco/tools/verify/__init__.py
+ACKNOWLEDGEMENTS.md
+packages/tools/src/disco/tools/secrets.py
+packages/tools/src/disco/tools/sandbox/shell_sessions.py
+packages/tools/src/disco/tools/sandbox/session.py
+packages/tools/src/disco/tools/sandbox/process.py
+packages/tools/src/disco/tools/sandbox/port_owner.py
+packages/tools/src/disco/tools/sandbox/podman.py
+packages/tools/src/disco/tools/sandbox/naming.py
+packages/tools/src/disco/tools/sandbox/local.py
+packages/tools/src/disco/tools/sandbox/kernel.py
+packages/tools/src/disco/tools/sandbox/isolation.py
+packages/tools/src/disco/tools/sandbox/inbound_forward.py
+packages/tools/src/disco/tools/sandbox/gvisor.py
+packages/tools/src/disco/tools/sandbox/egress_proxy.py
+packages/tools/src/disco/tools/sandbox/config.py
+packages/tools/src/disco/tools/sandbox/base.py
+packages/tools/src/disco/tools/sandbox/_container.py
+packages/tools/src/disco/tools/sandbox/__init__.py
+packages/tools/src/disco/tools/projects/store.py
+packages/tools/src/disco/tools/projects/archive.py
+packages/tools/src/disco/tools/projects/__init__.py
+packages/tools/src/disco/tools/mcp/tool_search.py
+integrations/messaging/test_disco_bot.py
+packages/tools/src/disco/tools/mcp/stdio.py
+integrations/messaging/disco_bot.py
+packages/tools/src/disco/tools/mcp/retrieval_tier.py
+packages/tools/src/disco/tools/mcp/pool.py
+packages/tools/src/disco/tools/mcp/naming.py
+packages/tools/src/disco/tools/mcp/migrations.py
+packages/tools/src/disco/tools/mcp/http_egress.py
+packages/tools/src/disco/tools/mcp/http.py
+packages/tools/scripts/verify_shell_sessions_gvisor.py
+packages/tools/src/disco/tools/mcp/fence.py
+packages/tools/src/disco/tools/mcp/config.py
+packages/tools/scripts/verify_preview_gvisor.py
+packages/tools/src/disco/tools/mcp/approval.py
+packages/tools/scripts/verify_podman_vm202.py
+packages/tools/src/disco/tools/mcp/__init__.py
+packages/tools/scripts/verify_local_socket.py
+packages/tools/scripts/verify_gvisor_vm201.py
+integrations/messaging/README.md
+packages/tools/scripts/verify_b7_browser_errors.py
+packages/tools/scripts/verify_agent_tools_local.py
+agent-loop-contract.md
+USAGE-PLAN.md
+api-endpoints.md
+packages/tools/pyproject.toml
+docs/disco-assist-policy-refactor-plan.md
+docs/codex-testing-suite-design-6-21-26.md
+docs/codex-evidence-harness-review-6-21-26.md
+docs/build-soak-surfaced-bugs.md
+docs/build-soak-guidelines.md
+archived God files/runtime.py
+archived God files/engine.py
+archived God files/dod_evaluator.py
+archived God files/config_state.py
+archived God files/app.py
+archived God files/README.md
+docs/dylans-runthru-v2-plan-6-20-26.md
+docs/dylans-runthru-6-20-26.md
+docs/dylans-runthru-3-6-21-26.md
+docs/disco-ui-control-gaps-6-21-26.md
+docs/disco-surgical-plan-massive-swath-6-19-26.md
+docs/disco-security-fix-campaign.md
+docs/disco-plan-progress-source-unify.md
+docs/disco-evidence-harness-campaign.md
+docs/disco-discrepancy-finish-plan-6-22-26.md
+docs/disco-deck-editor-real-render-plan.md
+docs/disco-consolidated-roadmap-6-18-26.md
+docs/disco-build-speed-fixes-plan.md
+docs/evidence/_definition.html
+docs/evidence/_cover_dark.html
+docs/evidence/_cover.html
+docs/evidence/macos-build-trace-6-17-26.txt
+docs/evidence/brand-mockup-slide.png
+docs/evidence/brand-mockup-slide-dark.png
+docs/evidence/brand-mockup-report-cover.png
+docs/evidence/brand-mockup-report-cover-dark.png
+docs/evidence/brand-mockup-report-body.png
+docs/evidence/brand-mockup-report-body-dark.png
+docs/evidence/brand-mockup-disco-definition.png
+docs/evidence/brand-mockup-disco-definition-dark.png
+docs/evidence/_slide_dark.html
+docs/evidence/_slide.html
+docs/evidence/_definition_dark.html
+event-state-contract.md
+harness/canary.py
+packages/retrieval/tests/test_wiring.py
+packages/retrieval/tests/test_upload_ingest.py
+packages/retrieval/tests/test_table_blocks.py
+packages/retrieval/tests/test_synthesis_variance.py
+packages/retrieval/tests/test_synthesis_repair.py
+packages/retrieval/tests/test_synthesis_disputed.py
+packages/retrieval/tests/test_streaming_keep_searching.py
+packages/retrieval/tests/test_streaming.py
+packages/retrieval/tests/test_retrieval_integration.py
+packages/retrieval/tests/test_pipeline_invariants.py
+packages/retrieval/tests/test_pipeline.py
+packages/retrieval/tests/test_local_encoders.py
+packages/retrieval/tests/test_live.py
+packages/retrieval/tests/test_judge.py
+packages/retrieval/tests/test_iterate.py
+packages/retrieval/tests/test_grounding.py
+packages/retrieval/tests/test_gather_concurrency_policy.py
+packages/retrieval/tests/test_extra.py
+packages/retrieval/tests/test_eval.py
+packages/retrieval/tests/test_env_knobs_B1b.py
+packages/retrieval/tests/test_env_knobs_B1a.py
+packages/retrieval/tests/test_encoder_oom_guard_B3.py
+packages/retrieval/tests/test_dr_steer.py
+packages/retrieval/tests/test_deep_research_iterative.py
+packages/retrieval/tests/test_deep_research.py
+packages/retrieval/tests/test_corpora.py
+packages/retrieval/tests/test_claims_extract.py
+packages/retrieval/tests/test_chart_blocks.py
+packages/retrieval/tests/test_bundled_providers.py
+packages/retrieval/tests/research_fakes.py
+docs/evidence/_brandfonts/SchibstedGrotesk.ttf
+docs/evidence/_brandfonts/NewsreaderItalic.ttf
+docs/evidence/_brandfonts/Newsreader.ttf
+docs/evidence/_brandfonts/FrauncesItalic.ttf
+docs/evidence/_brandfonts/Fraunces.ttf
+docs/evidence/_brand_dark.css
+docs/evidence/_brand_common.css
+docs/evidence/_body_dark.html
+docs/evidence/_body.html
+harness/build_soak/bakeoff.py
+harness/build_soak/product_evidence.py
+harness/build_soak/classify.py
+harness/build_soak/run.py
+harness/build_soak/failure_codes.py
+harness/build_soak/promotion.py
+harness/build_soak/provider_ledger.py
+evals/research/vcrpy.yaml
+harness/tests/test_sandbox_replay.py
+harness/tests/test_replay_runner.py
+harness/tests/test_obs.py
+harness/tests/test_fuzz.py
+harness/tests/test_faults.py
+harness/tests/test_eval_runner.py
+harness/tests/test_contract.py
+harness/tests/test_cassette.py
+harness/tests/test_canary.py
+packages/tools/src/disco/tools/builtin/scaffold_starter.py
+packages/tools/src/disco/tools/builtin/__init__.py
+packages/tools/src/disco/tools/builtin/appkit.py
+packages/tools/src/disco/tools/builtin/browser.py
+packages/tools/src/disco/tools/builtin/context_memory.py
+packages/tools/src/disco/tools/builtin/verify_app.py
+packages/tools/src/disco/tools/builtin/think.py
+packages/tools/src/disco/tools/builtin/system.py
+packages/tools/src/disco/tools/builtin/subagent.py
+packages/tools/src/disco/tools/builtin/slides.py
+packages/tools/src/disco/tools/builtin/shell_sessions.py
+harness/build_soak/adapters/disco_api.py
+packages/tools/src/disco/tools/builtin/sheets.py
+packages/tools/src/disco/tools/builtin/server.py
+harness/build_soak/adapters/__init__.py
+packages/tools/src/disco/tools/builtin/retrieval.py
+packages/tools/src/disco/tools/builtin/preview.py
+packages/tools/src/disco/tools/builtin/plan.py
+packages/tools/src/disco/tools/builtin/live_view.py
+harness/build_soak/__init__.py
+packages/tools/src/disco/tools/builtin/image_gen.py
+harness/build_loop_metrics.py
+packages/tools/src/disco/tools/builtin/files.py
+packages/tools/src/disco/tools/builtin/audio_overview.py
+harness/_capture_research_demo.py
+packages/tools/src/disco/tools/builtin/_slides_pipeline.py
+harness/_capture_loop_demo.py
+packages/tools/src/disco/tools/builtin/_pptx_render.py
+harness/__init__.py
+packages/tools/src/disco/tools/builtin/_deck_schema.py
+future-plans.md
+packages/tools/src/disco/tools/builtin/_deck_patch.py
+packages/tools/src/disco/tools/builtin/_c8_chart_layouts.py
+packages/tools/src/disco/tools/builtin/_browser_daemon.py
+packages/tools/src/disco/tools/builtin/_audio_mixer.py
+packages/tools/src/disco/tools/__init__.py
+docs/archive/harvest-backlog.md
+docs/archive/god-function-decomposition-plan.md
+docs/archive/god-file-decomposition-status.md
+docs/archive/fable-plan-reconciliation.md
+docs/archive/dylans-walkthru-6-17-26.md
+docs/archive/dylans-tailscale-runthru-bugs-6-18-26.md
+docs/archive/dylans-runthru-6-17-26-v2.md
+docs/archive/disco-surgical-master-plan-6-18-26.md
+docs/archive/disco-driver-reliability-plan-6-18-26.md
+docs/archive/disco-direction-and-decisions-6-17-26.md
+docs/archive/workorders/wave3-4-recon.md
+docs/archive/design-novnc-live-browser.md
+docs/archive/workorders/STATUS-2026-06-11-1757.md
+docs/archive/decomplexity-wave-plan.md
+docs/archive/workorders/RP-14-usability-debt.md
+docs/archive/deck-editor-integration-plan-6-18-26.md
+docs/archive/workorders/RP-12-bseries-residue.md
+docs/archive/build-parity-cluster.md
+docs/archive/workorders/RP-06-replay-share.md
+docs/archive/workorders/RP-05b-reapproval-diff-decision.md
+docs/archive/build-loop-oss-research.md
+docs/archive/workorders/RP-05b-orchestrator-proxy-decision.md
+docs/archive/build-loop-hardening-plan.md
+docs/archive/workorders/RP-05-mcp-client.md
+docs/archive/build-harness-review-6-17-26.md
+docs/archive/workorders/RP-04-wide-research-pipeline.md
+docs/archive/backlog-verified-2026-06-16.md
+docs/archive/backlog-6-16-26-unaudited.md
+docs/archive/workorders/RP-03-chart-blocks.md
+docs/archive/audit-2026-06-15-organization-and-licenses.md
+docs/archive/workorders/RP-02-deep-report-rich-blocks.md
+docs/archive/architecture-rebuild-writeup.md
+docs/archive/workorders/RP-01-dashboard-lite.md
+docs/archive/workorders/README.md
+docs/archive/workorders/DC-07-uploads-rematerialization.md
+docs/archive/workorders/DC-05c-resume-condensation.md
+docs/archive/workorders/DC-05b-resume-reconstruction.md
+docs/archive/workorders/DC-05a-takeover.md
+docs/archive/workorders/DC-05a-loop-breakers.md
+docs/archive/workorders/DC-04b-sessions-degrade.md
+docs/archive/workorders/DC-04a-session-diagnostics.md
+docs/archive/workorders/DC-03-gate-scoping.md
+docs/archive/workorders/DC-02-idle-suspend.md
+docs/archive/agent-architecture-rebuild-plan.md
+docs/archive/workorders/DC-01-host-preview-proxy.md
+docs/archive/workorders/BP-16-marathon-gate.md
+docs/archive/HANDOFF-2026-06-10.md
+docs/archive/workorders/BP-15-feed-screenshots-tier.md
+docs/archive/AUTONOMOUS-EXECUTION-LOG.md
+docs/archive/workorders/BP-14-terminal-live-sessions.md
+docs/architecture.generated.md
+docs/archive/workorders/BP-13-lifecycle-suspend-resume.md
+docs/WORK-ORDERS.md
+docs/archive/workorders/BP-12-build-resume.md
+docs/WORK-ORDERS-archive.md
+docs/archive/workorders/BP-11-file-upload.md
+harness/build_soak/tests/test_product_evidence_writer.py
+docs/AUTONOMOUS-FEATURE-CAMPAIGN.md
+docs/archive/workorders/BP-10-multi-port.md
+docs/A1-click-to-edit-design.md
+docs/archive/workorders/BP-09-egress-verify-prewarm.md
+docs/archive/workorders/BP-08-ipython-kernel.md
+docs/archive/workorders/BP-07-readcounter-rollback.md
+harness/build_soak/tests/test_browser_evidence_oracles.py
+harness/build_soak/tests/test_promotion.py
+harness/build_soak/tests/test_provider_ledger_oracle.py
+harness/build_soak/tests/test_revision_oracle.py
+harness/build_soak/tests/test_output_truth_oracle.py
+harness/slides_experiment/strategies.py
+harness/build_soak/tests/test_oracle_schema.py
+docs/archive/workorders/BP-06-observation-masking.md
+harness/build_soak/tests/test_no_fluke_policy.py
+docs/archive/workorders/BP-05-verify-gate.md
+harness/slides_experiment/scorers.py
+harness/build_soak/tests/test_live_api_smoke.py
+harness/build_soak/tests/test_fail_closed.py
+harness/slides_experiment/run.py
+harness/build_soak/tests/test_evidence_lock.py
+harness/build_soak/tests/test_event_chain_oracle.py
+harness/build_soak/tests/test_classifier.py
+harness/build_soak/tests/test_bakeoff.py
+harness/build_soak/tests/test_api_runner.py
+harness/build_soak/tests/conftest.py
+harness/build_soak/tests/_eventlog.py
+docs/archive/workorders/BP-04-browser-upgrade.md
+docs/archive/workorders/BP-03-environment-contract.md
+evals/baselines/scorecard.json
+docs/archive/workorders/BP-02-preview-as-session.md
+docs/archive/workorders/BP-01-shell-sessions.md
+harness/build_soak/scenarios.yaml
+docs/archive/workorders/BP-00-vision-judge.md
+docs/archive/walkthru-fix-plan-6-17-26.md
+docs/archive/universal-readiness-plan.md
+docs/archive/truth.md
+docs/archive/tasking-2026-06-16.md
+docs/archive/surgical-D-polish-search-attach-live.md
+docs/archive/surgical-C-trackc-editor.md
+docs/archive/surgical-B-trackc-slides.md
+docs/archive/surgical-A-driver-and-file-delivery.md
+docs/archive/surfaced-issues-2026-06-15.md
+docs/archive/slides-experiment-verdict.md
+harness/router.py
+docs/archive/self-host.md
+harness/replay_runner.py
+docs/archive/runthru-v2-research-digest.md
+harness/providers.py
+docs/archive/remaining-work-plan.md
+harness/projection.py
+docs/archive/remaining-items-consolidated-2026-06-15.md
+docs/archive/release-roadmap.md
+harness/sandbox.py
+docs/archive/release-execution-plan.md
+harness/runtime.py
+docs/archive/provider-matrix.md
+docs/archive/project-status-2026-05-snapshot.md
+harness/slides_experiment/__init__.py
+docs/archive/project-history-since-fable-handoff.md
+docs/archive/project-history-since-deep-research-fix.md
+docs/archive/product-ideas-2026-06-17.md
+docs/archive/pending-items-status.md
+docs/archive/north-star.md
+docs/archive/next-fix-set-plan.md
+packages/retrieval/src/disco/retrieval/evaluation.py
+docs/archive/manus-ui-gap-analysis.md
+docs/archive/manus-gap-analysis.md
+packages/retrieval/src/disco/retrieval/engine.py
+packages/retrieval/src/disco/retrieval/wiring.py
+packages/retrieval/src/disco/retrieval/vectorstore.py
+packages/retrieval/src/disco/retrieval/streaming.py
+packages/retrieval/src/disco/retrieval/ranking.py
+packages/retrieval/src/disco/retrieval/providers.py
+packages/retrieval/src/disco/retrieval/nli.py
+docs/archive/manus-gap-analysis-addendum.md
+packages/retrieval/src/disco/retrieval/models.py
+packages/retrieval/src/disco/retrieval/local_encoders.py
+packages/retrieval/src/disco/retrieval/live.py
+packages/retrieval/src/disco/retrieval/grounding.py
+basis-of-design.md
+compose.yaml
+harness/eval_runner.py
+harness/build_soak/oracles/browser_evidence.py
+harness/build_soak/oracles/__init__.py
+harness/build_soak/oracles/provider_ledger.py
+harness/build_soak/oracles/output_truth.py
+harness/build_soak/oracles/tool_scope.py
+harness/build_soak/oracles/schema.py
+harness/build_soak/oracles/revision.py
+harness/build_soak/migrations/2026_06_24_paused_incomplete_not_pass.md
+harness/build_soak/oracles/harness_validity.py
+harness/build_soak/oracles/event_chain.py
+harness/build_soak/infra_signatures.yaml
+harness/build_soak/oracles/contract.py
+harness/marathon/_or_key.py
+harness/marathon/README.md
+harness/logcap.py
+harness/live_build_acceptance.py
+harness/faults.py
+harness/marathon/drive.py
+harness/marathon/test_phase_c.py
+harness/marathon/test_phase_b.py
+harness/marathon/test_phase_a.py
+harness/marathon/sensor_readings.csv
+harness/marathon/provenance.json
+harness/marathon/make_csv.py
+harness/cassettes/research_demo.jsonl
+harness/cassettes/loop_demo.events.jsonl
+harness/cassettes/loop_demo.cassette.jsonl
+harness/cassettes/demo.jsonl
+harness/cassette.py
+harness/capture.py
+harness/build_soak/fixtures/fake_tools.py
+harness/build_soak/fixtures/fake_model.py
+harness/build_soak/fixtures/__init__.py
+harness/build_soak/evidence.py
+harness/build_soak/events.py
+harness/marathon/common.py
+harness/marathon/conftest.py
+deploy/sandbox/README.md
+deploy/sandbox/Dockerfile
+harness/marathon/data/sensor_readings.csv
+harness/marathon/data/PROVENANCE.md
+harness/slides_experiment/prompts/p12_mixed_content.json
+harness/slides_experiment/prompts/p11_long_narrative.json
+harness/slides_experiment/prompts/p10_research_report.json
+harness/slides_experiment/prompts/p09_minimal_single.json
+harness/slides_experiment/prompts/p08_image_heavy.json
+harness/slides_experiment/prompts/p07_training_content.json
+harness/slides_experiment/prompts/p06_comparison_table.json
+harness/slides_experiment/prompts/p05_product_launch.json
+harness/slides_experiment/prompts/p04_overflow_stress.json
+harness/slides_experiment/prompts/p03_tech_architecture.json
+harness/slides_experiment/prompts/p02_data_report.json
+harness/slides_experiment/prompts/p01_startup_pitch.json
+packages/app-server/pyproject.toml
+deploy/compose/Dockerfile.server
+deploy/compose/entrypoint.sh
+packages/retrieval/src/disco/retrieval/deep_research/__init__.py
+packages/retrieval/src/disco/retrieval/bundled_providers.py
+packages/retrieval/src/disco/retrieval/__init__.py
+packages/retrieval/pyproject.toml
+packages/retrieval/src/disco/retrieval/deep_research/concurrency.py
+packages/retrieval/src/disco/retrieval/deep_research/claims.py
+packages/retrieval/src/disco/retrieval/deep_research/decompose.py
+packages/retrieval/src/disco/retrieval/deep_research/depth.py
+packages/core/pyproject.toml
+packages/retrieval/src/disco/retrieval/deep_research/synthesis.py
+packages/retrieval/src/disco/retrieval/deep_research/judge.py
+packages/retrieval/src/disco/retrieval/deep_research/iterate.py
+packages/retrieval/src/disco/retrieval/deep_research/gather.py
+packages/retrieval/src/disco/retrieval/deep_research/engine.py
+frontend/index.html
+frontend/eslint.config.js
+packages/pi-kernel/vitest.config.ts
+packages/app-server/tests/test_secrets_routes.py
+packages/pi-kernel/tsconfig.test.json
+packages/app-server/tests/test_sandbox_probe_route.py
+packages/pi-kernel/tsconfig.json
+packages/app-server/tests/test_sandbox_persistence_health.py
+packages/app-server/tests/test_probe_routes.py
+packages/app-server/tests/test_mcp_endpoints.py
+packages/app-server/tests/test_live_browser_backend_gate.py
+packages/app-server/tests/test_app.py
+frontend/e2e-full/tsconfig.json
+packages/agent-server/scripts/verify_replan_acceptance.py
+packages/agent-server/scripts/verify_plan_approve.py
+packages/agent-server/scripts/verify_build_proof_of_life.py
+packages/agent-server/scripts/verify_browser_injection.py
+packages/agent-server/pyproject.toml
+frontend/vite.config.ts
+frontend/tsconfig.node.json
+frontend/tsconfig.json
+frontend/tsconfig.build.json
+frontend/tsconfig.app.json
+packages/pi-kernel/tests/stdio.test.ts
+packages/pi-kernel/tests/skills.test.ts
+packages/pi-kernel/tests/security.test.ts
+packages/pi-kernel/tests/protocol.test.ts
+packages/pi-kernel/tests/projectResources.test.ts
+packages/pi-kernel/tests/noTools.test.ts
+packages/pi-kernel/tests/main-wiring.test.ts
+packages/pi-kernel/tests/lifecycle.test.ts
+packages/pi-kernel/tests/install-policy.test.ts
+packages/pi-kernel/tests/discoProvider.test.ts
+packages/pi-kernel/tests/control-plane.test.ts
+frontend/e2e-full/support/wsRecorder.ts
+frontend/e2e-full/support/uiInventory.ts
+frontend/e2e-full/support/schema.ts
+frontend/e2e-full/support/schema.redact.test.ts
+frontend/e2e-full/support/recorder.ts
+frontend/e2e-full/support/discoClick.ts
+frontend/e2e-full/support/assertions.ts
+frontend/e2e-full/support/artifactCollector.ts
+frontend/e2e-full/scenarios/smoke.full.spec.ts
+frontend/e2e-full/scenarios/per-surface.full.spec.ts
+frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts
+frontend/e2e-full/full.config.ts
+packages/pi-kernel/src/tools.ts
+packages/pi-kernel/src/skills.ts
+packages/pi-kernel/src/runner.ts
+packages/pi-kernel/src/protocol.ts
+packages/pi-kernel/src/index.ts
+packages/pi-kernel/src/events.ts
+packages/pi-kernel/src/discoProvider.ts
+packages/agent-server/tests/fixtures/negative/raw_html_deck_deliverable.json
+packages/agent-server/tests/fixtures/negative/procedural_placeholder.png
+packages/agent-server/tests/fixtures/negative/procedural_image_deck.html
+packages/agent-server/tests/fixtures/negative/no_plan_progress_finished.json
+packages/agent-server/tests/fixtures/negative/README.md
+packages/agent-server/tests/conftest.py
+frontend/e2e-full/fixtures/tool_error_visible.json
+frontend/e2e-full/fixtures/running_then_error.json
+frontend/e2e-full/fixtures/no_plan_progress_finished.json
+frontend/e2e-full/fixtures/finished_with_partial_plan_updates.json
+frontend/e2e-full/fixtures/discoHarness.ts
+frontend/e2e-full/fixtures/cancelled_request.json
+frontend/e2e-full/fixtures/README.md
+frontend/e2e/visual.spec.ts-snapshots/settings-firefox-linux.png
+frontend/e2e/visual.spec.ts-snapshots/settings-alt-theme-firefox-linux.png
+frontend/e2e/visual.spec.ts-snapshots/research-answer-firefox-linux.png
+frontend/e2e/visual.spec.ts-snapshots/research-answer-alt-theme-firefox-linux.png
+frontend/e2e/visual.spec.ts
+frontend/src/vite-env.d.ts
+frontend/e2e/sheet-block.spec.ts
+frontend/e2e/settings.spec.ts
+frontend/e2e/schedule-section.spec.ts
+frontend/e2e/research.spec.ts
+frontend/e2e/report-export.spec.ts
+frontend/e2e/plan-drafting.spec.ts
+frontend/e2e/imagegen-comfy-workflow.spec.ts
+frontend/e2e/deep-research.spec.ts
+frontend/e2e/contradiction-surfacing.spec.ts
+frontend/e2e/clarify-gate.spec.ts
+frontend/e2e/build.spec.ts
+frontend/e2e/build-controls.spec.ts
+frontend/e2e/autonomous-toggle.spec.ts
+frontend/e2e/ask-gate.spec.ts
+packages/app-server/src/disco/app_server/routes/skills.py
+packages/app-server/src/disco/app_server/routes/secrets.py
+packages/app-server/src/disco/app_server/routes/openrouter.py
+packages/app-server/src/disco/app_server/routes/models.py
+packages/app-server/src/disco/app_server/routes/mcp.py
+packages/app-server/src/disco/app_server/routes/health.py
+packages/pi-kernel/skills/preview-repair/SKILL.md
+packages/app-server/src/disco/app_server/routes/conversations.py
+packages/app-server/src/disco/app_server/routes/config.py
+packages/app-server/src/disco/app_server/routes/__init__.py
+packages/app-server/src/disco/app_server/probe_clients.py
+packages/app-server/src/disco/app_server/config_state.py
+frontend/docker-entrypoint.d/40-disco-env.sh
+frontend/Dockerfile
+packages/core/tests/test_c1c_dod_gate_wiring.py
+packages/core/tests/test_c18_plan_step_done_condition.py
+packages/core/tests/test_c16_hard_reset_pointer_flush.py
+packages/core/tests/test_c13_exec_prefill.py
+packages/core/tests/test_build_replan_contract.py
+packages/core/tests/test_build_plan_contract.py
+packages/core/tests/test_build_loop_simulated_failures.py
+packages/core/tests/test_build_loop_regression.py
+packages/core/tests/test_bug6_actionless_honest_finish.py
+packages/core/tests/test_bug18_actionable_validation.py
+packages/core/tests/test_bug12_followup_replan.py
+packages/core/tests/test_brand.py
+packages/core/tests/test_bp03_acceptance.py
+packages/core/tests/test_autonomous_mode.py
+packages/core/tests/test_autonomous_loop.py
+packages/core/tests/test_assist_wireup.py
+packages/core/tests/test_alternatives_from_args.py
+packages/core/tests/test_agent_isolation.py
+packages/core/tests/test_actionless_completion.py
+packages/core/tests/loop_fakes.py
+packages/core/tests/llm_fakes.py
+packages/core/tests/event_fakes.py
+packages/core/tests/c11_still_omitted_proof.py
+packages/core/tests/c11_recover_proof.py
+packages/core/tests/_buildsoak_fakes.py
+packages/pi-kernel/skills/build-basic/SKILL.md
+packages/pi-kernel/package.json
+packages/pi-kernel/package-lock.json
+frontend/src/App.tsx
+frontend/src/App.moderesume.test.tsx
+frontend/shots.mjs
+packages/app-server/src/disco/app_server/config/mappers.py
+packages/app-server/src/disco/app_server/config/dtos.py
+packages/app-server/src/disco/app_server/config/__init__.py
+packages/app-server/src/disco/app_server/app.py
+packages/app-server/src/disco/app_server/__main__.py
+packages/app-server/src/disco/app_server/__init__.py
+frontend/src/views/settings.test.tsx
+frontend/src/views/history.test.tsx
+frontend/src/views/ShareView.tsx
+frontend/src/views/SettingsView.tsx
+frontend/src/views/ProjectsView.tsx
+frontend/src/views/ImportedRunView.tsx
+frontend/src/views/HistoryView.tsx
+frontend/src/views/HistoryView.status.test.tsx
+frontend/src/views/ActivityView.tsx
+frontend/src/views/ActivityView.test.tsx
+frontend/src/views/ActivityView.dashboard.test.tsx
+packages/agent-server/src/disco/agent_server/audio_config.py
+packages/agent-server/src/disco/agent_server/app.py
+packages/agent-server/src/disco/agent_server/__main__.py
+packages/agent-server/src/disco/agent_server/__init__.py
+packages/agent-server/src/disco/agent_server/control_ops.py
+packages/agent-server/src/disco/agent_server/build_messages.py
+frontend/scripts/shots_ab.mjs
+frontend/scripts/screenshots.mjs
+frontend/e2e-live/shell-sessions.spec.ts
+frontend/e2e-live/preview-truth.spec.ts
+frontend/e2e-live/dc-01-host-preview.spec.ts
+frontend/e2e-live/bp-15-screenshots.spec.ts
+frontend/e2e-live/bp-14-terminal.spec.ts
+frontend/e2e-live/bp-13-suspend.spec.ts
+frontend/e2e-live/bp-12-resume.spec.ts
+packages/agent-server/tests/test_build_contract_activation.py
+packages/agent-server/tests/test_lifecycle.py
+packages/agent-server/tests/test_workspace_route.py
+frontend/e2e-live/bp-11-upload.spec.ts
+packages/agent-server/tests/test_wire.py
+packages/agent-server/tests/test_vision_probe_startup.py
+frontend/e2e-live/bp-10-port-pills.spec.ts
+packages/agent-server/tests/test_verify.py
+frontend/e2e-live/bp-09-install.spec.ts
+packages/agent-server/tests/test_upload_corpus.py
+frontend/e2e-live/bp-08-kernel.spec.ts
+packages/agent-server/tests/test_upload.py
+frontend/e2e-live/bp-06-feed-unmasked.spec.ts
+packages/agent-server/tests/test_tts_local.py
+frontend/e2e-live/bp-05-verify-gate.spec.ts
+packages/agent-server/tests/test_title_service.py
+frontend/e2e-live/bp-04-browser.spec.ts
+packages/agent-server/tests/test_synthetic_deliverable.py
+frontend/e2e-live/bp-03-contract.spec.ts
+packages/agent-server/tests/test_supervision_guardrail.py
+frontend/e2e-live/bp-00-vision.spec.ts
+packages/agent-server/tests/test_stranded_followup_rekick.py
+packages/agent-server/tests/test_stale_policy.py
+packages/agent-server/tests/test_share_import.py
+packages/agent-server/tests/test_share.py
+packages/agent-server/tests/test_sessions_routes.py
+packages/agent-server/tests/test_sessions_degrade.py
+packages/agent-server/tests/test_secret_overlay.py
+packages/agent-server/tests/test_schedule_e2e.py
+packages/agent-server/tests/test_schedule_coalesce.py
+packages/agent-server/tests/test_sandbox_preflight_reconcile.py
+packages/agent-server/tests/test_sandbox_config.py
+packages/agent-server/tests/test_runtime.py
+packages/agent-server/tests/test_resume_reconstruction.py
+frontend/refs/perplexity.png
+packages/agent-server/tests/test_resume_condensation.py
+packages/agent-server/tests/test_resume.py
+packages/agent-server/tests/test_research_ws_B3.py
+frontend/refs/perplexity-dark.png
+frontend/src/types/sandbox.ts
+packages/agent-server/tests/test_research.py
+frontend/refs/manus.png
+packages/agent-server/tests/test_report_followup.py
+frontend/src/types/project.ts
+frontend/refs/manus-dark.png
+packages/agent-server/tests/test_report_export_pdf_fixes.py
+frontend/refs/manus-ai.png
+packages/agent-server/tests/test_report_export_brand.py
+packages/agent-server/tests/test_report_export.py
+frontend/src/types/probe.ts
+packages/agent-server/tests/test_report_audio_live.py
+frontend/refs.mjs
+frontend/src/types/models.ts
+frontend/refs-dark.mjs
+packages/agent-server/tests/test_report_audio.py
+frontend/src/types/grounded.ts
+frontend/playwright.live.config.ts
+packages/agent-server/tests/test_redaction.py
+frontend/src/types/conversation.ts
+frontend/playwright.config.ts
+packages/agent-server/src/disco/agent_server/runtime.py
+packages/agent-server/tests/test_projects_endpoints.py
+frontend/package.json
+packages/agent-server/tests/test_probes_route.py
+frontend/src/types/config.ts
+frontend/package-lock.json
+packages/agent-server/tests/test_probe_ttl.py
+frontend/src/types/agent.ts
+frontend/nginx.conf
+packages/agent-server/tests/test_preview_wake.py
+frontend/src/types/activity.ts
+packages/agent-server/tests/test_preview_manager.py
+packages/agent-server/tests/test_preview_fetch_inside.py
+packages/agent-server/tests/test_preview_edit_route.py
+packages/agent-server/tests/test_preflight.py
+packages/agent-server/src/disco/agent_server/lifecycle.py
+packages/agent-server/tests/test_policy_consistency.py
+packages/agent-server/tests/test_pi_tool_bridge_unit.py
+packages/agent-server/tests/test_pi_tool_bridge.py
+packages/agent-server/tests/test_pi_session_artifact.py
+packages/agent-server/tests/test_pi_process.py
+packages/agent-server/tests/test_pi_kernel.py
+packages/agent-server/tests/test_pi_inspect_trace.py
+packages/agent-server/tests/test_pi_inference_revoke_lifecycle.py
+packages/agent-server/tests/test_pi_inference_gateway.py
+packages/agent-server/tests/test_pi_event_mapper.py
+packages/agent-server/tests/test_p3_sticky_model.py
+packages/agent-server/tests/test_override_persistence.py
+packages/agent-server/tests/test_operator_preview_probe.py
+packages/agent-server/tests/test_oid_stamp.py
+packages/agent-server/tests/test_novnc_live.py
+packages/agent-server/tests/test_models_context_length.py
+packages/agent-server/tests/test_model_pick_pipeline.py
+packages/agent-server/tests/test_memory_release.py
+packages/agent-server/tests/test_mcp_tool_search_cap.py
+packages/agent-server/tests/test_mcp_retrieval_tier.py
+packages/agent-server/tests/test_mcp_pool.py
+packages/agent-server/tests/test_mcp_poisoning.py
+packages/core/src/disco/core/semantic_refs.py
+packages/agent-server/tests/test_mcp_http.py
+packages/agent-server/tests/test_mcp_fence.py
+packages/agent-server/tests/test_mcp_egress.py
+packages/agent-server/tests/test_mcp_e6_new_hash.py
+packages/agent-server/tests/test_live_probe_nonblocking.py
+packages/agent-server/tests/test_kill_generation_guard.py
+packages/agent-server/tests/test_inspect_trace.py
+packages/agent-server/tests/test_idle_suspend.py
+packages/agent-server/tests/test_host_proxy_C2.py
+packages/agent-server/tests/test_host_proxy.py
+packages/agent-server/tests/test_health.py
+packages/agent-server/tests/test_driver_models_pricing.py
+packages/agent-server/tests/test_dr1_dr3.py
+packages/agent-server/tests/test_disco_verify_runner.py
+packages/agent-server/tests/test_deck_editor_route.py
+packages/agent-server/tests/test_debug_evidence_route.py
+packages/agent-server/tests/test_datasource_attach.py
+packages/agent-server/tests/test_d10_unified_projection.py
+packages/agent-server/tests/test_conversation_title_sanitize.py
+packages/agent-server/tests/test_conversation_delete_cleanup.py
+packages/agent-server/tests/test_control_ops_ship_it.py
+packages/agent-server/tests/test_build_surface.py
+packages/agent-server/tests/test_build_kernel_pinning.py
+packages/agent-server/tests/test_build_kernel_interface.py
+packages/agent-server/tests/test_atomic_sidecar.py
+frontend/src/styles/theme.css
+packages/agent-server/tests/test_assist_tier.py
+packages/agent-server/tests/test_artifact_route.py
+packages/agent-server/tests/test_artifact_mode.py
+packages/agent-server/tests/test_agent_surface.py
+packages/agent-server/tests/test_activity.py
+packages/agent-server/tests/test_abandoned_gate_sweep.py
+frontend/src/test/setup.ts
+packages/agent-server/src/disco/agent_server/build_kernel/pi_event_mapper.py
+packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py
+packages/agent-server/src/disco/agent_server/build_kernel/base.py
+packages/agent-server/src/disco/agent_server/build_kernel/__init__.py
+packages/agent-server/src/disco/agent_server/build_kernel/pi_process.py
+packages/agent-server/src/disco/agent_server/build_kernel/pi_kernel.py
+packages/agent-server/src/disco/agent_server/build_kernel/pi_session_artifact.py
+packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py
+packages/agent-server/src/disco/agent_server/runtime_settings.py
+packages/agent-server/src/disco/agent_server/runtime_model_probe.py
+frontend/src/fixtures/models.ts
+frontend/src/fixtures/deepResearchTrace.ts
+frontend/src/fixtures/conversations.ts
+frontend/src/fixtures/config.ts
+frontend/src/fixtures/answers.ts
+frontend/src/fixtures/agentTrace.ts
+packages/core/src/disco/core/kits/__init__.py
+packages/core/src/disco/core/kits/brand.py
+packages/core/src/disco/core/kits/starter.py
+packages/agent-server/src/disco/agent_server/verify/schema.py
+packages/agent-server/src/disco/agent_server/verify/scenarios_run.py
+packages/agent-server/src/disco/agent_server/verify/scenarios.py
+packages/agent-server/src/disco/agent_server/verify/runner.py
+packages/agent-server/src/disco/agent_server/verify/operator.py
+packages/agent-server/src/disco/agent_server/verify/_setup_checks.py
+packages/agent-server/src/disco/agent_server/verify/__main__.py
+packages/agent-server/src/disco/agent_server/verify/__init__.py
+packages/agent-server/src/disco/agent_server/uploads_ingest.py
+packages/agent-server/src/disco/agent_server/tts_local.py
+packages/agent-server/src/disco/agent_server/sessions_service.py
+packages/agent-server/src/disco/agent_server/title_service.py
+packages/agent-server/src/disco/agent_server/share_viewer.py
+packages/agent-server/src/disco/agent_server/selection_agent.js
+packages/agent-server/src/disco/agent_server/share_service.py
+packages/agent-server/src/disco/agent_server/schedule_service.py
+packages/agent-server/src/disco/agent_server/schedule_models.py
+packages/agent-server/src/disco/agent_server/schedule.py
+packages/core/src/disco/core/obs.py
+packages/core/src/disco/core/migration.py
+packages/core/tests/test_f4_bootstrap.py
+packages/core/tests/test_f1_provider_recovery.py
+packages/core/tests/test_exec_policy.py
+packages/core/tests/test_evidence_schema.py
+packages/core/tests/test_event_kind_frontend_contract.py
+packages/core/tests/test_equality.py
+packages/core/tests/test_env_compat.py
+packages/core/tests/test_effective_plan_progress.py
+packages/core/tests/test_e5_agent_planning_capability.py
+packages/core/tests/test_dod_spec.py
+packages/core/tests/test_dod_evaluator.py
+packages/core/tests/test_df08_vision_escalation.py
+packages/core/tests/test_dc05_loop.py
+packages/core/tests/test_cw_p1_codex.py
+packages/core/tests/test_cw4_cw5_truthful_pin.py
+packages/core/tests/test_cw3_cache_prefix.py
+packages/core/tests/test_cw2_cw6_context_caps.py
+packages/core/tests/test_context_budget.py
+packages/core/tests/test_config_store.py
+packages/core/tests/test_condenser.py
+packages/core/tests/test_cluster9_errors.py
+packages/core/tests/test_cluster8_kvcache.py
+packages/core/tests/test_cluster7_knowledge.py
+packages/core/tests/test_cluster3_security.py
+packages/core/tests/test_cluster2_turntaking.py
+packages/core/tests/test_cluster1_context.py
+packages/core/tests/test_clean_thought.py
+packages/core/tests/test_clarify_gate.py
+packages/core/tests/test_c6_recitation_cadence.py
+packages/core/tests/test_c5_pmx_memory_persistence.py
+packages/core/tests/test_c21_assist_prompt.py
+packages/core/tests/test_c20_subagent_fanout.py
+packages/core/src/disco/core/env.py
+packages/core/src/disco/core/dod_util.py
+packages/core/src/disco/core/dod_evaluator.py
+packages/core/src/disco/core/dod.py
+packages/core/src/disco/core/appkit/models.py
+packages/core/src/disco/core/appkit/semantic_metadata.py
+packages/core/src/disco/core/appkit/__init__.py
+packages/agent-server/tests/integration/test_task_supervision.py
+packages/agent-server/tests/integration/test_scripted_smoke.py
+packages/agent-server/tests/integration/scripted_model.py
+packages/agent-server/tests/integration/harness.py
+packages/agent-server/tests/integration/__init__.py
+frontend/src/shell/mode.ts
+frontend/src/shell/mode.test.ts
+packages/core/src/disco/core/wire.py
+packages/core/src/disco/core/view.py
+frontend/src/shell/Shell.tsx
+frontend/src/shell/Shell.test.tsx
+frontend/src/shell/NavRail.tsx
+frontend/src/shell/NavRail.test.tsx
+frontend/src/shell/ModeSlider.tsx
+frontend/src/shell/ModeProvider.tsx
+frontend/src/main.tsx
+packages/core/src/disco/core/workflows/__init__.py
+packages/core/src/disco/core/workflows/skill_mount.py
+packages/core/src/disco/core/workflows/assembly.py
+packages/core/src/disco/core/workflows/prompt_pack.py
+packages/core/src/disco/core/brand/tokens.py
+packages/core/src/disco/core/brand/mark.py
+packages/core/src/disco/core/store/sqlite.py
+packages/core/src/disco/core/store/base.py
+packages/core/src/disco/core/store/__init__.py
+packages/core/src/disco/core/state.py
+packages/core/src/disco/core/skills.py
+packages/core/src/disco/core/loop/agent.py
+packages/core/src/disco/core/loop/engine.py
+packages/core/src/disco/core/loop/boundaries.py
+packages/core/src/disco/core/loop/driver.py
+packages/core/src/disco/core/loop/finish.py
+packages/core/src/disco/core/loop/context_builder.py
+packages/core/src/disco/core/loop/bootstrap.py
+packages/core/src/disco/core/loop/view_render.py
+packages/core/src/disco/core/loop/turn_control.py
+packages/core/src/disco/core/loop/tool_specs.py
+packages/core/src/disco/core/loop/stuck.py
+packages/core/src/disco/core/loop/stream_extract.py
+packages/core/src/disco/core/loop/signals.py
+packages/core/src/disco/core/loop/recitation.py
+packages/core/src/disco/core/workflows/prompt_packs/build_interactive_prototype.md
+packages/core/src/disco/core/loop/preview_target.py
+packages/core/src/disco/core/workflows/prompt_packs/build_static_site.md
+packages/core/src/disco/core/loop/policies.py
+packages/core/src/disco/core/workflows/prompt_packs/build_deck.md
+packages/core/src/disco/core/loop/plans.py
+packages/core/src/disco/core/workflows/prompt_packs/build_appkit_leadgen.md
+packages/core/src/disco/core/loop/plan_conditions.py
+packages/core/src/disco/core/workflows/prompt_packs/build_document.md
+packages/core/src/disco/core/loop/observe.py
+packages/core/src/disco/core/loop/messages.py
+packages/core/src/disco/core/loop/file_state.py
+packages/core/src/disco/core/loop/fc_kit.py
+packages/core/src/disco/core/loop/dedup.py
+packages/core/src/disco/core/loop/control.py
+packages/core/src/disco/core/loop/context_budget.py
+packages/core/src/disco/core/loop/__init__.py
+packages/agent-server/src/disco/agent_server/routes/ws.py
+packages/agent-server/src/disco/agent_server/routes/storage.py
+packages/agent-server/src/disco/agent_server/routes/share.py
+packages/agent-server/src/disco/agent_server/routes/sessions.py
+packages/agent-server/src/disco/agent_server/routes/schedules.py
+packages/agent-server/src/disco/agent_server/routes/report.py
+packages/agent-server/src/disco/agent_server/routes/projects.py
+packages/core/src/disco/core/brand/fonts/SchibstedGrotesk.ttf
+packages/agent-server/src/disco/agent_server/routes/probes.py
+packages/agent-server/src/disco/agent_server/routes/preview_edit.py
+packages/core/src/disco/core/brand/fonts/NewsreaderItalic.ttf
+packages/agent-server/src/disco/agent_server/routes/preview.py
+packages/agent-server/src/disco/agent_server/routes/pi_tools.py
+packages/agent-server/src/disco/agent_server/routes/pi_inference.py
+packages/agent-server/src/disco/agent_server/routes/models.py
+packages/agent-server/src/disco/agent_server/routes/mcp.py
+packages/agent-server/src/disco/agent_server/routes/health.py
+packages/agent-server/src/disco/agent_server/routes/files.py
+packages/agent-server/src/disco/agent_server/routes/export.py
+packages/agent-server/src/disco/agent_server/routes/deck_editor.py
+packages/agent-server/src/disco/agent_server/routes/debug.py
+packages/agent-server/src/disco/agent_server/routes/conversations.py
+packages/agent-server/src/disco/agent_server/routes/activity.py
+packages/core/src/disco/core/brand/fonts/Newsreader.ttf
+packages/agent-server/src/disco/agent_server/routes/_common.py
+packages/core/src/disco/core/brand/fonts/LICENSE-OFL.txt
+packages/agent-server/src/disco/agent_server/routes/__init__.py
+packages/core/src/disco/core/brand/fonts/FrauncesItalic.ttf
+packages/core/src/disco/core/brand/fonts/Fraunces.ttf
+packages/agent-server/src/disco/agent_server/resume_service.py
+packages/core/src/disco/core/brand/css.py
+packages/agent-server/src/disco/agent_server/report_export.py
+packages/core/src/disco/core/brand/chart_svg.py
+packages/agent-server/src/disco/agent_server/report_audio.py
+packages/core/src/disco/core/brand/__init__.py
+packages/agent-server/src/disco/agent_server/redaction.py
+packages/agent-server/src/disco/agent_server/preview_service.py
+packages/agent-server/src/disco/agent_server/preview_manager.py
+packages/agent-server/src/disco/agent_server/pi_inference.py
+packages/agent-server/src/disco/agent_server/oid_stamp.py
+packages/agent-server/src/disco/agent_server/mcp_manager.py
+packages/agent-server/src/disco/agent_server/host_proxy.py
+packages/agent-server/src/disco/agent_server/deep_research_service.py
+packages/core/src/disco/core/contract/registry.py
+packages/core/src/disco/core/contract/__init__.py
+packages/core/src/disco/core/contract/models.py
+packages/core/src/disco/core/contract/phase.py
+packages/core/src/disco/core/contract/enforce.py
+packages/core/src/disco/core/contract/scopes.py
+packages/core/src/disco/core/observations.py
+packages/core/src/disco/core/__init__.py
+packages/core/src/disco/core/equality.py
+frontend/src/components/states.tsx
+packages/core/src/disco/core/events.py
+packages/core/src/disco/core/inspect.py
+packages/core/src/disco/core/llm/__init__.py
+packages/core/src/disco/core/llm/config.py
+frontend/src/components/states.test.tsx
+packages/core/src/disco/core/security/analyzers.py
+packages/core/src/disco/core/security/__init__.py
+packages/core/src/disco/core/llm/config_store.py
+packages/core/src/disco/core/security/assessment.py
+packages/core/src/disco/core/security/risk.py
+packages/core/tests/test_preview_target.py
+packages/core/tests/test_prefill_masking.py
+packages/core/tests/test_planning_write_rejection.py
+packages/core/tests/test_planner_gate.py
+packages/core/tests/test_plan_from_args.py
+packages/core/tests/test_plan_approval_execution.py
+packages/core/tests/test_p2_driver_routing_retry.py
+packages/core/tests/test_p1_p2_provider_reliability.py
+packages/core/tests/test_openai_provider.py
+packages/core/tests/test_observation_masking.py
+packages/core/tests/test_no_read_penalty.py
+packages/core/tests/test_mcp_cap_requery.py
+packages/core/tests/test_loop_stuck.py
+packages/core/tests/test_loop_stophooks.py
+packages/core/tests/test_loop_step.py
+packages/core/tests/test_loop_state_machine.py
+packages/core/tests/test_loop_integration.py
+packages/core/tests/test_loop_extra.py
+packages/core/tests/test_loop_confirmation.py
+packages/core/tests/test_loop_condensation.py
+packages/core/tests/test_loop_concurrency.py
+packages/core/tests/test_k1_elision_guard.py
+packages/core/tests/test_hs08_invalid_reroute_invariant.py
+packages/core/tests/test_tail_variation.py
+packages/core/tests/test_hs03_reground_cadence.py
+packages/core/tests/test_store_status.py
+packages/core/tests/test_hs02_compaction_template.py
+packages/core/tests/test_store_filters.py
+packages/core/tests/test_gate_scoping.py
+packages/core/tests/test_store.py
+packages/core/tests/test_g1_exec_artifact_tools.py
+packages/core/tests/test_state.py
+packages/core/tests/test_snapshot_truncation.py
+packages/core/tests/test_finish_dod_gate.py
+packages/core/tests/test_snapshot_binary.py
+packages/core/tests/test_finish_browser_gate.py
+packages/core/tests/test_skills.py
+packages/core/tests/test_f9_read_dedup.py
+packages/core/tests/test_serve_tool.py
+packages/core/tests/test_f8_arg_truncation.py
+packages/core/tests/test_serialization.py
+packages/core/tests/test_security_vocab.py
+packages/core/tests/test_security_policy.py
+packages/core/tests/test_security_integration.py
+packages/core/tests/test_security_analyzer.py
+packages/core/tests/test_secrets.py
+packages/core/tests/test_sandbox_connection_validation.py
+packages/core/tests/test_router_summarizer_stream.py
+packages/core/tests/test_router_routing.py
+packages/core/tests/test_router_prompts.py
+packages/core/tests/test_router_overflow.py
+packages/core/tests/test_router_integration.py
+packages/core/tests/test_f5_thinking_budget.py
+packages/core/tests/test_router_extra.py
+packages/core/tests/test_router_errors.py
+packages/core/tests/test_revision_force_submit.py
+packages/core/src/disco/core/llm/openai_provider.py
+packages/core/tests/test_replan_pending_valve.py
+packages/core/tests/test_replan_forces_plan.py
+packages/core/src/disco/core/llm/nli.py
+packages/core/src/disco/core/llm/exec_policy.py
+packages/core/tests/test_remember_tool.py
+packages/core/src/disco/core/llm/errors.py
+packages/core/src/disco/core/llm/provider.py
+packages/core/src/disco/core/llm/prompts.py
+packages/core/src/disco/core/llm/policy.py
+packages/core/tests/test_write_loop_recovery.py
+packages/core/src/disco/core/evidence/__init__.py
+packages/core/tests/test_watch_it_write.py
+packages/core/tests/test_w5_execution_nudge_cap.py
+packages/core/src/disco/core/llm/routing.py
+packages/core/tests/test_w39_shell_verify_reminder.py
+packages/core/src/disco/core/llm/secrets.py
+packages/core/tests/test_w2_stale_snapshot.py
+packages/core/src/disco/core/llm/summarizer.py
+packages/core/tests/test_w1_read_breaker.py
+packages/core/tests/test_vision_wiring.py
+packages/core/tests/test_vision_caps.py
+packages/core/tests/test_verify_on_finish.py
+packages/core/tests/test_view_kv_stability.py
+packages/core/tests/test_unprocessed_user_message.py
+packages/core/tests/test_view.py
+packages/core/tests/test_toolcall_recovery.py
+packages/core/tests/test_verify_web_app_gate.py
+packages/core/tests/test_toolcall_defense.py
+packages/core/tests/test_tool_rejection_recovery.py
+packages/core/src/disco/core/context/_util.py
+packages/core/src/disco/core/evidence/schema.py
+packages/core/src/disco/core/context/source_priority.py
+packages/core/src/disco/core/llm/toolcall_recovery.py
+packages/core/tests/test_contract_models.py
+packages/core/tests/test_context_runtime_integration.py
+packages/core/tests/test_todo_memory.py
+packages/core/tests/test_recoverable_excerpts.py
+packages/core/tests/test_context_pack_prompt.py
+packages/core/tests/test_context_compaction.py
+packages/core/tests/test_artifact_memory.py
+packages/core/tests/test_context_pack.py
+frontend/src/components/QueryInput.think.test.tsx
+packages/core/tests/test_context_ledger.py
+frontend/src/components/PathPickerDialog.tsx
+packages/core/src/disco/core/context/artifact_memory.py
+frontend/src/components/ModelLeaderPill.tsx
+packages/core/src/disco/core/context/ledger.py
+packages/core/src/disco/core/context/pack.py
+frontend/src/components/Markdown.tsx
+packages/core/src/disco/core/llm/vision_table.py
+packages/core/tests/test_contract_registry.py
+packages/core/src/disco/core/llm/types.py
+frontend/src/components/Markdown.test.tsx
+packages/core/tests/test_skill_mount.py
+packages/core/src/disco/core/llm/wiring.py
+frontend/src/components/Markdown.chart.test.tsx
+frontend/src/components/FollowUps.tsx
+packages/core/tests/test_workflow_assembly.py
+frontend/src/components/ExampleQueries.tsx
+packages/core/tests/test_contract_scopes.py
+packages/core/tests/test_prompt_packs.py
+frontend/src/components/DemoDataBadge.tsx
+frontend/src/components/DemoDataBadge.test.tsx
+frontend/src/components/ConfirmDialog.tsx
+packages/core/src/disco/core/context/store.py
+frontend/src/components/CommandPalette.tsx
+frontend/src/components/CommandPalette.test.tsx
+packages/core/tests/test_contract_enforce.py
+packages/core/tests/test_contract_delivery.py
+frontend/src/components/Citation.tsx
+packages/core/tests/test_appkit_models.py
+packages/core/tests/test_contract_phase.py
+frontend/src/components/Citation.test.tsx
+packages/core/src/disco/core/context/compaction.py
+frontend/src/components/ChartBlock.test.tsx
+frontend/src/components/CapabilityBadges.tsx
+frontend/src/components/BuildSurface.verbose.test.tsx
+packages/core/tests/test_build_agent_isolation.py
+frontend/src/components/BuildSurface.tsx
+packages/core/tests/test_kits.py
+frontend/src/components/BuildSurface.test.tsx
+frontend/src/components/BuildSurface.scroll.test.tsx
+packages/core/src/disco/core/context/__init__.py
+frontend/src/components/BuildSurface.recovery.test.tsx
+frontend/src/components/AnswerDocument.tsx
+frontend/src/components/AnswerDocument.test.tsx
+frontend/src/components/AgentSurface.tsx
+frontend/src/components/ThemeToggle.tsx
+frontend/src/components/StaticRunView.tsx
+frontend/src/components/SourcePanel.tsx
+frontend/src/components/SourcePanel.test.tsx
+frontend/src/components/SlidesBlock.test.tsx
+frontend/src/lib/isolation.ts
+frontend/src/components/SheetBlock.test.tsx
+frontend/src/lib/isolation.test.ts
+packages/core/tests/test_finish_alias.py
+frontend/src/components/ScopeControl.tsx
+frontend/src/lib/gateMountSeam.test.tsx
+frontend/src/components/SandboxHealthBanner.tsx
+frontend/src/lib/eventDisposition.test.ts
+packages/core/tests/test_semantic_refs.py
+frontend/src/components/SandboxHealthBanner.test.tsx
+frontend/src/lib/e2eBridge.ts
+frontend/src/components/ResearchSurface.tsx
+frontend/src/lib/deepResearchTrace.ts
+frontend/src/components/ResearchSurface.test.tsx
+frontend/src/lib/deepResearchTrace.replay.test.ts
+frontend/src/components/ResearchSurface.draft.test.tsx
+packages/core/tests/test_appkit_semantic_metadata.py
+frontend/src/lib/date.ts
+frontend/src/lib/cost.ts
+frontend/src/components/ResearchSurface.attach.test.tsx
+frontend/src/lib/cost.test.ts
+frontend/src/components/QueryInput.tsx
+frontend/src/lib/cn.ts
+frontend/src/lib/buildTrace.ts
+frontend/src/lib/buildTrace.test.ts
+frontend/src/lib/buildTrace.replay.test.ts
+frontend/src/lib/buildTrace.derivers.replay.test.ts
+frontend/src/components/TtftIndicator.tsx
+frontend/src/components/Toast.tsx
+frontend/src/components/Toast.test.tsx
+frontend/src/components/ThinkToggle.tsx
+packages/core/tests/test_semantic_attr_parity.py
+frontend/src/components/settings/DataSourcesSection.tsx
+frontend/src/lib/discoSemanticAttrs.ts
+frontend/src/lib/eventDisposition.ts
+frontend/src/lib/useVerboseAgentChat.ts
+frontend/src/components/settings/DataSourcesSection.test.tsx
+frontend/src/lib/useVerboseAgentChat.test.ts
+frontend/src/lib/useTheme.ts
+frontend/src/components/settings/ChatVerbositySection.tsx
+frontend/src/components/settings/BuildKernelSection.tsx
+frontend/src/lib/useTheme.test.ts
+frontend/src/components/settings/AudioSection.tsx
+frontend/src/lib/useReplay.ts
+frontend/src/lib/useReplay.test.ts
+frontend/src/components/settings/LiveBrowserSection.tsx
+frontend/src/lib/usePointer.ts
+frontend/src/lib/think.ts
+frontend/src/lib/think.test.ts
+frontend/src/lib/srcdoc.test.ts
+frontend/src/lib/sources.ts
+frontend/src/lib/slidesRenderer.ts
+frontend/src/lib/selectionBridge.ts
+frontend/src/lib/selectionBridge.test.ts
+frontend/src/lib/selectionAgent.ts
+frontend/src/lib/scheduleNL.ts
+frontend/src/lib/scheduleNL.test.ts
+frontend/src/lib/runStatusBridge.ts
+frontend/src/components/settings/LiveBrowserSection.test.tsx
+frontend/src/components/settings/ImageGenSection.tsx
+frontend/src/components/settings/ImageGenSection.test.tsx
+frontend/src/components/settings/EncoderSection.tsx
+frontend/src/components/settings/ModelCatalogue.subscription.test.tsx
+frontend/src/components/settings/McpSection.tsx
+frontend/src/components/settings/McpSection.live.test.tsx
+frontend/src/components/settings/McpSection.approval.test.tsx
+frontend/src/components/settings/ModelMatrix.tsx
+frontend/src/components/settings/ModelCatalogue.tsx
+frontend/src/components/settings/NotWired.tsx
+frontend/src/components/settings/OpenRouterSection.tsx
+frontend/src/components/settings/SkillsSection.tsx
+frontend/src/components/settings/ScheduleSection.tsx
+frontend/src/components/settings/SandboxSection.tsx
+frontend/src/components/settings/SandboxSection.test.tsx
+frontend/src/components/settings/SandboxSection.switch.test.tsx
+frontend/src/components/settings/RoleModelPicker.tsx
+frontend/src/components/settings/ProviderKeysSection.tsx
+frontend/src/components/settings/ProviderKeysSection.test.tsx
+frontend/src/components/settings/ProjectStorageSection.tsx
+frontend/src/components/settings/ProjectStorageSection.test.tsx
+frontend/src/components/settings/ProbeButton.tsx
+frontend/src/components/settings/ProbeButton.test.tsx
+frontend/src/components/settings/PendingBadge.tsx
+frontend/src/lib/resolvers/appResolver.test.ts
+frontend/src/api/config.ts
+frontend/src/api/client.ts
+frontend/src/api/agent.upload.test.ts
+frontend/src/api/agent.ts
+frontend/src/api/agent.reconnect.test.ts
+frontend/src/api/activity.ts
+frontend/src/lib/resolvers/appResolver.ts
+frontend/src/api/deepResearch.ts
+frontend/src/api/deepResearch.test.ts
+frontend/src/api/conversations.ts
+frontend/src/api/models.ts
+frontend/src/api/projects.ts
+frontend/src/components/blocks.tsx
+frontend/src/api/secrets.ts
+frontend/src/api/research.ts
+frontend/src/components/blocks/BlockView.tsx
+frontend/src/components/research/DeepReportView.variance.test.tsx
+frontend/src/components/research/DeepReportView.tsx
+frontend/src/components/research/DeepReportView.table.test.tsx
+frontend/src/components/research/DeepProgressStrip.tsx
+frontend/src/components/research/DeepBoundedNotice.tsx
+frontend/src/components/research/ClaimVerdicts.tsx
+frontend/src/components/research/ClaimVerdicts.test.tsx
+frontend/src/components/research/AudioPlayer.tsx
+frontend/src/components/research/AudioPlayer.test.tsx
+frontend/src/components/mainSurface.test.tsx
+frontend/src/lib/resolvers/discoSemanticResolver.test.ts
+frontend/src/lib/resolvers/discoSemanticResolver.ts
+frontend/src/lib/resolvers/deckResolver.ts
+frontend/src/lib/resolvers/deckResolver.test.ts
+frontend/src/components/controls.test.tsx
+frontend/src/hooks/useBuild.lazy.test.tsx
+frontend/src/hooks/useActivity.ts
+frontend/src/hooks/useBuild.modelswitch.test.tsx
+frontend/src/components/blocks/CodeBlock.tsx
+frontend/src/components/blocks/CitedText.tsx
+frontend/src/components/blocks/ChartBlock.tsx
+frontend/src/components/blocks/SlidesBlock.tsx
+frontend/src/components/blocks/SheetBlock.tsx
+frontend/src/hooks/useBuild.ts
+frontend/src/components/blocks/TableView.tsx
+frontend/src/components/brand/DefinitionMark.test.tsx
+frontend/src/components/research/IncludeFollowUpsModal.tsx
+frontend/src/components/research/IncludeFollowUpsModal.test.tsx
+frontend/src/components/research/FollowUpStatus.tsx
+frontend/src/components/research/ReportFollowUp.tsx
+frontend/src/components/research/FollowUpStatus.test.tsx
+frontend/src/components/research/RecencySelector.tsx
+frontend/src/components/research/DepthTierSelector.tsx
+frontend/src/components/research/NeedMoreCard.tsx
+frontend/src/components/research/DeepResearchSurface.tsx
+frontend/src/components/research/NeedMoreCard.test.tsx
+frontend/src/components/research/IterativeToggle.tsx
+frontend/src/components/research/SupportMeter.tsx
+frontend/src/components/research/SupportMeter.test.tsx
+frontend/src/components/research/TemplatePicker.tsx
+frontend/src/components/research/TieredSourcePanel.tsx
+frontend/src/components/build/ActivityFeed.screenshot.test.tsx
+frontend/src/components/brand/DefinitionMark.tsx
+frontend/src/components/brand/Wordmark.tsx
+frontend/src/components/research/DeepResearchSurface.test.tsx
+frontend/src/components/research/DeepResearchSurface.attach.test.tsx
+frontend/src/components/research/DeepResearchSurface.resumed.test.tsx
+frontend/src/hooks/useBuildNotifications.test.ts
+frontend/src/hooks/useBuildNotifications.ts
+frontend/src/components/icons/CodeBlocksIcon.tsx
+frontend/src/hooks/useBuildStream.idfactory.test.ts
+frontend/src/hooks/useBuildStream.askgate.test.ts
+frontend/src/hooks/useBuildPreview.ts
+frontend/src/hooks/useBuildStream.suspend.test.ts
+frontend/src/hooks/useBuildStream.ts
+frontend/src/components/build/AgentCanvas.deckforeground.test.tsx
+frontend/src/components/build/ActivityFeed.tsx
+frontend/src/components/build/ActivityFeed.sheet.test.tsx
+frontend/src/hooks/useConfig.ts
+frontend/src/components/build/AgentCanvas.live.test.tsx
+frontend/src/components/build/AgentCanvas.discuss.test.tsx
+frontend/src/components/build/AgentCanvas.test.tsx
+frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx
+frontend/src/__unbiased_gate__/authorB_deep_report_variance.test.tsx
+frontend/src/__unbiased_gate__/authorB_chat_ui.test.tsx
+frontend/src/hooks/useConversations.ts
+frontend/src/components/build/AgentCanvas.tsx
+frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx
+frontend/src/__unbiased_gate__/authorB_slides_editor.test.tsx
+frontend/src/hooks/useDeepResearchStream.test.ts
+frontend/src/hooks/useDeepResearch.ts
+frontend/src/hooks/useDriverModels.ts
+frontend/src/hooks/useDeepResearchStream.ts
+frontend/src/hooks/useElementSelect.ts
+frontend/src/components/build/AgentStageCard.tsx
+frontend/src/components/build/AgentStageCard.test.tsx
+frontend/src/hooks/useExportCapabilities.ts
+frontend/src/components/build/AgentStatusBar.cost.test.tsx
+frontend/src/components/build/AgentStatusBar.resume.test.tsx
+frontend/src/hooks/useModels.ts
+frontend/src/hooks/useTemplates.ts
+frontend/src/hooks/useSessions.ts
+frontend/src/hooks/useSessions.test.ts
+frontend/src/hooks/useSecrets.ts
+frontend/src/hooks/useResearchStream.ts
+frontend/src/hooks/useResearch.ts
+frontend/src/hooks/useResearch.lazy.test.tsx
+frontend/src/hooks/useProjectsConfig.ts
+frontend/src/hooks/useProjects.ts
+frontend/src/components/build/AlternativesGate.tsx
+frontend/src/components/build/AlternativesGate.test.tsx
+frontend/src/components/build/AgentStatusBar.tsx
+frontend/src/components/build/AgentStatusBar.suspend.test.tsx
+frontend/src/components/build/AskPanel.tsx
+frontend/src/components/build/AskPanel.test.tsx
+frontend/src/components/build/BuildModelPicker.p3.test.tsx
+frontend/src/components/build/BuildModelPicker.subscription.test.tsx
+frontend/src/components/build/latestEditableDeckBase.test.ts
+frontend/src/components/build/editor/types.ts
+frontend/src/components/build/editor/slideToggle.ts
+frontend/src/components/build/editor/SlideThumbnail.tsx
+frontend/src/components/build/editor/SlideThumbnail.test.tsx
+frontend/src/components/build/editor/SlideCanvas.tsx
+frontend/src/components/build/editor/SlideCanvas.test.tsx
+frontend/src/components/build/editor/LayersPanel.tsx
+frontend/src/components/build/editor/ElementBox.tsx
+frontend/src/components/build/editor/ElementBox.test.tsx
+frontend/src/components/build/editor/DeckEditor.tsx
+frontend/src/components/build/editor/DeckEditor.test.tsx
+frontend/src/components/build/cluster6.test.tsx
+frontend/src/components/build/canvas/TerminalPane.tsx
+frontend/src/components/build/canvas/SelectionOverlay.tsx
+frontend/src/components/build/canvas/SelectionOverlay.tip.test.tsx
+frontend/src/components/build/canvas/SelectionOverlay.test.tsx
+frontend/src/components/build/canvas/PreviewPane.tsx
+frontend/src/components/build/canvas/PreviewPane.reload.test.tsx
+frontend/src/components/build/canvas/PreviewPane.edit.test.tsx
+frontend/src/components/build/canvas/PreviewPane.discuss.test.tsx
+frontend/src/components/build/canvas/FilesPane.tsx
+frontend/src/components/build/canvas/Empty.tsx
+frontend/src/components/build/canvas/EditAffordance.tsx
+frontend/src/components/build/canvas/EditAffordance.test.tsx
+frontend/src/components/build/canvas/CockpitPane.tsx
+frontend/src/components/build/StreamingFile.test.tsx
+frontend/src/components/build/SteerInput.tsx
+frontend/src/components/build/ResizableSplit.tsx
+frontend/src/components/build/ReplayScrubber.tsx
+frontend/src/components/build/PlanPanel.tsx
+frontend/src/components/build/PlanPanel.test.tsx
+frontend/src/components/build/LiveSignalBar.tsx
+frontend/src/components/build/ExecutionCanvas.tsx
+frontend/src/components/build/ExecutionCanvas.terminal.test.tsx
+frontend/src/components/build/ExecutionCanvas.preview.test.tsx
+frontend/src/components/build/ExecutionCanvas.cockpit.test.tsx
+frontend/src/components/build/DeliverablePanel.tsx
+frontend/src/components/build/DeliverablePanel.test.tsx
+frontend/src/components/build/DeckExportBar.tsx
+frontend/src/components/build/DeckExportBar.test.tsx
+frontend/src/components/build/DeckEditorPane.tsx
+frontend/src/components/build/DeckEditorPane.test.tsx
+frontend/src/components/build/ConnectionsStrip.tsx
+frontend/src/components/build/ConfirmationPanel.tsx
+frontend/src/components/build/ClarifyPanel.tsx
+frontend/src/components/build/ClarifyPanel.test.tsx
+frontend/src/components/build/BuildSurface.upload.test.tsx
+frontend/src/components/build/BuildSurface.tsx
+frontend/src/components/build/BuildModelPicker.tsx
+
+codex
+I found the P8D revision block in `disclaude.md`. I’m reading that section with the surrounding original plan now, and I’ll cross-check the existing classifier/oracle structure only where the plan depends on names or wiring points.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba disclaude.md | sed -n '1706,1765p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+  1706	## PR P8D — Targeted-edit & manual-edit oracles — PLAN
+  1707	PATH DEVIATION (flag for gate): plan says harness/oracles/ + harness/tests/, but the real oracle layer is
+  1708	harness/build_soak/oracles/ (zero-opinion OracleResult via schema.passing/failing/skipping + failure_codes with
+  1709	SEVERITY_BY_CODE) tested in harness/build_soak/tests/. Reuse that infra (no parallel oracle framework). Files:
+  1710	harness/build_soak/oracles/targeted_edit.py + manual_edit_preservation.py; tests in harness/build_soak/tests/.
+  1711	ORACLES (pure fns over plain-dict evidence; live producer = P1B-LIVE/soak, like the P1A browser oracles):
+  1712	- TargetedEditOracle: edited_files ⊆ expected_files → else fail TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES (P1).
+  1713	- RewriteAvoidanceOracle: a SMALL-scoped edit's churn_ratio (changed_lines/total_lines) ≤ threshold → else
+  1714	  SMALL_EDIT_FULL_REWRITE (P1). (Threshold gated; only adjudicated when edit_scope=="small".)
+  1715	- ManualEditPreservationOracle: every manual_override snippet still present in the post-edit file → else
+  1716	  MANUAL_EDIT_CLOBBERED (P1).
+  1717	- CommentAnchorOracle: anchors_before ⊆ anchors_after (preserved through text edit; survive a section reorder —
+  1718	  set membership, not position) → else COMMENT_ANCHOR_LOST (P1).
+  1719	- ScreenLabelOracle: for sections NOT in the edit's targets, screen_label_before == screen_label_after (stable) →
+  1720	  else SCREEN_LABEL_UNSTABLE (P2).
+  1721	Each returns passing/skipping (no applicable evidence → SKIP, never silent pass) or failing(code, first_broken_link).
+  1722	New codes added to failure_codes.py + registered in SEVERITY_BY_CODE. Exported from oracles/__init__.py.
+  1723	TESTS (harness/build_soak/tests/): small edit touches expected files only (pass+fail); comment anchor preserved
+  1724	through a text edit; comment anchor survives a section reorder; direct override not clobbered (pass+fail); small
+  1725	CTA edit does not rewrite the whole app (pass+fail); screen-label stability; each oracle SKIPs cleanly with no
+  1726	evidence. PARALLEL: DeepSeek = edit-churn/clobber negative fixtures. SCOPE: the 5 oracles + codes + tests; the
+  1727	live evidence producer is P1B-LIVE.
+  1728	
+  1729	### PR P8D — PLAN REVISION 1 (post gpt-5.5: 4 fixes; path/predicate/SKIP/severity approved)
+  1730	1. EVIDENCE SCHEMA pinned per oracle (each reads ONE named slice of the evidence dict):
+  1731	   - TargetedEditOracle ev["targeted_edit"]={"edited_files":[str],"expected_files":[str]}.
+  1732	   - RewriteAvoidanceOracle ev["rewrite_avoidance"]={"edit_scope":str,"changed_lines":int,"total_lines":int,
+  1733	     "max_churn_ratio":float}.
+  1734	   - ManualEditPreservationOracle ev["manual_edit"]={"overrides":{path:snippet},"final_files":{path:content}}.
+  1735	   - CommentAnchorOracle ev["comment_anchors"]={"before":[str],"after":[str]}.
+  1736	   - ScreenLabelOracle ev["screen_labels"]={"edited_sections":[str],"before":{sec:label},"after":{sec:label}}.
+  1737	   MALFORMED HANDLING: slice ABSENT → SKIP (reason, never silent pass). Slice PRESENT but missing a required key
+  1738	   / wrong type → FAIL with shared code EDIT_ORACLE_EVIDENCE_MALFORMED (P1, a harness-validity-class failure) —
+  1739	   present-but-malformed never silently passes.
+  1740	2. CHURN THRESHOLD evidence-supplied: max_churn_ratio comes from ev["rewrite_avoidance"] (scenario sets it;
+  1741	   recommended default 0.20 documented). Adjudicate ONLY when edit_scope=="small"; ratio=changed/total; facts
+  1742	   carry {edit_scope, changed_lines, total_lines, churn_ratio, max_churn_ratio}. Missing max_churn_ratio →
+  1743	   MALFORMED. total_lines==0 → MALFORMED (no divide-by-zero).
+  1744	3. TESTS add: every oracle SKIPs on absent slice; every oracle FAILs EDIT_ORACLE_EVIDENCE_MALFORMED on a present-
+  1745	   but-malformed slice (missing key / wrong type / total_lines 0).
+  1746	4. CLASSIFY() BOUNDARY explicit: export TARGETED_EDIT_ORACLES tuple + wire it into classify.py exactly like
+  1747	   BROWSER_EVIDENCE_ORACLES (the loop at classify.py:155) — SKIP-safe, so wiring is safe NOW (they SKIP without
+  1748	   evidence); the live evidence PRODUCER is P1B-LIVE. A test asserts classify() with no edit evidence yields SKIPs
+  1749	   (not FAILs) + doesn't regress existing classification.
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba harness/build_soak/classify.py | sed -n '1,240p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""The deterministic classifier (guidelines §13, §16).
+     2	
+     3	Runs the oracle layers in the §16 order; the FIRST broken link wins. The classifier
+     4	is a pure function of durable evidence — it MUST NOT call an LLM, and it ignores any
+     5	agent/Claude/Codex prose ("agent_comments_ignored_for_adjudication": true, §13).
+     6	
+     7	Outcome mapping:
+     8	  * a HarnessValidity / Contract failure (an evidence/contract defect, not a product
+     9	    defect) -> INVALID_RUN (§8): the harness couldn't adjudicate; never a pass.
+    10	  * any product-oracle failure -> FAIL with the code's severity (§12).
+    11	  * no failure -> PASS.
+    12	
+    13	It also implements the §17 no-fluke replay policy as a pure function: a run that
+    14	failed once then passed on exact replay is recorded as FAIL /
+    15	INTERMITTENT_<original_code> (same severity), never PASS — "fluke" has no
+    16	operational meaning.
+    17	"""
+    18	
+    19	from __future__ import annotations
+    20	
+    21	import json
+    22	from pathlib import Path
+    23	from typing import Any
+    24	
+    25	from . import failure_codes as fc
+    26	from .events import NormalizationError, normalize_events
+    27	from .evidence import EvidenceManifest, load_manifest, verify_evidence_unchanged
+    28	from .oracles import (
+    29	    BROWSER_EVIDENCE_ORACLES,
+    30	    ContractOracle,
+    31	    EventChainOracle,
+    32	    HarnessValidityOracle,
+    33	    OutputTruthOracle,
+    34	    ProviderLedgerOracle,
+    35	    RevisionOracle,
+    36	    ToolScopeOracle,
+    37	)
+    38	from .oracles.schema import OracleResult
+    39	
+    40	CLASSIFICATION_NAME = "classification.json"
+    41	
+    42	# Default "likely files" for the most common Build chain breaks (§16 example).
+    43	# Advisory only — surfaced to the repair loop, never adjudicated on.
+    44	_LIKELY_FILES: dict[str, list[str]] = {
+    45	    fc.NO_REPLAN_AFTER_REVISION: [
+    46	        "packages/core/src/disco/core/loop/plans.py",
+    47	        "packages/core/src/disco/core/loop/engine.py",
+    48	        "packages/agent-server/src/disco/agent_server/control_ops.py",
+    49	    ],
+    50	    fc.WRITE_TOOL_ATTEMPTED_IN_PLANNING: [
+    51	        "packages/core/src/disco/core/loop/engine.py",  # _gate_planning_mode
+    52	        "packages/core/src/disco/core/loop/driver.py",
+    53	    ],
+    54	    fc.WRITE_TOOL_ALLOWED_IN_PLANNING: [
+    55	        "packages/core/src/disco/core/loop/engine.py",
+    56	        "packages/core/src/disco/core/loop/driver.py",
+    57	    ],
+    58	    fc.APPROVE_PLAN_NO_EXECUTION: [
+    59	        "packages/core/src/disco/core/loop/finish.py",
+    60	        "packages/core/src/disco/core/loop/engine.py",
+    61	    ],
+    62	    fc.ACTION_NO_OBSERVATION: [
+    63	        "packages/core/src/disco/core/loop/observe.py",
+    64	    ],
+    65	}
+    66	
+    67	
+    68	def classify(
+    69	    events_raw: list[Any],
+    70	    *,
+    71	    scenario: dict[str, Any] | None = None,
+    72	    run_id: str = "",
+    73	    conversation_id: str = "",
+    74	    commit: str = "",
+    75	    seed: int | None = None,
+    76	    evidence_intact: bool = True,
+    77	    available_evidence: set[str] | None = None,
+    78	    workspace_manifest: dict[str, Any] | None = None,
+    79	    preview: dict[str, Any] | None = None,
+    80	    tool_scope: list[dict[str, Any]] | None = None,
+    81	    autonomous: bool | None = None,
+    82	    revision_meta: dict[str, Any] | None = None,
+    83	    provider_ledger: list[dict[str, Any]] | None = None,
+    84	    product_evidence: dict[str, Any] | None = None,
+    85	) -> dict[str, Any]:
+    86	    """Classify one run from its raw event log (full-event dicts OR DB rows) plus
+    87	    optional captured evidence. Returns the §13 classification dict.
+    88	
+    89	    `autonomous`, when given (e.g. from the run manifest), overrides the scenario's
+    90	    autonomy: an autonomous build legitimately skips the AWAITING_PLAN_APPROVAL gate
+    91	    (it auto-approves inline), so the event-chain approval-ordering check relaxes the
+    92	    awaiting link for it."""
+    93	    # An explicit autonomous flag (manifest) overrides the scenario declaration.
+    94	    if autonomous is not None:
+    95	        scenario = {**(scenario or {}), "autonomous": autonomous}
+    96	
+    97	    # Normalize the event log; a parse failure is a harness-validity defect.
+    98	    parse_ok = True
+    99	    try:
+   100	        events = normalize_events(events_raw)
+   101	    except (NormalizationError, ValueError, TypeError):
+   102	        events, parse_ok = [], False
+   103	
+   104	    # The evidence categories actually captured for this run — derived from the
+   105	    # supplied kwargs so the ContractOracle judges what we really have (a caller
+   106	    # may also pass an explicit set, which we union in).
+   107	    present: set[str] = set(available_evidence or set())
+   108	    present.add("events")
+   109	    if workspace_manifest is not None:
+   110	        present.add("workspace")
+   111	    if preview is not None:
+   112	        present.add("preview")
+   113	    if tool_scope is not None:
+   114	        present.add("tool_scope")
+   115	
+   116	    results: list[OracleResult] = []
+   117	
+   118	    # 1. harness validity (evidence integrity + parse + presence).
+   119	    results += HarnessValidityOracle().check(
+   120	        events, evidence_intact=evidence_intact, parse_ok=parse_ok
+   121	    )
+   122	    first_fail = _first_fail(results)
+   123	    if first_fail is None:
+   124	        # 2. scenario contract.
+   125	        results += ContractOracle().check(scenario, available_evidence=present)
+   126	        first_fail = _first_fail(results)
+   127	    if first_fail is None:
+   128	        # 3. event chain.
+   129	        results += EventChainOracle().check(events, scenario=scenario)
+   130	        first_fail = _first_fail(results)
+   131	    if first_fail is None:
+   132	        # 4. tool scope.
+   133	        results += ToolScopeOracle().check(events, scenario=scenario, tool_scope=tool_scope)
+   134	        first_fail = _first_fail(results)
+   135	    if first_fail is None:
+   136	        # 5. revision.
+   137	        results += RevisionOracle().check(events, scenario=scenario, meta=revision_meta)
+   138	        first_fail = _first_fail(results)
+   139	    if first_fail is None:
+   140	        # 6. output truth.
+   141	        results += OutputTruthOracle().check(
+   142	            events, scenario=scenario, workspace_manifest=workspace_manifest, preview=preview
+   143	        )
+   144	        first_fail = _first_fail(results)
+   145	    if first_fail is None:
+   146	        # 7. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
+   147	        results += ProviderLedgerOracle().check(
+   148	            events, scenario=scenario, provider_ledger=provider_ledger
+   149	        )
+   150	        first_fail = _first_fail(results)
+   151	    if first_fail is None:
+   152	        # 8. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
+   153	        # slice, so a headless run (product_evidence is None) is unaffected; a product-
+   154	        # harness run enforces the real UI path.
+   155	        for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
+   156	            results += _oracle_cls().check(product_evidence=product_evidence)
+   157	            first_fail = _first_fail(results)
+   158	            if first_fail is not None:
+   159	                break
+   160	
+   161	    required_evidence_present = not any(
+   162	        r.failed and r.code in fc.HARNESS_VALIDITY_CODES for r in results
+   163	    )
+   164	
+   165	    if first_fail is None:
+   166	        status, severity, code, broken, facts = fc.PASS, fc.NONE, None, None, {}
+   167	    elif first_fail.code in fc.HARNESS_VALIDITY_CODES:
+   168	        status, severity = fc.INVALID_RUN, fc.NONE
+   169	        code, broken, facts = first_fail.code, first_fail.first_broken_link, dict(first_fail.facts)
+   170	    else:
+   171	        status = fc.FAIL
+   172	        code = first_fail.code or fc.UNKNOWN_FAILURE
+   173	        severity = fc.severity_for(code)
+   174	        broken, facts = first_fail.first_broken_link, dict(first_fail.facts)
+   175	
+   176	    classification: dict[str, Any] = {
+   177	        "status": status,
+   178	        "severity": severity,
+   179	        "code": code,
+   180	        "first_broken_link": broken,
+   181	        "scenario_id": (scenario or {}).get("id") if scenario else None,
+   182	        "run_id": run_id,
+   183	        "conversation_id": conversation_id,
+   184	        "commit": commit,
+   185	        "seed": seed,
+   186	        "facts": facts,
+   187	        "oracle_results": [r.to_dict() for r in results],
+   188	        "required_evidence_present": required_evidence_present,
+   189	        "replay": {"attempted": False, "result": "not_attempted", "run_id": None},
+   190	        "accepted_by": "oracle",
+   191	        "agent_comments_ignored_for_adjudication": True,
+   192	    }
+   193	    if code and code in _LIKELY_FILES:
+   194	        classification["likely_files"] = list(_LIKELY_FILES[code])
+   195	    return classification
+   196	
+   197	
+   198	def _first_fail(results: list[OracleResult]) -> OracleResult | None:
+   199	    for r in results:
+   200	        if r.failed:
+   201	            return r
+   202	    return None
+   203	
+   204	
+   205	def classify_run_folder(
+   206	    folder: str | Path, *, scenario: dict[str, Any] | None = None
+   207	) -> dict[str, Any]:
+   208	    """Classify a frozen run folder: load the manifest, verify evidence integrity
+   209	    (a mismatch -> INVALID_RUN), read the event log, classify, and write
+   210	    classification.json into the folder. Returns the classification dict."""
+   211	    base = Path(folder)
+   212	    manifest: EvidenceManifest | None = None
+   213	    evidence_intact = True
+   214	    try:
+   215	        manifest = load_manifest(base)
+   216	        integrity = verify_evidence_unchanged(base, manifest)
+   217	        evidence_intact = integrity.intact
+   218	    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+   219	        manifest = None
+   220	
+   221	    events_raw: list[Any] = []
+   222	    events_rel = (manifest.evidence_files.get("events") if manifest else None) or "events.jsonl"
+   223	    events_path = base / events_rel
+   224	    if not events_path.is_file():
+   225	        # try the conventional conversation-scoped path
+   226	        for candidate in base.rglob("events.jsonl"):
+   227	            events_path = candidate
+   228	            break
+   229	    if events_path.is_file():
+   230	        events_raw = _read_jsonl(events_path)
+   231	
+   232	    # HARN-1a: the provider-call ledger (MiniMax-only / no-OpenRouter enforcement).
+   233	    # Read it if present anywhere in the run folder; absent → the oracle SKIPs (or
+   234	    # fails closed if the scenario requires it). A malformed line is NOT silently
+   235	    # dropped (that would under-report a forbidden call) nor crashes classification —
+   236	    # it becomes a hostless record the ProviderLedgerOracle fails on as an evidence gap.
+   237	    provider_ledger: list[dict[str, Any]] | None = None
+   238	    ledger_path = base / "provider-call-ledger.jsonl"
+   239	    if not ledger_path.is_file():
+   240	        ledger_path = next(iter(base.rglob("provider-call-ledger.jsonl")), ledger_path)
+
+exec
+/bin/bash -lc "nl -ba harness/build_soak/oracles/browser_evidence.py | sed -n '1,260p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""HARN-2 — the browser product-harness oracles.
+     2	
+     3	These eight zero-opinion oracles judge the REAL product path (not just that the
+     4	engine wrote files) over the browser evidence HARN-1b captures into a single
+     5	``product_evidence`` dict. Each oracle reads its own slice; when the slice is absent
+     6	(a headless run, or HARN-1b not yet wired) it SKIPS — so these never affect headless
+     7	classification until a product-harness run supplies the evidence.
+     8	
+     9	product_evidence (the HARN-1b dossier, all keys optional):
+    10	    {
+    11	      "browser_ws":   {"connections": int, "closes": [{"code": int, "reason": str}]},
+    12	      "lifecycle":    {"statuses": ["RUNNING", ...], "terminal": "FINISHED"|...},
+    13	      "sidecar":      {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
+    14	      "preview":      {"owner": "platform"|"model", "manual_port": bool,
+    15	                       "shown_to_user": bool, "url": str},
+    16	      "shown":        {"artifact_shown": bool, "preview_shown": bool},
+    17	      "verification": {"ready_for_verification_called": bool, "passed": bool},
+    18	      "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
+    19	      "cleanup":      {"orphans": int, "workspace_released": bool},
+    20	    }
+    21	"""
+    22	
+    23	from __future__ import annotations
+    24	
+    25	from typing import Any
+    26	
+    27	from .. import failure_codes as fc
+    28	from .schema import OracleResult, failing, passing, skipping
+    29	
+    30	_TERMINAL_OK = frozenset({"FINISHED", "VERIFIED"})
+    31	
+    32	
+    33	def _slice(product_evidence: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+    34	    if not product_evidence:
+    35	        return None
+    36	    val = product_evidence.get(key)
+    37	    return val if isinstance(val, dict) else None
+    38	
+    39	
+    40	def _int(v: Any) -> int | None:
+    41	    """Safe int coercion: returns None for a missing/non-numeric/bool value so a
+    42	    malformed count can be handled fail-closed instead of crashing classification."""
+    43	    if isinstance(v, bool) or v is None:
+    44	        return None
+    45	    try:
+    46	        return int(v)
+    47	    except (TypeError, ValueError):
+    48	        return None
+    49	
+    50	
+    51	class BrowserWSOracle:
+    52	    """The real browser opened (and kept) a build WebSocket — the 'silently dropped'
+    53	    bug class where the UI never connects yet the engine runs blind."""
+    54	
+    55	    _NAME = "browser_ws"
+    56	
+    57	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+    58	        ws = _slice(product_evidence, "browser_ws")
+    59	        if ws is None:
+    60	            return [skipping(self._NAME, reason="no browser_ws evidence (headless run)")]
+    61	        conns = _int(ws.get("connections"))
+    62	        if conns is None or conns <= 0:  # missing/malformed/zero → fail-closed
+    63	            return [
+    64	                failing(
+    65	                    self._NAME,
+    66	                    fc.BROWSER_WS_NOT_CONNECTED,
+    67	                    first_broken_link="build -> browser_ws_connected",
+    68	                    facts={"connections": ws.get("connections")},
+    69	                )
+    70	            ]
+    71	        return [passing(self._NAME, facts={"connections": conns})]
+    72	
+    73	
+    74	class LifecycleOracle:
+    75	    """The conversation status progressed to a clean terminal (no RUNNING-forever,
+    76	    no missing terminal)."""
+    77	
+    78	    _NAME = "lifecycle"
+    79	
+    80	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+    81	        lc = _slice(product_evidence, "lifecycle")
+    82	        if lc is None:
+    83	            return [skipping(self._NAME, reason="no lifecycle evidence (headless run)")]
+    84	        terminal = str(lc.get("terminal") or "")
+    85	        if terminal not in _TERMINAL_OK:
+    86	            return [
+    87	                failing(
+    88	                    self._NAME,
+    89	                    fc.LIFECYCLE_SEQUENCE_INVALID,
+    90	                    first_broken_link="build -> clean_terminal",
+    91	                    facts={"terminal": terminal or None, "statuses": lc.get("statuses")},
+    92	                )
+    93	            ]
+    94	        return [passing(self._NAME, facts={"terminal": terminal})]
+    95	
+    96	
+    97	class SidecarStopOracle:
+    98	    """The Pi sidecar (and provider calls) stopped at the terminal state — no runaway
+    99	    token burn."""
+   100	
+   101	    _NAME = "sidecar_stop"
+   102	
+   103	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+   104	        sc = _slice(product_evidence, "sidecar")
+   105	        if sc is None:
+   106	            return [skipping(self._NAME, reason="no sidecar evidence (headless run)")]
+   107	        calls_after = _int(sc.get("provider_calls_after_terminal", 0))
+   108	        # require an EXPLICIT stop + a well-formed zero post-terminal call count.
+   109	        if sc.get("stopped_at_terminal", False) is not True or calls_after is None or calls_after > 0:
+   110	            return [
+   111	                failing(
+   112	                    self._NAME,
+   113	                    fc.SIDECAR_NOT_STOPPED,
+   114	                    first_broken_link="terminal -> sidecar_stopped",
+   115	                    facts={
+   116	                        "stopped_at_terminal": sc.get("stopped_at_terminal"),
+   117	                        "provider_calls_after_terminal": sc.get("provider_calls_after_terminal"),
+   118	                    },
+   119	                )
+   120	            ]
+   121	        return [passing(self._NAME)]
+   122	
+   123	
+   124	class PreviewOwnershipOracle:
+   125	    """The PLATFORM owned the preview port/URL — the model never hand-served a port."""
+   126	
+   127	    _NAME = "preview_ownership"
+   128	
+   129	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+   130	        pv = _slice(product_evidence, "preview")
+   131	        if pv is None:
+   132	            return [skipping(self._NAME, reason="no preview evidence (headless run)")]
+   133	        # fail-closed: require the owner to be EXPLICITLY "platform" (a missing/unknown
+   134	        # owner cannot prove the platform owned the port) and manual_port not set.
+   135	        if pv.get("owner") != "platform" or pv.get("manual_port", False) is True:
+   136	            return [
+   137	                failing(
+   138	                    self._NAME,
+   139	                    fc.PREVIEW_OWNERSHIP_VIOLATION,
+   140	                    first_broken_link="preview -> platform_owned",
+   141	                    facts={"owner": pv.get("owner"), "manual_port": pv.get("manual_port")},
+   142	                )
+   143	            ]
+   144	        return [passing(self._NAME)]
+   145	
+   146	
+   147	class ShowToUserOracle:
+   148	    """The artifact/preview was actually SHOWN to the user — file existence is not the
+   149	    same as the UI presenting it."""
+   150	
+   151	    _NAME = "show_to_user"
+   152	
+   153	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+   154	        shown = _slice(product_evidence, "shown")
+   155	        if shown is None:
+   156	            return [skipping(self._NAME, reason="no shown evidence (headless run)")]
+   157	        if not (shown.get("artifact_shown", False) or shown.get("preview_shown", False)):
+   158	            return [
+   159	                failing(
+   160	                    self._NAME,
+   161	                    fc.ARTIFACT_NOT_SHOWN_TO_USER,
+   162	                    first_broken_link="finish -> shown_to_user",
+   163	                    facts={k: bool(shown.get(k, False)) for k in ("artifact_shown", "preview_shown")},
+   164	                )
+   165	            ]
+   166	        return [passing(self._NAME)]
+   167	
+   168	
+   169	class VerificationGateOracle:
+   170	    """Completion went THROUGH the host-owned verification finalizer (ready_for_*_
+   171	    verification), not a model self-declared finish."""
+   172	
+   173	    _NAME = "verification_gate"
+   174	
+   175	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+   176	        vf = _slice(product_evidence, "verification")
+   177	        if vf is None:
+   178	            return [skipping(self._NAME, reason="no verification evidence (headless run)")]
+   179	        # fail-closed: require BOTH flags explicitly True.
+   180	        if vf.get("ready_for_verification_called", False) is not True or vf.get("passed", False) is not True:
+   181	            return [
+   182	                failing(
+   183	                    self._NAME,
+   184	                    fc.VERIFICATION_GATE_BYPASSED,
+   185	                    first_broken_link="finish -> verification_gate",
+   186	                    facts={
+   187	                        "ready_for_verification_called": bool(vf.get("ready_for_verification_called", False)),
+   188	                        "passed": bool(vf.get("passed", False)),
+   189	                    },
+   190	                )
+   191	            ]
+   192	        return [passing(self._NAME)]
+   193	
+   194	
+   195	class ExportDownloadOracle:
+   196	    """When an export was requested, a real download was delivered (non-empty)."""
+   197	
+   198	    _NAME = "export_download"
+   199	
+   200	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+   201	        ex = _slice(product_evidence, "export")
+   202	        if ex is None:
+   203	            return [skipping(self._NAME, reason="no export evidence (headless run)")]
+   204	        if not ex.get("requested", False):
+   205	            return [skipping(self._NAME, reason="no export requested")]
+   206	        nbytes = _int(ex.get("download_bytes", 0))
+   207	        if ex.get("download_present", False) is not True or nbytes is None or nbytes <= 0:
+   208	            return [
+   209	                failing(
+   210	                    self._NAME,
+   211	                    fc.EXPORT_DOWNLOAD_MISSING,
+   212	                    first_broken_link="export -> download_delivered",
+   213	                    facts={
+   214	                        "download_present": ex.get("download_present"),
+   215	                        "download_bytes": ex.get("download_bytes"),
+   216	                    },
+   217	                )
+   218	            ]
+   219	        return [passing(self._NAME, facts={"download_bytes": nbytes})]
+   220	
+   221	
+   222	class CleanupOracle:
+   223	    """No orphan container/sandbox/preview survived the terminal state."""
+   224	
+   225	    _NAME = "cleanup"
+   226	
+   227	    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+   228	        cu = _slice(product_evidence, "cleanup")
+   229	        if cu is None:
+   230	            return [skipping(self._NAME, reason="no cleanup evidence (headless run)")]
+   231	        orphans = _int(cu.get("orphans", 0))
+   232	        # fail-closed: malformed orphan count, any orphan, or a non-explicit release.
+   233	        if orphans is None or orphans > 0 or cu.get("workspace_released", False) is not True:
+   234	            return [
+   235	                failing(
+   236	                    self._NAME,
+   237	                    fc.WORKSPACE_NOT_CLEANED,
+   238	                    first_broken_link="terminal -> resources_released",
+   239	                    facts={"orphans": cu.get("orphans"), "workspace_released": cu.get("workspace_released")},
+   240	                )
+   241	            ]
+   242	        return [passing(self._NAME, facts={"orphans": 0})]
+   243	
+   244	
+   245	# The ordered family the classifier runs (each SKIPs without its evidence slice).
+   246	BROWSER_EVIDENCE_ORACLES = (
+   247	    BrowserWSOracle,
+   248	    LifecycleOracle,
+   249	    SidecarStopOracle,
+   250	    PreviewOwnershipOracle,
+   251	    ShowToUserOracle,
+   252	    VerificationGateOracle,
+   253	    ExportDownloadOracle,
+   254	    CleanupOracle,
+   255	)
+
+exec
+/bin/bash -lc "nl -ba harness/build_soak/oracles/__init__.py | sed -n '1,240p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""Objective oracle layers (guidelines §10). Each emits structured OracleResult
+     2	facts — never prose — and never calls an LLM.
+     3	
+     4	This foundation slice ships the deterministic, event-log-adjudicable layers:
+     5	HarnessValidity, Contract, EventChain, ToolScope, Revision, OutputTruth. The
+     6	UI/Transport/Runtime oracles belong to the later live/UI-runner slices.
+     7	"""
+     8	
+     9	from __future__ import annotations
+    10	
+    11	from .browser_evidence import (
+    12	    BROWSER_EVIDENCE_ORACLES,
+    13	    BrowserWSOracle,
+    14	    CleanupOracle,
+    15	    ExportDownloadOracle,
+    16	    LifecycleOracle,
+    17	    PreviewOwnershipOracle,
+    18	    ShowToUserOracle,
+    19	    SidecarStopOracle,
+    20	    VerificationGateOracle,
+    21	)
+    22	from .contract import ContractOracle
+    23	from .event_chain import EventChainOracle
+    24	from .harness_validity import HarnessValidityOracle
+    25	from .output_truth import OutputTruthOracle
+    26	from .provider_ledger import ProviderLedgerOracle
+    27	from .revision import RevisionOracle
+    28	from .schema import OracleResult, failing, passing, skipping
+    29	from .tool_scope import ToolScopeOracle
+    30	
+    31	__all__ = [
+    32	    "BROWSER_EVIDENCE_ORACLES",
+    33	    "BrowserWSOracle",
+    34	    "CleanupOracle",
+    35	    "ContractOracle",
+    36	    "EventChainOracle",
+    37	    "ExportDownloadOracle",
+    38	    "HarnessValidityOracle",
+    39	    "LifecycleOracle",
+    40	    "OracleResult",
+    41	    "OutputTruthOracle",
+    42	    "PreviewOwnershipOracle",
+    43	    "ProviderLedgerOracle",
+    44	    "RevisionOracle",
+    45	    "ShowToUserOracle",
+    46	    "SidecarStopOracle",
+    47	    "ToolScopeOracle",
+    48	    "VerificationGateOracle",
+    49	    "failing",
+    50	    "passing",
+    51	    "skipping",
+    52	]
+
+codex
+The revision text matches the requested shape at a high level. I’m checking one possible edge now: whether the malformed evidence code is supposed to be a product P1 failure or an `INVALID_RUN` harness-validity failure, because the surrounding classifier treats those categories differently.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba harness/build_soak/failure_codes.py | sed -n '1,260p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""The Build Soak failure taxonomy (guidelines §12) + run outcomes (§8).
+     2	
+     3	Every `FAIL` must carry a code that lives here, with a known severity. No generic
+     4	"failed" bucket is allowed in promotion runs. `UNKNOWN_FAILURE` exists for
+     5	development only and is P0 until the classifier learns the case (§13).
+     6	
+     7	Codes are plain string constants (not an enum) so a frozen evidence
+     8	`classification.json` round-trips byte-for-byte without enum-name coupling, and so
+     9	this module stays import-free / disco-free.
+    10	"""
+    11	
+    12	from __future__ import annotations
+    13	
+    14	# ---- run outcomes (§8) ------------------------------------------------------
+    15	
+    16	PASS = "PASS"
+    17	FAIL = "FAIL"
+    18	INVALID_RUN = "INVALID_RUN"
+    19	INFRA_FAILURE = "INFRA_FAILURE"
+    20	
+    21	OUTCOMES = frozenset({PASS, FAIL, INVALID_RUN, INFRA_FAILURE})
+    22	
+    23	# ---- severities (§12) -------------------------------------------------------
+    24	
+    25	P0 = "P0"  # release blocker
+    26	P1 = "P1"  # major reliability bug
+    27	P2 = "P2"  # quality bug
+    28	NONE = "NONE"  # PASS / no failure
+    29	
+    30	SEVERITIES = frozenset({P0, P1, P2, NONE})
+    31	
+    32	# ---- P0 — release blockers (§12) --------------------------------------------
+    33	
+    34	NO_USER_EVENT_AFTER_SUBMIT = "NO_USER_EVENT_AFTER_SUBMIT"
+    35	NO_PLAN_AFTER_USER_TURN = "NO_PLAN_AFTER_USER_TURN"
+    36	NO_REPLAN_AFTER_REVISION = "NO_REPLAN_AFTER_REVISION"
+    37	WRITE_TOOL_ALLOWED_IN_PLANNING = "WRITE_TOOL_ALLOWED_IN_PLANNING"
+    38	WRITE_TOOL_ATTEMPTED_IN_PLANNING = "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
+    39	WRONG_TOOL_REJECTION_ABORTS_LOOP = "WRONG_TOOL_REJECTION_ABORTS_LOOP"
+    40	APPROVE_PLAN_NO_EXECUTION = "APPROVE_PLAN_NO_EXECUTION"
+    41	DUPLICATE_EXECUTION_AFTER_APPROVAL = "DUPLICATE_EXECUTION_AFTER_APPROVAL"
+    42	EXECUTION_NO_ACTION = "EXECUTION_NO_ACTION"
+    43	ACTION_NO_OBSERVATION = "ACTION_NO_OBSERVATION"
+    44	FALSE_FINISH_NO_OUTPUT = "FALSE_FINISH_NO_OUTPUT"
+    45	FALSE_FINISH_PREVIEW_BROKEN = "FALSE_FINISH_PREVIEW_BROKEN"
+    46	DUPLICATE_KICK_ON_RESUME = "DUPLICATE_KICK_ON_RESUME"
+    47	EVENT_LOG_STATE_DIVERGENCE = "EVENT_LOG_STATE_DIVERGENCE"
+    48	WS_FRAME_DROPPED_NO_ERROR = "WS_FRAME_DROPPED_NO_ERROR"
+    49	UI_ENABLED_DEAD_CONTROL = "UI_ENABLED_DEAD_CONTROL"
+    50	UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+    51	
+    52	# ---- P1 — major reliability bugs (§12) --------------------------------------
+    53	
+    54	PLAN_REVISION_NOT_INCREMENTED = "PLAN_REVISION_NOT_INCREMENTED"
+    55	STALE_PLAN_USED_AFTER_FOLLOWUP = "STALE_PLAN_USED_AFTER_FOLLOWUP"
+    56	PLAN_APPROVED_STATUS_MISSING = "PLAN_APPROVED_STATUS_MISSING"
+    57	TOOL_SCOPE_MISMATCH = "TOOL_SCOPE_MISMATCH"
+    58	TOOL_REJECTION_NOT_VISIBLE_TO_MODEL = "TOOL_REJECTION_NOT_VISIBLE_TO_MODEL"
+    59	MODEL_TOLD_WRONG_MODE = "MODEL_TOLD_WRONG_MODE"
+    60	STUCK_RUNNING_NO_EVENTS = "STUCK_RUNNING_NO_EVENTS"
+    61	PREVIEW_TRUTH_MISMATCH = "PREVIEW_TRUTH_MISMATCH"
+    62	ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
+    63	# CXT-5: a final deliverable contains DESTRUCTIVE elision (an "(elided)"/"[trimmed]"/
+    64	# "content omitted"/"truncated for brevity" marker with NO recover cue) — unrecoverable
+    65	# placeholder text shipped into a deliverable. Rule set v1 (disco.core.observations).
+    66	DESTRUCTIVE_ELISION = "DESTRUCTIVE_ELISION"
+    67	# P1/HARN-1a: provider-ledger violations of the soak constraint. A provider call went
+    68	# to a FORBIDDEN host (e.g. openrouter) or a host that isn't the required one; used the
+    69	# WRONG model (not the pinned soak model); or fired AFTER the conversation went terminal
+    70	# (runaway burn). These enforce the MiniMax-only / no-OpenRouter / zero-calls-after-terminal
+    71	# rule from the provider-call-ledger evidence. All P0.
+    72	PROVIDER_FORBIDDEN = "PROVIDER_FORBIDDEN"
+    73	PROVIDER_WRONG_MODEL = "PROVIDER_WRONG_MODEL"
+    74	PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
+    75	# P1/HARN-2: browser product-harness oracle violations (judged over the HARN-1b browser
+    76	# evidence streams). These prove the REAL UI path — not just that the engine built files.
+    77	BROWSER_WS_NOT_CONNECTED = "BROWSER_WS_NOT_CONNECTED"  # UI never opened the build WS
+    78	LIFECYCLE_SEQUENCE_INVALID = "LIFECYCLE_SEQUENCE_INVALID"  # bad status progression / no clean terminal
+    79	SIDECAR_NOT_STOPPED = "SIDECAR_NOT_STOPPED"  # sidecar/provider alive after terminal
+    80	PREVIEW_OWNERSHIP_VIOLATION = "PREVIEW_OWNERSHIP_VIOLATION"  # model owned a port/url, not the platform
+    81	ARTIFACT_NOT_SHOWN_TO_USER = "ARTIFACT_NOT_SHOWN_TO_USER"  # file exists but UI never showed it
+    82	VERIFICATION_GATE_BYPASSED = "VERIFICATION_GATE_BYPASSED"  # finished without ready_for_*_verification
+    83	EXPORT_DOWNLOAD_MISSING = "EXPORT_DOWNLOAD_MISSING"  # export claimed but no real download
+    84	WORKSPACE_NOT_CLEANED = "WORKSPACE_NOT_CLEANED"  # orphan container/sandbox/preview after terminal
+    85	NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
+    86	OBSERVATION_WITHOUT_ACTION = "OBSERVATION_WITHOUT_ACTION"
+    87	WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
+    88	# The run was required to FINISH and deliver output (scenario asserts
+    89	# workspace/preview output and/or terminal_status_in) but ended at a non-finished,
+    90	# non-required terminal — e.g. a no-progress / actionless PAUSE, or never reached a
+    91	# terminal at all. NOT a "false finish" (nothing claimed finished); a "never
+    92	# finished". Fail-closed: a build that does not complete is not a PASS even if some
+    93	# files happen to exist (migration 2026_06_24_paused_incomplete_not_pass).
+    94	BUILD_DID_NOT_FINISH = "BUILD_DID_NOT_FINISH"
+    95	
+    96	# ---- P2 — quality bugs (§12) ------------------------------------------------
+    97	
+    98	SLOW_FIRST_PLAN = "SLOW_FIRST_PLAN"
+    99	EXCESSIVE_READS_BEFORE_PLAN = "EXCESSIVE_READS_BEFORE_PLAN"
+   100	MISSING_DONE_CONDITIONS = "MISSING_DONE_CONDITIONS"
+   101	LOW_QUALITY_PLAN = "LOW_QUALITY_PLAN"
+   102	MISSING_PROGRESS_EVENTS = "MISSING_PROGRESS_EVENTS"
+   103	WEAK_FINAL_SUMMARY = "WEAK_FINAL_SUMMARY"
+   104	
+   105	# ---- harness-validity codes (§8 INVALID_RUN) --------------------------------
+   106	# These do NOT describe a product failure; they say the harness did not collect
+   107	# enough durable evidence to adjudicate. The classifier maps them to INVALID_RUN.
+   108	
+   109	NO_EVENTS = "NO_EVENTS"
+   110	UNPARSEABLE_EVENTS = "UNPARSEABLE_EVENTS"
+   111	EVIDENCE_HASH_MISMATCH = "EVIDENCE_HASH_MISMATCH"
+   112	MISSING_REQUIRED_EVIDENCE = "MISSING_REQUIRED_EVIDENCE"
+   113	SCENARIO_CONTRACT_UNSATISFIABLE = "SCENARIO_CONTRACT_UNSATISFIABLE"
+   114	# A POST-create runner-side outcome that is NOT adjudicable as a product result: the
+   115	# runner could not obtain a terminal verdict. RUN_INTERRUPTED — a mid-run transport loss
+   116	# (server crashed / network dropped). RUN_TIMEOUT_WHILE_PROGRESSING (Bug 15) — the hard
+   117	# cap was hit while the build was STILL actively progressing (a slow-but-advancing build
+   118	# cut off mid-flight), so it must NOT be recorded as a product BUILD_DID_NOT_FINISH; §17
+   119	# re-runs an INVALID_RUN instead of freezing a false product failure.
+   120	RUN_INTERRUPTED = "RUN_INTERRUPTED"
+   121	RUN_TIMEOUT_WHILE_PROGRESSING = "RUN_TIMEOUT_WHILE_PROGRESSING"
+   122	# The host ProjectStore workspace snapshot never reached the build's AGENT-FINAL state
+   123	# within the snapshot-wait budget — i.e. the snapshot's on-disk bytes for a declared file
+   124	# never matched what the agent last wrote to it (a stale/slow flush, or a multi-revision
+   125	# build whose later-revision bytes had not yet flushed). This is NOT a product
+   126	# ARTIFACT_TRUTH_MISMATCH (the harness read the snapshot before it settled): the collect
+   127	# FAILS FAST here rather than laundering a stale capture into a false product failure or a
+   128	# silent best-effort pass, so §17 re-runs it. Bounded — never hangs.
+   129	WORKSPACE_SNAPSHOT_NOT_READY = "WORKSPACE_SNAPSHOT_NOT_READY"
+   130	# A content (must_contain / must_not_contain / exact) assertion mismatched, but EVERY
+   131	# mismatching file was captured on a NON-AUTHORITATIVE basis (`unproven_extended_stability`
+   132	# / `unknown` — accepted via extended content-stability, with NO file_write raw-sha and no
+   133	# qualifying full readback to prove the bytes). The captured snapshot may be a stale
+   134	# pre-flush copy while the ProjectStore is actually correct, so the mismatch is UNRELIABLE
+   135	# and must NOT be reported as a definitive product ARTIFACT_TRUTH_MISMATCH. It is recorded
+   136	# as harness-validity evidence → INVALID_RUN so §17 re-runs it. A mismatch on a PROVEN basis
+   137	# (raw_sha / rendered_readback / absent) in the SAME run always WINS this fold and stays a
+   138	# hard ARTIFACT_TRUTH_MISMATCH (a proven regression is NEVER masked by an unproven one).
+   139	WORKSPACE_SNAPSHOT_UNVERIFIED = "WORKSPACE_SNAPSHOT_UNVERIFIED"
+   140	
+   141	HARNESS_VALIDITY_CODES = frozenset(
+   142	    {
+   143	        NO_EVENTS,
+   144	        UNPARSEABLE_EVENTS,
+   145	        EVIDENCE_HASH_MISMATCH,
+   146	        MISSING_REQUIRED_EVIDENCE,
+   147	        SCENARIO_CONTRACT_UNSATISFIABLE,
+   148	        RUN_INTERRUPTED,
+   149	        RUN_TIMEOUT_WHILE_PROGRESSING,
+   150	        WORKSPACE_SNAPSHOT_NOT_READY,
+   151	        WORKSPACE_SNAPSHOT_UNVERIFIED,
+   152	    }
+   153	)
+   154	
+   155	
+   156	# The severity of every product failure code. (Harness-validity codes are not in
+   157	# here — they resolve to INVALID_RUN, which has its own outcome, not a severity.)
+   158	SEVERITY_BY_CODE: dict[str, str] = {
+   159	    # P0
+   160	    NO_USER_EVENT_AFTER_SUBMIT: P0,
+   161	    NO_PLAN_AFTER_USER_TURN: P0,
+   162	    NO_REPLAN_AFTER_REVISION: P0,
+   163	    WRITE_TOOL_ALLOWED_IN_PLANNING: P0,
+   164	    WRITE_TOOL_ATTEMPTED_IN_PLANNING: P0,
+   165	    WRONG_TOOL_REJECTION_ABORTS_LOOP: P0,
+   166	    APPROVE_PLAN_NO_EXECUTION: P0,
+   167	    DUPLICATE_EXECUTION_AFTER_APPROVAL: P0,
+   168	    EXECUTION_NO_ACTION: P0,
+   169	    ACTION_NO_OBSERVATION: P0,
+   170	    FALSE_FINISH_NO_OUTPUT: P0,
+   171	    FALSE_FINISH_PREVIEW_BROKEN: P0,
+   172	    DUPLICATE_KICK_ON_RESUME: P0,
+   173	    EVENT_LOG_STATE_DIVERGENCE: P0,
+   174	    WS_FRAME_DROPPED_NO_ERROR: P0,
+   175	    UI_ENABLED_DEAD_CONTROL: P0,
+   176	    PROVIDER_FORBIDDEN: P0,
+   177	    PROVIDER_WRONG_MODEL: P0,
+   178	    PROVIDER_CALL_AFTER_TERMINAL: P0,
+   179	    BROWSER_WS_NOT_CONNECTED: P0,
+   180	    LIFECYCLE_SEQUENCE_INVALID: P0,
+   181	    SIDECAR_NOT_STOPPED: P0,
+   182	    PREVIEW_OWNERSHIP_VIOLATION: P0,
+   183	    ARTIFACT_NOT_SHOWN_TO_USER: P0,
+   184	    VERIFICATION_GATE_BYPASSED: P0,
+   185	    EXPORT_DOWNLOAD_MISSING: P0,
+   186	    WORKSPACE_NOT_CLEANED: P0,
+   187	    UNKNOWN_FAILURE: P0,
+   188	    # P1
+   189	    PLAN_REVISION_NOT_INCREMENTED: P1,
+   190	    STALE_PLAN_USED_AFTER_FOLLOWUP: P1,
+   191	    PLAN_APPROVED_STATUS_MISSING: P1,
+   192	    TOOL_SCOPE_MISMATCH: P1,
+   193	    TOOL_REJECTION_NOT_VISIBLE_TO_MODEL: P1,
+   194	    MODEL_TOLD_WRONG_MODE: P1,
+   195	    STUCK_RUNNING_NO_EVENTS: P1,
+   196	    PREVIEW_TRUTH_MISMATCH: P1,
+   197	    ARTIFACT_TRUTH_MISMATCH: P1,
+   198	    DESTRUCTIVE_ELISION: P1,
+   199	    NO_CLEAR_FAILURE_TO_USER: P1,
+   200	    OBSERVATION_WITHOUT_ACTION: P1,
+   201	    WRITE_BEFORE_REVISION_APPROVAL: P1,
+   202	    BUILD_DID_NOT_FINISH: P1,
+   203	    # P2
+   204	    SLOW_FIRST_PLAN: P2,
+   205	    EXCESSIVE_READS_BEFORE_PLAN: P2,
+   206	    MISSING_DONE_CONDITIONS: P2,
+   207	    LOW_QUALITY_PLAN: P2,
+   208	    MISSING_PROGRESS_EVENTS: P2,
+   209	    WEAK_FINAL_SUMMARY: P2,
+   210	}
+   211	
+   212	# Every product failure code, for validation.
+   213	PRODUCT_FAILURE_CODES = frozenset(SEVERITY_BY_CODE)
+   214	
+   215	# The "intermittent" prefix (§17): a run that failed once then passed on exact
+   216	# replay is recorded as FAIL with code INTERMITTENT_<original_code>, same severity.
+   217	INTERMITTENT_PREFIX = "INTERMITTENT_"
+   218	
+   219	
+   220	def severity_for(code: str) -> str:
+   221	    """Severity for a (possibly INTERMITTENT_-prefixed) failure code. Unknown
+   222	    codes are treated as P0 (§13: an unclassified failure is a release blocker)."""
+   223	    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+   224	    return SEVERITY_BY_CODE.get(base, P0)
+   225	
+   226	
+   227	def is_known_code(code: str) -> bool:
+   228	    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+   229	    return base in PRODUCT_FAILURE_CODES or base in HARNESS_VALIDITY_CODES
+
+exec
+/bin/bash -lc 'rg -n "HARNESS_VALIDITY_CODES|INVALID_RUN|MALFORMED|severity_for|P1|P2|NONE" harness/build_soak/failure_codes.py harness/build_soak/oracles -S' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/failure_codes.py:18:INVALID_RUN = "INVALID_RUN"
+harness/build_soak/failure_codes.py:21:OUTCOMES = frozenset({PASS, FAIL, INVALID_RUN, INFRA_FAILURE})
+harness/build_soak/failure_codes.py:26:P1 = "P1"  # major reliability bug
+harness/build_soak/failure_codes.py:27:P2 = "P2"  # quality bug
+harness/build_soak/failure_codes.py:28:NONE = "NONE"  # PASS / no failure
+harness/build_soak/failure_codes.py:30:SEVERITIES = frozenset({P0, P1, P2, NONE})
+harness/build_soak/failure_codes.py:52:# ---- P1 — major reliability bugs (§12) --------------------------------------
+harness/build_soak/failure_codes.py:67:# P1/HARN-1a: provider-ledger violations of the soak constraint. A provider call went
+harness/build_soak/failure_codes.py:75:# P1/HARN-2: browser product-harness oracle violations (judged over the HARN-1b browser
+harness/build_soak/failure_codes.py:96:# ---- P2 — quality bugs (§12) ------------------------------------------------
+harness/build_soak/failure_codes.py:105:# ---- harness-validity codes (§8 INVALID_RUN) --------------------------------
+harness/build_soak/failure_codes.py:107:# enough durable evidence to adjudicate. The classifier maps them to INVALID_RUN.
+harness/build_soak/failure_codes.py:119:# re-runs an INVALID_RUN instead of freezing a false product failure.
+harness/build_soak/failure_codes.py:136:# as harness-validity evidence → INVALID_RUN so §17 re-runs it. A mismatch on a PROVEN basis
+harness/build_soak/failure_codes.py:141:HARNESS_VALIDITY_CODES = frozenset(
+harness/build_soak/failure_codes.py:157:# here — they resolve to INVALID_RUN, which has its own outcome, not a severity.)
+harness/build_soak/failure_codes.py:188:    # P1
+harness/build_soak/failure_codes.py:189:    PLAN_REVISION_NOT_INCREMENTED: P1,
+harness/build_soak/failure_codes.py:190:    STALE_PLAN_USED_AFTER_FOLLOWUP: P1,
+harness/build_soak/failure_codes.py:191:    PLAN_APPROVED_STATUS_MISSING: P1,
+harness/build_soak/failure_codes.py:192:    TOOL_SCOPE_MISMATCH: P1,
+harness/build_soak/failure_codes.py:193:    TOOL_REJECTION_NOT_VISIBLE_TO_MODEL: P1,
+harness/build_soak/failure_codes.py:194:    MODEL_TOLD_WRONG_MODE: P1,
+harness/build_soak/failure_codes.py:195:    STUCK_RUNNING_NO_EVENTS: P1,
+harness/build_soak/failure_codes.py:196:    PREVIEW_TRUTH_MISMATCH: P1,
+harness/build_soak/failure_codes.py:197:    ARTIFACT_TRUTH_MISMATCH: P1,
+harness/build_soak/failure_codes.py:198:    DESTRUCTIVE_ELISION: P1,
+harness/build_soak/failure_codes.py:199:    NO_CLEAR_FAILURE_TO_USER: P1,
+harness/build_soak/failure_codes.py:200:    OBSERVATION_WITHOUT_ACTION: P1,
+harness/build_soak/failure_codes.py:201:    WRITE_BEFORE_REVISION_APPROVAL: P1,
+harness/build_soak/failure_codes.py:202:    BUILD_DID_NOT_FINISH: P1,
+harness/build_soak/failure_codes.py:203:    # P2
+harness/build_soak/failure_codes.py:204:    SLOW_FIRST_PLAN: P2,
+harness/build_soak/failure_codes.py:205:    EXCESSIVE_READS_BEFORE_PLAN: P2,
+harness/build_soak/failure_codes.py:206:    MISSING_DONE_CONDITIONS: P2,
+harness/build_soak/failure_codes.py:207:    LOW_QUALITY_PLAN: P2,
+harness/build_soak/failure_codes.py:208:    MISSING_PROGRESS_EVENTS: P2,
+harness/build_soak/failure_codes.py:209:    WEAK_FINAL_SUMMARY: P2,
+harness/build_soak/failure_codes.py:220:def severity_for(code: str) -> str:
+harness/build_soak/failure_codes.py:229:    return base in PRODUCT_FAILURE_CODES or base in HARNESS_VALIDITY_CODES
+harness/build_soak/oracles/provider_ledger.py:16:P17 soak requires the ledger present + enforcement on.)
+harness/build_soak/oracles/provider_ledger.py:50:        # silent pass — it maps to MISSING_REQUIRED_EVIDENCE → INVALID_RUN. A scenario may
+harness/build_soak/oracles/output_truth.py:79:    mismatch is non-authoritative → INVALID_RUN ``WORKSPACE_SNAPSHOT_UNVERIFIED`` (the capture
+harness/build_soak/oracles/output_truth.py:160:        # ARTIFACT_TRUTH_MISMATCH; all-non-authoritative → INVALID_RUN snapshot-unverified.
+harness/build_soak/oracles/schema.py:17:# Oracle result status. Distinct from the run OUTCOME (PASS/FAIL/INVALID_RUN/
+harness/build_soak/oracles/harness_validity.py:1:"""HarnessValidityOracle (guidelines §10, §8 INVALID_RUN).
+harness/build_soak/oracles/harness_validity.py:5:INVALID_RUN (which never counts as a pass and blocks promotion until the harness
+harness/build_soak/oracles/harness_validity.py:11:     §6 → INVALID_RUN).
+harness/build_soak/oracles/contract.py:10:Examples of an unsatisfiable contract → INVALID_RUN (SCENARIO_CONTRACT_UNSATISFIABLE):
+harness/build_soak/oracles/contract.py:62:        # contract and must FAIL-CLOSED to INVALID_RUN — never silently PASS via a
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg -n \"product_evidence|available_evidence|oracle_results|BROWSER_EVIDENCE_ORACLES|classify\\(\" harness/build_soak/tests/test_classifier.py harness/build_soak/tests/test_browser_evidence_oracles.py harness/build_soak/tests -S" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/tests/test_browser_evidence_oracles.py:39:        r = cls().check(product_evidence=None)
+harness/build_soak/tests/test_browser_evidence_oracles.py:50:        r = cls().check(product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:57:    assert BrowserWSOracle().check(product_evidence=ev)[0].code == "BROWSER_WS_NOT_CONNECTED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:62:    assert LifecycleOracle().check(product_evidence=ev)[0].code == "LIFECYCLE_SEQUENCE_INVALID"
+harness/build_soak/tests/test_browser_evidence_oracles.py:67:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:72:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:77:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:82:    assert ShowToUserOracle().check(product_evidence=ev)[0].code == "ARTIFACT_NOT_SHOWN_TO_USER"
+harness/build_soak/tests/test_browser_evidence_oracles.py:87:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:92:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:97:    assert ExportDownloadOracle().check(product_evidence=ev)[0].skipped
+harness/build_soak/tests/test_browser_evidence_oracles.py:102:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:110:def test_classify_unaffected_without_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:111:    # headless run: product_evidence None → all browser oracles SKIP → still PASS
+harness/build_soak/tests/test_browser_evidence_oracles.py:112:    assert classify(clean_smoke_log(), scenario=_scn())["status"] == "PASS"
+harness/build_soak/tests/test_browser_evidence_oracles.py:115:def test_classify_passes_with_green_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:116:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=_green_evidence())
+harness/build_soak/tests/test_browser_evidence_oracles.py:122:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:131:    r = BrowserWSOracle().check(product_evidence=ev)  # must not raise
+harness/build_soak/tests/test_browser_evidence_oracles.py:137:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:142:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:147:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:152:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:157:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:161:def test_run_folder_reads_product_evidence_green(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:173:def test_run_folder_product_evidence_violation_fails(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:186:def test_run_folder_corrupt_product_evidence_does_not_crash(tmp_path):
+harness/build_soak/tests/test_classifier.py:29:    c = classify(clean_smoke_log(), scenario=scenario)
+harness/build_soak/tests/test_classifier.py:51:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:69:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:106:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:122:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:140:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:155:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:171:    c = classify(events, scenario=_SCN, workspace_manifest={"nope.html": "x"})
+harness/build_soak/tests/test_classifier.py:181:    assert classify(full, scenario=scenario)["status"] == "PASS"
+harness/build_soak/tests/test_classifier.py:182:    assert classify(rows, scenario=scenario)["status"] == "PASS"
+harness/build_soak/tests/test_classifier.py:186:    c = classify([])
+harness/build_soak/tests/test_classifier.py:193:    c = classify(clean_smoke_log(), evidence_intact=False)
+harness/build_soak/tests/test_classifier.py:214:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:235:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:257:    c = classify(events, scenario=_SCN, workspace_manifest={"index.html": "Build Smoke OK"})
+harness/build_soak/tests/test_product_evidence_writer.py:12:from harness.build_soak.product_evidence import (
+harness/build_soak/tests/test_product_evidence_writer.py:13:    validate_product_evidence,
+harness/build_soak/tests/test_product_evidence_writer.py:14:    write_product_evidence,
+harness/build_soak/tests/test_product_evidence_writer.py:38:    assert validate_product_evidence(_green()) == []
+harness/build_soak/tests/test_product_evidence_writer.py:43:    probs = validate_product_evidence(ev)
+harness/build_soak/tests/test_product_evidence_writer.py:49:    probs = validate_product_evidence(ev)
+harness/build_soak/tests/test_product_evidence_writer.py:55:    assert any("preview: not a dict" == p for p in validate_product_evidence(ev))
+harness/build_soak/tests/test_product_evidence_writer.py:60:    assert validate_product_evidence(ev) == []
+harness/build_soak/tests/test_product_evidence_writer.py:67:        write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_product_evidence_writer.py:73:    p = write_product_evidence(tmp_path, ev, strict=False)
+harness/build_soak/tests/test_product_evidence_writer.py:82:    write_product_evidence(tmp_path, _green())
+harness/build_soak/tests/test_product_evidence_writer.py:91:    write_product_evidence(tmp_path, ev)
+harness/build_soak/tests/test_product_evidence_writer.py:115:    assert validate_product_evidence(["not", "a", "dict"]) == ["product_evidence is not a dict"]  # type: ignore[arg-type]
+harness/build_soak/tests/test_product_evidence_writer.py:126:        assert any(f"{slice_name}.{field}" in p for p in validate_product_evidence(ev))
+harness/build_soak/tests/test_product_evidence_writer.py:129:        assert any(f"{slice_name}.{field}" in p and "bool" in p for p in validate_product_evidence(ev2))
+harness/build_soak/tests/test_browser_evidence_oracles.py:39:        r = cls().check(product_evidence=None)
+harness/build_soak/tests/test_browser_evidence_oracles.py:50:        r = cls().check(product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:57:    assert BrowserWSOracle().check(product_evidence=ev)[0].code == "BROWSER_WS_NOT_CONNECTED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:62:    assert LifecycleOracle().check(product_evidence=ev)[0].code == "LIFECYCLE_SEQUENCE_INVALID"
+harness/build_soak/tests/test_browser_evidence_oracles.py:67:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:72:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:77:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:82:    assert ShowToUserOracle().check(product_evidence=ev)[0].code == "ARTIFACT_NOT_SHOWN_TO_USER"
+harness/build_soak/tests/test_browser_evidence_oracles.py:87:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:92:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:97:    assert ExportDownloadOracle().check(product_evidence=ev)[0].skipped
+harness/build_soak/tests/test_browser_evidence_oracles.py:102:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:110:def test_classify_unaffected_without_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:111:    # headless run: product_evidence None → all browser oracles SKIP → still PASS
+harness/build_soak/tests/test_browser_evidence_oracles.py:112:    assert classify(clean_smoke_log(), scenario=_scn())["status"] == "PASS"
+harness/build_soak/tests/test_browser_evidence_oracles.py:115:def test_classify_passes_with_green_product_evidence():
+harness/build_soak/tests/test_browser_evidence_oracles.py:116:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=_green_evidence())
+harness/build_soak/tests/test_browser_evidence_oracles.py:122:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:131:    r = BrowserWSOracle().check(product_evidence=ev)  # must not raise
+harness/build_soak/tests/test_browser_evidence_oracles.py:137:    assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:142:    assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
+harness/build_soak/tests/test_browser_evidence_oracles.py:147:    assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:152:    assert VerificationGateOracle().check(product_evidence=ev)[0].code == "VERIFICATION_GATE_BYPASSED"
+harness/build_soak/tests/test_browser_evidence_oracles.py:157:    assert ExportDownloadOracle().check(product_evidence=ev)[0].code == "EXPORT_DOWNLOAD_MISSING"
+harness/build_soak/tests/test_browser_evidence_oracles.py:161:def test_run_folder_reads_product_evidence_green(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:173:def test_run_folder_product_evidence_violation_fails(tmp_path):
+harness/build_soak/tests/test_browser_evidence_oracles.py:186:def test_run_folder_corrupt_product_evidence_does_not_crash(tmp_path):
+harness/build_soak/tests/test_provider_ledger_oracle.py:138:# --- end-to-end through classify() --------------------------------------------
+harness/build_soak/tests/test_provider_ledger_oracle.py:148:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=ledger)
+harness/build_soak/tests/test_provider_ledger_oracle.py:163:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=ledger)
+harness/build_soak/tests/test_provider_ledger_oracle.py:176:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=None)
+harness/build_soak/tests/test_provider_ledger_oracle.py:189:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=None)
+harness/build_soak/tests/test_no_fluke_policy.py:26:    c = classify(events, run_id="orig")
+harness/build_soak/tests/test_fail_closed.py:30:    return classify(events, scenario=_PLAN_SCN), classify(to_db_rows(events), scenario=_PLAN_SCN)
+harness/build_soak/tests/test_fail_closed.py:129:    c = classify(events, scenario=_PLAN_SCN)
+harness/build_soak/tests/test_fail_closed.py:145:    c = classify(events, scenario=_PLAN_SCN)
+harness/build_soak/tests/test_fail_closed.py:164:    full = classify(_approval_without_awaiting_log(), scenario=_PLAN_SCN)
+harness/build_soak/tests/test_fail_closed.py:165:    row = classify(to_db_rows(_approval_without_awaiting_log()), scenario=_PLAN_SCN)
+harness/build_soak/tests/test_fail_closed.py:183:    c = classify(events, scenario=_PLAN_SCN)
+harness/build_soak/tests/test_fail_closed.py:189:    c = classify(
+harness/build_soak/tests/test_fail_closed.py:198:    c = classify(_approval_without_awaiting_log(), scenario=_PLAN_SCN, autonomous=True)
+harness/build_soak/tests/test_fail_closed.py:229:    full = classify(_revised_approval_before_revised_plan_log())
+harness/build_soak/tests/test_fail_closed.py:230:    row = classify(to_db_rows(_revised_approval_before_revised_plan_log()))
+harness/build_soak/tests/test_fail_closed.py:248:    c = classify(events)
+harness/build_soak/tests/test_fail_closed.py:261:    c = classify(events, autonomous=True)
+harness/build_soak/tests/test_fail_closed.py:279:    c = classify(clean_smoke_log(), scenario=scenario)
+harness/build_soak/tests/test_fail_closed.py:297:    c = classify(clean_smoke_log(), scenario=scenario, tool_scope=tool_scope)
+harness/build_soak/tests/test_fail_closed.py:313:    c = classify(clean_smoke_log(), scenario=scenario, tool_scope=tool_scope)
+harness/build_soak/tests/test_classifier.py:29:    c = classify(clean_smoke_log(), scenario=scenario)
+harness/build_soak/tests/test_classifier.py:51:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:69:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:106:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:122:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:140:    c = classify(events)
+harness/build_soak/tests/test_classifier.py:155:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:171:    c = classify(events, scenario=_SCN, workspace_manifest={"nope.html": "x"})
+harness/build_soak/tests/test_classifier.py:181:    assert classify(full, scenario=scenario)["status"] == "PASS"
+harness/build_soak/tests/test_classifier.py:182:    assert classify(rows, scenario=scenario)["status"] == "PASS"
+harness/build_soak/tests/test_classifier.py:186:    c = classify([])
+harness/build_soak/tests/test_classifier.py:193:    c = classify(clean_smoke_log(), evidence_intact=False)
+harness/build_soak/tests/test_classifier.py:214:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:235:    c = classify(events, scenario=scenario)
+harness/build_soak/tests/test_classifier.py:257:    c = classify(events, scenario=_SCN, workspace_manifest={"index.html": "Build Smoke OK"})
+harness/build_soak/tests/test_api_runner.py:3:lock, classify() receives workspace + preview (codex #2), the infra gate fires ONLY
+harness/build_soak/tests/test_api_runner.py:261:    # silent skip. Prove the runner threads workspace + preview into classify().
+
+codex
+APPROVE
+tokens used
+60,005
+APPROVE

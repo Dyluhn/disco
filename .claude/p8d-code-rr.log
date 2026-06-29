@@ -1,0 +1,1872 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f151a-b74a-77e0-bdec-0a0ae08ba057
+--------
+user
+Re-review the 2 P8D code-review fixes (working tree):
+1. PRESENT-NON-DICT slice now MALFORMED, not absent: a shared harness/build_soak/oracles/_edit_evidence.py
+exposes slice_of()→ABSENT (key missing) | MALFORMED (present but not a dict) | the dict. Each of the 5 oracles:
+ABSENT→SKIP, MALFORMED→FAIL EDIT_ORACLE_EVIDENCE_MALFORMED. So {"targeted_edit": []} / None / "x" / 3 all FAIL
+malformed (test_present_non_dict_slice_is_malformed_for_every_oracle, parametrized over all 5 + classify-level
+test_classify_malformed_is_invalid_run_for_each_slice → INVALID_RUN).
+2. NO COERCION: strict guards is_str_list / is_str_dict / is_int (rejects bool) / is_num (rejects bool). So
+edited_files=[123] → malformed; changed_lines=True → malformed; overrides={"a":1} → malformed; comment anchors
+[1,2] → malformed; edited_sections="hero" → malformed. Tests: test_bool_is_not_accepted_as_int_for_churn,
+test_non_string_list_and_dict_payloads_are_malformed, test_screen_label_malformed_fails_closed.
+ManualEdit substring predicate kept (zero-opinion; producer supplies the verbatim snippet) — per your note.
+All P8D tests + browser-oracle + fail_closed regression green; basedpyright strict 0 errors.
+Confirm both resolved. Return exactly APPROVE or REVISE + one line each.
+codex
+I’ll inspect the shared evidence helper, the five oracle paths, and the added tests against the two claimed fixes.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'git status --short' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+ M .claude/p7-code.log
+ M disclaude.md
+ M harness/build_soak/classify.py
+ M harness/build_soak/failure_codes.py
+ M harness/build_soak/oracles/__init__.py
+?? .claude/p7-code-rr.log
+?? .claude/p8d-code-rr.log
+?? .claude/p8d-code.log
+?? .claude/p8d-plan-rr.log
+?? .claude/p8d-plan.log
+?? DISCLAUDE_CAMPAIGN_SUMMARY.md
+?? disclaude-changed-files.zip
+?? harness/build_soak/oracles/_edit_evidence.py
+?? harness/build_soak/oracles/manual_edit_preservation.py
+?? harness/build_soak/oracles/targeted_edit.py
+?? harness/build_soak/tests/test_targeted_edit_oracles.py
+
+exec
+/bin/bash -lc 'rg -n "slice_of|EDIT_ORACLE_EVIDENCE_MALFORMED|is_str_list|is_str_dict|is_int|is_num|targeted_edit|edited_files|changed_lines|edited_sections|screen_label|comment anchors|anchors" -S .' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+./disclaude.md:1087:  CSS-token-sanitized, html-escaped fields, data-disco-* anchors).
+./disclaude.md:1556:resolve_human_reference(phrase, *, context) → ReferenceResolution; normalize_screen_label(label) → deterministic slug.
+./disclaude.md:1558:unknown/ambiguous → ReferenceResolution(ambiguous=True, candidates=[...]) NOT a guess; normalize_screen_label
+./disclaude.md:1571:   tuple[SlideEntry(id, title, ordinal)]; comment_anchors: tuple[AnchorEntry(id, label)].
+./disclaude.md:1582:5. normalize_screen_label pinned: deterministic + idempotent; casefold; collapse whitespace+punctuation to single
+./disclaude.md:1602:metadata; comment anchors can't be duplicated or invented; screen labels are deterministic (reuse P8A
+./disclaude.md:1603:normalize_screen_label). Consumed by the renderer (core) + app tools + the P8C frontend resolver.
+./disclaude.md:1611:"data-disco-field" ...). attr(a, value)->' data-disco-x="esc"' (html-escaped, ready to inject). screen_label_value
+./disclaude.md:1612:(label)->normalize_screen_label (stable). SemanticMetadataError. extract_metadata(html)->dict[attr,list[value]].
+./disclaude.md:1613:validate_no_duplicate_anchors(html)-> raise on a repeated data-disco-comment-anchor. validate_anchors_not_invented
+./disclaude.md:1617:(generic/table section w/ field+metric-id), duplicate anchors rejected, anchors-not-invented rejected, screen
+./disclaude.md:1631:3. DECLARED ANCHORS derived from the source of truth: declared_anchors_from_spec(spec) -> frozenset, derived
+./disclaude.md:1632:   deterministically from section ids (the legitimate anchor namespace). validate_anchors_not_invented(html,
+./disclaude.md:1634:   zero invented anchors vs declared_anchors_from_spec; (b) synthetic HTML with an out-of-namespace anchor raises;
+./disclaude.md:1635:   (c) declared_anchors_from_spec derivation itself is tested.
+./disclaude.md:1648:  for P8A IndexedLocator; attr/item_attrs/extract_metadata/validate_no_duplicate_anchors/declared_anchors_from_spec/
+./disclaude.md:1649:  validate_anchors_not_invented) + models.py renderer refactored to emit THROUGH the vocab (killed hardcoded
+./disclaude.md:1710:harness/build_soak/oracles/targeted_edit.py + manual_edit_preservation.py; tests in harness/build_soak/tests/.
+./disclaude.md:1712:- TargetedEditOracle: edited_files ⊆ expected_files → else fail TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES (P1).
+./disclaude.md:1713:- RewriteAvoidanceOracle: a SMALL-scoped edit's churn_ratio (changed_lines/total_lines) ≤ threshold → else
+./disclaude.md:1717:- CommentAnchorOracle: anchors_before ⊆ anchors_after (preserved through text edit; survive a section reorder —
+./disclaude.md:1719:- ScreenLabelOracle: for sections NOT in the edit's targets, screen_label_before == screen_label_after (stable) →
+./disclaude.md:1731:   - TargetedEditOracle ev["targeted_edit"]={"edited_files":[str],"expected_files":[str]}.
+./disclaude.md:1732:   - RewriteAvoidanceOracle ev["rewrite_avoidance"]={"edit_scope":str,"changed_lines":int,"total_lines":int,
+./disclaude.md:1735:   - CommentAnchorOracle ev["comment_anchors"]={"before":[str],"after":[str]}.
+./disclaude.md:1736:   - ScreenLabelOracle ev["screen_labels"]={"edited_sections":[str],"before":{sec:label},"after":{sec:label}}.
+./disclaude.md:1738:   / wrong type → FAIL with shared code EDIT_ORACLE_EVIDENCE_MALFORMED (P1, a harness-validity-class failure) —
+./disclaude.md:1742:   carry {edit_scope, changed_lines, total_lines, churn_ratio, max_churn_ratio}. Missing max_churn_ratio →
+./disclaude.md:1744:3. TESTS add: every oracle SKIPs on absent slice; every oracle FAILs EDIT_ORACLE_EVIDENCE_MALFORMED on a present-
+./ui-implementation.md:129:**Anti-patterns (automatic fail):** the hover card covering body text; a thin-bar input; a low-contrast submit; body and UI sharing a face; a busy toolbar input; gradient/marketing pills; layout shift while streaming; an end-of-document reference dump without inline anchors; a cramped chat column for long answers; `fetch` in a component; swallowing a provider error into a generic failure.
+./basis-of-design.md:483:- **Avoid:** end-of-document reference dumps with no inline anchors; cramming a long report into a narrow chat column instead of a full-bleed document layout with a sticky table of contents.
+./archived God files/engine.py:981:# goal/files/constraints anchors a drifted model most often loses.
+./archived God files/engine.py:987:_HS03_REGROUND_SENTINEL = "<reground-anchors>"
+./archived God files/engine.py:3135:            pause re-anchors.
+./frontend/src/hooks/useDeepResearch.ts:307:  // (<system-reminder>, <reground-anchors>) is deliberately SUPPRESSED, not
+./frontend/src/hooks/useDeepResearch.ts:323:            !(e.message.content ?? "").includes("<reground-anchors>"),
+./packages/tools/src/disco/tools/executor.py:415:        # detector anchors on the marker's STRUCTURE (count anchor or its signature
+./docs/codex-evidence-harness-review-6-21-26.md:4153:   158	# goal/files/constraints anchors a drifted model most often loses.
+./docs/build-soak-surfaced-bugs.md:679:(which anchors on the marker's STRUCTURE — count anchor OR its signature tail prose — so a legitimate arg
+./docs/archive/workorders/RP-05-mcp-client.md:25:## Verified anchors (line drift noted; use symbols, not line numbers)
+./docs/archive/workorders/RP-05-mcp-client.md:603:- Anchors are symbols, not line numbers. The verified-anchors list
+./docs/archive/workorders/RP-05-mcp-client.md:772:  text. The verified-anchors list at the top is the only
+./docs/archive/workorders/RP-02-deep-report-rich-blocks.md:6:## Context — verified anchors
+./docs/archive/workorders/RP-01-dashboard-lite.md:6:## Context — verified anchors
+./packages/tools/src/disco/tools/builtin/files.py:587:            "pasted-in line numbers). This is the SAFEST targeted edit — it anchors on "
+./packages/core/tests/test_appkit_semantic_metadata.py:14:    declared_anchors_from_spec,
+./packages/core/tests/test_appkit_semantic_metadata.py:17:    screen_label_value,
+./packages/core/tests/test_appkit_semantic_metadata.py:18:    validate_anchors_not_invented,
+./packages/core/tests/test_appkit_semantic_metadata.py:19:    validate_no_duplicate_anchors,
+./packages/core/tests/test_appkit_semantic_metadata.py:58:def test_screen_labels_are_stable_across_renders() -> None:
+./packages/core/tests/test_appkit_semantic_metadata.py:60:    assert screen_label_value("Hero Section!") == screen_label_value("hero-section")
+./packages/core/tests/test_appkit_semantic_metadata.py:87:def test_duplicate_anchors_rejected_even_when_encoded_differently() -> None:
+./packages/core/tests/test_appkit_semantic_metadata.py:89:    validate_no_duplicate_anchors(ok)  # no raise
+./packages/core/tests/test_appkit_semantic_metadata.py:92:        validate_no_duplicate_anchors(dup)
+./packages/core/tests/test_appkit_semantic_metadata.py:96:        validate_no_duplicate_anchors(decoded_dup)
+./packages/core/tests/test_appkit_semantic_metadata.py:99:def test_declared_anchors_derive_from_spec_section_ids() -> None:
+./packages/core/tests/test_appkit_semantic_metadata.py:100:    assert declared_anchors_from_spec(SPEC) == frozenset({"hero", "lead", "feat"})
+./packages/core/tests/test_appkit_semantic_metadata.py:103:def test_anchors_not_invented() -> None:
+./packages/core/tests/test_appkit_semantic_metadata.py:104:    declared = declared_anchors_from_spec(SPEC)
+./packages/core/tests/test_appkit_semantic_metadata.py:105:    # a real render emits no comment anchors yet → trivially none invented
+./packages/core/tests/test_appkit_semantic_metadata.py:106:    validate_anchors_not_invented(render_html(SPEC), declared)
+./packages/core/tests/test_appkit_semantic_metadata.py:110:        validate_anchors_not_invented(bad, declared)
+./packages/core/tests/test_appkit_semantic_metadata.py:113:    validate_anchors_not_invented(good, declared)
+./packages/core/tests/test_semantic_refs.py:25:    normalize_screen_label,
+./packages/core/tests/test_semantic_refs.py:47:    comment_anchors=(AnchorEntry(id="cmt-intro", label="intro note"),),
+./packages/core/tests/test_semantic_refs.py:133:# --- normalize_screen_label (deterministic + idempotent) ----------------------
+./packages/core/tests/test_semantic_refs.py:136:        n = normalize_screen_label(s)
+./packages/core/tests/test_semantic_refs.py:137:        assert n == normalize_screen_label(n)  # idempotent
+./packages/core/tests/test_semantic_refs.py:138:        assert n == normalize_screen_label(s)  # deterministic
+./packages/core/tests/test_semantic_refs.py:139:    assert normalize_screen_label("Hero Headline!") == "hero-headline"
+./packages/core/tests/test_semantic_refs.py:140:    assert normalize_screen_label("Sign Up") == normalize_screen_label("sign-up")  # case/punct fold
+./packages/core/tests/test_semantic_refs.py:172:        comment_anchors=(AnchorEntry(id="notes", label="notes"),),
+./packages/core/tests/test_appkit_models.py:76:    assert 'data-disco-section="hero"' in html1  # semantic anchors present
+./docs/archive/dylans-walkthru-6-17-26.md:120:  `MessageEvent`s (skip `<system-reminder>`/`<reground-anchors>`) and append a "Follow-up Q&A"
+./docs/archive/build-loop-hardening-plan.md:55:**Fit:** GO on the deletion/no-op guard + demote (directly kills the 120b silent-deletion; A8 already steers via the snapshot preamble, so this is belt-and-suspenders). The uniqueness-refuse on `file_edit` is a CONDITIONAL go (exact-match only; the ws-normalized fallback over-refuses short anchors). **Risk:** check `test_executor_scope.py` for advertised-list assertions; the deletion guard's ~0% false-positive (whitespace-only replacement still possible via file_write).
+./docs/archive/dylans-tailscale-runthru-bugs-6-18-26.md:116:225 ENV   <reground-anchors> GOAL: Build a simple macOS-inspired desktop clone…  ← OLD goal re-injected
+./docs/archive/dylans-tailscale-runthru-bugs-6-18-26.md:155:  reground-anchors block must re-ground on the *re-plan task* (the latest user
+./docs/archive/dylans-tailscale-runthru-bugs-6-18-26.md:157:  `<reground-anchors>` string) — guard on mode and swap the anchor text.
+./packages/core/tests/test_context_pack.py:28:def test_from_ledger_passes_through_anchors() -> None:
+./packages/core/tests/test_context_ledger.py:90:    # documented precedence: anchors first, an unresolved failure outranks the
+./harness/build_soak/failure_codes.py:97:# preserved direct work + anchors, and did not rewrite the world).
+./harness/build_soak/failure_codes.py:104:EDIT_ORACLE_EVIDENCE_MALFORMED = "EDIT_ORACLE_EVIDENCE_MALFORMED"
+./harness/build_soak/failure_codes.py:163:        EDIT_ORACLE_EVIDENCE_MALFORMED,  # P8D: present-but-malformed edit evidence → INVALID_RUN
+./harness/build_soak/run.py:126:        # RevisionOracle anchors on it (and keeps the parallel seq/flag arrays aligned).
+./harness/build_soak/run.py:185:        # decision pick) so the RevisionOracle EXCLUDES it from revision anchors. Called AFTER
+./harness/build_soak/run.py:373:    # auto-answers (clarification answers / decision picks). The RevisionOracle anchors revision
+./harness/build_soak/run.py:455:        # (parallel arrays) so the RevisionOracle anchors on it (and ONLY the declared turns).
+./harness/build_soak/adapters/disco_api.py:318:    # RevisionOracle anchors revision checks on the DECLARED follow-ups ONLY and EXCLUDES the
+./harness/build_soak/tests/test_targeted_edit_oracles.py:2:present-but-malformed→FAIL(EDIT_ORACLE_EVIDENCE_MALFORMED), and the SKIP-safe classify() wiring."""
+./harness/build_soak/tests/test_targeted_edit_oracles.py:29:def test_targeted_edit_subset_passes() -> None:
+./harness/build_soak/tests/test_targeted_edit_oracles.py:30:    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": ["index.html"], "expected_files": ["index.html", "style.css"]}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:34:def test_targeted_edit_unexpected_file_fails() -> None:
+./harness/build_soak/tests/test_targeted_edit_oracles.py:35:    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": ["index.html", "secrets.env"], "expected_files": ["index.html"]}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:40:def test_targeted_edit_absent_skips() -> None:
+./harness/build_soak/tests/test_targeted_edit_oracles.py:44:def test_targeted_edit_malformed_fails_closed() -> None:
+./harness/build_soak/tests/test_targeted_edit_oracles.py:45:    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": "index.html", "expected_files": []}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:46:    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:51:    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 3, "total_lines": 100, "max_churn_ratio": 0.20}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:56:    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 90, "total_lines": 100, "max_churn_ratio": 0.20}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:61:    assert _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "rebuild", "changed_lines": 90, "total_lines": 100, "max_churn_ratio": 0.2}}).skipped
+./harness/build_soak/tests/test_targeted_edit_oracles.py:69:    z = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 0, "total_lines": 0, "max_churn_ratio": 0.2}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:70:    assert z.failed and z.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:71:    m = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 1, "total_lines": 10}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:72:    assert m.failed and m.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:89:    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:94:    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero", "lead"]}}).passed
+./harness/build_soak/tests/test_targeted_edit_oracles.py:99:    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["lead", "hero"]}}).passed
+./harness/build_soak/tests/test_targeted_edit_oracles.py:103:    r = _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero"]}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:109:    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": "hero", "after": []}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:114:    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": ["hero"], "before": {"hero": "hero", "about": "about"}, "after": {"hero": "hero-new", "about": "about"}}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:119:    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": ["hero"], "before": {"about": "about"}, "after": {"about": "about-2"}}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:123:def test_screen_label_absent_skips() -> None:
+./harness/build_soak/tests/test_targeted_edit_oracles.py:134:    ev = {"targeted_edit": {"edited_files": ["index.html", "id_rsa"], "expected_files": ["index.html"]}}
+./harness/build_soak/tests/test_targeted_edit_oracles.py:140:    ev = {"targeted_edit": {"edited_files": "nope", "expected_files": []}}
+./harness/build_soak/tests/test_targeted_edit_oracles.py:151:    TargetedEditOracle: "targeted_edit",
+./harness/build_soak/tests/test_targeted_edit_oracles.py:154:    CommentAnchorOracle: "comment_anchors",
+./harness/build_soak/tests/test_targeted_edit_oracles.py:155:    ScreenLabelOracle: "screen_labels",
+./harness/build_soak/tests/test_targeted_edit_oracles.py:164:            assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (oracle.__name__, bad)
+./harness/build_soak/tests/test_targeted_edit_oracles.py:168:    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": True, "total_lines": 100, "max_churn_ratio": 0.2}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:169:    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:173:    assert _one(TargetedEditOracle, {"targeted_edit": {"edited_files": [123], "expected_files": ["123"]}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:174:    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": [1, 2], "after": []}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:175:    assert _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": {"a": 1}, "final_files": {}}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_targeted_edit_oracles.py:178:def test_screen_label_malformed_fails_closed() -> None:
+./harness/build_soak/tests/test_targeted_edit_oracles.py:179:    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": "hero", "before": {}, "after": {}}})
+./harness/build_soak/tests/test_targeted_edit_oracles.py:180:    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+./harness/build_soak/tests/test_revision_oracle.py:285:# fix anchors revision checks on the DECLARED follow-ups only and EXCLUDES the injected turns.
+./harness/build_soak/tests/test_revision_oracle.py:310:    # WITHOUT metadata (legacy) the injected seq-16 answer mis-anchors → false NO_REPLAN.
+./packages/core/tests/test_c13_exec_prefill.py:241:    # different anchors (honest planning ack vs. concrete next-action).
+./harness/build_soak/oracles/manual_edit_preservation.py:4:override survives a later agent edit, comment anchors survive text edits and section
+./harness/build_soak/oracles/manual_edit_preservation.py:7:fail closed (EDIT_ORACLE_EVIDENCE_MALFORMED → INVALID_RUN) on a malformed one.
+./harness/build_soak/oracles/manual_edit_preservation.py:15:from ._edit_evidence import ABSENT, MALFORMED, is_str_dict, is_str_list, malformed, slice_of
+./harness/build_soak/oracles/manual_edit_preservation.py:27:        ev = slice_of(product_evidence, "manual_edit")
+./harness/build_soak/oracles/manual_edit_preservation.py:33:        if not is_str_dict(overrides) or not is_str_dict(final):
+./harness/build_soak/oracles/manual_edit_preservation.py:44:    """Comment anchors present before the edit must all still be present after it — they
+./harness/build_soak/oracles/manual_edit_preservation.py:50:        ev = slice_of(product_evidence, "comment_anchors")
+./harness/build_soak/oracles/manual_edit_preservation.py:52:            return [skipping(self._NAME, reason="no comment_anchors evidence")]
+./harness/build_soak/oracles/manual_edit_preservation.py:54:            return [malformed(self._NAME, "comment_anchors must be a dict")]
+./harness/build_soak/oracles/manual_edit_preservation.py:56:        if not is_str_list(before) or not is_str_list(after):
+./harness/build_soak/oracles/manual_edit_preservation.py:73:        ev = slice_of(product_evidence, "screen_labels")
+./harness/build_soak/oracles/manual_edit_preservation.py:75:            return [skipping(self._NAME, reason="no screen_labels evidence")]
+./harness/build_soak/oracles/manual_edit_preservation.py:77:            return [malformed(self._NAME, "screen_labels must be a dict")]
+./harness/build_soak/oracles/manual_edit_preservation.py:78:        edited, before, after = ev.get("edited_sections"), ev.get("before"), ev.get("after")
+./harness/build_soak/oracles/manual_edit_preservation.py:79:        if not is_str_list(edited) or not is_str_dict(before) or not is_str_dict(after):
+./harness/build_soak/oracles/manual_edit_preservation.py:80:            return [malformed(self._NAME, "edited_sections list[str] + before/after dict[str,str] required")]
+./harness/build_soak/oracles/manual_edit_preservation.py:86:        facts = {"edited_sections": sorted(edited_set), "unstable": unstable}
+./packages/core/src/disco/core/semantic_refs.py:150:    comment_anchors: tuple[AnchorEntry, ...] = ()
+./packages/core/src/disco/core/semantic_refs.py:197:def normalize_screen_label(label: str) -> str:
+./packages/core/src/disco/core/semantic_refs.py:234:    norm = normalize_screen_label(phrase)
+./packages/core/src/disco/core/semantic_refs.py:265:        lt = _tokens(normalize_screen_label(lab))
+./packages/core/src/disco/core/semantic_refs.py:288:    norm = normalize_screen_label(phrase)
+./packages/core/src/disco/core/semantic_refs.py:341:    for a in context.comment_anchors:
+./packages/core/tests/test_replan_forces_plan.py:19:  (c) re-grounding in PLANNING mode anchors to the LATEST user instruction, not
+./packages/core/tests/test_replan_forces_plan.py:292:    """In PLANNING mode the HS-03 recap anchors to the latest user instruction;
+./harness/build_soak/oracles/targeted_edit.py:7:malformed slice fails closed as EDIT_ORACLE_EVIDENCE_MALFORMED (→ INVALID_RUN), never a pass.
+./harness/build_soak/oracles/targeted_edit.py:15:from ._edit_evidence import ABSENT, MALFORMED, is_int, is_num, is_str_list, malformed, slice_of
+./harness/build_soak/oracles/targeted_edit.py:26:        ev = slice_of(product_evidence, "targeted_edit")
+./harness/build_soak/oracles/targeted_edit.py:28:            return [skipping(self._NAME, reason="no targeted_edit evidence")]
+./harness/build_soak/oracles/targeted_edit.py:30:            return [malformed(self._NAME, "targeted_edit must be a dict")]
+./harness/build_soak/oracles/targeted_edit.py:31:        edited, expected = ev.get("edited_files"), ev.get("expected_files")
+./harness/build_soak/oracles/targeted_edit.py:32:        if not is_str_list(edited) or not is_str_list(expected):
+./harness/build_soak/oracles/targeted_edit.py:33:            return [malformed(self._NAME, "edited_files/expected_files must be lists of strings")]
+./harness/build_soak/oracles/targeted_edit.py:35:        facts = {"edited_files": sorted(edited), "expected_files": sorted(expected), "unexpected": unexpected}
+./harness/build_soak/oracles/targeted_edit.py:50:        ev = slice_of(product_evidence, "rewrite_avoidance")
+./harness/build_soak/oracles/targeted_edit.py:60:        changed, total, bound = ev.get("changed_lines"), ev.get("total_lines"), ev.get("max_churn_ratio")
+./harness/build_soak/oracles/targeted_edit.py:61:        if not is_int(changed) or not is_int(total) or not is_num(bound):
+./harness/build_soak/oracles/targeted_edit.py:62:            return [malformed(self._NAME, "changed_lines/total_lines int (not bool) + max_churn_ratio number required")]
+./harness/build_soak/oracles/targeted_edit.py:66:        facts = {"edit_scope": scope, "changed_lines": changed, "total_lines": total,
+./packages/core/tests/test_preview_target.py:304:    # Bug-16 review #2 (the unwinnable-by-regex bypasses): because the matcher anchors at
+./harness/build_soak/oracles/_edit_evidence.py:4:(not a dict, or a field of the wrong type) → FAIL EDIT_ORACLE_EVIDENCE_MALFORMED (→ INVALID_RUN).
+./harness/build_soak/oracles/_edit_evidence.py:19:def slice_of(product_evidence: dict[str, Any] | None, key: str) -> Any:
+./harness/build_soak/oracles/_edit_evidence.py:27:def is_str_list(x: Any) -> bool:
+./harness/build_soak/oracles/_edit_evidence.py:31:def is_str_dict(x: Any) -> bool:
+./harness/build_soak/oracles/_edit_evidence.py:35:def is_int(x: Any) -> bool:
+./harness/build_soak/oracles/_edit_evidence.py:39:def is_num(x: Any) -> bool:
+./harness/build_soak/oracles/_edit_evidence.py:46:        fc.EDIT_ORACLE_EVIDENCE_MALFORMED,
+./harness/build_soak/oracles/__init__.py:34:from .targeted_edit import RewriteAvoidanceOracle, TargetedEditOracle
+./packages/core/src/disco/core/appkit/models.py:132:        _md.DataDiscoAttr.SCREEN_LABEL, _md.screen_label_value(sec.id)
+./harness/build_soak/oracles/revision.py:66:def _resolve_anchors(
+./harness/build_soak/oracles/revision.py:168:        anchors = _resolve_anchors(events, boundary, followups_spec, meta)
+./harness/build_soak/oracles/revision.py:169:        if not anchors:
+./harness/build_soak/oracles/revision.py:176:        for fseq, declared in anchors:
+./harness/build_soak/oracles/revision.py:345:                    "followup_count": len(anchors),
+./packages/core/src/disco/core/appkit/semantic_metadata.py:8:consumes from the DOM. Pure; reuses P8A ``normalize_screen_label`` for stable labels.
+./packages/core/src/disco/core/appkit/semantic_metadata.py:18:from disco.core.semantic_refs import normalize_screen_label
+./packages/core/src/disco/core/appkit/semantic_metadata.py:51:def screen_label_value(label: str) -> str:
+./packages/core/src/disco/core/appkit/semantic_metadata.py:53:    return normalize_screen_label(label)
+./packages/core/src/disco/core/appkit/semantic_metadata.py:86:def validate_no_duplicate_anchors(html_text: str) -> None:
+./packages/core/src/disco/core/appkit/semantic_metadata.py:88:    anchors = extract_metadata(html_text).get(DataDiscoAttr.COMMENT_ANCHOR, [])
+./packages/core/src/disco/core/appkit/semantic_metadata.py:91:    for a in anchors:
+./packages/core/src/disco/core/appkit/semantic_metadata.py:94:        raise SemanticMetadataError(f"duplicate comment anchors: {sorted(dups)}")
+./packages/core/src/disco/core/appkit/semantic_metadata.py:97:def declared_anchors_from_spec(spec: AppSpec) -> frozenset[str]:
+./packages/core/src/disco/core/appkit/semantic_metadata.py:103:def validate_anchors_not_invented(html_text: str, declared: frozenset[str]) -> None:
+./packages/core/src/disco/core/appkit/semantic_metadata.py:106:    anchors = set(extract_metadata(html_text).get(DataDiscoAttr.COMMENT_ANCHOR, []))
+./packages/core/src/disco/core/appkit/semantic_metadata.py:107:    invented = anchors - declared
+./packages/core/src/disco/core/appkit/semantic_metadata.py:109:        raise SemanticMetadataError(f"invented comment anchors not in the spec: {sorted(invented)}")
+./packages/core/src/disco/core/workflows/prompt_pack.py:24:    "targeted_edit_law",
+./packages/core/src/disco/core/context/pack.py:5:CompactionPolicy, and surface the run anchors (goal/contract/version/todo). The
+./packages/core/src/disco/core/context/pack.py:35:    """What the model actually sees: anchors + unresolved failures + capped refs."""
+./packages/core/src/disco/core/loop/engine.py:160:# goal/files/constraints anchors a drifted model most often loses.
+./packages/core/src/disco/core/loop/messages.py:162:_HS03_REGROUND_SENTINEL = "<reground-anchors>"
+./packages/core/src/disco/core/loop/messages.py:219:    # LATEST user instruction so the recap anchors to the NEW task instead of the
+./packages/core/src/disco/core/loop/context_builder.py:114:    event history / raw tool chatter — only the structured anchors. Stable across
+./packages/core/src/disco/core/loop/recitation.py:141:            pause re-anchors.
+./packages/agent-server/tests/test_report_export_pdf_fixes.py:133:    assert 'id="src-1"' in html and 'id="src-2"' in html  # appendix anchors
+./packages/agent-server/src/disco/agent_server/routes/report.py:74:    seq list.  System-plumbing messages (``<system-reminder>`` / ``<reground-anchors>``)
+./packages/agent-server/src/disco/agent_server/routes/report.py:88:        and not (e.message.content or "").startswith("<reground-anchors>")
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "rg --files | rg '(_edit_evidence|oracle|test_.*(oracle|evidence|malformed|coercion|churn|screen|classify))'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/tests/test_evidence_schema.py
+harness/build_soak/tests/test_targeted_edit_oracles.py
+harness/build_soak/tests/test_product_evidence_writer.py
+harness/build_soak/tests/test_browser_evidence_oracles.py
+harness/build_soak/tests/test_provider_ledger_oracle.py
+harness/build_soak/tests/test_revision_oracle.py
+harness/build_soak/tests/test_output_truth_oracle.py
+harness/build_soak/tests/test_oracle_schema.py
+harness/build_soak/tests/test_evidence_lock.py
+harness/build_soak/tests/test_event_chain_oracle.py
+harness/build_soak/oracles/manual_edit_preservation.py
+harness/build_soak/oracles/targeted_edit.py
+harness/build_soak/oracles/_edit_evidence.py
+harness/build_soak/oracles/__init__.py
+harness/build_soak/oracles/browser_evidence.py
+harness/build_soak/oracles/provider_ledger.py
+harness/build_soak/oracles/output_truth.py
+harness/build_soak/oracles/tool_scope.py
+harness/build_soak/oracles/schema.py
+harness/build_soak/oracles/revision.py
+harness/build_soak/oracles/harness_validity.py
+harness/build_soak/oracles/event_chain.py
+harness/build_soak/oracles/contract.py
+packages/agent-server/tests/test_debug_evidence_route.py
+
+codex
+The working tree contains only the P8D-related oracle/classifier files plus logs/docs. I’m narrowing now to the helper semantics, each oracle’s malformed path, and classify invalid-run mapping.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/oracles/targeted_edit.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Targeted-edit oracles (P8D).
+
+Zero-opinion checks that a targeted edit stayed targeted: it touched only the files it
+declared, and a SMALL edit did not rewrite the world. Pure functions over the
+``product_evidence`` dossier (the live producer is the P1B-LIVE / soak runner); each reads
+its own slice and SKIPs (never silent-passes) when the slice is absent. A present-but-
+malformed slice fails closed as EDIT_ORACLE_EVIDENCE_MALFORMED (→ INVALID_RUN), never a pass.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from ._edit_evidence import ABSENT, MALFORMED, is_int, is_num, is_str_list, malformed, slice_of
+from .schema import OracleResult, failing, passing, skipping
+
+
+class TargetedEditOracle:
+    """The edited files must be a SUBSET of the expected files — a targeted edit never
+    silently touches a file it didn't declare."""
+
+    _NAME = "TargetedEditOracle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ev = slice_of(product_evidence, "targeted_edit")
+        if ev is ABSENT:
+            return [skipping(self._NAME, reason="no targeted_edit evidence")]
+        if ev is MALFORMED:
+            return [malformed(self._NAME, "targeted_edit must be a dict")]
+        edited, expected = ev.get("edited_files"), ev.get("expected_files")
+        if not is_str_list(edited) or not is_str_list(expected):
+            return [malformed(self._NAME, "edited_files/expected_files must be lists of strings")]
+        unexpected = sorted(set(edited) - set(expected))
+        facts = {"edited_files": sorted(edited), "expected_files": sorted(expected), "unexpected": unexpected}
+        if unexpected:
+            return [failing(self._NAME, fc.TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES,
+                            first_broken_link="edit -> files", facts=facts)]
+        return [passing(self._NAME, facts=facts)]
+
+
+class RewriteAvoidanceOracle:
+    """A SMALL-scoped edit must not churn past the scenario's max_churn_ratio (changed lines
+    / total lines). Only adjudicated when edit_scope == 'small'; the bound is evidence-
+    supplied (not a hidden oracle opinion)."""
+
+    _NAME = "RewriteAvoidanceOracle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ev = slice_of(product_evidence, "rewrite_avoidance")
+        if ev is ABSENT:
+            return [skipping(self._NAME, reason="no rewrite_avoidance evidence")]
+        if ev is MALFORMED:
+            return [malformed(self._NAME, "rewrite_avoidance must be a dict")]
+        scope = ev.get("edit_scope")
+        if not isinstance(scope, str):
+            return [malformed(self._NAME, "edit_scope must be a string")]
+        if scope != "small":
+            return [skipping(self._NAME, reason=f"edit_scope={scope!r} not adjudicated (small-only)")]
+        changed, total, bound = ev.get("changed_lines"), ev.get("total_lines"), ev.get("max_churn_ratio")
+        if not is_int(changed) or not is_int(total) or not is_num(bound):
+            return [malformed(self._NAME, "changed_lines/total_lines int (not bool) + max_churn_ratio number required")]
+        if total <= 0:
+            return [malformed(self._NAME, "total_lines must be > 0", {"total_lines": total})]
+        ratio = changed / total
+        facts = {"edit_scope": scope, "changed_lines": changed, "total_lines": total,
+                 "churn_ratio": ratio, "max_churn_ratio": float(bound)}
+        if ratio > bound:
+            return [failing(self._NAME, fc.SMALL_EDIT_FULL_REWRITE,
+                            first_broken_link="small_edit -> churn", facts=facts)]
+        return [passing(self._NAME, facts=facts)]
+
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/oracles/_edit_evidence.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Shared evidence-slicing + strict type guards for the P8D edit oracles.
+
+The contract (gpt-5.5): a slice that is ABSENT → SKIP; a slice that is PRESENT but malformed
+(not a dict, or a field of the wrong type) → FAIL EDIT_ORACLE_EVIDENCE_MALFORMED (→ INVALID_RUN).
+Never coerce a wrong-typed value into a pass. `bool` is NOT accepted as an int/number.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from .schema import OracleResult, failing
+
+ABSENT = object()  # the slice key is not present at all → SKIP
+MALFORMED = object()  # the slice key is present but is not a dict → FAIL
+
+
+def slice_of(product_evidence: dict[str, Any] | None, key: str) -> Any:
+    """ABSENT if the key is missing, MALFORMED if present-but-not-a-dict, else the dict."""
+    if not product_evidence or key not in product_evidence:
+        return ABSENT
+    val = product_evidence.get(key)
+    return val if isinstance(val, dict) else MALFORMED
+
+
+def is_str_list(x: Any) -> bool:
+    return isinstance(x, list) and all(isinstance(i, str) for i in x)
+
+
+def is_str_dict(x: Any) -> bool:
+    return isinstance(x, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in x.items())
+
+
+def is_int(x: Any) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def is_num(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def malformed(oracle: str, why: str, facts: dict[str, Any] | None = None) -> OracleResult:
+    return failing(
+        oracle,
+        fc.EDIT_ORACLE_EVIDENCE_MALFORMED,
+        first_broken_link="edit_evidence -> oracle",
+        facts={"why": why, **(facts or {})},
+    )
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/oracles/manual_edit_preservation.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,240p' harness/build_soak/classify.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Manual-edit-preservation oracles (P8D).
+
+Zero-opinion checks that an edit preserved work it must not destroy: a user's direct/manual
+override survives a later agent edit, comment anchors survive text edits and section
+reorders (set membership, not position), and an UNEDITED section's screen label stays
+stable. Pure functions over the ``product_evidence`` dossier; SKIP on an absent slice,
+fail closed (EDIT_ORACLE_EVIDENCE_MALFORMED → INVALID_RUN) on a malformed one.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from ._edit_evidence import ABSENT, MALFORMED, is_str_dict, is_str_list, malformed, slice_of
+from .schema import OracleResult, failing, passing, skipping
+
+
+class ManualEditPreservationOracle:
+    """Every manual/direct override snippet must still be present (verbatim) in the post-edit
+    file — an agent edit must not clobber the user's own change. (The producer supplies the
+    exact verbatim snippet that must survive.)"""
+
+    _NAME = "ManualEditPreservationOracle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ev = slice_of(product_evidence, "manual_edit")
+        if ev is ABSENT:
+            return [skipping(self._NAME, reason="no manual_edit evidence")]
+        if ev is MALFORMED:
+            return [malformed(self._NAME, "manual_edit must be a dict")]
+        overrides, final = ev.get("overrides"), ev.get("final_files")
+        if not is_str_dict(overrides) or not is_str_dict(final):
+            return [malformed(self._NAME, "overrides/final_files must be dicts of str->str")]
+        clobbered = sorted(p for p, snippet in overrides.items() if snippet not in final.get(p, ""))
+        facts = {"override_paths": sorted(overrides), "clobbered": clobbered}
+        if clobbered:
+            return [failing(self._NAME, fc.MANUAL_EDIT_CLOBBERED,
+                            first_broken_link="agent_edit -> manual_override", facts=facts)]
+        return [passing(self._NAME, facts=facts)]
+
+
+class CommentAnchorOracle:
+    """Comment anchors present before the edit must all still be present after it — they
+    survive a text edit and MOVE with a section reorder (set membership, not position)."""
+
+    _NAME = "CommentAnchorOracle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ev = slice_of(product_evidence, "comment_anchors")
+        if ev is ABSENT:
+            return [skipping(self._NAME, reason="no comment_anchors evidence")]
+        if ev is MALFORMED:
+            return [malformed(self._NAME, "comment_anchors must be a dict")]
+        before, after = ev.get("before"), ev.get("after")
+        if not is_str_list(before) or not is_str_list(after):
+            return [malformed(self._NAME, "before/after must be lists of strings")]
+        lost = sorted(set(before) - set(after))
+        facts = {"before": sorted(before), "after": sorted(after), "lost": lost}
+        if lost:
+            return [failing(self._NAME, fc.COMMENT_ANCHOR_LOST,
+                            first_broken_link="edit -> comment_anchor", facts=facts)]
+        return [passing(self._NAME, facts=facts)]
+
+
+class ScreenLabelOracle:
+    """A section NOT in the edit's targets must keep the same screen label — an edit to one
+    section must not perturb another section's stable identity."""
+
+    _NAME = "ScreenLabelOracle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ev = slice_of(product_evidence, "screen_labels")
+        if ev is ABSENT:
+            return [skipping(self._NAME, reason="no screen_labels evidence")]
+        if ev is MALFORMED:
+            return [malformed(self._NAME, "screen_labels must be a dict")]
+        edited, before, after = ev.get("edited_sections"), ev.get("before"), ev.get("after")
+        if not is_str_list(edited) or not is_str_dict(before) or not is_str_dict(after):
+            return [malformed(self._NAME, "edited_sections list[str] + before/after dict[str,str] required")]
+        edited_set = set(edited)
+        unstable = sorted(
+            sec for sec, label in before.items()
+            if sec not in edited_set and after.get(sec) != label  # unedited section's label changed
+        )
+        facts = {"edited_sections": sorted(edited_set), "unstable": unstable}
+        if unstable:
+            return [failing(self._NAME, fc.SCREEN_LABEL_UNSTABLE,
+                            first_broken_link="edit -> unedited_section_label", facts=facts)]
+        return [passing(self._NAME, facts=facts)]
+
+ succeeded in 0ms:
+"""The deterministic classifier (guidelines §13, §16).
+
+Runs the oracle layers in the §16 order; the FIRST broken link wins. The classifier
+is a pure function of durable evidence — it MUST NOT call an LLM, and it ignores any
+agent/Claude/Codex prose ("agent_comments_ignored_for_adjudication": true, §13).
+
+Outcome mapping:
+  * a HarnessValidity / Contract failure (an evidence/contract defect, not a product
+    defect) -> INVALID_RUN (§8): the harness couldn't adjudicate; never a pass.
+  * any product-oracle failure -> FAIL with the code's severity (§12).
+  * no failure -> PASS.
+
+It also implements the §17 no-fluke replay policy as a pure function: a run that
+failed once then passed on exact replay is recorded as FAIL /
+INTERMITTENT_<original_code> (same severity), never PASS — "fluke" has no
+operational meaning.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from . import failure_codes as fc
+from .events import NormalizationError, normalize_events
+from .evidence import EvidenceManifest, load_manifest, verify_evidence_unchanged
+from .oracles import (
+    BROWSER_EVIDENCE_ORACLES,
+    TARGETED_EDIT_ORACLES,
+    ContractOracle,
+    EventChainOracle,
+    HarnessValidityOracle,
+    OutputTruthOracle,
+    ProviderLedgerOracle,
+    RevisionOracle,
+    ToolScopeOracle,
+)
+from .oracles.schema import OracleResult
+
+CLASSIFICATION_NAME = "classification.json"
+
+# Default "likely files" for the most common Build chain breaks (§16 example).
+# Advisory only — surfaced to the repair loop, never adjudicated on.
+_LIKELY_FILES: dict[str, list[str]] = {
+    fc.NO_REPLAN_AFTER_REVISION: [
+        "packages/core/src/disco/core/loop/plans.py",
+        "packages/core/src/disco/core/loop/engine.py",
+        "packages/agent-server/src/disco/agent_server/control_ops.py",
+    ],
+    fc.WRITE_TOOL_ATTEMPTED_IN_PLANNING: [
+        "packages/core/src/disco/core/loop/engine.py",  # _gate_planning_mode
+        "packages/core/src/disco/core/loop/driver.py",
+    ],
+    fc.WRITE_TOOL_ALLOWED_IN_PLANNING: [
+        "packages/core/src/disco/core/loop/engine.py",
+        "packages/core/src/disco/core/loop/driver.py",
+    ],
+    fc.APPROVE_PLAN_NO_EXECUTION: [
+        "packages/core/src/disco/core/loop/finish.py",
+        "packages/core/src/disco/core/loop/engine.py",
+    ],
+    fc.ACTION_NO_OBSERVATION: [
+        "packages/core/src/disco/core/loop/observe.py",
+    ],
+}
+
+
+def classify(
+    events_raw: list[Any],
+    *,
+    scenario: dict[str, Any] | None = None,
+    run_id: str = "",
+    conversation_id: str = "",
+    commit: str = "",
+    seed: int | None = None,
+    evidence_intact: bool = True,
+    available_evidence: set[str] | None = None,
+    workspace_manifest: dict[str, Any] | None = None,
+    preview: dict[str, Any] | None = None,
+    tool_scope: list[dict[str, Any]] | None = None,
+    autonomous: bool | None = None,
+    revision_meta: dict[str, Any] | None = None,
+    provider_ledger: list[dict[str, Any]] | None = None,
+    product_evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Classify one run from its raw event log (full-event dicts OR DB rows) plus
+    optional captured evidence. Returns the §13 classification dict.
+
+    `autonomous`, when given (e.g. from the run manifest), overrides the scenario's
+    autonomy: an autonomous build legitimately skips the AWAITING_PLAN_APPROVAL gate
+    (it auto-approves inline), so the event-chain approval-ordering check relaxes the
+    awaiting link for it."""
+    # An explicit autonomous flag (manifest) overrides the scenario declaration.
+    if autonomous is not None:
+        scenario = {**(scenario or {}), "autonomous": autonomous}
+
+    # Normalize the event log; a parse failure is a harness-validity defect.
+    parse_ok = True
+    try:
+        events = normalize_events(events_raw)
+    except (NormalizationError, ValueError, TypeError):
+        events, parse_ok = [], False
+
+    # The evidence categories actually captured for this run — derived from the
+    # supplied kwargs so the ContractOracle judges what we really have (a caller
+    # may also pass an explicit set, which we union in).
+    present: set[str] = set(available_evidence or set())
+    present.add("events")
+    if workspace_manifest is not None:
+        present.add("workspace")
+    if preview is not None:
+        present.add("preview")
+    if tool_scope is not None:
+        present.add("tool_scope")
+
+    results: list[OracleResult] = []
+
+    # 1. harness validity (evidence integrity + parse + presence).
+    results += HarnessValidityOracle().check(
+        events, evidence_intact=evidence_intact, parse_ok=parse_ok
+    )
+    first_fail = _first_fail(results)
+    if first_fail is None:
+        # 2. scenario contract.
+        results += ContractOracle().check(scenario, available_evidence=present)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 3. event chain.
+        results += EventChainOracle().check(events, scenario=scenario)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 4. tool scope.
+        results += ToolScopeOracle().check(events, scenario=scenario, tool_scope=tool_scope)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 5. revision.
+        results += RevisionOracle().check(events, scenario=scenario, meta=revision_meta)
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 6. output truth.
+        results += OutputTruthOracle().check(
+            events, scenario=scenario, workspace_manifest=workspace_manifest, preview=preview
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 7. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
+        results += ProviderLedgerOracle().check(
+            events, scenario=scenario, provider_ledger=provider_ledger
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 8. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
+        # slice, so a headless run (product_evidence is None) is unaffected; a product-
+        # harness run enforces the real UI path.
+        for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
+            results += _oracle_cls().check(product_evidence=product_evidence)
+            first_fail = _first_fail(results)
+            if first_fail is not None:
+                break
+    if first_fail is None:
+        # 9. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
+        # product_evidence slice, so non-edit runs are unaffected; an edit-harness run
+        # enforces targeted-edit + manual-preservation discipline. Producer = P1B-LIVE.
+        for _oracle_cls in TARGETED_EDIT_ORACLES:
+            results += _oracle_cls().check(product_evidence=product_evidence)
+            first_fail = _first_fail(results)
+            if first_fail is not None:
+                break
+
+    required_evidence_present = not any(
+        r.failed and r.code in fc.HARNESS_VALIDITY_CODES for r in results
+    )
+
+    if first_fail is None:
+        status, severity, code, broken, facts = fc.PASS, fc.NONE, None, None, {}
+    elif first_fail.code in fc.HARNESS_VALIDITY_CODES:
+        status, severity = fc.INVALID_RUN, fc.NONE
+        code, broken, facts = first_fail.code, first_fail.first_broken_link, dict(first_fail.facts)
+    else:
+        status = fc.FAIL
+        code = first_fail.code or fc.UNKNOWN_FAILURE
+        severity = fc.severity_for(code)
+        broken, facts = first_fail.first_broken_link, dict(first_fail.facts)
+
+    classification: dict[str, Any] = {
+        "status": status,
+        "severity": severity,
+        "code": code,
+        "first_broken_link": broken,
+        "scenario_id": (scenario or {}).get("id") if scenario else None,
+        "run_id": run_id,
+        "conversation_id": conversation_id,
+        "commit": commit,
+        "seed": seed,
+        "facts": facts,
+        "oracle_results": [r.to_dict() for r in results],
+        "required_evidence_present": required_evidence_present,
+        "replay": {"attempted": False, "result": "not_attempted", "run_id": None},
+        "accepted_by": "oracle",
+        "agent_comments_ignored_for_adjudication": True,
+    }
+    if code and code in _LIKELY_FILES:
+        classification["likely_files"] = list(_LIKELY_FILES[code])
+    return classification
+
+
+def _first_fail(results: list[OracleResult]) -> OracleResult | None:
+    for r in results:
+        if r.failed:
+            return r
+    return None
+
+
+def classify_run_folder(
+    folder: str | Path, *, scenario: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Classify a frozen run folder: load the manifest, verify evidence integrity
+    (a mismatch -> INVALID_RUN), read the event log, classify, and write
+    classification.json into the folder. Returns the classification dict."""
+    base = Path(folder)
+    manifest: EvidenceManifest | None = None
+    evidence_intact = True
+    try:
+        manifest = load_manifest(base)
+        integrity = verify_evidence_unchanged(base, manifest)
+        evidence_intact = integrity.intact
+    except (FileNotFoundError, ValueError, json.JSONDecodeError):
+        manifest = None
+
+    events_raw: list[Any] = []
+    events_rel = (manifest.evidence_files.get("events") if manifest else None) or "events.jsonl"
+    events_path = base / events_rel
+    if not events_path.is_file():
+        # try the conventional conversation-scoped path
+        for candidate in base.rglob("events.jsonl"):
+            events_path = candidate
+            break
+    if events_path.is_file():
+        events_raw = _read_jsonl(events_path)
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/oracles/__init__.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/failure_codes.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Objective oracle layers (guidelines §10). Each emits structured OracleResult
+facts — never prose — and never calls an LLM.
+
+This foundation slice ships the deterministic, event-log-adjudicable layers:
+HarnessValidity, Contract, EventChain, ToolScope, Revision, OutputTruth. The
+UI/Transport/Runtime oracles belong to the later live/UI-runner slices.
+"""
+
+from __future__ import annotations
+
+from .browser_evidence import (
+    BROWSER_EVIDENCE_ORACLES,
+    BrowserWSOracle,
+    CleanupOracle,
+    ExportDownloadOracle,
+    LifecycleOracle,
+    PreviewOwnershipOracle,
+    ShowToUserOracle,
+    SidecarStopOracle,
+    VerificationGateOracle,
+)
+from .contract import ContractOracle
+from .event_chain import EventChainOracle
+from .harness_validity import HarnessValidityOracle
+from .manual_edit_preservation import (
+    CommentAnchorOracle,
+    ManualEditPreservationOracle,
+    ScreenLabelOracle,
+)
+from .output_truth import OutputTruthOracle
+from .provider_ledger import ProviderLedgerOracle
+from .revision import RevisionOracle
+from .schema import OracleResult, failing, passing, skipping
+from .targeted_edit import RewriteAvoidanceOracle, TargetedEditOracle
+from .tool_scope import ToolScopeOracle
+
+# P8D targeted/manual-edit oracles — wired into classify() SKIP-safe (each SKIPs without its
+# product_evidence slice; the live producer is P1B-LIVE), mirroring BROWSER_EVIDENCE_ORACLES.
+TARGETED_EDIT_ORACLES = (
+    TargetedEditOracle,
+    RewriteAvoidanceOracle,
+    ManualEditPreservationOracle,
+    CommentAnchorOracle,
+    ScreenLabelOracle,
+)
+
+__all__ = [
+    "BROWSER_EVIDENCE_ORACLES",
+    "TARGETED_EDIT_ORACLES",
+    "BrowserWSOracle",
+    "CleanupOracle",
+    "CommentAnchorOracle",
+    "ContractOracle",
+    "EventChainOracle",
+    "ExportDownloadOracle",
+    "HarnessValidityOracle",
+    "LifecycleOracle",
+    "ManualEditPreservationOracle",
+    "OracleResult",
+    "OutputTruthOracle",
+    "PreviewOwnershipOracle",
+    "ProviderLedgerOracle",
+    "RevisionOracle",
+    "RewriteAvoidanceOracle",
+    "ScreenLabelOracle",
+    "ShowToUserOracle",
+    "SidecarStopOracle",
+    "TargetedEditOracle",
+    "ToolScopeOracle",
+    "VerificationGateOracle",
+    "failing",
+    "passing",
+    "skipping",
+]
+
+ succeeded in 0ms:
+"""The Build Soak failure taxonomy (guidelines §12) + run outcomes (§8).
+
+Every `FAIL` must carry a code that lives here, with a known severity. No generic
+"failed" bucket is allowed in promotion runs. `UNKNOWN_FAILURE` exists for
+development only and is P0 until the classifier learns the case (§13).
+
+Codes are plain string constants (not an enum) so a frozen evidence
+`classification.json` round-trips byte-for-byte without enum-name coupling, and so
+this module stays import-free / disco-free.
+"""
+
+from __future__ import annotations
+
+# ---- run outcomes (§8) ------------------------------------------------------
+
+PASS = "PASS"
+FAIL = "FAIL"
+INVALID_RUN = "INVALID_RUN"
+INFRA_FAILURE = "INFRA_FAILURE"
+
+OUTCOMES = frozenset({PASS, FAIL, INVALID_RUN, INFRA_FAILURE})
+
+# ---- severities (§12) -------------------------------------------------------
+
+P0 = "P0"  # release blocker
+P1 = "P1"  # major reliability bug
+P2 = "P2"  # quality bug
+NONE = "NONE"  # PASS / no failure
+
+SEVERITIES = frozenset({P0, P1, P2, NONE})
+
+# ---- P0 — release blockers (§12) --------------------------------------------
+
+NO_USER_EVENT_AFTER_SUBMIT = "NO_USER_EVENT_AFTER_SUBMIT"
+NO_PLAN_AFTER_USER_TURN = "NO_PLAN_AFTER_USER_TURN"
+NO_REPLAN_AFTER_REVISION = "NO_REPLAN_AFTER_REVISION"
+WRITE_TOOL_ALLOWED_IN_PLANNING = "WRITE_TOOL_ALLOWED_IN_PLANNING"
+WRITE_TOOL_ATTEMPTED_IN_PLANNING = "WRITE_TOOL_ATTEMPTED_IN_PLANNING"
+WRONG_TOOL_REJECTION_ABORTS_LOOP = "WRONG_TOOL_REJECTION_ABORTS_LOOP"
+APPROVE_PLAN_NO_EXECUTION = "APPROVE_PLAN_NO_EXECUTION"
+DUPLICATE_EXECUTION_AFTER_APPROVAL = "DUPLICATE_EXECUTION_AFTER_APPROVAL"
+EXECUTION_NO_ACTION = "EXECUTION_NO_ACTION"
+ACTION_NO_OBSERVATION = "ACTION_NO_OBSERVATION"
+FALSE_FINISH_NO_OUTPUT = "FALSE_FINISH_NO_OUTPUT"
+FALSE_FINISH_PREVIEW_BROKEN = "FALSE_FINISH_PREVIEW_BROKEN"
+DUPLICATE_KICK_ON_RESUME = "DUPLICATE_KICK_ON_RESUME"
+EVENT_LOG_STATE_DIVERGENCE = "EVENT_LOG_STATE_DIVERGENCE"
+WS_FRAME_DROPPED_NO_ERROR = "WS_FRAME_DROPPED_NO_ERROR"
+UI_ENABLED_DEAD_CONTROL = "UI_ENABLED_DEAD_CONTROL"
+UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+
+# ---- P1 — major reliability bugs (§12) --------------------------------------
+
+PLAN_REVISION_NOT_INCREMENTED = "PLAN_REVISION_NOT_INCREMENTED"
+STALE_PLAN_USED_AFTER_FOLLOWUP = "STALE_PLAN_USED_AFTER_FOLLOWUP"
+PLAN_APPROVED_STATUS_MISSING = "PLAN_APPROVED_STATUS_MISSING"
+TOOL_SCOPE_MISMATCH = "TOOL_SCOPE_MISMATCH"
+TOOL_REJECTION_NOT_VISIBLE_TO_MODEL = "TOOL_REJECTION_NOT_VISIBLE_TO_MODEL"
+MODEL_TOLD_WRONG_MODE = "MODEL_TOLD_WRONG_MODE"
+STUCK_RUNNING_NO_EVENTS = "STUCK_RUNNING_NO_EVENTS"
+PREVIEW_TRUTH_MISMATCH = "PREVIEW_TRUTH_MISMATCH"
+ARTIFACT_TRUTH_MISMATCH = "ARTIFACT_TRUTH_MISMATCH"
+# CXT-5: a final deliverable contains DESTRUCTIVE elision (an "(elided)"/"[trimmed]"/
+# "content omitted"/"truncated for brevity" marker with NO recover cue) — unrecoverable
+# placeholder text shipped into a deliverable. Rule set v1 (disco.core.observations).
+DESTRUCTIVE_ELISION = "DESTRUCTIVE_ELISION"
+# P1/HARN-1a: provider-ledger violations of the soak constraint. A provider call went
+# to a FORBIDDEN host (e.g. openrouter) or a host that isn't the required one; used the
+# WRONG model (not the pinned soak model); or fired AFTER the conversation went terminal
+# (runaway burn). These enforce the MiniMax-only / no-OpenRouter / zero-calls-after-terminal
+# rule from the provider-call-ledger evidence. All P0.
+PROVIDER_FORBIDDEN = "PROVIDER_FORBIDDEN"
+PROVIDER_WRONG_MODEL = "PROVIDER_WRONG_MODEL"
+PROVIDER_CALL_AFTER_TERMINAL = "PROVIDER_CALL_AFTER_TERMINAL"
+# P1/HARN-2: browser product-harness oracle violations (judged over the HARN-1b browser
+# evidence streams). These prove the REAL UI path — not just that the engine built files.
+BROWSER_WS_NOT_CONNECTED = "BROWSER_WS_NOT_CONNECTED"  # UI never opened the build WS
+LIFECYCLE_SEQUENCE_INVALID = "LIFECYCLE_SEQUENCE_INVALID"  # bad status progression / no clean terminal
+SIDECAR_NOT_STOPPED = "SIDECAR_NOT_STOPPED"  # sidecar/provider alive after terminal
+PREVIEW_OWNERSHIP_VIOLATION = "PREVIEW_OWNERSHIP_VIOLATION"  # model owned a port/url, not the platform
+ARTIFACT_NOT_SHOWN_TO_USER = "ARTIFACT_NOT_SHOWN_TO_USER"  # file exists but UI never showed it
+VERIFICATION_GATE_BYPASSED = "VERIFICATION_GATE_BYPASSED"  # finished without ready_for_*_verification
+EXPORT_DOWNLOAD_MISSING = "EXPORT_DOWNLOAD_MISSING"  # export claimed but no real download
+WORKSPACE_NOT_CLEANED = "WORKSPACE_NOT_CLEANED"  # orphan container/sandbox/preview after terminal
+NO_CLEAR_FAILURE_TO_USER = "NO_CLEAR_FAILURE_TO_USER"
+OBSERVATION_WITHOUT_ACTION = "OBSERVATION_WITHOUT_ACTION"
+WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
+# The run was required to FINISH and deliver output (scenario asserts
+# workspace/preview output and/or terminal_status_in) but ended at a non-finished,
+# non-required terminal — e.g. a no-progress / actionless PAUSE, or never reached a
+# terminal at all. NOT a "false finish" (nothing claimed finished); a "never
+# finished". Fail-closed: a build that does not complete is not a PASS even if some
+# files happen to exist (migration 2026_06_24_paused_incomplete_not_pass).
+BUILD_DID_NOT_FINISH = "BUILD_DID_NOT_FINISH"
+
+# P8D — targeted-edit / manual-edit discipline (an edit touched only what it should,
+# preserved direct work + anchors, and did not rewrite the world).
+TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES = "TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES"
+SMALL_EDIT_FULL_REWRITE = "SMALL_EDIT_FULL_REWRITE"  # a small edit churned past the bound
+MANUAL_EDIT_CLOBBERED = "MANUAL_EDIT_CLOBBERED"  # a direct/manual override was overwritten
+COMMENT_ANCHOR_LOST = "COMMENT_ANCHOR_LOST"  # an anchor disappeared (text edit / reorder)
+# present-but-malformed edit evidence — a harness-validity failure (→ INVALID_RUN), never a
+# silent pass.
+EDIT_ORACLE_EVIDENCE_MALFORMED = "EDIT_ORACLE_EVIDENCE_MALFORMED"
+
+# ---- P2 — quality bugs (§12) ------------------------------------------------
+
+SCREEN_LABEL_UNSTABLE = "SCREEN_LABEL_UNSTABLE"  # an unedited section's screen label changed
+SLOW_FIRST_PLAN = "SLOW_FIRST_PLAN"
+EXCESSIVE_READS_BEFORE_PLAN = "EXCESSIVE_READS_BEFORE_PLAN"
+MISSING_DONE_CONDITIONS = "MISSING_DONE_CONDITIONS"
+LOW_QUALITY_PLAN = "LOW_QUALITY_PLAN"
+MISSING_PROGRESS_EVENTS = "MISSING_PROGRESS_EVENTS"
+WEAK_FINAL_SUMMARY = "WEAK_FINAL_SUMMARY"
+
+# ---- harness-validity codes (§8 INVALID_RUN) --------------------------------
+# These do NOT describe a product failure; they say the harness did not collect
+# enough durable evidence to adjudicate. The classifier maps them to INVALID_RUN.
+
+NO_EVENTS = "NO_EVENTS"
+UNPARSEABLE_EVENTS = "UNPARSEABLE_EVENTS"
+EVIDENCE_HASH_MISMATCH = "EVIDENCE_HASH_MISMATCH"
+MISSING_REQUIRED_EVIDENCE = "MISSING_REQUIRED_EVIDENCE"
+SCENARIO_CONTRACT_UNSATISFIABLE = "SCENARIO_CONTRACT_UNSATISFIABLE"
+# A POST-create runner-side outcome that is NOT adjudicable as a product result: the
+# runner could not obtain a terminal verdict. RUN_INTERRUPTED — a mid-run transport loss
+# (server crashed / network dropped). RUN_TIMEOUT_WHILE_PROGRESSING (Bug 15) — the hard
+# cap was hit while the build was STILL actively progressing (a slow-but-advancing build
+# cut off mid-flight), so it must NOT be recorded as a product BUILD_DID_NOT_FINISH; §17
+# re-runs an INVALID_RUN instead of freezing a false product failure.
+RUN_INTERRUPTED = "RUN_INTERRUPTED"
+RUN_TIMEOUT_WHILE_PROGRESSING = "RUN_TIMEOUT_WHILE_PROGRESSING"
+# The host ProjectStore workspace snapshot never reached the build's AGENT-FINAL state
+# within the snapshot-wait budget — i.e. the snapshot's on-disk bytes for a declared file
+# never matched what the agent last wrote to it (a stale/slow flush, or a multi-revision
+# build whose later-revision bytes had not yet flushed). This is NOT a product
+# ARTIFACT_TRUTH_MISMATCH (the harness read the snapshot before it settled): the collect
+# FAILS FAST here rather than laundering a stale capture into a false product failure or a
+# silent best-effort pass, so §17 re-runs it. Bounded — never hangs.
+WORKSPACE_SNAPSHOT_NOT_READY = "WORKSPACE_SNAPSHOT_NOT_READY"
+# A content (must_contain / must_not_contain / exact) assertion mismatched, but EVERY
+# mismatching file was captured on a NON-AUTHORITATIVE basis (`unproven_extended_stability`
+# / `unknown` — accepted via extended content-stability, with NO file_write raw-sha and no
+# qualifying full readback to prove the bytes). The captured snapshot may be a stale
+# pre-flush copy while the ProjectStore is actually correct, so the mismatch is UNRELIABLE
+# and must NOT be reported as a definitive product ARTIFACT_TRUTH_MISMATCH. It is recorded
+# as harness-validity evidence → INVALID_RUN so §17 re-runs it. A mismatch on a PROVEN basis
+# (raw_sha / rendered_readback / absent) in the SAME run always WINS this fold and stays a
+# hard ARTIFACT_TRUTH_MISMATCH (a proven regression is NEVER masked by an unproven one).
+WORKSPACE_SNAPSHOT_UNVERIFIED = "WORKSPACE_SNAPSHOT_UNVERIFIED"
+
+HARNESS_VALIDITY_CODES = frozenset(
+    {
+        NO_EVENTS,
+        UNPARSEABLE_EVENTS,
+        EVIDENCE_HASH_MISMATCH,
+        MISSING_REQUIRED_EVIDENCE,
+        SCENARIO_CONTRACT_UNSATISFIABLE,
+        RUN_INTERRUPTED,
+        RUN_TIMEOUT_WHILE_PROGRESSING,
+        WORKSPACE_SNAPSHOT_NOT_READY,
+        WORKSPACE_SNAPSHOT_UNVERIFIED,
+        EDIT_ORACLE_EVIDENCE_MALFORMED,  # P8D: present-but-malformed edit evidence → INVALID_RUN
+    }
+)
+
+
+# The severity of every product failure code. (Harness-validity codes are not in
+# here — they resolve to INVALID_RUN, which has its own outcome, not a severity.)
+SEVERITY_BY_CODE: dict[str, str] = {
+    # P0
+    NO_USER_EVENT_AFTER_SUBMIT: P0,
+    NO_PLAN_AFTER_USER_TURN: P0,
+    NO_REPLAN_AFTER_REVISION: P0,
+    WRITE_TOOL_ALLOWED_IN_PLANNING: P0,
+    WRITE_TOOL_ATTEMPTED_IN_PLANNING: P0,
+    WRONG_TOOL_REJECTION_ABORTS_LOOP: P0,
+    APPROVE_PLAN_NO_EXECUTION: P0,
+    DUPLICATE_EXECUTION_AFTER_APPROVAL: P0,
+    EXECUTION_NO_ACTION: P0,
+    ACTION_NO_OBSERVATION: P0,
+    FALSE_FINISH_NO_OUTPUT: P0,
+    FALSE_FINISH_PREVIEW_BROKEN: P0,
+    DUPLICATE_KICK_ON_RESUME: P0,
+    EVENT_LOG_STATE_DIVERGENCE: P0,
+    WS_FRAME_DROPPED_NO_ERROR: P0,
+    UI_ENABLED_DEAD_CONTROL: P0,
+    PROVIDER_FORBIDDEN: P0,
+    PROVIDER_WRONG_MODEL: P0,
+    PROVIDER_CALL_AFTER_TERMINAL: P0,
+    BROWSER_WS_NOT_CONNECTED: P0,
+    LIFECYCLE_SEQUENCE_INVALID: P0,
+    SIDECAR_NOT_STOPPED: P0,
+    PREVIEW_OWNERSHIP_VIOLATION: P0,
+    ARTIFACT_NOT_SHOWN_TO_USER: P0,
+    VERIFICATION_GATE_BYPASSED: P0,
+    EXPORT_DOWNLOAD_MISSING: P0,
+    WORKSPACE_NOT_CLEANED: P0,
+    # P8D targeted/manual-edit discipline
+    TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES: P1,
+    SMALL_EDIT_FULL_REWRITE: P1,
+    MANUAL_EDIT_CLOBBERED: P1,
+    COMMENT_ANCHOR_LOST: P1,
+    SCREEN_LABEL_UNSTABLE: P2,
+    UNKNOWN_FAILURE: P0,
+    # P1
+    PLAN_REVISION_NOT_INCREMENTED: P1,
+    STALE_PLAN_USED_AFTER_FOLLOWUP: P1,
+    PLAN_APPROVED_STATUS_MISSING: P1,
+    TOOL_SCOPE_MISMATCH: P1,
+    TOOL_REJECTION_NOT_VISIBLE_TO_MODEL: P1,
+    MODEL_TOLD_WRONG_MODE: P1,
+    STUCK_RUNNING_NO_EVENTS: P1,
+    PREVIEW_TRUTH_MISMATCH: P1,
+    ARTIFACT_TRUTH_MISMATCH: P1,
+    DESTRUCTIVE_ELISION: P1,
+    NO_CLEAR_FAILURE_TO_USER: P1,
+    OBSERVATION_WITHOUT_ACTION: P1,
+    WRITE_BEFORE_REVISION_APPROVAL: P1,
+    BUILD_DID_NOT_FINISH: P1,
+    # P2
+    SLOW_FIRST_PLAN: P2,
+    EXCESSIVE_READS_BEFORE_PLAN: P2,
+    MISSING_DONE_CONDITIONS: P2,
+    LOW_QUALITY_PLAN: P2,
+    MISSING_PROGRESS_EVENTS: P2,
+    WEAK_FINAL_SUMMARY: P2,
+}
+
+# Every product failure code, for validation.
+PRODUCT_FAILURE_CODES = frozenset(SEVERITY_BY_CODE)
+
+# The "intermittent" prefix (§17): a run that failed once then passed on exact
+# replay is recorded as FAIL with code INTERMITTENT_<original_code>, same severity.
+INTERMITTENT_PREFIX = "INTERMITTENT_"
+
+
+def severity_for(code: str) -> str:
+    """Severity for a (possibly INTERMITTENT_-prefixed) failure code. Unknown
+    codes are treated as P0 (§13: an unclassified failure is a release blocker)."""
+    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    return SEVERITY_BY_CODE.get(base, P0)
+
+
+def is_known_code(code: str) -> bool:
+    base = code[len(INTERMITTENT_PREFIX):] if code.startswith(INTERMITTENT_PREFIX) else code
+    return base in PRODUCT_FAILURE_CODES or base in HARNESS_VALIDITY_CODES
+
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/tests/test_targeted_edit_oracles.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""P8D tests: the targeted-edit + manual-edit-preservation oracles — pass, fail, absent→SKIP,
+present-but-malformed→FAIL(EDIT_ORACLE_EVIDENCE_MALFORMED), and the SKIP-safe classify() wiring."""
+
+from __future__ import annotations
+
+from harness.build_soak import failure_codes as fc
+from harness.build_soak.classify import classify
+from harness.build_soak.oracles import (
+    TARGETED_EDIT_ORACLES,
+    CommentAnchorOracle,
+    ManualEditPreservationOracle,
+    RewriteAvoidanceOracle,
+    ScreenLabelOracle,
+    TargetedEditOracle,
+)
+
+from _eventlog import clean_smoke_log
+
+
+def _scn():
+    return {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+
+
+def _one(oracle, ev):
+    return oracle().check(product_evidence=ev)[0]
+
+
+# --- TargetedEditOracle -------------------------------------------------------
+def test_targeted_edit_subset_passes() -> None:
+    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": ["index.html"], "expected_files": ["index.html", "style.css"]}})
+    assert r.passed
+
+
+def test_targeted_edit_unexpected_file_fails() -> None:
+    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": ["index.html", "secrets.env"], "expected_files": ["index.html"]}})
+    assert r.failed and r.code == fc.TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES
+    assert r.facts["unexpected"] == ["secrets.env"]
+
+
+def test_targeted_edit_absent_skips() -> None:
+    assert _one(TargetedEditOracle, None).skipped
+
+
+def test_targeted_edit_malformed_fails_closed() -> None:
+    r = _one(TargetedEditOracle, {"targeted_edit": {"edited_files": "index.html", "expected_files": []}})
+    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+
+
+# --- RewriteAvoidanceOracle ---------------------------------------------------
+def test_small_edit_within_bound_passes() -> None:
+    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 3, "total_lines": 100, "max_churn_ratio": 0.20}})
+    assert r.passed and r.facts["churn_ratio"] == 0.03
+
+
+def test_small_cta_edit_full_rewrite_fails() -> None:
+    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 90, "total_lines": 100, "max_churn_ratio": 0.20}})
+    assert r.failed and r.code == fc.SMALL_EDIT_FULL_REWRITE
+
+
+def test_non_small_scope_skips() -> None:
+    assert _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "rebuild", "changed_lines": 90, "total_lines": 100, "max_churn_ratio": 0.2}}).skipped
+
+
+def test_rewrite_absent_skips() -> None:
+    assert _one(RewriteAvoidanceOracle, None).skipped
+
+
+def test_rewrite_zero_total_and_missing_bound_fail_closed() -> None:
+    z = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 0, "total_lines": 0, "max_churn_ratio": 0.2}})
+    assert z.failed and z.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    m = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": 1, "total_lines": 10}})
+    assert m.failed and m.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+
+
+# --- ManualEditPreservationOracle ---------------------------------------------
+def test_manual_override_preserved_passes() -> None:
+    r = _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": {"index.html": "MY HERO"}, "final_files": {"index.html": "<h1>MY HERO</h1>"}}})
+    assert r.passed
+
+
+def test_manual_override_clobbered_fails() -> None:
+    r = _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": {"index.html": "MY HERO"}, "final_files": {"index.html": "<h1>generic</h1>"}}})
+    assert r.failed and r.code == fc.MANUAL_EDIT_CLOBBERED and r.facts["clobbered"] == ["index.html"]
+
+
+def test_manual_absent_skips_and_malformed_fails() -> None:
+    assert _one(ManualEditPreservationOracle, None).skipped
+    r = _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": ["x"], "final_files": {}}})
+    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+
+
+# --- CommentAnchorOracle ------------------------------------------------------
+def test_anchor_preserved_through_text_edit_passes() -> None:
+    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero", "lead"]}}).passed
+
+
+def test_anchor_survives_section_reorder_passes() -> None:
+    # reorder changes order, not membership → still PASS (set, not position)
+    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["lead", "hero"]}}).passed
+
+
+def test_anchor_lost_fails() -> None:
+    r = _one(CommentAnchorOracle, {"comment_anchors": {"before": ["hero", "lead"], "after": ["hero"]}})
+    assert r.failed and r.code == fc.COMMENT_ANCHOR_LOST and r.facts["lost"] == ["lead"]
+
+
+def test_anchor_absent_skips_and_malformed_fails() -> None:
+    assert _one(CommentAnchorOracle, None).skipped
+    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": "hero", "after": []}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+
+
+# --- ScreenLabelOracle --------------------------------------------------------
+def test_unedited_section_label_stable_passes() -> None:
+    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": ["hero"], "before": {"hero": "hero", "about": "about"}, "after": {"hero": "hero-new", "about": "about"}}})
+    assert r.passed  # 'about' (unedited) stable; 'hero' (edited) may change
+
+
+def test_unedited_section_label_changed_fails() -> None:
+    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": ["hero"], "before": {"about": "about"}, "after": {"about": "about-2"}}})
+    assert r.failed and r.code == fc.SCREEN_LABEL_UNSTABLE and r.facts["unstable"] == ["about"]
+
+
+def test_screen_label_absent_skips() -> None:
+    assert _one(ScreenLabelOracle, None).skipped
+
+
+# --- classify() SKIP-safe wiring (P8D oracles do not regress a clean run) ------
+def test_classify_unaffected_without_edit_evidence() -> None:
+    # no edit slices → every P8D oracle SKIPs → still PASS (no false FAIL)
+    assert classify(clean_smoke_log(), scenario=_scn())["status"] == "PASS"
+
+
+def test_classify_fails_on_unexpected_edit_file() -> None:
+    ev = {"targeted_edit": {"edited_files": ["index.html", "id_rsa"], "expected_files": ["index.html"]}}
+    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+    assert c["status"] == "FAIL" and c["code"] == fc.TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES
+
+
+def test_classify_malformed_edit_evidence_is_invalid_run() -> None:
+    ev = {"targeted_edit": {"edited_files": "nope", "expected_files": []}}
+    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+    assert c["status"] == "INVALID_RUN"  # harness-validity class, never a silent pass
+
+
+def test_all_five_oracles_are_wired() -> None:
+    assert len(TARGETED_EDIT_ORACLES) == 5
+
+
+# --- P8D code-review fixes: present-non-dict + strict types (no silent pass) ---
+_SLICE_KEY = {
+    TargetedEditOracle: "targeted_edit",
+    RewriteAvoidanceOracle: "rewrite_avoidance",
+    ManualEditPreservationOracle: "manual_edit",
+    CommentAnchorOracle: "comment_anchors",
+    ScreenLabelOracle: "screen_labels",
+}
+
+
+def test_present_non_dict_slice_is_malformed_for_every_oracle() -> None:
+    # a present-but-not-a-dict slice (e.g. []/None/str) must FAIL malformed, NOT look absent
+    for oracle, key in _SLICE_KEY.items():
+        for bad in ([], None, "x", 3):
+            r = _one(oracle, {key: bad})
+            assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (oracle.__name__, bad)
+
+
+def test_bool_is_not_accepted_as_int_for_churn() -> None:
+    r = _one(RewriteAvoidanceOracle, {"rewrite_avoidance": {"edit_scope": "small", "changed_lines": True, "total_lines": 100, "max_churn_ratio": 0.2}})
+    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+
+
+def test_non_string_list_and_dict_payloads_are_malformed() -> None:
+    assert _one(TargetedEditOracle, {"targeted_edit": {"edited_files": [123], "expected_files": ["123"]}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    assert _one(CommentAnchorOracle, {"comment_anchors": {"before": [1, 2], "after": []}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+    assert _one(ManualEditPreservationOracle, {"manual_edit": {"overrides": {"a": 1}, "final_files": {}}}).code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+
+
+def test_screen_label_malformed_fails_closed() -> None:
+    r = _one(ScreenLabelOracle, {"screen_labels": {"edited_sections": "hero", "before": {}, "after": {}}})
+    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED
+
+
+def test_classify_malformed_is_invalid_run_for_each_slice() -> None:
+    # malformed evidence in ANY P8D slice → INVALID_RUN (never a silent PASS)
+    for key in _SLICE_KEY.values():
+        c = classify(clean_smoke_log(), scenario=_scn(), product_evidence={key: []})
+        assert c["status"] == "INVALID_RUN", key
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/oracles/schema.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""The structured fact every oracle emits (guidelines §10).
+
+Each oracle returns `OracleResult` objects — structured facts, never prose. The
+classifier reads these; a human reads them; nothing interprets free text. The
+result round-trips losslessly to/from a JSON-safe dict so it lands verbatim in the
+frozen `classification.json` (§13) and the evidence dossier.
+
+Plain dataclasses (no pydantic, no disco import) keep the schema standalone and the
+serialization byte-stable.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+# Oracle result status. Distinct from the run OUTCOME (PASS/FAIL/INVALID_RUN/
+# INFRA_FAILURE): an oracle PASSES, FAILS, or is SKIPPED (not applicable to this
+# scenario, or needs evidence this slice doesn't capture — e.g. the live tool
+# scope). A SKIP is never silently a pass; the classifier records it.
+OK = "PASS"
+FAILED = "FAIL"
+SKIPPED = "SKIP"
+
+_STATUSES = frozenset({OK, FAILED, SKIPPED})
+
+
+@dataclass(frozen=True)
+class OracleResult:
+    """One oracle's verdict on one predicate.
+
+    Fields:
+      oracle: the emitting oracle class name (e.g. "RevisionOracle").
+      status: PASS | FAIL | SKIP.
+      code:   a failure_codes constant when status==FAIL; for PASS/SKIP it may be
+              None or a short reason token.
+      facts:  structured, machine-readable evidence (never prose narrative).
+      first_broken_link: the "A -> B" link this result breaks (FAIL only), used by
+              the classifier's first-broken-link wins ordering (§16).
+      reason: an OPTIONAL short human token (e.g. why a SKIP) — advisory only,
+              never adjudicated on.
+    """
+
+    oracle: str
+    status: str
+    code: str | None = None
+    facts: dict[str, Any] = field(default_factory=dict)
+    first_broken_link: str | None = None
+    reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in _STATUSES:
+            raise ValueError(
+                f"OracleResult.status must be one of {sorted(_STATUSES)}, got {self.status!r}"
+            )
+        if self.status == FAILED and not self.code:
+            raise ValueError("a FAIL OracleResult must carry a failure code")
+        if not isinstance(self.facts, dict):
+            raise TypeError("OracleResult.facts must be a dict")
+
+    @property
+    def passed(self) -> bool:
+        return self.status == OK
+
+    @property
+    def failed(self) -> bool:
+        return self.status == FAILED
+
+    @property
+    def skipped(self) -> bool:
+        return self.status == SKIPPED
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-safe dict (stable key order) for the dossier."""
+        out: dict[str, Any] = {
+            "oracle": self.oracle,
+            "status": self.status,
+            "code": self.code,
+            "facts": dict(self.facts),
+        }
+        if self.first_broken_link is not None:
+            out["first_broken_link"] = self.first_broken_link
+        if self.reason is not None:
+            out["reason"] = self.reason
+        return out
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> OracleResult:
+        if not isinstance(raw, dict):
+            raise TypeError("OracleResult.from_dict expects a dict")
+        missing = {"oracle", "status"} - set(raw)
+        if missing:
+            raise ValueError(f"OracleResult dict missing keys: {sorted(missing)}")
+        return cls(
+            oracle=str(raw["oracle"]),
+            status=str(raw["status"]),
+            code=raw.get("code"),
+            facts=dict(raw.get("facts") or {}),
+            first_broken_link=raw.get("first_broken_link"),
+            reason=raw.get("reason"),
+        )
+
+
+def passing(
+    oracle: str, *, facts: dict[str, Any] | None = None, code: str | None = None
+) -> OracleResult:
+    return OracleResult(oracle=oracle, status=OK, code=code, facts=facts or {})
+
+
+def failing(
+    oracle: str,
+    code: str,
+    *,
+    first_broken_link: str,
+    facts: dict[str, Any] | None = None,
+) -> OracleResult:
+    return OracleResult(
+        oracle=oracle,
+        status=FAILED,
+        code=code,
+        facts=facts or {},
+        first_broken_link=first_broken_link,
+    )
+
+
+def skipping(oracle: str, *, reason: str, facts: dict[str, Any] | None = None) -> OracleResult:
+    return OracleResult(oracle=oracle, status=SKIPPED, code=None, facts=facts or {}, reason=reason)
+
+codex
+The code paths match the requested structure by inspection: `slice_of` distinguishes key-missing from present-non-dict, all five oracles fail malformed slices, and classifier maps that code through harness-validity to `INVALID_RUN`. I’m doing one targeted no-cache test run as a final check.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'PYTHONDONTWRITEBYTECODE=1 python -m pytest -q harness/build_soak/tests/test_targeted_edit_oracles.py -p no:cacheprovider' in /var/home/dylan/projects/disclaude
+ exited 1 in 187ms:
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/dylan/.local/lib/python3.14/site-packages/pytest/__main__.py", line 9, in <module>
+    raise SystemExit(pytest.console_main())
+                     ~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in console_main
+    code = main()
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 193, in main
+    config = _prepareconfig(new_args, plugins)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 361, in _prepareconfig
+    config: Config = pluginmanager.hook.pytest_cmdline_parse(
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pluginmanager=pluginmanager, args=args
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+    config = yield
+             ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1192, in pytest_cmdline_parse
+    self.parse(args)
+    ~~~~~~~~~~^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1562, in parse
+    self.hook.pytest_load_initial_conftests(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        early_config=self, args=args, parser=self._parser
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/warnings.py", line 128, in pytest_load_initial_conftests
+    return (yield)
+            ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 116, in _multicall
+    next(function_gen)  # first yield
+    ~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 170, in pytest_load_initial_conftests
+    capman.start_global_capturing()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 773, in start_global_capturing
+    self._global_capturing = _get_multicapture(self._method)
+                             ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 714, in _get_multicapture
+    return MultiCapture(in_=FDCapture(0), out=FDCapture(1), err=FDCapture(2))
+                                              ~~~~~~~~~^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 493, in __init__
+    TemporaryFile(buffering=0),
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 652, in TemporaryFile
+    prefix, suffix, dir, output_type = _sanitize_params(prefix, suffix, dir)
+                                       ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 127, in _sanitize_params
+    dir = gettempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 312, in gettempdir
+    return _os.fsdecode(_gettempdir())
+                        ~~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/tempfile.py", line 305, in _gettempdir
+    tempdir = _get_default_tempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 222, in _get_default_tempdir
+    raise FileNotFoundError(_errno.ENOENT,
+                            "No usable temporary directory found in %s" %
+                            dirlist)
+FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/var/home/dylan/projects/disclaude']
+
+codex
+Pytest could not start in this read-only sandbox because Python cannot create a temporary capture file. I’m switching to a direct in-process assertion script that avoids pytest/tempfile so the behavior itself can still be checked.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "def clean_smoke_log|clean_smoke_log" harness/build_soak/tests -S' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/tests/test_targeted_edit_oracles.py:17:from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_targeted_edit_oracles.py:130:    assert classify(clean_smoke_log(), scenario=_scn())["status"] == "PASS"
+harness/build_soak/tests/test_targeted_edit_oracles.py:135:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+harness/build_soak/tests/test_targeted_edit_oracles.py:141:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+harness/build_soak/tests/test_targeted_edit_oracles.py:186:        c = classify(clean_smoke_log(), scenario=_scn(), product_evidence={key: []})
+harness/build_soak/tests/test_product_evidence_writer.py:9:from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_product_evidence_writer.py:80:        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_product_evidence_writer.py:89:        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_product_evidence_writer.py:99:        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_browser_evidence_oracles.py:5:from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_browser_evidence_oracles.py:112:    assert classify(clean_smoke_log(), scenario=_scn())["status"] == "PASS"
+harness/build_soak/tests/test_browser_evidence_oracles.py:116:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=_green_evidence())
+harness/build_soak/tests/test_browser_evidence_oracles.py:122:    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+harness/build_soak/tests/test_browser_evidence_oracles.py:166:        "\n".join(_json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_browser_evidence_oracles.py:179:        "\n".join(_json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_browser_evidence_oracles.py:190:        "\n".join(__import__("json").dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_provider_ledger_oracle.py:8:from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_provider_ledger_oracle.py:148:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=ledger)
+harness/build_soak/tests/test_provider_ledger_oracle.py:163:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=ledger)
+harness/build_soak/tests/test_provider_ledger_oracle.py:176:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=None)
+harness/build_soak/tests/test_provider_ledger_oracle.py:189:    c = classify(clean_smoke_log(), scenario=scenario, provider_ledger=None)
+harness/build_soak/tests/test_provider_ledger_oracle.py:198:        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_provider_ledger_oracle.py:219:        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+harness/build_soak/tests/test_output_truth_oracle.py:5:from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_output_truth_oracle.py:21:        normalize_events(events or clean_smoke_log()),
+harness/build_soak/tests/test_output_truth_oracle.py:188:    unfinished = clean_smoke_log()[:-1]  # drop the FINISHED status
+harness/build_soak/tests/test_output_truth_oracle.py:197:    unfinished = clean_smoke_log()[:-1]
+harness/build_soak/tests/test_fail_closed.py:77:    from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_fail_closed.py:79:    full, row = _both_shapes(clean_smoke_log())
+harness/build_soak/tests/test_fail_closed.py:276:    from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_fail_closed.py:279:    c = classify(clean_smoke_log(), scenario=scenario)
+harness/build_soak/tests/test_fail_closed.py:293:    from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_fail_closed.py:297:    c = classify(clean_smoke_log(), scenario=scenario, tool_scope=tool_scope)
+harness/build_soak/tests/test_fail_closed.py:309:    from _eventlog import clean_smoke_log
+harness/build_soak/tests/test_fail_closed.py:313:    c = classify(clean_smoke_log(), scenario=scenario, tool_scope=tool_scope)
+harness/build_soak/tests/test_event_chain_oracle.py:9:    clean_smoke_log,
+harness/build_soak/tests/test_event_chain_oracle.py:30:    results = _run(clean_smoke_log(), _SCN_PLAN)
+harness/build_soak/tests/test_classifier.py:8:from _eventlog import action, agent_error, awaiting, clean_smoke_log, msg, observation, plan, status
+harness/build_soak/tests/test_classifier.py:29:    c = classify(clean_smoke_log(), scenario=scenario)
+harness/build_soak/tests/test_classifier.py:178:    full = clean_smoke_log()
+harness/build_soak/tests/test_classifier.py:193:    c = classify(clean_smoke_log(), evidence_intact=False)
+harness/build_soak/tests/test_classifier.py:268:        "\n".join(json.dumps(e) for e in clean_smoke_log()) + "\n", encoding="utf-8"
+harness/build_soak/tests/test_classifier.py:291:        "\n".join(json.dumps(e) for e in clean_smoke_log()) + "\n", encoding="utf-8"
+harness/build_soak/tests/test_api_runner.py:14:from _eventlog import action, clean_smoke_log, msg, plan, status
+harness/build_soak/tests/test_api_runner.py:141:    """clean_smoke_log's plan→approve→execute→finish shape, but the executed action is a
+harness/build_soak/tests/test_api_runner.py:143:    readiness gate records a PROVEN raw_sha capture for that file (vs clean_smoke_log's generic
+harness/build_soak/tests/test_api_runner.py:189:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:232:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:263:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:284:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1096:    # serve+PROBE of the snapshot static content (clean_smoke_log has NO in-run verify, so
+harness/build_soak/tests/test_api_runner.py:1100:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1520:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1545:    _seed_db(db, _CID, clean_smoke_log()[:-1])  # no FINISHED status
+harness/build_soak/tests/test_api_runner.py:1578:    _seed_db(db, _CID, clean_smoke_log()[:-1])  # no FINISHED
+harness/build_soak/tests/test_api_runner.py:1607:    _seed_db(db, _CID, clean_smoke_log()[:-1])
+harness/build_soak/tests/test_api_runner.py:1638:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1668:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1691:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1717:    _seed_db(db, _CID, clean_smoke_log()[:-1])  # no FINISHED
+harness/build_soak/tests/test_api_runner.py:1788:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1801:    _seed_db(db, _CID, clean_smoke_log()[:-1])  # frozen log, no FINISHED
+harness/build_soak/tests/test_api_runner.py:1814:    _seed_db(db, _CID, clean_smoke_log()[:-1])
+harness/build_soak/tests/test_api_runner.py:1828:    _seed_db(db, _CID, clean_smoke_log()[:-1])
+harness/build_soak/tests/test_api_runner.py:1854:    _seed_db(db, _CID, clean_smoke_log()[:-1])
+harness/build_soak/tests/test_api_runner.py:1931:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:1949:    _seed_db(db, _CID, clean_smoke_log())  # latest plan revision == 1
+harness/build_soak/tests/test_api_runner.py:1974:    _seed_db(db, _CID, clean_smoke_log())  # max seq 10, no re-plan
+harness/build_soak/tests/test_api_runner.py:1997:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2015:    _seed_db(db, _CID, clean_smoke_log())  # stale terminal: FINISHED at seq 10
+harness/build_soak/tests/test_api_runner.py:2038:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2112:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2150:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2187:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2229:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2247:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2282:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/test_api_runner.py:2313:    _seed_db(db, _CID, clean_smoke_log()[:-1])  # no FINISHED — never terminal
+harness/build_soak/tests/test_api_runner.py:2339:    _seed_db(db, _CID, clean_smoke_log())
+harness/build_soak/tests/_eventlog.py:120:def clean_smoke_log() -> list[dict[str, Any]]:
+
+exec
+/bin/bash -lc "sed -n '1,220p' harness/build_soak/tests/_eventlog.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Tiny builders for canonical full-event-dict fixtures (the persisted
+`event.model_dump(mode="json")` shape). Used by the oracle/classifier unit tests so
+each fixture event log is explicit and readable."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+
+def to_db_rows(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Render full-event dicts into the REAL SQLite row shape SqliteEventStore
+    persists: top-level seq/kind/source/id columns + a JSON-STRING `payload`
+    holding the whole event. Used to prove the normalizer/classifier behave
+    identically on both shapes."""
+    return [
+        {
+            "seq": e.get("seq"),
+            "kind": e.get("kind"),
+            "source": e.get("source"),
+            "id": e.get("id"),
+            "created_at": e.get("timestamp", ""),
+            "payload": json.dumps(e),
+        }
+        for e in events
+    ]
+
+
+def msg(seq: int, source: str, content: str, *, role: str | None = None) -> dict[str, Any]:
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "message",
+        "source": source,
+        "message": {"role": role or source, "content": content},
+    }
+
+
+def status(seq: int, status_value: str, detail: str | None = None) -> dict[str, Any]:
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "status",
+        "source": "system",
+        "status": status_value,
+        "detail": detail,
+    }
+
+
+def awaiting(seq: int, plan_seq: int | None = None) -> dict[str, Any]:
+    """An AWAITING_PLAN_APPROVAL status (the human-approval gate). `detail` carries
+    the proposed plan's event id, mirroring the real loop."""
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "status",
+        "source": "system",
+        "status": "AWAITING_PLAN_APPROVAL",
+        "detail": f"evt_{plan_seq}" if plan_seq is not None else None,
+    }
+
+
+def plan(seq: int, *, revision: int = 1, steps: int = 1) -> dict[str, Any]:
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "plan",
+        "source": "agent",
+        "summary": "a plan",
+        "steps": [{"title": f"step {i}"} for i in range(steps)],
+        "revision": revision,
+    }
+
+
+def action(
+    seq: int, tool: str, *, args: dict[str, Any] | None = None, action_id: str | None = None
+) -> dict[str, Any]:
+    aid = action_id or f"evt_{seq}"
+    return {
+        "id": aid,
+        "seq": seq,
+        "kind": "action",
+        "source": "agent",
+        "thought": "do it",
+        "tool_call": {"tool_name": tool, "arguments": args or {}, "call_id": f"call_{seq}"},
+    }
+
+
+def observation(
+    seq: int, action_id: str, *, tool: str = "shell", success: bool = True
+) -> dict[str, Any]:
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "observation",
+        "source": "environment",
+        "action_id": action_id,
+        "tool_result": {
+            "call_id": f"call_{seq}",
+            "tool_name": tool,
+            "success": success,
+            "content": "ok" if success else "failed",
+            "error": None if success else "boom",
+        },
+    }
+
+
+def agent_error(seq: int, action_id: str, *, error: str = "rejected") -> dict[str, Any]:
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "agent_error",
+        "source": "environment",
+        "error": error,
+        "action_id": action_id,
+        "tool_call_id": f"call_{seq}",
+    }
+
+
+def clean_smoke_log() -> list[dict[str, Any]]:
+    """A passing bare-Build event log: user -> plan -> approval -> action ->
+    observation -> finished."""
+    return [
+        msg(1, "user", "build a page"),
+        status(2, "RUNNING"),
+        plan(3, revision=1),
+        status(4, "AWAITING_PLAN_APPROVAL", "evt_3"),
+        status(5, "RUNNING", "plan_approved"),
+        status(6, "RUNNING"),
+        action(7, "shell", args={"cmd": "ls"}, action_id="act7"),
+        observation(8, "act7"),
+        msg(9, "agent", "done", role="assistant"),
+        status(10, "FINISHED"),
+    ]
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+import sys
+sys.path.insert(0, 'harness/build_soak/tests')
+from harness.build_soak import failure_codes as fc
+from harness.build_soak.classify import classify
+from harness.build_soak.oracles import (
+    CommentAnchorOracle,
+    ManualEditPreservationOracle,
+    RewriteAvoidanceOracle,
+    ScreenLabelOracle,
+    TargetedEditOracle,
+)
+from _eventlog import clean_smoke_log
+
+scn = {'id': 's', 'assertions': {'event_chain': {'require_plan_before_execution': True}}}
+keys = {
+    TargetedEditOracle: 'targeted_edit',
+    RewriteAvoidanceOracle: 'rewrite_avoidance',
+    ManualEditPreservationOracle: 'manual_edit',
+    CommentAnchorOracle: 'comment_anchors',
+    ScreenLabelOracle: 'screen_labels',
+}
+for oracle, key in keys.items():
+    assert oracle().check(product_evidence={})[0].skipped
+    for bad in ([], None, 'x', 3):
+        r = oracle().check(product_evidence={key: bad})[0]
+        assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (oracle.__name__, bad, r)
+    c = classify(clean_smoke_log(), scenario=scn, product_evidence={key: []})
+    assert c['status'] == fc.INVALID_RUN and c['code'] == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (key, c)
+
+bad_cases = [
+    (TargetedEditOracle, {'targeted_edit': {'edited_files': [123], 'expected_files': ['123']}}),
+    (RewriteAvoidanceOracle, {'rewrite_avoidance': {'edit_scope': 'small', 'changed_lines': True, 'total_lines': 100, 'max_churn_ratio': 0.2}}),
+    (RewriteAvoidanceOracle, {'rewrite_avoidance': {'edit_scope': 'small', 'changed_lines': 1, 'total_lines': True, 'max_churn_ratio': 0.2}}),
+    (RewriteAvoidanceOracle, {'rewrite_avoidance': {'edit_scope': 'small', 'changed_lines': 1, 'total_lines': 100, 'max_churn_ratio': False}}),
+    (ManualEditPreservationOracle, {'manual_edit': {'overrides': {'a': 1}, 'final_files': {}}}),
+    (CommentAnchorOracle, {'comment_anchors': {'before': [1, 2], 'after': []}}),
+    (ScreenLabelOracle, {'screen_labels': {'edited_sections': 'hero', 'before': {}, 'after': {}}}),
+]
+for oracle, ev in bad_cases:
+    r = oracle().check(product_evidence=ev)[0]
+    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (oracle.__name__, ev, r)
+print('ok')
+PY" in /var/home/dylan/projects/disclaude
+ exited 1 in 0ms:
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+  File "/var/home/dylan/projects/disclaude/harness/build_soak/classify.py", line 28, in <module>
+    from .oracles import (
+    ...<9 lines>...
+    )
+  File "/var/home/dylan/projects/disclaude/harness/build_soak/oracles/__init__.py", line 30, in <module>
+    from .output_truth import OutputTruthOracle
+  File "/var/home/dylan/projects/disclaude/harness/build_soak/oracles/output_truth.py", line 25, in <module>
+    from disco.core.observations import scan_for_destructive_elision
+ModuleNotFoundError: No module named 'disco'
+
+codex
+The direct script hit the repo’s normal import-path requirement (`disco` is under `packages/core/src`). I’m re-running with that path added; no filesystem writes are involved.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONPATH=packages/core/src PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+import sys
+sys.path.insert(0, 'harness/build_soak/tests')
+from harness.build_soak import failure_codes as fc
+from harness.build_soak.classify import classify
+from harness.build_soak.oracles import (
+    CommentAnchorOracle,
+    ManualEditPreservationOracle,
+    RewriteAvoidanceOracle,
+    ScreenLabelOracle,
+    TargetedEditOracle,
+)
+from _eventlog import clean_smoke_log
+
+scn = {'id': 's', 'assertions': {'event_chain': {'require_plan_before_execution': True}}}
+keys = {
+    TargetedEditOracle: 'targeted_edit',
+    RewriteAvoidanceOracle: 'rewrite_avoidance',
+    ManualEditPreservationOracle: 'manual_edit',
+    CommentAnchorOracle: 'comment_anchors',
+    ScreenLabelOracle: 'screen_labels',
+}
+for oracle, key in keys.items():
+    assert oracle().check(product_evidence={})[0].skipped
+    for bad in ([], None, 'x', 3):
+        r = oracle().check(product_evidence={key: bad})[0]
+        assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (oracle.__name__, bad, r)
+    c = classify(clean_smoke_log(), scenario=scn, product_evidence={key: []})
+    assert c['status'] == fc.INVALID_RUN and c['code'] == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (key, c)
+
+bad_cases = [
+    (TargetedEditOracle, {'targeted_edit': {'edited_files': [123], 'expected_files': ['123']}}),
+    (RewriteAvoidanceOracle, {'rewrite_avoidance': {'edit_scope': 'small', 'changed_lines': True, 'total_lines': 100, 'max_churn_ratio': 0.2}}),
+    (RewriteAvoidanceOracle, {'rewrite_avoidance': {'edit_scope': 'small', 'changed_lines': 1, 'total_lines': True, 'max_churn_ratio': 0.2}}),
+    (RewriteAvoidanceOracle, {'rewrite_avoidance': {'edit_scope': 'small', 'changed_lines': 1, 'total_lines': 100, 'max_churn_ratio': False}}),
+    (ManualEditPreservationOracle, {'manual_edit': {'overrides': {'a': 1}, 'final_files': {}}}),
+    (CommentAnchorOracle, {'comment_anchors': {'before': [1, 2], 'after': []}}),
+    (ScreenLabelOracle, {'screen_labels': {'edited_sections': 'hero', 'before': {}, 'after': {}}}),
+]
+for oracle, ev in bad_cases:
+    r = oracle().check(product_evidence=ev)[0]
+    assert r.failed and r.code == fc.EDIT_ORACLE_EVIDENCE_MALFORMED, (oracle.__name__, ev, r)
+print('ok')
+PY" in /var/home/dylan/projects/disclaude
+ succeeded in 229ms:
+ok
+
+codex
+APPROVE
+PRESENT-NON-DICT: resolved; all five slices fail `EDIT_ORACLE_EVIDENCE_MALFORMED` and classify as `INVALID_RUN`.
+NO COERCION: resolved; strict guards reject bool numerics and non-string list/dict payloads.
+tokens used
+52,246
+APPROVE
+PRESENT-NON-DICT: resolved; all five slices fail `EDIT_ORACLE_EVIDENCE_MALFORMED` and classify as `INVALID_RUN`.
+NO COERCION: resolved; strict guards reject bool numerics and non-string list/dict payloads.

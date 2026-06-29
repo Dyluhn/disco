@@ -93,8 +93,19 @@ WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
 # files happen to exist (migration 2026_06_24_paused_incomplete_not_pass).
 BUILD_DID_NOT_FINISH = "BUILD_DID_NOT_FINISH"
 
+# P8D — targeted-edit / manual-edit discipline (an edit touched only what it should,
+# preserved direct work + anchors, and did not rewrite the world).
+TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES = "TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES"
+SMALL_EDIT_FULL_REWRITE = "SMALL_EDIT_FULL_REWRITE"  # a small edit churned past the bound
+MANUAL_EDIT_CLOBBERED = "MANUAL_EDIT_CLOBBERED"  # a direct/manual override was overwritten
+COMMENT_ANCHOR_LOST = "COMMENT_ANCHOR_LOST"  # an anchor disappeared (text edit / reorder)
+# present-but-malformed edit evidence — a harness-validity failure (→ INVALID_RUN), never a
+# silent pass.
+EDIT_ORACLE_EVIDENCE_MALFORMED = "EDIT_ORACLE_EVIDENCE_MALFORMED"
+
 # ---- P2 — quality bugs (§12) ------------------------------------------------
 
+SCREEN_LABEL_UNSTABLE = "SCREEN_LABEL_UNSTABLE"  # an unedited section's screen label changed
 SLOW_FIRST_PLAN = "SLOW_FIRST_PLAN"
 EXCESSIVE_READS_BEFORE_PLAN = "EXCESSIVE_READS_BEFORE_PLAN"
 MISSING_DONE_CONDITIONS = "MISSING_DONE_CONDITIONS"
@@ -149,6 +160,7 @@ HARNESS_VALIDITY_CODES = frozenset(
         RUN_TIMEOUT_WHILE_PROGRESSING,
         WORKSPACE_SNAPSHOT_NOT_READY,
         WORKSPACE_SNAPSHOT_UNVERIFIED,
+        EDIT_ORACLE_EVIDENCE_MALFORMED,  # P8D: present-but-malformed edit evidence → INVALID_RUN
     }
 )
 
@@ -184,6 +196,12 @@ SEVERITY_BY_CODE: dict[str, str] = {
     VERIFICATION_GATE_BYPASSED: P0,
     EXPORT_DOWNLOAD_MISSING: P0,
     WORKSPACE_NOT_CLEANED: P0,
+    # P8D targeted/manual-edit discipline
+    TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES: P1,
+    SMALL_EDIT_FULL_REWRITE: P1,
+    MANUAL_EDIT_CLOBBERED: P1,
+    COMMENT_ANCHOR_LOST: P1,
+    SCREEN_LABEL_UNSTABLE: P2,
     UNKNOWN_FAILURE: P0,
     # P1
     PLAN_REVISION_NOT_INCREMENTED: P1,

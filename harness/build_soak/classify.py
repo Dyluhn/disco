@@ -27,6 +27,7 @@ from .events import NormalizationError, normalize_events
 from .evidence import EvidenceManifest, load_manifest, verify_evidence_unchanged
 from .oracles import (
     BROWSER_EVIDENCE_ORACLES,
+    TARGETED_EDIT_ORACLES,
     ContractOracle,
     EventChainOracle,
     HarnessValidityOracle,
@@ -153,6 +154,15 @@ def classify(
         # slice, so a headless run (product_evidence is None) is unaffected; a product-
         # harness run enforces the real UI path.
         for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
+            results += _oracle_cls().check(product_evidence=product_evidence)
+            first_fail = _first_fail(results)
+            if first_fail is not None:
+                break
+    if first_fail is None:
+        # 9. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
+        # product_evidence slice, so non-edit runs are unaffected; an edit-harness run
+        # enforces targeted-edit + manual-preservation discipline. Producer = P1B-LIVE.
+        for _oracle_cls in TARGETED_EDIT_ORACLES:
             results += _oracle_cls().check(product_evidence=product_evidence)
             first_fail = _first_fail(results)
             if first_fail is not None:

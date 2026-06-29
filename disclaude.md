@@ -1702,3 +1702,59 @@ fixture variants. SCOPE: resolver + attrs + parity + tests. Full in-frame inject
 - ENV: frontend node_modules was missing in the clone → ran `npm ci` (582 pkgs). vitest 10/10, tsc 0 errors,
   Python parity green. In-frame selectionAgent injection + live click deferred to P1B-LIVE (browser evidence).
 - NEXT: P8D (targeted-edit + manual-edit-preservation oracles) → completes P8.
+
+## PR P8D — Targeted-edit & manual-edit oracles — PLAN
+PATH DEVIATION (flag for gate): plan says harness/oracles/ + harness/tests/, but the real oracle layer is
+harness/build_soak/oracles/ (zero-opinion OracleResult via schema.passing/failing/skipping + failure_codes with
+SEVERITY_BY_CODE) tested in harness/build_soak/tests/. Reuse that infra (no parallel oracle framework). Files:
+harness/build_soak/oracles/targeted_edit.py + manual_edit_preservation.py; tests in harness/build_soak/tests/.
+ORACLES (pure fns over plain-dict evidence; live producer = P1B-LIVE/soak, like the P1A browser oracles):
+- TargetedEditOracle: edited_files ⊆ expected_files → else fail TARGETED_EDIT_TOUCHED_UNEXPECTED_FILES (P1).
+- RewriteAvoidanceOracle: a SMALL-scoped edit's churn_ratio (changed_lines/total_lines) ≤ threshold → else
+  SMALL_EDIT_FULL_REWRITE (P1). (Threshold gated; only adjudicated when edit_scope=="small".)
+- ManualEditPreservationOracle: every manual_override snippet still present in the post-edit file → else
+  MANUAL_EDIT_CLOBBERED (P1).
+- CommentAnchorOracle: anchors_before ⊆ anchors_after (preserved through text edit; survive a section reorder —
+  set membership, not position) → else COMMENT_ANCHOR_LOST (P1).
+- ScreenLabelOracle: for sections NOT in the edit's targets, screen_label_before == screen_label_after (stable) →
+  else SCREEN_LABEL_UNSTABLE (P2).
+Each returns passing/skipping (no applicable evidence → SKIP, never silent pass) or failing(code, first_broken_link).
+New codes added to failure_codes.py + registered in SEVERITY_BY_CODE. Exported from oracles/__init__.py.
+TESTS (harness/build_soak/tests/): small edit touches expected files only (pass+fail); comment anchor preserved
+through a text edit; comment anchor survives a section reorder; direct override not clobbered (pass+fail); small
+CTA edit does not rewrite the whole app (pass+fail); screen-label stability; each oracle SKIPs cleanly with no
+evidence. PARALLEL: DeepSeek = edit-churn/clobber negative fixtures. SCOPE: the 5 oracles + codes + tests; the
+live evidence producer is P1B-LIVE.
+
+### PR P8D — PLAN REVISION 1 (post gpt-5.5: 4 fixes; path/predicate/SKIP/severity approved)
+1. EVIDENCE SCHEMA pinned per oracle (each reads ONE named slice of the evidence dict):
+   - TargetedEditOracle ev["targeted_edit"]={"edited_files":[str],"expected_files":[str]}.
+   - RewriteAvoidanceOracle ev["rewrite_avoidance"]={"edit_scope":str,"changed_lines":int,"total_lines":int,
+     "max_churn_ratio":float}.
+   - ManualEditPreservationOracle ev["manual_edit"]={"overrides":{path:snippet},"final_files":{path:content}}.
+   - CommentAnchorOracle ev["comment_anchors"]={"before":[str],"after":[str]}.
+   - ScreenLabelOracle ev["screen_labels"]={"edited_sections":[str],"before":{sec:label},"after":{sec:label}}.
+   MALFORMED HANDLING: slice ABSENT → SKIP (reason, never silent pass). Slice PRESENT but missing a required key
+   / wrong type → FAIL with shared code EDIT_ORACLE_EVIDENCE_MALFORMED (P1, a harness-validity-class failure) —
+   present-but-malformed never silently passes.
+2. CHURN THRESHOLD evidence-supplied: max_churn_ratio comes from ev["rewrite_avoidance"] (scenario sets it;
+   recommended default 0.20 documented). Adjudicate ONLY when edit_scope=="small"; ratio=changed/total; facts
+   carry {edit_scope, changed_lines, total_lines, churn_ratio, max_churn_ratio}. Missing max_churn_ratio →
+   MALFORMED. total_lines==0 → MALFORMED (no divide-by-zero).
+3. TESTS add: every oracle SKIPs on absent slice; every oracle FAILs EDIT_ORACLE_EVIDENCE_MALFORMED on a present-
+   but-malformed slice (missing key / wrong type / total_lines 0).
+4. CLASSIFY() BOUNDARY explicit: export TARGETED_EDIT_ORACLES tuple + wire it into classify.py exactly like
+   BROWSER_EVIDENCE_ORACLES (the loop at classify.py:155) — SKIP-safe, so wiring is safe NOW (they SKIP without
+   evidence); the live evidence PRODUCER is P1B-LIVE. A test asserts classify() with no edit evidence yields SKIPs
+   (not FAILs) + doesn't regress existing classification.
+
+### HEARTBEAT 2026-06-29 — P8D ACCEPTED → P8 COMPLETE
+- PR P8D (targeted-edit + manual-edit oracles) COMPLETE. Plan gpt-5.5 REVISE(4)→APPROVE; code REVISE(2: present-
+  non-dict-slice-looked-absent silent-pass hole + str/bool coercion masking malformed types)→fix→APPROVE.
+- Files: harness/build_soak/oracles/{targeted_edit,manual_edit_preservation,_edit_evidence}.py + 5 failure codes
+  (4×P1 + SCREEN_LABEL_UNSTABLE P2 + EDIT_ORACLE_EVIDENCE_MALFORMED in HARNESS_VALIDITY_CODES→INVALID_RUN) +
+  TARGETED_EDIT_ORACLES wired into classify.py step 9 (skip-safe) + 28 tests. Producer=P1B-LIVE.
+- ===== P8 COMPLETE (A semantic-refs + B data-disco metadata + C frontend resolver + D edit oracles), all 4
+  Codex-gated + pushed. =====
+- NEXT: P9 (TweakSpec + owner controls: P9A schema, P9B tweaks_io, P9C app_set_tweak, P9D TweakPanel UI). Then
+  P1B-LIVE (pull-forward gate before P10).
