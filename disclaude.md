@@ -2192,3 +2192,17 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   {base_url http://localhost:8080/v1, model_id minimax-m3} → bring up disclaude stack → ONE real Playwright build of
   STATIC_SITE_SMOKE → observations→buildProductEvidence→write_dossier→classify_dossier PASS + SCREENSHOTS to Dylan.
   Provider-ledger sourced from the relay JSONL log (real minimaxi.chat host). Product Harness NOT complete till then.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b in progress: relay LIVE + 422 bug fixed
+- RELAY LIVE-VERIFIED: started harness.product_build.minimax_relay on :8080 → curl localhost:8080/v1/chat/
+  completions model minimax-m3 → HTTP 200, model=MiniMax-M3 (map worked); relay.jsonl logs {"host":
+  "api.minimaxi.chat", "model":"MiniMax-M3"} — the REAL upstream host for the P17 provider-ledger. Direct MiniMax,
+  no OpenRouter.
+- LIVE BUG FIXED (caught ONLY by the real run): the relay 422'd because `from __future__ import annotations`
+  stringized the FastAPI proxy's `request: Request` annotation (Request is lazily imported in create_app), so
+  FastAPI treated `request` as a query param. Removed the future-import from the relay module (annotations eager;
+  fastapi still lazy → import purity preserved; 7 unit tests + basedpyright 0/0 still green). NOW HTTP 200.
+- disco-config.json authored: driver-minimax → {base_url http://localhost:8080/v1, model_id minimax-m3, provider
+  minimax, api_key_env null (relay holds the key)}, default_model=driver-minimax (template = Disco-Pi which already
+  had a working driver-minimax entry). NEXT: bring up the disclaude stack (agent-server :8000 + frontend) + drive
+  ONE real Playwright build → dossier → classify_dossier PASS + screenshots.

@@ -10,13 +10,16 @@ The pure request transform + config + host parse are fastapi/httpx/secret-free s
 in isolation; the FastAPI proxy (and the env key read) are built lazily by create_app().
 """
 
-from __future__ import annotations
-
 import json
 import os
 import time
 from typing import Any, AsyncIterator
 from urllib.parse import urlparse
+
+# NOTE: no `from __future__ import annotations` here — FastAPI introspects the proxy handler's
+# annotations at runtime, and Request is imported lazily inside create_app(); a stringized
+# annotation would make FastAPI treat `request` as a query param (HTTP 422). Annotations stay
+# eager; fastapi/httpx are still imported lazily, so the pure import path remains dep-light.
 
 UPSTREAM = os.environ.get("MINIMAX_UPSTREAM", "https://api.minimaxi.chat/v1")
 DEFAULT_MODEL = os.environ.get("MINIMAX_MODEL", "MiniMax-M3")  # P17: M3 (source relay defaulted M2)
