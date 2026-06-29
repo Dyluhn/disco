@@ -1865,3 +1865,55 @@ read_file-raises-after-file_exists-True → propagates.
   TweaksError on unknown-key/invalid-value/invalid-default], TweaksError) + test (11). Path deviation builtin/
   (no disco.tools.appkit pkg) — gate-approved.
 - NEXT: P9C (typed app_set_tweak validating against TweakSpec, in builtin/appkit.py) → P9D (TweakPanel UI) → P1B-LIVE.
+
+## PR P9C — typed app_set_tweak — PLAN
+GOAL: app_set_tweak (builtin/appkit.py) becomes GOVERNED — it validates the value against the app's TweakSpec
+(.disco/tweaks.json, P9B) instead of blindly coercing+storing any key. CONTRACT CHANGE (flag): the tool now
+REQUIRES a TweakSpec; setting a tweak on an app with no .disco/tweaks.json → a clear error (no false affordance).
+FLOW (AppSetTweakTool.run): (1) require_tweakspec(ctx.sandbox) → spec; TweaksError/absent → ToolOutcome(success=
+False, error="no_tweakspec", content="this app defines no tweaks (.disco/tweaks.json missing)"). corrupt tweaks
+.json (ValidationError) → error="corrupt_tweakspec". (2) field=spec.get(key); if None → error="unknown_tweak"
+(content lists available keys). (3) coerced=spec.validate_value(key, args.value); on ValueError → error=
+"invalid_tweak_value" (content = the validator message + the editor/constraints). (4) _apply(ctx, lambda s:
+s.with_tweak(key, coerced)) to persist appspec+re-render; merge the success structured with {"tweak":key,
+"value":coerced,"affects":list(field.affects)} so the caller/UI sees what changed + the AppSpec paths controlled.
+ORDER: validate tweak (tweakspec) BEFORE touching appspec — a bad tweak never mutates the app.
+WHO WRITES tweaks.json: out of P9C scope (a builder / app_create-defaults / P9D seed step) — FLAG it; P9C only
+consumes + validates. ARGS unchanged (AppSetKVArgs key:str,value:str). app_set_design UNCHANGED.
+TESTS (test_appkit_tools.py or a new test_app_set_tweak.py): set a defined boolean "true"→stored True + affects
+echoed; unknown key→unknown_tweak; invalid value (out of range / bad enum)→invalid_tweak_value; no tweaks.json→
+no_tweakspec; corrupt tweaks.json→corrupt_tweakspec; the appspec is NOT mutated on any validation failure (read-
+back unchanged). Update/repair any existing app_set_tweak test that assumed the untyped behavior. PARALLEL:
+DeepSeek=invalid-value fixtures. SCOPE: the tool wiring + tests only (UI=P9D; tweaks.json authoring later).
+
+### PR P9C — PLAN REVISION 1 (post gpt-5.5: 5 fixes; the contract change must be product-LIVE)
+1. NO false affordance — SEED a real TweakSpec in app_create (part of P9C): add default_tweakspec() (core/tweaks
+   or a builtin helper) → a small GROUNDED spec for the default lead app: lead.include_phone (boolean, affects
+   ("lead_form.phone"), default False) + brand.accent (palette, swatches from the brand, affects ("design.accent")).
+   app_create writes .disco/tweaks.json via write_tweakspec ALWAYS — default_tweakspec() for the sections=None
+   default app; an EMPTY TweakSpec(fields=()) for custom-sections apps. So after app_create a tweaks.json always
+   exists → app_set_tweak is immediately usable (no dead tool). (Does NOT affect P7 byte-equiv: that compares only
+   .disco/appspec.json + index.html; tweaks.json is a new separate file.)
+2. ERROR PRECEDENCE (don't use _apply — inline read→validate→write for control): no_app > corrupt_appspec >
+   no_tweakspec > corrupt_tweakspec > unknown_tweak > invalid_tweak_value. Read appspec FIRST (no_app/corrupt),
+   then require_tweakspec, then validate, then with_tweak + store.write LAST — the appspec is only written after
+   ALL validation passes (a bad tweak never mutates the app).
+3. Echo CANONICAL value (the coerced result), not raw input, in structured {tweak, value, affects:list(field.
+   affects)}. affects = declared AppSpec metadata (lexical), not proof-of-change.
+4. UPDATE tool description: "Set a tweak defined in .disco/tweaks.json (validated against its TweakSpec)."; keep
+   advertising it (now seeded → usable). app_set_design UNCHANGED.
+5. MIGRATE existing tests (test_appkit_tools.py): test_set_design_and_tweak + test_tweak_coercion_is_robust assumed
+   arbitrary untyped keys → convert to typed: seed via app_create (or write_tweakspec), assert defined-tweak set +
+   unknown_tweak + invalid_tweak_value; assert AppSpec bytes UNCHANGED on no_tweakspec/corrupt_tweakspec/unknown_
+   tweak/invalid_tweak_value; AGENT_TOOLS snapshot unaffected (no tool added).
+
+### HEARTBEAT 2026-06-29 — P9C ACCEPTED
+- PR P9C (typed app_set_tweak) COMPLETE. Plan gpt-5.5 REVISE(5: SEED tweakspec in app_create so the governed tool
+  isn't a false affordance; no_app precedence; canonical value echo; description; migrate untyped tests)→APPROVE.
+  Code gpt-5.5 APPROVE first-pass.
+- builtin/appkit.py: _default_tweakspec() (lead.include_phone bool + brand.accent palette, grounded); app_create
+  ALWAYS seeds .disco/tweaks.json (default spec for lead app, empty for custom); AppSetTweakTool typed — inline
+  read appspec→read_tweakspec→get field→validate_value→write LAST; errors no_app>corrupt_appspec>no_tweakspec>
+  corrupt_tweakspec>unknown_tweak>invalid_tweak_value; structured echoes {tweak,value,affects}; dead _coerce_scalar
+  removed. Tests migrated (appspec-unchanged-on-error proven) + P7 byte-equiv + AGENT_TOOLS snapshot intact.
+- NEXT: P9D (TweakPanel UI — frontend TweakPanel.tsx + AppCard.tsx + vitest; agy frontend scout) → then P1B-LIVE.

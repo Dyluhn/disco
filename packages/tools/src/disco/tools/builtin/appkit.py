@@ -16,26 +16,16 @@ from typing import Any, Callable
 
 from disco.core import SecurityRisk
 from disco.core.appkit import AppSection, AppSpec, render_html
+from disco.core.appkit.models import DEFAULT_DESIGN
 from disco.core.kits import lead_form_appspec
+from disco.core.tweaks import TweakEditor, TweakField, TweakSpec
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from .tweaks_io import TWEAKS_PATH, read_tweakspec, write_tweakspec
 
 _SPEC_PATH = ".disco/appspec.json"
 _HTML_PATH = "index.html"
-
-
-def _coerce_scalar(value: str) -> Any:
-    """Coerce a string tweak value to a stable scalar: bools (case-insensitive
-    true/false), ints, else the trimmed string — so the spec's tweak shape is
-    predictable rather than 'true' the string sometimes and True other times."""
-    low = value.strip().lower()
-    if low in ("true", "false"):
-        return low == "true"
-    body = value.strip()
-    if body.lstrip("-").isdigit():
-        return int(body)
-    return value
 
 
 class AppSpecStore:
@@ -104,6 +94,17 @@ class AppCreateArgs(BaseModel):
     )
 
 
+def _default_tweakspec() -> TweakSpec:
+    """The owner controls seeded for the DEFAULT lead app, so app_set_tweak is usable the
+    moment app_create runs (no governed-but-unauthorable false affordance)."""
+    return TweakSpec(fields=(
+        TweakField(key="lead.include_phone", label="Include phone field", editor=TweakEditor.BOOLEAN,
+                   affects=("lead.phone",), default=False),
+        TweakField(key="brand.accent", label="Accent color", editor=TweakEditor.PALETTE,
+                   colors=(DEFAULT_DESIGN["accent"], DEFAULT_DESIGN["primary"]), affects=("design.accent",)),
+    ))
+
+
 class AppCreateTool:
     definition = _def(
         "app_create",
@@ -130,6 +131,11 @@ class AppCreateTool:
             # source — the StarterKit and app_create can't drift).
             spec = lead_form_appspec(args.title)
         await store.write(spec)
+        # Seed the owner-control schema so app_set_tweak is immediately usable: the default
+        # lead app gets real grounded tweaks; a custom-sections app gets an empty (but present)
+        # TweakSpec — so the tool reports unknown_tweak, never no_tweakspec, post-create.
+        tspec = _default_tweakspec() if args.sections is None else TweakSpec(fields=())
+        await write_tweakspec(ctx.sandbox, tspec)
         return ToolOutcome(success=True, content=f"created app '{args.title}' + index.html",
                            structured={"sections": [s.id for s in spec.sections]})
 
@@ -209,11 +215,45 @@ class AppSetDesignTool:
 
 
 class AppSetTweakTool:
-    definition = _def("app_set_tweak", "Set a tweak value (e.g. lead_form.include_phone='true').", AppSetKVArgs)
+    definition = _def(
+        "app_set_tweak",
+        "Set a tweak DEFINED in .disco/tweaks.json (validated against its TweakSpec, e.g. "
+        "lead.include_phone='true'). Rejects unknown tweaks + invalid values.",
+        AppSetKVArgs,
+    )
 
     async def run(self, args: AppSetKVArgs, ctx: ToolContext) -> ToolOutcome:
-        val = _coerce_scalar(args.value)
-        return await _apply(ctx, lambda s: s.with_tweak(args.key, val))
+        assert ctx.sandbox is not None
+        store = AppSpecStore(ctx.sandbox)
+        # Precedence: no_app > corrupt_appspec > no_tweakspec > corrupt_tweakspec >
+        # unknown_tweak > invalid_tweak_value. Validate fully BEFORE writing the appspec.
+        try:
+            spec = await store.read()
+        except Exception:
+            return ToolOutcome(success=False, error="corrupt_appspec", content=f"{_SPEC_PATH} is unreadable")
+        if spec is None:
+            return ToolOutcome(success=False, error="no_app", content="no app yet — call app_create first")
+        try:
+            tspec = await read_tweakspec(ctx.sandbox)  # ValueError = corrupt; backend errors propagate
+        except ValueError:
+            return ToolOutcome(success=False, error="corrupt_tweakspec", content=f"{TWEAKS_PATH} is unreadable")
+        if tspec is None:
+            return ToolOutcome(success=False, error="no_tweakspec",
+                               content=f"this app defines no tweaks ({TWEAKS_PATH} missing)")
+        field = tspec.get(args.key)
+        if field is None:
+            avail = ", ".join(f.key for f in tspec.fields) or "(none)"
+            return ToolOutcome(success=False, error="unknown_tweak",
+                               content=f"unknown tweak {args.key!r}; defined: {avail}")
+        try:
+            coerced = tspec.validate_value(args.key, args.value)
+        except ValueError as exc:
+            return ToolOutcome(success=False, error="invalid_tweak_value", content=str(exc))
+        await store.write(spec.with_tweak(args.key, coerced))  # only mutate after all validation
+        return ToolOutcome(
+            success=True, content=f"set tweak {args.key} = {coerced!r}",
+            structured={"tweak": args.key, "value": coerced, "affects": list(field.affects)},
+        )
 
 
 # --- app_snapshot_version -----------------------------------------------------

@@ -104,8 +104,9 @@ async def test_set_design_and_tweak() -> None:
     await AppCreateTool().run(AppCreateArgs(title="X"), _ctx(sbx))
     await AppSetDesignTool().run(AppSetKVArgs(key="primary", value="#0b5e2a"), _ctx(sbx))
     assert b"--primary:#0b5e2a" in sbx._fs["index.html"]
-    await AppSetTweakTool().run(AppSetKVArgs(key="lead_form.include_phone", value="true"), _ctx(sbx))
-    assert _spec_of(sbx).tweaks["lead_form.include_phone"] is True  # coerced to bool
+    out = await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="true"), _ctx(sbx))
+    assert out.success and _spec_of(sbx).tweaks["lead.include_phone"] is True  # coerced to bool
+    assert out.structured is not None and out.structured["affects"] == ["lead.phone"]  # P9C echoes affects
 
 
 @pytest.mark.asyncio
@@ -131,14 +132,36 @@ async def test_snapshot_default_label_is_deterministic() -> None:
 
 
 @pytest.mark.asyncio
-async def test_tweak_coercion_is_robust() -> None:
+async def test_app_create_seeds_a_tweakspec() -> None:
     sbx = FakeSandboxInstance()
     await AppCreateTool().run(AppCreateArgs(title="X"), _ctx(sbx))
-    await AppSetTweakTool().run(AppSetKVArgs(key="b", value="TRUE"), _ctx(sbx))  # mixed case
-    await AppSetTweakTool().run(AppSetKVArgs(key="n", value="42"), _ctx(sbx))  # int
-    await AppSetTweakTool().run(AppSetKVArgs(key="s", value="hello"), _ctx(sbx))  # str
-    tw = _spec_of(sbx).tweaks
-    assert tw["b"] is True and tw["n"] == 42 and tw["s"] == "hello"
+    assert ".disco/tweaks.json" in sbx._fs  # default app → grounded tweaks seeded
+
+
+@pytest.mark.asyncio
+async def test_typed_tweak_validation_and_appspec_untouched_on_error() -> None:
+    sbx = FakeSandboxInstance()
+    await AppCreateTool().run(AppCreateArgs(title="X"), _ctx(sbx))
+    # defined boolean (mixed case) + defined palette (a real swatch) both succeed + coerce
+    assert (await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="TRUE"), _ctx(sbx))).success
+    assert _spec_of(sbx).tweaks["lead.include_phone"] is True
+    ok = await AppSetTweakTool().run(AppSetKVArgs(key="brand.accent", value="#4077A3"), _ctx(sbx))
+    assert ok.success and _spec_of(sbx).tweaks["brand.accent"] == "#4077a3"  # canonicalized swatch
+    # from here the appspec must NOT change on any validation failure
+    before = sbx._fs[".disco/appspec.json"]
+    unk = await AppSetTweakTool().run(AppSetKVArgs(key="nope.key", value="x"), _ctx(sbx))
+    assert unk.error == "unknown_tweak" and sbx._fs[".disco/appspec.json"] == before
+    bad = await AppSetTweakTool().run(AppSetKVArgs(key="brand.accent", value="#000000"), _ctx(sbx))  # not a swatch
+    assert bad.error == "invalid_tweak_value" and sbx._fs[".disco/appspec.json"] == before
+    rng = await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="maybe"), _ctx(sbx))
+    assert rng.error == "invalid_tweak_value" and sbx._fs[".disco/appspec.json"] == before
+
+
+@pytest.mark.asyncio
+async def test_set_tweak_no_app_takes_precedence() -> None:
+    sbx = FakeSandboxInstance()  # no app_create
+    out = await AppSetTweakTool().run(AppSetKVArgs(key="lead.include_phone", value="true"), _ctx(sbx))
+    assert not out.success and out.error == "no_app"
 
 
 @pytest.mark.asyncio
