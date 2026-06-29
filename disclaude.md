@@ -1517,3 +1517,49 @@ The prior "P1 Product Harness COMPLETE" was OVERCLAIMED. Corrected:
 - HALT: per the "Do not start P8" directive, NOT starting P8. Next action when authorized: P8 Semantic Direct
   Manipulation (scout → plan → Codex gpt-5.5 gate → implement). P1B (live Playwright/UI/WS/PreviewPane harness)
   remains the open evidence gap for any "Product Harness complete" claim.
+
+---
+
+# PARALLEL HARNESS ADDENDUM (2026-06-29)
+Source: /home/dylan/.claude/uploads/.../disclaude_parallel_harness_remaining_work.md (full text is authoritative).
+OPERATIVE RULES: Claude primary = sole canonical writer (repo, disclaude.md, commits, push, integration).
+Codex/GPT (gpt-5.5) = binding review gate (plan + code), NOT a routine implementer. External agents produce
+patch.diff/scout_report/fixtures ONLY — they don't push/promote/weaken oracles. No promotion from headless
+evidence (needs P1B browser harness). P17 = MiniMax-M3 DIRECT (opencode minimax-coding-plan), never OpenRouter,
+never Pi. Phase order: P8 → P9 → P1B-LIVE → P10 → P11 → P12 → P13 → P14 → P15 → P16 → P17. GATES: no P10
+before P1B-LIVE exists; no P15 before P1B-LIVE green; no P16 before P10-P13 green; no P17 before P16 goldens green.
+
+## COMMAND DISCOVERY (2026-06-29)
+- **Codex gate:** `codex exec --sandbox read-only --model gpt-5.5 "<prompt>"` — WORKING.
+- **agy** (Gemini/Antigravity): WORKING. Non-interactive: `agy --print --model "<name>" "<prompt>"` (also
+  --sandbox, --add-dir). Models: Gemini 3.5 Flash (Low/Med/High), Gemini 3.1 Pro (Low/High), Claude Sonnet 4.6,
+  Claude Opus 4.6, GPT-OSS 120B. Role: frontend/Playwright/UI scout (read-only / separate worktree).
+- **opencode** (MiniMax + DeepSeek): WORKING at `/home/dylan/.opencode/bin/opencode` (NOT on PATH — use full
+  path). Non-interactive: `opencode run -m <provider/model> "<msg>"` (--format json, --agent, -c continue).
+  MiniMax: `minimax-coding-plan/MiniMax-M3` (+M2.x). DeepSeek: `deepseek/deepseek-chat|reasoner|v4-flash|v4-pro`.
+  → MiniMax-M3 direct soak driver (P17) = `opencode run -m minimax-coding-plan/MiniMax-M3`. DeepSeek = fixtures.
+- **pi** (local Qwen 35B/27B): UNAVAILABLE right now — local llama.cpp server is DOWN (ECONNREFUSED; the R9700
+  LLM server isn't running after the GPU-leak recovery). Qwen-via-Pi roles deferred until llama-server is back;
+  substitute DeepSeek/Sonnet for fixture/summary roles meanwhile. (Pi also must NOT touch MiniMax — per rule 0.5.)
+- **Claude Sonnet subagents:** via the Agent tool (subagent_type) — source/test/risk scouts.
+
+### HEARTBEAT 2026-06-29T (addendum intake)
+- Received the Parallel Harness Addendum; appended + ran command discovery (agy✅ opencode✅ pi❌-llama-down).
+- NEXT: P8A plan → Codex plan review → parallel scouts (Sonnet test-first + DeepSeek negatives) → implement → test → Codex code review → commit.
+
+## PR P8A — Semantic reference model — PLAN
+GOAL: deterministic, 1-index-safe human→target reference resolution that REJECTS ambiguity (never guesses).
+FILES (canonical, Claude-owned): packages/core/src/disco/core/semantic_refs.py + packages/core/tests/test_semantic_refs.py
+IMPLEMENT: SemanticTargetKind (str,Enum: field/section/card/column/slide/comment_anchor/...); SemanticTarget
+(frozen: kind + locator, e.g. section_id+field, or collection+index); ReferenceResolution (resolved: SemanticTarget|None
++ ambiguous: bool + reason + candidates); HumanIndexRef (1-indexed ordinal → 0-indexed array index, safe);
+resolve_human_reference(phrase, *, context) → ReferenceResolution; normalize_screen_label(label) → deterministic slug.
+RULES: "slide 5" → 5th slide / array index 4 (1-index→0-index); "second service card" → services.cards[1];
+unknown/ambiguous → ReferenceResolution(ambiguous=True, candidates=[...]) NOT a guess; normalize_screen_label
+deterministic + idempotent. Pure value objects; no runtime/tool imports (house style: frozen pydantic, (str,Enum)).
+REQUIRED CASES (from spec): hero headline, hero CTA, second service card, third pricing column, slide 5,
+section 3, comment anchor, ambiguous reference.
+PARALLEL ASSIGNMENTS: Claude primary = canonical writer; Sonnet B (Agent) = test scout (draft test cases first
+from the spec); DeepSeek (opencode) = negative/ambiguous reference fixtures; Qwen35-via-Pi (human-reference
+phrase gen) = UNAVAILABLE (Pi down) → DeepSeek covers it. agy/MiniMax = unused for P8A (pure core module).
+DONE WHEN: semantic refs deterministic + 1-index safe + reject ambiguity; Codex APPROVE plan+code; tests green.
