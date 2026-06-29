@@ -1971,3 +1971,80 @@ PARALLEL: agy(Gemini) scout DONE (patterns captured). SCOPE: TweakPanel + AppCar
   gated + pushed. =====
 - NEXT: P1B-LIVE — the minimal BROWSER product harness (pulled forward; the gate before P10). Requires the running
   frontend+agent-server stack + Playwright; produces the product-evidence dossier the P1A/P8D oracles consume.
+
+## P1B-LIVE — BROWSER PRODUCT HARNESS (decomposed; the gate before P10)
+ENV REALITY (scoped 2026-06-29): frontend/e2e-live/ exists (bp-* specs attach to a LIVE agent-server :8000 +
+inspect EXISTING builds — they don't drive a fresh build). playwright.config testDir=./e2e (webServer dev:5199);
+the bp-* live specs hit API :8000 directly. @playwright/test installed. BUILD DRIVER BLOCKED: local llama-server
+DOWN + Pi DOWN → no reliable in-repo model to drive a fresh deterministic build right now. The EXACT product_
+evidence contract the P1A BROWSER_EVIDENCE_ORACLES read (browser_evidence.py): browser_ws{connections:int};
+lifecycle{terminal:str, statuses:list}; sidecar{stopped_at_terminal:bool, provider_calls_after_terminal:int};
+preview{owner:"platform", manual_port:bool}; shown{artifact_shown:bool, preview_shown:bool}; verification{ready_
+for_verification_called:bool, passed:bool}; export{requested:bool, download_present:bool, download_bytes:int};
+cleanup{orphans:int, workspace_released:bool}.
+PLAN: decompose into P1B-LIVE-1 (evidence schema keystone — gateable NOW), -2 (evidence_writer + scenario_runner),
+-3 (playwright_runner.ts + build-artifact-runtime-smoke.spec.ts + support/productEvidence.ts + the FLAGGED live run).
+Product Harness stays NOT-complete until a real Playwright/UI/WS/PreviewPane run produces a passing dossier.
+
+## PR P1B-LIVE-1 — product_evidence schema keystone — PLAN
+GOAL: a TYPED ProductEvidence schema that serializes to EXACTLY the dict shape the P1A oracles read, so the harness
+(P1B-LIVE-2/3) and the oracles can never drift. Proven by a test that a GREEN dossier passes ALL 8 browser oracles
+via classify(), and each individually-broken slice FAILs its oracle with the right code.
+FILE: harness/product_build/product_evidence_schema.py + harness/build_soak/tests/test_product_evidence_schema.py.
+API: 8 frozen slice models (BrowserWS/Lifecycle/Sidecar/Preview/Shown/Verification/Export/Cleanup) matching the
+oracle keys EXACTLY (NOT the addendum §6.5 nested sketch — match the REAL oracles). ProductEvidence(frozen) with
+the 8 slices. .to_evidence_dict() -> dict[str, dict] (the {browser_ws:{...}, lifecycle:{...}, ...} the oracles
+read). green() classmethod → a fully-passing dossier (connections>=1, terminal FINISHED, sidecar stopped + 0 calls
+after, preview platform-owned + no manual_port, shown, verification called+passed, export requested+present+bytes>0,
+cleanup 0 orphans + released). validate(dict) round-trips. P1B-LIVE-2 (writer) builds this from captured artifacts;
+P1B-LIVE-3 (TS) emits the same JSON (cross-language, drift-guarded later).
+TESTS: green().to_evidence_dict() → classify(clean_smoke_log, product_evidence=...) == PASS (all 8 oracles pass);
+mutate each slice to its failing form → classify FAILs with the matching code (BROWSER_WS_NOT_CONNECTED / lifecycle
+/ SIDECAR_NOT_STOPPED / PREVIEW_OWNERSHIP_VIOLATION / not-shown / verification / EXPORT_DOWNLOAD_MISSING / WORKSPACE
+_NOT_CLEANED); ProductEvidence round-trips; the dict keys == the oracle slice keys (a parity assertion).
+SCOPE: schema + oracle-contract proof ONLY. PARALLEL: none (pure keystone). DeepSeek deferred.
+
+### PR P1B-LIVE-1 — REFRAMED (post gpt-5.5: schema already exists in P1A)
+DISCOVERY: harness/build_soak/product_evidence.py (_SLICE_FIELDS + validate_product_evidence + write_product_
+evidence) AND test_browser_evidence_oracles.py (_green_evidence → all 8 oracles .passed; each broken slice →
+exact failure code) ALREADY lock the schema↔oracle contract (P1A). A new Python schema = forbidden duplication.
+REFRAME: P1B-LIVE-1 = the genuinely-missing + DETERMINISTICALLY-VERIFIABLE bridge — the TS evidence-assembly layer
+that turns captured browser observations into the EXACT product_evidence dict shape the existing Python schema/
+oracles read, with a CROSS-LANGUAGE PARITY GUARD (like discoSemanticAttrs.ts↔DataDiscoAttr) so the TS evidence keys
+can never drift from Python _SLICE_FIELDS. No live model needed; pure + vitest-tested. The live Playwright run +
+scenario_runner stay P1B-LIVE-2/3, FLAGGED pending a build driver (llama-server + Pi DOWN → no reliable driver now).
+FILES: frontend/e2e-live/support/productEvidence.ts (+ .test.ts) + packages/.../test_product_evidence_parity.py.
+API (productEvidence.ts): typed ProductEvidence TS interface mirroring _SLICE_FIELDS (browser_ws{connections},
+lifecycle{terminal}, sidecar{stopped_at_terminal,provider_calls_after_terminal}, preview{owner,manual_port},
+shown{artifact_shown,preview_shown}, verification{ready_for_verification_called,passed}, export{requested,
+download_present,download_bytes}, cleanup{orphans,workspace_released}); buildProductEvidence(observations) → the
+dict (only includes a slice when its observation was captured — absent slice → oracle SKIPs, matching the writer's
+optional-slice contract); SLICE_KEYS constant. PARITY: a Python test reads productEvidence.ts, asserts its slice
+keys + per-slice field names == Python _SLICE_FIELDS exactly.
+TESTS: buildProductEvidence(green observations) → the green dict (deep-equal a fixture); a partial observation
+omits the un-captured slice (not a fake-passing default); field types correct (connections number, flags bool).
+Python parity test: TS slices/fields == _SLICE_FIELDS. SCOPE: TS assembly + parity ONLY; live run flagged.
+
+### PR P1B-LIVE-1 — PLAN REVISION 2 (post gpt-5.5: harden _SLICE_FIELDS first)
+gpt-5.5 found a REAL latent gap in P1A: _SLICE_FIELDS["export"] declares only {requested} but ExportDownloadOracle
+adjudicates download_present(bool) + download_bytes(int) → a bool download_bytes capture bug slips past validate_
+product_evidence. FIX FIRST (build-and-harden): expand _SLICE_FIELDS export→{requested:bool, download_present:bool,
+download_bytes:int} (+ lifecycle→{terminal:str, statuses:list} for completeness) so validation covers every oracle-
+adjudicated field. Add a Python test asserting _SLICE_FIELDS covers each field the 8 oracles read (audited). Then
+productEvidence.ts parity targets the COMPLETE _SLICE_FIELDS. Verify no regression (green dossier + existing
+writer/oracle tests still pass). THEN: productEvidence.ts (TS assembly, slice-only-when-captured) + Python parity
+test (TS keys/fields == corrected _SLICE_FIELDS). Live Playwright/scenario_runner = P1B-LIVE-2/3, FLAGGED (driver down).
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-1 ACCEPTED
+- PR P1B-LIVE-1 (product-evidence TS assembly + schema hardening) COMPLETE. Plan gpt-5.5 REVISE×3 (don't dup the
+  P1A schema → reframe to TS bridge; harden _SLICE_FIELDS export gap first)→APPROVE. Code gpt-5.5 REVISE(2:
+  SLICE_KEYS↔SLICE_FIELDS drift hole + add download_bytes=True regression)→fix→APPROVE.
+- HARDENED a real P1A latent bug: _SLICE_FIELDS["export"] only had {requested} but ExportDownloadOracle
+  adjudicates download_present/download_bytes → a bool download_bytes evaded validate_product_evidence. Now typed
+  (+ lifecycle.statuses). Files: harness/build_soak/product_evidence.py (hardened) + frontend/src/lib/harness/
+  productEvidence.ts (TS assembly; SLICE_FIELDS typed single source; SLICE_KEYS derived; slice-only-when-captured)
+  + .test.ts (4 vitest) + harness/build_soak/tests/test_product_evidence_parity.py (4: coverage + TS↔Py parity +
+  bool-bytes regression). DISCOVERY: P1A already locked the schema+oracle contract; this is the TS bridge + fix.
+- NEXT: P1B-LIVE-2 (evidence_writer + scenario_runner deriving evidence from captured artifacts) → P1B-LIVE-3
+  (playwright_runner.ts + build-artifact-runtime-smoke.spec.ts + the FLAGGED live run; driver down → live PENDING).
+  Product Harness STILL NOT complete (no real browser run yet).

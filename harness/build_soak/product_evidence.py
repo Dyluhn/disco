@@ -21,12 +21,14 @@ from typing import Any
 # IS present its fields must be well-typed so the oracle reads it fail-closed-correctly.
 _SLICE_FIELDS: dict[str, dict[str, type]] = {
     "browser_ws": {"connections": int},
-    "lifecycle": {"terminal": str},
+    "lifecycle": {"terminal": str, "statuses": list},
     "sidecar": {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
     "preview": {"owner": str, "manual_port": bool},
     "shown": {"artifact_shown": bool, "preview_shown": bool},
     "verification": {"ready_for_verification_called": bool, "passed": bool},
-    "export": {"requested": bool},
+    # download_present/download_bytes ARE adjudicated by ExportDownloadOracle — they must be
+    # type-validated here too, else e.g. a bool download_bytes capture bug evades validation.
+    "export": {"requested": bool, "download_present": bool, "download_bytes": int},
     "cleanup": {"orphans": int, "workspace_released": bool},
 }
 

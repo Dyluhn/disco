@@ -1,0 +1,922 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f158d-33f5-76b3-a8f6-d38fdc67d62c
+--------
+user
+Re-review the 2 P1B-LIVE-1 code-review fixes (productEvidence.ts + tests):
+1. DRIFT HOLE closed: SLICE_FIELDS is now typed `Record<SliceKey, readonly string[]>` (SliceKey = keyof
+ProductObservations) — TS forces it to carry exactly the observation slices. SLICE_KEYS is now DERIVED
+(Object.keys(SLICE_FIELDS)), not a hand-maintained parallel list. buildProductEvidence iterates Object.keys(SLICE_
+FIELDS) (the single source). New vitest "SLICE_KEYS is derived from SLICE_FIELDS" asserts they match; the
+"assembles every captured slice" test now asserts assembled keys == the INPUT observation keys (not SLICE_KEYS),
+breaking the circular self-reference so a dropped slice can't hide an evidence loss.
+2. Added the direct Python regression test_bool_download_bytes_now_fails_validation: validate_product_evidence
+with export.download_bytes=True returns a "download_bytes ... bool" problem.
+Python parity 4 + vitest 4 + tsc 0 errors. Confirm both resolved. Return exactly APPROVE or REVISE + one line each.
+codex
+I’ll verify the actual diffs and tests rather than relying on the summary, focusing only on the two P1B-LIVE-1 fixes you named.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg -n "SLICE_FIELDS|SLICE_KEYS|buildProductEvidence|ProductObservations|assembles every captured slice|derived from SLICE_FIELDS" -S .' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+./disclaude.md:2008:DISCOVERY: harness/build_soak/product_evidence.py (_SLICE_FIELDS + validate_product_evidence + write_product_
+./disclaude.md:2014:can never drift from Python _SLICE_FIELDS. No live model needed; pure + vitest-tested. The live Playwright run +
+./disclaude.md:2017:API (productEvidence.ts): typed ProductEvidence TS interface mirroring _SLICE_FIELDS (browser_ws{connections},
+./disclaude.md:2020:download_present,download_bytes}, cleanup{orphans,workspace_released}); buildProductEvidence(observations) → the
+./disclaude.md:2022:optional-slice contract); SLICE_KEYS constant. PARITY: a Python test reads productEvidence.ts, asserts its slice
+./disclaude.md:2023:keys + per-slice field names == Python _SLICE_FIELDS exactly.
+./disclaude.md:2024:TESTS: buildProductEvidence(green observations) → the green dict (deep-equal a fixture); a partial observation
+./disclaude.md:2026:Python parity test: TS slices/fields == _SLICE_FIELDS. SCOPE: TS assembly + parity ONLY; live run flagged.
+./disclaude.md:2028:### PR P1B-LIVE-1 — PLAN REVISION 2 (post gpt-5.5: harden _SLICE_FIELDS first)
+./disclaude.md:2029:gpt-5.5 found a REAL latent gap in P1A: _SLICE_FIELDS["export"] declares only {requested} but ExportDownloadOracle
+./disclaude.md:2031:product_evidence. FIX FIRST (build-and-harden): expand _SLICE_FIELDS export→{requested:bool, download_present:bool,
+./disclaude.md:2033:adjudicated field. Add a Python test asserting _SLICE_FIELDS covers each field the 8 oracles read (audited). Then
+./disclaude.md:2034:productEvidence.ts parity targets the COMPLETE _SLICE_FIELDS. Verify no regression (green dossier + existing
+./disclaude.md:2036:test (TS keys/fields == corrected _SLICE_FIELDS). Live Playwright/scenario_runner = P1B-LIVE-2/3, FLAGGED (driver down).
+./frontend/src/lib/harness/productEvidence.test.ts:4:  type ProductObservations,
+./frontend/src/lib/harness/productEvidence.test.ts:5:  SLICE_FIELDS,
+./frontend/src/lib/harness/productEvidence.test.ts:6:  SLICE_KEYS,
+./frontend/src/lib/harness/productEvidence.test.ts:7:  buildProductEvidence,
+./frontend/src/lib/harness/productEvidence.test.ts:10:function greenObservations(): ProductObservations {
+./frontend/src/lib/harness/productEvidence.test.ts:23:describe("buildProductEvidence", () => {
+./frontend/src/lib/harness/productEvidence.test.ts:24:  it("SLICE_KEYS is derived from SLICE_FIELDS (no parallel-list drift)", () => {
+./frontend/src/lib/harness/productEvidence.test.ts:25:    expect([...SLICE_KEYS].sort()).toEqual(Object.keys(SLICE_FIELDS).sort());
+./frontend/src/lib/harness/productEvidence.test.ts:28:  it("assembles every captured slice with its exact fields", () => {
+./frontend/src/lib/harness/productEvidence.test.ts:30:    const ev = buildProductEvidence(green) as Record<string, Record<string, unknown>>;
+./frontend/src/lib/harness/productEvidence.test.ts:31:    // assert against the INPUT keys (not SLICE_KEYS) so a dropped slice key can't hide a loss
+./frontend/src/lib/harness/productEvidence.test.ts:33:    for (const key of SLICE_KEYS) {
+./frontend/src/lib/harness/productEvidence.test.ts:34:      expect(Object.keys(ev[key]).sort()).toEqual([...SLICE_FIELDS[key]].sort());
+./frontend/src/lib/harness/productEvidence.test.ts:45:    const ev = buildProductEvidence(obs);
+./frontend/src/lib/harness/productEvidence.test.ts:51:    expect(buildProductEvidence({})).toEqual({});
+./frontend/src/lib/harness/productEvidence.ts:6: * Python writer (harness/build_soak/product_evidence.py `_SLICE_FIELDS`) validates and the
+./frontend/src/lib/harness/productEvidence.ts:11: * `SLICE_FIELDS` is the runtime mirror of the Python `_SLICE_FIELDS`; a Python parity test
+./frontend/src/lib/harness/productEvidence.ts:49:export interface ProductObservations {
+./frontend/src/lib/harness/productEvidence.ts:60:export type ProductEvidence = ProductObservations;
+./frontend/src/lib/harness/productEvidence.ts:63:export type SliceKey = keyof ProductObservations;
+./frontend/src/lib/harness/productEvidence.ts:66: * Runtime mirror of Python `_SLICE_FIELDS` (keys + field names) AND the single source the
+./frontend/src/lib/harness/productEvidence.ts:69: * asserts it equals `_SLICE_FIELDS`.
+./frontend/src/lib/harness/productEvidence.ts:71:export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = {
+./frontend/src/lib/harness/productEvidence.ts:82:/** All slice keys, DERIVED from SLICE_FIELDS — never a hand-maintained parallel list. */
+./frontend/src/lib/harness/productEvidence.ts:83:export const SLICE_KEYS = Object.keys(SLICE_FIELDS) as SliceKey[];
+./frontend/src/lib/harness/productEvidence.ts:86: * Assemble the `product_evidence` dict from captured observations. Iterates SLICE_FIELDS (the
+./frontend/src/lib/harness/productEvidence.ts:90:export function buildProductEvidence(obs: ProductObservations): ProductEvidence {
+./frontend/src/lib/harness/productEvidence.ts:92:  for (const key of Object.keys(SLICE_FIELDS) as SliceKey[]) {
+./harness/build_soak/product_evidence.py:22:_SLICE_FIELDS: dict[str, dict[str, type]] = {
+./harness/build_soak/product_evidence.py:47:    for slice_name, fields in _SLICE_FIELDS.items():
+./harness/build_soak/tests/test_product_evidence_parity.py:2:SLICE_FIELDS) must match the Python _SLICE_FIELDS EXACTLY (cross-language drift guard), and
+./harness/build_soak/tests/test_product_evidence_parity.py:3:_SLICE_FIELDS must cover every field the 8 HARN-2 browser oracles actually adjudicate."""
+./harness/build_soak/tests/test_product_evidence_parity.py:10:from harness.build_soak.product_evidence import _SLICE_FIELDS
+./harness/build_soak/tests/test_product_evidence_parity.py:32:    block = re.search(r"SLICE_FIELDS[^{]*\{(.*?)\n\};", text, re.DOTALL)
+./harness/build_soak/tests/test_product_evidence_parity.py:33:    assert block, "could not find SLICE_FIELDS object in productEvidence.ts"
+./harness/build_soak/tests/test_product_evidence_parity.py:41:    # the hardened _SLICE_FIELDS must type-validate every field an oracle adjudicates
+./harness/build_soak/tests/test_product_evidence_parity.py:43:        have = set(_SLICE_FIELDS[slice_name])
+./harness/build_soak/tests/test_product_evidence_parity.py:44:        assert reads <= have, f"{slice_name}: oracle reads {reads - have} not in _SLICE_FIELDS"
+./harness/build_soak/tests/test_product_evidence_parity.py:49:    assert _SLICE_FIELDS["export"]["download_present"] is bool
+./harness/build_soak/tests/test_product_evidence_parity.py:50:    assert _SLICE_FIELDS["export"]["download_bytes"] is int
+./harness/build_soak/tests/test_product_evidence_parity.py:65:    py = {k: set(v) for k, v in _SLICE_FIELDS.items()}
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "git diff -- productEvidence.ts '*productEvidence*' '*product_evidence*'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+diff --git a/harness/build_soak/product_evidence.py b/harness/build_soak/product_evidence.py
+index d98bc94e..ab9c5c3d 100644
+--- a/harness/build_soak/product_evidence.py
++++ b/harness/build_soak/product_evidence.py
+@@ -21,12 +21,14 @@ from typing import Any
+ # IS present its fields must be well-typed so the oracle reads it fail-closed-correctly.
+ _SLICE_FIELDS: dict[str, dict[str, type]] = {
+     "browser_ws": {"connections": int},
+-    "lifecycle": {"terminal": str},
++    "lifecycle": {"terminal": str, "statuses": list},
+     "sidecar": {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
+     "preview": {"owner": str, "manual_port": bool},
+     "shown": {"artifact_shown": bool, "preview_shown": bool},
+     "verification": {"ready_for_verification_called": bool, "passed": bool},
+-    "export": {"requested": bool},
++    # download_present/download_bytes ARE adjudicated by ExportDownloadOracle — they must be
++    # type-validated here too, else e.g. a bool download_bytes capture bug evades validation.
++    "export": {"requested": bool, "download_present": bool, "download_bytes": int},
+     "cleanup": {"orphans": int, "workspace_released": bool},
+ }
+ 
+
+exec
+/bin/bash -lc 'rg -n "test_bool_download_bytes_now_fails_validation|download_bytes|validate_product_evidence" -S .' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+./disclaude.md:956:- NEW harness/build_soak/product_evidence.py: validate_product_evidence (schema problems list; bool-where-int
+./disclaude.md:1983:for_verification_called:bool, passed:bool}; export{requested:bool, download_present:bool, download_bytes:int};
+./disclaude.md:2008:DISCOVERY: harness/build_soak/product_evidence.py (_SLICE_FIELDS + validate_product_evidence + write_product_
+./disclaude.md:2020:download_present,download_bytes}, cleanup{orphans,workspace_released}); buildProductEvidence(observations) → the
+./disclaude.md:2030:adjudicates download_present(bool) + download_bytes(int) → a bool download_bytes capture bug slips past validate_
+./disclaude.md:2032:download_bytes:int} (+ lifecycle→{terminal:str, statuses:list} for completeness) so validation covers every oracle-
+./DISCLAUDE_CAMPAIGN_SUMMARY.md:98:- **HARN-1b (evidence) — validated product-evidence + ledger writer.** `validate_product_evidence` +
+./harness/build_soak/product_evidence.py:29:    # download_present/download_bytes ARE adjudicated by ExportDownloadOracle — they must be
+./harness/build_soak/product_evidence.py:30:    # type-validated here too, else e.g. a bool download_bytes capture bug evades validation.
+./harness/build_soak/product_evidence.py:31:    "export": {"requested": bool, "download_present": bool, "download_bytes": int},
+./harness/build_soak/product_evidence.py:39:def validate_product_evidence(ev: dict[str, Any]) -> list[str]:
+./harness/build_soak/product_evidence.py:69:    problems = validate_product_evidence(ev)
+./harness/build_soak/tests/test_product_evidence_parity.py:25:    "export": {"requested", "download_present", "download_bytes"},
+./harness/build_soak/tests/test_product_evidence_parity.py:48:    # the specific P1A gap gpt-5.5 found: download_present/download_bytes are now typed
+./harness/build_soak/tests/test_product_evidence_parity.py:50:    assert _SLICE_FIELDS["export"]["download_bytes"] is int
+./harness/build_soak/tests/test_product_evidence_parity.py:53:def test_bool_download_bytes_now_fails_validation() -> None:
+./harness/build_soak/tests/test_product_evidence_parity.py:54:    # direct regression for the gap: a bool where download_bytes (int) is expected is caught
+./harness/build_soak/tests/test_product_evidence_parity.py:55:    from harness.build_soak.product_evidence import validate_product_evidence
+./harness/build_soak/tests/test_product_evidence_parity.py:57:    problems = validate_product_evidence(
+./harness/build_soak/tests/test_product_evidence_parity.py:58:        {"export": {"requested": True, "download_present": True, "download_bytes": True}}
+./harness/build_soak/tests/test_product_evidence_parity.py:60:    assert any("download_bytes" in p and "bool" in p for p in problems), problems
+./harness/build_soak/tests/test_product_evidence_writer.py:13:    validate_product_evidence,
+./harness/build_soak/tests/test_product_evidence_writer.py:38:    assert validate_product_evidence(_green()) == []
+./harness/build_soak/tests/test_product_evidence_writer.py:43:    probs = validate_product_evidence(ev)
+./harness/build_soak/tests/test_product_evidence_writer.py:49:    probs = validate_product_evidence(ev)
+./harness/build_soak/tests/test_product_evidence_writer.py:55:    assert any("preview: not a dict" == p for p in validate_product_evidence(ev))
+./harness/build_soak/tests/test_product_evidence_writer.py:60:    assert validate_product_evidence(ev) == []
+./harness/build_soak/tests/test_product_evidence_writer.py:115:    assert validate_product_evidence(["not", "a", "dict"]) == ["product_evidence is not a dict"]  # type: ignore[arg-type]
+./harness/build_soak/tests/test_product_evidence_writer.py:126:        assert any(f"{slice_name}.{field}" in p for p in validate_product_evidence(ev))
+./harness/build_soak/tests/test_product_evidence_writer.py:129:        assert any(f"{slice_name}.{field}" in p and "bool" in p for p in validate_product_evidence(ev2))
+./harness/build_soak/tests/test_browser_evidence_oracles.py:28:        "export": {"requested": True, "download_present": True, "download_bytes": 4096},
+./harness/build_soak/tests/test_browser_evidence_oracles.py:91:    ev = _green_evidence(); ev["export"] = {"requested": True, "download_present": False, "download_bytes": 0}
+./harness/build_soak/tests/test_browser_evidence_oracles.py:156:    ev = _green_evidence(); ev["export"] = {"requested": True, "download_present": True, "download_bytes": "big"}
+./harness/build_soak/oracles/browser_evidence.py:18:      "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
+./harness/build_soak/oracles/browser_evidence.py:206:        nbytes = _int(ex.get("download_bytes", 0))
+./harness/build_soak/oracles/browser_evidence.py:215:                        "download_bytes": ex.get("download_bytes"),
+./harness/build_soak/oracles/browser_evidence.py:219:        return [passing(self._NAME, facts={"download_bytes": nbytes})]
+./frontend/src/lib/harness/productEvidence.test.ts:18:    export: { requested: true, download_present: true, download_bytes: 4096 },
+./frontend/src/lib/harness/productEvidence.test.ts:39:    expect(typeof ev.export.download_bytes).toBe("number");
+./frontend/src/lib/harness/productEvidence.ts:41:  download_bytes: number;
+./frontend/src/lib/harness/productEvidence.ts:78:  export: ["requested", "download_present", "download_bytes"],
+
+codex
+The relevant symbols are in `frontend/src/lib/harness/productEvidence.ts`, its Vitest file, and `harness/build_soak/tests/test_product_evidence_parity.py`. I’m reading those directly now to check for remaining holes rather than just matching names.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+exec
+/bin/bash -lc "sed -n '1,180p' frontend/src/lib/harness/productEvidence.ts" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,140p' frontend/src/lib/harness/productEvidence.test.ts" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+/**
+ * productEvidence — P1B-LIVE-1 (the TS evidence-assembly bridge).
+ *
+ * The live browser product harness (P1B-LIVE-2/3) captures raw observations from the real
+ * UI/WS/preview run; this turns them into the EXACT `product_evidence` dict shape the
+ * Python writer (harness/build_soak/product_evidence.py `_SLICE_FIELDS`) validates and the
+ * HARN-2 browser oracles read. A slice is included ONLY when its observation was captured —
+ * an un-captured slice is omitted so the matching oracle SKIPs (the optional-slice contract);
+ * there are NO fake-passing defaults.
+ *
+ * `SLICE_FIELDS` is the runtime mirror of the Python `_SLICE_FIELDS`; a Python parity test
+ * (test_product_evidence_parity.py) asserts the two stay identical so they can never drift.
+ */
+
+export interface BrowserWsObs {
+  connections: number;
+}
+export interface LifecycleObs {
+  terminal: string;
+  statuses: string[];
+}
+export interface SidecarObs {
+  stopped_at_terminal: boolean;
+  provider_calls_after_terminal: number;
+}
+export interface PreviewObs {
+  owner: string;
+  manual_port: boolean;
+}
+export interface ShownObs {
+  artifact_shown: boolean;
+  preview_shown: boolean;
+}
+export interface VerificationObs {
+  ready_for_verification_called: boolean;
+  passed: boolean;
+}
+export interface ExportObs {
+  requested: boolean;
+  download_present: boolean;
+  download_bytes: number;
+}
+export interface CleanupObs {
+  orphans: number;
+  workspace_released: boolean;
+}
+
+/** Captured observations — a slice is present iff that part of the run was observed. */
+export interface ProductObservations {
+  browser_ws?: BrowserWsObs;
+  lifecycle?: LifecycleObs;
+  sidecar?: SidecarObs;
+  preview?: PreviewObs;
+  shown?: ShownObs;
+  verification?: VerificationObs;
+  export?: ExportObs;
+  cleanup?: CleanupObs;
+}
+
+export type ProductEvidence = ProductObservations;
+
+/** The slice keys — derived from the typed observation shape so they cannot drift. */
+export type SliceKey = keyof ProductObservations;
+
+/**
+ * Runtime mirror of Python `_SLICE_FIELDS` (keys + field names) AND the single source the
+ * assembler iterates. Annotated `Record<SliceKey, …>` so TS forces it to carry EXACTLY the
+ * observation slices (a dropped/renamed slice is a compile error); a Python parity test
+ * asserts it equals `_SLICE_FIELDS`.
+ */
+export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = {
+  browser_ws: ["connections"],
+  lifecycle: ["terminal", "statuses"],
+  sidecar: ["stopped_at_terminal", "provider_calls_after_terminal"],
+  preview: ["owner", "manual_port"],
+  shown: ["artifact_shown", "preview_shown"],
+  verification: ["ready_for_verification_called", "passed"],
+  export: ["requested", "download_present", "download_bytes"],
+  cleanup: ["orphans", "workspace_released"],
+};
+
+/** All slice keys, DERIVED from SLICE_FIELDS — never a hand-maintained parallel list. */
+export const SLICE_KEYS = Object.keys(SLICE_FIELDS) as SliceKey[];
+
+/**
+ * Assemble the `product_evidence` dict from captured observations. Iterates SLICE_FIELDS (the
+ * single source) and includes a slice ONLY when it was actually observed (no fabricated
+ * defaults) — an omitted slice SKIPs its oracle.
+ */
+export function buildProductEvidence(obs: ProductObservations): ProductEvidence {
+  const ev: Record<string, unknown> = {};
+  for (const key of Object.keys(SLICE_FIELDS) as SliceKey[]) {
+    const slice = obs[key];
+    if (slice !== undefined) ev[key] = slice;
+  }
+  return ev as ProductEvidence;
+}
+
+ succeeded in 0ms:
+import { describe, expect, it } from "vitest";
+
+import {
+  type ProductObservations,
+  SLICE_FIELDS,
+  SLICE_KEYS,
+  buildProductEvidence,
+} from "@/lib/harness/productEvidence";
+
+function greenObservations(): ProductObservations {
+  return {
+    browser_ws: { connections: 1 },
+    lifecycle: { terminal: "FINISHED", statuses: ["RUNNING", "FINISHED"] },
+    sidecar: { stopped_at_terminal: true, provider_calls_after_terminal: 0 },
+    preview: { owner: "platform", manual_port: false },
+    shown: { artifact_shown: true, preview_shown: true },
+    verification: { ready_for_verification_called: true, passed: true },
+    export: { requested: true, download_present: true, download_bytes: 4096 },
+    cleanup: { orphans: 0, workspace_released: true },
+  };
+}
+
+describe("buildProductEvidence", () => {
+  it("SLICE_KEYS is derived from SLICE_FIELDS (no parallel-list drift)", () => {
+    expect([...SLICE_KEYS].sort()).toEqual(Object.keys(SLICE_FIELDS).sort());
+  });
+
+  it("assembles every captured slice with its exact fields", () => {
+    const green = greenObservations();
+    const ev = buildProductEvidence(green) as Record<string, Record<string, unknown>>;
+    // assert against the INPUT keys (not SLICE_KEYS) so a dropped slice key can't hide a loss
+    expect(Object.keys(ev).sort()).toEqual(Object.keys(green).sort());
+    for (const key of SLICE_KEYS) {
+      expect(Object.keys(ev[key]).sort()).toEqual([...SLICE_FIELDS[key]].sort());
+    }
+    // field types match the schema (connections number, flags bool, bytes number)
+    expect(typeof ev.browser_ws.connections).toBe("number");
+    expect(typeof ev.preview.manual_port).toBe("boolean");
+    expect(typeof ev.export.download_bytes).toBe("number");
+  });
+
+  it("omits an un-captured slice (no fabricated default → that oracle SKIPs)", () => {
+    const obs = greenObservations();
+    delete obs.export; // export not observed this run
+    const ev = buildProductEvidence(obs);
+    expect("export" in ev).toBe(false);
+    expect("browser_ws" in ev).toBe(true);
+  });
+
+  it("an empty observation set yields an empty dossier (all oracles SKIP)", () => {
+    expect(buildProductEvidence({})).toEqual({});
+  });
+});
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'git status --short' in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,120p' harness/build_soak/product_evidence.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+ M .claude/p7-code.log
+ M disclaude.md
+ M harness/build_soak/product_evidence.py
+?? .claude/p1bl1-code-rr.log
+?? .claude/p1bl1-code.log
+?? .claude/p1bl1-plan-rr.log
+?? .claude/p1bl1-plan-rr2.log
+?? .claude/p1bl1-plan.log
+?? .claude/p7-code-rr.log
+?? DISCLAUDE_CAMPAIGN_SUMMARY.md
+?? disclaude-changed-files.zip
+?? frontend/src/lib/harness/
+?? harness/build_soak/tests/test_product_evidence_parity.py
+
+ succeeded in 0ms:
+"""HARN-1b (evidence side) — the validated producer of the product-harness dossier.
+
+The HARN-2 oracles READ a ``product_evidence`` dict + a provider-call ledger. This
+module is the verified WRITER: it validates a captured dossier against the schema the
+oracles expect BEFORE writing it, so a harness bug can't emit malformed evidence that
+an oracle would silently mis-adjudicate. The live Playwright harness captures the raw
+browser data and calls these to serialize ``product-evidence.json`` and
+``provider-call-ledger.jsonl`` into the run folder.
+
+This is pure + unit-tested; it does not drive a browser (that is HARN-1b's live spec).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+# The expected slices and their field types. Each slice is optional (a run that did
+# not export has no "export" slice → the ExportDownload oracle SKIPs), but when a slice
+# IS present its fields must be well-typed so the oracle reads it fail-closed-correctly.
+_SLICE_FIELDS: dict[str, dict[str, type]] = {
+    "browser_ws": {"connections": int},
+    "lifecycle": {"terminal": str, "statuses": list},
+    "sidecar": {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
+    "preview": {"owner": str, "manual_port": bool},
+    "shown": {"artifact_shown": bool, "preview_shown": bool},
+    "verification": {"ready_for_verification_called": bool, "passed": bool},
+    # download_present/download_bytes ARE adjudicated by ExportDownloadOracle — they must be
+    # type-validated here too, else e.g. a bool download_bytes capture bug evades validation.
+    "export": {"requested": bool, "download_present": bool, "download_bytes": int},
+    "cleanup": {"orphans": int, "workspace_released": bool},
+}
+
+PRODUCT_EVIDENCE_NAME = "product-evidence.json"
+PROVIDER_LEDGER_NAME = "provider-call-ledger.jsonl"
+
+
+def validate_product_evidence(ev: dict[str, Any]) -> list[str]:
+    """Return a list of schema problems (empty = valid). Unknown top-level keys are
+    allowed (forward-compat); a known slice must be a dict whose declared fields, when
+    present, carry the right type. ``bool`` is rejected where ``int`` is required (a
+    bool count is a capture bug)."""
+    problems: list[str] = []
+    if not isinstance(ev, dict):
+        return ["product_evidence is not a dict"]
+    for slice_name, fields in _SLICE_FIELDS.items():
+        if slice_name not in ev:
+            continue
+        slice_val = ev[slice_name]
+        if not isinstance(slice_val, dict):
+            problems.append(f"{slice_name}: not a dict")
+            continue
+        for field, typ in fields.items():
+            if field not in slice_val:
+                continue
+            val = slice_val[field]
+            if typ is int and isinstance(val, bool):
+                problems.append(f"{slice_name}.{field}: bool where int expected")
+            elif not isinstance(val, typ):
+                problems.append(f"{slice_name}.{field}: {type(val).__name__} where {typ.__name__} expected")
+    return problems
+
+
+def write_product_evidence(folder: str | Path, ev: dict[str, Any], *, strict: bool = True) -> Path:
+    """Validate then write ``product-evidence.json`` into ``folder``. With
+    ``strict=True`` (default) a schema problem raises ValueError BEFORE writing, so the
+    harness never persists evidence the oracles can't trust."""
+    problems = validate_product_evidence(ev)
+    if problems and strict:
+        raise ValueError(f"product_evidence failed schema validation: {problems}")
+    out = Path(folder) / PRODUCT_EVIDENCE_NAME
+    out.write_text(json.dumps(ev, indent=2, sort_keys=True), encoding="utf-8")
+    return out
+
+
+def write_provider_ledger(folder: str | Path, records: list[dict[str, Any]]) -> Path:
+    """Write ``provider-call-ledger.jsonl`` (one JSON record per line). Each record
+    should carry at least a ``host``; the ProviderLedgerOracle fail-closes on a hostless
+    record, so a non-dict / hostless entry here would surface as an evidence gap."""
+    out = Path(folder) / PROVIDER_LEDGER_NAME
+    lines = [json.dumps(r, sort_keys=True) for r in records]
+    out.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return out
+
+exec
+/bin/bash -lc "sed -n '1,120p' harness/build_soak/tests/test_product_evidence_parity.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""P1B-LIVE-1: the TS evidence-assembly mirror (frontend/e2e-live/support/productEvidence.ts
+SLICE_FIELDS) must match the Python _SLICE_FIELDS EXACTLY (cross-language drift guard), and
+_SLICE_FIELDS must cover every field the 8 HARN-2 browser oracles actually adjudicate."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from harness.build_soak.product_evidence import _SLICE_FIELDS
+
+_TS = (
+    Path(__file__).resolve().parents[3]
+    / "frontend" / "src" / "lib" / "harness" / "productEvidence.ts"
+)
+
+# Every field each browser oracle READS (audited from oracles/browser_evidence.py).
+_ORACLE_READS: dict[str, set[str]] = {
+    "browser_ws": {"connections"},
+    "lifecycle": {"terminal", "statuses"},
+    "sidecar": {"stopped_at_terminal", "provider_calls_after_terminal"},
+    "preview": {"owner", "manual_port"},
+    "shown": {"artifact_shown", "preview_shown"},
+    "verification": {"ready_for_verification_called", "passed"},
+    "export": {"requested", "download_present", "download_bytes"},
+    "cleanup": {"orphans", "workspace_released"},
+}
+
+
+def _parse_ts_slice_fields() -> dict[str, set[str]]:
+    text = _TS.read_text(encoding="utf-8")
+    block = re.search(r"SLICE_FIELDS[^{]*\{(.*?)\n\};", text, re.DOTALL)
+    assert block, "could not find SLICE_FIELDS object in productEvidence.ts"
+    out: dict[str, set[str]] = {}
+    for key, body in re.findall(r"(\w+):\s*\[([^\]]*)\]", block.group(1)):
+        out[key] = set(re.findall(r'"([^"]+)"', body))
+    return out
+
+
+def test_schema_covers_every_oracle_read_field() -> None:
+    # the hardened _SLICE_FIELDS must type-validate every field an oracle adjudicates
+    for slice_name, reads in _ORACLE_READS.items():
+        have = set(_SLICE_FIELDS[slice_name])
+        assert reads <= have, f"{slice_name}: oracle reads {reads - have} not in _SLICE_FIELDS"
+
+
+def test_export_download_fields_now_validated() -> None:
+    # the specific P1A gap gpt-5.5 found: download_present/download_bytes are now typed
+    assert _SLICE_FIELDS["export"]["download_present"] is bool
+    assert _SLICE_FIELDS["export"]["download_bytes"] is int
+
+
+def test_bool_download_bytes_now_fails_validation() -> None:
+    # direct regression for the gap: a bool where download_bytes (int) is expected is caught
+    from harness.build_soak.product_evidence import validate_product_evidence
+
+    problems = validate_product_evidence(
+        {"export": {"requested": True, "download_present": True, "download_bytes": True}}
+    )
+    assert any("download_bytes" in p and "bool" in p for p in problems), problems
+
+
+def test_ts_mirror_matches_python_slice_fields_exactly() -> None:
+    ts = _parse_ts_slice_fields()
+    py = {k: set(v) for k, v in _SLICE_FIELDS.items()}
+    assert ts == py, f"TS↔Python product_evidence drift — TS-only: {set(ts) ^ set(py)}; {ts} vs {py}"
+
+codex
+The TS side now has a single keyed source for slice iteration, and the Python side has the direct `bool`-as-`int` regression. I’m doing one last consistency check against the oracle-read schema before returning the requested verdict format.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+exec
+/bin/bash -lc "sed -n '1,260p' harness/build_soak/oracles/browser_evidence.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,160p' harness/build_soak/tests/test_product_evidence_writer.py" in /var/home/dylan/projects/disclaude
+hook: PreToolUse Failed
+ succeeded in 0ms:
+"""HARN-2 — the browser product-harness oracles.
+
+These eight zero-opinion oracles judge the REAL product path (not just that the
+engine wrote files) over the browser evidence HARN-1b captures into a single
+``product_evidence`` dict. Each oracle reads its own slice; when the slice is absent
+(a headless run, or HARN-1b not yet wired) it SKIPS — so these never affect headless
+classification until a product-harness run supplies the evidence.
+
+product_evidence (the HARN-1b dossier, all keys optional):
+    {
+      "browser_ws":   {"connections": int, "closes": [{"code": int, "reason": str}]},
+      "lifecycle":    {"statuses": ["RUNNING", ...], "terminal": "FINISHED"|...},
+      "sidecar":      {"stopped_at_terminal": bool, "provider_calls_after_terminal": int},
+      "preview":      {"owner": "platform"|"model", "manual_port": bool,
+                       "shown_to_user": bool, "url": str},
+      "shown":        {"artifact_shown": bool, "preview_shown": bool},
+      "verification": {"ready_for_verification_called": bool, "passed": bool},
+      "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
+      "cleanup":      {"orphans": int, "workspace_released": bool},
+    }
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .. import failure_codes as fc
+from .schema import OracleResult, failing, passing, skipping
+
+_TERMINAL_OK = frozenset({"FINISHED", "VERIFIED"})
+
+
+def _slice(product_evidence: dict[str, Any] | None, key: str) -> dict[str, Any] | None:
+    if not product_evidence:
+        return None
+    val = product_evidence.get(key)
+    return val if isinstance(val, dict) else None
+
+
+def _int(v: Any) -> int | None:
+    """Safe int coercion: returns None for a missing/non-numeric/bool value so a
+    malformed count can be handled fail-closed instead of crashing classification."""
+    if isinstance(v, bool) or v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+class BrowserWSOracle:
+    """The real browser opened (and kept) a build WebSocket — the 'silently dropped'
+    bug class where the UI never connects yet the engine runs blind."""
+
+    _NAME = "browser_ws"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ws = _slice(product_evidence, "browser_ws")
+        if ws is None:
+            return [skipping(self._NAME, reason="no browser_ws evidence (headless run)")]
+        conns = _int(ws.get("connections"))
+        if conns is None or conns <= 0:  # missing/malformed/zero → fail-closed
+            return [
+                failing(
+                    self._NAME,
+                    fc.BROWSER_WS_NOT_CONNECTED,
+                    first_broken_link="build -> browser_ws_connected",
+                    facts={"connections": ws.get("connections")},
+                )
+            ]
+        return [passing(self._NAME, facts={"connections": conns})]
+
+
+class LifecycleOracle:
+    """The conversation status progressed to a clean terminal (no RUNNING-forever,
+    no missing terminal)."""
+
+    _NAME = "lifecycle"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        lc = _slice(product_evidence, "lifecycle")
+        if lc is None:
+            return [skipping(self._NAME, reason="no lifecycle evidence (headless run)")]
+        terminal = str(lc.get("terminal") or "")
+        if terminal not in _TERMINAL_OK:
+            return [
+                failing(
+                    self._NAME,
+                    fc.LIFECYCLE_SEQUENCE_INVALID,
+                    first_broken_link="build -> clean_terminal",
+                    facts={"terminal": terminal or None, "statuses": lc.get("statuses")},
+                )
+            ]
+        return [passing(self._NAME, facts={"terminal": terminal})]
+
+
+class SidecarStopOracle:
+    """The Pi sidecar (and provider calls) stopped at the terminal state — no runaway
+    token burn."""
+
+    _NAME = "sidecar_stop"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        sc = _slice(product_evidence, "sidecar")
+        if sc is None:
+            return [skipping(self._NAME, reason="no sidecar evidence (headless run)")]
+        calls_after = _int(sc.get("provider_calls_after_terminal", 0))
+        # require an EXPLICIT stop + a well-formed zero post-terminal call count.
+        if sc.get("stopped_at_terminal", False) is not True or calls_after is None or calls_after > 0:
+            return [
+                failing(
+                    self._NAME,
+                    fc.SIDECAR_NOT_STOPPED,
+                    first_broken_link="terminal -> sidecar_stopped",
+                    facts={
+                        "stopped_at_terminal": sc.get("stopped_at_terminal"),
+                        "provider_calls_after_terminal": sc.get("provider_calls_after_terminal"),
+                    },
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class PreviewOwnershipOracle:
+    """The PLATFORM owned the preview port/URL — the model never hand-served a port."""
+
+    _NAME = "preview_ownership"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        pv = _slice(product_evidence, "preview")
+        if pv is None:
+            return [skipping(self._NAME, reason="no preview evidence (headless run)")]
+        # fail-closed: require the owner to be EXPLICITLY "platform" (a missing/unknown
+        # owner cannot prove the platform owned the port) and manual_port not set.
+        if pv.get("owner") != "platform" or pv.get("manual_port", False) is True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.PREVIEW_OWNERSHIP_VIOLATION,
+                    first_broken_link="preview -> platform_owned",
+                    facts={"owner": pv.get("owner"), "manual_port": pv.get("manual_port")},
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class ShowToUserOracle:
+    """The artifact/preview was actually SHOWN to the user — file existence is not the
+    same as the UI presenting it."""
+
+    _NAME = "show_to_user"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        shown = _slice(product_evidence, "shown")
+        if shown is None:
+            return [skipping(self._NAME, reason="no shown evidence (headless run)")]
+        if not (shown.get("artifact_shown", False) or shown.get("preview_shown", False)):
+            return [
+                failing(
+                    self._NAME,
+                    fc.ARTIFACT_NOT_SHOWN_TO_USER,
+                    first_broken_link="finish -> shown_to_user",
+                    facts={k: bool(shown.get(k, False)) for k in ("artifact_shown", "preview_shown")},
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class VerificationGateOracle:
+    """Completion went THROUGH the host-owned verification finalizer (ready_for_*_
+    verification), not a model self-declared finish."""
+
+    _NAME = "verification_gate"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        vf = _slice(product_evidence, "verification")
+        if vf is None:
+            return [skipping(self._NAME, reason="no verification evidence (headless run)")]
+        # fail-closed: require BOTH flags explicitly True.
+        if vf.get("ready_for_verification_called", False) is not True or vf.get("passed", False) is not True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.VERIFICATION_GATE_BYPASSED,
+                    first_broken_link="finish -> verification_gate",
+                    facts={
+                        "ready_for_verification_called": bool(vf.get("ready_for_verification_called", False)),
+                        "passed": bool(vf.get("passed", False)),
+                    },
+                )
+            ]
+        return [passing(self._NAME)]
+
+
+class ExportDownloadOracle:
+    """When an export was requested, a real download was delivered (non-empty)."""
+
+    _NAME = "export_download"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        ex = _slice(product_evidence, "export")
+        if ex is None:
+            return [skipping(self._NAME, reason="no export evidence (headless run)")]
+        if not ex.get("requested", False):
+            return [skipping(self._NAME, reason="no export requested")]
+        nbytes = _int(ex.get("download_bytes", 0))
+        if ex.get("download_present", False) is not True or nbytes is None or nbytes <= 0:
+            return [
+                failing(
+                    self._NAME,
+                    fc.EXPORT_DOWNLOAD_MISSING,
+                    first_broken_link="export -> download_delivered",
+                    facts={
+                        "download_present": ex.get("download_present"),
+                        "download_bytes": ex.get("download_bytes"),
+                    },
+                )
+            ]
+        return [passing(self._NAME, facts={"download_bytes": nbytes})]
+
+
+class CleanupOracle:
+    """No orphan container/sandbox/preview survived the terminal state."""
+
+    _NAME = "cleanup"
+
+    def check(self, *, product_evidence: dict[str, Any] | None = None) -> list[OracleResult]:
+        cu = _slice(product_evidence, "cleanup")
+        if cu is None:
+            return [skipping(self._NAME, reason="no cleanup evidence (headless run)")]
+        orphans = _int(cu.get("orphans", 0))
+        # fail-closed: malformed orphan count, any orphan, or a non-explicit release.
+        if orphans is None or orphans > 0 or cu.get("workspace_released", False) is not True:
+            return [
+                failing(
+                    self._NAME,
+                    fc.WORKSPACE_NOT_CLEANED,
+                    first_broken_link="terminal -> resources_released",
+                    facts={"orphans": cu.get("orphans"), "workspace_released": cu.get("workspace_released")},
+                )
+            ]
+        return [passing(self._NAME, facts={"orphans": 0})]
+
+
+# The ordered family the classifier runs (each SKIPs without its evidence slice).
+BROWSER_EVIDENCE_ORACLES = (
+    BrowserWSOracle,
+    LifecycleOracle,
+    SidecarStopOracle,
+    PreviewOwnershipOracle,
+    ShowToUserOracle,
+    VerificationGateOracle,
+    ExportDownloadOracle,
+    CleanupOracle,
+)
+
+ succeeded in 0ms:
+"""HARN-1b (evidence side) tests: the validated product-evidence writer closes the
+loop with the HARN-2 oracles (write → classify_run_folder → verdict)."""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+from _eventlog import clean_smoke_log
+
+from harness.build_soak.classify import classify_run_folder
+from harness.build_soak.product_evidence import (
+    validate_product_evidence,
+    write_product_evidence,
+    write_provider_ledger,
+)
+
+
+def _green():
+    return {
+        "browser_ws": {"connections": 1},
+        "lifecycle": {"terminal": "FINISHED"},
+        "sidecar": {"stopped_at_terminal": True, "provider_calls_after_terminal": 0},
+        "preview": {"owner": "platform", "manual_port": False},
+        "shown": {"artifact_shown": True, "preview_shown": True},
+        "verification": {"ready_for_verification_called": True, "passed": True},
+        "export": {"requested": False},
+        "cleanup": {"orphans": 0, "workspace_released": True},
+    }
+
+
+def _scn():
+    return {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}
+
+
+# --- validation ---------------------------------------------------------------
+def test_green_evidence_validates_clean():
+    assert validate_product_evidence(_green()) == []
+
+
+def test_bool_where_int_is_a_problem():
+    ev = _green(); ev["browser_ws"]["connections"] = True
+    probs = validate_product_evidence(ev)
+    assert any("browser_ws.connections" in p and "bool" in p for p in probs)
+
+
+def test_wrong_type_is_a_problem():
+    ev = _green(); ev["sidecar"]["provider_calls_after_terminal"] = "n/a"
+    probs = validate_product_evidence(ev)
+    assert any("sidecar.provider_calls_after_terminal" in p for p in probs)
+
+
+def test_non_dict_slice_is_a_problem():
+    ev = _green(); ev["preview"] = ["not", "a", "dict"]
+    assert any("preview: not a dict" == p for p in validate_product_evidence(ev))
+
+
+def test_unknown_top_level_key_allowed():
+    ev = _green(); ev["future_slice"] = {"anything": 1}
+    assert validate_product_evidence(ev) == []
+
+
+# --- strict write refuses malformed evidence ----------------------------------
+def test_strict_write_raises_on_malformed(tmp_path):
+    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+    with pytest.raises(ValueError):
+        write_product_evidence(tmp_path, ev)
+    assert not (tmp_path / "product-evidence.json").exists()  # nothing written
+
+
+def test_non_strict_write_persists_anyway(tmp_path):
+    ev = _green(); ev["browser_ws"]["connections"] = "lots"
+    p = write_product_evidence(tmp_path, ev, strict=False)
+    assert p.exists()
+
+
+# --- the loop: writer → classify_run_folder → oracle verdict ------------------
+def test_written_green_evidence_classifies_pass(tmp_path):
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    write_product_evidence(tmp_path, _green())
+    assert classify_run_folder(tmp_path, scenario=_scn())["status"] == "PASS"
+
+
+def test_written_violation_classifies_fail(tmp_path):
+    ev = _green(); ev["preview"]["owner"] = "model"
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    write_product_evidence(tmp_path, ev)
+    c = classify_run_folder(tmp_path, scenario=_scn())
+    assert c["status"] == "FAIL" and c["code"] == "PREVIEW_OWNERSHIP_VIOLATION"
+
+
+# --- provider ledger writer round-trips through the ProviderLedgerOracle -------
+def test_provider_ledger_writer_round_trip(tmp_path):
+    (tmp_path / "events.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in clean_smoke_log()), encoding="utf-8"
+    )
+    write_provider_ledger(tmp_path, [{"host": "openrouter.ai", "model": "MiniMax-M3"}])
+    scenario = {
+        "id": "s",
+        "assertions": {
+            "event_chain": {"require_plan_before_execution": True},
+            "provider": {"require_host_substr": "minimax", "model": "MiniMax-M3"},
+        },
+    }
+    c = classify_run_folder(tmp_path, scenario=scenario)
+    assert c["status"] == "FAIL" and c["code"] == "PROVIDER_FORBIDDEN"
+
+
+# --- optional hardening (Codex): non-dict root + remaining int fields ---------
+def test_non_dict_root_is_a_problem():
+    assert validate_product_evidence(["not", "a", "dict"]) == ["product_evidence is not a dict"]  # type: ignore[arg-type]
+
+
+def test_all_int_fields_reject_bad_types():
+    for slice_name, field in (
+        ("browser_ws", "connections"),
+        ("sidecar", "provider_calls_after_terminal"),
+        ("cleanup", "orphans"),
+    ):
+        ev = _green()
+        ev[slice_name][field] = "x"
+        assert any(f"{slice_name}.{field}" in p for p in validate_product_evidence(ev))
+        ev2 = _green()
+        ev2[slice_name][field] = True  # bool where int
+        assert any(f"{slice_name}.{field}" in p and "bool" in p for p in validate_product_evidence(ev2))
+
+exec
+/bin/bash -lc "sed -n '1,120p' tsconfig.json 2>/dev/null || true; sed -n '1,160p' frontend/tsconfig.json 2>/dev/null || true" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+{
+  "files": [],
+  "references": [{ "path": "./tsconfig.app.json" }, { "path": "./tsconfig.node.json" }]
+}
+
+codex
+APPROVE
+DRIFT HOLE: resolved; `SLICE_FIELDS` is the typed single source, `SLICE_KEYS` is derived, and assembly/test coverage no longer hides dropped slices.
+download_bytes bool regression: resolved; `True` for `export.download_bytes` now produces a bool-where-int validation problem with a direct Python test.
+tokens used
+17,982
+APPROVE
+DRIFT HOLE: resolved; `SLICE_FIELDS` is the typed single source, `SLICE_KEYS` is derived, and assembly/test coverage no longer hides dropped slices.
+download_bytes bool regression: resolved; `True` for `export.download_bytes` now produces a bool-where-int validation problem with a direct Python test.
