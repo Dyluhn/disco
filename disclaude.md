@@ -1651,3 +1651,54 @@ SCOPE: vocabulary+emit+validate+renderer-wiring ONLY. P8C frontend resolver + P8
   import-cycle dodged via TYPE_CHECKING. Existing appkit/kits/tools tests stay green (P7 byte-equiv intact).
 - NEXT: P8C frontend semantic resolver (TS: discoSemanticResolver.ts + selectionAgent.ts). agy/Gemini = frontend
   scout. Needs the generated discoSemanticAttrs.ts cross-language constants (deferred from P8B).
+
+## PR P8C — Frontend semantic resolver — PLAN
+CONTEXT: frontend already has selectionAgent.ts (in-frame injected script), selectionBridge.ts (SourceRef{kind:
+"source",oid,file,line} from data-oid via appResolver.parseOid), EditAffordance/PreviewPane (click-to-edit). P8C
+adds a SEMANTIC resolution layer: data-disco-* → a typed target (mirroring P8A locators), with data-oid as the
+FALLBACK. vitest+jsdom test runner.
+FILES: frontend/src/lib/resolvers/discoSemanticResolver.ts (+ .test.ts), frontend/src/lib/discoSemanticAttrs.ts.
+CROSS-LANGUAGE SINGLE SOURCE: discoSemanticAttrs.ts holds the data-disco-* attribute NAME constants mirroring the
+Python core DataDiscoAttr (P8B). A Python DRIFT-GUARD test (packages/core/tests/test_semantic_attr_parity.py)
+reads the .ts file + asserts its values == DataDiscoAttr values (TS can't import Python; the test enforces parity).
+RESOLVER (pure, DOM-walking): resolveSemanticTarget(el: Element): DiscoSemanticTarget | null. Walk from el up to
+the nearest ancestor carrying a data-disco-* attr, BY PRIORITY: field > section > file > comment_anchor, with
+data-oid SOURCE as the fallback. Result = discriminated union: {kind:'field',section,field} | {kind:'section',
+section} | {kind:'file',file} | {kind:'comment_anchor',anchor} | {kind:'source',oid,file,line} | null. A field
+target ALSO resolves its enclosing data-disco-section (so "click hero headline" → {field, section:'hero',
+field:'headline'}). Plus semanticEditTarget(t): a stable string id ("hero.headline" / "hero" / anchor) for the
+app_update_content-style steer.
+SELECTIONAGENT: noted — the in-frame agent prefers resolveSemanticTarget (semantic), falls back to data-oid; the
+actual injection wiring is small + verified in P1B-LIVE (browser). P8C core = the pure resolver + parity, unit-tested.
+TESTS (vitest/jsdom): click hero headline → field hero.headline; click a section → section target; click unknown
+DOM (no data-disco, no oid) → null; comment_anchor resolved; data-oid fallback when no data-disco present; priority
+ordering (field beats an ancestor section). + Python parity test.
+PARALLEL: agy(Gemini) frontend scout (invocation fix: `agy --model "<m>" --print "<prompt>"`). DeepSeek = jsdom
+fixture variants. SCOPE: resolver + attrs + parity + tests. Full in-frame injection + live click → P1B-LIVE.
+
+### PR P8C — PLAN REVISION 1 (post gpt-5.5: 6 fixes)
+1. INDEXED target added: resolve data-disco-collection + data-disco-index (nonneg int) + optional data-disco-item-
+   kind → {kind:'indexed',collection,index,itemKind?}; beats an enclosing section.
+2. TRAVERSAL pinned CLOSEST-FIRST: walk from the clicked el upward; the FIRST ancestor carrying ANY data-disco
+   semantic attr wins, resolved by that node's WITHIN-NODE specificity order indexed>field>comment_anchor>section>
+   file. A farther section/file can NEVER mask a closer field/indexed/comment_anchor.
+3. FIELD fails closed: a field target must find a nearest enclosing data-disco-section (continue up); if none →
+   fall back to source (data-oid) or null — never emit a section-less field.
+4. TYPES split: DiscoSemanticTarget = field|section|indexed|comment_anchor|file (semantic); SourceRef stays the
+   data-oid fallback. DiscoResolvedTarget = DiscoSemanticTarget | SourceRef. semanticEditTarget() accepts ONLY
+   semantic targets. NOTE: data-disco-file is FRONTEND file-level metadata, NOT a P8A locator (don't claim parity
+   for it) — kept for file-scoped selection.
+5. CONSTANTS framing: Python core DataDiscoAttr is CANONICAL; discoSemanticAttrs.ts is a checked-in MIRROR; the
+   Python drift-guard test asserts EXACT equality of ALL 11 attr values (no missing/extra).
+6. TESTS add: indexed target, invalid/negative index (rejected→fallback), comment_anchor nested in section/file
+   (closest wins), field-without-section (fail closed), source fallback ONLY when no semantic target applies.
+
+### HEARTBEAT 2026-06-29 — P8C ACCEPTED
+- PR P8C (frontend semantic resolver) COMPLETE. Plan gpt-5.5 REVISE(6: indexed target, closest-first traversal,
+  field-fail-closed, type split, canonical/mirror framing, edge tests)→APPROVE. Code gpt-5.5 APPROVE first-pass.
+- Files: frontend/src/lib/discoSemanticAttrs.ts (TS mirror of Python DataDiscoAttr), resolvers/
+  discoSemanticResolver.ts (closest-first DOM walk → DiscoSemanticTarget|SourceRef; field fails closed; nonneg
+  index; data-oid fallback), .test.ts (10 vitest), packages/core/tests/test_semantic_attr_parity.py (drift guard).
+- ENV: frontend node_modules was missing in the clone → ran `npm ci` (582 pkgs). vitest 10/10, tsc 0 errors,
+  Python parity green. In-frame selectionAgent injection + live click deferred to P1B-LIVE (browser evidence).
+- NEXT: P8D (targeted-edit + manual-edit-preservation oracles) → completes P8.
