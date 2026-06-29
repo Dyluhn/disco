@@ -1596,3 +1596,58 @@ ordinal (0/neg), out-of-range index, off-by-one (slide 5→index 4), every requi
   sharing an id); (4) raw-negative vs normalized-zero parsing + IndexedLocator index ge=0; (5) tests for all.
 - Parallel: DeepSeek (opencode) generated 25 ambiguous negative fixtures → folded into the never-guess tests.
 - 24 tests green, basedpyright strict 0 errors. NEXT: commit P8A → P8B (data-disco-* metadata conventions).
+
+## PR P8B — data-disco-* metadata conventions — PLAN
+GOAL: ONE canonical data-disco-* vocabulary + emit helpers + validators; AppKit output carries stable semantic
+metadata; comment anchors can't be duplicated or invented; screen labels are deterministic (reuse P8A
+normalize_screen_label). Consumed by the renderer (core) + app tools + the P8C frontend resolver.
+LAYERING DEVIATION (from the plan's tools/appkit path — flagged for the gate): put the canonical module at
+packages/core/src/disco/core/appkit/semantic_metadata.py, NOT tools/appkit/, because render_html lives in core
+and core MUST NOT import tools. Putting the vocabulary in tools would create TWO sources of truth (the renderer's
+hardcoded "data-disco-section"/"data-disco-field" strings at models.py:130-156 + tools constants). Single-source
+wins: the renderer is refactored to EMIT via the vocabulary (kills the hardcoded strings). Tools/frontend import
+the core vocabulary. Test at packages/core/tests/test_appkit_semantic_metadata.py.
+API: DataDiscoAttr(str,Enum)= FIELD/SECTION/FILE/FLOW/SCREEN_LABEL/COMMENT_ANCHOR/METRIC_ID/VERSION (values
+"data-disco-field" ...). attr(a, value)->' data-disco-x="esc"' (html-escaped, ready to inject). screen_label_value
+(label)->normalize_screen_label (stable). SemanticMetadataError. extract_metadata(html)->dict[attr,list[value]].
+validate_no_duplicate_anchors(html)-> raise on a repeated data-disco-comment-anchor. validate_anchors_not_invented
+(html, declared:set)-> raise if an emitted anchor isn't declared. Renderer: _render_section emits via attr(), adds
+data-disco-screen-label (normalized section id/label) per section + data-disco-version on <html>.
+TESTS: hero metadata emitted (section+field+screen-label), contact-form metadata, admin-table metadata
+(generic/table section w/ field+metric-id), duplicate anchors rejected, anchors-not-invented rejected, screen
+labels stable (byte-identical across two renders). Existing appkit tests stay green (render output superset).
+PARALLEL: agy(Gemini) UI scout for the data-disco attr set vs frontend needs (advisory) — deferred to P8C; P8B
+is core. DeepSeek = duplicate/invented-anchor negative fixtures. Sonnet test scout = unused (small surface).
+SCOPE: vocabulary+emit+validate+renderer-wiring ONLY. P8C frontend resolver + P8D oracles separate.
+
+### PR P8B — PLAN REVISION 1 (post gpt-5.5: core placement APPROVED; 5 fixes)
+1. INDEXED-ITEM ATTRS added to the vocabulary so P8A IndexedLocator is DOM-resolvable: data-disco-collection
+   ("services.cards"), data-disco-index (0-based), data-disco-item-kind ("card"). Emit helper + unit test now.
+   RENDERER emitting collections is DEFERRED (AppKit has no collection/list section kind yet — when one lands,
+   it stamps these). Explicitly out of P8B renderer scope; the convention + emit + extract exist + are tested.
+2. ADMIN-TABLE test DROPPED (AppSection.kind is an allowlist Literal — "admin/table" is rejected by design).
+   Replaced with an existing-kind generic section (kind in the allowlist) carrying section+field+screen-label,
+   PLUS the indexed emit-helper unit test (collection+index+item-kind) standing in for repeated items.
+3. DECLARED ANCHORS derived from the source of truth: declared_anchors_from_spec(spec) -> frozenset, derived
+   deterministically from section ids (the legitimate anchor namespace). validate_anchors_not_invented(html,
+   declared) raises if an EMITTED data-disco-comment-anchor is outside `declared`. Tests: (a) a real render has
+   zero invented anchors vs declared_anchors_from_spec; (b) synthetic HTML with an out-of-namespace anchor raises;
+   (c) declared_anchors_from_spec derivation itself is tested.
+4. TS CROSS-LANGUAGE (note, addressed in P8C): the frontend (TS) cannot import Python core; P8C consumes the
+   emitted DOM attrs and/or a generated shared-constants artifact. P8B documents the 8+3 attr VALUES as the
+   cross-language contract (the string values are the API). Generation of discoSemanticAttrs.ts deferred to P8C.
+5. EXTRA TESTS: html-escaping + roundtrip extract_metadata (decode before compare); STABLE attr ordering in
+   emitted output; duplicate DECODED anchor values caught (two encodings, same decoded value → duplicate);
+   data-disco-version present on <html>. Existing appkit tests stay green (output is a metadata SUPERSET —
+   intentional byte change; P7 byte-equivalence is starter-vs-current-renderer, not old bytes).
+
+### HEARTBEAT 2026-06-29 — P8B ACCEPTED
+- PR P8B (data-disco-* metadata conventions) COMPLETE. Plan gpt-5.5 REVISE(5: indexed attrs, drop admin-table,
+  declared-anchor source, TS-boundary note, escaping/ordering/version tests)→APPROVE. Code gpt-5.5 APPROVE first-pass.
+- Files: core/appkit/semantic_metadata.py (canonical DataDiscoAttr vocab — 11 attrs incl collection/index/item-kind
+  for P8A IndexedLocator; attr/item_attrs/extract_metadata/validate_no_duplicate_anchors/declared_anchors_from_spec/
+  validate_anchors_not_invented) + models.py renderer refactored to emit THROUGH the vocab (killed hardcoded
+  data-disco strings; +data-disco-screen-label per section +data-disco-version on <html>) + test (16). Single source;
+  import-cycle dodged via TYPE_CHECKING. Existing appkit/kits/tools tests stay green (P7 byte-equiv intact).
+- NEXT: P8C frontend semantic resolver (TS: discoSemanticResolver.ts + selectionAgent.ts). agy/Gemini = frontend
+  scout. Needs the generated discoSemanticAttrs.ts cross-language constants (deferred from P8B).

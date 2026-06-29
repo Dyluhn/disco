@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from disco.core.appkit import semantic_metadata as _md  # canonical data-disco-* vocabulary (P8B)
+
 # Strip characters that could break OUT of a CSS declaration / the <style> element
 # (a design-token value is interpolated into inline CSS, so it must not carry these).
 _CSS_UNSAFE = re.compile(r"""[<>{};"'\\\n\r]""")
@@ -123,20 +125,32 @@ def _esc(s: str) -> str:
     return html.escape(s, quote=True)
 
 
+def _sec_attrs(sec: AppSection) -> str:
+    """The data-disco-* attributes every section carries — emitted through the canonical
+    vocabulary (P8B) so the names live in ONE place, plus a stable screen label."""
+    return _md.attr(_md.DataDiscoAttr.SECTION, sec.id) + _md.attr(
+        _md.DataDiscoAttr.SCREEN_LABEL, _md.screen_label_value(sec.id)
+    )
+
+
+def _field(name: str) -> str:
+    return _md.attr(_md.DataDiscoAttr.FIELD, name)
+
+
 def _render_section(sec: AppSection) -> str:
     f = sec.fields
     if sec.kind == "hero":
         return (
-            f'<section class="hero" data-disco-section="{_esc(sec.id)}">'
-            f'<h1 data-disco-field="headline">{_esc(f.get("headline", ""))}</h1>'
-            f'<p data-disco-field="subhead">{_esc(f.get("subhead", ""))}</p>'
-            f'<a class="cta" href="#lead" data-disco-field="cta_text">{_esc(f.get("cta_text", "Get started"))}</a>'
+            f'<section class="hero"{_sec_attrs(sec)}>'
+            f'<h1{_field("headline")}>{_esc(f.get("headline", ""))}</h1>'
+            f'<p{_field("subhead")}>{_esc(f.get("subhead", ""))}</p>'
+            f'<a class="cta" href="#lead"{_field("cta_text")}>{_esc(f.get("cta_text", "Get started"))}</a>'
             f"</section>"
         )
     if sec.kind == "lead_form":
         return (
-            f'<section class="lead" id="lead" data-disco-section="{_esc(sec.id)}">'
-            f'<h2 data-disco-field="title">{_esc(f.get("title", "Contact us"))}</h2>'
+            f'<section class="lead" id="lead"{_sec_attrs(sec)}>'
+            f'<h2{_field("title")}>{_esc(f.get("title", "Contact us"))}</h2>'
             f'<form method="post" action="/lead">'
             f'<input name="name" placeholder="Name" required>'
             f'<input name="email" type="email" placeholder="Email" required>'
@@ -145,15 +159,15 @@ def _render_section(sec: AppSection) -> str:
         )
     if sec.kind == "about":
         return (
-            f'<section class="about" data-disco-section="{_esc(sec.id)}">'
-            f'<h2 data-disco-field="title">{_esc(f.get("title", "About"))}</h2>'
-            f'<p data-disco-field="body">{_esc(f.get("body", ""))}</p></section>'
+            f'<section class="about"{_sec_attrs(sec)}>'
+            f'<h2{_field("title")}>{_esc(f.get("title", "About"))}</h2>'
+            f'<p{_field("body")}>{_esc(f.get("body", ""))}</p></section>'
         )
     # features / cta / footer + any future-but-known kind: a generic titled block.
     return (
-        f'<section class="{_esc(sec.kind)}" data-disco-section="{_esc(sec.id)}">'
-        f'<h2 data-disco-field="title">{_esc(f.get("title", sec.kind.title()))}</h2>'
-        f'<p data-disco-field="body">{_esc(f.get("body", ""))}</p></section>'
+        f'<section class="{_esc(sec.kind)}"{_sec_attrs(sec)}>'
+        f'<h2{_field("title")}>{_esc(f.get("title", sec.kind.title()))}</h2>'
+        f'<p{_field("body")}>{_esc(f.get("body", ""))}</p></section>'
     )
 
 
@@ -172,8 +186,9 @@ def render_html(spec: AppSpec) -> str:
         ".lead input{padding:.6rem;border:1px solid #ccc;border-radius:.4rem}"
     )
     body = "\n".join(_render_section(s) for s in spec.sections)
+    ver = _md.attr(_md.DataDiscoAttr.VERSION, _md.METADATA_VERSION)
     return (
-        "<!doctype html>\n<html lang=\"en\">\n<head>\n"
+        f'<!doctype html>\n<html lang="en"{ver}>\n<head>\n'
         '<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n'
         f"<title>{_esc(spec.title)}</title>\n<style>{css}</style>\n</head>\n"
         f"<body>\n{body}\n</body>\n</html>\n"
