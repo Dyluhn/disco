@@ -1815,3 +1815,53 @@ not-in-swatches rejected; ungrounded field (no controls_behavior+no affects) rej
   exact numeric bounds + canonical_hex + per-editor coercion, TweakSpec registry + validate_value) + test (22).
 - NEXT: P9B (.disco/tweaks.json IO: read/write/require/merge_tweak_defaults) → P9C (typed app_set_tweak) → P9D
   (TweakPanel UI) → then P1B-LIVE.
+
+## PR P9B — .disco/tweaks.json IO — PLAN
+PATH DEVIATION (flag for gate): plan says packages/tools/src/disco/tools/appkit/tweaks_io.py, but there is no
+disco.tools.appkit package — the AppSpec IO (AppSpecStore) + app_set_tweak (P9C's consumer) live in
+packages/tools/src/disco/tools/builtin/appkit.py. Put tweaks_io.py in builtin/ next to them (module
+disco.tools.builtin.tweaks_io); tests packages/tools/tests/test_tweaks_io.py. (No tools.appkit package churn.)
+MODEL: .disco/tweaks.json = the TweakSpec (P9A definitions + per-field defaults); AppSpec.tweaks (in
+.disco/appspec.json) = the current VALUES. tweaks_io bridges them.
+API:
+- TWEAKS_PATH = ".disco/tweaks.json".
+- read_tweakspec(sandbox) -> TweakSpec | None: use sandbox.file_exists FIRST (absent→None), THEN read_file +
+  TweakSpec.model_validate_json (corrupt→ValueError, caller maps to error). file_exists-first avoids the P7
+  clobber-class bug of treating a transient read error as "absent".
+- write_tweakspec(sandbox, spec): write_file(TWEAKS_PATH, spec.model_dump_json(indent=2)+"\n").
+- require_tweakspec(sandbox) -> TweakSpec: read_tweakspec; raise TweaksError("no .disco/tweaks.json") if None.
+- merge_tweak_defaults(spec: TweakSpec, values: Mapping[str,Any]) -> dict[str,Any]: returns a NEW dict where
+  (1) every present value for a DEFINED tweak is validated+coerced via spec.validate_value (canonical), (2) a
+  defined tweak absent from values but with a non-None default is filled from its default (validated), (3) a
+  value keyed to an UNDEFINED tweak raises TweaksError (never silently keep an ungoverned value). Deterministic
+  key order (sorted) for byte-stable persistence.
+TESTS (packages/tools/tests/test_tweaks_io.py, FakeSandboxInstance): round-trip write→read; read absent→None;
+read corrupt→ValueError; read where file_exists True but read_file raises→propagates (NOT silently None);
+require absent→TweaksError; merge fills defaults + coerces present values ("true"→True, "#FFF"→"#ffffff",
+"3"→3); merge rejects unknown value key; merge leaves a value with no default + not-present absent; deterministic
+ordering. PARALLEL: DeepSeek = corrupt/edge tweaks.json fixtures. SCOPE: IO + merge only (tool=P9C, UI=P9D).
+
+### PR P9B — PLAN REVISION 1 (post gpt-5.5: all decisions a-f approved; 4 refinements)
+1. write_tweakspec writes BYTES: await sandbox.write_file(TWEAKS_PATH, (spec.model_dump_json(indent=2)+"\n").
+   encode("utf-8")) — matches AppSpecStore.write + sandbox protocol.
+2. TweaksError (new domain exception) for ALL merge SEMANTIC failures — unknown value key, invalid present value,
+   invalid default — message includes the tweak KEY; the underlying ValueError preserved as __cause__ (raise ...
+   from e). require_tweakspec-absent also raises TweaksError.
+3. Backend/IO failures stay UNWRAPPED: a file_exists error or a read_file error AFTER existence is confirmed
+   PROPAGATES (not caught/None). read_tweakspec corrupt JSON/schema → ValueError/pydantic ValidationError (caller
+   maps to corrupt_tweakspec). Only "file absent" → None.
+4. merge_tweak_defaults: defaults fill ONLY when the key is ABSENT (never overwrite a present value); a present
+   None is treated as PRESENT and validated (not default-filled). Every present value for a defined tweak is
+   coerced via spec.validate_value; an undefined-tweak value key → TweaksError.
+TESTS add: invalid defined PRESENT value → TweaksError (not just unknown key); present None validated-not-filled;
+read_file-raises-after-file_exists-True → propagates.
+
+### HEARTBEAT 2026-06-29 — P9B ACCEPTED
+- PR P9B (.disco/tweaks.json IO) COMPLETE. Plan gpt-5.5 (decisions a-f approved) REVISE(4 refinements)→APPROVE;
+  code gpt-5.5 APPROVE first-pass.
+- File: packages/tools/src/disco/tools/builtin/tweaks_io.py (TWEAKS_PATH, read_tweakspec [file_exists-first,
+  absent→None, read-error propagates, corrupt→ValidationError], write_tweakspec [bytes], require_tweakspec
+  [TweaksError], merge_tweak_defaults [coerce present values, fill absent defaults, present-None=present, raise
+  TweaksError on unknown-key/invalid-value/invalid-default], TweaksError) + test (11). Path deviation builtin/
+  (no disco.tools.appkit pkg) — gate-approved.
+- NEXT: P9C (typed app_set_tweak validating against TweakSpec, in builtin/appkit.py) → P9D (TweakPanel UI) → P1B-LIVE.
