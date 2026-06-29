@@ -1563,3 +1563,36 @@ PARALLEL ASSIGNMENTS: Claude primary = canonical writer; Sonnet B (Agent) = test
 from the spec); DeepSeek (opencode) = negative/ambiguous reference fixtures; Qwen35-via-Pi (human-reference
 phrase gen) = UNAVAILABLE (Pi down) → DeepSeek covers it. agy/MiniMax = unused for P8A (pure core module).
 DONE WHEN: semantic refs deterministic + 1-index safe + reject ambiguity; Codex APPROVE plan+code; tests green.
+
+### PR P8A — PLAN REVISION 1 (post gpt-5.5: direction approved, 6 required fixes)
+1. PINNED CONTEXT: SemanticReferenceContext (frozen) = typed inventory the resolver resolves AGAINST:
+   sections: tuple[SectionEntry(id, label, aliases, ordinal)]; fields: tuple[FieldEntry(section_id, field_id,
+   labels)]; collections: tuple[CollectionEntry(id e.g. "services.cards", item_kind, length, labels)]; slides:
+   tuple[SlideEntry(id, title, ordinal)]; comment_anchors: tuple[AnchorEntry(id, label)].
+2. TYPED LOCATORS (no raw dict): FieldLocator(kind, section_id, field_id) / SectionLocator(kind, section_id) /
+   IndexedLocator(kind, collection_id, index) / SlideLocator(kind, slide_id) / CommentAnchorLocator(kind,
+   anchor_id) — a discriminated union (each carries a Literal kind). SemanticTarget = that union. No invalid
+   target shapes possible.
+3. AMBIGUITY IS AN OUTCOME, not a kind: SemanticTargetKind has NO AMBIGUOUS member. ResolutionReason(str,Enum):
+   RESOLVED / AMBIGUOUS / NO_MATCH / INVALID_ORDINAL / OUT_OF_RANGE. ReferenceResolution invariant (asserted in
+   a validator): resolved is not None ⟺ reason==RESOLVED ⟺ ambiguous is False; ambiguous ⟺ candidates non-empty.
+4. HumanIndexRef pinned: ordinal WORDS (first..tenth) + DIGITS ("5","5th","slide 5","5th slide") → human ordinal
+   (1-based) → array index (0-based, =ordinal-1). "second"→1, "third"→2. REJECT 0/"0th"/negative/non-ordinal →
+   INVALID_ORDINAL; index ≥ collection.length → OUT_OF_RANGE.
+5. normalize_screen_label pinned: deterministic + idempotent; casefold; collapse whitespace+punctuation to single
+   "-"; trim. Normalized-label COLLISIONS in the context (two entries same slug) → that reference resolves
+   AMBIGUOUS (candidates = the colliding ids), never a guess.
+6. Scope: model + pure resolver + tests ONLY (P8B/P8C/P8D separate). Confirmed.
+TESTS pin: case-insensitive matching, normalized-label collision→ambiguous, ordinal words AND digits, invalid
+ordinal (0/neg), out-of-range index, off-by-one (slide 5→index 4), every required phrase, unknown→ambiguous-not-guessed.
+
+### HEARTBEAT 2026-06-29 — P8A ACCEPTED
+- PR P8A (Semantic reference model) COMPLETE. Plan reviewed (gpt-5.5 REVISE→6 fixes→APPROVE), implemented,
+  CODE reviewed (gpt-5.5 REVISE→5 fixes→re-REVISE finding-3→fix→APPROVE; reviewer RAN the code to confirm).
+- Files: packages/core/src/disco/core/semantic_refs.py + packages/core/tests/test_semantic_refs.py (24 tests).
+- 5 code-review fixes: (1) full invariant biconditional; (2) slides/sections by EXPLICIT ordinal equality
+  (sparse/out-of-order correct, duplicate→ambiguous); (3) GLOBAL cross-tier ambiguity + subsumption +
+  kind-qualified identity (qualified_target_id — fixed a target_id collision that collapsed a section & anchor
+  sharing an id); (4) raw-negative vs normalized-zero parsing + IndexedLocator index ge=0; (5) tests for all.
+- Parallel: DeepSeek (opencode) generated 25 ambiguous negative fixtures → folded into the never-guess tests.
+- 24 tests green, basedpyright strict 0 errors. NEXT: commit P8A → P8B (data-disco-* metadata conventions).

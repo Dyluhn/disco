@@ -1,0 +1,1341 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f14e3-ef75-70e3-8ef6-afb2e9934da2
+--------
+user
+# Codex CODE Review — P8A Semantic reference model — IMPLEMENTED
+
+You APPROVED this design. Inspect packages/core/src/disco/core/semantic_refs.py +
+packages/core/tests/test_semantic_refs.py.
+
+Implements the approved design: SemanticTargetKind(str,Enum: field/section/indexed/slide/comment_anchor);
+typed discriminated-union locators (FieldLocator/SectionLocator/IndexedLocator/SlideLocator/
+CommentAnchorLocator, each frozen + Literal kind) = SemanticTarget; SemanticReferenceContext (typed inventory:
+sections/fields/collections/slides/comment_anchors); ResolutionReason(str,Enum: RESOLVED/AMBIGUOUS/NO_MATCH/
+INVALID_ORDINAL/OUT_OF_RANGE); ReferenceResolution with a model_validator enforcing the invariants
+(resolved-not-None ⟺ RESOLVED ⟺ not-ambiguous; ambiguous ⟺ candidates non-empty); parse_human_ordinal (words
+first..tenth + digits/Nth; negative detected on RAW phrase, zero on normalized — NOT a normalization hyphen);
+human_ordinal_to_index (1-based→0-based, rejects <1); normalize_screen_label (casefold + collapse non-alnum→'-'
++ trim, idempotent); resolve_human_reference (tiered: slide→section-by-ordinal→field→collection-item→bare
+section/anchor; >1 in a tier → AMBIGUOUS with sorted candidate ids; never guesses).
+
+Tests (16): every required case (hero headline/cta, second service card→index1, third pricing column→index2,
+slide 5→index4 with off-by-one guard, section 3, comment anchor); unknown→ambiguous/no_match-never-guessed
+(DeepSeek scout fixtures); normalized-label collision→AMBIGUOUS(candidates); ordinal words+digits; invalid
+ordinal (0/0th/zeroth/negative); out-of-range; human_ordinal_to_index; normalize deterministic+idempotent;
+ReferenceResolution invariants enforced; target_id stable. basedpyright strict 0 errors.
+
+Judge: (a) is resolution genuinely deterministic + 1-index-safe + ambiguity-rejecting (no guess past one
+candidate in a tier)? (b) is the tier precedence (field > collection-item > bare-section/anchor) sound, or
+could it mask a real ambiguity ACROSS tiers (e.g. a phrase matching both a field and a section)? (c) ordinal
+parsing correctness — the raw-negative vs normalized-zero split, ordinal words AND digits, no false
+positive on '10'/'50'? (d) the invariant validator + typed locators — any invalid target shape constructible?
+(e) test sufficiency. Return APPROVE|REVISE|BLOCKED_CODEX_UNAVAILABLE + REASONS + REQUIRED_REVISIONS.
+codex
+I’ll inspect the implementation and tests directly, then judge the five points from the actual code behavior rather than the summary.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,320p' packages/core/tests/test_semantic_refs.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/semantic_refs.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""Semantic reference model (P8A) — deterministic human→target resolution.
+
+A user says "the hero headline", "the second service card", "slide 5", "section 3". This
+resolves such a phrase to a TYPED target against a structured screen inventory
+(SemanticReferenceContext) — deterministically, 1-index-safe, and REJECTING ambiguity
+rather than guessing. The frontend (P8C) and the edit tools (P8B/P4) consume the typed
+targets; this module is pure (no runtime/tool imports).
+
+Invariants: a resolution is either RESOLVED (exactly one typed target) or it carries a
+reason (AMBIGUOUS with candidates / NO_MATCH / INVALID_ORDINAL / OUT_OF_RANGE) and resolves
+to nothing. It never invents a target it isn't sure about.
+"""
+
+from __future__ import annotations
+
+import re
+from enum import Enum
+from typing import Literal, Union
+
+from pydantic import BaseModel, ConfigDict, model_validator
+
+# ---------------------------------------------------------------- kinds + reasons
+
+
+class SemanticTargetKind(str, Enum):
+    FIELD = "field"  # a field of a section (hero.headline)
+    SECTION = "section"  # a whole section
+    INDEXED = "indexed"  # the Nth item of a collection (services.cards[1])
+    SLIDE = "slide"  # the Nth slide of a deck
+    COMMENT_ANCHOR = "comment_anchor"  # a stable comment anchor
+
+
+class ResolutionReason(str, Enum):
+    RESOLVED = "resolved"
+    AMBIGUOUS = "ambiguous"  # >1 candidate — surfaced, never guessed
+    NO_MATCH = "no_match"
+    INVALID_ORDINAL = "invalid_ordinal"  # "0th" / negative / non-ordinal
+    OUT_OF_RANGE = "out_of_range"  # ordinal beyond the collection/deck length
+
+
+# ---------------------------------------------------------------- typed locators
+# Each locator is frozen and carries a Literal kind, so SemanticTarget is a
+# discriminated union — an invalid shape (e.g. a SLIDE with a field) is impossible.
+
+
+class FieldLocator(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal[SemanticTargetKind.FIELD] = SemanticTargetKind.FIELD
+    section_id: str
+    field_id: str
+
+
+class SectionLocator(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal[SemanticTargetKind.SECTION] = SemanticTargetKind.SECTION
+    section_id: str
+
+
+class IndexedLocator(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal[SemanticTargetKind.INDEXED] = SemanticTargetKind.INDEXED
+    collection_id: str
+    index: int  # 0-based array index
+
+
+class SlideLocator(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal[SemanticTargetKind.SLIDE] = SemanticTargetKind.SLIDE
+    slide_id: str
+
+
+class CommentAnchorLocator(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal[SemanticTargetKind.COMMENT_ANCHOR] = SemanticTargetKind.COMMENT_ANCHOR
+    anchor_id: str
+
+
+SemanticTarget = Union[
+    FieldLocator, SectionLocator, IndexedLocator, SlideLocator, CommentAnchorLocator
+]
+
+
+def target_id(t: SemanticTarget) -> str:
+    """A stable id string for a target (used in ambiguity candidate lists)."""
+    if isinstance(t, FieldLocator):
+        return f"{t.section_id}.{t.field_id}"
+    if isinstance(t, SectionLocator):
+        return t.section_id
+    if isinstance(t, IndexedLocator):
+        return f"{t.collection_id}[{t.index}]"
+    if isinstance(t, SlideLocator):
+        return t.slide_id
+    return t.anchor_id
+
+
+# ---------------------------------------------------------------- context inventory
+
+
+class SectionEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str
+    label: str
+    aliases: tuple[str, ...] = ()
+    ordinal: int  # 1-based position on the screen
+
+
+class FieldEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    section_id: str
+    field_id: str
+    labels: tuple[str, ...] = ()  # human names for the field ("headline", "cta")
+
+
+class CollectionEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str  # e.g. "services.cards"
+    item_kind: str  # e.g. "card", "column"
+    length: int
+    labels: tuple[str, ...] = ()  # human names ("service card", "services")
+
+
+class SlideEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str
+    title: str
+    ordinal: int  # 1-based
+
+
+class AnchorEntry(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str
+    label: str
+
+
+class SemanticReferenceContext(BaseModel):
+    """The typed inventory a phrase resolves AGAINST."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    sections: tuple[SectionEntry, ...] = ()
+    fields: tuple[FieldEntry, ...] = ()
+    collections: tuple[CollectionEntry, ...] = ()
+    slides: tuple[SlideEntry, ...] = ()
+    comment_anchors: tuple[AnchorEntry, ...] = ()
+
+
+# ---------------------------------------------------------------- resolution result
+
+
+class ReferenceResolution(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    resolved: SemanticTarget | None = None
+    ambiguous: bool = False
+    reason: ResolutionReason = ResolutionReason.NO_MATCH
+    candidates: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _invariants(self) -> ReferenceResolution:
+        if self.reason is ResolutionReason.RESOLVED:
+            if self.resolved is None or self.ambiguous:
+                raise ValueError("RESOLVED requires a target and not-ambiguous")
+        else:
+            if self.resolved is not None:
+                raise ValueError(f"{self.reason} must not carry a resolved target")
+        if self.ambiguous and not self.candidates:
+            raise ValueError("ambiguous requires candidates")
+        if self.ambiguous and self.reason is not ResolutionReason.AMBIGUOUS:
+            raise ValueError("ambiguous requires reason=AMBIGUOUS")
+        return self
+
+
+def _resolved(t: SemanticTarget) -> ReferenceResolution:
+    return ReferenceResolution(resolved=t, reason=ResolutionReason.RESOLVED)
+
+
+def _ambiguous(candidates: list[str]) -> ReferenceResolution:
+    return ReferenceResolution(
+        ambiguous=True, reason=ResolutionReason.AMBIGUOUS, candidates=tuple(sorted(set(candidates)))
+    )
+
+
+def _reject(reason: ResolutionReason) -> ReferenceResolution:
+    return ReferenceResolution(reason=reason)
+
+
+# ---------------------------------------------------------------- label normalization
+
+_PUNCT_RUN = re.compile(r"[^a-z0-9]+")
+
+
+def normalize_screen_label(label: str) -> str:
+    """Deterministic, idempotent slug: casefold, collapse any run of non-alphanumerics
+    to a single '-', trim. ``normalize(normalize(x)) == normalize(x)``."""
+    return _PUNCT_RUN.sub("-", label.casefold()).strip("-")
+
+
+# ---------------------------------------------------------------- ordinal parsing
+
+_ORDINAL_WORDS: dict[str, int] = {
+    w: i + 1
+    for i, w in enumerate(
+        ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+    )
+}
+_DIGIT_ORDINAL = re.compile(r"\b(\d+)(?:st|nd|rd|th)?\b")
+# a zero ordinal on the normalized string ("0", "0th"); a NEGATIVE on the RAW string (a
+# minus at start/after-space before a digit — NOT a normalization hyphen-separator).
+_ZERO_ORDINAL = re.compile(r"\b0+(?:st|nd|rd|th)?\b")
+_NEG_ORDINAL = re.compile(r"(?:^|\s)-\d")
+
+
+class _Ordinal(BaseModel):
+    """The outcome of looking for a human ordinal in a phrase."""
+
+    model_config = ConfigDict(frozen=True)
+    value: int | None = None  # 1-based ordinal found, or None if none present
+    invalid: bool = False  # an explicit but invalid ordinal (0th / negative)
+
+
+def parse_human_ordinal(phrase: str) -> _Ordinal:
+    """Find a 1-based human ordinal in ``phrase``. Ordinal WORDS (first..tenth) and DIGITS
+    (5 / 5th) both count. An explicit 0 / 0th / zeroth / negative is INVALID (not absent)."""
+    if _NEG_ORDINAL.search(phrase):
+        return _Ordinal(invalid=True)
+    norm = normalize_screen_label(phrase)
+    if _ZERO_ORDINAL.search(norm) or "zeroth" in norm:
+        return _Ordinal(invalid=True)
+    for word, n in _ORDINAL_WORDS.items():
+        if re.search(rf"\b{word}\b", norm):
+            return _Ordinal(value=n)
+    m = _DIGIT_ORDINAL.search(norm)
+    if m:
+        n = int(m.group(1))
+        return _Ordinal(value=n) if n >= 1 else _Ordinal(invalid=True)
+    return _Ordinal()
+
+
+def human_ordinal_to_index(ordinal: int) -> int:
+    """1-based human ordinal → 0-based array index. Rejects < 1."""
+    if ordinal < 1:
+        raise ValueError(f"ordinal must be >= 1, got {ordinal}")
+    return ordinal - 1
+
+
+# ---------------------------------------------------------------- the resolver
+
+
+def _tokens(norm: str) -> set[str]:
+    return set(norm.split("-")) - {""}
+
+
+def _labels_match(phrase_norm: str, labels: tuple[str, ...]) -> bool:
+    """True iff ANY of the entry's labels appears as a contiguous token-run in the phrase."""
+    pt = _tokens(phrase_norm)
+    for lab in labels:
+        lt = _tokens(normalize_screen_label(lab))
+        if lt and lt <= pt:
+            return True
+    return False
+
+
+
+ succeeded in 0ms:
+"""P8A tests: deterministic, 1-index-safe semantic reference resolution that rejects
+ambiguity. Required cases from the spec + pinned ordinal/normalize/collision behaviors.
+Negative/ambiguous phrases sourced from the DeepSeek scout fixture."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from disco.core.semantic_refs import (
+    AnchorEntry,
+    CollectionEntry,
+    CommentAnchorLocator,
+    FieldEntry,
+    FieldLocator,
+    IndexedLocator,
+    ReferenceResolution,
+    ResolutionReason,
+    SectionEntry,
+    SectionLocator,
+    SemanticReferenceContext,
+    SlideEntry,
+    SlideLocator,
+    human_ordinal_to_index,
+    normalize_screen_label,
+    parse_human_ordinal,
+    resolve_human_reference,
+    target_id,
+)
+
+CTX = SemanticReferenceContext(
+    sections=(
+        SectionEntry(id="hero", label="hero", ordinal=1),
+        SectionEntry(id="services", label="services", ordinal=2),
+        SectionEntry(id="pricing", label="pricing", ordinal=3),
+        SectionEntry(id="about", label="about", ordinal=4),
+    ),
+    fields=(
+        FieldEntry(section_id="hero", field_id="headline", labels=("headline", "title")),
+        FieldEntry(section_id="hero", field_id="cta", labels=("cta", "call to action")),
+    ),
+    collections=(
+        CollectionEntry(id="services.cards", item_kind="card", length=3, labels=("service card",)),
+        CollectionEntry(id="pricing.columns", item_kind="column", length=4, labels=("pricing column",)),
+    ),
+    slides=tuple(SlideEntry(id=f"slide-{i}", title=f"Slide {i}", ordinal=i) for i in range(1, 7)),
+    comment_anchors=(AnchorEntry(id="cmt-intro", label="intro note"),),
+)
+
+
+def _r(phrase: str) -> ReferenceResolution:
+    return resolve_human_reference(phrase, context=CTX)
+
+
+# --- required spec cases ------------------------------------------------------
+def test_hero_headline() -> None:
+    assert _r("the hero headline").resolved == FieldLocator(section_id="hero", field_id="headline")
+
+
+def test_hero_cta() -> None:
+    assert _r("hero cta").resolved == FieldLocator(section_id="hero", field_id="cta")
+
+
+def test_second_service_card_is_index_1() -> None:
+    res = _r("second service card")
+    assert res.resolved == IndexedLocator(collection_id="services.cards", index=1)
+
+
+def test_third_pricing_column_is_index_2() -> None:
+    assert _r("third pricing column").resolved == IndexedLocator(collection_id="pricing.columns", index=2)
+
+
+def test_slide_5_is_fifth_slide_index_4() -> None:
+    res = _r("slide 5")
+    assert res.resolved == SlideLocator(slide_id="slide-5")  # 1-index→0-index: 5th slide
+    assert CTX.slides[4].ordinal == 5  # off-by-one guard
+
+
+def test_section_3() -> None:
+    assert _r("section 3").resolved == SectionLocator(section_id="pricing")  # ordinal 3
+
+
+def test_comment_anchor() -> None:
+    assert _r("the intro note").resolved == CommentAnchorLocator(anchor_id="cmt-intro")
+
+
+def test_unknown_is_ambiguous_or_no_match_never_guessed() -> None:
+    # DeepSeek scout fixtures: phrases lacking a discriminating ordinal/label
+    for phrase in ("that thing", "the element", "click there", "the button", "make it pop"):
+        res = _r(phrase)
+        assert res.resolved is None  # NEVER a guess
+        assert res.reason in (ResolutionReason.NO_MATCH, ResolutionReason.AMBIGUOUS)
+
+
+# --- ambiguity: a normalized-label collision -> AMBIGUOUS (candidates) ---------
+def test_normalized_label_collision_is_ambiguous() -> None:
+    ctx = SemanticReferenceContext(
+        sections=(
+            SectionEntry(id="feat1", label="Features", ordinal=1),
+            SectionEntry(id="feat2", label="features", ordinal=2),  # same slug
+        )
+    )
+    res = resolve_human_reference("features", context=ctx)
+    assert res.resolved is None and res.ambiguous and res.reason is ResolutionReason.AMBIGUOUS
+    assert res.candidates == ("feat1", "feat2")
+
+
+# --- ordinal parsing (words AND digits, invalid, off-by-one) ------------------
+def test_parse_ordinal_words_and_digits() -> None:
+    assert parse_human_ordinal("second service card").value == 2
+    assert parse_human_ordinal("the 5th slide").value == 5
+    assert parse_human_ordinal("slide 5").value == 5
+    assert parse_human_ordinal("third one").value == 3
+    assert parse_human_ordinal("the headline").value is None  # no ordinal present
+
+
+def test_invalid_ordinal_rejected() -> None:
+    for bad in ("the 0th slide", "slide 0", "the -1 card", "zeroth slide"):
+        assert resolve_human_reference(bad, context=CTX).reason is ResolutionReason.INVALID_ORDINAL
+
+
+def test_out_of_range() -> None:
+    assert _r("slide 99").reason is ResolutionReason.OUT_OF_RANGE
+    assert _r("fifth pricing column").reason is ResolutionReason.OUT_OF_RANGE  # only 4 columns
+
+
+def test_human_ordinal_to_index() -> None:
+    assert human_ordinal_to_index(1) == 0 and human_ordinal_to_index(5) == 4
+    with pytest.raises(ValueError):
+        human_ordinal_to_index(0)
+
+
+# --- normalize_screen_label (deterministic + idempotent) ----------------------
+def test_normalize_is_deterministic_and_idempotent() -> None:
+    for s in ("Hero Headline!", "  Get   Started  ", "Sign-Up / Login", "CTA"):
+        n = normalize_screen_label(s)
+        assert n == normalize_screen_label(n)  # idempotent
+        assert n == normalize_screen_label(s)  # deterministic
+    assert normalize_screen_label("Hero Headline!") == "hero-headline"
+    assert normalize_screen_label("Sign Up") == normalize_screen_label("sign-up")  # case/punct fold
+
+
+# --- result invariants enforced -----------------------------------------------
+def test_resolution_invariants_enforced() -> None:
+    with pytest.raises(ValidationError):  # RESOLVED needs a target
+        ReferenceResolution(reason=ResolutionReason.RESOLVED)
+    with pytest.raises(ValidationError):  # a reject must not carry a target
+        ReferenceResolution(resolved=SectionLocator(section_id="x"), reason=ResolutionReason.NO_MATCH)
+    with pytest.raises(ValidationError):  # ambiguous needs candidates
+        ReferenceResolution(ambiguous=True, reason=ResolutionReason.AMBIGUOUS)
+
+
+def test_target_id_stable() -> None:
+    assert target_id(FieldLocator(section_id="hero", field_id="headline")) == "hero.headline"
+    assert target_id(IndexedLocator(collection_id="services.cards", index=1)) == "services.cards[1]"
+
+exec
+/bin/bash -lc 'rg -n "semantic_refs|SemanticReference|resolve_human_reference|SemanticTarget" packages/core/src packages/core/tests' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/semantic_refs.py:5:(SemanticReferenceContext) — deterministically, 1-index-safe, and REJECTING ambiguity
+packages/core/src/disco/core/semantic_refs.py:25:class SemanticTargetKind(str, Enum):
+packages/core/src/disco/core/semantic_refs.py:42:# Each locator is frozen and carries a Literal kind, so SemanticTarget is a
+packages/core/src/disco/core/semantic_refs.py:48:    kind: Literal[SemanticTargetKind.FIELD] = SemanticTargetKind.FIELD
+packages/core/src/disco/core/semantic_refs.py:55:    kind: Literal[SemanticTargetKind.SECTION] = SemanticTargetKind.SECTION
+packages/core/src/disco/core/semantic_refs.py:61:    kind: Literal[SemanticTargetKind.INDEXED] = SemanticTargetKind.INDEXED
+packages/core/src/disco/core/semantic_refs.py:68:    kind: Literal[SemanticTargetKind.SLIDE] = SemanticTargetKind.SLIDE
+packages/core/src/disco/core/semantic_refs.py:74:    kind: Literal[SemanticTargetKind.COMMENT_ANCHOR] = SemanticTargetKind.COMMENT_ANCHOR
+packages/core/src/disco/core/semantic_refs.py:78:SemanticTarget = Union[
+packages/core/src/disco/core/semantic_refs.py:83:def target_id(t: SemanticTarget) -> str:
+packages/core/src/disco/core/semantic_refs.py:135:class SemanticReferenceContext(BaseModel):
+packages/core/src/disco/core/semantic_refs.py:151:    resolved: SemanticTarget | None = None
+packages/core/src/disco/core/semantic_refs.py:171:def _resolved(t: SemanticTarget) -> ReferenceResolution:
+packages/core/src/disco/core/semantic_refs.py:261:def resolve_human_reference(phrase: str, *, context: SemanticReferenceContext) -> ReferenceResolution:
+packages/core/src/disco/core/semantic_refs.py:289:    field_hits: list[SemanticTarget] = []
+packages/core/src/disco/core/semantic_refs.py:299:    item_hits: list[SemanticTarget] = []
+packages/core/src/disco/core/semantic_refs.py:312:    bare_hits: list[SemanticTarget] = []
+packages/core/src/disco/core/semantic_refs.py:327:def _dedupe(targets: list[SemanticTarget]) -> list[SemanticTarget]:
+packages/core/src/disco/core/semantic_refs.py:329:    out: list[SemanticTarget] = []
+packages/core/tests/test_semantic_refs.py:10:from disco.core.semantic_refs import (
+packages/core/tests/test_semantic_refs.py:21:    SemanticReferenceContext,
+packages/core/tests/test_semantic_refs.py:27:    resolve_human_reference,
+packages/core/tests/test_semantic_refs.py:31:CTX = SemanticReferenceContext(
+packages/core/tests/test_semantic_refs.py:52:    return resolve_human_reference(phrase, context=CTX)
+packages/core/tests/test_semantic_refs.py:97:    ctx = SemanticReferenceContext(
+packages/core/tests/test_semantic_refs.py:103:    res = resolve_human_reference("features", context=ctx)
+packages/core/tests/test_semantic_refs.py:119:        assert resolve_human_reference(bad, context=CTX).reason is ResolutionReason.INVALID_ORDINAL
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'git diff -- packages/core/src/disco/core/semantic_refs.py packages/core/tests/test_semantic_refs.py' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+codex
+The first read shows the core types and ordinal helpers; I still need the resolver body and line numbers so the review can point at exact behavior.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '220,380p' packages/core/src/disco/core/semantic_refs.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+    """Find a 1-based human ordinal in ``phrase``. Ordinal WORDS (first..tenth) and DIGITS
+    (5 / 5th) both count. An explicit 0 / 0th / zeroth / negative is INVALID (not absent)."""
+    if _NEG_ORDINAL.search(phrase):
+        return _Ordinal(invalid=True)
+    norm = normalize_screen_label(phrase)
+    if _ZERO_ORDINAL.search(norm) or "zeroth" in norm:
+        return _Ordinal(invalid=True)
+    for word, n in _ORDINAL_WORDS.items():
+        if re.search(rf"\b{word}\b", norm):
+            return _Ordinal(value=n)
+    m = _DIGIT_ORDINAL.search(norm)
+    if m:
+        n = int(m.group(1))
+        return _Ordinal(value=n) if n >= 1 else _Ordinal(invalid=True)
+    return _Ordinal()
+
+
+def human_ordinal_to_index(ordinal: int) -> int:
+    """1-based human ordinal → 0-based array index. Rejects < 1."""
+    if ordinal < 1:
+        raise ValueError(f"ordinal must be >= 1, got {ordinal}")
+    return ordinal - 1
+
+
+# ---------------------------------------------------------------- the resolver
+
+
+def _tokens(norm: str) -> set[str]:
+    return set(norm.split("-")) - {""}
+
+
+def _labels_match(phrase_norm: str, labels: tuple[str, ...]) -> bool:
+    """True iff ANY of the entry's labels appears as a contiguous token-run in the phrase."""
+    pt = _tokens(phrase_norm)
+    for lab in labels:
+        lt = _tokens(normalize_screen_label(lab))
+        if lt and lt <= pt:
+            return True
+    return False
+
+
+def resolve_human_reference(phrase: str, *, context: SemanticReferenceContext) -> ReferenceResolution:
+    """Resolve a human reference phrase to a typed target, or reject (ambiguous / no_match /
+    invalid_ordinal / out_of_range). Deterministic; never guesses past one clear candidate."""
+    norm = normalize_screen_label(phrase)
+    if not norm:
+        return _reject(ResolutionReason.NO_MATCH)
+    ordinal = parse_human_ordinal(phrase)
+    if ordinal.invalid:
+        return _reject(ResolutionReason.INVALID_ORDINAL)
+
+    # 1) SLIDE — "slide N" / "Nth slide" (most specific when the word 'slide' is present).
+    if "slide" in _tokens(norm) and ordinal.value is not None:
+        idx = human_ordinal_to_index(ordinal.value)
+        if idx < len(context.slides):
+            return _resolved(SlideLocator(slide_id=context.slides[idx].id))
+        return _reject(ResolutionReason.OUT_OF_RANGE)
+
+    # 2) SECTION by ordinal — "section N".
+    if "section" in _tokens(norm) and ordinal.value is not None:
+        idx = human_ordinal_to_index(ordinal.value)
+        by_ord = sorted(context.sections, key=lambda s: s.ordinal)
+        if idx < len(by_ord):
+            return _resolved(SectionLocator(section_id=by_ord[idx].id))
+        return _reject(ResolutionReason.OUT_OF_RANGE)
+
+    # Collect all plausible candidates, then decide (1 → resolve, >1 → ambiguous, 0 → no_match).
+    # A FIELD (section+field, 2 labels) is the most specific tier; collection item next; then
+    # bare section / anchor. We resolve within the most specific non-empty tier.
+    field_hits: list[SemanticTarget] = []
+    for f in context.fields:
+        sec = next((s for s in context.sections if s.id == f.section_id), None)
+        sec_labels = (sec.label, *sec.aliases) if sec is not None else ()
+        if _labels_match(norm, sec_labels) and _labels_match(norm, f.labels or (f.field_id,)):
+            field_hits.append(FieldLocator(section_id=f.section_id, field_id=f.field_id))
+    if field_hits:
+        uniq = _dedupe(field_hits)
+        return _resolved(uniq[0]) if len(uniq) == 1 else _ambiguous([target_id(t) for t in uniq])
+
+    item_hits: list[SemanticTarget] = []
+    if ordinal.value is not None:
+        for col in context.collections:
+            names = (*col.labels, col.item_kind)
+            if _labels_match(norm, names):
+                idx = human_ordinal_to_index(ordinal.value)
+                if idx >= col.length:
+                    return _reject(ResolutionReason.OUT_OF_RANGE)
+                item_hits.append(IndexedLocator(collection_id=col.id, index=idx))
+    if item_hits:
+        uniq = _dedupe(item_hits)
+        return _resolved(uniq[0]) if len(uniq) == 1 else _ambiguous([target_id(t) for t in uniq])
+
+    bare_hits: list[SemanticTarget] = []
+    for s in context.sections:
+        if _labels_match(norm, (s.label, *s.aliases)):
+            bare_hits.append(SectionLocator(section_id=s.id))
+    for a in context.comment_anchors:
+        if _labels_match(norm, (a.label, a.id)):
+            bare_hits.append(CommentAnchorLocator(anchor_id=a.id))
+    uniq = _dedupe(bare_hits)
+    if len(uniq) == 1:
+        return _resolved(uniq[0])
+    if len(uniq) > 1:
+        return _ambiguous([target_id(t) for t in uniq])
+    return _reject(ResolutionReason.NO_MATCH)
+
+
+def _dedupe(targets: list[SemanticTarget]) -> list[SemanticTarget]:
+    seen: set[str] = set()
+    out: list[SemanticTarget] = []
+    for t in targets:
+        tid = target_id(t)
+        if tid not in seen:
+            seen.add(tid)
+            out.append(t)
+    return out
+
+exec
+/bin/bash -lc "nl -ba packages/core/src/disco/core/semantic_refs.py | sed -n '1,380p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""Semantic reference model (P8A) — deterministic human→target resolution.
+     2	
+     3	A user says "the hero headline", "the second service card", "slide 5", "section 3". This
+     4	resolves such a phrase to a TYPED target against a structured screen inventory
+     5	(SemanticReferenceContext) — deterministically, 1-index-safe, and REJECTING ambiguity
+     6	rather than guessing. The frontend (P8C) and the edit tools (P8B/P4) consume the typed
+     7	targets; this module is pure (no runtime/tool imports).
+     8	
+     9	Invariants: a resolution is either RESOLVED (exactly one typed target) or it carries a
+    10	reason (AMBIGUOUS with candidates / NO_MATCH / INVALID_ORDINAL / OUT_OF_RANGE) and resolves
+    11	to nothing. It never invents a target it isn't sure about.
+    12	"""
+    13	
+    14	from __future__ import annotations
+    15	
+    16	import re
+    17	from enum import Enum
+    18	from typing import Literal, Union
+    19	
+    20	from pydantic import BaseModel, ConfigDict, model_validator
+    21	
+    22	# ---------------------------------------------------------------- kinds + reasons
+    23	
+    24	
+    25	class SemanticTargetKind(str, Enum):
+    26	    FIELD = "field"  # a field of a section (hero.headline)
+    27	    SECTION = "section"  # a whole section
+    28	    INDEXED = "indexed"  # the Nth item of a collection (services.cards[1])
+    29	    SLIDE = "slide"  # the Nth slide of a deck
+    30	    COMMENT_ANCHOR = "comment_anchor"  # a stable comment anchor
+    31	
+    32	
+    33	class ResolutionReason(str, Enum):
+    34	    RESOLVED = "resolved"
+    35	    AMBIGUOUS = "ambiguous"  # >1 candidate — surfaced, never guessed
+    36	    NO_MATCH = "no_match"
+    37	    INVALID_ORDINAL = "invalid_ordinal"  # "0th" / negative / non-ordinal
+    38	    OUT_OF_RANGE = "out_of_range"  # ordinal beyond the collection/deck length
+    39	
+    40	
+    41	# ---------------------------------------------------------------- typed locators
+    42	# Each locator is frozen and carries a Literal kind, so SemanticTarget is a
+    43	# discriminated union — an invalid shape (e.g. a SLIDE with a field) is impossible.
+    44	
+    45	
+    46	class FieldLocator(BaseModel):
+    47	    model_config = ConfigDict(frozen=True, extra="forbid")
+    48	    kind: Literal[SemanticTargetKind.FIELD] = SemanticTargetKind.FIELD
+    49	    section_id: str
+    50	    field_id: str
+    51	
+    52	
+    53	class SectionLocator(BaseModel):
+    54	    model_config = ConfigDict(frozen=True, extra="forbid")
+    55	    kind: Literal[SemanticTargetKind.SECTION] = SemanticTargetKind.SECTION
+    56	    section_id: str
+    57	
+    58	
+    59	class IndexedLocator(BaseModel):
+    60	    model_config = ConfigDict(frozen=True, extra="forbid")
+    61	    kind: Literal[SemanticTargetKind.INDEXED] = SemanticTargetKind.INDEXED
+    62	    collection_id: str
+    63	    index: int  # 0-based array index
+    64	
+    65	
+    66	class SlideLocator(BaseModel):
+    67	    model_config = ConfigDict(frozen=True, extra="forbid")
+    68	    kind: Literal[SemanticTargetKind.SLIDE] = SemanticTargetKind.SLIDE
+    69	    slide_id: str
+    70	
+    71	
+    72	class CommentAnchorLocator(BaseModel):
+    73	    model_config = ConfigDict(frozen=True, extra="forbid")
+    74	    kind: Literal[SemanticTargetKind.COMMENT_ANCHOR] = SemanticTargetKind.COMMENT_ANCHOR
+    75	    anchor_id: str
+    76	
+    77	
+    78	SemanticTarget = Union[
+    79	    FieldLocator, SectionLocator, IndexedLocator, SlideLocator, CommentAnchorLocator
+    80	]
+    81	
+    82	
+    83	def target_id(t: SemanticTarget) -> str:
+    84	    """A stable id string for a target (used in ambiguity candidate lists)."""
+    85	    if isinstance(t, FieldLocator):
+    86	        return f"{t.section_id}.{t.field_id}"
+    87	    if isinstance(t, SectionLocator):
+    88	        return t.section_id
+    89	    if isinstance(t, IndexedLocator):
+    90	        return f"{t.collection_id}[{t.index}]"
+    91	    if isinstance(t, SlideLocator):
+    92	        return t.slide_id
+    93	    return t.anchor_id
+    94	
+    95	
+    96	# ---------------------------------------------------------------- context inventory
+    97	
+    98	
+    99	class SectionEntry(BaseModel):
+   100	    model_config = ConfigDict(frozen=True, extra="forbid")
+   101	    id: str
+   102	    label: str
+   103	    aliases: tuple[str, ...] = ()
+   104	    ordinal: int  # 1-based position on the screen
+   105	
+   106	
+   107	class FieldEntry(BaseModel):
+   108	    model_config = ConfigDict(frozen=True, extra="forbid")
+   109	    section_id: str
+   110	    field_id: str
+   111	    labels: tuple[str, ...] = ()  # human names for the field ("headline", "cta")
+   112	
+   113	
+   114	class CollectionEntry(BaseModel):
+   115	    model_config = ConfigDict(frozen=True, extra="forbid")
+   116	    id: str  # e.g. "services.cards"
+   117	    item_kind: str  # e.g. "card", "column"
+   118	    length: int
+   119	    labels: tuple[str, ...] = ()  # human names ("service card", "services")
+   120	
+   121	
+   122	class SlideEntry(BaseModel):
+   123	    model_config = ConfigDict(frozen=True, extra="forbid")
+   124	    id: str
+   125	    title: str
+   126	    ordinal: int  # 1-based
+   127	
+   128	
+   129	class AnchorEntry(BaseModel):
+   130	    model_config = ConfigDict(frozen=True, extra="forbid")
+   131	    id: str
+   132	    label: str
+   133	
+   134	
+   135	class SemanticReferenceContext(BaseModel):
+   136	    """The typed inventory a phrase resolves AGAINST."""
+   137	
+   138	    model_config = ConfigDict(frozen=True, extra="forbid")
+   139	    sections: tuple[SectionEntry, ...] = ()
+   140	    fields: tuple[FieldEntry, ...] = ()
+   141	    collections: tuple[CollectionEntry, ...] = ()
+   142	    slides: tuple[SlideEntry, ...] = ()
+   143	    comment_anchors: tuple[AnchorEntry, ...] = ()
+   144	
+   145	
+   146	# ---------------------------------------------------------------- resolution result
+   147	
+   148	
+   149	class ReferenceResolution(BaseModel):
+   150	    model_config = ConfigDict(frozen=True)
+   151	    resolved: SemanticTarget | None = None
+   152	    ambiguous: bool = False
+   153	    reason: ResolutionReason = ResolutionReason.NO_MATCH
+   154	    candidates: tuple[str, ...] = ()
+   155	
+   156	    @model_validator(mode="after")
+   157	    def _invariants(self) -> ReferenceResolution:
+   158	        if self.reason is ResolutionReason.RESOLVED:
+   159	            if self.resolved is None or self.ambiguous:
+   160	                raise ValueError("RESOLVED requires a target and not-ambiguous")
+   161	        else:
+   162	            if self.resolved is not None:
+   163	                raise ValueError(f"{self.reason} must not carry a resolved target")
+   164	        if self.ambiguous and not self.candidates:
+   165	            raise ValueError("ambiguous requires candidates")
+   166	        if self.ambiguous and self.reason is not ResolutionReason.AMBIGUOUS:
+   167	            raise ValueError("ambiguous requires reason=AMBIGUOUS")
+   168	        return self
+   169	
+   170	
+   171	def _resolved(t: SemanticTarget) -> ReferenceResolution:
+   172	    return ReferenceResolution(resolved=t, reason=ResolutionReason.RESOLVED)
+   173	
+   174	
+   175	def _ambiguous(candidates: list[str]) -> ReferenceResolution:
+   176	    return ReferenceResolution(
+   177	        ambiguous=True, reason=ResolutionReason.AMBIGUOUS, candidates=tuple(sorted(set(candidates)))
+   178	    )
+   179	
+   180	
+   181	def _reject(reason: ResolutionReason) -> ReferenceResolution:
+   182	    return ReferenceResolution(reason=reason)
+   183	
+   184	
+   185	# ---------------------------------------------------------------- label normalization
+   186	
+   187	_PUNCT_RUN = re.compile(r"[^a-z0-9]+")
+   188	
+   189	
+   190	def normalize_screen_label(label: str) -> str:
+   191	    """Deterministic, idempotent slug: casefold, collapse any run of non-alphanumerics
+   192	    to a single '-', trim. ``normalize(normalize(x)) == normalize(x)``."""
+   193	    return _PUNCT_RUN.sub("-", label.casefold()).strip("-")
+   194	
+   195	
+   196	# ---------------------------------------------------------------- ordinal parsing
+   197	
+   198	_ORDINAL_WORDS: dict[str, int] = {
+   199	    w: i + 1
+   200	    for i, w in enumerate(
+   201	        ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
+   202	    )
+   203	}
+   204	_DIGIT_ORDINAL = re.compile(r"\b(\d+)(?:st|nd|rd|th)?\b")
+   205	# a zero ordinal on the normalized string ("0", "0th"); a NEGATIVE on the RAW string (a
+   206	# minus at start/after-space before a digit — NOT a normalization hyphen-separator).
+   207	_ZERO_ORDINAL = re.compile(r"\b0+(?:st|nd|rd|th)?\b")
+   208	_NEG_ORDINAL = re.compile(r"(?:^|\s)-\d")
+   209	
+   210	
+   211	class _Ordinal(BaseModel):
+   212	    """The outcome of looking for a human ordinal in a phrase."""
+   213	
+   214	    model_config = ConfigDict(frozen=True)
+   215	    value: int | None = None  # 1-based ordinal found, or None if none present
+   216	    invalid: bool = False  # an explicit but invalid ordinal (0th / negative)
+   217	
+   218	
+   219	def parse_human_ordinal(phrase: str) -> _Ordinal:
+   220	    """Find a 1-based human ordinal in ``phrase``. Ordinal WORDS (first..tenth) and DIGITS
+   221	    (5 / 5th) both count. An explicit 0 / 0th / zeroth / negative is INVALID (not absent)."""
+   222	    if _NEG_ORDINAL.search(phrase):
+   223	        return _Ordinal(invalid=True)
+   224	    norm = normalize_screen_label(phrase)
+   225	    if _ZERO_ORDINAL.search(norm) or "zeroth" in norm:
+   226	        return _Ordinal(invalid=True)
+   227	    for word, n in _ORDINAL_WORDS.items():
+   228	        if re.search(rf"\b{word}\b", norm):
+   229	            return _Ordinal(value=n)
+   230	    m = _DIGIT_ORDINAL.search(norm)
+   231	    if m:
+   232	        n = int(m.group(1))
+   233	        return _Ordinal(value=n) if n >= 1 else _Ordinal(invalid=True)
+   234	    return _Ordinal()
+   235	
+   236	
+   237	def human_ordinal_to_index(ordinal: int) -> int:
+   238	    """1-based human ordinal → 0-based array index. Rejects < 1."""
+   239	    if ordinal < 1:
+   240	        raise ValueError(f"ordinal must be >= 1, got {ordinal}")
+   241	    return ordinal - 1
+   242	
+   243	
+   244	# ---------------------------------------------------------------- the resolver
+   245	
+   246	
+   247	def _tokens(norm: str) -> set[str]:
+   248	    return set(norm.split("-")) - {""}
+   249	
+   250	
+   251	def _labels_match(phrase_norm: str, labels: tuple[str, ...]) -> bool:
+   252	    """True iff ANY of the entry's labels appears as a contiguous token-run in the phrase."""
+   253	    pt = _tokens(phrase_norm)
+   254	    for lab in labels:
+   255	        lt = _tokens(normalize_screen_label(lab))
+   256	        if lt and lt <= pt:
+   257	            return True
+   258	    return False
+   259	
+   260	
+   261	def resolve_human_reference(phrase: str, *, context: SemanticReferenceContext) -> ReferenceResolution:
+   262	    """Resolve a human reference phrase to a typed target, or reject (ambiguous / no_match /
+   263	    invalid_ordinal / out_of_range). Deterministic; never guesses past one clear candidate."""
+   264	    norm = normalize_screen_label(phrase)
+   265	    if not norm:
+   266	        return _reject(ResolutionReason.NO_MATCH)
+   267	    ordinal = parse_human_ordinal(phrase)
+   268	    if ordinal.invalid:
+   269	        return _reject(ResolutionReason.INVALID_ORDINAL)
+   270	
+   271	    # 1) SLIDE — "slide N" / "Nth slide" (most specific when the word 'slide' is present).
+   272	    if "slide" in _tokens(norm) and ordinal.value is not None:
+   273	        idx = human_ordinal_to_index(ordinal.value)
+   274	        if idx < len(context.slides):
+   275	            return _resolved(SlideLocator(slide_id=context.slides[idx].id))
+   276	        return _reject(ResolutionReason.OUT_OF_RANGE)
+   277	
+   278	    # 2) SECTION by ordinal — "section N".
+   279	    if "section" in _tokens(norm) and ordinal.value is not None:
+   280	        idx = human_ordinal_to_index(ordinal.value)
+   281	        by_ord = sorted(context.sections, key=lambda s: s.ordinal)
+   282	        if idx < len(by_ord):
+   283	            return _resolved(SectionLocator(section_id=by_ord[idx].id))
+   284	        return _reject(ResolutionReason.OUT_OF_RANGE)
+   285	
+   286	    # Collect all plausible candidates, then decide (1 → resolve, >1 → ambiguous, 0 → no_match).
+   287	    # A FIELD (section+field, 2 labels) is the most specific tier; collection item next; then
+   288	    # bare section / anchor. We resolve within the most specific non-empty tier.
+   289	    field_hits: list[SemanticTarget] = []
+   290	    for f in context.fields:
+   291	        sec = next((s for s in context.sections if s.id == f.section_id), None)
+   292	        sec_labels = (sec.label, *sec.aliases) if sec is not None else ()
+   293	        if _labels_match(norm, sec_labels) and _labels_match(norm, f.labels or (f.field_id,)):
+   294	            field_hits.append(FieldLocator(section_id=f.section_id, field_id=f.field_id))
+   295	    if field_hits:
+   296	        uniq = _dedupe(field_hits)
+   297	        return _resolved(uniq[0]) if len(uniq) == 1 else _ambiguous([target_id(t) for t in uniq])
+   298	
+   299	    item_hits: list[SemanticTarget] = []
+   300	    if ordinal.value is not None:
+   301	        for col in context.collections:
+   302	            names = (*col.labels, col.item_kind)
+   303	            if _labels_match(norm, names):
+   304	                idx = human_ordinal_to_index(ordinal.value)
+   305	                if idx >= col.length:
+   306	                    return _reject(ResolutionReason.OUT_OF_RANGE)
+   307	                item_hits.append(IndexedLocator(collection_id=col.id, index=idx))
+   308	    if item_hits:
+   309	        uniq = _dedupe(item_hits)
+   310	        return _resolved(uniq[0]) if len(uniq) == 1 else _ambiguous([target_id(t) for t in uniq])
+   311	
+   312	    bare_hits: list[SemanticTarget] = []
+   313	    for s in context.sections:
+   314	        if _labels_match(norm, (s.label, *s.aliases)):
+   315	            bare_hits.append(SectionLocator(section_id=s.id))
+   316	    for a in context.comment_anchors:
+   317	        if _labels_match(norm, (a.label, a.id)):
+   318	            bare_hits.append(CommentAnchorLocator(anchor_id=a.id))
+   319	    uniq = _dedupe(bare_hits)
+   320	    if len(uniq) == 1:
+   321	        return _resolved(uniq[0])
+   322	    if len(uniq) > 1:
+   323	        return _ambiguous([target_id(t) for t in uniq])
+   324	    return _reject(ResolutionReason.NO_MATCH)
+   325	
+   326	
+   327	def _dedupe(targets: list[SemanticTarget]) -> list[SemanticTarget]:
+   328	    seen: set[str] = set()
+   329	    out: list[SemanticTarget] = []
+   330	    for t in targets:
+   331	        tid = target_id(t)
+   332	        if tid not in seen:
+   333	            seen.add(tid)
+   334	            out.append(t)
+   335	    return out
+
+exec
+/bin/bash -lc "nl -ba packages/core/tests/test_semantic_refs.py | sed -n '1,220p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""P8A tests: deterministic, 1-index-safe semantic reference resolution that rejects
+     2	ambiguity. Required cases from the spec + pinned ordinal/normalize/collision behaviors.
+     3	Negative/ambiguous phrases sourced from the DeepSeek scout fixture."""
+     4	
+     5	from __future__ import annotations
+     6	
+     7	import pytest
+     8	from pydantic import ValidationError
+     9	
+    10	from disco.core.semantic_refs import (
+    11	    AnchorEntry,
+    12	    CollectionEntry,
+    13	    CommentAnchorLocator,
+    14	    FieldEntry,
+    15	    FieldLocator,
+    16	    IndexedLocator,
+    17	    ReferenceResolution,
+    18	    ResolutionReason,
+    19	    SectionEntry,
+    20	    SectionLocator,
+    21	    SemanticReferenceContext,
+    22	    SlideEntry,
+    23	    SlideLocator,
+    24	    human_ordinal_to_index,
+    25	    normalize_screen_label,
+    26	    parse_human_ordinal,
+    27	    resolve_human_reference,
+    28	    target_id,
+    29	)
+    30	
+    31	CTX = SemanticReferenceContext(
+    32	    sections=(
+    33	        SectionEntry(id="hero", label="hero", ordinal=1),
+    34	        SectionEntry(id="services", label="services", ordinal=2),
+    35	        SectionEntry(id="pricing", label="pricing", ordinal=3),
+    36	        SectionEntry(id="about", label="about", ordinal=4),
+    37	    ),
+    38	    fields=(
+    39	        FieldEntry(section_id="hero", field_id="headline", labels=("headline", "title")),
+    40	        FieldEntry(section_id="hero", field_id="cta", labels=("cta", "call to action")),
+    41	    ),
+    42	    collections=(
+    43	        CollectionEntry(id="services.cards", item_kind="card", length=3, labels=("service card",)),
+    44	        CollectionEntry(id="pricing.columns", item_kind="column", length=4, labels=("pricing column",)),
+    45	    ),
+    46	    slides=tuple(SlideEntry(id=f"slide-{i}", title=f"Slide {i}", ordinal=i) for i in range(1, 7)),
+    47	    comment_anchors=(AnchorEntry(id="cmt-intro", label="intro note"),),
+    48	)
+    49	
+    50	
+    51	def _r(phrase: str) -> ReferenceResolution:
+    52	    return resolve_human_reference(phrase, context=CTX)
+    53	
+    54	
+    55	# --- required spec cases ------------------------------------------------------
+    56	def test_hero_headline() -> None:
+    57	    assert _r("the hero headline").resolved == FieldLocator(section_id="hero", field_id="headline")
+    58	
+    59	
+    60	def test_hero_cta() -> None:
+    61	    assert _r("hero cta").resolved == FieldLocator(section_id="hero", field_id="cta")
+    62	
+    63	
+    64	def test_second_service_card_is_index_1() -> None:
+    65	    res = _r("second service card")
+    66	    assert res.resolved == IndexedLocator(collection_id="services.cards", index=1)
+    67	
+    68	
+    69	def test_third_pricing_column_is_index_2() -> None:
+    70	    assert _r("third pricing column").resolved == IndexedLocator(collection_id="pricing.columns", index=2)
+    71	
+    72	
+    73	def test_slide_5_is_fifth_slide_index_4() -> None:
+    74	    res = _r("slide 5")
+    75	    assert res.resolved == SlideLocator(slide_id="slide-5")  # 1-index→0-index: 5th slide
+    76	    assert CTX.slides[4].ordinal == 5  # off-by-one guard
+    77	
+    78	
+    79	def test_section_3() -> None:
+    80	    assert _r("section 3").resolved == SectionLocator(section_id="pricing")  # ordinal 3
+    81	
+    82	
+    83	def test_comment_anchor() -> None:
+    84	    assert _r("the intro note").resolved == CommentAnchorLocator(anchor_id="cmt-intro")
+    85	
+    86	
+    87	def test_unknown_is_ambiguous_or_no_match_never_guessed() -> None:
+    88	    # DeepSeek scout fixtures: phrases lacking a discriminating ordinal/label
+    89	    for phrase in ("that thing", "the element", "click there", "the button", "make it pop"):
+    90	        res = _r(phrase)
+    91	        assert res.resolved is None  # NEVER a guess
+    92	        assert res.reason in (ResolutionReason.NO_MATCH, ResolutionReason.AMBIGUOUS)
+    93	
+    94	
+    95	# --- ambiguity: a normalized-label collision -> AMBIGUOUS (candidates) ---------
+    96	def test_normalized_label_collision_is_ambiguous() -> None:
+    97	    ctx = SemanticReferenceContext(
+    98	        sections=(
+    99	            SectionEntry(id="feat1", label="Features", ordinal=1),
+   100	            SectionEntry(id="feat2", label="features", ordinal=2),  # same slug
+   101	        )
+   102	    )
+   103	    res = resolve_human_reference("features", context=ctx)
+   104	    assert res.resolved is None and res.ambiguous and res.reason is ResolutionReason.AMBIGUOUS
+   105	    assert res.candidates == ("feat1", "feat2")
+   106	
+   107	
+   108	# --- ordinal parsing (words AND digits, invalid, off-by-one) ------------------
+   109	def test_parse_ordinal_words_and_digits() -> None:
+   110	    assert parse_human_ordinal("second service card").value == 2
+   111	    assert parse_human_ordinal("the 5th slide").value == 5
+   112	    assert parse_human_ordinal("slide 5").value == 5
+   113	    assert parse_human_ordinal("third one").value == 3
+   114	    assert parse_human_ordinal("the headline").value is None  # no ordinal present
+   115	
+   116	
+   117	def test_invalid_ordinal_rejected() -> None:
+   118	    for bad in ("the 0th slide", "slide 0", "the -1 card", "zeroth slide"):
+   119	        assert resolve_human_reference(bad, context=CTX).reason is ResolutionReason.INVALID_ORDINAL
+   120	
+   121	
+   122	def test_out_of_range() -> None:
+   123	    assert _r("slide 99").reason is ResolutionReason.OUT_OF_RANGE
+   124	    assert _r("fifth pricing column").reason is ResolutionReason.OUT_OF_RANGE  # only 4 columns
+   125	
+   126	
+   127	def test_human_ordinal_to_index() -> None:
+   128	    assert human_ordinal_to_index(1) == 0 and human_ordinal_to_index(5) == 4
+   129	    with pytest.raises(ValueError):
+   130	        human_ordinal_to_index(0)
+   131	
+   132	
+   133	# --- normalize_screen_label (deterministic + idempotent) ----------------------
+   134	def test_normalize_is_deterministic_and_idempotent() -> None:
+   135	    for s in ("Hero Headline!", "  Get   Started  ", "Sign-Up / Login", "CTA"):
+   136	        n = normalize_screen_label(s)
+   137	        assert n == normalize_screen_label(n)  # idempotent
+   138	        assert n == normalize_screen_label(s)  # deterministic
+   139	    assert normalize_screen_label("Hero Headline!") == "hero-headline"
+   140	    assert normalize_screen_label("Sign Up") == normalize_screen_label("sign-up")  # case/punct fold
+   141	
+   142	
+   143	# --- result invariants enforced -----------------------------------------------
+   144	def test_resolution_invariants_enforced() -> None:
+   145	    with pytest.raises(ValidationError):  # RESOLVED needs a target
+   146	        ReferenceResolution(reason=ResolutionReason.RESOLVED)
+   147	    with pytest.raises(ValidationError):  # a reject must not carry a target
+   148	        ReferenceResolution(resolved=SectionLocator(section_id="x"), reason=ResolutionReason.NO_MATCH)
+   149	    with pytest.raises(ValidationError):  # ambiguous needs candidates
+   150	        ReferenceResolution(ambiguous=True, reason=ResolutionReason.AMBIGUOUS)
+   151	
+   152	
+   153	def test_target_id_stable() -> None:
+   154	    assert target_id(FieldLocator(section_id="hero", field_id="headline")) == "hero.headline"
+   155	    assert target_id(IndexedLocator(collection_id="services.cards", index=1)) == "services.cards[1]"
+
+codex
+The resolver is simple enough to audit manually. I’m going to do a couple of focused runtime probes for edge cases the tests don’t currently pin, while keeping pytest cache/write behavior disabled because this workspace is read-only.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "find . -maxdepth 3 -name 'pyproject.toml' -o -name 'pytest.ini' -o -name 'setup.cfg'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+./packages/agent-server/pyproject.toml
+./packages/app-server/pyproject.toml
+./packages/core/pyproject.toml
+./packages/retrieval/pyproject.toml
+./packages/tools/pyproject.toml
+./pyproject.toml
+
+exec
+/bin/bash -lc "rg -n \"basedpyright|pytest|pythonpath|pydantic\" pyproject.toml packages/core/pyproject.toml packages/core -g 'pyproject.toml' -g 'pytest.ini' -g 'setup.cfg'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/pyproject.toml:11:    "pydantic>=2.7",
+pyproject.toml:29:    "pytest>=8.2",
+pyproject.toml:30:    "pytest-asyncio>=0.24",
+pyproject.toml:36:    "basedpyright>=1.39",  # Python static type-checking (strict: zero errors tree-wide, no baseline)
+pyproject.toml:56:[tool.pytest.ini_options]
+packages/core/pyproject.toml:11:    "pydantic>=2.7",
+
+exec
+/bin/bash -lc 'PYTHONDONTWRITEBYTECODE=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q packages/core/tests/test_semantic_refs.py -p no:cacheprovider' in /var/home/dylan/projects/disclaude
+ exited 1 in 184ms:
+Traceback (most recent call last):
+  File "/home/dylan/.local/bin/pytest", line 6, in <module>
+    sys.exit(console_main())
+             ~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in console_main
+    code = main()
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 193, in main
+    config = _prepareconfig(new_args, plugins)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 361, in _prepareconfig
+    config: Config = pluginmanager.hook.pytest_cmdline_parse(
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pluginmanager=pluginmanager, args=args
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+    config = yield
+             ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1192, in pytest_cmdline_parse
+    self.parse(args)
+    ~~~~~~~~~~^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1562, in parse
+    self.hook.pytest_load_initial_conftests(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        early_config=self, args=args, parser=self._parser
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/warnings.py", line 128, in pytest_load_initial_conftests
+    return (yield)
+            ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 116, in _multicall
+    next(function_gen)  # first yield
+    ~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 170, in pytest_load_initial_conftests
+    capman.start_global_capturing()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 773, in start_global_capturing
+    self._global_capturing = _get_multicapture(self._method)
+                             ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 714, in _get_multicapture
+    return MultiCapture(in_=FDCapture(0), out=FDCapture(1), err=FDCapture(2))
+                                              ~~~~~~~~~^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 493, in __init__
+    TemporaryFile(buffering=0),
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 652, in TemporaryFile
+    prefix, suffix, dir, output_type = _sanitize_params(prefix, suffix, dir)
+                                       ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 127, in _sanitize_params
+    dir = gettempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 312, in gettempdir
+    return _os.fsdecode(_gettempdir())
+                        ~~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/tempfile.py", line 305, in _gettempdir
+    tempdir = _get_default_tempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 222, in _get_default_tempdir
+    raise FileNotFoundError(_errno.ENOENT,
+                            "No usable temporary directory found in %s" %
+                            dirlist)
+FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/var/home/dylan/projects/disclaude']
+
+codex
+Pytest cannot start in this sandbox because Python cannot find any writable temp directory for its capture files. I can still import and probe the module without bytecode writes, which is enough to confirm a few review-specific edge cases.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/core/src python -c \"from disco.core.semantic_refs import *; print(parse_human_ordinal('10').model_dump()); print(parse_human_ordinal('50').model_dump()); print(parse_human_ordinal('slide:-1').model_dump()); print(ReferenceResolution(reason=ResolutionReason.AMBIGUOUS, candidates=('x',)).model_dump()); print(ReferenceResolution(reason=ResolutionReason.NO_MATCH, candidates=('x',)).model_dump())\"" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/core/src python -c \"from disco.core.semantic_refs import *; from pydantic import ValidationError; cases=[lambda: SlideLocator(kind=SemanticTargetKind.FIELD, slide_id='s'), lambda: SlideLocator(slide_id='s', field_id='f'), lambda: ReferenceResolution(resolved={'kind':'slide','section_id':'x'}, reason=ResolutionReason.RESOLVED), lambda: IndexedLocator(collection_id='c', index=-1)];
+for i,fn in enumerate(cases,1):
+    try:
+        v=fn(); print(i, 'OK', v)
+    except Exception as e:
+        print(i, type(e).__name__, str(e).split('\\n')[0])\"" in /var/home/dylan/projects/disclaude
+ succeeded in 285ms:
+1 ValidationError 1 validation error for SlideLocator
+2 ValidationError 1 validation error for SlideLocator
+3 ValidationError 12 validation errors for ReferenceResolution
+4 OK kind=<SemanticTargetKind.INDEXED: 'indexed'> collection_id='c' index=-1
+
+ succeeded in 311ms:
+{'value': 10, 'invalid': False}
+{'value': 50, 'invalid': False}
+{'value': 1, 'invalid': False}
+{'resolved': None, 'ambiguous': False, 'reason': <ResolutionReason.AMBIGUOUS: 'ambiguous'>, 'candidates': ('x',)}
+{'resolved': None, 'ambiguous': False, 'reason': <ResolutionReason.NO_MATCH: 'no_match'>, 'candidates': ('x',)}
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/core/src python -c \"from disco.core.semantic_refs import *; ctx=SemanticReferenceContext(sections=(SectionEntry(id='hero',label='hero',ordinal=1),), fields=(FieldEntry(section_id='hero',field_id='headline',labels=('headline',)),), comment_anchors=(AnchorEntry(id='hero-headline-anchor',label='hero headline'),)); print(resolve_human_reference('hero headline', context=ctx).model_dump()); ctx2=SemanticReferenceContext(sections=(SectionEntry(id='a', label='a', ordinal=10), SectionEntry(id='b', label='b', ordinal=20), SectionEntry(id='c', label='c', ordinal=30))); print(resolve_human_reference('section 20', context=ctx2).model_dump()); ctx3=SemanticReferenceContext(slides=(SlideEntry(id='slide-five', title='x', ordinal=5), SlideEntry(id='slide-one', title='x', ordinal=1))); print(resolve_human_reference('slide 1', context=ctx3).model_dump())\"" in /var/home/dylan/projects/disclaude
+ succeeded in 203ms:
+{'resolved': {'kind': <SemanticTargetKind.FIELD: 'field'>, 'section_id': 'hero', 'field_id': 'headline'}, 'ambiguous': False, 'reason': <ResolutionReason.RESOLVED: 'resolved'>, 'candidates': ()}
+{'resolved': None, 'ambiguous': False, 'reason': <ResolutionReason.OUT_OF_RANGE: 'out_of_range'>, 'candidates': ()}
+{'resolved': {'kind': <SemanticTargetKind.SLIDE: 'slide'>, 'slide_id': 'slide-five'}, 'ambiguous': False, 'reason': <ResolutionReason.RESOLVED: 'resolved'>, 'candidates': ()}
+
+codex
+REVISE
+
+**REASONS**
+
+- [packages/core/src/disco/core/semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:156): `ReferenceResolution` invariants are incomplete. It allows `reason=AMBIGUOUS` with `ambiguous=False`, and allows non-empty `candidates` on non-ambiguous results. That violates `ambiguous <=> candidates non-empty`.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:271): ordinal resolution is not fully 1-index-safe against the typed inventory. Slides ignore `SlideEntry.ordinal` and use tuple position. Sections sort by ordinal but still index by position, so sparse/out-of-order ordinals resolve incorrectly or return false out-of-range.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:289): tier precedence can mask real cross-tier ambiguity. A phrase matching one field and one section/comment anchor resolves the field before lower-tier candidates are checked. That is deterministic, but not globally ambiguity-rejecting.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:204): ordinal parsing accepts bare `10` and `50` as ordinals. That is fine only if bare cardinal digits are intentional. Also, raw negative detection misses punctuation-bound negatives like `slide:-1`, which parses as `1`.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:59): locator shapes are mostly protected by `Literal` kind plus `extra="forbid"`, but `IndexedLocator(index=-1)` is constructible. If invalid target shapes must be impossible, add a non-negative constraint.
+
+**REQUIRED_REVISIONS**
+
+- Enforce the full `ReferenceResolution` invariant: `RESOLVED` iff exactly one `resolved` target and no ambiguity/candidates; `AMBIGUOUS` iff `ambiguous=True`, no resolved target, and non-empty candidates; other reasons must have no resolved target and no candidates.
+
+- Resolve slides/sections by explicit `ordinal == requested_ordinal`, or add validators proving inventories are sorted, contiguous, unique, and 1-based.
+
+- Decide and pin cross-tier semantics. For true ambiguity rejection, collect all matching candidates across tiers and return `AMBIGUOUS` when more than one semantic target matches.
+
+- Add tests for inverse invariants, cross-tier collisions, sparse/out-of-order ordinals, duplicate ordinals, `10`/`50` behavior, and punctuation-bound negatives.
+
+I could not run pytest here because the sandbox has no writable temp directory, but the code inspection and import-level probes were enough to find the issues above.
+tokens used
+35,986
+REVISE
+
+**REASONS**
+
+- [packages/core/src/disco/core/semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:156): `ReferenceResolution` invariants are incomplete. It allows `reason=AMBIGUOUS` with `ambiguous=False`, and allows non-empty `candidates` on non-ambiguous results. That violates `ambiguous <=> candidates non-empty`.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:271): ordinal resolution is not fully 1-index-safe against the typed inventory. Slides ignore `SlideEntry.ordinal` and use tuple position. Sections sort by ordinal but still index by position, so sparse/out-of-order ordinals resolve incorrectly or return false out-of-range.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:289): tier precedence can mask real cross-tier ambiguity. A phrase matching one field and one section/comment anchor resolves the field before lower-tier candidates are checked. That is deterministic, but not globally ambiguity-rejecting.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:204): ordinal parsing accepts bare `10` and `50` as ordinals. That is fine only if bare cardinal digits are intentional. Also, raw negative detection misses punctuation-bound negatives like `slide:-1`, which parses as `1`.
+
+- [semantic_refs.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/semantic_refs.py:59): locator shapes are mostly protected by `Literal` kind plus `extra="forbid"`, but `IndexedLocator(index=-1)` is constructible. If invalid target shapes must be impossible, add a non-negative constraint.
+
+**REQUIRED_REVISIONS**
+
+- Enforce the full `ReferenceResolution` invariant: `RESOLVED` iff exactly one `resolved` target and no ambiguity/candidates; `AMBIGUOUS` iff `ambiguous=True`, no resolved target, and non-empty candidates; other reasons must have no resolved target and no candidates.
+
+- Resolve slides/sections by explicit `ordinal == requested_ordinal`, or add validators proving inventories are sorted, contiguous, unique, and 1-based.
+
+- Decide and pin cross-tier semantics. For true ambiguity rejection, collect all matching candidates across tiers and return `AMBIGUOUS` when more than one semantic target matches.
+
+- Add tests for inverse invariants, cross-tier collisions, sparse/out-of-order ordinals, duplicate ordinals, `10`/`50` behavior, and punctuation-bound negatives.
+
+I could not run pytest here because the sandbox has no writable temp directory, but the code inspection and import-level probes were enough to find the issues above.
