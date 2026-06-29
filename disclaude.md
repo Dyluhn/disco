@@ -2140,3 +2140,55 @@ screenshots. PROVIDER-LEDGER (P17): record the REAL upstream host (minimaxi.chat
 MiniMax-only/no-OpenRouter proof is honest — source from the relay's RELAY-REQ log or disco's configured upstream.
 MEMORY: save a note that MiniMax coding-plan (sk-cp-) works OpenAI-compat on api.minimaxi.chat/v1 + api.minimax.io
 /v1 (NOT api.minimaxi.com), so the relay needs no Anthropic adapter.
+
+## PR P1B-LIVE-3a — MiniMax relay → repo permanent home + unit test — PLAN
+GOAL: bring /home/dylan/projects/disco-pi-dev/minimax_relay.py into the disclaude repo as its permanent home,
+refactored so the PURE request-transform (model-map + max_tokens clamp) is unit-testable WITHOUT fastapi/network;
+the FastAPI proxy is built lazily. Behavior identical to the proven relay (OpenAI passthrough → MINIMAX_UPSTREAM
+default api.minimaxi.chat/v1, Bearer KEY, SSE). The live run (start it + disco-config + Playwright build) is 3b.
+FILE: harness/product_build/minimax_relay.py + harness/build_soak/tests/test_minimax_relay.py.
+DESIGN: module-level pure config + functions (NO fastapi import at top): UPSTREAM/DEFAULT_MODEL/MODEL_MAP/
+MAX_TOKENS_CAP from env (MINIMAX_UPSTREAM default https://api.minimaxi.chat/v1, MINIMAX_MODEL default MiniMax-M3,
+MODEL_MAP maps minimax-m3/minimax/minimax-m3→MiniMax-M3 + m2 variants→MiniMax-M2, cap 131072). transform_request
+(body:dict, *, default_model, model_map, cap)->dict: returns a NEW dict (no input mutation) with model mapped +
+max_tokens clamped (absent / non-int / bool / >cap → cap; a valid int ≤cap kept). create_app(): lazily imports
+fastapi/httpx, builds the /v1/models + /v1/{path} proxy using transform_request + Accept-Encoding: identity +
+RELAY-REQ/RESP logging that NOW also logs the UPSTREAM HOST (for the P17 provider-ledger honesty — ledger must
+show minimaxi.chat not localhost). __main__ runs uvicorn. KEY from os.environ["MINIMAX_API_KEY"] (env only; NEVER
+in repo; the module has NO hardcoded token).
+TESTS (pure, no fastapi/network): transform_request maps minimax-m3→MiniMax-M3 + unknown→default; clamps absent/
+too-big/bool/negative max_tokens→cap; KEEPS a valid small max_tokens; does NOT mutate the input dict; passes
+through other fields (messages/tools/stream) unchanged. SCOPE: relay module + pure-transform test only; the live
+run + ledger-upstream sourcing is 3b. PARALLEL: none.
+
+### PR P1B-LIVE-3a — PLAN REVISION 1 (post gpt-5.5: 5 refinements)
+1. PURE seam: transform_request + the config constants + upstream_host(url) import with NO fastapi/httpx/network/
+   secret. create_app() (lazy) imports fastapi/httpx AND reads MINIMAX_API_KEY (env only; fail-fast if unset) —
+   so pure tests/imports never need the secret.
+2. CLAMP tightened: max_tokens is kept ONLY if type(mt) is int (rejects bool) AND 0 < mt <= cap(131072); else
+   (absent / non-int / bool / <=0 / >cap) → cap. No input mutation (return a new dict).
+3. STRUCTURED relay log: a JSONL record {"host": upstream_host(url), "url": url, "model": mapped_model, "ts": ...}
+   (the provider_ledger parser reads JSON host/url) — so 3b can source the provider-call-ledger from it showing
+   the REAL minimaxi.chat host. Pure upstream_host(url) extracts the host. Actual ledger population + after-terminal
+   correlation = 3b.
+4. DEFAULT MODEL = MiniMax-M3 (INTENTIONAL change from the source relay's M2 default, for P17) — pick + test it;
+   not "identical behavior", an intentional default.
+5. Refactor REMOVES the source relay's top-level env-read + in-place body mutation (transform_request is pure).
+TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-M3 default); clamp matrix (absent/0/
+-5/True/9_999_999→131072; 2048 kept); no-mutation of input; passthrough of messages/tools/stream; upstream_host
+("https://api.minimaxi.chat/v1/chat/completions")=="api.minimaxi.chat".
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3a ACCEPTED
+- PR P1B-LIVE-3a (MiniMax relay → repo permanent home + unit test) COMPLETE. Plan gpt-5.5 REVISE(5: pure/lazy seam,
+  clamp=positive-non-bool-int, key-in-create_app, structured JSONL log, intentional M3 default)→APPROVE. Code
+  gpt-5.5 REVISE(3: key-check-before-imports, package __init__ pulled disco breaking import-purity, SSE returned
+  200 regardless of upstream status)→fix→APPROVE.
+- Files: harness/product_build/minimax_relay.py (pure transform_request/map_model/_clamp/upstream_host/relay_log_
+  record — fastapi/secret-free; lazy create_app reads MINIMAX_API_KEY first then imports; SSE preserves upstream
+  status + closes client; JSONL {host,url,model,ts} log for the P17 ledger) + __init__.py made LAZY (__getattr__ +
+  TYPE_CHECKING) so the relay imports without disco + test_minimax_relay.py (7, incl subprocess import-purity proof).
+- NEXT: P1B-LIVE-3b — THE LIVE RUN. Start the relay (MINIMAX_API_KEY=sk-cp- from opencode auth, env ONLY;
+  MINIMAX_MODEL=MiniMax-M3; UPSTREAM api.minimaxi.chat/v1; port 8080) → disco-config.json driver-minimax →
+  {base_url http://localhost:8080/v1, model_id minimax-m3} → bring up disclaude stack → ONE real Playwright build of
+  STATIC_SITE_SMOKE → observations→buildProductEvidence→write_dossier→classify_dossier PASS + SCREENSHOTS to Dylan.
+  Provider-ledger sourced from the relay JSONL log (real minimaxi.chat host). Product Harness NOT complete till then.
