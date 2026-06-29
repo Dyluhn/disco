@@ -82,6 +82,27 @@ def test_deck_no_longer_claims_an_unresolvable_starter() -> None:
     assert c.artifact.required_files == ("deck.authored.json",)  # the real AuthoredDeck source
 
 
+def test_starter_contracts_bootstrap_with_scaffold_starter() -> None:
+    # gpt-5.5 fix: a contract that declares a file-map starter_kit must ROUTE to the
+    # materializer (scaffold_starter) in its bootstrap pack — not just name the starter.
+    reg = BuildContractRegistry.default()
+    sreg = StarterKitRegistry.default()
+    for kind in (ContractKind.STATIC_SITE, ContractKind.INTERACTIVE_PROTOTYPE):
+        c = reg.get(kind)
+        assert c is not None
+        assert sreg.get(c.artifact.starter_kit) is not None  # type: ignore[arg-type]
+        assert "scaffold_starter" in c.bootstrap.tools, kind
+
+
+def test_deck_pack_pins_canonical_filename() -> None:
+    # the deck contract requires the exact deck.authored.json → the pack must pin the base
+    from disco.core.workflows import PromptPackRegistry
+
+    pack = PromptPackRegistry().require("build_deck")
+    assert 'filename="deck"' in pack.raw
+    assert "deck.authored.json" in pack.raw
+
+
 # --- brand projection ---------------------------------------------------------
 def test_brand_names_come_from_the_real_theme_registry() -> None:
     assert {"disco", "neutral"} <= BRAND_NAMES  # projects the existing core.brand themes

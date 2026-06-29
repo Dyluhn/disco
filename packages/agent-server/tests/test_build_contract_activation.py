@@ -65,6 +65,17 @@ def test_set_build_kind_none_resets_to_custom() -> None:
     assert rt._build_trackers["c4"][0].kind is ContractKind.CUSTOM
 
 
+def test_starter_kit_for_resolves_the_contract_starter() -> None:
+    rt = _runtime()
+    assert rt._starter_kit_for("none") is None  # no declared build → no starter
+    rt.set_build_kind("site", "static.site")
+    assert rt._starter_kit_for("site") == "app_shell"
+    rt.set_build_kind("app", "appkit.leadgen")
+    assert rt._starter_kit_for("app") == "lead_form"
+    rt.set_build_kind("deck", "deck")
+    assert rt._starter_kit_for("deck") is None  # deck has no file-map starter
+
+
 def test_finalizer_alias_only_for_non_custom_declared_kind() -> None:
     rt = _runtime()
     # no declared kind → no alias (a plain build)

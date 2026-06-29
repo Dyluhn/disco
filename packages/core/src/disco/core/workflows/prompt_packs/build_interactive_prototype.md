@@ -11,13 +11,14 @@ self-contained page with inline styles + JS at the end of `<body>` so it paints
 reliably; state lives in the page (and persists where the flow needs it).
 
 ## Workflow steps
-1. Scaffold `index.html` from the `app_shell` starter (file_write).
+1. Scaffold the `app_shell` starter with scaffold_starter, then build out `index.html` (file_edit/file_write).
 2. Build the stateful interactions: multi-step flow, validation, persistence.
 3. preview_start, then exercise EACH interactive path and confirm it works.
 4. ready_for_prototype_verification.
 
 ## Allowed tools
-file_write (scaffold), file_edit / file_replace_lines (targeted edits), preview_* (the
+scaffold_starter (materialize the app_shell starter frame), file_write (scaffold), file_edit /
+file_replace_lines (targeted edits), preview_* (the
 platform-owned preview), ready_for_prototype_verification.
 
 ## Forbidden tools

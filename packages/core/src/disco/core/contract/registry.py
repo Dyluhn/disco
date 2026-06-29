@@ -30,7 +30,8 @@ def _static_site() -> BuildContract:
         artifact=ArtifactContract(
             kind=ContractKind.STATIC_SITE, required_files=("index.html",), starter_kit="app_shell"
         ),
-        bootstrap=ToolPack(name="static.site.bootstrap", tools=("file_write", "preview_start")),
+        # P7: scaffold_starter materializes the app_shell starter; file_write builds it out.
+        bootstrap=ToolPack(name="static.site.bootstrap", tools=("scaffold_starter", "file_write", "preview_start")),
         edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",)),
         verify=VerificationContract(finalizer="ready_for_static_site_verification"),
         export=ExportContract(name="static_standalone", pipeline=("preflight", "bundle", "validate", "deliver")),
@@ -107,7 +108,8 @@ def _interactive_prototype() -> BuildContract:
         artifact=ArtifactContract(
             kind=ContractKind.INTERACTIVE_PROTOTYPE, required_files=("index.html",), starter_kit="app_shell"
         ),
-        bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=("file_write", "preview_start")),
+        # P7: scaffold_starter materializes the app_shell starter; file_write builds it out.
+        bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=("scaffold_starter", "file_write", "preview_start")),
         edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
         verify=VerificationContract(finalizer="ready_for_prototype_verification"),
         prompt_pack="build_interactive_prototype",

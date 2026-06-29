@@ -1388,3 +1388,59 @@ accepted; fix any REVISE, then continue P8. <<<
 Files: core/kits/{starter,brand,__init__}.py, tools/builtin/scaffold_starter.py, ToolContext.starter_kit +
 executor + runtime wiring, appkit.py app_create→lead_form single source, deck contract+pack reconcile
 (deck.authored.json), AGENT_TOOLS snapshot, tests (test_kits.py, test_scaffold_starter.py).
+
+---
+
+## HEARTBEAT AUDIT — 2026-06-29T15:00Z (campaign compliance-repair pass)
+
+Triggered by Dylan's compliance directive on resume after the 2026-06-28 workstation GPU leak that
+wedged the desktop and ended the autonomous campaign session.
+
+- **Bootstrap:** 2026-06-28T02:55Z. **Cadence:** 10 min (`.claude/heartbeat.py`).
+- **Expected heartbeats** (bootstrap → 2026-06-29T15:00Z, ~2164 min): **216**.
+- **Observed `heartbeat.log` reminders:** **102** (first 02:56Z, last **19:46Z on 2026-06-28**).
+- **Observed ledger sections in `disclaude.md` (live window):** 145 `##`/`###` sections (43 PR/phase
+  milestones). During the live window the append discipline was MET — more sections than heartbeats.
+- **`heartbeat.log` status:** stopped 2026-06-28T19:46Z; process (pid 163986) **DEAD**, never restarted.
+- **Missed heartbeats:** **~114, ALL after 19:46Z on 2026-06-28** — zero fired since.
+- **Missed-heartbeat explanation (no hand-waving):** at ~19:46Z 2026-06-28 the workstation's amdgpu VRAM
+  leak wedged the display (kwin gfx-ring timeouts) and the box was rebooted. That killed the heartbeat
+  process (pid 163986) AND ended the campaign session. The operator's next session was spent diagnosing
+  + fixing the GPU/VRAM crisis (root cause: a 27B LLM sharing the display card overcommitted VRAM under
+  desktop load; fixed via PCI-pinned card placement + a runtime VRAM guard), NOT the campaign. So the
+  ~19h gap (19:46Z 6/28 → 15:00Z 6/29) is fully accounted for: GPU-crisis recovery, externally
+  documented, not silent drift.
+- **Corrective procedure (executing now):** (1) restart `.claude/heartbeat.py`; (2) resume STRICT
+  per-heartbeat ledger — every heartbeat appends a real section here; (3) re-run the Codex CODE review
+  of P7 HEAD (it was committed gate-pending pre-crash, review interrupted mid-run) before P7 is treated
+  as accepted, fixing any REVISE; (4) re-run the test gate after P7 APPROVE; (5) no phase advance to P8
+  until 1–4 are done.
+
+## P1 STATUS CLARIFICATION — 2026-06-29 (renamed for honesty; supersedes prior "P1 STATUS")
+
+P1 (Product Harness / Oracles) is split to end the "is P1 done?" ambiguity:
+
+- **P1A — Headless oracle/policy layer: COMPLETE.** HARN-1a + HARN-2 + HARN-3: provider ledger + 8
+  browser oracles + promotion policy + validated evidence writer, all Codex-APPROVED and green.
+- **P1B — Browser product harness: PENDING.** HARN-1b — the LIVE Playwright spec that DRIVES the real
+  UI and writes the browser-evidence streams. NOT done.
+- **HARD GATE:** "Product Harness" is **NOT complete** and must not be marked complete until real
+  **Playwright / UI / WebSocket / PreviewPane** evidence exists. Until then: P1A done, P1B open.
+  (Per the campaign's own release rule, P2+ promotion-to-mainline still waits on P1B + the P17 soak;
+  P2–P7 build work proceeded correctly as build-order, not promotion.)
+
+### PR P7-KITS — CODEX CODE REVIEW (re-run on resume, 2026-06-29) → REVISE
+Codex(gpt-5.5, read-only, xhigh) re-reviewed HEAD e3d03d1e (the pre-crash interrupted review redone).
+VERDICT: **REVISE** (5 required). Approved: lead_form_appspec + app_create(sections=None) byte-equiv;
+brand kit clean projection. Required fixes:
+1. scaffold_starter is a FALSE AFFORDANCE — registered but ContractScopeGuard denies it (mutating, not in
+   any bootstrap pack). Wire it into the bootstrap path for contracts with artifact.starter_kit.
+2. build_static_site.md + build_interactive_prototype.md still instruct file_write for app_shell — must
+   call scaffold_starter (only it resolves the starter registry).
+3. scaffold_starter._exists() treats ANY read_file error as missing → clobber risk; use sandbox.file_exists().
+4. deck pack: slides_generate writes {filename}.authored.json but contract requires exact deck.authored.json
+   → pin basename "deck" (or relax contract).
+5. Add executor-level tests (DefaultToolExecutor + ContractScopeGuard) proving scaffold_starter runs under
+   the active starter contract + advances phase.
+NOTE: Codex couldn't run tests (openpyxl missing in registry import) — install before the gate.
+P7 NOT accepted. Fixing now, then retest + re-review before acceptance. P8 untouched.

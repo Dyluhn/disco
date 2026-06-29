@@ -13,13 +13,14 @@ page that still technically "exists". Split into separate files only for a genui
 large or multi-page site.
 
 ## Workflow steps
-1. Scaffold `index.html` from the `app_shell` starter (file_write).
+1. Scaffold the `app_shell` starter with scaffold_starter, then build out `index.html` (file_edit/file_write).
 2. Build the page content + inline styles.
 3. preview_start, then confirm it actually RENDERS visible, styled content.
 4. ready_for_static_site_verification.
 
 ## Allowed tools
-file_write (scaffold), file_edit / file_replace_lines (targeted edits), preview_start /
+scaffold_starter (materialize the app_shell starter frame), file_write (scaffold), file_edit /
+file_replace_lines (targeted edits), preview_start /
 preview_status / preview_logs / preview_stop, ready_for_static_site_verification.
 
 ## Forbidden tools

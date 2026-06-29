@@ -57,6 +57,44 @@ async def test_unknown_starter_is_structured_error() -> None:
     assert not out.success and out.error == "unknown_starter"
 
 
+@pytest.mark.asyncio
+async def test_uses_file_exists_not_read_so_a_read_error_never_clobbers() -> None:
+    # gpt-5.5 fix: a transient read_file failure must NOT be read as "missing" and clobber.
+    class ReadFailsButExists(FakeSandboxInstance):
+        async def read_file(self, path):  # type: ignore[override]
+            raise RuntimeError("transient read failure")
+
+    sbx = ReadFailsButExists()
+    sbx._fs["index.html"] = b"<h1>real work</h1>"  # exists; file_exists() will report True
+    out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="X"), _ctx(sbx, "app_shell"))
+    assert out.success
+    assert sbx._fs["index.html"] == b"<h1>real work</h1>"  # NOT clobbered despite read error
+    assert out.structured is not None and "index.html" in out.structured["skipped"]
+
+
+@pytest.mark.asyncio
+async def test_executor_threads_active_contract_starter_to_ctx() -> None:
+    # PROVE the active-contract binding end-to-end: the executor stamps its starter_kit
+    # onto every ToolContext, so scaffold_starter materializes THIS build's starter.
+    from disco.core.llm import ModelExecutionPolicy
+    from disco.tools import DefaultToolExecutor, agent_scope, build_default_registry
+    from tool_fakes import call
+
+    sbx = FakeSandboxInstance()
+    ex = DefaultToolExecutor(
+        build_default_registry(),
+        agent_scope(model_policy=ModelExecutionPolicy.standard()),
+        sandbox=sbx,
+        starter_kit="app_shell",  # the runtime threads the contract's starter here
+    )
+    res = await ex.execute(call("scaffold_starter", title="Acme"))
+    assert res.success and "index.html" in sbx._fs  # ctx.starter_kit reached the tool
+    # with no starter bound, the tool reports no_starter (not a silent success)
+    ex2 = DefaultToolExecutor(build_default_registry(), agent_scope(model_policy=ModelExecutionPolicy.standard()), sandbox=FakeSandboxInstance())
+    res2 = await ex2.execute(call("scaffold_starter", title="Acme"))
+    assert not res2.success and res2.error == "no_starter"
+
+
 def test_registered_and_in_scopes() -> None:
     from disco.core.llm import ModelExecutionPolicy
     from disco.tools import agent_scope, build_default_registry

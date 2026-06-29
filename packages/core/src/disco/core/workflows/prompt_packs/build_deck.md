@@ -10,7 +10,8 @@ slides_generate writes and deck_patch edits). Prefer static slide markup with la
 readable type; slide titles should tell the story; speaker notes travel with their slide.
 
 ## Workflow steps
-1. Generate the deck with slides_generate (it authors the AuthoredDeck source).
+1. Generate the deck with slides_generate using `filename="deck"` (so it authors the
+   canonical `deck.authored.json` source the contract requires).
 2. Author slides: one idea per slide, readable type, notes per slide.
 3. Targeted edits via deck_patch (RFC-6902) — never regenerate the whole deck for a
    single-slide change.

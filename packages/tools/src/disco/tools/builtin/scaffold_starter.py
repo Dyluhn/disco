@@ -56,7 +56,9 @@ class ScaffoldStarterTool:
         written: list[str] = []
         skipped: list[str] = []
         for path, text in files.items():
-            if await self._exists(ctx, path):
+            # use the sandbox's own existence check — NOT a read_file try/except, which
+            # would treat a transient read error as "missing" and clobber real work.
+            if await ctx.sandbox.file_exists(path):
                 skipped.append(path)  # never clobber existing work
                 continue
             await ctx.sandbox.write_file(path, text.encode("utf-8"))
@@ -68,12 +70,3 @@ class ScaffoldStarterTool:
             success=True, content=msg,
             structured={"starter": starter_id, "written": written, "skipped": skipped},
         )
-
-    @staticmethod
-    async def _exists(ctx: ToolContext, path: str) -> bool:
-        assert ctx.sandbox is not None
-        try:
-            await ctx.sandbox.read_file(path)
-            return True
-        except Exception:
-            return False
