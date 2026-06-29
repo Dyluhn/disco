@@ -1,0 +1,127 @@
+"""P1B-LIVE-2: the capture→dossier→classify pipeline proven with SYNTHETIC captured fixtures
+(no live model). A green dossier classifies PASS; a broken slice / forbidden provider / missing
+required slice / malformed capture all fail correctly — the live run feeds the same writer."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+
+import pytest
+
+from harness.build_soak import failure_codes as fc
+from harness.product_build import STATIC_SITE_SMOKE, classify_dossier, write_dossier
+
+from _eventlog import clean_smoke_log
+
+# --- TEST-ONLY green fixtures (never a production passing default) -------------
+_MINIMAX_LEDGER = [{"host": "api.minimaxi.com", "model": "MiniMax-M3", "tokens": 128}]
+
+
+def _green_pe() -> dict:
+    return {
+        "browser_ws": {"connections": 1},
+        "lifecycle": {"terminal": "FINISHED", "statuses": ["RUNNING", "FINISHED"]},
+        "sidecar": {"stopped_at_terminal": True, "provider_calls_after_terminal": 0},
+        "preview": {"owner": "platform", "manual_port": False},
+        "shown": {"artifact_shown": True, "preview_shown": True},
+        "verification": {"ready_for_verification_called": True, "passed": True},
+        "export": {"requested": False},
+        "cleanup": {"orphans": 0, "workspace_released": True},
+    }
+
+
+def _write(tmp_path, *, pe=None, ledger=None, artifacts=None):
+    return write_dossier(
+        tmp_path,
+        product_evidence=pe if pe is not None else _green_pe(),
+        provider_records=_MINIMAX_LEDGER if ledger is None else ledger,
+        events=clean_smoke_log(),
+        artifacts=artifacts,
+        run_id="r1",
+        scenario_id="static_site_smoke",
+    )
+
+
+# --- green path ---------------------------------------------------------------
+def test_green_dossier_classifies_pass(tmp_path) -> None:
+    _write(tmp_path)
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "PASS", c
+
+
+def test_dossier_has_locked_evidence_files(tmp_path) -> None:
+    _write(tmp_path, artifacts={"timeline.md": "# run\nopened build\n"})
+    for f in ("events.jsonl", "product-evidence.json", "provider-call-ledger.jsonl", "manifest.json"):
+        assert (tmp_path / f).is_file(), f
+    assert (tmp_path / "artifacts" / "timeline.md").is_file()  # artifacts namespaced under artifacts/
+
+
+def test_artifact_cannot_clobber_a_core_dossier_file(tmp_path) -> None:
+    # an artifact named like a core file must NOT overwrite the strict-validated one
+    _write(tmp_path, artifacts={"product-evidence.json": "EVIL", "events.jsonl": "EVIL"})
+    import json as _json
+
+    core = _json.loads((tmp_path / "product-evidence.json").read_text())
+    assert core["browser_ws"]["connections"] == 1  # the real evidence, not "EVIL"
+    assert (tmp_path / "artifacts" / "product-evidence.json").read_text() == "EVIL"
+    # the run still classifies normally (hash lock intact)
+    assert classify_dossier(tmp_path, STATIC_SITE_SMOKE)["status"] == "PASS"
+
+
+# --- broken slices / provider -------------------------------------------------
+def test_broken_browser_ws_fails(tmp_path) -> None:
+    pe = _green_pe()
+    pe["browser_ws"]["connections"] = 0
+    _write(tmp_path, pe=pe)
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "FAIL" and c["code"] == "BROWSER_WS_NOT_CONNECTED", c
+
+
+def test_openrouter_provider_record_fails(tmp_path) -> None:
+    _write(tmp_path, ledger=[{"host": "openrouter.ai/api", "model": "x"}])
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "FAIL", c  # forbidden provider host
+
+
+def test_missing_provider_ledger_is_invalid_run(tmp_path) -> None:
+    _write(tmp_path, ledger=[])  # require_ledger=True → no provider evidence
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "INVALID_RUN", c
+
+
+# --- product-harness completeness (no PASS via SKIP) --------------------------
+def test_missing_required_slice_is_invalid_not_pass(tmp_path) -> None:
+    pe = _green_pe()
+    del pe["cleanup"]  # a required slice — its oracle would SKIP, but the run is incomplete
+    _write(tmp_path, pe=pe)
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "INVALID_RUN" and c["code"] == fc.MISSING_REQUIRED_EVIDENCE
+    assert "cleanup" in c["facts"]["missing_slices"]
+
+
+def test_no_product_evidence_is_invalid_run(tmp_path) -> None:
+    # an empty folder (no dossier) must not classify PASS for a product scenario
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "INVALID_RUN" and c["code"] == fc.MISSING_REQUIRED_EVIDENCE
+
+
+# --- write_dossier guards -----------------------------------------------------
+def test_malformed_capture_raises_before_writing(tmp_path) -> None:
+    pe = _green_pe()
+    pe["export"] = {"requested": True, "download_present": True, "download_bytes": True}  # bool, not int
+    with pytest.raises(ValueError):
+        _write(tmp_path, pe=pe)
+    assert not (tmp_path / "product-evidence.json").exists()  # nothing written on preflight failure
+
+
+def test_unsafe_artifact_path_rejected(tmp_path) -> None:
+    for bad in ("../escape.txt", "/etc/passwd"):
+        with pytest.raises(ValueError):
+            _write(tmp_path / bad.replace("/", "_"), artifacts={bad: "x"})
+
+
+def test_requires_export_scenario_rejects_unrequested(tmp_path) -> None:
+    export_scn = replace(STATIC_SITE_SMOKE, id="export_smoke", requires_export=True)
+    _write(tmp_path)  # green pe has export.requested=False
+    c = classify_dossier(tmp_path, export_scn)
+    assert c["status"] == "INVALID_RUN" and c["code"] == fc.MISSING_REQUIRED_EVIDENCE

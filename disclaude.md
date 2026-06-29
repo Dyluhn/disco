@@ -2048,3 +2048,65 @@ test (TS keys/fields == corrected _SLICE_FIELDS). Live Playwright/scenario_runne
 - NEXT: P1B-LIVE-2 (evidence_writer + scenario_runner deriving evidence from captured artifacts) → P1B-LIVE-3
   (playwright_runner.ts + build-artifact-runtime-smoke.spec.ts + the FLAGGED live run; driver down → live PENDING).
   Product Harness STILL NOT complete (no real browser run yet).
+
+## PR P1B-LIVE-2 — scenario_runner + evidence dossier writer — PLAN
+GOAL: the deterministic capture→dossier→classify pipeline. Given CAPTURED browser observations (+ provider
+records + the build event log), assemble a run folder that the EXISTING classify_run_folder adjudicates — proven
+green→PASS + broken-slice→FAIL with synthetic captured fixtures (no live model needed). The live Playwright
+capture feeds REAL observations into the same writer in P1B-LIVE-3.
+FILES: harness/product_build/__init__.py + evidence_writer.py + scenario_runner.py + harness/build_soak/tests/
+test_product_build_dossier.py.
+evidence_writer.write_dossier(run_dir, *, observations:dict, provider_records:list[dict], events:list[dict],
+artifacts:dict[str,str]|None=None) -> Path: builds product_evidence from observations (the productEvidence slice
+shape), writes product-evidence.json via the EXISTING write_product_evidence(strict=True) (raises on malformed →
+no untrusted dossier), provider-call-ledger.jsonl via write_provider_ledger, events.jsonl, + any raw §6.4
+artifacts (timeline.md/ui-actions.jsonl/etc.) verbatim. Returns run_dir. NO fabricated defaults — only what was
+captured.
+scenario_runner: ProductScenario(frozen: id, build_prompt, kind, requires_export:bool) + STATIC_SITE_SMOKE (the
+§6.8 minimal scenario, assertions={event_chain:{require_plan_before_execution:True}}) + classify_dossier(run_dir,
+scenario)->dict wrapping classify_run_folder with the scenario assertions.
+TESTS: write_dossier(green observations + MiniMax provider record + clean_smoke_log events) → folder has product-
+evidence.json (validates) + provider-call-ledger.jsonl + events.jsonl; classify_dossier → status PASS (all 8
+browser oracles .passed + provider-ledger MiniMax-only OK); a broken browser_ws (connections 0) → classify FAIL
+BROWSER_WS_NOT_CONNECTED; an OpenRouter provider record → classify FAIL (provider-ledger violation); malformed
+observation (bool download_bytes) → write_dossier raises (strict). DRIVER: ~/.config/disco/secrets.json exists
+(encrypted) — availability check deferred to P1B-LIVE-3's flagged live run. SCOPE: writer + scenario + classify
+wrapper + tests; live capture = P1B-LIVE-3.
+
+### PR P1B-LIVE-2 — PLAN REVISION 1 (post gpt-5.5: 5 fixes — SKIP-default oracles won't auto-prove)
+1. ProductScenario MATERIALIZES the full classifier scenario dict: assertions.event_chain.require_plan_before_
+   execution=True + assertions.provider {require_host_substr:"minimax", forbid_host_substr:["openrouter"],
+   require_ledger:true, model:"MiniMax-M3"} + required_slices:tuple (the product slices this scenario REQUIRES).
+   STATIC_SITE_SMOKE.required_slices = (browser_ws, lifecycle, preview, shown, verification, cleanup); export +
+   sidecar optional (requires_export=False; disco kernel = no sidecar → those oracles SKIP legitimately).
+2. classify_dossier(run_dir, scenario): FIRST enforce product-harness completeness — every required_slice must be
+   PRESENT in product-evidence.json, else return INVALID_RUN/MISSING_REQUIRED_EVIDENCE (NOT a PASS via oracle
+   SKIP). If requires_export, require export.requested=True present. THEN delegate to classify_run_folder(run_dir,
+   scenario.to_classifier_dict()). Do NOT claim "all 8 oracles passed" — assert the REQUIRED oracles passed +
+   optional SKIP.
+3. NEGATIVE tests: omit a required slice (browser_ws/cleanup) → INVALID_RUN not PASS; missing/empty provider
+   ledger under the provider-required scenario → MISSING_REQUIRED_EVIDENCE→INVALID_RUN; an OpenRouter provider
+   record under the provider scenario → FAIL (forbidden host); malformed obs (bool download_bytes) → write_dossier
+   raises.
+4. green fixtures TEST-ONLY; production write_dossier only serializes SUPPLIED captured observations (no passing
+   defaults).
+5. write_dossier: PREFLIGHT validate_product_evidence BEFORE any write (raise → no partial dossier); REJECT unsafe
+   artifact relpaths (no abs / ".."); write events.jsonl + product-evidence.json + provider-call-ledger.jsonl +
+   raw artifacts, THEN compute_evidence_hashes + write_manifest (EvidenceManifest run_id/scenario_id/mode="ui"/
+   evidence_files) so classify_run_folder loads via the manifest + the evidence lock holds.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-2 ACCEPTED
+- PR P1B-LIVE-2 (scenario_runner + evidence dossier writer) COMPLETE. Plan gpt-5.5 REVISE(5: SKIP-default oracles
+  won't auto-prove → materialize full scenario + provider enforcement + required-slice completeness + manifest
+  lock)→APPROVE. Code gpt-5.5 (1st review TIMED OUT, re-ran) REVISE(2: artifact could clobber a core dossier file +
+  manifest-label collision broke the hash lock)→fix(namespace artifacts/ + artifact: labels)→APPROVE.
+- Files: harness/product_build/{__init__,evidence_writer,scenario_runner}.py + test_product_build_dossier.py (11).
+  write_dossier: preflight-validate→write events/product-evidence/provider-ledger/artifacts(under artifacts/)→
+  EvidenceManifest hash-lock; rejects unsafe paths + can't clobber core files. ProductScenario materializes the
+  classifier dict (event_chain + MiniMax-only provider); classify_dossier enforces required slices present (else
+  INVALID_RUN, not PASS-via-SKIP) then delegates to the EXISTING classify_run_folder. Proven via the REAL
+  classifier: green→PASS, broken/forbidden/missing→FAIL/INVALID_RUN, malformed→raise.
+- NEXT: P1B-LIVE-3 (playwright_runner.ts + frontend e2e-live/build-artifact-runtime-smoke.spec.ts capturing REAL
+  observations→write_dossier; the FLAGGED live run). Scope driver availability first (~/.config/disco/secrets.json
+  encrypted — needs DISCO_SECRET_KEY); if no driver, live run stays pending + surfaced to Dylan, Product Harness
+  NOT complete.
