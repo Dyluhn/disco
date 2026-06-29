@@ -1917,3 +1917,57 @@ DeepSeek=invalid-value fixtures. SCOPE: the tool wiring + tests only (UI=P9D; tw
   corrupt_tweakspec>unknown_tweak>invalid_tweak_value; structured echoes {tweak,value,affects}; dead _coerce_scalar
   removed. Tests migrated (appspec-unchanged-on-error proven) + P7 byte-equiv + AGENT_TOOLS snapshot intact.
 - NEXT: P9D (TweakPanel UI — frontend TweakPanel.tsx + AppCard.tsx + vitest; agy frontend scout) → then P1B-LIVE.
+
+## PR P9D — TweakPanel UI — PLAN
+CONTEXT (agy scout): no UI kit — native HTML inputs + Tailwind design tokens (surface-1/border-hairline/accent/
+font-ui/gap-hair/rounded-control), cn from @/lib/cn, decoupled callback-prop pattern (parent issues the wire
+command), tests @testing-library/react + user-event/fireEvent + vitest + jest-dom. TS has NO TweakSpec import →
+field defs come via PROPS.
+FILES: frontend/src/components/build/TweakPanel.tsx (+ .test.tsx) + AppCard.tsx.
+TYPES (in TweakPanel.tsx, exported): TweakFieldView = { key; label; editor: "boolean"|"enum"|"int"|"float"|
+"color"|"palette"|"text"; options?: string[]; colors?: string[]; min?: number; max?: number; step?: number } —
+the UI-relevant subset mirroring core TweakField (a runtime API/props mirror, like discoSemanticAttrs). TweakValue
+= string|number|boolean.
+TweakPanel Props: { fields: TweakFieldView[]; values: Record<string,TweakValue>; onTweak: (key, value) => void }.
+EDITOR→CONTROL (semantic per editor — NO freeform soup; an unknown editor renders a disabled "unsupported" note,
+NEVER a fallback text box):
+- boolean → <input type=checkbox> (checked from values) → onTweak(key, checked)
+- enum → <select> of options (value from values) → onTweak(key, option)
+- int/float → <input type=range min/max/step> (value from values) → onTweak(key, Number)
+- palette → row of curated swatch <button>s (one per colors[]) → onTweak(key, color); active swatch ring
+- color → <input type=color> (bounded native picker, NOT a hex text field) → onTweak(key, value)
+- text → ONE bounded <input type=text> (a defined grounded text tweak; not generic soup) → onTweak(key, value)
+Each control wrapped in a labeled row (field.label). onTweak is the contract; the PARENT wires it to app_set_tweak
+(the live mount into the build surface + real call = P1B-LIVE). AppCard.tsx = a thin presentational card (app
+title + the mounted TweakPanel) — real, minimal, not a stub.
+TESTS (TweakPanel.test.tsx, jsdom): render boolean+enum+slider+palette+color+text fields; each control present by
+role; toggling boolean→onTweak(key,bool); enum select→onTweak(key,opt); slider change→onTweak(key,number); swatch
+click→onTweak(key,color); color change→onTweak(key,hex); text type→onTweak(key,str); NO stray textbox for a
+boolean/enum/palette (no-soup); values reflected (checkbox checked, select value, slider value); unknown editor →
+disabled note, no input. + an AppCard render test mounting TweakPanel. tsc 0 errors.
+PARALLEL: agy(Gemini) scout DONE (patterns captured). SCOPE: TweakPanel + AppCard + tests; live wiring=P1B-LIVE.
+
+### PR P9D — PLAN REVISION 1 (post gpt-5.5: mapping/seam/AppCard approved; 4 fixes)
+1. TEXT bounded: <input type="text" maxLength={field.maxLength ?? 120}> — add maxLength?:number to TweakFieldView;
+   test asserts NO textarea/contenteditable/freeform fallback anywhere.
+2. FAIL CLOSED on MALFORMED known editors too (not only unknown): enum w/o options, palette w/o colors, int/float
+   w/o min|max|step → render a disabled "unsupported" note + NO input control. (boolean/text always renderable.)
+3. CONTROL METADATA: each row carries data-disco-control="build.tweak.<key>" + data-tweak-key="<key>" for
+   automation — NOT data-disco-field/section/etc (those are P8C rendered-APP target attrs; never echo affects as
+   semantic attrs).
+4. A11Y + TESTS: color queried by accessible LABEL (jsdom color role unreliable); palette = a labeled group
+   (role/aria-label) of swatch <button>s each with aria-label + aria-pressed selected state; assert value
+   reflection for checkbox/select/range/color/text + selected swatch; assert "no soup" via DOM selectors — for a
+   boolean/enum/palette/color/unknown row there is NO extra input[type=text]/textarea/[contenteditable].
+
+### HEARTBEAT 2026-06-29 — P9D ACCEPTED → P9 COMPLETE
+- PR P9D (TweakPanel UI) COMPLETE. Plan gpt-5.5 REVISE(4: bounded text+maxLength, fail-closed on malformed KNOWN
+  editors, data-disco-control not P8C attrs, a11y aria-pressed + DOM no-soup)→APPROVE. Code gpt-5.5 REVISE(2:
+  isMalformed only caught undefined not runtime null bounds; missing reflection/metadata/AppCard tests)→fix→APPROVE.
+- Files: frontend/src/components/build/TweakPanel.tsx (one semantic control per editor; native inputs; fail-closed
+  on malformed-known + unknown editors via notFiniteNum guard; data-disco-control/data-tweak-key; aria-pressed
+  swatches) + AppCard.tsx (real pass-through host + empty-state) + TweakPanel.test.tsx (17 vitest). tsc 0.
+- ===== P9 COMPLETE (A TweakSpec schema + B tweaks_io + C typed app_set_tweak+seed + D TweakPanel UI), all Codex-
+  gated + pushed. =====
+- NEXT: P1B-LIVE — the minimal BROWSER product harness (pulled forward; the gate before P10). Requires the running
+  frontend+agent-server stack + Playwright; produces the product-evidence dossier the P1A/P8D oracles consume.
