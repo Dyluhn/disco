@@ -1,0 +1,2011 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f153c-5713-75d0-ba2a-e461db163c90
+--------
+user
+# Codex CODE review — P9A TweakSpec schema — IMPLEMENTED (plan APPROVED)
+
+Inspect packages/core/src/disco/core/tweaks.py + packages/core/tests/test_tweaks.py (19 tests).
+
+Implements the approved design: TweakEditor(str,Enum: text/color/int/float/boolean/enum/palette, lowercase, NO
+null). TweakField (frozen, extra=forbid): key (dotted-path ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$), label, editor,
+affects (lexical paths, NOT validated vs AppSpec — P9B/C), controls_behavior, default, + per-editor options
+(enum)/colors (palette)/min/max/step (numeric). Validators: cross-editor constraints rejected; GROUNDED invariant
+(controls_behavior or affects) for ALL + TEXT/COLOR stronger (behavior or affects>=2); enum non-empty+unique
+options; palette 2..5 unique canonical swatches; numeric min<=max, step>0, integral INT, (max-min) step-aligned
+EXACTLY via Decimal (no float modulo), bool min/max/step rejected in a mode=before validator (pydantic would coerce
+False->0.0), NaN/inf rejected; default validated against the editor. canonical_hex: #RGB/#RRGGBB only → #rrggbb.
+coerce_tweak_value/validate_value: per-editor narrow coercion (text->str, color/palette->canonical hex + palette∈
+swatches, boolean incl 'true'/'false', int/float incl numeric strings reject bool/fraction/NaN/inf, enum∈options,
+numeric range+step) → canonical value or ValueError; unknown key rejected.
+
+Verified: 19 tests pass; basedpyright strict 0 errors.
+
+Judge: (a) is the validation airtight — any construct that should be rejected but isn't (esp. step alignment via
+Decimal, palette canonicalization in mode=before on a frozen model, bool slipping through numeric bounds OR values)?
+(b) is coerce_tweak_value's coercion narrow + correct (no surprising accept, e.g. int editor accepting "3.0" or
+float "1e9", boolean accepting "TRUE")? (c) is the GROUNDED/justification rule correctly encoded? (d) frozen-model
++ mode=before normalization — sound? (e) does separating definition (TweakSpec) from values (AppSpec.tweaks) leave
+a clean seam for P9B/C? (f) test sufficiency. Return APPROVE|REVISE|BLOCKED + REASONS + REQUIRED_REVISIONS.
+codex
+I’ll review this in code-review mode: read the implementation and tests first, then check the edge cases you called out against the actual validators and coercion paths.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,260p' packages/core/src/disco/core/tweaks.py" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "sed -n '1,320p' packages/core/tests/test_tweaks.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""TweakSpec — the typed DEFINITION layer for owner controls (P9A).
+
+Tweaks are the small set of knobs the platform exposes to a non-technical owner (toggle a
+phone field, pick a curated accent, set a count). This module defines what a tweak IS — its
+editor + constraints — separately from the current VALUES (``AppSpec.tweaks``). P9B persists
+``.disco/tweaks.json``, P9C's ``app_set_tweak`` validates a value against this schema, P9D
+renders the TweakPanel. Pure, frozen value objects + validation; no runtime imports.
+
+Design rules (gpt-5.5-gated): a tweak must be GROUNDED — it controls behavior or >=1 field;
+a TEXT/COLOR tweak must control behavior or >=2 fields (single-place copy/color belongs in
+app_update_content / app_set_design, not a tweak). Numeric bounds are exact (integer-scaled,
+never float modulo); colors are a strict #RGB/#RRGGBB hex subset normalized to #rrggbb;
+palettes are 2-5 unique curated swatches and a value must be one of them.
+"""
+
+from __future__ import annotations
+
+import math
+import re
+from decimal import Decimal
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, model_validator
+
+
+class TweakEditor(str, Enum):
+    TEXT = "text"
+    COLOR = "color"  # a free canonical hex
+    INT = "int"
+    FLOAT = "float"
+    BOOLEAN = "boolean"
+    ENUM = "enum"  # one of curated string options
+    PALETTE = "palette"  # one of 2-5 curated color swatches
+
+
+_NUMERIC = frozenset({TweakEditor.INT, TweakEditor.FLOAT})
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")  # e.g. lead_form.include_phone
+_HEX3 = re.compile(r"^#[0-9a-fA-F]{3}$")
+_HEX6 = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def canonical_hex(value: Any) -> str:
+    """``#RGB`` / ``#RRGGBB`` → lowercase ``#rrggbb``. Rejects names, rgb(), alpha, malformed."""
+    if not isinstance(value, str):
+        raise ValueError(f"color must be a hex string, got {type(value).__name__}")
+    v = value.strip()
+    if _HEX3.match(v):
+        return f"#{v[1]*2}{v[2]*2}{v[3]*2}".lower()
+    if _HEX6.match(v):
+        return v.lower()
+    raise ValueError(f"color must be #RGB or #RRGGBB hex, got {value!r}")
+
+
+def _is_real(x: Any) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def _is_int(x: Any) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def _step_aligned(value: float, lo: float, step: float) -> bool:
+    """(value - lo) is an exact integer multiple of step — integer-scaled, no float modulo."""
+    q = (Decimal(str(value)) - Decimal(str(lo))) / Decimal(str(step))
+    return q == q.to_integral_value()
+
+
+class TweakField(BaseModel):
+    """One owner control: its editor + constraints + what it grounds onto (``affects``)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key: str
+    label: str
+    editor: TweakEditor
+    affects: tuple[str, ...] = ()  # LEXICAL AppSpec paths it controls (validated vs spec in P9B/C)
+    controls_behavior: bool = False
+    default: Any = None
+    options: tuple[str, ...] | None = None  # ENUM
+    colors: tuple[str, ...] | None = None  # PALETTE swatches
+    min: float | None = None  # INT/FLOAT
+    max: float | None = None
+    step: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            # reject bool numeric bounds BEFORE pydantic coerces False->0.0 (default may be a
+            # bool — that's valid for the boolean editor — so only guard min/max/step here).
+            for k in ("min", "max", "step"):
+                if isinstance(data.get(k), bool):
+                    raise ValueError(f"{k} must be a number, not a bool")
+            # canonicalize palette swatches up front (frozen model can't mutate post-construction)
+            if data.get("editor") in (TweakEditor.PALETTE, "palette"):
+                cols = data.get("colors")
+                if isinstance(cols, (list, tuple)):
+                    data = {**data, "colors": tuple(canonical_hex(c) for c in cols)}
+        return data
+
+    @model_validator(mode="after")
+    def _validate(self) -> TweakField:
+        if not _KEY_RE.match(self.key):
+            raise ValueError(f"key must match dotted-path pattern, got {self.key!r}")
+        if not self.label.strip():
+            raise ValueError("label must be non-empty")
+        ed = self.editor
+        # reject constraints irrelevant to the editor
+        if self.options is not None and ed is not TweakEditor.ENUM:
+            raise ValueError("options only valid for enum")
+        if self.colors is not None and ed is not TweakEditor.PALETTE:
+            raise ValueError("colors only valid for palette")
+        if (self.min, self.max, self.step) != (None, None, None) and ed not in _NUMERIC:
+            raise ValueError("min/max/step only valid for int/float")
+        # GROUNDED invariant
+        if not self.controls_behavior and not self.affects:
+            raise ValueError(f"tweak {self.key!r} is ungrounded: needs controls_behavior or affects")
+        if ed in (TweakEditor.TEXT, TweakEditor.COLOR) and not self.controls_behavior and len(self.affects) < 2:
+            raise ValueError(
+                f"{ed.value} tweak {self.key!r} must control behavior or >=2 fields (else use a direct edit)"
+            )
+        # per-editor constraints
+        if ed is TweakEditor.ENUM:
+            if not self.options:
+                raise ValueError("enum requires non-empty options")
+            if len(set(self.options)) != len(self.options):
+                raise ValueError("enum options must be unique")
+        if ed is TweakEditor.PALETTE:
+            cols = self.colors or ()
+            if not 2 <= len(cols) <= 5:
+                raise ValueError("palette requires 2..5 colors")
+            if len(set(cols)) != len(cols):
+                raise ValueError("palette colors must be unique")
+        if ed in _NUMERIC:
+            self._validate_numeric()
+        # default must itself be a valid value for this field
+        if self.default is not None:
+            coerce_tweak_value(self, self.default)
+        return self
+
+    def _validate_numeric(self) -> None:
+        lo, hi, step = self.min, self.max, self.step
+        if lo is None or hi is None or step is None:
+            raise ValueError("int/float require min/max/step")
+        if not (_is_real(lo) and _is_real(hi) and _is_real(step)):
+            raise ValueError("min/max/step must be finite numbers (no bool/NaN/inf)")
+        if self.editor is TweakEditor.INT and not all(float(x).is_integer() for x in (lo, hi, step)):
+            raise ValueError("int min/max/step must be integral")
+        if step <= 0:
+            raise ValueError("step must be > 0")
+        if lo > hi:
+            raise ValueError("min must be <= max")
+        if not _step_aligned(hi, lo, step):
+            raise ValueError("(max - min) must be a whole number of steps (reachable max)")
+
+
+def coerce_tweak_value(field: TweakField, value: Any) -> Any:
+    """Coerce + validate a raw value for ``field``'s editor → the canonical value, or ValueError.
+    Narrow, editor-specific coercion only (legacy app_set_tweak passes strings)."""
+    ed = field.editor
+    if ed is TweakEditor.TEXT:
+        if isinstance(value, str):
+            return value
+        raise ValueError("text value must be a string")
+    if ed is TweakEditor.COLOR:
+        return canonical_hex(value)
+    if ed is TweakEditor.PALETTE:
+        v = canonical_hex(value)
+        if v not in (field.colors or ()):
+            raise ValueError(f"{v} is not one of the palette swatches {field.colors}")
+        return v
+    if ed is TweakEditor.BOOLEAN:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+            return value.strip().lower() == "true"
+        raise ValueError("boolean value must be a bool or 'true'/'false'")
+    if ed is TweakEditor.ENUM:
+        if value in (field.options or ()):
+            return value
+        raise ValueError(f"{value!r} not in enum options {field.options}")
+    # numeric
+    num = _to_int(value) if ed is TweakEditor.INT else _to_float(value)
+    assert field.min is not None and field.max is not None and field.step is not None
+    if not field.min <= num <= field.max:
+        raise ValueError(f"{num} out of range [{field.min}, {field.max}]")
+    if not _step_aligned(num, field.min, field.step):
+        raise ValueError(f"{num} is not aligned to step {field.step} from {field.min}")
+    return num
+
+
+def _to_int(value: Any) -> int:
+    if _is_int(value):
+        return value
+    if isinstance(value, str) and re.match(r"^-?\d+$", value.strip()):
+        return int(value.strip())
+    raise ValueError(f"int value must be an integer or all-digit string, got {value!r}")
+
+
+def _to_float(value: Any) -> float:
+    if _is_real(value):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            f = float(value.strip())
+        except ValueError:
+            raise ValueError(f"float value must be numeric, got {value!r}") from None
+        if math.isfinite(f):
+            return f
+    raise ValueError(f"float value must be a finite number, got {value!r}")
+
+
+class TweakSpec(BaseModel):
+    """A registry of an app's owner-facing tweak definitions (unique keys)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    fields: tuple[TweakField, ...] = ()
+
+    @model_validator(mode="after")
+    def _unique_keys(self) -> TweakSpec:
+        keys = [f.key for f in self.fields]
+        if len(set(keys)) != len(keys):
+            raise ValueError("tweak keys must be unique")
+        return self
+
+    def get(self, key: str) -> TweakField | None:
+        return next((f for f in self.fields if f.key == key), None)
+
+    def validate_value(self, key: str, value: Any) -> Any:
+        """Coerce+validate ``value`` for the tweak ``key`` → canonical value, or ValueError
+        (unknown key included — never silently accept an undefined tweak)."""
+        field = self.get(key)
+        if field is None:
+            raise ValueError(f"unknown tweak {key!r}")
+        return coerce_tweak_value(field, value)
+
+ succeeded in 0ms:
+"""P9A tests: the TweakSpec typed definition layer — per-editor constraints, the grounded/
+justification rules, exact numeric bounds, canonical hex, and validate_value coercion."""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from disco.core.tweaks import (
+    TweakEditor,
+    TweakField,
+    TweakSpec,
+    canonical_hex,
+)
+
+
+def _f(**kw) -> TweakField:
+    base = {"key": "k", "label": "L", "editor": TweakEditor.BOOLEAN, "controls_behavior": True}
+    return TweakField(**{**base, **kw})
+
+
+# --- editors + happy paths ----------------------------------------------------
+def test_boolean_enum_palette_numeric_text_color_construct() -> None:
+    _f(editor=TweakEditor.BOOLEAN)
+    _f(editor=TweakEditor.ENUM, options=("a", "b"))
+    _f(editor=TweakEditor.PALETTE, colors=("#fff", "#000"))
+    _f(editor=TweakEditor.INT, min=0, max=10, step=2)
+    _f(editor=TweakEditor.FLOAT, min=0.0, max=1.0, step=0.25)
+    _f(editor=TweakEditor.TEXT, affects=("hero.headline", "hero.subhead"))
+    _f(editor=TweakEditor.COLOR, controls_behavior=True)
+
+
+# --- per-editor constraints ---------------------------------------------------
+def test_enum_requires_unique_nonempty_options() -> None:
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.ENUM)
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.ENUM, options=("a", "a"))
+
+
+def test_palette_requires_2_to_5_unique_colors() -> None:
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.PALETTE, colors=("#fff",))  # 1
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.PALETTE, colors=("#111", "#222", "#333", "#444", "#555", "#666"))  # 6
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.PALETTE, colors=("#ffffff", "#fff"))  # duplicate after canonicalize
+
+
+def test_palette_colors_canonicalized() -> None:
+    f = _f(editor=TweakEditor.PALETTE, colors=("#FFF", "#010203"))
+    assert f.colors == ("#ffffff", "#010203")
+
+
+def test_cross_editor_constraints_rejected() -> None:
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.BOOLEAN, options=("a",))
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.TEXT, affects=("a", "b"), colors=("#fff", "#000"))
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.BOOLEAN, min=0, max=1, step=1)
+
+
+# --- numeric exactness --------------------------------------------------------
+def test_numeric_requires_min_max_step() -> None:
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.INT, min=0, max=10)  # no step
+
+
+def test_numeric_min_le_max_step_positive() -> None:
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.INT, min=10, max=0, step=1)
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.INT, min=0, max=10, step=0)
+
+
+def test_int_min_max_step_must_be_integral() -> None:
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.INT, min=0.0, max=10.5, step=1)
+
+
+def test_unreachable_max_rejected() -> None:
+    # (max-min) not a whole number of steps → max unreachable
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.INT, min=0, max=10, step=3)
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.FLOAT, min=0.0, max=1.0, step=0.3)
+
+
+def test_nan_inf_bool_rejected_in_bounds() -> None:
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.FLOAT, min=0.0, max=float("inf"), step=0.1)
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.INT, min=False, max=10, step=1)  # bool not int
+
+
+# --- grounded / justification rule --------------------------------------------
+def test_ungrounded_field_rejected() -> None:
+    with pytest.raises(ValidationError):
+        TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN)  # no controls_behavior, no affects
+
+
+def test_text_color_need_behavior_or_two_fields() -> None:
+    with pytest.raises(ValidationError):  # text, 1 field, no behavior
+        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.headline",))
+    TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("a.b", "c.d"))  # 2 fields ok
+    TweakField(key="k", label="L", editor=TweakEditor.COLOR, controls_behavior=True)  # behavior ok
+
+
+def test_boolean_with_single_affect_is_grounded() -> None:
+    TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",))
+
+
+# --- key/label + default ------------------------------------------------------
+def test_key_pattern_and_label_enforced() -> None:
+    with pytest.raises(ValidationError):
+        _f(key="Bad Key")
+    with pytest.raises(ValidationError):
+        _f(label="  ")
+
+
+def test_default_validated_against_editor() -> None:
+    _f(editor=TweakEditor.ENUM, options=("a", "b"), default="a")
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.ENUM, options=("a", "b"), default="z")
+    _f(editor=TweakEditor.INT, min=0, max=10, step=2, default=4)
+    with pytest.raises(ValidationError):
+        _f(editor=TweakEditor.INT, min=0, max=10, step=2, default=3)  # not step-aligned
+
+
+# --- canonical_hex ------------------------------------------------------------
+def test_canonical_hex() -> None:
+    assert canonical_hex("#FFF") == "#ffffff"
+    assert canonical_hex("#AbCdEf") == "#abcdef"
+    for bad in ("white", "rgb(0,0,0)", "#ffff", "#12", "#1234567f", 123):
+        with pytest.raises(ValueError):
+            canonical_hex(bad)
+
+
+# --- TweakSpec + validate_value -----------------------------------------------
+SPEC = TweakSpec(fields=(
+    _f(key="lead_form.include_phone", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",)),
+    _f(key="hero.cta_count", editor=TweakEditor.INT, min=1, max=5, step=1, affects=("hero.ctas",)),
+    _f(key="brand.tone", editor=TweakEditor.ENUM, options=("calm", "bold"), affects=("design.tone",)),
+    _f(key="brand.accent", editor=TweakEditor.PALETTE, colors=("#0a84ff", "#e2725b"), affects=("design.accent",)),
+))
+
+
+def test_spec_unique_keys() -> None:
+    with pytest.raises(ValidationError):
+        TweakSpec(fields=(_f(key="x.y", affects=("a",)), _f(key="x.y", affects=("a",))))
+
+
+def test_validate_value_coerces_per_editor() -> None:
+    assert SPEC.validate_value("lead_form.include_phone", "true") is True
+    assert SPEC.validate_value("lead_form.include_phone", False) is False
+    assert SPEC.validate_value("hero.cta_count", "3") == 3
+    assert SPEC.validate_value("brand.tone", "bold") == "bold"
+    assert SPEC.validate_value("brand.accent", "#E2725B") == "#e2725b"
+
+
+def test_validate_value_rejects_bad() -> None:
+    for key, bad in [
+        ("lead_form.include_phone", "yes"),       # not true/false
+        ("hero.cta_count", "9"),                  # out of range
+        ("hero.cta_count", True),                 # bool not int
+        ("brand.tone", "spicy"),                  # not an option
+        ("brand.accent", "#000000"),              # not a swatch
+        ("nope.key", "x"),                        # unknown tweak
+    ]:
+        with pytest.raises(ValueError):
+            SPEC.validate_value(key, bad)
+
+exec
+/bin/bash -lc 'rg -n "TweakSpec|TweakField|coerce_tweak_value|validate_value|tweaks" packages/core/src packages/core/tests' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/src/disco/core/tweaks.py:1:"""TweakSpec — the typed DEFINITION layer for owner controls (P9A).
+packages/core/src/disco/core/tweaks.py:5:editor + constraints — separately from the current VALUES (``AppSpec.tweaks``). P9B persists
+packages/core/src/disco/core/tweaks.py:6:``.disco/tweaks.json``, P9C's ``app_set_tweak`` validates a value against this schema, P9D
+packages/core/src/disco/core/tweaks.py:69:class TweakField(BaseModel):
+packages/core/src/disco/core/tweaks.py:103:    def _validate(self) -> TweakField:
+packages/core/src/disco/core/tweaks.py:139:            coerce_tweak_value(self, self.default)
+packages/core/src/disco/core/tweaks.py:158:def coerce_tweak_value(field: TweakField, value: Any) -> Any:
+packages/core/src/disco/core/tweaks.py:214:class TweakSpec(BaseModel):
+packages/core/src/disco/core/tweaks.py:219:    fields: tuple[TweakField, ...] = ()
+packages/core/src/disco/core/tweaks.py:222:    def _unique_keys(self) -> TweakSpec:
+packages/core/src/disco/core/tweaks.py:228:    def get(self, key: str) -> TweakField | None:
+packages/core/src/disco/core/tweaks.py:231:    def validate_value(self, key: str, value: Any) -> Any:
+packages/core/src/disco/core/tweaks.py:237:        return coerce_tweak_value(field, value)
+packages/core/tests/test_tweaks.py:1:"""P9A tests: the TweakSpec typed definition layer — per-editor constraints, the grounded/
+packages/core/tests/test_tweaks.py:2:justification rules, exact numeric bounds, canonical hex, and validate_value coercion."""
+packages/core/tests/test_tweaks.py:9:from disco.core.tweaks import (
+packages/core/tests/test_tweaks.py:11:    TweakField,
+packages/core/tests/test_tweaks.py:12:    TweakSpec,
+packages/core/tests/test_tweaks.py:17:def _f(**kw) -> TweakField:
+packages/core/tests/test_tweaks.py:19:    return TweakField(**{**base, **kw})
+packages/core/tests/test_tweaks.py:100:        TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN)  # no controls_behavior, no affects
+packages/core/tests/test_tweaks.py:105:        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.headline",))
+packages/core/tests/test_tweaks.py:106:    TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("a.b", "c.d"))  # 2 fields ok
+packages/core/tests/test_tweaks.py:107:    TweakField(key="k", label="L", editor=TweakEditor.COLOR, controls_behavior=True)  # behavior ok
+packages/core/tests/test_tweaks.py:111:    TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",))
+packages/core/tests/test_tweaks.py:140:# --- TweakSpec + validate_value -----------------------------------------------
+packages/core/tests/test_tweaks.py:141:SPEC = TweakSpec(fields=(
+packages/core/tests/test_tweaks.py:151:        TweakSpec(fields=(_f(key="x.y", affects=("a",)), _f(key="x.y", affects=("a",))))
+packages/core/tests/test_tweaks.py:154:def test_validate_value_coerces_per_editor() -> None:
+packages/core/tests/test_tweaks.py:155:    assert SPEC.validate_value("lead_form.include_phone", "true") is True
+packages/core/tests/test_tweaks.py:156:    assert SPEC.validate_value("lead_form.include_phone", False) is False
+packages/core/tests/test_tweaks.py:157:    assert SPEC.validate_value("hero.cta_count", "3") == 3
+packages/core/tests/test_tweaks.py:158:    assert SPEC.validate_value("brand.tone", "bold") == "bold"
+packages/core/tests/test_tweaks.py:159:    assert SPEC.validate_value("brand.accent", "#E2725B") == "#e2725b"
+packages/core/tests/test_tweaks.py:162:def test_validate_value_rejects_bad() -> None:
+packages/core/tests/test_tweaks.py:172:            SPEC.validate_value(key, bad)
+packages/core/src/disco/core/appkit/models.py:3:An app is described by an AppSpec (sections + design tokens + tweaks), NOT by hand-drawn
+packages/core/src/disco/core/appkit/models.py:68:    tweaks: dict[str, Any] = {}
+packages/core/src/disco/core/appkit/models.py:121:        return self.model_copy(update={"tweaks": {**self.tweaks, key: value}})
+packages/core/src/disco/core/appkit/__init__.py:3:An app is a structured AppSpec (sections + design + tweaks) rendered deterministically
+packages/core/tests/test_appkit_models.py:65:    assert s.tweaks["lead_form.include_phone"] is True
+
+codex
+I’ve got the main implementation and tests. The first pass shows the core invariants are encoded where expected; I’m checking Pydantic coercion behavior now because that’s where the subtle bypasses usually live.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+exec
+/bin/bash -lc "nl -ba packages/core/src/disco/core/tweaks.py | sed -n '1,270p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""TweakSpec — the typed DEFINITION layer for owner controls (P9A).
+     2	
+     3	Tweaks are the small set of knobs the platform exposes to a non-technical owner (toggle a
+     4	phone field, pick a curated accent, set a count). This module defines what a tweak IS — its
+     5	editor + constraints — separately from the current VALUES (``AppSpec.tweaks``). P9B persists
+     6	``.disco/tweaks.json``, P9C's ``app_set_tweak`` validates a value against this schema, P9D
+     7	renders the TweakPanel. Pure, frozen value objects + validation; no runtime imports.
+     8	
+     9	Design rules (gpt-5.5-gated): a tweak must be GROUNDED — it controls behavior or >=1 field;
+    10	a TEXT/COLOR tweak must control behavior or >=2 fields (single-place copy/color belongs in
+    11	app_update_content / app_set_design, not a tweak). Numeric bounds are exact (integer-scaled,
+    12	never float modulo); colors are a strict #RGB/#RRGGBB hex subset normalized to #rrggbb;
+    13	palettes are 2-5 unique curated swatches and a value must be one of them.
+    14	"""
+    15	
+    16	from __future__ import annotations
+    17	
+    18	import math
+    19	import re
+    20	from decimal import Decimal
+    21	from enum import Enum
+    22	from typing import Any
+    23	
+    24	from pydantic import BaseModel, ConfigDict, model_validator
+    25	
+    26	
+    27	class TweakEditor(str, Enum):
+    28	    TEXT = "text"
+    29	    COLOR = "color"  # a free canonical hex
+    30	    INT = "int"
+    31	    FLOAT = "float"
+    32	    BOOLEAN = "boolean"
+    33	    ENUM = "enum"  # one of curated string options
+    34	    PALETTE = "palette"  # one of 2-5 curated color swatches
+    35	
+    36	
+    37	_NUMERIC = frozenset({TweakEditor.INT, TweakEditor.FLOAT})
+    38	_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")  # e.g. lead_form.include_phone
+    39	_HEX3 = re.compile(r"^#[0-9a-fA-F]{3}$")
+    40	_HEX6 = re.compile(r"^#[0-9a-fA-F]{6}$")
+    41	
+    42	
+    43	def canonical_hex(value: Any) -> str:
+    44	    """``#RGB`` / ``#RRGGBB`` → lowercase ``#rrggbb``. Rejects names, rgb(), alpha, malformed."""
+    45	    if not isinstance(value, str):
+    46	        raise ValueError(f"color must be a hex string, got {type(value).__name__}")
+    47	    v = value.strip()
+    48	    if _HEX3.match(v):
+    49	        return f"#{v[1]*2}{v[2]*2}{v[3]*2}".lower()
+    50	    if _HEX6.match(v):
+    51	        return v.lower()
+    52	    raise ValueError(f"color must be #RGB or #RRGGBB hex, got {value!r}")
+    53	
+    54	
+    55	def _is_real(x: Any) -> bool:
+    56	    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    57	
+    58	
+    59	def _is_int(x: Any) -> bool:
+    60	    return isinstance(x, int) and not isinstance(x, bool)
+    61	
+    62	
+    63	def _step_aligned(value: float, lo: float, step: float) -> bool:
+    64	    """(value - lo) is an exact integer multiple of step — integer-scaled, no float modulo."""
+    65	    q = (Decimal(str(value)) - Decimal(str(lo))) / Decimal(str(step))
+    66	    return q == q.to_integral_value()
+    67	
+    68	
+    69	class TweakField(BaseModel):
+    70	    """One owner control: its editor + constraints + what it grounds onto (``affects``)."""
+    71	
+    72	    model_config = ConfigDict(frozen=True, extra="forbid")
+    73	
+    74	    key: str
+    75	    label: str
+    76	    editor: TweakEditor
+    77	    affects: tuple[str, ...] = ()  # LEXICAL AppSpec paths it controls (validated vs spec in P9B/C)
+    78	    controls_behavior: bool = False
+    79	    default: Any = None
+    80	    options: tuple[str, ...] | None = None  # ENUM
+    81	    colors: tuple[str, ...] | None = None  # PALETTE swatches
+    82	    min: float | None = None  # INT/FLOAT
+    83	    max: float | None = None
+    84	    step: float | None = None
+    85	
+    86	    @model_validator(mode="before")
+    87	    @classmethod
+    88	    def _normalize(cls, data: Any) -> Any:
+    89	        if isinstance(data, dict):
+    90	            # reject bool numeric bounds BEFORE pydantic coerces False->0.0 (default may be a
+    91	            # bool — that's valid for the boolean editor — so only guard min/max/step here).
+    92	            for k in ("min", "max", "step"):
+    93	                if isinstance(data.get(k), bool):
+    94	                    raise ValueError(f"{k} must be a number, not a bool")
+    95	            # canonicalize palette swatches up front (frozen model can't mutate post-construction)
+    96	            if data.get("editor") in (TweakEditor.PALETTE, "palette"):
+    97	                cols = data.get("colors")
+    98	                if isinstance(cols, (list, tuple)):
+    99	                    data = {**data, "colors": tuple(canonical_hex(c) for c in cols)}
+   100	        return data
+   101	
+   102	    @model_validator(mode="after")
+   103	    def _validate(self) -> TweakField:
+   104	        if not _KEY_RE.match(self.key):
+   105	            raise ValueError(f"key must match dotted-path pattern, got {self.key!r}")
+   106	        if not self.label.strip():
+   107	            raise ValueError("label must be non-empty")
+   108	        ed = self.editor
+   109	        # reject constraints irrelevant to the editor
+   110	        if self.options is not None and ed is not TweakEditor.ENUM:
+   111	            raise ValueError("options only valid for enum")
+   112	        if self.colors is not None and ed is not TweakEditor.PALETTE:
+   113	            raise ValueError("colors only valid for palette")
+   114	        if (self.min, self.max, self.step) != (None, None, None) and ed not in _NUMERIC:
+   115	            raise ValueError("min/max/step only valid for int/float")
+   116	        # GROUNDED invariant
+   117	        if not self.controls_behavior and not self.affects:
+   118	            raise ValueError(f"tweak {self.key!r} is ungrounded: needs controls_behavior or affects")
+   119	        if ed in (TweakEditor.TEXT, TweakEditor.COLOR) and not self.controls_behavior and len(self.affects) < 2:
+   120	            raise ValueError(
+   121	                f"{ed.value} tweak {self.key!r} must control behavior or >=2 fields (else use a direct edit)"
+   122	            )
+   123	        # per-editor constraints
+   124	        if ed is TweakEditor.ENUM:
+   125	            if not self.options:
+   126	                raise ValueError("enum requires non-empty options")
+   127	            if len(set(self.options)) != len(self.options):
+   128	                raise ValueError("enum options must be unique")
+   129	        if ed is TweakEditor.PALETTE:
+   130	            cols = self.colors or ()
+   131	            if not 2 <= len(cols) <= 5:
+   132	                raise ValueError("palette requires 2..5 colors")
+   133	            if len(set(cols)) != len(cols):
+   134	                raise ValueError("palette colors must be unique")
+   135	        if ed in _NUMERIC:
+   136	            self._validate_numeric()
+   137	        # default must itself be a valid value for this field
+   138	        if self.default is not None:
+   139	            coerce_tweak_value(self, self.default)
+   140	        return self
+   141	
+   142	    def _validate_numeric(self) -> None:
+   143	        lo, hi, step = self.min, self.max, self.step
+   144	        if lo is None or hi is None or step is None:
+   145	            raise ValueError("int/float require min/max/step")
+   146	        if not (_is_real(lo) and _is_real(hi) and _is_real(step)):
+   147	            raise ValueError("min/max/step must be finite numbers (no bool/NaN/inf)")
+   148	        if self.editor is TweakEditor.INT and not all(float(x).is_integer() for x in (lo, hi, step)):
+   149	            raise ValueError("int min/max/step must be integral")
+   150	        if step <= 0:
+   151	            raise ValueError("step must be > 0")
+   152	        if lo > hi:
+   153	            raise ValueError("min must be <= max")
+   154	        if not _step_aligned(hi, lo, step):
+   155	            raise ValueError("(max - min) must be a whole number of steps (reachable max)")
+   156	
+   157	
+   158	def coerce_tweak_value(field: TweakField, value: Any) -> Any:
+   159	    """Coerce + validate a raw value for ``field``'s editor → the canonical value, or ValueError.
+   160	    Narrow, editor-specific coercion only (legacy app_set_tweak passes strings)."""
+   161	    ed = field.editor
+   162	    if ed is TweakEditor.TEXT:
+   163	        if isinstance(value, str):
+   164	            return value
+   165	        raise ValueError("text value must be a string")
+   166	    if ed is TweakEditor.COLOR:
+   167	        return canonical_hex(value)
+   168	    if ed is TweakEditor.PALETTE:
+   169	        v = canonical_hex(value)
+   170	        if v not in (field.colors or ()):
+   171	            raise ValueError(f"{v} is not one of the palette swatches {field.colors}")
+   172	        return v
+   173	    if ed is TweakEditor.BOOLEAN:
+   174	        if isinstance(value, bool):
+   175	            return value
+   176	        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+   177	            return value.strip().lower() == "true"
+   178	        raise ValueError("boolean value must be a bool or 'true'/'false'")
+   179	    if ed is TweakEditor.ENUM:
+   180	        if value in (field.options or ()):
+   181	            return value
+   182	        raise ValueError(f"{value!r} not in enum options {field.options}")
+   183	    # numeric
+   184	    num = _to_int(value) if ed is TweakEditor.INT else _to_float(value)
+   185	    assert field.min is not None and field.max is not None and field.step is not None
+   186	    if not field.min <= num <= field.max:
+   187	        raise ValueError(f"{num} out of range [{field.min}, {field.max}]")
+   188	    if not _step_aligned(num, field.min, field.step):
+   189	        raise ValueError(f"{num} is not aligned to step {field.step} from {field.min}")
+   190	    return num
+   191	
+   192	
+   193	def _to_int(value: Any) -> int:
+   194	    if _is_int(value):
+   195	        return value
+   196	    if isinstance(value, str) and re.match(r"^-?\d+$", value.strip()):
+   197	        return int(value.strip())
+   198	    raise ValueError(f"int value must be an integer or all-digit string, got {value!r}")
+   199	
+   200	
+   201	def _to_float(value: Any) -> float:
+   202	    if _is_real(value):
+   203	        return float(value)
+   204	    if isinstance(value, str):
+   205	        try:
+   206	            f = float(value.strip())
+   207	        except ValueError:
+   208	            raise ValueError(f"float value must be numeric, got {value!r}") from None
+   209	        if math.isfinite(f):
+   210	            return f
+   211	    raise ValueError(f"float value must be a finite number, got {value!r}")
+   212	
+   213	
+   214	class TweakSpec(BaseModel):
+   215	    """A registry of an app's owner-facing tweak definitions (unique keys)."""
+   216	
+   217	    model_config = ConfigDict(frozen=True, extra="forbid")
+   218	
+   219	    fields: tuple[TweakField, ...] = ()
+   220	
+   221	    @model_validator(mode="after")
+   222	    def _unique_keys(self) -> TweakSpec:
+   223	        keys = [f.key for f in self.fields]
+   224	        if len(set(keys)) != len(keys):
+   225	            raise ValueError("tweak keys must be unique")
+   226	        return self
+   227	
+   228	    def get(self, key: str) -> TweakField | None:
+   229	        return next((f for f in self.fields if f.key == key), None)
+   230	
+   231	    def validate_value(self, key: str, value: Any) -> Any:
+   232	        """Coerce+validate ``value`` for the tweak ``key`` → canonical value, or ValueError
+   233	        (unknown key included — never silently accept an undefined tweak)."""
+   234	        field = self.get(key)
+   235	        if field is None:
+   236	            raise ValueError(f"unknown tweak {key!r}")
+   237	        return coerce_tweak_value(field, value)
+
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba packages/core/tests/test_tweaks.py | sed -n '1,240p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""P9A tests: the TweakSpec typed definition layer — per-editor constraints, the grounded/
+     2	justification rules, exact numeric bounds, canonical hex, and validate_value coercion."""
+     3	
+     4	from __future__ import annotations
+     5	
+     6	import pytest
+     7	from pydantic import ValidationError
+     8	
+     9	from disco.core.tweaks import (
+    10	    TweakEditor,
+    11	    TweakField,
+    12	    TweakSpec,
+    13	    canonical_hex,
+    14	)
+    15	
+    16	
+    17	def _f(**kw) -> TweakField:
+    18	    base = {"key": "k", "label": "L", "editor": TweakEditor.BOOLEAN, "controls_behavior": True}
+    19	    return TweakField(**{**base, **kw})
+    20	
+    21	
+    22	# --- editors + happy paths ----------------------------------------------------
+    23	def test_boolean_enum_palette_numeric_text_color_construct() -> None:
+    24	    _f(editor=TweakEditor.BOOLEAN)
+    25	    _f(editor=TweakEditor.ENUM, options=("a", "b"))
+    26	    _f(editor=TweakEditor.PALETTE, colors=("#fff", "#000"))
+    27	    _f(editor=TweakEditor.INT, min=0, max=10, step=2)
+    28	    _f(editor=TweakEditor.FLOAT, min=0.0, max=1.0, step=0.25)
+    29	    _f(editor=TweakEditor.TEXT, affects=("hero.headline", "hero.subhead"))
+    30	    _f(editor=TweakEditor.COLOR, controls_behavior=True)
+    31	
+    32	
+    33	# --- per-editor constraints ---------------------------------------------------
+    34	def test_enum_requires_unique_nonempty_options() -> None:
+    35	    with pytest.raises(ValidationError):
+    36	        _f(editor=TweakEditor.ENUM)
+    37	    with pytest.raises(ValidationError):
+    38	        _f(editor=TweakEditor.ENUM, options=("a", "a"))
+    39	
+    40	
+    41	def test_palette_requires_2_to_5_unique_colors() -> None:
+    42	    with pytest.raises(ValidationError):
+    43	        _f(editor=TweakEditor.PALETTE, colors=("#fff",))  # 1
+    44	    with pytest.raises(ValidationError):
+    45	        _f(editor=TweakEditor.PALETTE, colors=("#111", "#222", "#333", "#444", "#555", "#666"))  # 6
+    46	    with pytest.raises(ValidationError):
+    47	        _f(editor=TweakEditor.PALETTE, colors=("#ffffff", "#fff"))  # duplicate after canonicalize
+    48	
+    49	
+    50	def test_palette_colors_canonicalized() -> None:
+    51	    f = _f(editor=TweakEditor.PALETTE, colors=("#FFF", "#010203"))
+    52	    assert f.colors == ("#ffffff", "#010203")
+    53	
+    54	
+    55	def test_cross_editor_constraints_rejected() -> None:
+    56	    with pytest.raises(ValidationError):
+    57	        _f(editor=TweakEditor.BOOLEAN, options=("a",))
+    58	    with pytest.raises(ValidationError):
+    59	        _f(editor=TweakEditor.TEXT, affects=("a", "b"), colors=("#fff", "#000"))
+    60	    with pytest.raises(ValidationError):
+    61	        _f(editor=TweakEditor.BOOLEAN, min=0, max=1, step=1)
+    62	
+    63	
+    64	# --- numeric exactness --------------------------------------------------------
+    65	def test_numeric_requires_min_max_step() -> None:
+    66	    with pytest.raises(ValidationError):
+    67	        _f(editor=TweakEditor.INT, min=0, max=10)  # no step
+    68	
+    69	
+    70	def test_numeric_min_le_max_step_positive() -> None:
+    71	    with pytest.raises(ValidationError):
+    72	        _f(editor=TweakEditor.INT, min=10, max=0, step=1)
+    73	    with pytest.raises(ValidationError):
+    74	        _f(editor=TweakEditor.INT, min=0, max=10, step=0)
+    75	
+    76	
+    77	def test_int_min_max_step_must_be_integral() -> None:
+    78	    with pytest.raises(ValidationError):
+    79	        _f(editor=TweakEditor.INT, min=0.0, max=10.5, step=1)
+    80	
+    81	
+    82	def test_unreachable_max_rejected() -> None:
+    83	    # (max-min) not a whole number of steps → max unreachable
+    84	    with pytest.raises(ValidationError):
+    85	        _f(editor=TweakEditor.INT, min=0, max=10, step=3)
+    86	    with pytest.raises(ValidationError):
+    87	        _f(editor=TweakEditor.FLOAT, min=0.0, max=1.0, step=0.3)
+    88	
+    89	
+    90	def test_nan_inf_bool_rejected_in_bounds() -> None:
+    91	    with pytest.raises(ValidationError):
+    92	        _f(editor=TweakEditor.FLOAT, min=0.0, max=float("inf"), step=0.1)
+    93	    with pytest.raises(ValidationError):
+    94	        _f(editor=TweakEditor.INT, min=False, max=10, step=1)  # bool not int
+    95	
+    96	
+    97	# --- grounded / justification rule --------------------------------------------
+    98	def test_ungrounded_field_rejected() -> None:
+    99	    with pytest.raises(ValidationError):
+   100	        TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN)  # no controls_behavior, no affects
+   101	
+   102	
+   103	def test_text_color_need_behavior_or_two_fields() -> None:
+   104	    with pytest.raises(ValidationError):  # text, 1 field, no behavior
+   105	        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.headline",))
+   106	    TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("a.b", "c.d"))  # 2 fields ok
+   107	    TweakField(key="k", label="L", editor=TweakEditor.COLOR, controls_behavior=True)  # behavior ok
+   108	
+   109	
+   110	def test_boolean_with_single_affect_is_grounded() -> None:
+   111	    TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",))
+   112	
+   113	
+   114	# --- key/label + default ------------------------------------------------------
+   115	def test_key_pattern_and_label_enforced() -> None:
+   116	    with pytest.raises(ValidationError):
+   117	        _f(key="Bad Key")
+   118	    with pytest.raises(ValidationError):
+   119	        _f(label="  ")
+   120	
+   121	
+   122	def test_default_validated_against_editor() -> None:
+   123	    _f(editor=TweakEditor.ENUM, options=("a", "b"), default="a")
+   124	    with pytest.raises(ValidationError):
+   125	        _f(editor=TweakEditor.ENUM, options=("a", "b"), default="z")
+   126	    _f(editor=TweakEditor.INT, min=0, max=10, step=2, default=4)
+   127	    with pytest.raises(ValidationError):
+   128	        _f(editor=TweakEditor.INT, min=0, max=10, step=2, default=3)  # not step-aligned
+   129	
+   130	
+   131	# --- canonical_hex ------------------------------------------------------------
+   132	def test_canonical_hex() -> None:
+   133	    assert canonical_hex("#FFF") == "#ffffff"
+   134	    assert canonical_hex("#AbCdEf") == "#abcdef"
+   135	    for bad in ("white", "rgb(0,0,0)", "#ffff", "#12", "#1234567f", 123):
+   136	        with pytest.raises(ValueError):
+   137	            canonical_hex(bad)
+   138	
+   139	
+   140	# --- TweakSpec + validate_value -----------------------------------------------
+   141	SPEC = TweakSpec(fields=(
+   142	    _f(key="lead_form.include_phone", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",)),
+   143	    _f(key="hero.cta_count", editor=TweakEditor.INT, min=1, max=5, step=1, affects=("hero.ctas",)),
+   144	    _f(key="brand.tone", editor=TweakEditor.ENUM, options=("calm", "bold"), affects=("design.tone",)),
+   145	    _f(key="brand.accent", editor=TweakEditor.PALETTE, colors=("#0a84ff", "#e2725b"), affects=("design.accent",)),
+   146	))
+   147	
+   148	
+   149	def test_spec_unique_keys() -> None:
+   150	    with pytest.raises(ValidationError):
+   151	        TweakSpec(fields=(_f(key="x.y", affects=("a",)), _f(key="x.y", affects=("a",))))
+   152	
+   153	
+   154	def test_validate_value_coerces_per_editor() -> None:
+   155	    assert SPEC.validate_value("lead_form.include_phone", "true") is True
+   156	    assert SPEC.validate_value("lead_form.include_phone", False) is False
+   157	    assert SPEC.validate_value("hero.cta_count", "3") == 3
+   158	    assert SPEC.validate_value("brand.tone", "bold") == "bold"
+   159	    assert SPEC.validate_value("brand.accent", "#E2725B") == "#e2725b"
+   160	
+   161	
+   162	def test_validate_value_rejects_bad() -> None:
+   163	    for key, bad in [
+   164	        ("lead_form.include_phone", "yes"),       # not true/false
+   165	        ("hero.cta_count", "9"),                  # out of range
+   166	        ("hero.cta_count", True),                 # bool not int
+   167	        ("brand.tone", "spicy"),                  # not an option
+   168	        ("brand.accent", "#000000"),              # not a swatch
+   169	        ("nope.key", "x"),                        # unknown tweak
+   170	    ]:
+   171	        with pytest.raises(ValueError):
+   172	            SPEC.validate_value(key, bad)
+
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 python - <<'PY'
+import pydantic
+print(pydantic.__version__)
+from disco.core.tweaks import TweakField, TweakEditor, TweakSpec, coerce_tweak_value
+
+def probe(name, fn):
+    try:
+        r = fn()
+        print('ACCEPT', name, repr(r))
+    except Exception as e:
+        print('REJECT', name, type(e).__name__, str(e).split('\\n')[0])
+
+# constructor coercion probes
+probe('field editor None', lambda: TweakField(key='k', label='L', editor=None, controls_behavior=True))
+probe('key int', lambda: TweakField(key=1, label='L', editor=TweakEditor.BOOLEAN, controls_behavior=True))
+probe('label int', lambda: TweakField(key='k', label=1, editor=TweakEditor.BOOLEAN, controls_behavior=True))
+probe('affects int tuple', lambda: TweakField(key='k', label='L', editor=TweakEditor.BOOLEAN, affects=(1,), controls_behavior=False))
+probe('controls_behavior string false', lambda: TweakField(key='k', label='L', editor=TweakEditor.BOOLEAN, controls_behavior='false'))
+probe('options list', lambda: TweakField(key='k', label='L', editor=TweakEditor.ENUM, options=['a','b'], controls_behavior=True).options)
+probe('colors list mixed', lambda: TweakField(key='k', label='L', editor='palette', colors=['#fff','#000'], controls_behavior=True).colors)
+probe('palette colors nonstr int', lambda: TweakField(key='k', label='L', editor='palette', colors=['#fff',123], controls_behavior=True))
+probe('float min numeric strings', lambda: TweakField(key='k', label='L', editor='float', min='0', max='1', step='0.1', controls_behavior=True))
+probe('float nan string bound', lambda: TweakField(key='k', label='L', editor='float', min='0', max='nan', step='0.1', controls_behavior=True))
+probe('float default string sci', lambda: TweakField(key='k', label='L', editor='float', min=0, max=1000000000, step=1, default='1e9', controls_behavior=True).default)
+probe('int default str 3.0', lambda: TweakField(key='k', label='L', editor='int', min=0, max=10, step=1, default='3.0', controls_behavior=True))
+
+fint=TweakField(key='k', label='L', editor='int', min=0, max=10, step=1, controls_behavior=True)
+ffloat=TweakField(key='f', label='L', editor='float', min=0, max=1e10, step=1, controls_behavior=True)
+fbool=TweakField(key='b', label='L', editor='boolean', controls_behavior=True)
+for val in ['3.0','03','+3',' 3 ',3.0, True]:
+    probe(f'int value {val"'!r}'"', lambda v=val: coerce_tweak_value(fint, v))
+for val in ['1e9','TRUE',' true ','nan','inf', True, '']:
+    probe(f'float value {val"'!r}'"', lambda v=val: coerce_tweak_value(ffloat, v))
+for val in ['TRUE',' True ','False',' FALSE ','yes','1',1, False]:
+    probe(f'bool value {val"'!r}'"', lambda v=val: coerce_tweak_value(fbool, v))
+PY" in /var/home/dylan/projects/disclaude/packages/core
+ exited 1 in 116ms:
+2.12.5
+Traceback (most recent call last):
+  File "<stdin>", line 3, in <module>
+ModuleNotFoundError: No module named 'disco'
+
+codex
+The import path needed the package source path, so I’m rerunning the coercion probes with `PYTHONPATH=src`. The checks are targeted at constructor-side coercion and runtime value coercion, not broad test execution.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python - <<'PY'
+import pydantic
+print('pydantic', pydantic.__version__)
+from disco.core.tweaks import TweakField, TweakEditor, coerce_tweak_value
+
+def probe(name, fn):
+    try:
+        r = fn()
+        print('ACCEPT', name, repr(r))
+    except Exception as e:
+        first = str(e).split('\\n')[0]
+        print('REJECT', name, type(e).__name__, first)
+
+probe('field editor None', lambda: TweakField(key='k', label='L', editor=None, controls_behavior=True))
+probe('key int', lambda: TweakField(key=1, label='L', editor=TweakEditor.BOOLEAN, controls_behavior=True))
+probe('label int', lambda: TweakField(key='k', label=1, editor=TweakEditor.BOOLEAN, controls_behavior=True))
+probe('affects int tuple', lambda: TweakField(key='k', label='L', editor=TweakEditor.BOOLEAN, affects=(1,), controls_behavior=False))
+probe('controls_behavior string false', lambda: TweakField(key='k', label='L', editor=TweakEditor.BOOLEAN, controls_behavior='false'))
+probe('options list', lambda: TweakField(key='k', label='L', editor=TweakEditor.ENUM, options=['a','b'], controls_behavior=True).options)
+probe('options nonstr', lambda: TweakField(key='k', label='L', editor=TweakEditor.ENUM, options=[1], controls_behavior=True))
+probe('colors list mixed', lambda: TweakField(key='k', label='L', editor='palette', colors=['#fff','#000'], controls_behavior=True).colors)
+probe('palette colors nonstr int', lambda: TweakField(key='k', label='L', editor='palette', colors=['#fff',123], controls_behavior=True))
+probe('float min numeric strings', lambda: TweakField(key='k', label='L', editor='float', min='0', max='1', step='0.1', controls_behavior=True))
+probe('float nan string bound', lambda: TweakField(key='k', label='L', editor='float', min='0', max='nan', step='0.1', controls_behavior=True))
+probe('float default string sci', lambda: TweakField(key='k', label='L', editor='float', min=0, max=1000000000, step=1, default='1e9', controls_behavior=True).default)
+probe('int default str 3.0', lambda: TweakField(key='k', label='L', editor='int', min=0, max=10, step=1, default='3.0', controls_behavior=True))
+
+fint=TweakField(key='k', label='L', editor='int', min=0, max=10, step=1, controls_behavior=True)
+ffloat=TweakField(key='f', label='L', editor='float', min=0, max=1e10, step=1, controls_behavior=True)
+fbool=TweakField(key='b', label='L', editor='boolean', controls_behavior=True)
+for val in ['3.0','03','+3',' 3 ',3.0, True]:
+    probe(f'int value {val"'!r}'"', lambda v=val: coerce_tweak_value(fint, v))
+for val in ['1e9','TRUE',' true ','nan','inf', True, '']:
+    probe(f'float value {val"'!r}'"', lambda v=val: coerce_tweak_value(ffloat, v))
+for val in ['TRUE',' True ','False',' FALSE ','yes','1',1, False]:
+    probe(f'bool value {val"'!r}'"', lambda v=val: coerce_tweak_value(fbool, v))
+PY" in /var/home/dylan/projects/disclaude/packages/core
+ succeeded in 270ms:
+pydantic 2.12.5
+REJECT field editor None ValidationError 1 validation error for TweakField
+REJECT key int ValidationError 1 validation error for TweakField
+REJECT label int ValidationError 1 validation error for TweakField
+REJECT affects int tuple ValidationError 1 validation error for TweakField
+REJECT controls_behavior string false ValidationError 1 validation error for TweakField
+ACCEPT options list ('a', 'b')
+REJECT options nonstr ValidationError 1 validation error for TweakField
+ACCEPT colors list mixed ('#ffffff', '#000000')
+REJECT palette colors nonstr int ValidationError 1 validation error for TweakField
+ACCEPT float min numeric strings TweakField(key='k', label='L', editor=<TweakEditor.FLOAT: 'float'>, affects=(), controls_behavior=True, default=None, options=None, colors=None, min=0.0, max=1.0, step=0.1)
+REJECT float nan string bound ValidationError 1 validation error for TweakField
+ACCEPT float default string sci '1e9'
+REJECT int default str 3.0 ValidationError 1 validation error for TweakField
+REJECT int value '3.0' ValueError int value must be an integer or all-digit string, got '3.0'
+ACCEPT int value '03' 3
+REJECT int value '+3' ValueError int value must be an integer or all-digit string, got '+3'
+ACCEPT int value ' 3 ' 3
+REJECT int value 3.0 ValueError int value must be an integer or all-digit string, got 3.0
+REJECT int value True ValueError int value must be an integer or all-digit string, got True
+ACCEPT float value '1e9' 1000000000.0
+REJECT float value 'TRUE' ValueError float value must be numeric, got 'TRUE'
+REJECT float value ' true ' ValueError float value must be numeric, got ' true '
+REJECT float value 'nan' ValueError float value must be a finite number, got 'nan'
+REJECT float value 'inf' ValueError float value must be a finite number, got 'inf'
+REJECT float value True ValueError float value must be a finite number, got True
+REJECT float value '' ValueError float value must be numeric, got ''
+ACCEPT bool value 'TRUE' True
+ACCEPT bool value ' True ' True
+ACCEPT bool value 'False' False
+ACCEPT bool value ' FALSE ' False
+REJECT bool value 'yes' ValueError boolean value must be a bool or 'true'/'false'
+REJECT bool value '1' ValueError boolean value must be a bool or 'true'/'false'
+REJECT bool value 1 ValueError boolean value must be a bool or 'true'/'false'
+ACCEPT bool value False False
+
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "sed -n '1,180p' packages/core/src/disco/core/appkit/models.py" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+"""AppSpec — the structured representation of an AppKit app (P4 / TOOL-1).
+
+An app is described by an AppSpec (sections + design tokens + tweaks), NOT by hand-drawn
+HTML. The specialized mutation tools (app_update_content / app_add_section / …) make
+SMALL, semantic edits to this spec, and the deterministic renderer projects it to a
+self-contained ``index.html``. Targeted edits touch one field/section — never a full
+rewrite. Pure, frozen, serializable value objects + a pure renderer; no runtime imports.
+"""
+
+from __future__ import annotations
+
+import html
+import re
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from disco.core.appkit import semantic_metadata as _md  # canonical data-disco-* vocabulary (P8B)
+
+# Strip characters that could break OUT of a CSS declaration / the <style> element
+# (a design-token value is interpolated into inline CSS, so it must not carry these).
+_CSS_UNSAFE = re.compile(r"""[<>{};"'\\\n\r]""")
+
+
+def _css_safe(v: str) -> str:
+    return _CSS_UNSAFE.sub("", v)
+
+# The section kinds the renderer knows how to draw.
+SECTION_KINDS: frozenset[str] = frozenset(
+    {"hero", "features", "lead_form", "about", "cta", "footer"}
+)
+
+# Default design tokens (a real app overrides via app_set_design).
+DEFAULT_DESIGN: dict[str, str] = {
+    "primary": "#4077a3",
+    "accent": "#e2725b",
+    "bg": "#fcfcfa",
+    "fg": "#1a1a1a",
+    "font": "system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+}
+
+
+class AppSection(BaseModel):
+    """One section of the app (a hero, a lead form, …) with its editable fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str
+    kind: str
+    fields: dict[str, str] = {}
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, v: str) -> str:
+        if v not in SECTION_KINDS:
+            raise ValueError(f"unknown section kind {v!r}; known: {sorted(SECTION_KINDS)}")
+        return v
+
+
+class AppSpec(BaseModel):
+    """The whole app: title + ordered sections + design tokens + tweak values."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    title: str
+    sections: tuple[AppSection, ...] = ()
+    design: dict[str, str] = {}
+    tweaks: dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def _unique_section_ids(self) -> AppSpec:
+        ids = [s.id for s in self.sections]
+        if len(ids) != len(set(ids)):
+            dupes = sorted({i for i in ids if ids.count(i) > 1})
+            raise ValueError(f"section ids must be unique; duplicates: {dupes}")
+        return self
+
+    # --- lookups ---------------------------------------------------------------
+    def _index_of(self, section_id: str) -> int:
+        for i, s in enumerate(self.sections):
+            if s.id == section_id:
+                return i
+        raise ValueError(f"no section {section_id!r}")
+
+    def section(self, section_id: str) -> AppSection:
+        return self.sections[self._index_of(section_id)]
+
+    def resolved_design(self) -> dict[str, str]:
+        return {**DEFAULT_DESIGN, **self.design}
+
+    # --- pure mutations (return a NEW AppSpec) ---------------------------------
+    def with_content(self, section_id: str, field: str, value: str) -> AppSpec:
+        i = self._index_of(section_id)
+        sec = self.sections[i]
+        new_sec = sec.model_copy(update={"fields": {**sec.fields, field: value}})
+        return self.model_copy(update={"sections": (*self.sections[:i], new_sec, *self.sections[i + 1 :])})
+
+    def with_section_added(self, section: AppSection, *, index: int | None = None) -> AppSpec:
+        if any(s.id == section.id for s in self.sections):
+            raise ValueError(f"duplicate section id {section.id!r}")
+        secs = list(self.sections)
+        secs.insert(len(secs) if index is None else index, section)
+        return self.model_copy(update={"sections": tuple(secs)})
+
+    def with_section_removed(self, section_id: str) -> AppSpec:
+        i = self._index_of(section_id)
+        return self.model_copy(update={"sections": (*self.sections[:i], *self.sections[i + 1 :])})
+
+    def with_section_reordered(self, section_id: str, to_index: int) -> AppSpec:
+        i = self._index_of(section_id)
+        secs = list(self.sections)
+        sec = secs.pop(i)
+        to_index = max(0, min(to_index, len(secs)))
+        secs.insert(to_index, sec)
+        return self.model_copy(update={"sections": tuple(secs)})
+
+    def with_design(self, key: str, value: str) -> AppSpec:
+        return self.model_copy(update={"design": {**self.design, key: value}})
+
+    def with_tweak(self, key: str, value: Any) -> AppSpec:
+        return self.model_copy(update={"tweaks": {**self.tweaks, key: value}})
+
+
+def _esc(s: str) -> str:
+    return html.escape(s, quote=True)
+
+
+def _sec_attrs(sec: AppSection) -> str:
+    """The data-disco-* attributes every section carries — emitted through the canonical
+    vocabulary (P8B) so the names live in ONE place, plus a stable screen label."""
+    return _md.attr(_md.DataDiscoAttr.SECTION, sec.id) + _md.attr(
+        _md.DataDiscoAttr.SCREEN_LABEL, _md.screen_label_value(sec.id)
+    )
+
+
+def _field(name: str) -> str:
+    return _md.attr(_md.DataDiscoAttr.FIELD, name)
+
+
+def _render_section(sec: AppSection) -> str:
+    f = sec.fields
+    if sec.kind == "hero":
+        return (
+            f'<section class="hero"{_sec_attrs(sec)}>'
+            f'<h1{_field("headline")}>{_esc(f.get("headline", ""))}</h1>'
+            f'<p{_field("subhead")}>{_esc(f.get("subhead", ""))}</p>'
+            f'<a class="cta" href="#lead"{_field("cta_text")}>{_esc(f.get("cta_text", "Get started"))}</a>'
+            f"</section>"
+        )
+    if sec.kind == "lead_form":
+        return (
+            f'<section class="lead" id="lead"{_sec_attrs(sec)}>'
+            f'<h2{_field("title")}>{_esc(f.get("title", "Contact us"))}</h2>'
+            f'<form method="post" action="/lead">'
+            f'<input name="name" placeholder="Name" required>'
+            f'<input name="email" type="email" placeholder="Email" required>'
+            f'<button type="submit">{_esc(f.get("submit_text", "Send"))}</button>'
+            f"</form></section>"
+        )
+    if sec.kind == "about":
+        return (
+            f'<section class="about"{_sec_attrs(sec)}>'
+            f'<h2{_field("title")}>{_esc(f.get("title", "About"))}</h2>'
+            f'<p{_field("body")}>{_esc(f.get("body", ""))}</p></section>'
+        )
+    # features / cta / footer + any future-but-known kind: a generic titled block.
+    return (
+        f'<section class="{_esc(sec.kind)}"{_sec_attrs(sec)}>'
+        f'<h2{_field("title")}>{_esc(f.get("title", sec.kind.title()))}</h2>'
+        f'<p{_field("body")}>{_esc(f.get("body", ""))}</p></section>'
+    )
+
+
+def render_html(spec: AppSpec) -> str:
+    """Deterministically render an AppSpec to a self-contained index.html (inline CSS
+    so it paints reliably — no separate stylesheet that streams late)."""
+    d = {k: _css_safe(v) for k, v in spec.resolved_design().items()}
+    css = (
+        f":root{{--primary:{d['primary']};--accent:{d['accent']};--bg:{d['bg']};--fg:{d['fg']}}}"
+        f"body{{margin:0;font-family:{d['font']};background:var(--bg);color:var(--fg)}}"
+
+exec
+/bin/bash -lc "rg -n \"ConfigDict\\(|strict|validate_assignment|extra=|frozen\" packages/core/src/disco/core packages/core/tests -g '*.py'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+packages/core/tests/test_appkit_semantic_metadata.py:100:    assert declared_anchors_from_spec(SPEC) == frozenset({"hero", "lead", "feat"})
+packages/core/src/disco/core/tweaks.py:7:renders the TweakPanel. Pure, frozen value objects + validation; no runtime imports.
+packages/core/src/disco/core/tweaks.py:12:never float modulo); colors are a strict #RGB/#RRGGBB hex subset normalized to #rrggbb;
+packages/core/src/disco/core/tweaks.py:37:_NUMERIC = frozenset({TweakEditor.INT, TweakEditor.FLOAT})
+packages/core/src/disco/core/tweaks.py:72:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/tweaks.py:95:            # canonicalize palette swatches up front (frozen model can't mutate post-construction)
+packages/core/src/disco/core/tweaks.py:217:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/tests/test_kits.py:24:    assert reg.ids() == frozenset({"app_shell", "lead_form"})
+packages/core/src/disco/core/semantic_refs.py:42:# Each locator is frozen and carries a Literal kind, so SemanticTarget is a
+packages/core/src/disco/core/semantic_refs.py:47:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:54:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:60:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:67:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:73:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:107:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:115:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:122:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:130:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:137:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:145:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/semantic_refs.py:157:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/semantic_refs.py:224:    model_config = ConfigDict(frozen=True)
+packages/core/tests/test_build_agent_isolation.py:19:  • AGENT_TOOLS is an explicit named frozenset; any addition or removal must
+packages/core/tests/test_finish_alias.py:49:        callable_tool_names=lambda: frozenset({"file_write"}),
+packages/core/tests/test_finish_alias.py:54:        _planning_tools=frozenset(),
+packages/core/tests/test_appkit_models.py:21:def test_roundtrip_and_frozen() -> None:
+packages/core/src/disco/core/kits/brand.py:15:BRAND_NAMES: frozenset[str] = frozenset(name for name, _mode in THEMES)
+packages/core/tests/test_contract_registry.py:11:    assert reg.kinds() == frozenset(ContractKind)
+packages/core/tests/test_contract_registry.py:50:    assert reg.get_for_brief({"kind": "nonsense"}, strict_kind=False).kind is ContractKind.CUSTOM
+packages/core/src/disco/core/kits/starter.py:107:    def ids(self) -> frozenset[str]:
+packages/core/src/disco/core/kits/starter.py:108:        return frozenset(self._BUILTINS)
+packages/core/tests/test_skill_mount.py:12:    assert resolve_mounted_skills(c) == frozenset()
+packages/core/tests/test_skill_mount.py:18:    assert resolve_mounted_skills(c) == frozenset({"appkit.leadgen", "cloudflare_export", "design_recipe"})
+packages/core/tests/test_skill_mount.py:41:    assert resolve_mounted_skills(c) == frozenset()
+packages/core/tests/test_skill_mount.py:43:    assert resolve_mounted_skills(c, base_skills=("safety_always_on",)) == frozenset({"safety_always_on"})
+packages/core/tests/test_contract_scopes.py:32:    assert s.bootstrap == frozenset({"app_create"})
+packages/core/tests/test_contract_scopes.py:33:    assert s.edit == frozenset({"app_update_content"})
+packages/core/tests/test_contract_scopes.py:34:    assert s.repair == frozenset({"file_write"})
+packages/core/tests/test_contract_scopes.py:35:    assert s.verify == frozenset({"ready_for_artifact_verification"})
+packages/core/tests/test_contract_scopes.py:36:    assert s.export == frozenset()
+packages/core/tests/test_contract_scopes.py:57:    assert s.verify == frozenset({"ready_for_app_verification"})
+packages/core/tests/test_contract_scopes.py:105:        assert s.verify == frozenset({c.verify.finalizer})
+packages/core/tests/test_contract_models.py:63:def test_frozen_immutable() -> None:
+packages/core/src/disco/core/appkit/models.py:7:rewrite. Pure, frozen, serializable value objects + a pure renderer; no runtime imports.
+packages/core/src/disco/core/appkit/models.py:29:SECTION_KINDS: frozenset[str] = frozenset(
+packages/core/src/disco/core/appkit/models.py:46:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/appkit/models.py:63:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/appkit/semantic_metadata.py:97:def declared_anchors_from_spec(spec: AppSpec) -> frozenset[str]:
+packages/core/src/disco/core/appkit/semantic_metadata.py:100:    return frozenset(s.id for s in spec.sections)
+packages/core/src/disco/core/appkit/semantic_metadata.py:103:def validate_anchors_not_invented(html_text: str, declared: frozenset[str]) -> None:
+packages/core/tests/test_context_compaction.py:108:        events, CompactionPolicy.default(), protected_seqs=frozenset({3})
+packages/core/tests/test_context_ledger.py:80:    # frozen: direct mutation forbidden
+packages/core/src/disco/core/workflows/skill_mount.py:20:) -> frozenset[str]:
+packages/core/src/disco/core/workflows/skill_mount.py:26:    return frozenset(base_skills) | frozenset(contract.skills)
+packages/core/tests/test_write_loop_recovery.py:69:        return frozenset({"file_read"})
+packages/core/tests/test_write_loop_recovery.py:445:        "file_read", {"path": "x.py"}, events, readonly_names=frozenset({"file_read"})
+packages/core/tests/test_w5_execution_nudge_cap.py:92:        planning_tools=frozenset({"submit_plan"}),
+packages/core/tests/test_w5_execution_nudge_cap.py:145:        planning_tools=frozenset({"submit_plan"}),
+packages/core/src/disco/core/workflows/prompt_pack.py:44:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/workflows/prompt_pack.py:111:    def ids(self) -> frozenset[str]:
+packages/core/src/disco/core/workflows/prompt_pack.py:113:            return frozenset(p.stem for p in self._dir.glob("*.md"))
+packages/core/src/disco/core/workflows/prompt_pack.py:115:        return frozenset(r.name[:-3] for r in root.iterdir() if r.name.endswith(".md"))
+packages/core/tests/test_w39_shell_verify_reminder.py:86:    def __init__(self, *, fail_calls: frozenset[str] | None = None):
+packages/core/tests/test_w39_shell_verify_reminder.py:88:        self._fail_calls = fail_calls or frozenset()
+packages/core/tests/test_w39_shell_verify_reminder.py:110:        return frozenset({"file_read"})
+packages/core/tests/test_w39_shell_verify_reminder.py:259:    ex = _EchoExecutor(fail_calls=frozenset({"call_shell_1"}))
+packages/core/tests/test_w39_shell_verify_reminder.py:433:    # strictly-after).
+packages/core/tests/test_w2_stale_snapshot.py:122:    stale: frozenset[str] | None = None,
+packages/core/tests/test_w2_stale_snapshot.py:191:    text1 = _snapshot({"app.js": content}, events, tracker=tracker, stale=frozenset())
+packages/core/tests/test_w2_stale_snapshot.py:197:    text2 = _snapshot({"app.js": content}, events, tracker=tracker, stale=frozenset())
+packages/core/tests/test_w2_stale_snapshot.py:210:    _snapshot({"hello.py": b"x=1"}, events, tracker=tracker, stale=frozenset())
+packages/core/tests/test_w2_stale_snapshot.py:212:    text = _snapshot({"hello.py": b"x=1"}, events, tracker=tracker, stale=frozenset())
+packages/core/tests/test_w2_stale_snapshot.py:286:    _snapshot({"work.py": original}, events, tracker=tracker, stale=frozenset())
+packages/core/tests/test_w2_stale_snapshot.py:294:        stale=frozenset({"work.py"}),
+packages/core/tests/test_w2_stale_snapshot.py:364:    t1 = _snapshot({"windows.js": large_bytes}, events, tracker=tracker, stale=frozenset())
+packages/core/tests/test_w2_stale_snapshot.py:369:    t2 = _snapshot({"windows.js": large_bytes}, events, tracker=tracker, stale=frozenset())
+packages/core/tests/test_vision_caps.py:156:        capabilities=frozenset(caps),
+packages/core/tests/test_vision_caps.py:525:                        update={"capabilities": frozenset(caps)}
+packages/core/tests/test_vision_caps.py:543:            capabilities=frozenset(),  # no capabilities declared yet
+packages/core/tests/test_vision_caps.py:560:            capabilities=frozenset(),
+packages/core/tests/test_vision_caps.py:608:        caps: frozenset[Requirement] = (
+packages/core/tests/test_vision_caps.py:609:            frozenset({Requirement.VISION}) if vision else frozenset()
+packages/core/src/disco/core/contract/registry.py:166:    def kinds(self) -> frozenset[ContractKind]:
+packages/core/src/disco/core/contract/registry.py:167:        return frozenset(self._by_kind)
+packages/core/src/disco/core/contract/registry.py:175:        self, brief: Mapping[str, Any] | None, *, strict_kind: bool = True
+packages/core/src/disco/core/contract/registry.py:181:        kind (a typo, wrong type) is a bad input: with ``strict_kind=True`` (default) it
+packages/core/src/disco/core/contract/registry.py:182:        raises ValueError rather than silently broadening to CUSTOM; ``strict_kind=False``
+packages/core/src/disco/core/contract/registry.py:191:            if strict_kind:
+packages/core/tests/test_view.py:379:    event list or the tombstone. (Both are frozen Pydantic models so a
+packages/core/src/disco/core/contract/models.py:3:Pure, frozen, serializable Pydantic v2 value objects (house style: `BaseModel` +
+packages/core/src/disco/core/contract/models.py:4:`ConfigDict(frozen=True, extra="forbid")`, `model_dump(mode="json")` round-trip). No
+packages/core/src/disco/core/contract/models.py:40:_APP_DELIVERY_KINDS: frozenset[ContractKind] = frozenset(
+packages/core/src/disco/core/contract/models.py:62:    STRICT = "strict"  # export/deploy → full check
+packages/core/src/disco/core/contract/models.py:68:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/contract/models.py:79:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/contract/models.py:89:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/contract/models.py:107:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/contract/models.py:117:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/contract/models.py:134:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/contract/phase.py:30:        self._bootstrap_tools = frozenset(contract.bootstrap.tools)
+packages/core/tests/test_verify_web_app_gate.py:169:        planning_tools=frozenset({"submit_plan"}),
+packages/core/src/disco/core/contract/enforce.py:30:DANGEROUS_TOOLS: frozenset[str] = frozenset(
+packages/core/src/disco/core/contract/enforce.py:39:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/contract/scopes.py:35:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/contract/scopes.py:37:    bootstrap: frozenset[str] = frozenset()
+packages/core/src/disco/core/contract/scopes.py:38:    edit: frozenset[str] = frozenset()
+packages/core/src/disco/core/contract/scopes.py:39:    repair: frozenset[str] = frozenset()
+packages/core/src/disco/core/contract/scopes.py:40:    verify: frozenset[str] = frozenset()
+packages/core/src/disco/core/contract/scopes.py:41:    export: frozenset[str] = frozenset()
+packages/core/src/disco/core/contract/scopes.py:43:    def for_phase(self, phase: Phase) -> frozenset[str]:
+packages/core/src/disco/core/contract/scopes.py:70:        bootstrap=frozenset(contract.bootstrap.tools),
+packages/core/src/disco/core/contract/scopes.py:71:        edit=frozenset(contract.edit.edit_tools),
+packages/core/src/disco/core/contract/scopes.py:72:        repair=frozenset(contract.edit.repair_tools),
+packages/core/src/disco/core/contract/scopes.py:73:        verify=frozenset({contract.verify.finalizer}),
+packages/core/src/disco/core/contract/scopes.py:74:        export=frozenset(),
+packages/core/tests/test_tool_rejection_recovery.py:7:xfail(strict=True). See docs/build-soak-surfaced-bugs.md.
+packages/core/tests/test_store_filters.py:95:    # Bracket strictly around the middle event's timestamp.
+packages/core/src/disco/core/events.py:75:    `frozen=True` makes events immutable at the type level (invariant #1):
+packages/core/src/disco/core/events.py:81:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/events.py:106:    Deliberately a plain class with no fields so it composes with the frozen
+packages/core/src/disco/core/events.py:121:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/events.py:135:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/events.py:144:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/events.py:157:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/events.py:175:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/events.py:663:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/events.py:820:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/tests/test_store.py:30:def test_events_are_frozen():
+packages/core/tests/test_store.py:31:    """Mutating a persisted event raises (frozen model) — invariant #1."""
+packages/core/tests/test_skills.py:163:    skills = [Skill(id="a", name="House Style", body="Use TypeScript strict mode.", enabled=True)]
+packages/core/tests/test_skills.py:166:    assert "TypeScript strict mode" in out
+packages/core/src/disco/core/context/compaction.py:40:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/compaction.py:101:    protected_seqs: frozenset[int] = frozenset(),
+packages/core/src/disco/core/context/store.py:29:_MD_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
+packages/core/src/disco/core/context/store.py:37:_JSON_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
+packages/core/src/disco/core/context/store.py:46:_SINGLETON_KINDS: frozenset[ArtifactMemoryKind] = _MD_KINDS | _JSON_KINDS
+packages/core/src/disco/core/context/store.py:75:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/store.py:85:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/pack.py:37:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/ledger.py:40:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/ledger.py:53:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/ledger.py:65:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/ledger.py:78:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/ledger.py:90:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/ledger.py:99:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/tests/test_router_routing.py:110:    resp = await router.complete(_req(requirements=frozenset({Requirement.VISION})))
+packages/core/tests/test_router_routing.py:124:        await router.complete(_req(requirements=frozenset({Requirement.VISION})))
+packages/core/tests/test_router_routing.py:134:        _req(requirements=frozenset({Requirement.VISION})), context=ctx
+packages/core/tests/test_router_routing.py:148:                capabilities=frozenset({Requirement.TOOL_CALLING}),
+packages/core/src/disco/core/context/artifact_memory.py:35:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/context/source_priority.py:50:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/tests/test_router_overflow.py:91:        OverflowSignal(difficulty=Difficulty.ROUTINE, requires=frozenset({Requirement.VISION})),
+packages/core/tests/test_router_overflow.py:147:                role=ModelRole.AGENT_DRIVER, requirements=frozenset({Requirement.VISION})
+packages/core/tests/test_router_overflow.py:166:                    role=ModelRole.AGENT_DRIVER, requirements=frozenset({Requirement.VISION})
+packages/core/src/disco/core/wire.py:23:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/wire.py:51:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/tests/test_revision_force_submit.py:153:    executor.readonly_tool_names = lambda: frozenset({"file_read"})  # type: ignore[attr-defined]
+packages/core/src/disco/core/view.py:56:_DURABLE_TOOLS = frozenset({"file_write", "file_append", "file_edit", "plan_step"})
+packages/core/tests/test_replan_pending_valve.py:112:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_replan_pending_valve.py:221:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_replan_pending_valve.py:268:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_replan_pending_valve.py:338:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_replan_pending_valve.py:375:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_replan_forces_plan.py:90:        return frozenset({"file_read", "file_list", "submit_plan"})
+packages/core/tests/test_replan_forces_plan.py:152:    loop._planning_tools = frozenset(["file_read", "file_list"])
+packages/core/tests/test_replan_forces_plan.py:377:    loop._planning_tools = frozenset(["file_read", "file_list"])
+packages/core/src/disco/core/store/sqlite.py:303:        beyond the JSON round-trip, because the spec is frozen upstream."""
+packages/core/src/disco/core/store/sqlite.py:357:        The returned spec is the live Pydantic model — frozen, so even an
+packages/core/tests/test_preview_target.py:139:    assert reserved_control_ports() == frozenset({8000, 8800, 5173})
+packages/core/src/disco/core/store/base.py:124:        wrap the spec, and the spec itself is frozen (in-process mutation is
+packages/core/tests/test_c5_pmx_memory_persistence.py:233:    """The existing in-View dedup of duplicate remember calls is a strict
+packages/core/tests/test_planner_gate.py:6:  (2) name allowlist — restrict further to the operator's curated set.
+packages/core/tests/test_planner_gate.py:37:        self._readonly = frozenset(readonly)
+packages/core/tests/test_planner_gate.py:43:def _loop(executor, *, mode, planning_tools=frozenset()):
+packages/core/tests/test_planner_gate.py:73:        planning_tools=frozenset({"file_read", "search", "submit_plan", "shell"}),
+packages/core/tests/test_planner_gate.py:91:def test_allowlist_restricts_further_within_readonly():
+packages/core/tests/test_planner_gate.py:98:        planning_tools=frozenset({"submit_plan", "file_read"}),
+packages/core/tests/test_planner_gate.py:114:        planning_tools=frozenset({"submit_plan", "shell"}),
+packages/core/tests/test_c1c_dod_gate_wiring.py:92:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c1c_dod_gate_wiring.py:211:    loop1._planning_tools = frozenset(["file_read"])
+packages/core/src/disco/core/security/assessment.py:27:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/security/analyzers.py:177:    _META_TOOLS = frozenset({"submit_plan", "plan_step", "update_plan_progress"})
+packages/core/tests/test_mcp_cap_requery.py:28:        self._callable = frozenset(callable_names)
+packages/core/tests/test_c18_plan_step_done_condition.py:186:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:253:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:315:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:417:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:465:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:514:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:596:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:651:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:703:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:755:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_c18_plan_step_done_condition.py:803:    loop._planning_tools = frozenset(["file_read"])
+packages/core/src/disco/core/obs.py:54:    _LOG.info(name, extra={"_fields": {"span": name, "event": "point", **fields}})
+packages/core/src/disco/core/obs.py:68:    _LOG.info(name, extra={"_fields": {"span": name, "event": "start", **extra}})
+packages/core/src/disco/core/obs.py:77:            extra={"_fields": {"span": name, "event": "end", "ms": ms, **extra, **measured}},
+packages/core/tests/test_f5_thinking_budget.py:159:    # The total length is strictly less than the original (we dropped chars).
+packages/core/tests/test_c13_exec_prefill.py:255:    """The strict byte-identical check: the OFF-path prefill value on the
+packages/core/tests/test_loop_step.py:159:    # (the old assertion was too strict; the new design explicitly adds it).
+packages/core/tests/test_loop_step.py:895:    loop._planning_tools = frozenset({"submit_plan"})
+packages/core/tests/test_loop_step.py:987:    loop._planning_tools = frozenset({"submit_plan"})
+packages/core/tests/test_loop_step.py:1023:    loop._planning_tools = frozenset({"submit_plan"})
+packages/core/tests/test_loop_step.py:1256:    loop._planning_tools = frozenset({"submit_plan"})
+packages/core/tests/test_build_replan_contract.py:4:Spec contracts (guidelines §11.4, §20.2). Spec-violations are xfail(strict=True)
+packages/core/src/disco/core/llm/types.py:66:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/types.py:69:    requirements: frozenset[Requirement] = frozenset()
+packages/core/src/disco/core/llm/types.py:81:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/types.py:94:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/types.py:142:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/types.py:157:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/types.py:167:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/types.py:192:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/types.py:207:    model_config = ConfigDict(frozen=True)
+packages/core/tests/test_f4_bootstrap.py:682:    loop._planning_tools = frozenset({"submit_plan"})
+packages/core/tests/test_build_plan_contract.py:4:violates the spec the test is marked `xfail(strict=True)` with the surfaced bug code,
+packages/core/src/disco/core/llm/toolcall_recovery.py:13:> Software without restriction, including without limitation the rights to use, copy,
+packages/core/tests/test_build_loop_simulated_failures.py:48:_PROD_PLANNING = frozenset({"submit_plan", "file_list", "file_read", "search", "extract"})
+packages/core/src/disco/core/loop/agent.py:123:        requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
+packages/core/src/disco/core/loop/agent.py:321:        requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
+packages/core/src/disco/core/loop/agent.py:347:        requirements: frozenset[Requirement] = frozenset({Requirement.TOOL_CALLING}),
+packages/core/tests/test_dc05_loop.py:50:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_dc05_loop.py:85:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_dc05_loop.py:118:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_dc05_loop.py:316:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_dc05_loop.py:744:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_hs08_invalid_reroute_invariant.py:70:        self._known = frozenset(known)
+packages/core/tests/test_hs08_invalid_reroute_invariant.py:108:        self._known = frozenset(known)
+packages/core/tests/test_build_loop_regression.py:117:    is satisfiable by the intended post-fix behavior (not impossibly strict)."""
+packages/core/src/disco/core/loop/preview_target.py:50:def reserved_control_ports() -> frozenset[int]:
+packages/core/src/disco/core/loop/preview_target.py:59:    return frozenset(
+packages/core/src/disco/core/loop/preview_target.py:82:@dataclass(frozen=True)
+packages/core/src/disco/core/loop/preview_target.py:106:    reserved: frozenset[int] | None = None,
+packages/core/src/disco/core/loop/preview_target.py:171:    reserved: frozenset[int] | None = None,
+packages/core/src/disco/core/loop/preview_target.py:196:    reserved: frozenset[int] | None = None,
+packages/core/src/disco/core/loop/preview_target.py:345:    command: str, reserved: frozenset[int] | None = None
+packages/core/src/disco/core/loop/preview_target.py:423:    reserved: frozenset[int] | None = None,
+packages/core/tests/test_exec_policy.py:30:    assert p.withheld_tools == frozenset({"plan_step"})
+packages/core/tests/test_exec_policy.py:37:    assert p.withheld_tools == frozenset({"plan_step", "update_plan_progress"})
+packages/core/tests/test_exec_policy.py:45:    assert p.withheld_tools == frozenset({"plan_step", "file_str_replace"})
+packages/core/tests/test_exec_policy.py:48:    assert q.withheld_tools == frozenset({"plan_step", "update_plan_progress", "file_str_replace"})
+packages/core/src/disco/core/llm/routing.py:89:    model_config = ConfigDict(frozen=True)
+packages/core/tests/test_cw_p1_codex.py:11:P1-c (assist-ON strict byte-identity): CW-3 reworded assist-ON-visible prose
+packages/core/tests/test_bug6_actionless_honest_finish.py:240:        executor=executor, agent=agent, planning_tools=frozenset(["file_read"])
+packages/core/src/disco/core/loop/policies.py:71:_PUBLISH_KEYWORDS = frozenset({"deploy", "publish", "release"})
+packages/core/tests/test_hs03_reground_cadence.py:551:    # brief restricts the change to engine.py + this test, so we don't
+packages/core/tests/test_cw4_cw5_truthful_pin.py:177:    out = collapse_superseded_reads(msgs, events, pinned_full_paths=frozenset({"app.js"}))
+packages/core/tests/test_cw4_cw5_truthful_pin.py:187:    out = collapse_superseded_reads(msgs, events, pinned_full_paths=frozenset())
+packages/core/tests/test_evidence_schema.py:74:    """extra='forbid' — unknown fields must raise ValidationError."""
+packages/core/src/disco/core/llm/prompts.py:70:        capabilities: frozenset[Requirement] | None = None,
+packages/core/src/disco/core/llm/prompts.py:101:        capabilities: frozenset[Requirement] | None = None,
+packages/core/src/disco/core/llm/prompts.py:333:    "CORE RULES — follow these strictly:\n"
+packages/core/src/disco/core/llm/prompts.py:539:    def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
+packages/core/src/disco/core/llm/prompts.py:561:        capabilities: frozenset[Requirement] | None = None,
+packages/core/src/disco/core/loop/engine.py:130:# default). The policy is a frozen dataclass — safe to share as a singleton.
+packages/core/src/disco/core/loop/engine.py:164:_TERMINAL_FOR_NOW = frozenset(
+packages/core/src/disco/core/loop/engine.py:417:# itself call `delegate_explore` (its tools are restricted to the read-only
+packages/core/src/disco/core/loop/engine.py:514:        planning_tools: frozenset[str] = frozenset(),
+packages/core/src/disco/core/loop/engine.py:782:    def _readonly_tool_names(self) -> frozenset[str] | None:
+packages/core/src/disco/core/llm/policy.py:29:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/policy.py:34:    requires: frozenset[Requirement] = frozenset()
+packages/core/src/disco/core/llm/policy.py:53:# DISCRETIONARY_TRIGGERS = frozenset({"hard_step", "low_confidence"})
+packages/core/src/disco/core/llm/policy.py:56:# _LOCAL_ONLY_ROLES = frozenset(
+packages/core/src/disco/core/llm/policy.py:89:#             local_caps = local.capabilities if local else frozenset()
+packages/core/src/disco/core/llm/policy.py:90:#             overflow_caps = overflow.capabilities if overflow else frozenset()
+packages/core/src/disco/core/loop/plan_conditions.py:58:        Steps WITHOUT a predicate are a strict no-op (back-compat): no
+packages/core/tests/test_brand.py:426:def test_theme_is_frozen_dataclass() -> None:
+packages/core/tests/test_brand.py:458:    """is_valid_template accepts only gallery ids — stricter than resolve_theme,
+packages/core/src/disco/core/loop/boundaries.py:51:    model_config = ConfigDict(frozen=True)
+packages/core/src/disco/core/llm/openai_provider.py:186:        self._caps = frozenset(capabilities)
+packages/core/src/disco/core/llm/openai_provider.py:266:        # truncate it. A frozen LLMMessage requires a `model_copy(update=...)` to
+packages/core/src/disco/core/llm/openai_provider.py:604:                # Rung 5: (a) strict parse
+packages/core/tests/test_finish_browser_gate.py:227:        planning_tools=frozenset({"submit_plan"}),
+packages/core/src/disco/core/loop/observe.py:309:        # interleaves between the tool-call action and its result (strict
+packages/core/src/disco/core/loop/dedup.py:18:frozensets live here (rather than in engine.py) because F9's invalidation and
+packages/core/src/disco/core/loop/dedup.py:40:_WORKSPACE_MUTATING_TOOLS = frozenset({
+packages/core/src/disco/core/loop/dedup.py:44:_WORKSPACE_READ_TOOLS = frozenset({"file_read"})
+packages/core/src/disco/core/loop/dedup.py:193:# fallback to the narrow _WORKSPACE_READ_TOOLS frozenset when the
+packages/core/src/disco/core/loop/dedup.py:364:    pinned_full_paths: frozenset[str] | None = None,
+packages/core/src/disco/core/loop/dedup.py:402:    # _WORKSPACE_READ_TOOLS = frozenset({"file_read"}) — use the single
+packages/core/src/disco/core/loop/dedup.py:403:    # source of truth from this module rather than a new frozenset.
+packages/core/src/disco/core/loop/dedup.py:457:    readonly_names: frozenset[str] | None,
+packages/core/src/disco/core/loop/dedup.py:478:        readonly_names: frozenset of read-only tool names from the
+packages/core/src/disco/core/loop/dedup.py:499:    # _WORKSPACE_READ_TOOLS frozenset (file_read) when the executor
+packages/core/src/disco/core/loop/dedup.py:589:_W39_SHELL_TOOLS = frozenset({"shell", "shell_exec"})
+packages/core/src/disco/core/loop/dedup.py:634:    scan to events strictly before the current action (defensive)."""
+packages/core/tests/test_autonomous_mode.py:37:        planning_tools=frozenset({"submit_plan", "file_read"}),
+packages/core/tests/test_dod_spec.py:262:# ---- Discriminator & frozen-model guarantees ------------------------------
+packages/core/tests/test_dod_spec.py:298:def test_predicates_and_spec_are_frozen() -> None:
+packages/core/tests/test_dod_spec.py:299:    """Both the spec and each predicate are Pydantic-frozen. In-process
+packages/core/tests/test_condenser.py:194:    # The forgotten span is the MIDDLE: strictly after the head, strictly before
+packages/core/src/disco/core/llm/exec_policy.py:8:toolset, and a cached loop's frozen boolean could go stale against the live UI badge.
+packages/core/src/disco/core/llm/exec_policy.py:11:frozen, and threaded immutably into the loop, executor, tool scope, prompt selection,
+packages/core/src/disco/core/llm/exec_policy.py:26:@dataclass(frozen=True)
+packages/core/src/disco/core/llm/exec_policy.py:47:    def withheld_tools(self) -> frozenset[str]:
+packages/core/src/disco/core/llm/exec_policy.py:72:        return frozenset(out)
+packages/core/src/disco/core/loop/driver.py:167:    def readonly_tool_names(self) -> frozenset[str] | None:
+packages/core/src/disco/core/loop/driver.py:176:            return frozenset(fn())
+packages/core/src/disco/core/loop/driver.py:180:    def planning_allowed_tool_names(self) -> frozenset[str]:
+packages/core/src/disco/core/loop/driver.py:202:        readonly = self.readonly_tool_names()  # frozenset | None (None=unknown)
+packages/core/src/disco/core/loop/driver.py:213:                return name in allow  # allowlist restricts further
+packages/core/src/disco/core/loop/driver.py:223:        return frozenset(names)
+packages/core/src/disco/core/loop/driver.py:283:                readonly = self.readonly_tool_names() or frozenset()
+packages/core/src/disco/core/loop/driver.py:307:            #   (2) name allowlist (when configured): restrict further to the
+packages/core/src/disco/core/loop/driver.py:309:            readonly = self.readonly_tool_names()  # frozenset | None (None=unknown)
+packages/core/src/disco/core/loop/driver.py:316:                    return name in allow  # allowlist restricts further
+packages/core/src/disco/core/loop/driver.py:394:            # iterable of tool-name strings (frozenset[str] on the real backend).
+packages/core/tests/test_autonomous_loop.py:66:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_autonomous_loop.py:86:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_autonomous_loop.py:209:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_autonomous_loop.py:252:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_autonomous_loop.py:288:    loop._planning_tools = frozenset(["file_read"])
+packages/core/src/disco/core/loop/context_budget.py:79:@dataclass(frozen=True)
+packages/core/tests/test_dod_evaluator.py:224:    # frozen Pydantic instance the spec carries — equality is exact).
+packages/core/tests/test_f9_read_dedup.py:21:fallback to the narrow ``_WORKSPACE_READ_TOOLS`` frozenset). No new hardcoded
+packages/core/tests/test_f9_read_dedup.py:119:        self._readonly = frozenset(readonly) if readonly is not None else frozenset({"file_read"})
+packages/core/tests/test_f9_read_dedup.py:718:        "shell", {"command": "ls"}, events, readonly_names=frozenset({"file_read"})
+packages/core/tests/test_f9_read_dedup.py:729:        "file_read", {"path": "x.py"}, events, readonly_names=frozenset({"file_read"})
+packages/core/tests/test_f9_read_dedup.py:739:        "file_read", {"path": "x.py"}, events, readonly_names=frozenset({"file_read"})
+packages/core/tests/test_f9_read_dedup.py:777:        "file_read", {"path": "P"}, events, readonly_names=frozenset({"file_read"})
+packages/core/tests/test_f9_read_dedup.py:813:        "file_read", {"path": "P"}, events, readonly_names=frozenset({"file_read"})
+packages/core/tests/test_f9_read_dedup.py:936:        "file_read", {"path": "P"}, events, readonly_names=frozenset({"file_read"})
+packages/core/tests/test_cluster3_security.py:100:    spec = SandboxSpec(egress_allow=frozenset({"api.openai.com", ".github.com"}))
+packages/core/tests/test_df08_vision_escalation.py:67:            capabilities=frozenset({Requirement.TOOL_CALLING, Requirement.JSON_MODE}),
+packages/core/tests/test_df08_vision_escalation.py:73:            capabilities=frozenset(escalation_caps),
+packages/core/tests/test_df08_vision_escalation.py:299:                capabilities=frozenset({Requirement.TOOL_CALLING, Requirement.VISION}),
+packages/core/tests/test_df08_vision_escalation.py:305:                capabilities=frozenset({Requirement.VISION}),
+packages/core/tests/test_f8_arg_truncation.py:635:    # The modified message is a NEW LLMMessage (frozen model_copy).
+packages/core/tests/test_f8_arg_truncation.py:636:    for m_in, m_out in zip(in_messages, out_messages, strict=False):
+packages/core/tests/test_f8_arg_truncation.py:638:            for tc_in, tc_out in zip(m_in.tool_calls, m_out.tool_calls, strict=False):
+packages/core/src/disco/core/llm/config.py:65:    capabilities: frozenset[Requirement] = frozenset()
+packages/core/src/disco/core/llm/config.py:503:            capabilities=frozenset(driver_caps),
+packages/core/src/disco/core/llm/config.py:512:            capabilities=frozenset(
+packages/core/src/disco/core/llm/config.py:527:            capabilities=frozenset({Requirement.JSON_MODE}),
+packages/core/src/disco/core/llm/config.py:555:            capabilities=frozenset(
+packages/core/src/disco/core/llm/config.py:578:            capabilities=frozenset(
+packages/core/src/disco/core/llm/config.py:599:            capabilities=frozenset(
+packages/core/src/disco/core/llm/config.py:699:        new_models[key] = entry.model_copy(update={"capabilities": frozenset(caps)})
+packages/core/tests/test_actionless_completion.py:43:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_actionless_completion.py:114:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_actionless_completion.py:154:    loop._planning_tools = frozenset(["file_read"])
+packages/core/tests/test_actionless_completion.py:226:        executor=executor, agent=agent, planning_tools=frozenset(["file_read"])
+packages/core/tests/test_actionless_completion.py:304:        executor=executor, agent=agent, planning_tools=frozenset(["file_read"])
+packages/core/src/disco/core/loop/signals.py:35:_BOOKKEEPING_TOOLS = frozenset(
+packages/core/src/disco/core/loop/signals.py:46:_NON_PRODUCTIVE_TOOLS = frozenset(
+packages/core/src/disco/core/loop/signals.py:119:_NONCRITICAL_FAILURE_TOOLS = frozenset({"update_plan_progress"})
+packages/core/src/disco/core/loop/finish.py:199:_FILE_WRITE_TOOLS = frozenset(
+packages/core/src/disco/core/loop/finish.py:203:_SHELL_TOOLS = frozenset({"shell", "shell_exec"})
+packages/core/src/disco/core/loop/finish.py:258:_VALIDATOR_EXECUTABLES = frozenset(
+packages/core/src/disco/core/loop/finish.py:262:_GREP_EXECUTABLES = frozenset({"grep", "egrep", "fgrep", "rg", "ripgrep", "ag"})
+packages/core/src/disco/core/loop/finish.py:264:_PYTHON_EXECUTABLES = frozenset({"python", "python3", "py", "python2"})
+packages/core/src/disco/core/loop/finish.py:266:_NONVALIDATION_EXECUTABLES = frozenset(
+packages/core/src/disco/core/loop/finish.py:1138:        # predicates (named by `kind` + the frozen-predicate `repr`); the
+packages/core/src/disco/core/loop/finish.py:1149:            # The frozen predicate's repr names kind + fields. Pair with
+packages/core/src/disco/core/inspect.py:53:@dataclass(frozen=True)
+packages/core/src/disco/core/loop/stuck.py:42:_F6_FILE_MUTATING_TOOLS = frozenset({
+packages/core/src/disco/core/loop/stuck.py:55:_NO_PROGRESS_PROBE_TOOLS = frozenset(
+packages/core/src/disco/core/loop/stuck.py:65:_WAIT_POLL_TOOLS = frozenset({
+packages/core/src/disco/core/loop/stuck.py:74:_PLAN_META_TOOLS = frozenset(
+packages/core/src/disco/core/loop/stuck.py:449:    probe_tools: frozenset[str] = _NO_PROGRESS_PROBE_TOOLS,
+packages/core/src/disco/core/loop/stuck.py:450:    edit_tools: frozenset[str] = _F6_FILE_MUTATING_TOOLS,
+packages/core/tests/llm_fakes.py:109:            capabilities=frozenset({Requirement.TOOL_CALLING, Requirement.JSON_MODE}),
+packages/core/tests/llm_fakes.py:116:            capabilities=frozenset(
+packages/core/tests/loop_fakes.py:233:    planning_tools: frozenset[str] = frozenset(),
+packages/core/src/disco/core/loop/view_render.py:141:    stale: frozenset[str] | None = None,
+packages/core/src/disco/core/loop/view_render.py:185:    _stale: frozenset[str] = stale if stale is not None else frozenset()
+packages/core/src/disco/core/loop/view_render.py:389:    modified message is a new LLMMessage (LLMMessage is frozen, so
+packages/core/src/disco/core/loop/view_render.py:482:        # it strictly exceeds the 8k baseline, so the assist-ON / small-window caps
+packages/core/src/disco/core/loop/view_render.py:535:            stale=frozenset(stale),
+packages/core/src/disco/core/loop/view_render.py:584:        _pinned_arg = None if self._loop._assist else frozenset(pinned_full)
+packages/core/tests/_buildsoak_fakes.py:14:PROD_PLANNING_TOOLS = frozenset(
+packages/core/src/disco/core/dod_util.py:36:def _egress_allowed(url: str, allow_hosts: frozenset[str]) -> tuple[bool, str]:
+packages/core/src/disco/core/dod.py:65:  3. `DoDSpec.model_config` is `frozen=True` and the predicates are themselves
+packages/core/src/disco/core/dod.py:66:     frozen Pydantic models — even in-process mutation is a `ValidationError`.
+packages/core/src/disco/core/dod.py:98:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod.py:119:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod.py:133:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod.py:184:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod.py:189:    # to set it; stored value is what the spec was first frozen at.
+packages/core/src/disco/core/dod_evaluator.py:14:  * the `DoDSpec` (the predicates, in their frozen form),
+packages/core/src/disco/core/dod_evaluator.py:126:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod_evaluator.py:151:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod_evaluator.py:165:    instance the verdict is about — frozen, Pydantic-equal to the source
+packages/core/src/disco/core/dod_evaluator.py:170:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod_evaluator.py:209:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod_evaluator.py:229:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod_evaluator.py:237:    (in its frozen form), plus a tiny evidence packet: the spec's predicates
+packages/core/src/disco/core/dod_evaluator.py:241:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/dod_evaluator.py:269:_DEFAULT_HTTP_ALLOW_HOSTS = frozenset(
+packages/core/src/disco/core/dod_evaluator.py:370:    allow_hosts: frozenset[str],
+packages/core/src/disco/core/dod_evaluator.py:470:        http_allow_hosts: frozenset[str] = _DEFAULT_HTTP_ALLOW_HOSTS,
+packages/core/src/disco/core/dod_evaluator.py:485:        self._http_allow_hosts = frozenset(http_allow_hosts)
+packages/core/src/disco/core/dod_evaluator.py:510:        http_allow_hosts: frozenset[str],
+packages/core/src/disco/core/evidence/schema.py:81:_TOKEN_COUNT_KEYS: frozenset[str] = frozenset(
+packages/core/src/disco/core/evidence/schema.py:257:    ``frozen=True`` makes instances immutable at the type level, matching the
+packages/core/src/disco/core/evidence/schema.py:261:    model_config = ConfigDict(frozen=True, extra="forbid")
+packages/core/src/disco/core/brand/__init__.py:11:  Theme               — frozen dataclass of all brand tokens
+packages/core/src/disco/core/brand/tokens.py:18:@dataclass(frozen=True)
+packages/core/src/disco/core/brand/tokens.py:346:@dataclass(frozen=True)
+packages/core/src/disco/core/brand/tokens.py:382:_VALID_TEMPLATE_IDS: frozenset[str] = frozenset(t.id for t in TEMPLATE_CATALOG)
+packages/core/src/disco/core/brand/css.py:90:        when the page is served over http (mixed-content / CORS restriction).
+
+exec
+/bin/bash -lc "rg -n \"basedpyright|pytest|pydantic|pythonpath|tool\\.pytest\" pyproject.toml packages/core/pyproject.toml uv.lock tox.ini pytest.ini setup.cfg" in /var/home/dylan/projects/disclaude
+ exited 2 in 0ms:
+rg: tox.ini: No such file or directory (os error 2)
+rg: pytest.ini: No such file or directory (os error 2)
+rg: setup.cfg: No such file or directory (os error 2)
+packages/core/pyproject.toml:11:    "pydantic>=2.7",
+pyproject.toml:29:    "pytest>=8.2",
+pyproject.toml:30:    "pytest-asyncio>=0.24",
+pyproject.toml:36:    "basedpyright>=1.39",  # Python static type-checking (strict: zero errors tree-wide, no baseline)
+pyproject.toml:56:[tool.pytest.ini_options]
+uv.lock:88:name = "basedpyright"
+uv.lock:94:sdist = { url = "https://files.pythonhosted.org/packages/d2/62/8550c75850b2185df984d1de437b4805b039ba856cacbee2966236203133/basedpyright-1.39.8.tar.gz", hash = "sha256:bb1a86d4d71425d52d1501b317fe23d45527baed06bd5d5e1a07cd4b60d07b55", size = 25488230, upload-time = "2026-06-14T09:05:30.177Z" }
+uv.lock:96:    { url = "https://files.pythonhosted.org/packages/f5/94/878454aefe94328ba7ad808ecd63da8311aae1198da46cfb29f5cfe130a8/basedpyright-1.39.8-py3-none-any.whl", hash = "sha256:a79d89928064bd9023d429b50c625d87d023bacc2fe3932ef6c7bd13b5426048", size = 13182726, upload-time = "2026-06-14T09:05:26.368Z" },
+uv.lock:671:    { name = "pydantic" },
+uv.lock:678:    { name = "pydantic", specifier = ">=2.7" },
+uv.lock:743:    { name = "basedpyright" },
+uv.lock:751:    { name = "pytest" },
+uv.lock:752:    { name = "pytest-asyncio" },
+uv.lock:760:    { name = "basedpyright", specifier = ">=1.39" },
+uv.lock:768:    { name = "pytest", specifier = ">=8.2" },
+uv.lock:769:    { name = "pytest-asyncio", specifier = ">=0.24" },
+uv.lock:847:    { name = "pydantic" },
+uv.lock:1793:    { name = "pydantic" },
+uv.lock:1794:    { name = "pydantic-settings" },
+uv.lock:2369:name = "pydantic"
+uv.lock:2374:    { name = "pydantic-core" },
+uv.lock:2378:sdist = { url = "https://files.pythonhosted.org/packages/18/a5/b60d21ac674192f8ab0ba4e9fd860690f9b4a6e51ca5df118733b487d8d6/pydantic-2.13.4.tar.gz", hash = "sha256:c40756b57adaa8b1efeeced5c196f3f3b7c435f90e84ea7f443901bec8099ef6", size = 844775, upload-time = "2026-05-06T13:43:05.343Z" }
+uv.lock:2380:    { url = "https://files.pythonhosted.org/packages/fd/7b/122376b1fd3c62c1ed9dc80c931ace4844b3c55407b6fb2d199377c9736f/pydantic-2.13.4-py3-none-any.whl", hash = "sha256:45a282cde31d808236fd7ea9d919b128653c8b38b393d1c4ab335c62924d9aba", size = 472262, upload-time = "2026-05-06T13:43:02.641Z" },
+uv.lock:2384:name = "pydantic-core"
+uv.lock:2390:sdist = { url = "https://files.pythonhosted.org/packages/9d/56/921726b776ace8d8f5db44c4ef961006580d91dc52b803c489fafd1aa249/pydantic_core-2.46.4.tar.gz", hash = "sha256:62f875393d7f270851f20523dd2e29f082bcc82292d66db2b64ea71f64b6e1c1", size = 471464, upload-time = "2026-05-06T13:37:06.98Z" }
+uv.lock:2392:    { url = "https://files.pythonhosted.org/packages/ce/8c/af022f0af448d7747c5154288d46b5f2bc5f17366eaa0e23e9aa04d59f3b/pydantic_core-2.46.4-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:3245406455a5d98187ec35530fd772b1d799b26667980872c8d4614991e2c4a2", size = 2106158, upload-time = "2026-05-06T13:38:57.215Z" },
+uv.lock:2393:    { url = "https://files.pythonhosted.org/packages/19/95/6195171e385007300f0f5574592e467c568becce2d937a0b6804f218bc49/pydantic_core-2.46.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:962ccbab7b642487b1d8b7df90ef677e03134cf1fd8880bf698649b22a69371f", size = 1951724, upload-time = "2026-05-06T13:37:02.697Z" },
+uv.lock:2394:    { url = "https://files.pythonhosted.org/packages/8e/bc/f47d1ff9cbb1620e1b5b697eef06010035735f07820180e74178226b27b3/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:8233f2947cf85404441fd7e0085f53b10c93e0ee78611099b5c7237e36aacbf7", size = 1975742, upload-time = "2026-05-06T13:37:09.448Z" },
+uv.lock:2395:    { url = "https://files.pythonhosted.org/packages/5b/11/9b9a5b0306345664a2da6410877af6e8082481b5884b3ddd78d47c6013ce/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:3a233125ac121aa3ffba9a2b59edfc4a985a76092dc8279586ab4b71390875e7", size = 2052418, upload-time = "2026-05-06T13:37:38.234Z" },
+uv.lock:2396:    { url = "https://files.pythonhosted.org/packages/f1/b7/a65fec226f5d78fc39f4a13c4cc0c768c22b113438f60c14adc9d2865038/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:5b712b53160b79a5850310b912a5ef8e57e56947c8ad690c227f5c9d7e561712", size = 2232274, upload-time = "2026-05-06T13:38:27.753Z" },
+uv.lock:2397:    { url = "https://files.pythonhosted.org/packages/68/f0/92039db98b907ef49269a8271f67db9cb78ae2fc68062ef7e4e77adb5f61/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:9401557acd873c3a7f3eb9383edef8ac4968f9510e340f4808d427e75667e7b4", size = 2309940, upload-time = "2026-05-06T13:38:05.353Z" },
+uv.lock:2398:    { url = "https://files.pythonhosted.org/packages/5f/97/2aab507d3d00ca626e8e57c1eac6a79e4e5fbcc63eb99733ff55d1717f65/pydantic_core-2.46.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:926c9541b14b12b1681dca8a0b75feb510b06c6341b70a8e500c2fdcff837cce", size = 2094516, upload-time = "2026-05-06T13:39:10.577Z" },
+uv.lock:2399:    { url = "https://files.pythonhosted.org/packages/22/37/a8aca44d40d737dde2bc05b3c6c07dff0de07ce6f82e9f3167aeaf4d5dea/pydantic_core-2.46.4-cp312-cp312-manylinux_2_31_riscv64.whl", hash = "sha256:56cb4851bcaf3d117eddcef4fe66afd750a50274b0da8e22be256d10e5611987", size = 2136854, upload-time = "2026-05-06T13:40:22.59Z" },
+uv.lock:2400:    { url = "https://files.pythonhosted.org/packages/24/99/fcef1b79238c06a8cbec70819ac722ba76e02bc8ada9b0fd66eba40da01b/pydantic_core-2.46.4-cp312-cp312-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:c68fcd102d71ea85c5b2dfac3f4f8476eff42a9e078fd5faefff6d145063536b", size = 2180306, upload-time = "2026-05-06T13:40:10.666Z" },
+uv.lock:2401:    { url = "https://files.pythonhosted.org/packages/ae/6c/fc44000918855b42779d007ae63b0532794739027b2f417321cddbc44f6a/pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_aarch64.whl", hash = "sha256:b2f69dec1725e79a012d920df1707de5caf7ed5e08f3be4435e25803efc47458", size = 2190044, upload-time = "2026-05-06T13:40:43.231Z" },
+uv.lock:2402:    { url = "https://files.pythonhosted.org/packages/6b/65/d9cadc9f1920d7a127ad2edba16c1db7916e59719285cd6c94600b0080ba/pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_armv7l.whl", hash = "sha256:8d0820e8192167f80d88d64038e609c31452eeca865b4e1d9950a27a4609b00b", size = 2329133, upload-time = "2026-05-06T13:39:57.365Z" },
+uv.lock:2403:    { url = "https://files.pythonhosted.org/packages/d0/cf/c873d91679f3a30bcf5e7ac280ce5573483e72295307685120d0d5ad3416/pydantic_core-2.46.4-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:fbdb89b3e1c94a30cc5edfce477c6e6a5dc4d8f84665b455c27582f211a1c72c", size = 2374464, upload-time = "2026-05-06T13:38:06.976Z" },
+uv.lock:2404:    { url = "https://files.pythonhosted.org/packages/47/bd/6f2fc8188f31bf10590f1e98e7b306336161fac930a8c514cd7bd828c7dc/pydantic_core-2.46.4-cp312-cp312-win32.whl", hash = "sha256:9aa768456404a8bf48a4406685ac2bec8e72b62c69313734fa3b73cf33b3a894", size = 1974823, upload-time = "2026-05-06T13:40:47.985Z" },
+uv.lock:2405:    { url = "https://files.pythonhosted.org/packages/40/8c/985c1d41ea1107c2534abd9870e4ed5c8e7669b5c308297835c001e7a1c4/pydantic_core-2.46.4-cp312-cp312-win_amd64.whl", hash = "sha256:e9c26f834c65f5752f3f06cb08cb86a913ceb7274d0db6e267808a708b46bc89", size = 2072919, upload-time = "2026-05-06T13:39:21.153Z" },
+uv.lock:2406:    { url = "https://files.pythonhosted.org/packages/c4/ba/f463d006e0c47373ca7ec5e1a261c59dc01ef4d62b2657af925fb0deee3a/pydantic_core-2.46.4-cp312-cp312-win_arm64.whl", hash = "sha256:4fc73cb559bdb54b1134a706a2802a4cddd27a0633f5abb7e53056268751ac6a", size = 2027604, upload-time = "2026-05-06T13:39:03.753Z" },
+uv.lock:2407:    { url = "https://files.pythonhosted.org/packages/51/a2/5d30b469c5267a17b39dec53208222f76a8d351dfac4af661888c5aee77d/pydantic_core-2.46.4-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:5d5902252db0d3cedf8d4a1bc68f70eeb430f7e4c7104c8c476753519b423008", size = 2106306, upload-time = "2026-05-06T13:37:48.029Z" },
+uv.lock:2408:    { url = "https://files.pythonhosted.org/packages/c1/81/4fa520eaffa8bd7d1525e644cd6d39e7d60b1592bc5b516693c7340b50f1/pydantic_core-2.46.4-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:c94f0688e7b8d0a67abf40e57a7eaaecd17cc9586706a31b76c031f63df052b4", size = 1951906, upload-time = "2026-05-06T13:37:17.012Z" },
+uv.lock:2409:    { url = "https://files.pythonhosted.org/packages/03/d5/fd02da45b659668b05923b17ba3a0100a0a3d5541e3bd8fcc4ecb711309e/pydantic_core-2.46.4-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f027324c56cd5406ca49c124b0db10e56c69064fec039acc571c29020cc87c76", size = 1976802, upload-time = "2026-05-06T13:37:35.113Z" },
+uv.lock:2410:    { url = "https://files.pythonhosted.org/packages/21/f2/95727e1368be3d3ed485eaab7adbd7dda408f33f7a36e8b48e0144002b91/pydantic_core-2.46.4-cp313-cp313-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:e739fee756ba1010f8bcccb534252e85a35fe45ae92c295a06059ce58b74ccd3", size = 2052446, upload-time = "2026-05-06T13:37:12.313Z" },
+uv.lock:2411:    { url = "https://files.pythonhosted.org/packages/9c/86/5d99feea3f77c7234b8718075b23db11532773c1a0dbd9b9490215dc2eeb/pydantic_core-2.46.4-cp313-cp313-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:9d56801be94b86a9da183e5f3766e6310752b99ff647e38b09a9500d88e46e76", size = 2232757, upload-time = "2026-05-06T13:39:01.149Z" },
+uv.lock:2412:    { url = "https://files.pythonhosted.org/packages/d2/3a/508ac615935ef7588cf6d9e9b91309fdc2da751af865e02a9098de88258c/pydantic_core-2.46.4-cp313-cp313-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:2412e734dcb48da14d4e4006b82b46b74f2518b8a26ee7e58c6844a6cd6d03c4", size = 2309275, upload-time = "2026-05-06T13:37:41.406Z" },
+uv.lock:2413:    { url = "https://files.pythonhosted.org/packages/07/f8/41db9de19d7987d6b04715a02b3b40aea467000275d9d758ffaa31af7d50/pydantic_core-2.46.4-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:9551187363ffc0de2a00b2e47c25aeaeb1020b69b668762966df15fc5659dd5a", size = 2094467, upload-time = "2026-05-06T13:39:18.847Z" },
+uv.lock:2414:    { url = "https://files.pythonhosted.org/packages/2c/e2/f35033184cb11d0052daf4416e8e10a502ea2ac006fc4f459aee872727d1/pydantic_core-2.46.4-cp313-cp313-manylinux_2_31_riscv64.whl", hash = "sha256:0186750b482eefa11d7f435892b09c5c606193ef3375bcf94aa00ae6bfb66262", size = 2134417, upload-time = "2026-05-06T13:40:17.944Z" },
+uv.lock:2415:    { url = "https://files.pythonhosted.org/packages/7e/7b/6ceeb1cc90e193862f444ebe373d8fdf613f0a82572dde03fb10734c6c71/pydantic_core-2.46.4-cp313-cp313-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:5855698a4856556d86e8e6cd8434bc3ac0314ee8e12089ae0e143f64c6256e4e", size = 2179782, upload-time = "2026-05-06T13:40:32.618Z" },
+uv.lock:2416:    { url = "https://files.pythonhosted.org/packages/5a/f2/c8d7773ede6af08036423a00ae0ceffce266c3c52a096c435d68c896083f/pydantic_core-2.46.4-cp313-cp313-musllinux_1_1_aarch64.whl", hash = "sha256:cbaf13819775b7f769bf4a1f066cb6df7a28d4480081a589828ef190226881cd", size = 2188782, upload-time = "2026-05-06T13:36:51.018Z" },
+uv.lock:2417:    { url = "https://files.pythonhosted.org/packages/59/31/0c864784e31f09f05cdd87606f08923b9c9e7f6e51dd27f20f62f975ce9f/pydantic_core-2.46.4-cp313-cp313-musllinux_1_1_armv7l.whl", hash = "sha256:633147d34cf4550417f12e2b1a0383973bdf5cdfde212cb09e9a581cf10820be", size = 2328334, upload-time = "2026-05-06T13:40:37.764Z" },
+uv.lock:2418:    { url = "https://files.pythonhosted.org/packages/c2/eb/4f6c8a41efa30baa755590f4141abf3a8c370fab610915733e74134a7270/pydantic_core-2.46.4-cp313-cp313-musllinux_1_1_x86_64.whl", hash = "sha256:82cf5301172168103724d49a1444d3378cb20cdee30b116a1bd6031236298a5d", size = 2372986, upload-time = "2026-05-06T13:39:34.152Z" },
+uv.lock:2419:    { url = "https://files.pythonhosted.org/packages/5b/24/b375a480d53113860c299764bfe9f349a3dc9108b3adc0d7f0d786492ebf/pydantic_core-2.46.4-cp313-cp313-win32.whl", hash = "sha256:9fa8ae11da9e2b3126c6426f147e0fba88d96d65921799bb30c6abd1cb2c97fb", size = 1973693, upload-time = "2026-05-06T13:37:55.072Z" },
+uv.lock:2420:    { url = "https://files.pythonhosted.org/packages/7e/e8/cff247591966f2d22ec8c003cd7587e27b7ba7b81ab2fb888e3ab75dc285/pydantic_core-2.46.4-cp313-cp313-win_amd64.whl", hash = "sha256:6b3ace8194b0e5204818c92802dcdca7fc6d88aabbb799d7c795540d9cd6d292", size = 2071819, upload-time = "2026-05-06T13:38:49.139Z" },
+uv.lock:2421:    { url = "https://files.pythonhosted.org/packages/c6/1a/f4aee670d5670e9e148e0c82c7db98d780be566c6e6a97ee8035528ca0b3/pydantic_core-2.46.4-cp313-cp313-win_arm64.whl", hash = "sha256:184c081504d17f1c1066e430e117142b2c77d9448a97f7b65c6ac9fd9aee238d", size = 2027411, upload-time = "2026-05-06T13:40:45.796Z" },
+uv.lock:2422:    { url = "https://files.pythonhosted.org/packages/8d/74/228a26ddad29c6672b805d9fd78e8d251cd04004fa7eed0e622096cd0250/pydantic_core-2.46.4-cp314-cp314-macosx_10_12_x86_64.whl", hash = "sha256:428e04521a40150c85216fc8b85e8d39fece235a9cf5e383761238c7fa9b96fb", size = 2102079, upload-time = "2026-05-06T13:38:41.019Z" },
+uv.lock:2423:    { url = "https://files.pythonhosted.org/packages/ad/1f/8970b150a4b4365623ae00fc88603491f763c627311ae8031e3111356d6e/pydantic_core-2.46.4-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:23ace664830ee0bfe014a0c7bc248b1f7f25ed7ad103852c317624a1083af462", size = 1952179, upload-time = "2026-05-06T13:36:59.812Z" },
+uv.lock:2424:    { url = "https://files.pythonhosted.org/packages/95/30/5211a831ae054928054b2f79731661087a2bc5c01e825c672b3a4a8f1b3e/pydantic_core-2.46.4-cp314-cp314-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ce5c1d2a8b27468f433ca974829c44060b8097eedc39933e3c206a90ee49c4a9", size = 1978926, upload-time = "2026-05-06T13:37:39.933Z" },
+uv.lock:2425:    { url = "https://files.pythonhosted.org/packages/57/e9/689668733b1eb67adeef047db3c2e8788fcf65a7fd9c9e2b46b7744fe245/pydantic_core-2.46.4-cp314-cp314-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:7283d57845ecf5a163403eb0702dfc220cc4fbdd18919cb5ccea4f95ee1cdab4", size = 2046785, upload-time = "2026-05-06T13:38:01.995Z" },
+uv.lock:2426:    { url = "https://files.pythonhosted.org/packages/60/d9/6715260422ff50a2109878fd24d948a6c3446bb2664f34ee78cd972b3acd/pydantic_core-2.46.4-cp314-cp314-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:8daafc69c93ee8a0204506a3b6b30f586ef54028f52aeeeb5c4cfc5184fd5914", size = 2228733, upload-time = "2026-05-06T13:40:50.371Z" },
+uv.lock:2427:    { url = "https://files.pythonhosted.org/packages/18/ae/fdb2f64316afca925640f8e70bb1a564b0ec2721c1389e25b8eb4bf9a299/pydantic_core-2.46.4-cp314-cp314-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:cd2213145bcc2ba85884d0ac63d222fece9209678f77b9b4d76f054c561adb28", size = 2307534, upload-time = "2026-05-06T13:37:21.531Z" },
+uv.lock:2428:    { url = "https://files.pythonhosted.org/packages/89/1d/8eff589b45bb8190a9d12c49cfad0f176a5cbd1534908a6b5125e2886239/pydantic_core-2.46.4-cp314-cp314-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7a5f930472650a82629163023e630d160863fce524c616f4e5186e5de9d9a49b", size = 2099732, upload-time = "2026-05-06T13:39:31.942Z" },
+uv.lock:2429:    { url = "https://files.pythonhosted.org/packages/06/d5/ee5a3366637fee41dee51a1fc91562dcf12ddbc68fda34e6b253da2324bb/pydantic_core-2.46.4-cp314-cp314-manylinux_2_31_riscv64.whl", hash = "sha256:c1b3f518abeca3aa13c712fd202306e145abf59a18b094a6bafb2d2bbf59192c", size = 2129627, upload-time = "2026-05-06T13:37:25.033Z" },
+uv.lock:2430:    { url = "https://files.pythonhosted.org/packages/94/33/2414be571d2c6a6c4d08be21f9292b6d3fdb08949a97b6dfe985017821db/pydantic_core-2.46.4-cp314-cp314-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:1a7dd0b3ee80d90150e3495a3a13ac34dbcbfd4f012996a6a1d8900e91b5c0fb", size = 2179141, upload-time = "2026-05-06T13:37:14.046Z" },
+uv.lock:2431:    { url = "https://files.pythonhosted.org/packages/7b/79/7daa95be995be0eecc4cf75064cb33f9bbbfe3fe0158caf2f0d4a996a5c7/pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_aarch64.whl", hash = "sha256:3fb702cd90b0446a3a1c5e470bfa0dd23c0233b676a9099ddcc964fa6ca13898", size = 2184325, upload-time = "2026-05-06T13:36:53.615Z" },
+uv.lock:2432:    { url = "https://files.pythonhosted.org/packages/9f/cb/d0a382f5c0de8a222dc61c65348e0ce831b1f68e0a018450d31c2cace3a5/pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_armv7l.whl", hash = "sha256:b8458003118a712e66286df6a707db01c52c0f52f7db8e4a38f0da1d3b94fc4e", size = 2323990, upload-time = "2026-05-06T13:40:29.971Z" },
+uv.lock:2433:    { url = "https://files.pythonhosted.org/packages/05/db/d9ba624cc4a5aced1598e88c04fdbd8310c8a69b9d38b9a3d39ce3a61ed7/pydantic_core-2.46.4-cp314-cp314-musllinux_1_1_x86_64.whl", hash = "sha256:372429a130e469c9cd698925ce5fc50940b7a1336b0d82038e63d5bbc4edc519", size = 2369978, upload-time = "2026-05-06T13:37:23.027Z" },
+uv.lock:2434:    { url = "https://files.pythonhosted.org/packages/f2/20/d15df15ba918c423461905802bfd2981c3af0bfa0e40d05e13edbfa48bc3/pydantic_core-2.46.4-cp314-cp314-win32.whl", hash = "sha256:85bb3611ff1802f3ee7fdd7dbff26b56f343fb432d57a4728fdd49b6ef35e2f4", size = 1966354, upload-time = "2026-05-06T13:38:03.499Z" },
+uv.lock:2435:    { url = "https://files.pythonhosted.org/packages/fc/b6/6b8de4c0a7d7ab3004c439c80c5c1e0a3e8d78bbae19379b01960383d9e5/pydantic_core-2.46.4-cp314-cp314-win_amd64.whl", hash = "sha256:811ff8e9c313ab425368bcbb36e5c4ebd7108c2bbf4e4089cfbb0b01eff63fac", size = 2072238, upload-time = "2026-05-06T13:39:40.807Z" },
+uv.lock:2436:    { url = "https://files.pythonhosted.org/packages/32/36/51eb763beec1f4cf59b1db243a7dcc39cbb41230f050a09b9d69faaf0a48/pydantic_core-2.46.4-cp314-cp314-win_arm64.whl", hash = "sha256:bfec22eab3c8cc2ceec0248aec886624116dc079afa027ecc8ad4a7e62010f8a", size = 2018251, upload-time = "2026-05-06T13:37:26.72Z" },
+uv.lock:2437:    { url = "https://files.pythonhosted.org/packages/e8/91/855af51d625b23aa987116a19e231d2aaef9c4a415273ddc189b79a45fee/pydantic_core-2.46.4-cp314-cp314t-macosx_10_12_x86_64.whl", hash = "sha256:af8244b2bef6aaad6d92cda81372de7f8c8d36c9f0c3ea36e827c60e7d9467a0", size = 2099593, upload-time = "2026-05-06T13:39:47.682Z" },
+uv.lock:2438:    { url = "https://files.pythonhosted.org/packages/fb/1b/8784a54c65edb5f49f0a14d6977cf1b209bba85a4c77445b255c2de58ab3/pydantic_core-2.46.4-cp314-cp314t-macosx_11_0_arm64.whl", hash = "sha256:5a4330cdbc57162e4b3aa303f588ba752257694c9c9be3e7ebb11b4aca659b5d", size = 1935226, upload-time = "2026-05-06T13:40:40.428Z" },
+uv.lock:2439:    { url = "https://files.pythonhosted.org/packages/e8/e7/1955d28d1afc56dd4b3ad7cc0cf39df1b9852964cf16e5d13912756d6d6b/pydantic_core-2.46.4-cp314-cp314t-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:29c61fc04a3d840155ff08e475a04809278972fe6aef51e2720554e96367e34b", size = 1974605, upload-time = "2026-05-06T13:37:32.029Z" },
+uv.lock:2440:    { url = "https://files.pythonhosted.org/packages/93/e2/3fedbf0ba7a22850e6e9fd78117f1c0f10f950182344d8a6c535d468fdd8/pydantic_core-2.46.4-cp314-cp314t-manylinux_2_17_armv7l.manylinux2014_armv7l.whl", hash = "sha256:c50f2528cf200c5eed56faf3f4e22fcd5f38c157a8b78576e6ba3168ec35f000", size = 2030777, upload-time = "2026-05-06T13:38:55.239Z" },
+uv.lock:2441:    { url = "https://files.pythonhosted.org/packages/f8/61/46be275fcaaba0b4f5b9669dd852267ce1ff616592dccf7a7845588df091/pydantic_core-2.46.4-cp314-cp314t-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:0cbe8b01f948de4286c74cdd6c667aceb38f5c1e26f0693b3983d9d74887c65e", size = 2236641, upload-time = "2026-05-06T13:37:08.096Z" },
+uv.lock:2442:    { url = "https://files.pythonhosted.org/packages/60/db/12e93e46a8bac9988be3c016860f83293daea8c716c029c9ace279036f2f/pydantic_core-2.46.4-cp314-cp314t-manylinux_2_17_s390x.manylinux2014_s390x.whl", hash = "sha256:617d7e2ca7dcb8c5cf6bcb8c59b8832c94b36196bbf1cbd1bfb56ed341905edd", size = 2286404, upload-time = "2026-05-06T13:40:20.221Z" },
+uv.lock:2443:    { url = "https://files.pythonhosted.org/packages/e2/4a/4d8b19008f38d31c53b8219cfedc2e3d5de5fe99d90076b7e767de29274f/pydantic_core-2.46.4-cp314-cp314t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:7027560ee92211647d0d34e3f7cd6f50da56399d26a9c8ad0da286d3869a53f3", size = 2109219, upload-time = "2026-05-06T13:38:12.153Z" },
+uv.lock:2444:    { url = "https://files.pythonhosted.org/packages/88/70/3cbc40978fefb7bb09c6708d40d4ad1a5d70fd7213c3d17f971de868ec1f/pydantic_core-2.46.4-cp314-cp314t-manylinux_2_31_riscv64.whl", hash = "sha256:f99626688942fb746e545232e7726926f3be91b5975f8b55327665fafda991c7", size = 2110594, upload-time = "2026-05-06T13:40:02.971Z" },
+uv.lock:2445:    { url = "https://files.pythonhosted.org/packages/9d/20/b8d36736216e29491125531685b2f9e61aa5b4b2599893f8268551da3338/pydantic_core-2.46.4-cp314-cp314t-manylinux_2_5_i686.manylinux1_i686.whl", hash = "sha256:fc3e9034a63de20e15e8ade85358bc6efc614008cab72898b4b4952bea0509ff", size = 2159542, upload-time = "2026-05-06T13:39:27.506Z" },
+uv.lock:2446:    { url = "https://files.pythonhosted.org/packages/1d/a2/367df868eb584dacf6bf82a389272406d7178e301c4ac82545ab98bc2dd9/pydantic_core-2.46.4-cp314-cp314t-musllinux_1_1_aarch64.whl", hash = "sha256:97e7cf2be5c77b7d1a9713a05605d49460d02c6078d38d8bef3cbe323c548424", size = 2168146, upload-time = "2026-05-06T13:38:31.93Z" },
+uv.lock:2447:    { url = "https://files.pythonhosted.org/packages/c1/b8/4460f77f7e201893f649a29ab355dddd3beee8a97bcb1a320db414f9a06e/pydantic_core-2.46.4-cp314-cp314t-musllinux_1_1_armv7l.whl", hash = "sha256:3bf92c5d0e00fefaab325a4d27828fe6b6e2a21848686b5b60d2d9eeb09d76c6", size = 2306309, upload-time = "2026-05-06T13:37:44.717Z" },
+uv.lock:2448:    { url = "https://files.pythonhosted.org/packages/64/c4/be2639293acd87dc8ddbcec41a73cee9b2ebf996fe6d892a1a74e88ad3f7/pydantic_core-2.46.4-cp314-cp314t-musllinux_1_1_x86_64.whl", hash = "sha256:3ecbc122d18468d06ca279dc26a8c2e2d5acb10943bb35e36ae92096dc3b5565", size = 2369736, upload-time = "2026-05-06T13:37:05.645Z" },
+uv.lock:2449:    { url = "https://files.pythonhosted.org/packages/30/a6/9f9f380dbb301f67023bf8f707aaa75daadf84f7152d95c410fd7e81d994/pydantic_core-2.46.4-cp314-cp314t-win32.whl", hash = "sha256:e846ae7835bf0703ae43f534ab79a867146dadd59dc9ca5c8b53d5c8f7c9ef02", size = 1955575, upload-time = "2026-05-06T13:38:51.116Z" },
+uv.lock:2450:    { url = "https://files.pythonhosted.org/packages/40/1f/f1eb9eb350e795d1af8586289746f5c5677d16043040d63710e22abc43c9/pydantic_core-2.46.4-cp314-cp314t-win_amd64.whl", hash = "sha256:2108ba5c1c1eca18030634489dc544844144ee36357f2f9f780b93e7ddbb44b5", size = 2051624, upload-time = "2026-05-06T13:38:21.672Z" },
+uv.lock:2451:    { url = "https://files.pythonhosted.org/packages/f6/d2/42dd53d0a85c27606f316d3aa5d2869c4e8470a5ed6dec30e4a1abe19192/pydantic_core-2.46.4-cp314-cp314t-win_arm64.whl", hash = "sha256:4fcbe087dbc2068af7eda3aa87634eba216dbda64d1ae73c8684b621d33f6596", size = 2017325, upload-time = "2026-05-06T13:40:52.723Z" },
+uv.lock:2452:    { url = "https://files.pythonhosted.org/packages/9d/1d/8987ad40f65ae1432753072f214fb5c74fe47ffbd0698bb9cbbb585664f8/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-macosx_10_12_x86_64.whl", hash = "sha256:1d8ba486450b14f3b1d63bc521d410ec7565e52f887b9fb671791886436a42f7", size = 2095527, upload-time = "2026-05-06T13:39:52.283Z" },
+uv.lock:2453:    { url = "https://files.pythonhosted.org/packages/64/d3/84c282a7eee1d3ac4c0377546ef5a1ea436ce26840d9ac3b7ed54a377507/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:3009f12e4e90b7f88b4f9adb1b0c4a3d58fe7820f3238c190047209d148026df", size = 1936024, upload-time = "2026-05-06T13:40:15.671Z" },
+uv.lock:2454:    { url = "https://files.pythonhosted.org/packages/d7/ca/eac61596cdeb4d7e174d3dc0bd8a6238f14f75f97a24e7b7db4c7e7340a0/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ad785e92e6dc634c21555edc8bd6b64957ab844541bcb96a1366c202951ae526", size = 1990696, upload-time = "2026-05-06T13:38:34.717Z" },
+uv.lock:2455:    { url = "https://files.pythonhosted.org/packages/fa/c3/7c8b240552251faf6b3a957db200fcfbbcec36763c050428b601e0c9b83b/pydantic_core-2.46.4-graalpy312-graalpy250_312_native-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:00c603d540afdd6b80eb39f078f33ebd46211f02f33e34a32d9f053bba711de0", size = 2147590, upload-time = "2026-05-06T13:39:29.883Z" },
+uv.lock:2459:name = "pydantic-settings"
+uv.lock:2463:    { name = "pydantic" },
+uv.lock:2467:sdist = { url = "https://files.pythonhosted.org/packages/07/60/1d1e59c9c90d54591469ada7d268251f71c24bdb765f1a8a832cee8c6653/pydantic_settings-2.14.1.tar.gz", hash = "sha256:e874d3bec7e787b0c9958277956ed9b4dd5de6a80e162188fdaff7c5e26fd5fa", size = 235551, upload-time = "2026-05-08T13:40:06.542Z" }
+uv.lock:2469:    { url = "https://files.pythonhosted.org/packages/ae/8d/f1af3832f5e6eb13ba94ee809e72b8ecb5eef226d27ee0bef7d963d943c7/pydantic_settings-2.14.1-py3-none-any.whl", hash = "sha256:6e3c7edfd8277687cdc598f56e5cff0e9bfff0910a3749deaa8d4401c3a2b9de", size = 60964, upload-time = "2026-05-08T13:40:04.958Z" },
+uv.lock:2570:name = "pytest"
+uv.lock:2580:sdist = { url = "https://files.pythonhosted.org/packages/7d/0d/549bd94f1a0a402dc8cf64563a117c0f3765662e2e668477624baeec44d5/pytest-9.0.3.tar.gz", hash = "sha256:b86ada508af81d19edeb213c681b1d48246c1a91d304c6c81a427674c17eb91c", size = 1572165, upload-time = "2026-04-07T17:16:18.027Z" }
+uv.lock:2582:    { url = "https://files.pythonhosted.org/packages/d4/24/a372aaf5c9b7208e7112038812994107bc65a84cd00e0354a88c2c77a617/pytest-9.0.3-py3-none-any.whl", hash = "sha256:2c5efc453d45394fdd706ade797c0a81091eccd1d6e4bccfcd476e2b8e0ab5d9", size = 375249, upload-time = "2026-04-07T17:16:16.13Z" },
+uv.lock:2586:name = "pytest-asyncio"
+uv.lock:2590:    { name = "pytest" },
+uv.lock:2593:sdist = { url = "https://files.pythonhosted.org/packages/43/7c/d36d04db312ecf4298932ef77e6e4a9e8ad017906e24e34f0b0c361a2473/pytest_asyncio-1.4.0.tar.gz", hash = "sha256:c6c0d2259945122819f171a32ecea2c349ead889ee28176caaf492143424be42", size = 58514, upload-time = "2026-05-26T09:56:04.083Z" }
+uv.lock:2595:    { url = "https://files.pythonhosted.org/packages/03/e2/08a497ef684b88559c9cc5f4ad53a37e7b99e727094a86d6ea32536d5d3c/pytest_asyncio-1.4.0-py3-none-any.whl", hash = "sha256:933ca923a23075a87fb7070c0ec272a6848489824d887c85c812670932835aa1", size = 16930, upload-time = "2026-05-26T09:56:02.576Z" },
+
+codex
+The probes show value coercion is mostly as designed: ints reject `"3.0"` and bools; booleans intentionally accept case-insensitive `"TRUE"`/`"FALSE"` with whitespace; floats accept ordinary Python numeric strings including scientific notation. I’m doing one focused test run with cache disabled to confirm the stated suite under the read-only profile.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/core/src pytest -q packages/core/tests/test_tweaks.py -p no:cacheprovider' in /var/home/dylan/projects/disclaude
+ exited 1 in 180ms:
+Traceback (most recent call last):
+  File "/home/dylan/.local/bin/pytest", line 6, in <module>
+    sys.exit(console_main())
+             ~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in console_main
+    code = main()
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 193, in main
+    config = _prepareconfig(new_args, plugins)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 361, in _prepareconfig
+    config: Config = pluginmanager.hook.pytest_cmdline_parse(
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pluginmanager=pluginmanager, args=args
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+    config = yield
+             ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1192, in pytest_cmdline_parse
+    self.parse(args)
+    ~~~~~~~~~~^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1562, in parse
+    self.hook.pytest_load_initial_conftests(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        early_config=self, args=args, parser=self._parser
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/warnings.py", line 128, in pytest_load_initial_conftests
+    return (yield)
+            ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 116, in _multicall
+    next(function_gen)  # first yield
+    ~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 170, in pytest_load_initial_conftests
+    capman.start_global_capturing()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 773, in start_global_capturing
+    self._global_capturing = _get_multicapture(self._method)
+                             ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 714, in _get_multicapture
+    return MultiCapture(in_=FDCapture(0), out=FDCapture(1), err=FDCapture(2))
+                                              ~~~~~~~~~^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 493, in __init__
+    TemporaryFile(buffering=0),
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 652, in TemporaryFile
+    prefix, suffix, dir, output_type = _sanitize_params(prefix, suffix, dir)
+                                       ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 127, in _sanitize_params
+    dir = gettempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 312, in gettempdir
+    return _os.fsdecode(_gettempdir())
+                        ~~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/tempfile.py", line 305, in _gettempdir
+    tempdir = _get_default_tempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 222, in _get_default_tempdir
+    raise FileNotFoundError(_errno.ENOENT,
+                            "No usable temporary directory found in %s" %
+                            dirlist)
+FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/var/home/dylan/projects/disclaude']
+
+codex
+One material gap is emerging: `affects` is only typed as strings, not checked as lexical paths, so invalid strings can satisfy groundedness. I’m checking one more palette-normalization path because the current before-validator only handles list/tuple inputs.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python - <<'PY'
+from disco.core.tweaks import TweakField
+
+def probe(name, fn):
+    try:
+        r = fn()
+        print('ACCEPT', name, repr(r))
+    except Exception as e:
+        print('REJECT', name, type(e).__name__, str(e).split('\\n')[0])
+
+base = dict(key='k', label='L', controls_behavior=False)
+probe('bad affects blanks grounds boolean', lambda: TweakField(**base, editor='boolean', affects=(' ',)))
+probe('bad affects uppercase grounds boolean', lambda: TweakField(**base, editor='boolean', affects=('Hero.Title',)))
+probe('bad affects one blank grounds text with two entries', lambda: TweakField(**base, editor='text', affects=('hero.title', ' ')))
+probe('palette set uppercase swatches', lambda: TweakField(key='k', label='L', editor='palette', colors={'#FFF','#000'}, controls_behavior=True).colors)
+probe('palette set canonical duplicate', lambda: TweakField(key='k', label='L', editor='palette', colors={'#FFF','#ffffff'}, controls_behavior=True).colors)
+probe('palette tuple canonical duplicate', lambda: TweakField(key='k', label='L', editor='palette', colors=('#FFF','#ffffff'), controls_behavior=True).colors)
+PY" in /var/home/dylan/projects/disclaude/packages/core
+ succeeded in 265ms:
+ACCEPT bad affects blanks grounds boolean TweakField(key='k', label='L', editor=<TweakEditor.BOOLEAN: 'boolean'>, affects=(' ',), controls_behavior=False, default=None, options=None, colors=None, min=None, max=None, step=None)
+ACCEPT bad affects uppercase grounds boolean TweakField(key='k', label='L', editor=<TweakEditor.BOOLEAN: 'boolean'>, affects=('Hero.Title',), controls_behavior=False, default=None, options=None, colors=None, min=None, max=None, step=None)
+ACCEPT bad affects one blank grounds text with two entries TweakField(key='k', label='L', editor=<TweakEditor.TEXT: 'text'>, affects=('hero.title', ' '), controls_behavior=False, default=None, options=None, colors=None, min=None, max=None, step=None)
+ACCEPT palette set uppercase swatches ('#FFF', '#000')
+ACCEPT palette set canonical duplicate ('#FFF', '#ffffff')
+REJECT palette tuple canonical duplicate ValidationError 1 validation error for TweakField
+
+codex
+I found two concrete validation bypasses so far, both reproducible from plain model construction: bad `affects` strings can ground a tweak, and palette colors passed as a set bypass canonicalization/duplicate detection. I’m checking whether these are isolated to Python-only inputs or affect the JSON-shaped path too.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python - <<'PY'
+from disco.core.tweaks import TweakField
+
+def probe(name, **kw):
+    try:
+        f = TweakField(**kw)
+        print('ACCEPT', name, 'colors=', f.colors, 'affects=', f.affects, 'default=', repr(f.default))
+    except Exception as e:
+        print('REJECT', name, type(e).__name__, str(e).split('\\n')[0])
+
+base = dict(key='k', label='L', editor='palette', controls_behavior=True)
+for colors in ['#fff', ('#fff', '#000'), ['#fff', '#000'], {'#fff', '#000'}, frozenset({'#fff','#000'})]:
+    probe(f'colors {type(colors).__name__}', **base, colors=colors)
+probe('JSON-shaped bad affects list', key='k', label='L', editor='boolean', affects=['not a path'], controls_behavior=False)
+probe('color default shorthand remains raw', key='k', label='L', editor='color', controls_behavior=True, default='#FFF')
+probe('palette default uppercase remains raw', key='k', label='L', editor='palette', colors=['#fff','#000'], controls_behavior=True, default='#FFF')
+probe('bool default TRUE remains raw', key='k', label='L', editor='boolean', controls_behavior=True, default='TRUE')
+probe('int default string remains raw', key='k', label='L', editor='int', min=0, max=10, step=1, controls_behavior=True, default='3')
+PY" in /var/home/dylan/projects/disclaude/packages/core
+ succeeded in 281ms:
+REJECT colors str ValidationError 1 validation error for TweakField
+ACCEPT colors tuple colors= ('#ffffff', '#000000') affects= () default= None
+ACCEPT colors list colors= ('#ffffff', '#000000') affects= () default= None
+ACCEPT colors set colors= ('#000', '#fff') affects= () default= None
+ACCEPT colors frozenset colors= ('#000', '#fff') affects= () default= None
+ACCEPT JSON-shaped bad affects list colors= None affects= ('not a path',) default= None
+ACCEPT color default shorthand remains raw colors= None affects= () default= '#FFF'
+ACCEPT palette default uppercase remains raw colors= ('#ffffff', '#000000') affects= () default= '#FFF'
+ACCEPT bool default TRUE remains raw colors= None affects= () default= 'TRUE'
+ACCEPT int default string remains raw colors= None affects= () default= '3'
+
+codex
+The bad `affects` case is JSON-shaped, so it would matter for persisted tweak specs. The palette set issue is Python-construction-only, but because Pydantic accepts sets for tuple fields, the model invariant itself is still not airtight.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=packages/core/src pytest -q -s packages/core/tests/test_tweaks.py -p no:cacheprovider' in /var/home/dylan/projects/disclaude
+ succeeded in 401ms:
+...................
+
+codex
+With capture disabled and pytest cache disabled, the focused test file does run in this read-only environment: all 19 pass. I’m checking the final static surface and then I’ll give a verdict with required revisions only.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'basedpyright packages/core/src/disco/core/tweaks.py packages/core/tests/test_tweaks.py' in /var/home/dylan/projects/disclaude
+ exited 127 in 0ms:
+/bin/bash: line 1: basedpyright: command not found
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python - <<'PY'
+from disco.core.tweaks import TweakField
+
+def probe(name, **kw):
+    try:
+        f=TweakField(**kw)
+        print('ACCEPT', name, repr(f.controls_behavior), type(f.controls_behavior).__name__)
+    except Exception as e:
+        print('REJECT', name, type(e).__name__, str(e).split('\\n')[0])
+for v in ['true','TRUE','1',1,0,'false']:
+    probe(f'controls_behavior {v"'!r}'"', key='k', label='L', editor='boolean', controls_behavior=v)
+PY" in /var/home/dylan/projects/disclaude/packages/core
+ succeeded in 269ms:
+ACCEPT controls_behavior 'true' True bool
+ACCEPT controls_behavior 'TRUE' True bool
+ACCEPT controls_behavior '1' True bool
+ACCEPT controls_behavior 1 True bool
+REJECT controls_behavior 0 ValidationError 1 validation error for TweakField
+REJECT controls_behavior 'false' ValidationError 1 validation error for TweakField
+
+codex
+There’s also an affects-count variant: the text/color “two fields” rule counts tuple length, so duplicate paths can satisfy it. That pairs with the missing lexical validation; the fix should validate and de-duplicate/count unique paths, not just check non-empty.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src python - <<'PY'
+from disco.core.tweaks import TweakField
+
+def probe(name, **kw):
+    try:
+        f=TweakField(**kw)
+        print('ACCEPT', name, f.affects)
+    except Exception as e:
+        print('REJECT', name, type(e).__name__, str(e).split('\\n')[0])
+probe('text duplicate affects counts as 2', key='k', label='L', editor='text', affects=('hero.headline','hero.headline'))
+probe('color duplicate affects counts as 2', key='k', label='L', editor='color', affects=('design.accent','design.accent'))
+PY" in /var/home/dylan/projects/disclaude/packages/core
+ succeeded in 268ms:
+ACCEPT text duplicate affects counts as 2 ('hero.headline', 'hero.headline')
+ACCEPT color duplicate affects counts as 2 ('design.accent', 'design.accent')
+
+codex
+REVISE
+
+**Reasons**
+- [tweaks.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/tweaks.py:77): `affects` is not lexically validated. `affects=(" ",)` or `("Hero.Title",)` can ground a tweak.
+- [tweaks.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/tweaks.py:119): TEXT/COLOR count raw `len(self.affects)`, so duplicate paths like `("hero.title", "hero.title")` satisfy the “>=2 fields” rule.
+- [tweaks.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/tweaks.py:96): palette canonicalization only runs for list/tuple. Pydantic accepts `set`/`frozenset` for `tuple[str, ...]`, so `colors={"#FFF", "#ffffff"}` bypasses canonical duplicate detection and stores non-canonical swatches.
+
+Bool does not slip through numeric bounds or values. Int coercion rejects `"3.0"` and bool. Decimal step alignment is reasonable for the current float-backed representation. The TweakSpec/AppSpec separation is clean for P9B/C.
+
+**Required Revisions**
+- Validate every `affects` entry against the lexical dotted-path pattern.
+- Reject duplicate `affects`, or count unique affects for TEXT/COLOR grounding.
+- Make palette `colors` normalization cover every input Pydantic accepts, or reject non-list/tuple inputs before Pydantic coercion.
+
+I ran `pytest -q -s packages/core/tests/test_tweaks.py -p no:cacheprovider`: 19 passed. `basedpyright` was not available as a direct command in this environment.
+tokens used
+96,560
+REVISE
+
+**Reasons**
+- [tweaks.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/tweaks.py:77): `affects` is not lexically validated. `affects=(" ",)` or `("Hero.Title",)` can ground a tweak.
+- [tweaks.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/tweaks.py:119): TEXT/COLOR count raw `len(self.affects)`, so duplicate paths like `("hero.title", "hero.title")` satisfy the “>=2 fields” rule.
+- [tweaks.py](/var/home/dylan/projects/disclaude/packages/core/src/disco/core/tweaks.py:96): palette canonicalization only runs for list/tuple. Pydantic accepts `set`/`frozenset` for `tuple[str, ...]`, so `colors={"#FFF", "#ffffff"}` bypasses canonical duplicate detection and stores non-canonical swatches.
+
+Bool does not slip through numeric bounds or values. Int coercion rejects `"3.0"` and bool. Decimal step alignment is reasonable for the current float-backed representation. The TweakSpec/AppSpec separation is clean for P9B/C.
+
+**Required Revisions**
+- Validate every `affects` entry against the lexical dotted-path pattern.
+- Reject duplicate `affects`, or count unique affects for TEXT/COLOR grounding.
+- Make palette `colors` normalization cover every input Pydantic accepts, or reject non-list/tuple inputs before Pydantic coercion.
+
+I ran `pytest -q -s packages/core/tests/test_tweaks.py -p no:cacheprovider`: 19 passed. `basedpyright` was not available as a direct command in this environment.

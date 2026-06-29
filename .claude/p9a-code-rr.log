@@ -1,0 +1,2125 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f1541-a29d-71a1-992d-5ad7df0a9d5c
+--------
+user
+Re-review the 3 P9A code-review fixes (tweaks.py):
+1. affects entries now lexically validated against the dotted-path pattern _KEY_RE (rejects " ", "Hero.Title",
+"hero..x", "1bad") — test_affects_paths_must_be_lexical.
+2. Duplicate affects rejected (len(set)!=len) BEFORE the grounded check, so a TEXT/COLOR tweak can't satisfy
+">=2 fields" with a repeated path — test_duplicate_affects_rejected_so_text_cannot_fake_two_fields.
+3. Palette colors that aren't an ordered list/tuple (e.g. a set/frozenset) are REJECTED in the mode=before
+validator (raising before pydantic coerces set->tuple), so canonicalization + uniqueness can't be bypassed —
+test_palette_set_input_rejected_not_silently_uncanonicalized.
+22 tests pass; basedpyright strict 0 errors. Confirm all 3 resolved. Return exactly APPROVE or REVISE + one line each.
+codex
+I’ll inspect `tweaks.py` and the targeted tests, then check the validator ordering and edge cases against the three reported fixes.
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'rg --files .' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+./disclaude.md
+./disclaude-changed-files.zip
+./DISCLAUDE_CAMPAIGN_SUMMARY.md
+./uv.lock
+./ui-implementation.md
+./tool-sandbox-contract.md
+./tmux-client-3.log
+./tests/unbiased_gate/test_authorB_models_imagegen.py
+./tests/unbiased_gate/test_authorA_sandbox_browser_slides.py
+./tests/unbiased_gate/test_authorA_report_audio_exports.py
+./tests/unbiased_gate/test_authorA_preflight_lifecycle.py
+./source-accuracy-testing.md
+./security-analyzer-contract.md
+./scripts/vm201-pw.sh
+./scripts/trace_conversation.py
+./scripts/spec-draft.sh
+./scripts/seed_config.py
+./scripts/screenshot-triage.sh
+./scripts/orchestrate.sh
+./scripts/gen_arch_diagram.py
+./scripts/extract_grounding.py
+./scripts/diff-prefilter.sh
+./scripts/check_arch_budget.py
+./retrieval-grounding-contract.md
+./pyproject.toml
+./prompts/screenshot-triage.txt
+./prompts/diff-prefilter.txt
+./packages/tools/tests/test_validation_executor.py
+./packages/tools/tests/test_scaffold_starter.py
+./packages/tools/tests/test_executor_contract_scope.py
+./packages/tools/tests/test_appkit_tools.py
+./packages/tools/tests/test_browser_spill.py
+./packages/tools/tests/test_context_memory.py
+./packages/tools/tests/tool_fakes.py
+./packages/tools/tests/test_write_loop_gate_recovery.py
+./packages/tools/tests/test_w3_w4_edit_safety.py
+./packages/tools/tests/test_verify_app.py
+./packages/tools/tests/test_tools_integration.py
+./packages/tools/tests/test_tool_markdown.py
+./packages/tools/tests/test_think_tool.py
+./packages/tools/tests/test_sweep_stale_roots.py
+./packages/tools/tests/test_slides_procedural_contract.py
+./packages/tools/tests/test_slides_pipeline.py
+./packages/tools/tests/test_slides.py
+./packages/tools/tests/test_shell_spill.py
+./packages/tools/tests/test_shell_sessions.py
+./packages/tools/tests/test_sheets.py
+./packages/tools/tests/test_session_diagnostics.py
+./packages/tools/tests/test_server_status.py
+./packages/tools/tests/test_security.py
+./packages/tools/tests/test_scope_advertise_split.py
+./packages/tools/tests/test_sandbox_wedge_and_hotapply.py
+./packages/tools/tests/test_sandbox_resource_and_egress_leaks.py
+./packages/tools/tests/test_sandbox_read_guardrail.py
+./packages/tools/tests/test_sandbox_integration.py
+./packages/tools/tests/test_sandbox_healthcheck.py
+./packages/tools/tests/test_sandbox_exception_contract.py
+./packages/tools/tests/test_sandbox.py
+./packages/tools/tests/test_root2_workspace_path.py
+./packages/tools/tests/test_resource_bounds.py
+./packages/tools/tests/test_rematerialize_servers.py
+./packages/tools/tests/test_projects.py
+./packages/tools/tests/test_production_validity.py
+./packages/tools/tests/test_preview_tools.py
+./packages/tools/tests/test_preview_session.py
+./packages/tools/tests/test_preview.py
+./packages/tools/tests/test_pptx_render.py
+./packages/tools/tests/test_policy_tool_surface.py
+./packages/tools/tests/test_podman.py
+./packages/tools/tests/test_planner_readonly.py
+./packages/tools/tests/test_multi_service_tracking.py
+./packages/tools/tests/test_mcp_transport.py
+./packages/tools/tests/test_mcp_tool_search.py
+./packages/tools/tests/test_mcp_naming.py
+./packages/tools/tests/test_mcp_approval.py
+./packages/tools/tests/test_local.py
+./packages/tools/tests/test_live_view.py
+./packages/tools/tests/test_kernel_session.py
+./packages/tools/tests/test_kernel_idle_cull.py
+./packages/tools/tests/test_kernel_gateway_auth.py
+./packages/tools/tests/test_inclusive_editing.py
+./packages/tools/tests/test_image_gen_binary.py
+./packages/tools/tests/test_heavy_validators.py
+./packages/tools/tests/test_gvisor.py
+./packages/tools/tests/test_fix6_inbound_forward.py
+./packages/tools/tests/test_fetch_inside.py
+./packages/tools/tests/test_f7_pressure_aware_head_only.py
+./packages/tools/tests/test_f3_read_before_write.py
+./packages/tools/tests/test_executor_scope.py
+./packages/tools/tests/test_executor_elision_guard.py
+./packages/tools/tests/test_executor_assist.py
+./packages/tools/tests/test_escape_suite.py
+./packages/tools/tests/test_egress_proxy.py
+./packages/tools/tests/test_egress_mode.py
+./packages/tools/tests/test_edit_guards.py
+./packages/tools/tests/test_e8_filtered_egress_proxy_wiring.py
+./packages/tools/tests/test_e4_default_projects_root.py
+./packages/tools/tests/test_deck_validators.py
+./packages/tools/tests/test_deck_schema.py
+./packages/tools/tests/test_deck_patch.py
+./packages/tools/tests/test_cw6_read_budget.py
+./packages/tools/tests/test_cluster4_filesystem.py
+./packages/tools/tests/test_c8_chart_layouts.py
+./packages/tools/tests/test_builtin_extra.py
+./packages/tools/tests/test_browser_daemon.py
+./packages/tools/tests/test_browser.py
+./packages/tools/tests/test_bp_g10_filtered_default.py
+./packages/tools/tests/test_audio_overview_tool.py
+./packages/tools/tests/test_audio_overview_three_modes.py
+./packages/tools/tests/test_audio_overview_integration.py
+./packages/tools/tests/test_audio_mixer_robustness.py
+./packages/tools/tests/test_artifact_validators.py
+./packages/tools/tests/test_agent_tools.py
+./packages/tools/tests/mcp_fakes.py
+./packages/tools/tests/fixtures/artifacts/sample_report.pdf
+./packages/tools/src/disco/tools/registry.py
+./packages/tools/src/disco/tools/executor.py
+./packages/tools/src/disco/tools/anatomy.py
+./packages/tools/src/disco/tools/verify/heavy_validators.py
+./packages/tools/src/disco/tools/verify/artifact_validators.py
+./packages/tools/src/disco/tools/verify/__init__.py
+./packages/tools/src/disco/tools/secrets.py
+./packages/tools/src/disco/tools/sandbox/shell_sessions.py
+./packages/tools/src/disco/tools/sandbox/session.py
+./packages/tools/src/disco/tools/sandbox/process.py
+./packages/tools/src/disco/tools/sandbox/port_owner.py
+./packages/tools/src/disco/tools/sandbox/podman.py
+./packages/tools/src/disco/tools/sandbox/naming.py
+./packages/tools/src/disco/tools/sandbox/local.py
+./packages/tools/src/disco/tools/sandbox/kernel.py
+./packages/tools/src/disco/tools/sandbox/isolation.py
+./packages/tools/src/disco/tools/sandbox/inbound_forward.py
+./packages/tools/src/disco/tools/sandbox/gvisor.py
+./packages/tools/src/disco/tools/sandbox/egress_proxy.py
+./packages/tools/src/disco/tools/sandbox/config.py
+./packages/tools/src/disco/tools/sandbox/base.py
+./packages/tools/src/disco/tools/sandbox/_container.py
+./packages/tools/src/disco/tools/sandbox/__init__.py
+./packages/tools/pyproject.toml
+./packages/tools/src/disco/tools/projects/store.py
+./packages/tools/src/disco/tools/projects/archive.py
+./packages/tools/src/disco/tools/projects/__init__.py
+./packages/tools/src/disco/tools/__init__.py
+./packages/tools/src/disco/tools/mcp/tool_search.py
+./packages/tools/src/disco/tools/mcp/stdio.py
+./packages/tools/src/disco/tools/mcp/retrieval_tier.py
+./packages/tools/src/disco/tools/mcp/pool.py
+./packages/tools/src/disco/tools/mcp/naming.py
+./packages/tools/src/disco/tools/mcp/migrations.py
+./packages/tools/src/disco/tools/mcp/http_egress.py
+./packages/tools/src/disco/tools/mcp/http.py
+./packages/tools/src/disco/tools/mcp/fence.py
+./packages/tools/src/disco/tools/mcp/config.py
+./packages/tools/src/disco/tools/mcp/approval.py
+./packages/tools/src/disco/tools/mcp/__init__.py
+./basis-of-design.md
+./packages/tools/src/disco/tools/builtin/scaffold_starter.py
+./packages/tools/src/disco/tools/builtin/__init__.py
+./packages/tools/src/disco/tools/builtin/appkit.py
+./packages/tools/src/disco/tools/builtin/browser.py
+./packages/tools/src/disco/tools/builtin/context_memory.py
+./packages/tools/src/disco/tools/builtin/verify_app.py
+./packages/tools/src/disco/tools/builtin/think.py
+./packages/tools/src/disco/tools/builtin/system.py
+./packages/tools/src/disco/tools/builtin/subagent.py
+./packages/tools/src/disco/tools/builtin/slides.py
+./packages/tools/src/disco/tools/builtin/shell_sessions.py
+./packages/tools/src/disco/tools/builtin/sheets.py
+./packages/tools/src/disco/tools/builtin/server.py
+./packages/tools/src/disco/tools/builtin/retrieval.py
+./packages/tools/src/disco/tools/builtin/preview.py
+./packages/tools/src/disco/tools/builtin/plan.py
+./packages/tools/src/disco/tools/builtin/live_view.py
+./packages/tools/src/disco/tools/builtin/image_gen.py
+./packages/tools/src/disco/tools/builtin/files.py
+./packages/tools/src/disco/tools/builtin/audio_overview.py
+./packages/tools/src/disco/tools/builtin/_slides_pipeline.py
+./packages/tools/src/disco/tools/builtin/_pptx_render.py
+./packages/tools/src/disco/tools/builtin/_deck_schema.py
+./packages/tools/src/disco/tools/builtin/_deck_patch.py
+./packages/tools/src/disco/tools/builtin/_c8_chart_layouts.py
+./packages/tools/src/disco/tools/builtin/_browser_daemon.py
+./packages/tools/src/disco/tools/builtin/_audio_mixer.py
+./Makefile
+./LICENSE
+./CONTRIBUTING.md
+./CLAUDE.md
+./ACKNOWLEDGEMENTS.md
+./USAGE-PLAN.md
+./SECURITY.md
+./README.md
+./agent-loop-contract.md
+./api-endpoints.md
+./llm-router-contract.md
+./packages/app-server/tests/test_secrets_routes.py
+./packages/app-server/tests/test_sandbox_probe_route.py
+./packages/app-server/tests/test_sandbox_persistence_health.py
+./packages/app-server/tests/test_probe_routes.py
+./packages/app-server/tests/test_mcp_endpoints.py
+./packages/app-server/tests/test_live_browser_backend_gate.py
+./packages/app-server/tests/test_app.py
+./packages/tools/scripts/verify_shell_sessions_gvisor.py
+./packages/tools/scripts/verify_preview_gvisor.py
+./packages/tools/scripts/verify_podman_vm202.py
+./packages/tools/scripts/verify_local_socket.py
+./packages/tools/scripts/verify_gvisor_vm201.py
+./packages/tools/scripts/verify_b7_browser_errors.py
+./packages/tools/scripts/verify_agent_tools_local.py
+./compose.yaml
+./packages/retrieval/tests/test_wiring.py
+./packages/retrieval/tests/test_upload_ingest.py
+./packages/retrieval/tests/test_table_blocks.py
+./packages/retrieval/tests/test_synthesis_variance.py
+./packages/retrieval/tests/test_synthesis_repair.py
+./packages/retrieval/tests/test_synthesis_disputed.py
+./packages/retrieval/tests/test_streaming_keep_searching.py
+./packages/retrieval/tests/test_streaming.py
+./packages/retrieval/tests/test_retrieval_integration.py
+./packages/retrieval/tests/test_pipeline_invariants.py
+./packages/retrieval/tests/test_pipeline.py
+./packages/retrieval/tests/test_local_encoders.py
+./frontend/vite.config.ts
+./frontend/tsconfig.node.json
+./frontend/tsconfig.json
+./frontend/tsconfig.build.json
+./frontend/tsconfig.app.json
+./packages/retrieval/tests/test_live.py
+./packages/retrieval/tests/test_judge.py
+./packages/retrieval/tests/test_iterate.py
+./packages/retrieval/tests/test_grounding.py
+./packages/retrieval/tests/test_gather_concurrency_policy.py
+./packages/retrieval/tests/test_extra.py
+./packages/retrieval/tests/test_eval.py
+./packages/retrieval/tests/test_env_knobs_B1b.py
+./packages/retrieval/tests/test_env_knobs_B1a.py
+./packages/retrieval/tests/test_encoder_oom_guard_B3.py
+./packages/retrieval/tests/test_dr_steer.py
+./packages/retrieval/tests/test_deep_research_iterative.py
+./packages/retrieval/tests/test_deep_research.py
+./packages/retrieval/tests/test_corpora.py
+./packages/retrieval/tests/test_claims_extract.py
+./packages/retrieval/tests/test_chart_blocks.py
+./packages/retrieval/tests/test_bundled_providers.py
+./packages/retrieval/tests/research_fakes.py
+./packages/core/pyproject.toml
+./archived God files/runtime.py
+./archived God files/engine.py
+./archived God files/dod_evaluator.py
+./archived God files/config_state.py
+./archived God files/app.py
+./archived God files/README.md
+./frontend/refs-dark.mjs
+./frontend/playwright.live.config.ts
+./frontend/playwright.config.ts
+./frontend/package.json
+./frontend/package-lock.json
+./frontend/nginx.conf
+./frontend/index.html
+./frontend/eslint.config.js
+./frontend/src/vite-env.d.ts
+./frontend/src/views/settings.test.tsx
+./deploy/sandbox/README.md
+./frontend/src/views/history.test.tsx
+./deploy/sandbox/Dockerfile
+./frontend/src/views/ShareView.tsx
+./frontend/src/views/SettingsView.tsx
+./frontend/src/views/ProjectsView.tsx
+./frontend/src/views/ImportedRunView.tsx
+./frontend/src/views/HistoryView.tsx
+./frontend/src/views/HistoryView.status.test.tsx
+./frontend/src/views/ActivityView.tsx
+./frontend/src/views/ActivityView.test.tsx
+./frontend/src/views/ActivityView.dashboard.test.tsx
+./deploy/compose/entrypoint.sh
+./deploy/compose/Dockerfile.server
+./frontend/src/types/sandbox.ts
+./frontend/src/types/project.ts
+./frontend/src/types/probe.ts
+./frontend/src/types/models.ts
+./frontend/src/types/grounded.ts
+./frontend/src/types/conversation.ts
+./frontend/src/types/config.ts
+./frontend/src/types/agent.ts
+./frontend/src/types/activity.ts
+./docs/architecture.generated.md
+./docs/WORK-ORDERS.md
+./docs/WORK-ORDERS-archive.md
+./docs/AUTONOMOUS-FEATURE-CAMPAIGN.md
+./docs/A1-click-to-edit-design.md
+./docs/build-soak-surfaced-bugs.md
+./docs/build-soak-guidelines.md
+./frontend/src/test/setup.ts
+./packages/app-server/src/disco/app_server/routes/skills.py
+./integrations/messaging/test_disco_bot.py
+./frontend/src/styles/theme.css
+./packages/app-server/src/disco/app_server/routes/secrets.py
+./packages/app-server/src/disco/app_server/routes/openrouter.py
+./packages/app-server/src/disco/app_server/routes/models.py
+./integrations/messaging/disco_bot.py
+./packages/app-server/src/disco/app_server/routes/mcp.py
+./integrations/messaging/README.md
+./packages/app-server/src/disco/app_server/routes/health.py
+./packages/app-server/src/disco/app_server/routes/conversations.py
+./packages/app-server/src/disco/app_server/routes/config.py
+./packages/app-server/src/disco/app_server/routes/__init__.py
+./packages/retrieval/src/disco/retrieval/wiring.py
+./packages/retrieval/src/disco/retrieval/vectorstore.py
+./packages/app-server/src/disco/app_server/probe_clients.py
+./packages/retrieval/src/disco/retrieval/streaming.py
+./packages/retrieval/src/disco/retrieval/ranking.py
+./packages/app-server/src/disco/app_server/config_state.py
+./packages/retrieval/src/disco/retrieval/providers.py
+./packages/retrieval/src/disco/retrieval/nli.py
+./packages/retrieval/src/disco/retrieval/models.py
+./packages/retrieval/src/disco/retrieval/local_encoders.py
+./packages/retrieval/src/disco/retrieval/live.py
+./packages/retrieval/src/disco/retrieval/grounding.py
+./packages/retrieval/src/disco/retrieval/evaluation.py
+./packages/retrieval/src/disco/retrieval/engine.py
+./frontend/src/shell/mode.ts
+./frontend/src/shell/mode.test.ts
+./frontend/src/shell/Shell.tsx
+./frontend/src/shell/Shell.test.tsx
+./frontend/src/shell/NavRail.tsx
+./frontend/src/shell/NavRail.test.tsx
+./frontend/src/shell/ModeSlider.tsx
+./frontend/src/shell/ModeProvider.tsx
+./frontend/src/main.tsx
+./packages/app-server/src/disco/app_server/config/mappers.py
+./packages/app-server/src/disco/app_server/config/dtos.py
+./packages/app-server/src/disco/app_server/config/__init__.py
+./packages/app-server/src/disco/app_server/app.py
+./packages/app-server/src/disco/app_server/__main__.py
+./packages/app-server/src/disco/app_server/__init__.py
+./packages/app-server/pyproject.toml
+./frontend/e2e/visual.spec.ts-snapshots/settings-firefox-linux.png
+./frontend/e2e/visual.spec.ts-snapshots/settings-alt-theme-firefox-linux.png
+./frontend/e2e/visual.spec.ts-snapshots/research-answer-firefox-linux.png
+./frontend/e2e/visual.spec.ts-snapshots/research-answer-alt-theme-firefox-linux.png
+./frontend/e2e/visual.spec.ts
+./frontend/e2e/sheet-block.spec.ts
+./frontend/e2e/settings.spec.ts
+./frontend/e2e/schedule-section.spec.ts
+./frontend/e2e/research.spec.ts
+./frontend/e2e/report-export.spec.ts
+./frontend/e2e/plan-drafting.spec.ts
+./frontend/e2e/imagegen-comfy-workflow.spec.ts
+./frontend/e2e/deep-research.spec.ts
+./frontend/e2e/contradiction-surfacing.spec.ts
+./frontend/e2e/clarify-gate.spec.ts
+./frontend/e2e/build.spec.ts
+./frontend/e2e/build-controls.spec.ts
+./frontend/e2e/autonomous-toggle.spec.ts
+./frontend/e2e/ask-gate.spec.ts
+./packages/retrieval/src/disco/retrieval/deep_research/synthesis.py
+./packages/retrieval/src/disco/retrieval/deep_research/judge.py
+./packages/retrieval/src/disco/retrieval/deep_research/iterate.py
+./packages/retrieval/src/disco/retrieval/deep_research/gather.py
+./packages/retrieval/src/disco/retrieval/deep_research/engine.py
+./packages/retrieval/src/disco/retrieval/deep_research/depth.py
+./packages/retrieval/src/disco/retrieval/deep_research/decompose.py
+./packages/retrieval/src/disco/retrieval/deep_research/concurrency.py
+./packages/retrieval/src/disco/retrieval/deep_research/claims.py
+./packages/retrieval/src/disco/retrieval/deep_research/__init__.py
+./packages/retrieval/src/disco/retrieval/bundled_providers.py
+./packages/retrieval/src/disco/retrieval/__init__.py
+./packages/retrieval/pyproject.toml
+./docs/evidence/macos-build-trace-6-17-26.txt
+./docs/evidence/brand-mockup-slide.png
+./docs/evidence/brand-mockup-slide-dark.png
+./docs/evidence/brand-mockup-report-cover.png
+./docs/evidence/brand-mockup-report-cover-dark.png
+./docs/evidence/brand-mockup-report-body.png
+./docs/evidence/brand-mockup-report-body-dark.png
+./docs/evidence/brand-mockup-disco-definition.png
+./docs/evidence/brand-mockup-disco-definition-dark.png
+./docs/evidence/_slide_dark.html
+./docs/evidence/_slide.html
+./docs/evidence/_definition_dark.html
+./docs/evidence/_definition.html
+./docs/evidence/_cover_dark.html
+./docs/evidence/_cover.html
+./frontend/e2e-live/shell-sessions.spec.ts
+./frontend/e2e-live/preview-truth.spec.ts
+./frontend/e2e-live/dc-01-host-preview.spec.ts
+./frontend/e2e-live/bp-15-screenshots.spec.ts
+./frontend/e2e-live/bp-14-terminal.spec.ts
+./frontend/e2e-live/bp-13-suspend.spec.ts
+./frontend/e2e-live/bp-12-resume.spec.ts
+./frontend/e2e-live/bp-11-upload.spec.ts
+./frontend/e2e-live/bp-10-port-pills.spec.ts
+./frontend/e2e-live/bp-09-install.spec.ts
+./frontend/e2e-live/bp-08-kernel.spec.ts
+./frontend/e2e-live/bp-06-feed-unmasked.spec.ts
+./frontend/e2e-live/bp-05-verify-gate.spec.ts
+./frontend/e2e-live/bp-04-browser.spec.ts
+./frontend/e2e-live/bp-03-contract.spec.ts
+./frontend/e2e-live/bp-00-vision.spec.ts
+./frontend/src/lib/discoSemanticAttrs.ts
+./frontend/src/lib/eventDisposition.ts
+./frontend/src/lib/useVerboseAgentChat.ts
+./frontend/src/lib/useVerboseAgentChat.test.ts
+./frontend/src/lib/useTheme.ts
+./frontend/src/lib/useTheme.test.ts
+./frontend/src/lib/useReplay.ts
+./frontend/src/lib/useReplay.test.ts
+./frontend/src/lib/usePointer.ts
+./frontend/src/lib/think.ts
+./frontend/src/lib/think.test.ts
+./frontend/src/lib/srcdoc.test.ts
+./frontend/src/lib/sources.ts
+./frontend/src/lib/slidesRenderer.ts
+./frontend/src/lib/selectionBridge.ts
+./frontend/src/lib/selectionBridge.test.ts
+./frontend/src/lib/selectionAgent.ts
+./frontend/src/lib/scheduleNL.ts
+./frontend/src/lib/scheduleNL.test.ts
+./frontend/src/lib/runStatusBridge.ts
+./harness/tests/test_sandbox_replay.py
+./harness/tests/test_replay_runner.py
+./harness/tests/test_obs.py
+./harness/tests/test_fuzz.py
+./harness/tests/test_faults.py
+./harness/tests/test_eval_runner.py
+./harness/tests/test_contract.py
+./harness/tests/test_cassette.py
+./harness/tests/test_canary.py
+./docs/evidence/_brandfonts/SchibstedGrotesk.ttf
+./docs/evidence/_brandfonts/NewsreaderItalic.ttf
+./docs/evidence/_brandfonts/Newsreader.ttf
+./docs/evidence/_brandfonts/FrauncesItalic.ttf
+./docs/evidence/_brandfonts/Fraunces.ttf
+./docs/evidence/_brand_dark.css
+./docs/evidence/_brand_common.css
+./docs/evidence/_body_dark.html
+./docs/evidence/_body.html
+./docs/dylans-runthru-v2-plan-6-20-26.md
+./docs/dylans-runthru-6-20-26.md
+./docs/dylans-runthru-3-6-21-26.md
+./docs/disco-ui-control-gaps-6-21-26.md
+./docs/disco-surgical-plan-massive-swath-6-19-26.md
+./docs/disco-security-fix-campaign.md
+./docs/disco-plan-progress-source-unify.md
+./docs/disco-evidence-harness-campaign.md
+./docs/disco-discrepancy-finish-plan-6-22-26.md
+./docs/disco-deck-editor-real-render-plan.md
+./docs/disco-consolidated-roadmap-6-18-26.md
+./docs/disco-build-speed-fixes-plan.md
+./docs/disco-assist-policy-refactor-plan.md
+./docs/codex-testing-suite-design-6-21-26.md
+./docs/codex-evidence-harness-review-6-21-26.md
+./frontend/e2e-full/tsconfig.json
+./frontend/src/lib/resolvers/discoSemanticResolver.test.ts
+./frontend/src/lib/resolvers/discoSemanticResolver.ts
+./frontend/src/lib/resolvers/deckResolver.ts
+./frontend/src/lib/resolvers/deckResolver.test.ts
+./frontend/src/lib/resolvers/appResolver.ts
+./frontend/src/lib/resolvers/appResolver.test.ts
+./frontend/src/lib/isolation.ts
+./frontend/src/lib/isolation.test.ts
+./frontend/src/lib/gateMountSeam.test.tsx
+./frontend/src/lib/eventDisposition.test.ts
+./frontend/src/lib/e2eBridge.ts
+./frontend/src/lib/deepResearchTrace.ts
+./frontend/src/lib/deepResearchTrace.replay.test.ts
+./frontend/src/lib/date.ts
+./frontend/src/lib/cost.ts
+./frontend/src/lib/cost.test.ts
+./frontend/src/lib/cn.ts
+./packages/pi-kernel/vitest.config.ts
+./frontend/src/lib/buildTrace.ts
+./frontend/src/lib/buildTrace.test.ts
+./packages/pi-kernel/tsconfig.test.json
+./frontend/src/lib/buildTrace.replay.test.ts
+./packages/pi-kernel/tsconfig.json
+./harness/slides_experiment/strategies.py
+./frontend/src/lib/buildTrace.derivers.replay.test.ts
+./harness/slides_experiment/scorers.py
+./harness/slides_experiment/run.py
+./frontend/docker-entrypoint.d/40-disco-env.sh
+./frontend/Dockerfile
+./event-state-contract.md
+./frontend/e2e-full/support/wsRecorder.ts
+./frontend/e2e-full/support/uiInventory.ts
+./frontend/e2e-full/support/schema.ts
+./frontend/e2e-full/support/schema.redact.test.ts
+./frontend/e2e-full/support/recorder.ts
+./frontend/e2e-full/support/discoClick.ts
+./frontend/e2e-full/support/assertions.ts
+./frontend/e2e-full/support/artifactCollector.ts
+./packages/core/tests/test_tweaks.py
+./packages/core/tests/test_semantic_attr_parity.py
+./packages/core/tests/test_appkit_semantic_metadata.py
+./packages/core/tests/test_semantic_refs.py
+./packages/core/tests/test_kits.py
+./packages/core/tests/test_build_agent_isolation.py
+./packages/core/tests/test_finish_alias.py
+./packages/core/tests/test_contract_delivery.py
+./packages/core/tests/test_contract_phase.py
+./packages/core/tests/test_contract_enforce.py
+./packages/core/tests/test_appkit_models.py
+./packages/core/tests/test_contract_registry.py
+./packages/core/tests/test_skill_mount.py
+./packages/core/tests/test_workflow_assembly.py
+./packages/core/tests/test_prompt_packs.py
+./packages/core/tests/test_contract_scopes.py
+./packages/core/tests/test_contract_models.py
+./packages/core/tests/test_context_runtime_integration.py
+./packages/core/tests/test_todo_memory.py
+./packages/core/tests/test_recoverable_excerpts.py
+./packages/core/tests/test_context_pack_prompt.py
+./packages/core/tests/test_context_compaction.py
+./packages/core/tests/test_artifact_memory.py
+./packages/core/tests/test_context_pack.py
+./packages/core/tests/test_context_ledger.py
+./packages/core/tests/test_write_loop_recovery.py
+./packages/core/tests/test_watch_it_write.py
+./packages/core/tests/test_w5_execution_nudge_cap.py
+./packages/core/tests/test_w39_shell_verify_reminder.py
+./packages/core/tests/test_w2_stale_snapshot.py
+./packages/core/tests/test_w1_read_breaker.py
+./packages/core/tests/test_vision_wiring.py
+./packages/core/tests/test_vision_caps.py
+./packages/core/tests/test_view_kv_stability.py
+./packages/core/tests/test_view.py
+./packages/core/tests/test_verify_web_app_gate.py
+./packages/pi-kernel/tests/stdio.test.ts
+./packages/pi-kernel/tests/skills.test.ts
+./packages/core/tests/test_verify_on_finish.py
+./packages/pi-kernel/tests/security.test.ts
+./packages/core/tests/test_unprocessed_user_message.py
+./packages/pi-kernel/tests/protocol.test.ts
+./packages/core/tests/test_toolcall_recovery.py
+./packages/pi-kernel/tests/projectResources.test.ts
+./packages/core/tests/test_toolcall_defense.py
+./packages/pi-kernel/tests/noTools.test.ts
+./packages/core/tests/test_tool_rejection_recovery.py
+./packages/pi-kernel/tests/main-wiring.test.ts
+./packages/core/tests/test_tail_variation.py
+./packages/pi-kernel/tests/lifecycle.test.ts
+./packages/core/tests/test_store_status.py
+./packages/pi-kernel/tests/install-policy.test.ts
+./packages/core/tests/test_store_filters.py
+./packages/pi-kernel/tests/discoProvider.test.ts
+./packages/core/tests/test_store.py
+./packages/pi-kernel/tests/control-plane.test.ts
+./packages/core/tests/test_state.py
+./packages/core/tests/test_snapshot_truncation.py
+./packages/core/tests/test_snapshot_binary.py
+./packages/core/tests/test_skills.py
+./packages/core/tests/test_serve_tool.py
+./packages/core/tests/test_serialization.py
+./packages/core/tests/test_security_vocab.py
+./packages/core/tests/test_security_policy.py
+./packages/core/tests/test_security_integration.py
+./packages/core/tests/test_security_analyzer.py
+./packages/core/tests/test_secrets.py
+./packages/core/tests/test_sandbox_connection_validation.py
+./packages/core/tests/test_router_summarizer_stream.py
+./packages/core/tests/test_router_routing.py
+./packages/core/tests/test_router_prompts.py
+./packages/core/tests/test_router_overflow.py
+./packages/core/tests/test_router_integration.py
+./packages/core/tests/test_router_extra.py
+./packages/core/tests/test_router_errors.py
+./packages/core/tests/test_revision_force_submit.py
+./packages/core/tests/test_replan_pending_valve.py
+./packages/core/tests/test_replan_forces_plan.py
+./packages/core/tests/test_remember_tool.py
+./packages/core/tests/test_preview_target.py
+./packages/core/tests/test_prefill_masking.py
+./packages/core/tests/test_planning_write_rejection.py
+./packages/core/tests/test_planner_gate.py
+./packages/core/tests/test_plan_from_args.py
+./packages/core/tests/test_plan_approval_execution.py
+./packages/core/tests/test_p2_driver_routing_retry.py
+./packages/core/tests/test_p1_p2_provider_reliability.py
+./packages/core/tests/test_openai_provider.py
+./frontend/src/hooks/useTemplates.ts
+./packages/core/tests/test_observation_masking.py
+./frontend/src/hooks/useSessions.ts
+./packages/core/tests/test_no_read_penalty.py
+./frontend/src/hooks/useSessions.test.ts
+./packages/core/tests/test_mcp_cap_requery.py
+./packages/core/tests/test_loop_stuck.py
+./packages/core/tests/test_loop_stophooks.py
+./frontend/src/hooks/useSecrets.ts
+./packages/core/tests/test_loop_step.py
+./packages/core/tests/test_loop_state_machine.py
+./packages/core/tests/test_loop_integration.py
+./frontend/src/hooks/useResearchStream.ts
+./packages/core/tests/test_loop_extra.py
+./packages/core/tests/test_loop_confirmation.py
+./packages/core/tests/test_loop_condensation.py
+./frontend/src/hooks/useResearch.ts
+./packages/core/tests/test_loop_concurrency.py
+./frontend/src/hooks/useResearch.lazy.test.tsx
+./packages/core/tests/test_k1_elision_guard.py
+./frontend/src/hooks/useProjectsConfig.ts
+./packages/core/tests/test_hs08_invalid_reroute_invariant.py
+./frontend/src/hooks/useProjects.ts
+./packages/core/tests/test_hs03_reground_cadence.py
+./frontend/src/hooks/useModels.ts
+./packages/core/tests/test_hs02_compaction_template.py
+./frontend/src/hooks/useExportCapabilities.ts
+./packages/core/tests/test_gate_scoping.py
+./harness/slides_experiment/prompts/p12_mixed_content.json
+./frontend/src/hooks/useElementSelect.ts
+./frontend/src/hooks/useDriverModels.ts
+./packages/core/tests/test_g1_exec_artifact_tools.py
+./frontend/src/hooks/useDeepResearchStream.ts
+./frontend/src/hooks/useDeepResearchStream.test.ts
+./frontend/src/hooks/useDeepResearch.ts
+./frontend/src/hooks/useConversations.ts
+./frontend/src/hooks/useConfig.ts
+./harness/slides_experiment/prompts/p11_long_narrative.json
+./frontend/src/hooks/useBuildStream.ts
+./frontend/e2e-full/scenarios/smoke.full.spec.ts
+./frontend/src/hooks/useBuildStream.suspend.test.ts
+./harness/slides_experiment/prompts/p10_research_report.json
+./packages/core/tests/test_finish_dod_gate.py
+./harness/slides_experiment/prompts/p09_minimal_single.json
+./packages/core/tests/test_finish_browser_gate.py
+./harness/slides_experiment/prompts/p08_image_heavy.json
+./packages/core/tests/test_f9_read_dedup.py
+./harness/slides_experiment/prompts/p07_training_content.json
+./frontend/e2e-full/scenarios/per-surface.full.spec.ts
+./packages/core/tests/test_f8_arg_truncation.py
+./harness/slides_experiment/prompts/p06_comparison_table.json
+./packages/core/tests/test_f5_thinking_budget.py
+./frontend/e2e-full/scenarios/click-provenance.smoke.spec.ts
+./harness/slides_experiment/prompts/p05_product_launch.json
+./packages/core/tests/test_f4_bootstrap.py
+./harness/slides_experiment/prompts/p04_overflow_stress.json
+./packages/core/tests/test_f1_provider_recovery.py
+./frontend/src/hooks/useBuildStream.idfactory.test.ts
+./harness/slides_experiment/prompts/p03_tech_architecture.json
+./frontend/src/hooks/useBuildStream.askgate.test.ts
+./frontend/e2e-full/full.config.ts
+./packages/core/tests/test_exec_policy.py
+./frontend/src/hooks/useBuildPreview.ts
+./harness/slides_experiment/prompts/p02_data_report.json
+./frontend/src/hooks/useBuildNotifications.ts
+./packages/core/tests/test_evidence_schema.py
+./harness/slides_experiment/prompts/p01_startup_pitch.json
+./packages/core/tests/test_event_kind_frontend_contract.py
+./frontend/src/hooks/useBuildNotifications.test.ts
+./packages/core/tests/test_equality.py
+./frontend/src/hooks/useBuild.ts
+./harness/slides_experiment/__init__.py
+./frontend/src/hooks/useBuild.modelswitch.test.tsx
+./frontend/src/hooks/useBuild.lazy.test.tsx
+./frontend/src/hooks/useActivity.ts
+./harness/sandbox.py
+./harness/runtime.py
+./harness/router.py
+./harness/replay_runner.py
+./packages/core/tests/test_env_compat.py
+./harness/providers.py
+./harness/projection.py
+./packages/core/tests/test_effective_plan_progress.py
+./packages/core/tests/test_e5_agent_planning_capability.py
+./packages/core/tests/test_dod_spec.py
+./packages/core/tests/test_dod_evaluator.py
+./packages/core/tests/test_df08_vision_escalation.py
+./packages/core/tests/test_dc05_loop.py
+./packages/core/tests/test_cw_p1_codex.py
+./packages/core/tests/test_cw4_cw5_truthful_pin.py
+./packages/core/tests/test_cw3_cache_prefix.py
+./packages/core/tests/test_cw2_cw6_context_caps.py
+./packages/core/tests/test_context_budget.py
+./packages/core/tests/test_config_store.py
+./packages/core/tests/test_condenser.py
+./packages/core/tests/test_cluster9_errors.py
+./packages/core/tests/test_cluster8_kvcache.py
+./packages/core/tests/test_cluster7_knowledge.py
+./packages/core/tests/test_cluster3_security.py
+./packages/core/tests/test_cluster2_turntaking.py
+./packages/core/tests/test_cluster1_context.py
+./packages/core/tests/test_clean_thought.py
+./packages/core/tests/test_clarify_gate.py
+./packages/core/tests/test_c6_recitation_cadence.py
+./packages/core/tests/test_c5_pmx_memory_persistence.py
+./packages/core/tests/test_c21_assist_prompt.py
+./packages/core/tests/test_c20_subagent_fanout.py
+./packages/core/tests/test_c1c_dod_gate_wiring.py
+./packages/core/tests/test_c18_plan_step_done_condition.py
+./packages/core/tests/test_c16_hard_reset_pointer_flush.py
+./packages/core/tests/test_c13_exec_prefill.py
+./packages/core/tests/test_build_replan_contract.py
+./packages/core/tests/test_build_plan_contract.py
+./packages/core/tests/test_build_loop_simulated_failures.py
+./packages/core/tests/test_build_loop_regression.py
+./packages/core/tests/test_bug6_actionless_honest_finish.py
+./packages/core/tests/test_bug18_actionable_validation.py
+./packages/core/tests/test_bug12_followup_replan.py
+./packages/core/tests/test_brand.py
+./packages/core/tests/test_bp03_acceptance.py
+./packages/core/tests/test_autonomous_mode.py
+./packages/core/tests/test_autonomous_loop.py
+./packages/core/tests/test_assist_wireup.py
+./packages/core/tests/test_alternatives_from_args.py
+./packages/core/tests/test_agent_isolation.py
+./packages/core/tests/test_actionless_completion.py
+./packages/core/tests/loop_fakes.py
+./packages/core/tests/llm_fakes.py
+./packages/core/tests/event_fakes.py
+./packages/core/tests/c11_still_omitted_proof.py
+./packages/core/tests/c11_recover_proof.py
+./packages/core/tests/_buildsoak_fakes.py
+./frontend/src/fixtures/models.ts
+./docs/archive/workorders/wave3-4-recon.md
+./docs/archive/workorders/STATUS-2026-06-11-1757.md
+./docs/archive/workorders/RP-14-usability-debt.md
+./docs/archive/workorders/RP-12-bseries-residue.md
+./docs/archive/workorders/RP-06-replay-share.md
+./docs/archive/workorders/RP-05b-reapproval-diff-decision.md
+./docs/archive/workorders/RP-05b-orchestrator-proxy-decision.md
+./docs/archive/workorders/RP-05-mcp-client.md
+./docs/archive/workorders/RP-04-wide-research-pipeline.md
+./docs/archive/workorders/RP-03-chart-blocks.md
+./docs/archive/workorders/RP-02-deep-report-rich-blocks.md
+./frontend/src/fixtures/deepResearchTrace.ts
+./docs/archive/workorders/RP-01-dashboard-lite.md
+./docs/archive/workorders/README.md
+./frontend/src/fixtures/conversations.ts
+./docs/archive/workorders/DC-07-uploads-rematerialization.md
+./frontend/src/fixtures/config.ts
+./docs/archive/workorders/DC-05c-resume-condensation.md
+./frontend/src/fixtures/answers.ts
+./docs/archive/workorders/DC-05b-resume-reconstruction.md
+./frontend/src/fixtures/agentTrace.ts
+./docs/archive/workorders/DC-05a-takeover.md
+./docs/archive/workorders/DC-05a-loop-breakers.md
+./docs/archive/workorders/DC-04b-sessions-degrade.md
+./docs/archive/workorders/DC-04a-session-diagnostics.md
+./docs/archive/workorders/DC-03-gate-scoping.md
+./docs/archive/workorders/DC-02-idle-suspend.md
+./docs/archive/workorders/DC-01-host-preview-proxy.md
+./docs/archive/workorders/BP-16-marathon-gate.md
+./docs/archive/workorders/BP-15-feed-screenshots-tier.md
+./docs/archive/workorders/BP-14-terminal-live-sessions.md
+./docs/archive/workorders/BP-13-lifecycle-suspend-resume.md
+./packages/pi-kernel/src/tools.ts
+./frontend/e2e-full/fixtures/tool_error_visible.json
+./packages/pi-kernel/src/skills.ts
+./packages/pi-kernel/src/runner.ts
+./frontend/e2e-full/fixtures/running_then_error.json
+./packages/pi-kernel/src/protocol.ts
+./docs/archive/workorders/BP-12-build-resume.md
+./packages/pi-kernel/src/index.ts
+./frontend/e2e-full/fixtures/no_plan_progress_finished.json
+./packages/pi-kernel/src/events.ts
+./docs/archive/workorders/BP-11-file-upload.md
+./frontend/e2e-full/fixtures/finished_with_partial_plan_updates.json
+./packages/pi-kernel/src/discoProvider.ts
+./frontend/e2e-full/fixtures/discoHarness.ts
+./docs/archive/workorders/BP-10-multi-port.md
+./frontend/e2e-full/fixtures/cancelled_request.json
+./docs/archive/workorders/BP-09-egress-verify-prewarm.md
+./frontend/e2e-full/fixtures/README.md
+./docs/archive/workorders/BP-08-ipython-kernel.md
+./docs/archive/workorders/BP-07-readcounter-rollback.md
+./evals/research/vcrpy.yaml
+./docs/archive/workorders/BP-06-observation-masking.md
+./docs/archive/workorders/BP-05-verify-gate.md
+./docs/archive/workorders/BP-04-browser-upgrade.md
+./docs/archive/workorders/BP-03-environment-contract.md
+./frontend/shots.mjs
+./docs/archive/workorders/BP-02-preview-as-session.md
+./docs/archive/workorders/BP-01-shell-sessions.md
+./docs/archive/workorders/BP-00-vision-judge.md
+./docs/archive/walkthru-fix-plan-6-17-26.md
+./docs/archive/universal-readiness-plan.md
+./docs/archive/truth.md
+./docs/archive/tasking-2026-06-16.md
+./docs/archive/surgical-D-polish-search-attach-live.md
+./docs/archive/surgical-C-trackc-editor.md
+./docs/archive/surgical-B-trackc-slides.md
+./docs/archive/surgical-A-driver-and-file-delivery.md
+./docs/archive/surfaced-issues-2026-06-15.md
+./docs/archive/slides-experiment-verdict.md
+./docs/archive/self-host.md
+./docs/archive/runthru-v2-research-digest.md
+./docs/archive/remaining-work-plan.md
+./docs/archive/remaining-items-consolidated-2026-06-15.md
+./docs/archive/release-roadmap.md
+./docs/archive/release-execution-plan.md
+./docs/archive/provider-matrix.md
+./docs/archive/project-status-2026-05-snapshot.md
+./docs/archive/project-history-since-fable-handoff.md
+./docs/archive/project-history-since-deep-research-fix.md
+./docs/archive/product-ideas-2026-06-17.md
+./docs/archive/pending-items-status.md
+./docs/archive/north-star.md
+./docs/archive/next-fix-set-plan.md
+./docs/archive/manus-ui-gap-analysis.md
+./docs/archive/manus-gap-analysis.md
+./docs/archive/manus-gap-analysis-addendum.md
+./docs/archive/harvest-backlog.md
+./docs/archive/god-function-decomposition-plan.md
+./docs/archive/god-file-decomposition-status.md
+./docs/archive/fable-plan-reconciliation.md
+./docs/archive/dylans-walkthru-6-17-26.md
+./docs/archive/dylans-tailscale-runthru-bugs-6-18-26.md
+./docs/archive/dylans-runthru-6-17-26-v2.md
+./docs/archive/disco-surgical-master-plan-6-18-26.md
+./docs/archive/disco-driver-reliability-plan-6-18-26.md
+./docs/archive/disco-direction-and-decisions-6-17-26.md
+./docs/archive/design-novnc-live-browser.md
+./docs/archive/decomplexity-wave-plan.md
+./docs/archive/deck-editor-integration-plan-6-18-26.md
+./evals/baselines/scorecard.json
+./docs/archive/build-parity-cluster.md
+./docs/archive/build-loop-oss-research.md
+./docs/archive/build-loop-hardening-plan.md
+./docs/archive/build-harness-review-6-17-26.md
+./docs/archive/backlog-verified-2026-06-16.md
+./docs/archive/backlog-6-16-26-unaudited.md
+./docs/archive/audit-2026-06-15-organization-and-licenses.md
+./docs/archive/architecture-rebuild-writeup.md
+./docs/archive/agent-architecture-rebuild-plan.md
+./docs/archive/HANDOFF-2026-06-10.md
+./docs/archive/AUTONOMOUS-EXECUTION-LOG.md
+./frontend/refs.mjs
+./frontend/scripts/shots_ab.mjs
+./frontend/scripts/screenshots.mjs
+./frontend/src/components/AnswerDocument.test.tsx
+./frontend/src/components/AgentSurface.tsx
+./frontend/src/components/BuildSurface.scroll.test.tsx
+./frontend/src/components/BuildSurface.recovery.test.tsx
+./frontend/src/components/AnswerDocument.tsx
+./frontend/src/components/BuildSurface.test.tsx
+./frontend/src/components/BuildSurface.tsx
+./frontend/src/components/BuildSurface.verbose.test.tsx
+./harness/marathon/test_phase_c.py
+./frontend/src/components/CapabilityBadges.tsx
+./harness/marathon/test_phase_b.py
+./harness/marathon/test_phase_a.py
+./frontend/src/components/Citation.test.tsx
+./harness/marathon/sensor_readings.csv
+./frontend/src/components/ChartBlock.test.tsx
+./harness/marathon/provenance.json
+./harness/marathon/make_csv.py
+./frontend/src/components/Citation.tsx
+./harness/marathon/drive.py
+./frontend/src/components/CommandPalette.test.tsx
+./frontend/src/components/CommandPalette.tsx
+./harness/cassette.py
+./harness/capture.py
+./harness/canary.py
+./frontend/refs/perplexity.png
+./frontend/refs/perplexity-dark.png
+./frontend/refs/manus.png
+./frontend/refs/manus-dark.png
+./frontend/refs/manus-ai.png
+./harness/_capture_loop_demo.py
+./harness/__init__.py
+./future-plans.md
+./harness/_capture_research_demo.py
+./harness/build_loop_metrics.py
+./frontend/src/components/QueryInput.think.test.tsx
+./frontend/src/components/PathPickerDialog.tsx
+./frontend/src/components/ModelLeaderPill.tsx
+./frontend/src/components/Markdown.tsx
+./packages/agent-server/tests/test_build_contract_activation.py
+./frontend/src/components/Markdown.test.tsx
+./packages/agent-server/tests/test_lifecycle.py
+./packages/agent-server/tests/test_workspace_route.py
+./packages/agent-server/tests/test_wire.py
+./packages/agent-server/tests/test_vision_probe_startup.py
+./packages/agent-server/tests/test_verify.py
+./packages/agent-server/tests/test_upload_corpus.py
+./packages/agent-server/tests/test_upload.py
+./packages/agent-server/tests/test_tts_local.py
+./packages/agent-server/tests/test_title_service.py
+./packages/agent-server/tests/test_synthetic_deliverable.py
+./packages/pi-kernel/skills/preview-repair/SKILL.md
+./frontend/src/components/Markdown.chart.test.tsx
+./packages/agent-server/tests/test_supervision_guardrail.py
+./packages/agent-server/tests/test_stranded_followup_rekick.py
+./frontend/src/components/FollowUps.tsx
+./packages/agent-server/tests/test_stale_policy.py
+./frontend/src/components/ExampleQueries.tsx
+./packages/agent-server/tests/test_share_import.py
+./frontend/src/components/DemoDataBadge.tsx
+./packages/agent-server/tests/test_share.py
+./frontend/src/components/DemoDataBadge.test.tsx
+./frontend/src/components/ConfirmDialog.tsx
+./packages/agent-server/tests/test_sessions_routes.py
+./packages/agent-server/tests/test_sessions_degrade.py
+./packages/agent-server/tests/test_secret_overlay.py
+./packages/agent-server/tests/test_schedule_e2e.py
+./frontend/src/components/ScopeControl.tsx
+./packages/agent-server/tests/test_schedule_coalesce.py
+./frontend/src/components/SandboxHealthBanner.tsx
+./packages/agent-server/tests/test_sandbox_preflight_reconcile.py
+./frontend/src/components/SandboxHealthBanner.test.tsx
+./frontend/src/components/ResearchSurface.tsx
+./frontend/src/components/ResearchSurface.test.tsx
+./frontend/src/components/ResearchSurface.draft.test.tsx
+./frontend/src/components/ResearchSurface.attach.test.tsx
+./frontend/src/components/QueryInput.tsx
+./frontend/src/components/StaticRunView.tsx
+./frontend/src/components/SourcePanel.tsx
+./packages/agent-server/tests/test_sandbox_config.py
+./frontend/src/components/SourcePanel.test.tsx
+./packages/agent-server/tests/test_runtime.py
+./frontend/src/components/SlidesBlock.test.tsx
+./packages/agent-server/tests/test_resume_reconstruction.py
+./frontend/src/components/SheetBlock.test.tsx
+./packages/agent-server/tests/test_resume_condensation.py
+./frontend/src/components/Toast.test.tsx
+./packages/agent-server/tests/test_resume.py
+./frontend/src/components/ThinkToggle.tsx
+./packages/agent-server/tests/test_research_ws_B3.py
+./packages/agent-server/tests/test_research.py
+./frontend/src/components/ThemeToggle.tsx
+./packages/agent-server/tests/test_report_followup.py
+./frontend/src/components/TtftIndicator.tsx
+./packages/agent-server/tests/test_report_export_pdf_fixes.py
+./frontend/src/components/Toast.tsx
+./packages/agent-server/tests/test_report_export_brand.py
+./packages/agent-server/tests/test_report_export.py
+./frontend/src/components/blocks.tsx
+./packages/agent-server/tests/test_report_audio_live.py
+./packages/agent-server/tests/test_report_audio.py
+./packages/agent-server/tests/test_redaction.py
+./packages/agent-server/tests/test_projects_endpoints.py
+./packages/agent-server/tests/test_probes_route.py
+./packages/agent-server/tests/test_probe_ttl.py
+./packages/agent-server/tests/test_preview_wake.py
+./packages/agent-server/tests/test_preview_manager.py
+./packages/agent-server/tests/test_preview_fetch_inside.py
+./packages/agent-server/tests/test_preview_edit_route.py
+./packages/agent-server/tests/test_preflight.py
+./packages/agent-server/tests/test_policy_consistency.py
+./packages/agent-server/tests/test_pi_tool_bridge_unit.py
+./packages/agent-server/tests/test_pi_tool_bridge.py
+./packages/agent-server/tests/test_pi_session_artifact.py
+./packages/agent-server/tests/test_pi_process.py
+./packages/agent-server/tests/test_pi_kernel.py
+./packages/agent-server/tests/test_pi_inspect_trace.py
+./packages/agent-server/tests/test_pi_inference_revoke_lifecycle.py
+./packages/agent-server/tests/test_pi_inference_gateway.py
+./packages/agent-server/tests/test_pi_event_mapper.py
+./packages/agent-server/tests/test_p3_sticky_model.py
+./packages/agent-server/tests/test_override_persistence.py
+./packages/agent-server/tests/test_operator_preview_probe.py
+./packages/agent-server/tests/test_oid_stamp.py
+./packages/agent-server/tests/test_novnc_live.py
+./packages/agent-server/tests/test_models_context_length.py
+./packages/agent-server/tests/test_model_pick_pipeline.py
+./packages/agent-server/tests/test_memory_release.py
+./packages/agent-server/tests/test_mcp_tool_search_cap.py
+./packages/agent-server/tests/test_mcp_retrieval_tier.py
+./harness/marathon/data/sensor_readings.csv
+./packages/agent-server/tests/test_mcp_pool.py
+./harness/marathon/data/PROVENANCE.md
+./packages/agent-server/tests/test_mcp_poisoning.py
+./harness/marathon/conftest.py
+./harness/marathon/common.py
+./harness/marathon/_or_key.py
+./harness/marathon/README.md
+./packages/agent-server/tests/test_mcp_http.py
+./harness/logcap.py
+./packages/agent-server/tests/test_mcp_fence.py
+./harness/live_build_acceptance.py
+./packages/agent-server/tests/test_mcp_egress.py
+./harness/faults.py
+./packages/agent-server/tests/test_mcp_e6_new_hash.py
+./harness/eval_runner.py
+./packages/agent-server/tests/test_live_probe_nonblocking.py
+./packages/agent-server/tests/test_kill_generation_guard.py
+./packages/agent-server/tests/test_inspect_trace.py
+./packages/agent-server/tests/test_idle_suspend.py
+./packages/agent-server/tests/test_host_proxy_C2.py
+./packages/agent-server/tests/test_host_proxy.py
+./packages/agent-server/tests/test_health.py
+./packages/agent-server/tests/test_driver_models_pricing.py
+./packages/agent-server/tests/test_dr1_dr3.py
+./packages/agent-server/tests/test_disco_verify_runner.py
+./packages/agent-server/tests/test_deck_editor_route.py
+./packages/agent-server/tests/test_debug_evidence_route.py
+./packages/agent-server/tests/test_datasource_attach.py
+./packages/agent-server/tests/test_d10_unified_projection.py
+./packages/agent-server/tests/test_conversation_title_sanitize.py
+./packages/agent-server/tests/test_conversation_delete_cleanup.py
+./packages/agent-server/tests/test_control_ops_ship_it.py
+./packages/agent-server/tests/test_build_surface.py
+./packages/agent-server/tests/test_build_kernel_pinning.py
+./packages/agent-server/tests/test_build_kernel_interface.py
+./frontend/src/components/states.tsx
+./packages/agent-server/tests/test_atomic_sidecar.py
+./frontend/src/components/states.test.tsx
+./packages/agent-server/tests/test_assist_tier.py
+./packages/agent-server/tests/test_artifact_route.py
+./packages/agent-server/tests/test_artifact_mode.py
+./packages/agent-server/tests/test_agent_surface.py
+./packages/agent-server/tests/test_activity.py
+./packages/agent-server/tests/test_abandoned_gate_sweep.py
+./frontend/src/api/secrets.ts
+./packages/pi-kernel/skills/build-basic/SKILL.md
+./frontend/src/api/research.ts
+./frontend/src/api/projects.ts
+./frontend/src/api/models.ts
+./frontend/src/api/deepResearch.ts
+./frontend/src/api/deepResearch.test.ts
+./frontend/src/api/conversations.ts
+./packages/core/src/disco/core/tweaks.py
+./packages/pi-kernel/package.json
+./frontend/src/api/config.ts
+./packages/core/src/disco/core/semantic_refs.py
+./packages/pi-kernel/package-lock.json
+./frontend/src/api/client.ts
+./frontend/src/api/agent.upload.test.ts
+./frontend/src/api/agent.ts
+./frontend/src/api/agent.reconnect.test.ts
+./frontend/src/api/activity.ts
+./frontend/src/App.tsx
+./frontend/src/App.moderesume.test.tsx
+./frontend/src/components/blocks/CitedText.tsx
+./frontend/src/components/blocks/ChartBlock.tsx
+./frontend/src/components/blocks/BlockView.tsx
+./frontend/src/components/blocks/SheetBlock.tsx
+./frontend/src/components/blocks/CodeBlock.tsx
+./frontend/src/components/blocks/SlidesBlock.tsx
+./frontend/src/components/blocks/TableView.tsx
+./harness/build_soak/promotion.py
+./harness/build_soak/provider_ledger.py
+./harness/build_soak/classify.py
+./harness/build_soak/failure_codes.py
+./harness/build_soak/product_evidence.py
+./harness/build_soak/run.py
+./frontend/src/components/controls.test.tsx
+./harness/cassettes/research_demo.jsonl
+./harness/cassettes/loop_demo.events.jsonl
+./harness/cassettes/loop_demo.cassette.jsonl
+./harness/cassettes/demo.jsonl
+./packages/core/src/disco/core/kits/__init__.py
+./packages/core/src/disco/core/kits/brand.py
+./packages/core/src/disco/core/kits/starter.py
+./packages/agent-server/tests/integration/test_task_supervision.py
+./packages/agent-server/tests/integration/test_scripted_smoke.py
+./packages/agent-server/tests/integration/scripted_model.py
+./packages/agent-server/tests/integration/harness.py
+./packages/agent-server/tests/integration/__init__.py
+./harness/build_soak/migrations/2026_06_24_paused_incomplete_not_pass.md
+./harness/build_soak/infra_signatures.yaml
+./frontend/src/__unbiased_gate__/authorB_slides_editor.test.tsx
+./frontend/src/__unbiased_gate__/authorB_research_slides.test.tsx
+./frontend/src/__unbiased_gate__/authorB_models_ui.test.tsx
+./frontend/src/__unbiased_gate__/authorB_deep_report_variance.test.tsx
+./frontend/src/__unbiased_gate__/authorB_chat_ui.test.tsx
+./harness/build_soak/scenarios.yaml
+./packages/core/src/disco/core/appkit/models.py
+./packages/core/src/disco/core/appkit/semantic_metadata.py
+./packages/core/src/disco/core/appkit/__init__.py
+./frontend/src/components/settings/SkillsSection.tsx
+./frontend/src/components/settings/ScheduleSection.tsx
+./frontend/src/components/settings/SandboxSection.tsx
+./frontend/src/components/settings/SandboxSection.test.tsx
+./frontend/src/components/settings/SandboxSection.switch.test.tsx
+./frontend/src/components/settings/RoleModelPicker.tsx
+./frontend/src/components/settings/ProviderKeysSection.tsx
+./frontend/src/components/settings/ProviderKeysSection.test.tsx
+./frontend/src/components/settings/ProjectStorageSection.tsx
+./frontend/src/components/settings/ProjectStorageSection.test.tsx
+./frontend/src/components/settings/ProbeButton.tsx
+./frontend/src/components/settings/ProbeButton.test.tsx
+./frontend/src/components/settings/PendingBadge.tsx
+./frontend/src/components/settings/OpenRouterSection.tsx
+./frontend/src/components/settings/NotWired.tsx
+./frontend/src/components/settings/ModelMatrix.tsx
+./frontend/src/components/settings/ModelCatalogue.tsx
+./frontend/src/components/settings/ModelCatalogue.subscription.test.tsx
+./frontend/src/components/settings/McpSection.tsx
+./frontend/src/components/settings/McpSection.live.test.tsx
+./frontend/src/components/settings/McpSection.approval.test.tsx
+./frontend/src/components/settings/LiveBrowserSection.tsx
+./frontend/src/components/settings/LiveBrowserSection.test.tsx
+./frontend/src/components/settings/ImageGenSection.tsx
+./frontend/src/components/settings/ImageGenSection.test.tsx
+./frontend/src/components/settings/EncoderSection.tsx
+./frontend/src/components/settings/DataSourcesSection.tsx
+./frontend/src/components/settings/DataSourcesSection.test.tsx
+./frontend/src/components/settings/ChatVerbositySection.tsx
+./frontend/src/components/settings/BuildKernelSection.tsx
+./frontend/src/components/settings/AudioSection.tsx
+./harness/build_soak/fixtures/fake_tools.py
+./harness/build_soak/fixtures/fake_model.py
+./harness/build_soak/fixtures/__init__.py
+./harness/build_soak/evidence.py
+./harness/build_soak/events.py
+./harness/build_soak/bakeoff.py
+./harness/build_soak/tests/test_targeted_edit_oracles.py
+./harness/build_soak/tests/test_product_evidence_writer.py
+./harness/build_soak/tests/test_browser_evidence_oracles.py
+./harness/build_soak/tests/test_promotion.py
+./harness/build_soak/tests/test_provider_ledger_oracle.py
+./harness/build_soak/tests/test_revision_oracle.py
+./harness/build_soak/tests/test_output_truth_oracle.py
+./packages/core/src/disco/core/workflows/__init__.py
+./harness/build_soak/tests/test_oracle_schema.py
+./packages/core/src/disco/core/workflows/skill_mount.py
+./harness/build_soak/tests/test_no_fluke_policy.py
+./packages/core/src/disco/core/workflows/assembly.py
+./harness/build_soak/tests/test_live_api_smoke.py
+./packages/core/src/disco/core/workflows/prompt_pack.py
+./harness/build_soak/tests/test_fail_closed.py
+./harness/build_soak/tests/test_evidence_lock.py
+./harness/build_soak/tests/test_event_chain_oracle.py
+./harness/build_soak/tests/test_classifier.py
+./harness/build_soak/tests/test_bakeoff.py
+./harness/build_soak/tests/test_api_runner.py
+./harness/build_soak/tests/conftest.py
+./harness/build_soak/tests/_eventlog.py
+./frontend/src/components/build/AgentStageCard.test.tsx
+./frontend/src/components/build/AgentCanvas.tsx
+./frontend/src/components/build/AgentCanvas.test.tsx
+./frontend/src/components/build/AgentCanvas.live.test.tsx
+./frontend/src/components/build/AgentCanvas.discuss.test.tsx
+./frontend/src/components/build/AgentCanvas.deckforeground.test.tsx
+./frontend/src/components/build/ActivityFeed.tsx
+./frontend/src/components/build/ActivityFeed.sheet.test.tsx
+./frontend/src/components/build/ActivityFeed.screenshot.test.tsx
+./harness/build_soak/adapters/disco_api.py
+./harness/build_soak/adapters/__init__.py
+./harness/build_soak/__init__.py
+./packages/agent-server/tests/fixtures/negative/raw_html_deck_deliverable.json
+./packages/agent-server/tests/fixtures/negative/procedural_placeholder.png
+./harness/build_soak/oracles/output_truth.py
+./packages/agent-server/tests/fixtures/negative/procedural_image_deck.html
+./harness/build_soak/oracles/tool_scope.py
+./packages/agent-server/tests/fixtures/negative/no_plan_progress_finished.json
+./harness/build_soak/oracles/schema.py
+./packages/agent-server/tests/fixtures/negative/README.md
+./harness/build_soak/oracles/revision.py
+./harness/build_soak/oracles/harness_validity.py
+./harness/build_soak/oracles/event_chain.py
+./harness/build_soak/oracles/contract.py
+./harness/build_soak/oracles/__init__.py
+./packages/agent-server/tests/conftest.py
+./harness/build_soak/oracles/browser_evidence.py
+./harness/build_soak/oracles/provider_ledger.py
+./harness/build_soak/oracles/targeted_edit.py
+./harness/build_soak/oracles/_edit_evidence.py
+./harness/build_soak/oracles/manual_edit_preservation.py
+./frontend/src/components/build/AskPanel.test.tsx
+./packages/core/src/disco/core/obs.py
+./frontend/src/components/build/AlternativesGate.tsx
+./frontend/src/components/build/AlternativesGate.test.tsx
+./packages/core/src/disco/core/migration.py
+./frontend/src/components/build/AgentStatusBar.tsx
+./frontend/src/components/build/AgentStatusBar.suspend.test.tsx
+./frontend/src/components/build/AgentStatusBar.resume.test.tsx
+./frontend/src/components/build/AgentStatusBar.cost.test.tsx
+./frontend/src/components/build/AgentStageCard.tsx
+./frontend/src/components/build/BuildSurface.tsx
+./frontend/src/components/build/BuildModelPicker.tsx
+./frontend/src/components/build/BuildModelPicker.subscription.test.tsx
+./frontend/src/components/build/BuildModelPicker.p3.test.tsx
+./frontend/src/components/build/AskPanel.tsx
+./frontend/src/components/build/ClarifyPanel.tsx
+./frontend/src/components/build/ClarifyPanel.test.tsx
+./frontend/src/components/build/BuildSurface.upload.test.tsx
+./frontend/src/components/build/ConfirmationPanel.tsx
+./frontend/src/components/build/ConnectionsStrip.tsx
+./frontend/src/components/build/DeckEditorPane.test.tsx
+./packages/core/src/disco/core/workflows/prompt_packs/build_interactive_prototype.md
+./frontend/src/components/research/ClaimVerdicts.tsx
+./packages/core/src/disco/core/workflows/prompt_packs/build_static_site.md
+./frontend/src/components/research/ClaimVerdicts.test.tsx
+./packages/core/src/disco/core/workflows/prompt_packs/build_deck.md
+./packages/core/src/disco/core/workflows/prompt_packs/build_appkit_leadgen.md
+./packages/core/src/disco/core/workflows/prompt_packs/build_document.md
+./frontend/src/components/research/AudioPlayer.tsx
+./frontend/src/components/research/AudioPlayer.test.tsx
+./frontend/src/components/mainSurface.test.tsx
+./frontend/src/components/brand/Wordmark.tsx
+./frontend/src/components/brand/DefinitionMark.tsx
+./frontend/src/components/brand/DefinitionMark.test.tsx
+./frontend/src/components/build/DeckExportBar.test.tsx
+./frontend/src/components/build/DeckEditorPane.tsx
+./frontend/src/components/build/DeckExportBar.tsx
+./frontend/src/components/build/DeliverablePanel.test.tsx
+./frontend/src/components/research/DeepResearchSurface.test.tsx
+./frontend/src/components/research/DeepResearchSurface.resumed.test.tsx
+./frontend/src/components/research/DeepResearchSurface.attach.test.tsx
+./frontend/src/components/research/DeepReportView.variance.test.tsx
+./frontend/src/components/research/DeepReportView.tsx
+./frontend/src/components/research/DeepReportView.table.test.tsx
+./frontend/src/components/research/DeepProgressStrip.tsx
+./frontend/src/components/research/DeepBoundedNotice.tsx
+./frontend/src/components/build/DeliverablePanel.tsx
+./frontend/src/components/research/FollowUpStatus.tsx
+./frontend/src/components/research/FollowUpStatus.test.tsx
+./frontend/src/components/research/DepthTierSelector.tsx
+./frontend/src/components/research/DeepResearchSurface.tsx
+./frontend/src/components/research/IterativeToggle.tsx
+./frontend/src/components/research/IncludeFollowUpsModal.tsx
+./frontend/src/components/research/IncludeFollowUpsModal.test.tsx
+./frontend/src/components/build/ExecutionCanvas.cockpit.test.tsx
+./frontend/src/components/research/NeedMoreCard.tsx
+./frontend/src/components/research/NeedMoreCard.test.tsx
+./frontend/src/components/research/RecencySelector.tsx
+./frontend/src/components/research/ReportFollowUp.tsx
+./frontend/src/components/research/TieredSourcePanel.tsx
+./frontend/src/components/research/TemplatePicker.tsx
+./packages/agent-server/scripts/verify_replan_acceptance.py
+./packages/core/src/disco/core/contract/registry.py
+./frontend/src/components/research/SupportMeter.tsx
+./packages/core/src/disco/core/contract/__init__.py
+./packages/agent-server/scripts/verify_plan_approve.py
+./frontend/src/components/research/SupportMeter.test.tsx
+./packages/core/src/disco/core/contract/models.py
+./packages/agent-server/scripts/verify_build_proof_of_life.py
+./packages/core/src/disco/core/contract/phase.py
+./packages/agent-server/scripts/verify_browser_injection.py
+./packages/core/src/disco/core/contract/enforce.py
+./packages/core/src/disco/core/contract/scopes.py
+./packages/core/src/disco/core/observations.py
+./packages/core/src/disco/core/__init__.py
+./packages/agent-server/pyproject.toml
+./packages/agent-server/src/disco/agent_server/pi_inference.py
+./packages/core/src/disco/core/events.py
+./orders.yaml
+./packages/agent-server/src/disco/agent_server/oid_stamp.py
+./packages/agent-server/src/disco/agent_server/mcp_manager.py
+./packages/agent-server/src/disco/agent_server/__main__.py
+./packages/agent-server/src/disco/agent_server/host_proxy.py
+./packages/agent-server/src/disco/agent_server/__init__.py
+./packages/agent-server/src/disco/agent_server/deep_research_service.py
+./packages/agent-server/src/disco/agent_server/app.py
+./packages/agent-server/src/disco/agent_server/control_ops.py
+./packages/agent-server/src/disco/agent_server/audio_config.py
+./packages/agent-server/src/disco/agent_server/build_messages.py
+./packages/agent-server/src/disco/agent_server/report_audio.py
+./frontend/src/components/build/LiveSignalBar.tsx
+./packages/agent-server/src/disco/agent_server/redaction.py
+./frontend/src/components/icons/CodeBlocksIcon.tsx
+./packages/agent-server/src/disco/agent_server/preview_service.py
+./packages/agent-server/src/disco/agent_server/preview_manager.py
+./packages/agent-server/src/disco/agent_server/resume_service.py
+./packages/agent-server/src/disco/agent_server/report_export.py
+./frontend/src/components/build/ReplayScrubber.tsx
+./frontend/src/components/build/PlanPanel.tsx
+./frontend/src/components/build/ExecutionCanvas.tsx
+./frontend/src/components/build/PlanPanel.test.tsx
+./frontend/src/components/build/ExecutionCanvas.terminal.test.tsx
+./frontend/src/components/build/ResizableSplit.tsx
+./frontend/src/components/build/ExecutionCanvas.preview.test.tsx
+./frontend/src/components/build/SteerInput.tsx
+./frontend/src/components/build/StreamingFile.test.tsx
+./packages/agent-server/src/disco/agent_server/runtime_model_probe.py
+./packages/agent-server/src/disco/agent_server/runtime_settings.py
+./packages/agent-server/src/disco/agent_server/schedule.py
+./packages/core/src/disco/core/state.py
+./packages/core/src/disco/core/skills.py
+./frontend/src/components/build/latestEditableDeckBase.test.ts
+./packages/core/src/disco/core/context/__init__.py
+./packages/core/src/disco/core/context/compaction.py
+./packages/core/src/disco/core/context/store.py
+./packages/core/src/disco/core/context/pack.py
+./packages/core/src/disco/core/context/ledger.py
+./packages/core/src/disco/core/context/artifact_memory.py
+./packages/core/src/disco/core/context/source_priority.py
+./packages/core/src/disco/core/context/_util.py
+./packages/core/src/disco/core/wire.py
+./packages/core/src/disco/core/view.py
+./packages/agent-server/src/disco/agent_server/build_kernel/pi_tool_bridge.py
+./packages/agent-server/src/disco/agent_server/runtime.py
+./packages/agent-server/src/disco/agent_server/build_kernel/pi_session_artifact.py
+./packages/agent-server/src/disco/agent_server/lifecycle.py
+./packages/agent-server/src/disco/agent_server/build_kernel/pi_process.py
+./packages/agent-server/src/disco/agent_server/build_kernel/pi_kernel.py
+./packages/agent-server/src/disco/agent_server/build_kernel/pi_event_mapper.py
+./packages/agent-server/src/disco/agent_server/build_kernel/disco_kernel.py
+./packages/agent-server/src/disco/agent_server/build_kernel/base.py
+./packages/agent-server/src/disco/agent_server/build_kernel/__init__.py
+./packages/core/src/disco/core/security/risk.py
+./packages/core/src/disco/core/security/assessment.py
+./packages/core/src/disco/core/security/analyzers.py
+./packages/core/src/disco/core/security/__init__.py
+./packages/core/src/disco/core/loop/agent.py
+./packages/core/src/disco/core/loop/engine.py
+./packages/core/src/disco/core/loop/boundaries.py
+./packages/core/src/disco/core/loop/driver.py
+./packages/core/src/disco/core/loop/finish.py
+./packages/core/src/disco/core/loop/context_builder.py
+./packages/core/src/disco/core/loop/bootstrap.py
+./packages/core/src/disco/core/loop/view_render.py
+./packages/core/src/disco/core/loop/turn_control.py
+./packages/core/src/disco/core/loop/tool_specs.py
+./packages/core/src/disco/core/loop/stuck.py
+./packages/core/src/disco/core/loop/stream_extract.py
+./packages/core/src/disco/core/loop/signals.py
+./packages/core/src/disco/core/loop/recitation.py
+./packages/core/src/disco/core/loop/preview_target.py
+./packages/core/src/disco/core/loop/policies.py
+./packages/core/src/disco/core/loop/plans.py
+./packages/core/src/disco/core/loop/plan_conditions.py
+./packages/core/src/disco/core/loop/observe.py
+./packages/core/src/disco/core/loop/messages.py
+./packages/core/src/disco/core/loop/file_state.py
+./packages/core/src/disco/core/loop/fc_kit.py
+./packages/core/src/disco/core/loop/dedup.py
+./packages/core/src/disco/core/loop/control.py
+./packages/core/src/disco/core/loop/context_budget.py
+./packages/core/src/disco/core/loop/__init__.py
+./packages/core/src/disco/core/store/base.py
+./packages/core/src/disco/core/store/sqlite.py
+./packages/core/src/disco/core/store/__init__.py
+./packages/core/src/disco/core/dod_evaluator.py
+./packages/core/src/disco/core/dod.py
+./packages/core/src/disco/core/env.py
+./packages/core/src/disco/core/dod_util.py
+./packages/core/src/disco/core/equality.py
+./packages/core/src/disco/core/llm/nli.py
+./packages/core/src/disco/core/llm/exec_policy.py
+./packages/core/src/disco/core/llm/errors.py
+./packages/core/src/disco/core/llm/config_store.py
+./packages/core/src/disco/core/llm/config.py
+./packages/core/src/disco/core/llm/__init__.py
+./packages/core/src/disco/core/inspect.py
+./packages/core/src/disco/core/llm/provider.py
+./packages/core/src/disco/core/llm/prompts.py
+./packages/core/src/disco/core/llm/policy.py
+./packages/core/src/disco/core/llm/openai_provider.py
+./packages/agent-server/src/disco/agent_server/routes/ws.py
+./packages/core/src/disco/core/llm/secrets.py
+./packages/agent-server/src/disco/agent_server/routes/storage.py
+./packages/agent-server/src/disco/agent_server/routes/share.py
+./packages/agent-server/src/disco/agent_server/routes/sessions.py
+./packages/agent-server/src/disco/agent_server/routes/schedules.py
+./packages/agent-server/src/disco/agent_server/routes/report.py
+./packages/agent-server/src/disco/agent_server/routes/projects.py
+./packages/core/src/disco/core/llm/routing.py
+./packages/agent-server/src/disco/agent_server/routes/probes.py
+./packages/agent-server/src/disco/agent_server/routes/preview_edit.py
+./packages/agent-server/src/disco/agent_server/routes/preview.py
+./packages/core/src/disco/core/llm/toolcall_recovery.py
+./packages/agent-server/src/disco/agent_server/routes/pi_tools.py
+./packages/core/src/disco/core/llm/summarizer.py
+./packages/agent-server/src/disco/agent_server/routes/pi_inference.py
+./packages/agent-server/src/disco/agent_server/routes/models.py
+./packages/core/src/disco/core/llm/types.py
+./packages/agent-server/src/disco/agent_server/routes/mcp.py
+./packages/core/src/disco/core/llm/vision_table.py
+./packages/agent-server/src/disco/agent_server/routes/health.py
+./packages/agent-server/src/disco/agent_server/routes/files.py
+./packages/core/src/disco/core/evidence/__init__.py
+./packages/agent-server/src/disco/agent_server/routes/export.py
+./frontend/src/components/build/canvas/EditAffordance.test.tsx
+./packages/agent-server/src/disco/agent_server/routes/deck_editor.py
+./frontend/src/components/build/canvas/CockpitPane.tsx
+./packages/agent-server/src/disco/agent_server/routes/debug.py
+./packages/core/src/disco/core/llm/wiring.py
+./packages/agent-server/src/disco/agent_server/routes/conversations.py
+./frontend/src/components/build/canvas/EditAffordance.tsx
+./packages/agent-server/src/disco/agent_server/routes/activity.py
+./packages/agent-server/src/disco/agent_server/routes/_common.py
+./packages/agent-server/src/disco/agent_server/routes/__init__.py
+./frontend/src/components/build/editor/LayersPanel.tsx
+./frontend/src/components/build/editor/ElementBox.tsx
+./frontend/src/components/build/editor/ElementBox.test.tsx
+./frontend/src/components/build/editor/DeckEditor.tsx
+./frontend/src/components/build/editor/DeckEditor.test.tsx
+./packages/agent-server/src/disco/agent_server/title_service.py
+./frontend/src/components/build/cluster6.test.tsx
+./packages/agent-server/src/disco/agent_server/share_viewer.py
+./packages/core/src/disco/core/evidence/schema.py
+./packages/agent-server/src/disco/agent_server/share_service.py
+./frontend/src/components/build/canvas/Empty.tsx
+./packages/agent-server/src/disco/agent_server/sessions_service.py
+./packages/agent-server/src/disco/agent_server/selection_agent.js
+./frontend/src/components/build/editor/SlideThumbnail.test.tsx
+./packages/agent-server/src/disco/agent_server/schedule_service.py
+./frontend/src/components/build/editor/SlideCanvas.tsx
+./packages/agent-server/src/disco/agent_server/schedule_models.py
+./frontend/src/components/build/editor/SlideCanvas.test.tsx
+./frontend/src/components/build/canvas/FilesPane.tsx
+./packages/agent-server/src/disco/agent_server/verify/__main__.py
+./packages/agent-server/src/disco/agent_server/verify/__init__.py
+./frontend/src/components/build/editor/slideToggle.ts
+./packages/agent-server/src/disco/agent_server/uploads_ingest.py
+./frontend/src/components/build/editor/SlideThumbnail.tsx
+./packages/agent-server/src/disco/agent_server/tts_local.py
+./frontend/src/components/build/editor/types.ts
+./packages/agent-server/src/disco/agent_server/verify/operator.py
+./packages/agent-server/src/disco/agent_server/verify/_setup_checks.py
+./packages/agent-server/src/disco/agent_server/verify/runner.py
+./packages/agent-server/src/disco/agent_server/verify/scenarios.py
+./packages/agent-server/src/disco/agent_server/verify/scenarios_run.py
+./frontend/src/components/build/canvas/PreviewPane.discuss.test.tsx
+./frontend/src/components/build/canvas/PreviewPane.reload.test.tsx
+./frontend/src/components/build/canvas/PreviewPane.edit.test.tsx
+./frontend/src/components/build/canvas/SelectionOverlay.test.tsx
+./frontend/src/components/build/canvas/PreviewPane.tsx
+./frontend/src/components/build/canvas/SelectionOverlay.tip.test.tsx
+./packages/agent-server/src/disco/agent_server/verify/schema.py
+./packages/core/src/disco/core/brand/css.py
+./packages/core/src/disco/core/brand/chart_svg.py
+./packages/core/src/disco/core/brand/__init__.py
+./frontend/src/components/build/canvas/SelectionOverlay.tsx
+./packages/core/src/disco/core/brand/tokens.py
+./packages/core/src/disco/core/brand/mark.py
+./frontend/src/components/build/canvas/TerminalPane.tsx
+./packages/core/src/disco/core/brand/fonts/SchibstedGrotesk.ttf
+./packages/core/src/disco/core/brand/fonts/NewsreaderItalic.ttf
+./packages/core/src/disco/core/brand/fonts/Newsreader.ttf
+./packages/core/src/disco/core/brand/fonts/LICENSE-OFL.txt
+./packages/core/src/disco/core/brand/fonts/FrauncesItalic.ttf
+./packages/core/src/disco/core/brand/fonts/Fraunces.ttf
+
+exec
+/bin/bash -lc 'rg -n "_KEY_RE|affects|palette|test_affects_paths_must_be_lexical|test_duplicate_affects_rejected_so_text_cannot_fake_two_fields|test_palette_set_input_rejected_not_silently_uncanonicalized" .' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+./basis-of-design.md:505:- **Color — aggressively restrained:** stark light/dark, near-absolute backgrounds for contrast; desaturated muted blue for links (not reflex blue); chroma reserved strictly for **actionable/verifiable** elements (citations, approve/confirm, low-confidence flags) — never ambient decoration. Where a richer palette appears (dashboards), a strict 60-30-10.
+./ui-implementation.md:62:**Prove it:** re-apply the tokens to the **existing answer surface** so the four type roles are visibly distinct (especially the new reading face on the body), the line-height lands near 1.55, the palette/surface-ladder/muted-blue-links are token-driven, and both themes render deliberately. This is a refactor-to-tokens of what exists, not a redesign of its layout.
+./ui-implementation.md:66:**Done when:** a documented token system exists; the answer surface renders through it in both themes with four visibly-distinct type roles and the corrected line-height; no surface value is hard-coded. **Report** the exact faces you chose (and why they fit "calm, precise, invisible"), the palette, and the TTFT micro-interaction you designed.
+./docs/WORK-ORDERS-archive.md:97:- [x] **EPIC C — AppSpec/DesignSpec.** DONE (`e9a15e9`+5 codex rounds→`9443e0f`, disco-nightly) — AppSpec(pages/sections/entities/structured Actions) + DesignSpec(typography/palette/layout+justifications) + `.disco/` JSON IO; AIRTIGHT save-gate (frozen+tuples+revalidate-on-save+correct-type-per-path+size-symmetry); 63 tests; codex-APPROVED. _orig:_ C1 Pydantic models (appkit/spec.py); C2 spec IO helpers.
+./archived God files/runtime.py:478:        # so a skill toggled in Settings affects the next conversation without a
+./docs/build-soak-guidelines.md:1338:Codex and Claude disagree on root cause in a way that affects patch direction
+./docs/disco-ui-control-gaps-6-21-26.md:175:  command-palette (`CommandPalette.tsx:90`), and preview-edit (`EditAffordance.tsx:54`)
+./packages/tools/tests/test_deck_validators.py:70:    palette + a dominant background but NO thin corner-diagonal accent line). Byte detection
+./docs/codex-evidence-harness-review-6-21-26.md:5456:   232	    three-color palette. Same prompt + same seed → byte-identical PNG
+./docs/codex-evidence-harness-review-6-21-26.md:5486:   262	        # A three-color palette derived from the seed — the visual signal
+./docs/codex-evidence-harness-review-6-21-26.md:5938:There is a real compatibility risk in slides: changing the default to `pptx` routes markdown-only callers into the Marp-required path, while `html` is the only guaranteed fallback. I’m moving to evidence/redaction now because that affects what the harness can safely expose.
+./docs/codex-evidence-harness-review-6-21-26.md:9186:    77	    output (W3 bug signature). That backend draws a flat ≤~7-colour palette plus a single
+./docs/archive/workorders/RP-14-usability-debt.md:25:## 2. Cmd+K / Ctrl+K command palette
+./docs/archive/workorders/RP-14-usability-debt.md:27:Global palette: navigation (New build, History, Projects, Settings) + actions
+./docs/archive/next-fix-set-plan.md:322:palette, history search, cost meter. Each is small; they share one order so the
+./docs/archive/next-fix-set-plan.md:395:   UI. Each spec: palette + semantic tokens, type scale, spacing, component
+./docs/archive/manus-gap-analysis-addendum.md:173:images, OG images, favicons, palettes) for the generated site, with model-by-dimension
+./docs/archive/surgical-B-trackc-slides.md:22:| **`chart_svg.py`** | "just added, reusable for slide charts" | **CONFIRMED EXISTS** at `packages/agent-server/src/disco/agent_server/chart_svg.py`. Public: `Palette`, `palette_from_theme(theme)`, `render_chart_svg(spec, pal)->str\|None`, `render_chart_table(spec)->str`; renderers bar/line/pie/scatter (`_render_*`). ⚠ **LAYERING TRAP (new finding):** it lives in **agent-server (a TOP layer)**. The deck renderer (C3/C8) lives in **tools (lower)**. `tools → agent_server` is an **illegal upward import** (only the one whitelisted audio edge exists). **C8 cannot import `chart_svg` from the tools deck renderer.** See C8 for the resolution (move down to `core`, or don't reuse it). |
+./docs/archive/surgical-B-trackc-slides.md:136:- **Files (current, verified) + the chart_svg layering finding.** `_deck_schema.py` (fill stubs + chart layouts); `_pptx_render.py` (chart/table renderers); C2 prompt (allow `chart`/`table` payloads). ⚠ **`chart_svg.py` reuse is BLOCKED by layering.** `packages/agent-server/.../chart_svg.py` (`render_chart_svg(spec,pal)`, `render_chart_table(spec)`, `palette_from_theme`) is genuinely reusable code, but it sits in **agent-server (top layer)** while the deck renderer is in **tools (lower)** — `tools → agent_server` is an illegal upward import (lint-imports gate). **Resolution options:** (A) **MOVE `chart_svg.py` down to `core/` (e.g. `core/charts/`)** so BOTH the agent-server report path AND the tools deck renderer import it downward — preferred, makes it a true shared asset like `core/brand`; (B) reimplement the SVG charting inside tools (duplication — avoid); (C) for the deck path use Chart.js (HTML) + python-pptx native charts (PPTX) and DON'T reuse `chart_svg` at all (works, but loses the shared SVG renderer for static/PDF chart fallback). **Recommendation: (A)** — relocate `chart_svg` to `core` as part of C8, then both consumers share it; re-run the arch-diagram + lint-imports gates after the move.
+./docs/archive/release-roadmap.md:140:5. **No onboarding** beyond example queries; no keyboard palette (Cmd+K), no full-text
+./docs/archive/release-roadmap.md:241:   BuildSurface.tsx:44 hardcode); conversation full-text search; Cmd+K palette; cost meter
+./packages/tools/src/disco/tools/verify/artifact_validators.py:86:    output (W3 bug signature). That backend draws a flat ≤~7-colour palette plus a single
+./packages/tools/src/disco/tools/verify/artifact_validators.py:104:    # Posterize before counting so JPEG compression noise doesn't inflate the palette. Then
+./packages/tools/src/disco/tools/verify/artifact_validators.py:105:    # require BOTH a small flat palette AND the procedural backend's SPECIFIC signature: a
+./packages/tools/src/disco/tools/verify/artifact_validators.py:107:    # placeholder from ordinary flat art (a logo/chart also has a small palette + a dominant
+./docs/archive/project-history-since-fable-handoff.md:149:  palette (radix, no new deps), history search + empty state, and a cost meter **gated off on paid
+./packages/tools/src/disco/tools/builtin/_c8_chart_layouts.py:26:    palette_from_theme,
+./packages/tools/src/disco/tools/builtin/_c8_chart_layouts.py:172:    pal = palette_from_theme(theme)
+./packages/core/tests/test_tweaks.py:23:def test_boolean_enum_palette_numeric_text_color_construct() -> None:
+./packages/core/tests/test_tweaks.py:29:    _f(editor=TweakEditor.TEXT, affects=("hero.headline", "hero.subhead"))
+./packages/core/tests/test_tweaks.py:41:def test_palette_requires_2_to_5_unique_colors() -> None:
+./packages/core/tests/test_tweaks.py:50:def test_palette_colors_canonicalized() -> None:
+./packages/core/tests/test_tweaks.py:59:        _f(editor=TweakEditor.TEXT, affects=("a", "b"), colors=("#fff", "#000"))
+./packages/core/tests/test_tweaks.py:100:        TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN)  # no controls_behavior, no affects
+./packages/core/tests/test_tweaks.py:105:        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.headline",))
+./packages/core/tests/test_tweaks.py:106:    TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("a.b", "c.d"))  # 2 fields ok
+./packages/core/tests/test_tweaks.py:111:    TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",))
+./packages/core/tests/test_tweaks.py:114:# --- P9A code-review fixes: affects validation + palette set bypass -----------
+./packages/core/tests/test_tweaks.py:115:def test_affects_paths_must_be_lexical() -> None:
+./packages/core/tests/test_tweaks.py:118:            TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN, affects=(bad,))
+./packages/core/tests/test_tweaks.py:121:def test_duplicate_affects_rejected_so_text_cannot_fake_two_fields() -> None:
+./packages/core/tests/test_tweaks.py:123:        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.title", "hero.title"))
+./packages/core/tests/test_tweaks.py:126:def test_palette_set_input_rejected_not_silently_uncanonicalized() -> None:
+./packages/core/tests/test_tweaks.py:159:    _f(key="lead_form.include_phone", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",)),
+./packages/core/tests/test_tweaks.py:160:    _f(key="hero.cta_count", editor=TweakEditor.INT, min=1, max=5, step=1, affects=("hero.ctas",)),
+./packages/core/tests/test_tweaks.py:161:    _f(key="brand.tone", editor=TweakEditor.ENUM, options=("calm", "bold"), affects=("design.tone",)),
+./packages/core/tests/test_tweaks.py:162:    _f(key="brand.accent", editor=TweakEditor.PALETTE, colors=("#0a84ff", "#e2725b"), affects=("design.accent",)),
+./packages/core/tests/test_tweaks.py:168:        TweakSpec(fields=(_f(key="x.y", affects=("a",)), _f(key="x.y", affects=("a",))))
+./frontend/src/components/CommandPalette.tsx:85:          data-testid="command-palette"
+./frontend/src/components/CommandPalette.tsx:90:          <Dialog.Title className="sr-only">Command palette</Dialog.Title>
+./frontend/src/components/CommandPalette.tsx:98:              data-testid="command-palette-input"
+./packages/retrieval/src/disco/retrieval/deep_research/synthesis.py:74:# report doesn't read as the same deterministic mould. This affects token
+./llm-router-contract.md:458:- **Model pill (manual override):** `CallContext.model_override` selects the driver model → `path == "manual"`, and it overrides the settings default; it affects `AGENT_DRIVER` only (other roles keep their settings assignment).
+./packages/core/src/disco/core/tweaks.py:13:palettes are 2-5 unique curated swatches and a value must be one of them.
+./packages/core/src/disco/core/tweaks.py:34:    PALETTE = "palette"  # one of 2-5 curated color swatches
+./packages/core/src/disco/core/tweaks.py:38:_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")  # e.g. lead_form.include_phone
+./packages/core/src/disco/core/tweaks.py:70:    """One owner control: its editor + constraints + what it grounds onto (``affects``)."""
+./packages/core/src/disco/core/tweaks.py:77:    affects: tuple[str, ...] = ()  # LEXICAL AppSpec paths it controls (validated vs spec in P9B/C)
+./packages/core/src/disco/core/tweaks.py:95:            # canonicalize palette swatches up front (frozen model can't mutate post-construction).
+./packages/core/src/disco/core/tweaks.py:98:            if data.get("editor") in (TweakEditor.PALETTE, "palette"):
+./packages/core/src/disco/core/tweaks.py:102:                        raise ValueError("palette colors must be an ordered list/tuple")
+./packages/core/src/disco/core/tweaks.py:108:        if not _KEY_RE.match(self.key):
+./packages/core/src/disco/core/tweaks.py:112:        # affects are lexical AppSpec paths — same dotted form as a key, and unique (so a
+./packages/core/src/disco/core/tweaks.py:114:        for path in self.affects:
+./packages/core/src/disco/core/tweaks.py:115:            if not _KEY_RE.match(path):
+./packages/core/src/disco/core/tweaks.py:116:                raise ValueError(f"affects path {path!r} must be a dotted lexical path")
+./packages/core/src/disco/core/tweaks.py:117:        if len(set(self.affects)) != len(self.affects):
+./packages/core/src/disco/core/tweaks.py:118:            raise ValueError("affects paths must be unique")
+./packages/core/src/disco/core/tweaks.py:124:            raise ValueError("colors only valid for palette")
+./packages/core/src/disco/core/tweaks.py:128:        if not self.controls_behavior and not self.affects:
+./packages/core/src/disco/core/tweaks.py:129:            raise ValueError(f"tweak {self.key!r} is ungrounded: needs controls_behavior or affects")
+./packages/core/src/disco/core/tweaks.py:130:        if ed in (TweakEditor.TEXT, TweakEditor.COLOR) and not self.controls_behavior and len(self.affects) < 2:
+./packages/core/src/disco/core/tweaks.py:143:                raise ValueError("palette requires 2..5 colors")
+./packages/core/src/disco/core/tweaks.py:145:                raise ValueError("palette colors must be unique")
+./packages/core/src/disco/core/tweaks.py:182:            raise ValueError(f"{v} is not one of the palette swatches {field.colors}")
+./packages/agent-server/tests/test_report_export_pdf_fixes.py:22:    palette_from_theme,
+./packages/agent-server/tests/test_report_export_pdf_fixes.py:28:_PAL = palette_from_theme(_LIGHT)
+./orders.yaml:505:  - test-record/screenshots/rp-14/palette-filtered.png
+./packages/core/src/disco/core/loop/view_render.py:320:            # channel: it never affects the returned message bytes (assist-ON stays
+./packages/agent-server/src/disco/agent_server/runtime.py:538:        # so a skill toggled in Settings affects the next conversation without a
+./packages/agent-server/src/disco/agent_server/report_export.py:44:    palette_from_theme,
+./packages/agent-server/src/disco/agent_server/report_export.py:282:    # Numbered-citation map (id → [N]) + theme palette for inline SVG charts.
+./packages/agent-server/src/disco/agent_server/report_export.py:284:    pal = palette_from_theme(theme)
+./packages/core/src/disco/core/brand/chart_svg.py:9:natively, vector-crisp, no extra dependency), theme-aware via a palette derived
+./packages/core/src/disco/core/brand/chart_svg.py:24:# Series palette — byte-identical to ChartBlock.tsx COLORS so PDF matches screen.
+./packages/core/src/disco/core/brand/chart_svg.py:44:def palette_from_theme(theme: Any) -> Palette:
+./packages/core/src/disco/core/brand/tokens.py:194:# rationed-chroma structure; the MOOD changes via palette + font pairing.
+./packages/core/src/disco/core/brand/css.py:101:    The data-URI approach here only affects HTML/PDF output.
+./disclaude.md:1770:min/max/step:float (INT/FLOAT); affects:tuple[str,...] (the AppSpec paths it controls), controls_behavior:bool.
+./disclaude.md:1775:len(affects)>=2, else ValueError (use direct edit, not a tweak). Other editors (boolean/enum/palette/numeric) are
+./disclaude.md:1777:.validate_value(key, value)->coerced value or ValueError (typed per editor: color hex check, enum∈options, palette
+./disclaude.md:1781:affects>=2 allowed; duplicate keys rejected; validate_value coerces/validates per editor incl out-of-range +
+./disclaude.md:1788:   (no control surface). 7 editors, lowercase values: text/color/int/float/boolean/enum/palette. key non-empty +
+./disclaude.md:1790:   irrelevant to the editor (options only on enum, colors only on palette, min/max/step only on numeric).
+./disclaude.md:1797:4. JUSTIFICATION: BASE invariant for ALL fields — controls_behavior OR non-empty affects (else ungrounded →
+./disclaude.md:1798:   reject). TEXT/COLOR STRONGER — controls_behavior OR len(affects)>=2 (single-place copy/color belongs in
+./disclaude.md:1799:   app_update_content/app_set_design, not a tweak). affects = LEXICAL dotted paths only; NOT validated against a
+./disclaude.md:1801:5. validate_value(key,value) COERCES narrowly + per-editor: text→str (reject non-coercible); color/palette→
+./disclaude.md:1802:   canonical hex (palette∈swatches); boolean→bool incl "true"/"false" case-insensitive (reject other strings);
+./disclaude.md:1807:rejected; #RGB expands + lowercased; non-hex/rgb()/alpha rejected; palette duplicate/1/6 rejected; palette value
+./disclaude.md:1808:not-in-swatches rejected; ungrounded field (no controls_behavior+no affects) rejected; coercion happy+sad per editor.
+
+codex
+I found the relevant implementation and tests in `packages/core`. I’m reading those exact sections now so the review is about the actual validation flow, not just the test names.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba packages/core/src/disco/core/tweaks.py | sed -n '1,230p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""TweakSpec — the typed DEFINITION layer for owner controls (P9A).
+     2	
+     3	Tweaks are the small set of knobs the platform exposes to a non-technical owner (toggle a
+     4	phone field, pick a curated accent, set a count). This module defines what a tweak IS — its
+     5	editor + constraints — separately from the current VALUES (``AppSpec.tweaks``). P9B persists
+     6	``.disco/tweaks.json``, P9C's ``app_set_tweak`` validates a value against this schema, P9D
+     7	renders the TweakPanel. Pure, frozen value objects + validation; no runtime imports.
+     8	
+     9	Design rules (gpt-5.5-gated): a tweak must be GROUNDED — it controls behavior or >=1 field;
+    10	a TEXT/COLOR tweak must control behavior or >=2 fields (single-place copy/color belongs in
+    11	app_update_content / app_set_design, not a tweak). Numeric bounds are exact (integer-scaled,
+    12	never float modulo); colors are a strict #RGB/#RRGGBB hex subset normalized to #rrggbb;
+    13	palettes are 2-5 unique curated swatches and a value must be one of them.
+    14	"""
+    15	
+    16	from __future__ import annotations
+    17	
+    18	import math
+    19	import re
+    20	from decimal import Decimal
+    21	from enum import Enum
+    22	from typing import Any
+    23	
+    24	from pydantic import BaseModel, ConfigDict, model_validator
+    25	
+    26	
+    27	class TweakEditor(str, Enum):
+    28	    TEXT = "text"
+    29	    COLOR = "color"  # a free canonical hex
+    30	    INT = "int"
+    31	    FLOAT = "float"
+    32	    BOOLEAN = "boolean"
+    33	    ENUM = "enum"  # one of curated string options
+    34	    PALETTE = "palette"  # one of 2-5 curated color swatches
+    35	
+    36	
+    37	_NUMERIC = frozenset({TweakEditor.INT, TweakEditor.FLOAT})
+    38	_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$")  # e.g. lead_form.include_phone
+    39	_HEX3 = re.compile(r"^#[0-9a-fA-F]{3}$")
+    40	_HEX6 = re.compile(r"^#[0-9a-fA-F]{6}$")
+    41	
+    42	
+    43	def canonical_hex(value: Any) -> str:
+    44	    """``#RGB`` / ``#RRGGBB`` → lowercase ``#rrggbb``. Rejects names, rgb(), alpha, malformed."""
+    45	    if not isinstance(value, str):
+    46	        raise ValueError(f"color must be a hex string, got {type(value).__name__}")
+    47	    v = value.strip()
+    48	    if _HEX3.match(v):
+    49	        return f"#{v[1]*2}{v[2]*2}{v[3]*2}".lower()
+    50	    if _HEX6.match(v):
+    51	        return v.lower()
+    52	    raise ValueError(f"color must be #RGB or #RRGGBB hex, got {value!r}")
+    53	
+    54	
+    55	def _is_real(x: Any) -> bool:
+    56	    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    57	
+    58	
+    59	def _is_int(x: Any) -> bool:
+    60	    return isinstance(x, int) and not isinstance(x, bool)
+    61	
+    62	
+    63	def _step_aligned(value: float, lo: float, step: float) -> bool:
+    64	    """(value - lo) is an exact integer multiple of step — integer-scaled, no float modulo."""
+    65	    q = (Decimal(str(value)) - Decimal(str(lo))) / Decimal(str(step))
+    66	    return q == q.to_integral_value()
+    67	
+    68	
+    69	class TweakField(BaseModel):
+    70	    """One owner control: its editor + constraints + what it grounds onto (``affects``)."""
+    71	
+    72	    model_config = ConfigDict(frozen=True, extra="forbid")
+    73	
+    74	    key: str
+    75	    label: str
+    76	    editor: TweakEditor
+    77	    affects: tuple[str, ...] = ()  # LEXICAL AppSpec paths it controls (validated vs spec in P9B/C)
+    78	    controls_behavior: bool = False
+    79	    default: Any = None
+    80	    options: tuple[str, ...] | None = None  # ENUM
+    81	    colors: tuple[str, ...] | None = None  # PALETTE swatches
+    82	    min: float | None = None  # INT/FLOAT
+    83	    max: float | None = None
+    84	    step: float | None = None
+    85	
+    86	    @model_validator(mode="before")
+    87	    @classmethod
+    88	    def _normalize(cls, data: Any) -> Any:
+    89	        if isinstance(data, dict):
+    90	            # reject bool numeric bounds BEFORE pydantic coerces False->0.0 (default may be a
+    91	            # bool — that's valid for the boolean editor — so only guard min/max/step here).
+    92	            for k in ("min", "max", "step"):
+    93	                if isinstance(data.get(k), bool):
+    94	                    raise ValueError(f"{k} must be a number, not a bool")
+    95	            # canonicalize palette swatches up front (frozen model can't mutate post-construction).
+    96	            # Require an ORDERED list/tuple — reject set/frozenset (pydantic would coerce those to
+    97	            # a tuple AFTER this hook, bypassing canonicalization + losing swatch order).
+    98	            if data.get("editor") in (TweakEditor.PALETTE, "palette"):
+    99	                cols = data.get("colors")
+   100	                if cols is not None:
+   101	                    if not isinstance(cols, (list, tuple)):
+   102	                        raise ValueError("palette colors must be an ordered list/tuple")
+   103	                    data = {**data, "colors": tuple(canonical_hex(c) for c in cols)}
+   104	        return data
+   105	
+   106	    @model_validator(mode="after")
+   107	    def _validate(self) -> TweakField:
+   108	        if not _KEY_RE.match(self.key):
+   109	            raise ValueError(f"key must match dotted-path pattern, got {self.key!r}")
+   110	        if not self.label.strip():
+   111	            raise ValueError("label must be non-empty")
+   112	        # affects are lexical AppSpec paths — same dotted form as a key, and unique (so a
+   113	        # TEXT/COLOR tweak can't satisfy ">=2 fields" with a repeated path).
+   114	        for path in self.affects:
+   115	            if not _KEY_RE.match(path):
+   116	                raise ValueError(f"affects path {path!r} must be a dotted lexical path")
+   117	        if len(set(self.affects)) != len(self.affects):
+   118	            raise ValueError("affects paths must be unique")
+   119	        ed = self.editor
+   120	        # reject constraints irrelevant to the editor
+   121	        if self.options is not None and ed is not TweakEditor.ENUM:
+   122	            raise ValueError("options only valid for enum")
+   123	        if self.colors is not None and ed is not TweakEditor.PALETTE:
+   124	            raise ValueError("colors only valid for palette")
+   125	        if (self.min, self.max, self.step) != (None, None, None) and ed not in _NUMERIC:
+   126	            raise ValueError("min/max/step only valid for int/float")
+   127	        # GROUNDED invariant
+   128	        if not self.controls_behavior and not self.affects:
+   129	            raise ValueError(f"tweak {self.key!r} is ungrounded: needs controls_behavior or affects")
+   130	        if ed in (TweakEditor.TEXT, TweakEditor.COLOR) and not self.controls_behavior and len(self.affects) < 2:
+   131	            raise ValueError(
+   132	                f"{ed.value} tweak {self.key!r} must control behavior or >=2 fields (else use a direct edit)"
+   133	            )
+   134	        # per-editor constraints
+   135	        if ed is TweakEditor.ENUM:
+   136	            if not self.options:
+   137	                raise ValueError("enum requires non-empty options")
+   138	            if len(set(self.options)) != len(self.options):
+   139	                raise ValueError("enum options must be unique")
+   140	        if ed is TweakEditor.PALETTE:
+   141	            cols = self.colors or ()
+   142	            if not 2 <= len(cols) <= 5:
+   143	                raise ValueError("palette requires 2..5 colors")
+   144	            if len(set(cols)) != len(cols):
+   145	                raise ValueError("palette colors must be unique")
+   146	        if ed in _NUMERIC:
+   147	            self._validate_numeric()
+   148	        # default must itself be a valid value for this field
+   149	        if self.default is not None:
+   150	            coerce_tweak_value(self, self.default)
+   151	        return self
+   152	
+   153	    def _validate_numeric(self) -> None:
+   154	        lo, hi, step = self.min, self.max, self.step
+   155	        if lo is None or hi is None or step is None:
+   156	            raise ValueError("int/float require min/max/step")
+   157	        if not (_is_real(lo) and _is_real(hi) and _is_real(step)):
+   158	            raise ValueError("min/max/step must be finite numbers (no bool/NaN/inf)")
+   159	        if self.editor is TweakEditor.INT and not all(float(x).is_integer() for x in (lo, hi, step)):
+   160	            raise ValueError("int min/max/step must be integral")
+   161	        if step <= 0:
+   162	            raise ValueError("step must be > 0")
+   163	        if lo > hi:
+   164	            raise ValueError("min must be <= max")
+   165	        if not _step_aligned(hi, lo, step):
+   166	            raise ValueError("(max - min) must be a whole number of steps (reachable max)")
+   167	
+   168	
+   169	def coerce_tweak_value(field: TweakField, value: Any) -> Any:
+   170	    """Coerce + validate a raw value for ``field``'s editor → the canonical value, or ValueError.
+   171	    Narrow, editor-specific coercion only (legacy app_set_tweak passes strings)."""
+   172	    ed = field.editor
+   173	    if ed is TweakEditor.TEXT:
+   174	        if isinstance(value, str):
+   175	            return value
+   176	        raise ValueError("text value must be a string")
+   177	    if ed is TweakEditor.COLOR:
+   178	        return canonical_hex(value)
+   179	    if ed is TweakEditor.PALETTE:
+   180	        v = canonical_hex(value)
+   181	        if v not in (field.colors or ()):
+   182	            raise ValueError(f"{v} is not one of the palette swatches {field.colors}")
+   183	        return v
+   184	    if ed is TweakEditor.BOOLEAN:
+   185	        if isinstance(value, bool):
+   186	            return value
+   187	        if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+   188	            return value.strip().lower() == "true"
+   189	        raise ValueError("boolean value must be a bool or 'true'/'false'")
+   190	    if ed is TweakEditor.ENUM:
+   191	        if value in (field.options or ()):
+   192	            return value
+   193	        raise ValueError(f"{value!r} not in enum options {field.options}")
+   194	    # numeric
+   195	    num = _to_int(value) if ed is TweakEditor.INT else _to_float(value)
+   196	    assert field.min is not None and field.max is not None and field.step is not None
+   197	    if not field.min <= num <= field.max:
+   198	        raise ValueError(f"{num} out of range [{field.min}, {field.max}]")
+   199	    if not _step_aligned(num, field.min, field.step):
+   200	        raise ValueError(f"{num} is not aligned to step {field.step} from {field.min}")
+   201	    return num
+   202	
+   203	
+   204	def _to_int(value: Any) -> int:
+   205	    if _is_int(value):
+   206	        return value
+   207	    if isinstance(value, str) and re.match(r"^-?\d+$", value.strip()):
+   208	        return int(value.strip())
+   209	    raise ValueError(f"int value must be an integer or all-digit string, got {value!r}")
+   210	
+   211	
+   212	def _to_float(value: Any) -> float:
+   213	    if _is_real(value):
+   214	        return float(value)
+   215	    if isinstance(value, str):
+   216	        try:
+   217	            f = float(value.strip())
+   218	        except ValueError:
+   219	            raise ValueError(f"float value must be numeric, got {value!r}") from None
+   220	        if math.isfinite(f):
+   221	            return f
+   222	    raise ValueError(f"float value must be a finite number, got {value!r}")
+   223	
+   224	
+   225	class TweakSpec(BaseModel):
+   226	    """A registry of an app's owner-facing tweak definitions (unique keys)."""
+   227	
+   228	    model_config = ConfigDict(frozen=True, extra="forbid")
+   229	
+   230	    fields: tuple[TweakField, ...] = ()
+
+exec
+/bin/bash -lc "nl -ba packages/core/tests/test_tweaks.py | sed -n '1,220p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""P9A tests: the TweakSpec typed definition layer — per-editor constraints, the grounded/
+     2	justification rules, exact numeric bounds, canonical hex, and validate_value coercion."""
+     3	
+     4	from __future__ import annotations
+     5	
+     6	import pytest
+     7	from pydantic import ValidationError
+     8	
+     9	from disco.core.tweaks import (
+    10	    TweakEditor,
+    11	    TweakField,
+    12	    TweakSpec,
+    13	    canonical_hex,
+    14	)
+    15	
+    16	
+    17	def _f(**kw) -> TweakField:
+    18	    base = {"key": "k", "label": "L", "editor": TweakEditor.BOOLEAN, "controls_behavior": True}
+    19	    return TweakField(**{**base, **kw})
+    20	
+    21	
+    22	# --- editors + happy paths ----------------------------------------------------
+    23	def test_boolean_enum_palette_numeric_text_color_construct() -> None:
+    24	    _f(editor=TweakEditor.BOOLEAN)
+    25	    _f(editor=TweakEditor.ENUM, options=("a", "b"))
+    26	    _f(editor=TweakEditor.PALETTE, colors=("#fff", "#000"))
+    27	    _f(editor=TweakEditor.INT, min=0, max=10, step=2)
+    28	    _f(editor=TweakEditor.FLOAT, min=0.0, max=1.0, step=0.25)
+    29	    _f(editor=TweakEditor.TEXT, affects=("hero.headline", "hero.subhead"))
+    30	    _f(editor=TweakEditor.COLOR, controls_behavior=True)
+    31	
+    32	
+    33	# --- per-editor constraints ---------------------------------------------------
+    34	def test_enum_requires_unique_nonempty_options() -> None:
+    35	    with pytest.raises(ValidationError):
+    36	        _f(editor=TweakEditor.ENUM)
+    37	    with pytest.raises(ValidationError):
+    38	        _f(editor=TweakEditor.ENUM, options=("a", "a"))
+    39	
+    40	
+    41	def test_palette_requires_2_to_5_unique_colors() -> None:
+    42	    with pytest.raises(ValidationError):
+    43	        _f(editor=TweakEditor.PALETTE, colors=("#fff",))  # 1
+    44	    with pytest.raises(ValidationError):
+    45	        _f(editor=TweakEditor.PALETTE, colors=("#111", "#222", "#333", "#444", "#555", "#666"))  # 6
+    46	    with pytest.raises(ValidationError):
+    47	        _f(editor=TweakEditor.PALETTE, colors=("#ffffff", "#fff"))  # duplicate after canonicalize
+    48	
+    49	
+    50	def test_palette_colors_canonicalized() -> None:
+    51	    f = _f(editor=TweakEditor.PALETTE, colors=("#FFF", "#010203"))
+    52	    assert f.colors == ("#ffffff", "#010203")
+    53	
+    54	
+    55	def test_cross_editor_constraints_rejected() -> None:
+    56	    with pytest.raises(ValidationError):
+    57	        _f(editor=TweakEditor.BOOLEAN, options=("a",))
+    58	    with pytest.raises(ValidationError):
+    59	        _f(editor=TweakEditor.TEXT, affects=("a", "b"), colors=("#fff", "#000"))
+    60	    with pytest.raises(ValidationError):
+    61	        _f(editor=TweakEditor.BOOLEAN, min=0, max=1, step=1)
+    62	
+    63	
+    64	# --- numeric exactness --------------------------------------------------------
+    65	def test_numeric_requires_min_max_step() -> None:
+    66	    with pytest.raises(ValidationError):
+    67	        _f(editor=TweakEditor.INT, min=0, max=10)  # no step
+    68	
+    69	
+    70	def test_numeric_min_le_max_step_positive() -> None:
+    71	    with pytest.raises(ValidationError):
+    72	        _f(editor=TweakEditor.INT, min=10, max=0, step=1)
+    73	    with pytest.raises(ValidationError):
+    74	        _f(editor=TweakEditor.INT, min=0, max=10, step=0)
+    75	
+    76	
+    77	def test_int_min_max_step_must_be_integral() -> None:
+    78	    with pytest.raises(ValidationError):
+    79	        _f(editor=TweakEditor.INT, min=0.0, max=10.5, step=1)
+    80	
+    81	
+    82	def test_unreachable_max_rejected() -> None:
+    83	    # (max-min) not a whole number of steps → max unreachable
+    84	    with pytest.raises(ValidationError):
+    85	        _f(editor=TweakEditor.INT, min=0, max=10, step=3)
+    86	    with pytest.raises(ValidationError):
+    87	        _f(editor=TweakEditor.FLOAT, min=0.0, max=1.0, step=0.3)
+    88	
+    89	
+    90	def test_nan_inf_bool_rejected_in_bounds() -> None:
+    91	    with pytest.raises(ValidationError):
+    92	        _f(editor=TweakEditor.FLOAT, min=0.0, max=float("inf"), step=0.1)
+    93	    with pytest.raises(ValidationError):
+    94	        _f(editor=TweakEditor.INT, min=False, max=10, step=1)  # bool not int
+    95	
+    96	
+    97	# --- grounded / justification rule --------------------------------------------
+    98	def test_ungrounded_field_rejected() -> None:
+    99	    with pytest.raises(ValidationError):
+   100	        TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN)  # no controls_behavior, no affects
+   101	
+   102	
+   103	def test_text_color_need_behavior_or_two_fields() -> None:
+   104	    with pytest.raises(ValidationError):  # text, 1 field, no behavior
+   105	        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.headline",))
+   106	    TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("a.b", "c.d"))  # 2 fields ok
+   107	    TweakField(key="k", label="L", editor=TweakEditor.COLOR, controls_behavior=True)  # behavior ok
+   108	
+   109	
+   110	def test_boolean_with_single_affect_is_grounded() -> None:
+   111	    TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",))
+   112	
+   113	
+   114	# --- P9A code-review fixes: affects validation + palette set bypass -----------
+   115	def test_affects_paths_must_be_lexical() -> None:
+   116	    for bad in (" ", "Hero.Title", "hero..x", "1bad"):
+   117	        with pytest.raises(ValidationError):
+   118	            TweakField(key="k", label="L", editor=TweakEditor.BOOLEAN, affects=(bad,))
+   119	
+   120	
+   121	def test_duplicate_affects_rejected_so_text_cannot_fake_two_fields() -> None:
+   122	    with pytest.raises(ValidationError):  # duplicate paths don't satisfy ">=2 fields"
+   123	        TweakField(key="k", label="L", editor=TweakEditor.TEXT, affects=("hero.title", "hero.title"))
+   124	
+   125	
+   126	def test_palette_set_input_rejected_not_silently_uncanonicalized() -> None:
+   127	    with pytest.raises(ValidationError):  # a set bypasses canonicalization → must be rejected
+   128	        _f(editor=TweakEditor.PALETTE, colors={"#FFF", "#ffffff"})
+   129	
+   130	
+   131	# --- key/label + default ------------------------------------------------------
+   132	def test_key_pattern_and_label_enforced() -> None:
+   133	    with pytest.raises(ValidationError):
+   134	        _f(key="Bad Key")
+   135	    with pytest.raises(ValidationError):
+   136	        _f(label="  ")
+   137	
+   138	
+   139	def test_default_validated_against_editor() -> None:
+   140	    _f(editor=TweakEditor.ENUM, options=("a", "b"), default="a")
+   141	    with pytest.raises(ValidationError):
+   142	        _f(editor=TweakEditor.ENUM, options=("a", "b"), default="z")
+   143	    _f(editor=TweakEditor.INT, min=0, max=10, step=2, default=4)
+   144	    with pytest.raises(ValidationError):
+   145	        _f(editor=TweakEditor.INT, min=0, max=10, step=2, default=3)  # not step-aligned
+   146	
+   147	
+   148	# --- canonical_hex ------------------------------------------------------------
+   149	def test_canonical_hex() -> None:
+   150	    assert canonical_hex("#FFF") == "#ffffff"
+   151	    assert canonical_hex("#AbCdEf") == "#abcdef"
+   152	    for bad in ("white", "rgb(0,0,0)", "#ffff", "#12", "#1234567f", 123):
+   153	        with pytest.raises(ValueError):
+   154	            canonical_hex(bad)
+   155	
+   156	
+   157	# --- TweakSpec + validate_value -----------------------------------------------
+   158	SPEC = TweakSpec(fields=(
+   159	    _f(key="lead_form.include_phone", editor=TweakEditor.BOOLEAN, affects=("lead_form.phone",)),
+   160	    _f(key="hero.cta_count", editor=TweakEditor.INT, min=1, max=5, step=1, affects=("hero.ctas",)),
+   161	    _f(key="brand.tone", editor=TweakEditor.ENUM, options=("calm", "bold"), affects=("design.tone",)),
+   162	    _f(key="brand.accent", editor=TweakEditor.PALETTE, colors=("#0a84ff", "#e2725b"), affects=("design.accent",)),
+   163	))
+   164	
+   165	
+   166	def test_spec_unique_keys() -> None:
+   167	    with pytest.raises(ValidationError):
+   168	        TweakSpec(fields=(_f(key="x.y", affects=("a",)), _f(key="x.y", affects=("a",))))
+   169	
+   170	
+   171	def test_validate_value_coerces_per_editor() -> None:
+   172	    assert SPEC.validate_value("lead_form.include_phone", "true") is True
+   173	    assert SPEC.validate_value("lead_form.include_phone", False) is False
+   174	    assert SPEC.validate_value("hero.cta_count", "3") == 3
+   175	    assert SPEC.validate_value("brand.tone", "bold") == "bold"
+   176	    assert SPEC.validate_value("brand.accent", "#E2725B") == "#e2725b"
+   177	
+   178	
+   179	def test_validate_value_rejects_bad() -> None:
+   180	    for key, bad in [
+   181	        ("lead_form.include_phone", "yes"),       # not true/false
+   182	        ("hero.cta_count", "9"),                  # out of range
+   183	        ("hero.cta_count", True),                 # bool not int
+   184	        ("brand.tone", "spicy"),                  # not an option
+   185	        ("brand.accent", "#000000"),              # not a swatch
+   186	        ("nope.key", "x"),                        # unknown tweak
+   187	    ]:
+   188	        with pytest.raises(ValueError):
+   189	            SPEC.validate_value(key, bad)
+
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'git diff -- packages/core/src/disco/core/tweaks.py packages/core/tests/test_tweaks.py' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+codex
+The implementation has the duplicate-affects check before the grounded/TEXT-COLOR length rule, and the palette `mode="before"` hook rejects unordered inputs before tuple coercion. I’m going to run the narrow test file with cache/bytecode writes disabled if the read-only sandbox allows it.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'PYTHONDONTWRITEBYTECODE=1 pytest packages/core/tests/test_tweaks.py -q -p no:cacheprovider' in /var/home/dylan/projects/disclaude
+ exited 1 in 178ms:
+Traceback (most recent call last):
+  File "/home/dylan/.local/bin/pytest", line 6, in <module>
+    sys.exit(console_main())
+             ~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 223, in console_main
+    code = main()
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 193, in main
+    config = _prepareconfig(new_args, plugins)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 361, in _prepareconfig
+    config: Config = pluginmanager.hook.pytest_cmdline_parse(
+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        pluginmanager=pluginmanager, args=args
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+    config = yield
+             ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1192, in pytest_cmdline_parse
+    self.parse(args)
+    ~~~~~~~~~~^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/config/__init__.py", line 1562, in parse
+    self.hook.pytest_load_initial_conftests(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        early_config=self, args=args, parser=self._parser
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+           ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/warnings.py", line 128, in pytest_load_initial_conftests
+    return (yield)
+            ^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/pluggy/_callers.py", line 116, in _multicall
+    next(function_gen)  # first yield
+    ~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 170, in pytest_load_initial_conftests
+    capman.start_global_capturing()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 773, in start_global_capturing
+    self._global_capturing = _get_multicapture(self._method)
+                             ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 714, in _get_multicapture
+    return MultiCapture(in_=FDCapture(0), out=FDCapture(1), err=FDCapture(2))
+                                              ~~~~~~~~~^^^
+  File "/home/dylan/.local/lib/python3.14/site-packages/_pytest/capture.py", line 493, in __init__
+    TemporaryFile(buffering=0),
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 652, in TemporaryFile
+    prefix, suffix, dir, output_type = _sanitize_params(prefix, suffix, dir)
+                                       ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib64/python3.14/tempfile.py", line 127, in _sanitize_params
+    dir = gettempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 312, in gettempdir
+    return _os.fsdecode(_gettempdir())
+                        ~~~~~~~~~~~^^
+  File "/usr/lib64/python3.14/tempfile.py", line 305, in _gettempdir
+    tempdir = _get_default_tempdir()
+  File "/usr/lib64/python3.14/tempfile.py", line 222, in _get_default_tempdir
+    raise FileNotFoundError(_errno.ENOENT,
+                            "No usable temporary directory found in %s" %
+                            dirlist)
+FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/var/home/dylan/projects/disclaude']
+
+codex
+The sandbox blocked pytest before collection because it has no usable writable temp directory. I’m retrying without pytest’s fd capture so it does not need a temp file.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'PYTHONDONTWRITEBYTECODE=1 pytest packages/core/tests/test_tweaks.py -q -s -p no:cacheprovider' in /var/home/dylan/projects/disclaude
+ exited 2 in 340ms:
+
+==================================== ERRORS ====================================
+_____________ ERROR collecting packages/core/tests/test_tweaks.py ______________
+ImportError while importing test module '/var/home/dylan/projects/disclaude/packages/core/tests/test_tweaks.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+/usr/lib64/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+packages/core/tests/test_tweaks.py:9: in <module>
+    from disco.core.tweaks import (
+E   ModuleNotFoundError: No module named 'disco'
+=========================== short test summary info ============================
+ERROR packages/core/tests/test_tweaks.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+
+codex
+With capture disabled pytest gets to collection; the only issue is the package path in this bare shell. I’m adding the core source path and rerunning the same narrow file.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc 'PYTHONPATH=packages/core/src PYTHONDONTWRITEBYTECODE=1 pytest packages/core/tests/test_tweaks.py -q -s -p no:cacheprovider' in /var/home/dylan/projects/disclaude
+ succeeded in 400ms:
+......................
+
+codex
+APPROVE
+1. Affects paths are `_KEY_RE`-validated and reject the listed bad lexical forms.
+2. Duplicate `affects` are rejected before the grounded/TEXT-COLOR length check.
+3. Palette set/frozenset inputs are rejected in the `mode="before"` validator before coercion.
+tokens used
+65,903
+APPROVE
+1. Affects paths are `_KEY_RE`-validated and reject the listed bad lexical forms.
+2. Duplicate `affects` are rejected before the grounded/TEXT-COLOR length check.
+3. Palette set/frozenset inputs are rejected in the `mode="before"` validator before coercion.

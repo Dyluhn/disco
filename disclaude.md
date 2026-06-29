@@ -1758,3 +1758,60 @@ live evidence producer is P1B-LIVE.
   Codex-gated + pushed. =====
 - NEXT: P9 (TweakSpec + owner controls: P9A schema, P9B tweaks_io, P9C app_set_tweak, P9D TweakPanel UI). Then
   P1B-LIVE (pull-forward gate before P10).
+
+## PR P9 — TweakSpec & owner controls
+## PR P9A — TweakSpec schema — PLAN
+CONTEXT: tweaks today = untyped AppSpec.tweaks dict[str,Any] + stringly app_set_tweak. P9A adds the typed
+DEFINITION layer (what tweaks exist + their editor + constraints); P9B = .disco/tweaks.json IO, P9C = typed
+app_set_tweak validating against it, P9D = TweakPanel UI. P9A is pure value objects + validation (no runtime).
+FILES: packages/core/src/disco/core/tweaks.py + packages/core/tests/test_tweaks.py.
+API: TweakEditor(str,Enum)= TEXT/COLOR/INT/FLOAT/BOOLEAN/ENUM/PALETTE/NULL. TweakField (frozen pydantic):
+key, label, editor, + editor-specific constraints: options:tuple[str,...] (ENUM), colors:tuple[str,...] (PALETTE),
+min/max/step:float (INT/FLOAT); affects:tuple[str,...] (the AppSpec paths it controls), controls_behavior:bool.
+VALIDATORS (model_validator): ENUM requires non-empty options (+default∈options if set); PALETTE requires 2..5
+colors; INT/FLOAT require min/max/step with min<=max and step>0 (INT min/max/step integral); TEXT/COLOR/BOOLEAN/
+NULL carry no numeric/option constraints (reject if present). JUSTIFICATION RULE ("ordinary copy/color shouldn't
+be a tweak unless it controls behavior or many fields"): a TEXT or COLOR field must have controls_behavior=True OR
+len(affects)>=2, else ValueError (use direct edit, not a tweak). Other editors (boolean/enum/palette/numeric) are
+inherently control-like → allowed. TweakSpec (frozen): fields:tuple[TweakField,...] with unique keys; .get(key);
+.validate_value(key, value)->coerced value or ValueError (typed per editor: color hex check, enum∈options, palette
+list 2-5 hex, int/float in [min,max] and step-aligned, boolean true/false, null→None, text→str).
+TESTS: each editor's happy path; ENUM-without-options rejected; PALETTE 1 or 6 colors rejected; numeric missing
+min/max/step rejected + min>max rejected; TEXT-without-justification rejected, TEXT-with-controls_behavior or
+affects>=2 allowed; duplicate keys rejected; validate_value coerces/validates per editor incl out-of-range +
+bad-hex + enum-not-in-options; default∈options.
+PARALLEL: DeepSeek(opencode)= invalid-tweak-field negative fixtures. SCOPE: schema+validation only (IO/tool/UI
+in P9B/C/D).
+
+### PR P9A — PLAN REVISION 1 (post gpt-5.5: direction approved; 5 fixes)
+1. VALUE SCHEMA: add optional `default` (validated against the editor, e.g. default∈options). Drop NULL editor
+   (no control surface). 7 editors, lowercase values: text/color/int/float/boolean/enum/palette. key non-empty +
+   dotted-path pattern ^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$ ; label non-empty. extra="forbid"; reject constraints
+   irrelevant to the editor (options only on enum, colors only on palette, min/max/step only on numeric).
+2. NUMERIC: reject bool for INT/FLOAT; reject NaN/inf; INT requires integral min/max/step + integral values; FLOAT
+   real; step>0; min<=max; (max-min) MUST be step-aligned (reachable max). Step alignment EXACT via integer scaling
+   (round((v-min)/step) compare) / Decimal(str(.)), NEVER float modulo.
+3. COLOR/PALETTE: accept hex subset #RGB and #RRGGBB only (no names/rgb()/alpha); normalize to lowercase #rrggbb.
+   PALETTE.colors = 2..5 UNIQUE curated swatches (canonical hex); a PALETTE value must be one of those swatches
+   (pick-from-curated). COLOR value = any canonical hex (free). (COLOR=free hex; PALETTE=curated swatch pick.)
+4. JUSTIFICATION: BASE invariant for ALL fields — controls_behavior OR non-empty affects (else ungrounded →
+   reject). TEXT/COLOR STRONGER — controls_behavior OR len(affects)>=2 (single-place copy/color belongs in
+   app_update_content/app_set_design, not a tweak). affects = LEXICAL dotted paths only; NOT validated against a
+   live AppSpec in P9A (that reconciliation is P9B/C). Define the path syntax now.
+5. validate_value(key,value) COERCES narrowly + per-editor: text→str (reject non-coercible); color/palette→
+   canonical hex (palette∈swatches); boolean→bool incl "true"/"false" case-insensitive (reject other strings);
+   int→int or all-digit str (reject bool, fractional); float→float or numeric str (reject bool/NaN/inf); enum→
+   ∈options; all numerics range + step-aligned. Returns the coerced canonical value or ValueError.
+TweakSpec(frozen): fields unique-keyed; .get(key); .validate_value(key,value). TESTS add: default∈options + bad
+default rejected; NULL gone; bool-as-int rejected; NaN/inf rejected; unreachable max (max-min not step-aligned)
+rejected; #RGB expands + lowercased; non-hex/rgb()/alpha rejected; palette duplicate/1/6 rejected; palette value
+not-in-swatches rejected; ungrounded field (no controls_behavior+no affects) rejected; coercion happy+sad per editor.
+
+### HEARTBEAT 2026-06-29 — P9A ACCEPTED
+- PR P9A (TweakSpec schema) COMPLETE. Plan gpt-5.5 REVISE(5: default/drop-NULL/exact-int-scaled-step/canonical-hex/
+  grounded-invariant)→APPROVE. Code gpt-5.5 REVISE(3: affects not lexically validated, dup-affects faked ">=2
+  fields", palette set-input bypassed canonicalization)→fix→APPROVE (reviewer ran pytest).
+- File: packages/core/src/disco/core/tweaks.py (TweakEditor 7 editors, TweakField w/ grounded+justification rules +
+  exact numeric bounds + canonical_hex + per-editor coercion, TweakSpec registry + validate_value) + test (22).
+- NEXT: P9B (.disco/tweaks.json IO: read/write/require/merge_tweak_defaults) → P9C (typed app_set_tweak) → P9D
+  (TweakPanel UI) → then P1B-LIVE.
