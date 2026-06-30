@@ -4747,3 +4747,24 @@ conservative → never accepts a too-deep blob). No string-state tracking needed
 eval runs ONLY after size+brackets pass (try/except ValueError/SyntaxError/TypeError defense-in-depth). _MAX_HARVESTED
 _STEPS=64 = post-parse coercion cap (not a parse gate). Rest unchanged (gated on not steps; _coerce_step dict-str-
 title/str only; cannot regress).
+
+### REL-RC-A3 plan r4 (Codex REVISE x4 → PIVOT): abandon ast.literal_eval, use BOUNDED REGEX-HARVEST
+Codex (4th): `ast.literal_eval("+"*10000+"1")` passes size+bracket gates (0 brackets) yet can stack-overflow the
+parser — unary-op nesting needs no brackets. VERDICT: safely bounding ast.literal_eval on model-controlled strings is
+a tar pit (every structural pre-gate has an unbracketed/in-string bypass). PIVOT — recover steps WITHOUT invoking any
+Python/JSON parser:
+- **REGEX-HARVEST.** When `not steps`, scan each candidate blob (FIRST size-cap len<=65536) with a NON-backtracking
+  bounded pattern for step titles: `(?:'title'|"title")\s*:\s*(?:'([^']{1,200})'|"((?:[^"\\]|\\.){1,200})")`
+  via re.finditer, take at most _MAX_HARVESTED_STEPS=64 matches; each captured title (after _strip_plan_tags) →
+  PlanStep(title=...). Optionally a 2nd pass for 'detail'. 
+- SAFETY: no parser/eval/exec invoked → no AST, no C-stack recursion, no MemoryError/RecursionError surface. The
+  pattern uses only BOUNDED char classes `[^']{1,200}` / `(?:[^"\\]|\\.){1,200}` (no nested/overlapping quantifiers)
+  → linear time, no catastrophic backtracking (no ReDoS). Input pre-capped at 64KB; match count capped at 64. This
+  is a complete, sound safety boundary that does NOT depend on the blob's internal structure.
+- RECOVERS the live failure (run001 rev4 blob `{'steps':[{'title':'Update hero copy to "Grand Opening"...'},...]}`
+  — titles in single quotes w/ inner double quotes parse cleanly via `'([^']{1,200})'`). 
+- Gated on `not steps` → worst case 0 matches → stays 0 steps = today's behavior → CANNOT regress a passing run.
+- Harvest from steps-as-str/summary/context/rationale; break on first blob yielding ≥1 title.
+Fix C (literal directive example) + HONEST MiniMax multi-revision ceiling (run000 prose-collapse, run002 execution-
+layer serialization → REL-6 capability caveat, never faked) unchanged. _coerce_step helper still extracted + shared
+by the normal steps[] path.
