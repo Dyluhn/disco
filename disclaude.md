@@ -4363,3 +4363,21 @@ LANE B — runtime lifecycle leaks (Category B, product-side; soak's REL-4 kill 
 TRIAGE: REL-5 (this PR, harness soundness) must fix A-B4, A-B1(+preflight), A-M2, A-B5/M3, A-M4 before it's sound.
 REL-5b (product teardown-at-terminal, deferred) = B-B1 + the Pi-sidecar gap (B-B2/B3). REL-6 DISCONNECT_OR_CANCEL
 consumes the Lane B cancel/disconnect/Pi assertions. Issue discovery NOT reduced (policy §0).
+
+### REL-5 status (2026-06-30) — Lane-A harness-soundness fixes landed; remaining tracked
+- DONE (live-proven, committed): payload-parse regression fix; A-M2 build-terminal anchor (excl IDLE, incl
+  VERIFIED); A-B5/M3 RUNNING-only container count; A-M4 wire provider_ledger (independent after-terminal check).
+  Each: PASS + all 3 cleanup oracles adjudicate + 0 containers + 79 unit tests.
+- REMAINING REL-5 harness-soundness blockers (Category C, before the REL-5 Codex code-gate):
+  · A-B4 [BLOCK]: persist product-evidence.json + add to the §6 hash-lock + make classify_run_folder enforce the
+    missing-slice rule (today the live evidence is in-memory only → any folder reclassify/replay → all browser
+    oracles SKIP → GREEN, ungated). The single biggest remaining gap.
+  · A-B1 [BLOCK]: REL-6 infra preflight must HARD-REQUIRE the relay env for positive scenarios (fail-closed
+    INFRA_FAILURE if unset) so _live_measure can't be silently False → SKIP-as-PASS.
+  · REL-6 scenarios must ASSERT provider enforcement (assertions.provider) so the now-wired ProviderLedgerOracle
+    actually RUNS (not SKIP).
+- DEFERRED (separate PRs, classified): REL-5b product teardown-at-terminal (Lane B B-B1: product leaks sandbox+
+  egress+preview per FINISHED build until idle-TTL; + the runtime.kill→PiKernel.kill gap B-B2/B3) — needs resume/
+  suspend UX care. REL-6 DISCONNECT_OR_CANCEL consumes Lane B cancel/disconnect/Pi assertions.
+- NEXT: A-B4 (persist+tamper-lock+folder-enforce) → A-B1 (preflight) → REL-5 Codex code-gate → then REL-1/2/3
+  shadow-canary + REL-6. Parallel lanes (policy §2) on each.
