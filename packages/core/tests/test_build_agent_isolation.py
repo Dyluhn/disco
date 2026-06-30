@@ -226,6 +226,7 @@ _EXPECTED_AGENT_TOOLS = [
     "preview_start",
     "preview_status",
     "preview_stop",
+    "run_project_script",  # CD-TOOLS-7 — buffered transactional batch of file transforms
     "safe_write_file",  # CD-TOOLS-3 — guarded whole-file writer (shrink/governed/atomic)
     "scaffold_starter",  # P7: materialize the contract's host-owned starter frame
     "search",

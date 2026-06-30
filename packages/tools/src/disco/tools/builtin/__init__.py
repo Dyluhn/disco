@@ -37,6 +37,7 @@ from .preview import (
     PreviewStopTool,
 )
 from .retrieval import ExtractTool, SearchTool
+from .run_script import RunProjectScriptTool
 from .server import ServerStatusTool
 from .sheets import SheetsTool
 from .shell_sessions import (
@@ -68,6 +69,7 @@ __all__ = [
     "FileReplaceLinesTool",
     "FileStrReplaceTool",
     "FileWriteTool",
+    "RunProjectScriptTool",
     "SafeWriteFileTool",
     "ImageGenTool",
     "select_image_backend",
@@ -108,6 +110,7 @@ def build_default_registry() -> ToolRegistry:
         FileStrReplaceTool(),  # W4: anchored str-replace; withheld from weak-tier advertised set
         ExactReplaceTool(),  # CD-TOOLS-2: atomic exact-match batch replace; anchored-edit tier
         SafeWriteFileTool(),  # CD-TOOLS-3: guarded whole-file writer (shrink/governed/atomic)
+        RunProjectScriptTool(),  # CD-TOOLS-7: buffered transactional batch of file transforms
         FileListTool(),
         ShellTool(),
         ShellExecTool(),
