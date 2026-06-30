@@ -4813,3 +4813,17 @@ serialization failure the scout flagged as UNREACHABLE by plan-parse). So A3 lif
 MiniMax execution-layer serialization defect persists → this run still fails overall. Confirms the honest ceiling:
 A3 is the right planning fix; multi-revision REVISION_CHAIN 100% is blocked by a SECOND MiniMax-M3 defect at the tool-
 arg execution layer. Awaiting full tally; will report honestly (planning-fixed != run-passed).
+
+### REL-2a step2 DESIGN FORK (caught before mis-implementing): lock placement vs layering
+The r1 plan said "per-cid asyncio.Lock in runtime.py (_session_view_locks pattern :709)". BUT the observe.py:517
+fold is in CORE, and the layering rule (core ← tools ← agent-server; CLAUDE.md) FORBIDS core importing agent-server.
+So a runtime-level lock is UNREACHABLE from the core observe fold. The lock must live in CORE. Options:
+- (X) Lock ON the ArtifactMemoryStore instance (core/context) + an `upsert_artifact(record)` doing read-modify-write
+  UNDER self._lock. CLEANEST + respects layering — BUT only mutually-excludes if the SAME store instance is shared by
+  all writers for a cid (observe + report + preview + lifecycle). Requires the runtime to hold ONE store per cid and
+  hand the same instance to every writer (verify current construction — if each writer news its own store over the
+  same files, the locks differ → no exclusion).
+- (Y) Lock on the AgentLoop (core) — but the agent-server edge writers (report/preview) don't all go through the loop.
+- VERDICT: (X) shared-per-cid store + lock-in-store is the right design; REL-2a step2 must FIRST confirm/establish a
+  single shared ArtifactMemoryStore per cid in the runtime, then put the RMW lock there. This is a plan refinement —
+  re-gate the lock-placement with Codex before implementing. Did NOT make a half-edit that would violate layering.
