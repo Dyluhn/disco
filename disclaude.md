@@ -4902,3 +4902,19 @@ APPROVE. The $ref-inlining root-cause fix is now COMPLETE + double-gated + commi
 that ran on the pre-discriminator schema; CLEAN inlining re-soak running (rel-inline-resoak2, complete fix loaded).
 NEXT: collect clean re-soak (honest tally) → fix SIDECAR_NOT_STOPPED (REL-5b) → secondary per-tool examples → keep
 REVISION_CHAIN→100% in OUR code.
+
+## REL-5b — SIDECAR_NOT_STOPPED root cause: async auto-title miscounted as post-terminal build call
+A3-soak run002: product-evidence sidecar={provider_calls_after_terminal:1, stopped_at_terminal:true} → release SUCCEEDED
+(containers torn down); the FAIL is the 1 post-terminal provider call. Events show run002 FINISHED with NO build
+model-call after the terminal status. ROOT CAUSE (OUR code, NOT the model, NOT a build runaway): TitleService
+(runtime.py:562/1783) fires an ASYNC SUMMARIZER-role provider call off kick() — independent of the build loop — and
+the relay ledger (relay_log_record, minimax_relay.py:64) records only {host,url,model,ts} with NO role, so a benign
+async auto-title call after terminal is miscounted as a post-terminal BUILD runaway. 
+FIX (NOT oracle-weakening — makes the oracle measure the right thing = build-loop runaways, not benign async titling):
+(1) relay ledger records the model ROLE (the title/summarizer request carries a marker, e.g. an X-Disco-Role header
+the relay reads, or the role in the call metadata); (2) harness provider_calls_after_terminal counts ONLY build-
+driver-role calls after terminal, excluding SUMMARIZER (title/condense). The fix self-verifies: if post-terminal
+build-call count → 0 after role attribution, the title hypothesis is confirmed. Codex-gate (touches oracle evidence
+semantics — must prove it excludes ONLY non-build roles, never a real build runaway). + double-check no OTHER async
+provider caller fires post-terminal. This is a measurement-attribution bug; the build itself was clean (FINISHED, 0
+orphans, release ok).
