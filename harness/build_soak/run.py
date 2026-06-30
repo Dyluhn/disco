@@ -646,8 +646,12 @@ def classify_dossier(
             _t = _terminal_status_epoch(run.events)
             _s = _min_event_epoch(run.events)
             if _t is not None and _s is not None:
+                # [REL-5b] after_terminal is the BUILD-runaway signal the ProviderLedgerOracle reads.
+                # Stamp it True ONLY for a tool-bearing (build-driver) call past terminal — a tool-
+                # less SUMMARIZER/auto-title call is benign and must not read as PROVIDER_CALL_AFTER_
+                # TERMINAL. Unmarked records default has_tools=True (fail-closed → still flagged).
                 provider_ledger = [
-                    {**r, "after_terminal": float(r["ts"]) > _t}
+                    {**r, "after_terminal": float(r["ts"]) > _t and bool(r.get("has_tools", True))}
                     for r in _recs
                     if isinstance(r.get("ts"), (int, float)) and float(r["ts"]) >= _s
                 ]
