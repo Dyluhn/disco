@@ -1,0 +1,196 @@
+{
+  "_meta": {
+    "fixture": "appkit_leadgen.artifact.json",
+    "purpose": "appkit.leadgen golden input: .disco/appspec.json + index.html, lead_form starter, a boolean phone-field toggle tweak, STRICT verification, cloudflare_project export. Exercises the semantic AppKit tool path (app_* tools, not raw file writes).",
+    "maps_to_contract_kind": "appkit.leadgen",
+    "delivery_mode": "app",
+    "spec_refs": [
+      "DISCO_ARTIFACT_VM_SPEC.md",
+      "DIRECT_MANIPULATION_SPEC.md",
+      "STARTER_KIT_CATALOG.md",
+      "EXPORT_PIPELINE_SPEC.md",
+      "RESOURCE_AND_PROVENANCE_SPEC.md"
+    ],
+    "expected_verdict": "PASS"
+  },
+  "artifact_kind": "appkit.leadgen",
+  "required_files": [
+    ".disco/appspec.json",
+    "index.html"
+  ],
+  "manifest": {
+    "kind": "appkit.leadgen",
+    "required_files": [
+      ".disco/appspec.json",
+      "index.html"
+    ],
+    "persisted_aux_files": [
+      ".disco/tweaks.json"
+    ],
+    "starter_kit": "lead_form",
+    "bootstrap_tools": [
+      "app_create"
+    ],
+    "edit_tools": [
+      "app_update_content",
+      "app_add_section",
+      "app_remove_section",
+      "app_reorder_section",
+      "app_set_design",
+      "app_set_tweak",
+      "app_snapshot_version"
+    ],
+    "repair_tools": [
+      "file_write",
+      "file_edit"
+    ],
+    "rewrite_allowed": false,
+    "prompt_pack": "build_appkit_leadgen",
+    "ui_card": "AppCard",
+    "skills": [
+      "appkit.leadgen",
+      "cloudflare_export",
+      "design_recipe"
+    ],
+    "verify": {
+      "finalizer": "ready_for_app_verification",
+      "level": "strict"
+    },
+    "export": {
+      "name": "cloudflare_project",
+      "pipeline": [
+        "preflight",
+        "bundle",
+        "validate",
+        "deliver"
+      ]
+    }
+  },
+  "semantic_metadata": {
+    "note": "AppKit sections/fields are anchored by data-disco-* so app_* semantic edits target stable nodes. The lead_form starter provides hero/headline/lead/cta_text/viewport tokens.",
+    "attributes": [
+      {
+        "element": "<section data-disco-section=\"hero\">",
+        "attribute": "data-disco-section",
+        "value": "hero",
+        "source": "starter_kit:lead_form section 'hero'"
+      },
+      {
+        "element": "<h1 data-disco-field=\"headline\">Book a demo</h1>",
+        "attribute": "data-disco-field",
+        "value": "headline",
+        "source": "appspec.content.headline"
+      },
+      {
+        "element": "<input data-disco-field=\"lead.email\" type=\"email\">",
+        "attribute": "data-disco-field",
+        "value": "lead.email",
+        "source": "starter_kit:lead_form field 'lead' -> email control"
+      },
+      {
+        "element": "<input data-disco-field=\"lead.phone\" type=\"tel\">",
+        "attribute": "data-disco-field",
+        "value": "lead.phone",
+        "source": "tweak:collect_phone toggles presence of this control"
+      },
+      {
+        "element": "<button data-disco-field=\"cta_text\">Get started</button>",
+        "attribute": "data-disco-field",
+        "value": "cta_text",
+        "source": "appspec.content.cta_text"
+      }
+    ]
+  },
+  "tweak_metadata": {
+    "note": "Boolean phone-field toggle. controls_behavior=true (adds/removes a form control) satisfies the grounding law. Persisted to .disco/tweaks.json; value lives in AppSpec.tweaks and is set via app_set_tweak.",
+    "persisted_at": ".disco/tweaks.json",
+    "values_live_in": "AppSpec.tweaks",
+    "set_via_tool": "app_set_tweak",
+    "fields": [
+      {
+        "key": "collect_phone",
+        "label": "Collect phone number",
+        "editor": "boolean",
+        "affects": ["input[data-disco-field=lead.phone]"],
+        "controls_behavior": true,
+        "default": false
+      }
+    ]
+  },
+  "resource_manifest": {
+    "entries": [
+      {
+        "id": "res-appspec",
+        "source_kind": "generated",
+        "source_ref": "app_create -> .disco/appspec.json",
+        "copied_path": ".disco/appspec.json",
+        "media_type": "application/json",
+        "status": "resolved"
+      },
+      {
+        "id": "res-hero-image-slot",
+        "source_kind": "generated",
+        "source_ref": "media-slot:hero_image",
+        "copied_path": "assets/hero.placeholder.png",
+        "media_type": "image/png",
+        "status": "placeholder"
+      },
+      {
+        "id": "res-brand-logo",
+        "source_kind": "user",
+        "source_ref": "upload:logo.svg",
+        "copied_path": "assets/logo.svg",
+        "media_type": "image/svg+xml",
+        "status": "resolved"
+      }
+    ]
+  },
+  "verification_expectations": {
+    "finalizer": "ready_for_app_verification",
+    "level": "strict",
+    "evidence_host_must_observe": [
+      "both required files exist: .disco/appspec.json (parses) and index.html",
+      "preview route serves index.html with HTTP 200 and a clean browser console",
+      "STRICT level: lead form renders, submits, and produces a receipt/confirmation state (form is functional, not decorative)",
+      "collect_phone tweak toggles the tel input on/off and AppSpec.tweaks reflects the persisted value",
+      "no false affordances: every visible control is wired"
+    ]
+  },
+  "export_expectations": {
+    "pipeline_name": "cloudflare_project",
+    "stages": [
+      "preflight",
+      "bundle",
+      "validate",
+      "deliver"
+    ],
+    "expected_output": {
+      "artifact": "Cloudflare-deployable project bundle",
+      "bytes_gt_zero": true,
+      "emitted_via": "DeliverableEvent"
+    },
+    "delivery_mode": "app"
+  },
+  "known_invalid_variants": [
+    {
+      "name": "missing_appspec",
+      "mutation": "index.html present but .disco/appspec.json absent",
+      "expected_failure": "ready_for_app_verification rejects: required file .disco/appspec.json missing"
+    },
+    {
+      "name": "raw_write_to_entrypoint",
+      "mutation": "index.html mutated via raw file_write instead of an app_* semantic edit",
+      "expected_failure": "governed artifact routing (CD-TOOLS) / safe_write_file refuses to clobber the artifact entrypoint; edit must go through app_update_content et al."
+    },
+    {
+      "name": "dead_submit_button",
+      "mutation": "lead form CTA renders but submit handler is unwired (no receipt, no POST)",
+      "expected_failure": "ready_for_app_verification STRICT rejects: false-affordance / non-functional form fails the strict functional-evidence gate"
+    },
+    {
+      "name": "phone_tweak_ungrounded",
+      "mutation": "collect_phone declared with controls_behavior=false and affects=[]",
+      "expected_failure": "TweakSpec grounding law rejects: tweak must control behavior OR affect >=1 field"
+    }
+  ]
+}

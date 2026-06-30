@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "fixture": "comment_anchor_preserved_pass.json",
+    "category": "anchor",
+    "spec_refs": [
+      "_GROUNDING.md §10 (data-disco-comment-anchor convention)",
+      "_GROUNDING.md §9 (CD-TOOLS targeted edits preserve surrounding structure)"
+    ]
+  },
+  "purpose": "Proves that a targeted exact_replace which edits content inside an anchored region preserves the data-disco-comment-anchor exactly once — the anchor id survives the edit and is neither dropped nor duplicated.",
+  "required_evidence": [
+    "file before/after",
+    "count of each data-disco-comment-anchor id before and after the edit",
+    "before == after == 1 for the edited anchor",
+    "anchored element identity preserved"
+  ],
+  "expected_oracle": "comment_anchor_integrity_oracle",
+  "expected_verdict": "pass",
+  "failure_code": null,
+  "minimal_example_payload": {
+    "artifact": { "kind": "static.site", "entrypoint": "index.html" },
+    "tool_call": {
+      "name": "exact_replace",
+      "args": {
+        "path": "index.html",
+        "old_string": "<section data-disco-comment-anchor=\"pricing-1\">\n      <h2>Pricing</h2>\n      <p>From $9/mo.</p>\n    </section>",
+        "new_string": "<section data-disco-comment-anchor=\"pricing-1\">\n      <h2>Pricing</h2>\n      <p>From $12/mo.</p>\n    </section>"
+      }
+    },
+    "file_before": "<main>\n    <section data-disco-comment-anchor=\"pricing-1\">\n      <h2>Pricing</h2>\n      <p>From $9/mo.</p>\n    </section>\n  </main>\n",
+    "file_after": "<main>\n    <section data-disco-comment-anchor=\"pricing-1\">\n      <h2>Pricing</h2>\n      <p>From $12/mo.</p>\n    </section>\n  </main>\n",
+    "anchor_counts": {
+      "pricing-1": { "before": 1, "after": 1 }
+    }
+  },
+  "rationale": "The edit changes only the price text inside the anchored section while keeping data-disco-comment-anchor=\"pricing-1\" present exactly once. Comment anchors map user comments to artifact regions; preserving them 1:1 is mandatory, so the oracle returns pass."
+}

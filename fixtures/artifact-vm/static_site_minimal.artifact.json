@@ -1,0 +1,136 @@
+{
+  "_meta": {
+    "fixture": "static_site_minimal.artifact.json",
+    "purpose": "Smallest valid static.site artifact: a single index.html, no tweaks, app delivery mode. Golden 'happy path' input for the static_site finalizer + static_standalone export oracle.",
+    "maps_to_contract_kind": "static.site",
+    "delivery_mode": "app",
+    "spec_refs": [
+      "DISCO_ARTIFACT_VM_SPEC.md",
+      "ARTIFACT_TOOL_CONTRACTS.md",
+      "EXPORT_PIPELINE_SPEC.md",
+      "CONTENT_AND_DESIGN_DISCIPLINE_SPEC.md"
+    ],
+    "expected_verdict": "PASS"
+  },
+  "artifact_kind": "static.site",
+  "required_files": [
+    "index.html"
+  ],
+  "manifest": {
+    "kind": "static.site",
+    "required_files": [
+      "index.html"
+    ],
+    "starter_kit": "app_shell",
+    "bootstrap_tools": [
+      "scaffold_starter",
+      "file_write",
+      "preview_start"
+    ],
+    "edit_tools": [
+      "file_edit",
+      "file_replace_lines"
+    ],
+    "repair_tools": [
+      "file_write"
+    ],
+    "rewrite_allowed": false,
+    "prompt_pack": "build_static_site",
+    "ui_card": "SiteCard",
+    "skills": [],
+    "verify": {
+      "finalizer": "ready_for_static_site_verification",
+      "level": "standard"
+    },
+    "export": {
+      "name": "static_standalone",
+      "pipeline": [
+        "preflight",
+        "bundle",
+        "validate",
+        "deliver"
+      ]
+    }
+  },
+  "semantic_metadata": {
+    "note": "data-disco-* metadata grammar present even in the minimal site so the host can anchor section identity and version. Element -> source mappings below.",
+    "attributes": [
+      {
+        "element": "<body data-disco-version=\"1\">",
+        "attribute": "data-disco-version",
+        "value": "1",
+        "source": "host-assigned snapshot version"
+      },
+      {
+        "element": "<section data-disco-section=\"hero\">",
+        "attribute": "data-disco-section",
+        "value": "hero",
+        "source": "starter_kit:app_shell field token 'hero'"
+      },
+      {
+        "element": "<h1 data-disco-field=\"headline\">Welcome</h1>",
+        "attribute": "data-disco-field",
+        "value": "headline",
+        "source": "user brief -> 'headline' field token"
+      }
+    ]
+  },
+  "tweak_metadata": {
+    "note": "static.site minimal carries NO tweaks. .disco/tweaks.json is intentionally absent; AppSpec.tweaks is not used for static.site. Empty by design.",
+    "fields": []
+  },
+  "resource_manifest": {
+    "entries": [
+      {
+        "id": "res-headline-copy",
+        "source_kind": "user",
+        "source_ref": "brief:headline",
+        "copied_path": null,
+        "media_type": "text/plain",
+        "status": "inline"
+      }
+    ]
+  },
+  "verification_expectations": {
+    "finalizer": "ready_for_static_site_verification",
+    "level": "standard",
+    "evidence_host_must_observe": [
+      "preview_start serves index.html on a route with HTTP 200",
+      "verify_web_app screenshot shows visible, styled content (non-blank body, computed background/text contrast present)",
+      "browser console is free of uncaught errors",
+      "required file index.html exists at project root"
+    ]
+  },
+  "export_expectations": {
+    "pipeline_name": "static_standalone",
+    "stages": [
+      "preflight",
+      "bundle",
+      "validate",
+      "deliver"
+    ],
+    "expected_output": {
+      "artifact": "self-contained static bundle (index.html + assets)",
+      "bytes_gt_zero": true,
+      "emitted_via": "DeliverableEvent"
+    },
+    "delivery_mode": "app"
+  },
+  "known_invalid_variants": [
+    {
+      "name": "missing_index",
+      "mutation": "required_files lists index.html but no index.html exists at project root",
+      "expected_failure": "ready_for_static_site_verification rejects: required file index.html absent; finalizer cannot route to a served page"
+    },
+    {
+      "name": "blank_body",
+      "mutation": "index.html present but body renders no visible content (empty/all display:none)",
+      "expected_failure": "static_site finalizer (standard level) rejects: screenshot oracle observes blank/unstyled page, fails visible-styled-content evidence"
+    },
+    {
+      "name": "console_error",
+      "mutation": "index.html references a missing script that throws an uncaught ReferenceError on load",
+      "expected_failure": "static_site finalizer rejects: console-clean evidence fails (uncaught error observed during verify_web_app)"
+    }
+  ]
+}

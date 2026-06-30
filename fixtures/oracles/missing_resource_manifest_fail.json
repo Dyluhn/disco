@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "fixture": "missing_resource_manifest_fail.json",
+    "category": "resource",
+    "spec_refs": [
+      "_GROUNDING.md §10 (resource rules — proposed resource_manifest (GAP))",
+      "_GROUNDING.md §11 (self-contained artifacts)"
+    ]
+  },
+  "purpose": "Proves the provenance rule that every non-code asset the entrypoint references must be declared in the artifact's resource_manifest. An asset present on disk and referenced but absent from the manifest fails the oracle (undeclared/unprovenanced resource).",
+  "required_evidence": [
+    "entrypoint source asset references (project-relative, valid paths)",
+    "files present in project root",
+    "resource_manifest.assets list",
+    "set-difference: referenced-and-present assets NOT listed in manifest"
+  ],
+  "expected_oracle": "resource_provenance_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "RESOURCE_MANIFEST_MISSING_ENTRY",
+  "minimal_example_payload": {
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html",
+      "project_root": "/work/projects/acme-site"
+    },
+    "entrypoint_source": "<!doctype html>\n<html><body>\n  <img src=\"assets/hero.jpg\" alt=\"hero\">\n  <img src=\"assets/logo.svg\" alt=\"logo\">\n</body></html>\n",
+    "files_present": ["index.html", "assets/hero.jpg", "assets/logo.svg"],
+    "resource_manifest": {
+      "assets": [
+        { "path": "assets/hero.jpg", "origin": "image_generate", "sha256": "9f2c…" }
+      ]
+    },
+    "undeclared_assets": ["assets/logo.svg"]
+  },
+  "rationale": "assets/logo.svg is referenced by the entrypoint and exists on disk but has no resource_manifest entry, so its provenance (origin/hash) is unknown. The provenance rule requires every referenced asset to be declared, so the oracle returns fail."
+}

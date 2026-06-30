@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "fixture": "verifier_only_tool_used_by_main_agent_fail.json",
+    "category": "tool-scope",
+    "spec_refs": [
+      "_GROUNDING.md §4 (verify_web_app screenshot/eval)",
+      "_GROUNDING.md §9 (CD-TOOLS 5: verifier-only read scope)",
+      "_GROUNDING.md §10 (show_artifact_to_agent vs verifier scope)"
+    ]
+  },
+  "purpose": "Proves the verifier-only tool scope: verification tools (screenshot capture / page eval) are reserved for the verifier role. If the MAIN build agent invokes a verifier-only tool, the tool-scope oracle fails it.",
+  "required_evidence": [
+    "tool_call.name in the verifier-only set (e.g. verify_web_app screenshot, page eval)",
+    "caller role of the tool_call (main_agent vs verifier)",
+    "tool registry scope tag for the tool"
+  ],
+  "expected_oracle": "verifier_tool_scope_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "VERIFIER_ONLY_TOOL_CALLED_BY_MAIN_AGENT",
+  "minimal_example_payload": {
+    "artifact": { "kind": "static.site", "entrypoint": "index.html" },
+    "caller": { "role": "main_agent" },
+    "tool_call": {
+      "name": "verify_web_app",
+      "args": {
+        "op": "eval",
+        "expression": "document.querySelectorAll('.lead-form').length",
+        "screenshot": true
+      }
+    },
+    "tool_registry_entry": {
+      "name": "verify_web_app",
+      "scope": "verifier_only",
+      "allowed_roles": ["verifier"]
+    }
+  },
+  "rationale": "verify_web_app (screenshot + page eval) is scope-tagged verifier_only so that verification evidence is produced by an independent verifier, not self-attested by the builder. The main agent called it directly, violating verifier-only tool scope, so the oracle returns fail."
+}

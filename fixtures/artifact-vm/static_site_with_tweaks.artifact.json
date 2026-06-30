@@ -1,0 +1,170 @@
+{
+  "_meta": {
+    "fixture": "static_site_with_tweaks.artifact.json",
+    "purpose": "static.site with a .disco/tweaks.json carrying a palette tweak and a boolean tweak. Exercises the TweakSpec grounding law (palette + boolean) on the static.site kind, plus the tweak-persistence path.",
+    "maps_to_contract_kind": "static.site",
+    "delivery_mode": "app",
+    "spec_refs": [
+      "DISCO_ARTIFACT_VM_SPEC.md",
+      "DIRECT_MANIPULATION_SPEC.md",
+      "ARTIFACT_TOOL_CONTRACTS.md",
+      "EXPORT_PIPELINE_SPEC.md"
+    ],
+    "expected_verdict": "PASS"
+  },
+  "artifact_kind": "static.site",
+  "required_files": [
+    "index.html"
+  ],
+  "manifest": {
+    "kind": "static.site",
+    "required_files": [
+      "index.html"
+    ],
+    "persisted_aux_files": [
+      ".disco/tweaks.json"
+    ],
+    "starter_kit": "app_shell",
+    "bootstrap_tools": [
+      "scaffold_starter",
+      "file_write",
+      "preview_start"
+    ],
+    "edit_tools": [
+      "file_edit",
+      "file_replace_lines"
+    ],
+    "repair_tools": [
+      "file_write"
+    ],
+    "rewrite_allowed": false,
+    "prompt_pack": "build_static_site",
+    "ui_card": "SiteCard",
+    "skills": [],
+    "verify": {
+      "finalizer": "ready_for_static_site_verification",
+      "level": "standard"
+    },
+    "export": {
+      "name": "static_standalone",
+      "pipeline": [
+        "preflight",
+        "bundle",
+        "validate",
+        "deliver"
+      ]
+    }
+  },
+  "semantic_metadata": {
+    "note": "data-disco-field/section anchor the elements that tweaks affect, so a TweakField.affects entry can be resolved to a real DOM target.",
+    "attributes": [
+      {
+        "element": "<section data-disco-section=\"hero\">",
+        "attribute": "data-disco-section",
+        "value": "hero",
+        "source": "starter_kit:app_shell token 'hero'"
+      },
+      {
+        "element": "<div data-disco-field=\"brand_palette\">",
+        "attribute": "data-disco-field",
+        "value": "brand_palette",
+        "source": "tweak:brand_palette -> affects this element's CSS custom properties"
+      },
+      {
+        "element": "<section data-disco-section=\"testimonials\" data-disco-field=\"show_testimonials\">",
+        "attribute": "data-disco-field",
+        "value": "show_testimonials",
+        "source": "tweak:show_testimonials -> toggles this section's visibility"
+      }
+    ]
+  },
+  "tweak_metadata": {
+    "note": "Two real TweakField shapes. brand_palette is a palette editor (>=2 affected fields satisfies grounding law); show_testimonials is a boolean (controls_behavior=true satisfies grounding law).",
+    "persisted_at": ".disco/tweaks.json",
+    "fields": [
+      {
+        "key": "brand_palette",
+        "label": "Brand palette",
+        "editor": "palette",
+        "affects": [
+          "--color-primary",
+          "--color-accent",
+          "--color-surface"
+        ],
+        "controls_behavior": false,
+        "default": ["#1d4ed8", "#9333ea", "#f8fafc"],
+        "colors": ["#1d4ed8", "#9333ea", "#f8fafc"]
+      },
+      {
+        "key": "show_testimonials",
+        "label": "Show testimonials section",
+        "editor": "boolean",
+        "affects": ["section[data-disco-section=testimonials]"],
+        "controls_behavior": true,
+        "default": true
+      }
+    ]
+  },
+  "resource_manifest": {
+    "entries": [
+      {
+        "id": "res-palette-default",
+        "source_kind": "generated",
+        "source_ref": "brand_registry:default_palette",
+        "copied_path": null,
+        "media_type": "application/json",
+        "status": "resolved"
+      },
+      {
+        "id": "res-testimonial-copy",
+        "source_kind": "user",
+        "source_ref": "brief:testimonials",
+        "copied_path": null,
+        "media_type": "text/plain",
+        "status": "inline"
+      }
+    ]
+  },
+  "verification_expectations": {
+    "finalizer": "ready_for_static_site_verification",
+    "level": "standard",
+    "evidence_host_must_observe": [
+      "index.html renders visible styled content",
+      ".disco/tweaks.json parses and every TweakField satisfies the grounding law (controls behavior OR >=1 affected field; text/color require behavior or >=2 fields)",
+      "applied palette values normalize to #rrggbb and appear in computed styles",
+      "toggling show_testimonials changes section visibility without console errors"
+    ]
+  },
+  "export_expectations": {
+    "pipeline_name": "static_standalone",
+    "stages": [
+      "preflight",
+      "bundle",
+      "validate",
+      "deliver"
+    ],
+    "expected_output": {
+      "artifact": "static bundle reflecting persisted tweak values from .disco/tweaks.json",
+      "bytes_gt_zero": true,
+      "emitted_via": "DeliverableEvent"
+    },
+    "delivery_mode": "app"
+  },
+  "known_invalid_variants": [
+    {
+      "name": "ungrounded_color_tweak",
+      "mutation": "a color-editor tweak declared with affects=[] and controls_behavior=false",
+      "expected_failure": "TweakSpec grounding law rejects: COLOR must control behavior or affect >=2 fields"
+    },
+    {
+      "name": "bad_color_normalization",
+      "mutation": "brand_palette colors include 'royalblue' (named) instead of hex",
+      "expected_failure": "TweakField color normalization rejects: colors must normalize to #rrggbb"
+    },
+    {
+      "name": "tweaks_json_unparseable",
+      "mutation": ".disco/tweaks.json contains trailing comma / invalid JSON",
+      "expected_failure": "ready_for_static_site_verification rejects: tweak store fails to parse, tweak values cannot be applied"
+    }
+  ]
+}

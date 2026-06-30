@@ -1,0 +1,33 @@
+{
+  "_meta": {
+    "fixture": "export_zero_bytes_fail.json",
+    "category": "export",
+    "spec_refs": [
+      "_GROUNDING.md §8 (export pipelines; P10b live export bytes from DeliverableEvent)",
+      "_GROUNDING.md §2 (ExportContract pipeline preflight,bundle,validate,deliver)"
+    ]
+  },
+  "purpose": "Proves the export fail-closed rule: a DeliverableEvent whose payload is 0 bytes (empty export artifact) must be rejected at the validate stage; an export must never deliver an empty file.",
+  "required_evidence": [
+    "ExportContract.pipeline stages executed",
+    "DeliverableEvent emitted by deliver stage",
+    "DeliverableEvent.bytes / payload length",
+    "validate-stage result"
+  ],
+  "expected_oracle": "export_nonempty_deliverable_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "EXPORT_ZERO_BYTES",
+  "minimal_example_payload": {
+    "artifact": { "kind": "document", "entrypoint": "report.md" },
+    "export_contract": { "name": "document_pdf", "pipeline": ["preflight", "bundle", "validate", "deliver"] },
+    "deliverable_event": {
+      "type": "DeliverableEvent",
+      "name": "report.pdf",
+      "mime": "application/pdf",
+      "bytes": 0,
+      "payload_b64": ""
+    },
+    "validate_result": { "ok": false, "reason": "deliverable payload is empty" }
+  },
+  "rationale": "P10b established that real export bytes must flow through the DeliverableEvent. A 0-byte payload means the bundle stage produced nothing real; fail-closed export requires validate to reject it rather than deliver an empty file, so the oracle returns fail."
+}

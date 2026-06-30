@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: tweak_panel (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : tweak_panel
+  Purpose  : Reference layout of a TweakPanel — one control per TweakEditor
+             type from tweaks.py (text, color, boolean, enum, palette,
+             int range). Controls only; no live behavior.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             tweak_panel is a (GAP) kit. TweakEditor + TweakField are REAL
+             (core/tweaks.py); real tweak values persist at .disco/tweaks.json
+             and the app_set_tweak tool writes them. Each control here binds to
+             a tweak KEY via data-disco-field (e.g. lead_form.include_phone).
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : the panel region.
+    data-disco-field         : each control bound to a tweak key.
+    data-disco-screen-label  : human-facing label for the panel.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="tweaks.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tweak panel</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --accent:#2563eb; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           color:var(--ink); background:var(--bg); line-height:1.5; }
+    .panel { max-width:360px; margin:2rem auto; background:#fff; border:1px solid var(--line);
+             border-radius:14px; padding:1.25rem 1.25rem 1.5rem; }
+    .panel h2 { font-size:1rem; margin:0 0 .25rem; }
+    .panel .sub { color:var(--muted); font-size:.8rem; margin:0 0 1.25rem; }
+    .row { display:flex; flex-direction:column; gap:.35rem; margin-bottom:1.1rem; }
+    .row label { font-weight:600; font-size:.82rem; }
+    .row .key { font-size:.7rem; color:var(--muted); font-family:ui-monospace,monospace; }
+    .row .editor-tag { font-size:.65rem; color:var(--accent); text-transform:uppercase;
+                       letter-spacing:.04em; }
+    input[type=text], select { padding:.5rem .6rem; border:1px solid var(--line);
+             border-radius:8px; font-size:.9rem; }
+    input[type=range] { width:100%; }
+    .switch { display:flex; align-items:center; gap:.5rem; }
+    .palette { display:flex; gap:.4rem; }
+    .swatch { width:26px; height:26px; border-radius:6px; border:1px solid var(--line); }
+  </style>
+</head>
+<body>
+  <section class="panel" data-disco-section="tweak_panel" data-disco-screen-label="Tweak panel">
+    <h2>Tweaks</h2>
+    <p class="sub">Reference controls — one per TweakEditor type.</p>
+
+    <!-- text -->
+    <div class="row">
+      <label for="tw-text">CTA label</label>
+      <span class="editor-tag">text</span>
+      <input id="tw-text" type="text" placeholder="e.g. Get started"
+             data-disco-field="lead_form.cta_label">
+      <span class="key">lead_form.cta_label</span>
+    </div>
+
+    <!-- color -->
+    <div class="row">
+      <label for="tw-color">Accent color</label>
+      <span class="editor-tag">color</span>
+      <input id="tw-color" type="color" value="#2563eb"
+             data-disco-field="lead_form.accent_color">
+      <span class="key">lead_form.accent_color</span>
+    </div>
+
+    <!-- boolean -->
+    <div class="row">
+      <span class="editor-tag">boolean</span>
+      <div class="switch">
+        <input id="tw-bool" type="checkbox" data-disco-field="lead_form.include_phone">
+        <label for="tw-bool">Include phone field</label>
+      </div>
+      <span class="key">lead_form.include_phone</span>
+    </div>
+
+    <!-- enum -->
+    <div class="row">
+      <label for="tw-enum">Layout</label>
+      <span class="editor-tag">enum</span>
+      <select id="tw-enum" data-disco-field="lead_form.layout">
+        <option value="stacked">Stacked</option>
+        <option value="split">Split</option>
+        <option value="centered">Centered</option>
+      </select>
+      <span class="key">lead_form.layout</span>
+    </div>
+
+    <!-- palette -->
+    <div class="row">
+      <span class="editor-tag">palette</span>
+      <label>Theme palette</label>
+      <div class="palette" data-disco-field="lead_form.palette" role="radiogroup"
+           aria-label="Theme palette">
+        <span class="swatch" style="background:#2563eb" title="#2563eb"></span>
+        <span class="swatch" style="background:#7c3aed" title="#7c3aed"></span>
+        <span class="swatch" style="background:#059669" title="#059669"></span>
+        <span class="swatch" style="background:#d97706" title="#d97706"></span>
+      </div>
+      <span class="key">lead_form.palette</span>
+    </div>
+
+    <!-- int range -->
+    <div class="row">
+      <label for="tw-int">Form width (px)</label>
+      <span class="editor-tag">int (range)</span>
+      <input id="tw-int" type="range" min="320" max="720" step="20" value="480"
+             data-disco-field="lead_form.form_width">
+      <span class="key">lead_form.form_width · min 320 · max 720 · step 20</span>
+    </div>
+  </section>
+</body>
+</html>

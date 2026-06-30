@@ -1,0 +1,154 @@
+{
+  "_meta": {
+    "fixture": "deck_with_stage.artifact.json",
+    "purpose": "deck artifact: deck.authored.json built via slides_generate + edited via deck_patch, using a deck_stage starter (GAP kit) and image media-slots. Files delivery mode, deck_export pipeline (no preflight stage).",
+    "maps_to_contract_kind": "deck",
+    "delivery_mode": "files",
+    "spec_refs": [
+      "DISCO_ARTIFACT_VM_SPEC.md",
+      "STARTER_KIT_CATALOG.md",
+      "RESOURCE_AND_PROVENANCE_SPEC.md",
+      "EXPORT_PIPELINE_SPEC.md"
+    ],
+    "expected_verdict": "PASS"
+  },
+  "artifact_kind": "deck",
+  "required_files": [
+    "deck.authored.json"
+  ],
+  "manifest": {
+    "kind": "deck",
+    "required_files": [
+      "deck.authored.json"
+    ],
+    "starter_kit": null,
+    "starter_kit_note": "registry registers no starter_kit for deck today; this fixture references the proposed deck_stage kit (GAP) for the on-canvas stage. deck_stage is NOT in kits/starter.py yet.",
+    "bootstrap_tools": [
+      "slides_generate"
+    ],
+    "edit_tools": [
+      "deck_patch"
+    ],
+    "repair_tools": [],
+    "rewrite_allowed": false,
+    "prompt_pack": "build_deck",
+    "ui_card": "DeckCard",
+    "skills": [],
+    "verify": {
+      "finalizer": "ready_for_deck_verification",
+      "level": "standard"
+    },
+    "export": {
+      "name": "deck_export",
+      "pipeline": [
+        "bundle",
+        "validate",
+        "deliver"
+      ]
+    }
+  },
+  "semantic_metadata": {
+    "note": "Deck slides carry data-disco-* anchors for media-slot identity and per-slide section/version, so deck_patch can target a specific slot. Image slots start as placeholders until resolved.",
+    "attributes": [
+      {
+        "element": "<section data-disco-section=\"slide-1\" data-disco-version=\"1\">",
+        "attribute": "data-disco-section",
+        "value": "slide-1",
+        "source": "slides_generate -> slide index"
+      },
+      {
+        "element": "<figure data-disco-media-slot=\"slide-1.hero_image\">",
+        "attribute": "data-disco-media-slot",
+        "value": "slide-1.hero_image",
+        "source": "deck_stage image slot -> resource_manifest res-slide1-image"
+      },
+      {
+        "element": "<figure data-disco-media-slot=\"slide-3.chart\">",
+        "attribute": "data-disco-media-slot",
+        "value": "slide-3.chart",
+        "source": "generated chart asset -> resource_manifest res-slide3-chart"
+      }
+    ]
+  },
+  "tweak_metadata": {
+    "note": "deck kind has no registered TweakSpec; decks are edited via deck_patch, not tweaks. Empty by design.",
+    "fields": []
+  },
+  "resource_manifest": {
+    "entries": [
+      {
+        "id": "res-deck-authored",
+        "source_kind": "generated",
+        "source_ref": "slides_generate -> deck.authored.json",
+        "copied_path": "deck.authored.json",
+        "media_type": "application/json",
+        "status": "resolved"
+      },
+      {
+        "id": "res-slide1-image",
+        "source_kind": "generated",
+        "source_ref": "media-slot:slide-1.hero_image (image_generate pending)",
+        "copied_path": "assets/slide-1-hero.placeholder.png",
+        "media_type": "image/png",
+        "status": "placeholder"
+      },
+      {
+        "id": "res-slide3-chart",
+        "source_kind": "generated",
+        "source_ref": "image_generate -> chart",
+        "copied_path": "assets/slide-3-chart.png",
+        "media_type": "image/png",
+        "status": "resolved"
+      },
+      {
+        "id": "res-stat-source",
+        "source_kind": "research",
+        "source_ref": "search:market-size-2026 -> citation",
+        "copied_path": null,
+        "media_type": "text/plain",
+        "status": "cited"
+      }
+    ]
+  },
+  "verification_expectations": {
+    "finalizer": "ready_for_deck_verification",
+    "level": "standard",
+    "evidence_host_must_observe": [
+      "deck.authored.json exists and parses as the authored deck model",
+      "each slide has resolvable content; media-slots either resolve to embedded image bytes or are flagged as placeholders",
+      "deck renders to slides without authoring-model errors"
+    ]
+  },
+  "export_expectations": {
+    "pipeline_name": "deck_export",
+    "stages": [
+      "bundle",
+      "validate",
+      "deliver"
+    ],
+    "expected_output": {
+      "artifact": "PPTX/HTML deck export with image bytes embedded (not [image] placeholders)",
+      "bytes_gt_zero": true,
+      "emitted_via": "DeliverableEvent"
+    },
+    "delivery_mode": "files",
+    "note": "deck_export has NO preflight stage (bundle, validate, deliver only) — matches registry."
+  },
+  "known_invalid_variants": [
+    {
+      "name": "missing_authored_json",
+      "mutation": "deck.authored.json absent (e.g. only an exported PPTX present)",
+      "expected_failure": "ready_for_deck_verification rejects: required file deck.authored.json missing"
+    },
+    {
+      "name": "unembedded_image_slot",
+      "mutation": "deck_export run while slide-1.hero_image is still a placeholder, producing an [image] placeholder in the PPTX",
+      "expected_failure": "deck_export validate stage rejects / verification flags: media-slot bytes not embedded (regression C7 guard)"
+    },
+    {
+      "name": "preflight_stage_injected",
+      "mutation": "export config declares a preflight stage for deck_export",
+      "expected_failure": "ExportContract for deck_export rejects: pipeline must be (bundle, validate, deliver) with no preflight"
+    }
+  ]
+}

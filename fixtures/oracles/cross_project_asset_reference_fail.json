@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "fixture": "cross_project_asset_reference_fail.json",
+    "category": "resource",
+    "spec_refs": [
+      "_GROUNDING.md §0 (artifact lives in its own project workspace)",
+      "_GROUNDING.md §10 (resource/provenance rules — proposed resource_manifest)",
+      "_GROUNDING.md §11 (self-contained artifacts)"
+    ]
+  },
+  "purpose": "Proves the resource rule that an artifact entrypoint may not reference an asset belonging to a DIFFERENT project workspace. All referenced resources must resolve within the artifact's own project root and be declared in its resource_manifest.",
+  "required_evidence": [
+    "artifact project root path",
+    "entrypoint source referencing an asset by relative/absolute path",
+    "resolved asset path vs artifact project root containment check",
+    "resource_manifest entries (declared assets)"
+  ],
+  "expected_oracle": "resource_provenance_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "ASSET_CROSS_PROJECT_REFERENCE",
+  "minimal_example_payload": {
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html",
+      "project_root": "/work/projects/acme-site"
+    },
+    "entrypoint_source": "<!doctype html>\n<html><body>\n  <img src=\"../beta-site/assets/logo.png\" alt=\"logo\">\n</body></html>\n",
+    "resolved_reference": "/work/projects/beta-site/assets/logo.png",
+    "containment_check": {
+      "asset_within_project_root": false,
+      "owning_project": "beta-site",
+      "current_project": "acme-site"
+    },
+    "resource_manifest": { "assets": [] }
+  },
+  "rationale": "The <img> resolves into a sibling project (beta-site), violating workspace isolation and provenance: the asset is not owned by this artifact and is not in its resource_manifest. A self-contained artifact must not borrow another project's files, so the oracle returns fail."
+}

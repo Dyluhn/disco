@@ -1,0 +1,133 @@
+{
+  "_meta": {
+    "fixture": "prototype_stateful.artifact.json",
+    "purpose": "interactive.prototype: index.html with client-side JS state (a counter/wizard), app_shell starter, app delivery. Highlights the registry GAP: interactive.prototype has NO export pipeline today.",
+    "maps_to_contract_kind": "interactive.prototype",
+    "delivery_mode": "app",
+    "spec_refs": [
+      "DISCO_ARTIFACT_VM_SPEC.md",
+      "ARTIFACT_TOOL_CONTRACTS.md",
+      "CONTEXT_AND_ITERATION_SPEC.md",
+      "EXPORT_PIPELINE_SPEC.md"
+    ],
+    "expected_verdict": "PASS (verification); export N/A (GAP)"
+  },
+  "artifact_kind": "interactive.prototype",
+  "required_files": [
+    "index.html"
+  ],
+  "manifest": {
+    "kind": "interactive.prototype",
+    "required_files": [
+      "index.html"
+    ],
+    "starter_kit": "app_shell",
+    "bootstrap_tools": [
+      "scaffold_starter",
+      "file_write",
+      "preview_start"
+    ],
+    "edit_tools": [
+      "file_edit",
+      "file_replace_lines"
+    ],
+    "repair_tools": [],
+    "rewrite_allowed": false,
+    "prompt_pack": "build_interactive_prototype",
+    "ui_card": "PrototypeCard",
+    "skills": [],
+    "verify": {
+      "finalizer": "ready_for_prototype_verification",
+      "level": "standard"
+    },
+    "export": null,
+    "export_note": "GAP: interactive.prototype has NO export pipeline registered today. A prototype is verified/previewed in-app but cannot be exported. The proposed prototype_standalone export is GAP work (see EXPORT_PIPELINE_SPEC.md)."
+  },
+  "semantic_metadata": {
+    "note": "Stateful prototype anchors interactive regions + screen labels so iteration edits and screenshot triage can target a specific screen/state.",
+    "attributes": [
+      {
+        "element": "<main data-disco-screen-label=\"step-1\">",
+        "attribute": "data-disco-screen-label",
+        "value": "step-1",
+        "source": "prototype wizard step 1"
+      },
+      {
+        "element": "<div data-disco-field=\"counter\" data-disco-version=\"1\">0</div>",
+        "attribute": "data-disco-field",
+        "value": "counter",
+        "source": "JS state variable 'count' bound to this node"
+      },
+      {
+        "element": "<button data-disco-field=\"increment\">+1</button>",
+        "attribute": "data-disco-field",
+        "value": "increment",
+        "source": "click handler mutates 'count' state"
+      },
+      {
+        "element": "<section data-disco-screen-label=\"step-2\">",
+        "attribute": "data-disco-screen-label",
+        "value": "step-2",
+        "source": "prototype wizard step 2 (shown after state transition)"
+      }
+    ]
+  },
+  "tweak_metadata": {
+    "note": "interactive.prototype has no registered TweakSpec; prototypes are edited via file_edit. Empty by design.",
+    "fields": []
+  },
+  "resource_manifest": {
+    "entries": [
+      {
+        "id": "res-index-html",
+        "source_kind": "generated",
+        "source_ref": "scaffold_starter:app_shell + file_edit",
+        "copied_path": "index.html",
+        "media_type": "text/html",
+        "status": "resolved"
+      },
+      {
+        "id": "res-icon-slot",
+        "source_kind": "external",
+        "source_ref": "media-slot:wizard-icon (cdn icon set)",
+        "copied_path": "assets/wizard-icon.placeholder.svg",
+        "media_type": "image/svg+xml",
+        "status": "placeholder"
+      }
+    ]
+  },
+  "verification_expectations": {
+    "finalizer": "ready_for_prototype_verification",
+    "level": "standard",
+    "evidence_host_must_observe": [
+      "index.html serves on a route with HTTP 200",
+      "initial screen (step-1) renders visible styled content",
+      "interacting with a control mutates state (e.g. increment changes the counter; step transition reveals step-2) WITHOUT a full reload",
+      "browser console clean during interaction"
+    ]
+  },
+  "export_expectations": {
+    "pipeline_name": null,
+    "stages": [],
+    "expected_output": null,
+    "delivery_mode": "app",
+    "gap_note": "No export pipeline exists for interactive.prototype in the registry. Attempting to export must surface a clear 'no export for this kind' result rather than a silent failure. Proposed remediation = prototype_standalone (GAP)."
+  },
+  "known_invalid_variants": [
+    {
+      "name": "static_only_no_state",
+      "mutation": "index.html renders but controls do nothing (no JS state mutation on interaction)",
+      "expected_failure": "ready_for_prototype_verification rejects: prototype must demonstrate state change on interaction; dead controls = false affordance"
+    },
+    {
+      "name": "missing_index",
+      "mutation": "no index.html present",
+      "expected_failure": "ready_for_prototype_verification rejects: required file index.html missing"
+    },
+    {
+      "name": "assumes_export",
+      "mutation": "manifest declares an export.name (e.g. 'static_standalone') for interactive.prototype",
+      "expected_failure": "BuildContract/registry rejects: interactive.prototype registers export=None; declaring an export pipeline is invalid for this kind (GAP)"
+    }
+  ]
+}

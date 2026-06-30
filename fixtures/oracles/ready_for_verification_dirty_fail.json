@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "fixture": "ready_for_verification_dirty_fail.json",
+    "category": "verification",
+    "spec_refs": [
+      "_GROUNDING.md §2 (VerificationContract.finalizer)",
+      "_GROUNDING.md §3 (ready_for_static_site_verification)",
+      "_GROUNDING.md §9 (CD-TOOLS 6: no elision markers in editable source)"
+    ]
+  },
+  "purpose": "Proves the ready-for-verification gate fails when the working source is dirty: the entrypoint contains an uncommitted in-flight edit and an elision marker (e.g. '<!-- ... rest unchanged -->'), meaning the source on disk is not a real, fully-materialized artifact.",
+  "required_evidence": [
+    "finalizer ready_for_static_site_verification fired",
+    "working_tree.dirty == true OR pending_edits non-empty",
+    "entrypoint source contains an elision marker token",
+    "rendered evidence absent OR stale relative to last edit"
+  ],
+  "expected_oracle": "ready_for_verification_gate_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "VERIFY_DIRTY_WORKING_TREE",
+  "minimal_example_payload": {
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html",
+      "required_files": ["index.html"]
+    },
+    "working_tree": {
+      "dirty": true,
+      "pending_edits": ["index.html"],
+      "files_present": ["index.html"]
+    },
+    "entrypoint_source": "<!doctype html>\n<html>\n<body>\n  <h1>Acme Logistics</h1>\n  <!-- ... rest unchanged ... -->\n</body>\n</html>\n",
+    "show_artifact_to_user_state": true,
+    "rendered_evidence": null,
+    "finalizer": { "name": "ready_for_static_site_verification", "level": "standard" }
+  },
+  "rationale": "The entrypoint still carries an elision placeholder and an uncommitted edit, and no fresh rendered evidence exists. Declaring this 'ready' would ship an incomplete artifact, so the gate oracle returns fail."
+}

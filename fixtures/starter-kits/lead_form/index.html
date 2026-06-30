@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: lead_form
+  ----------------------------------------------------------------------------
+  Kit name : lead_form
+  Purpose  : Lead-generation landing surface (hero + capture form) used as the
+             scaffold for appkit.leadgen builds.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             Demonstrates the data-disco-* direct-manipulation grammar.
+             lead_form is a REAL starter kit id (kits/starter.py).
+  Reliability: single self-contained HTML5 file, CSS inline, no external
+             assets, no <script src>.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version        : artifact version, on the document root.
+    data-disco-file           : source file this DOM subtree came from.
+    data-disco-section         : movable / removable region (hero / form).
+    data-disco-field           : editable text (headline, subhead, cta_text,
+                                 submit_text) and form field labels.
+    data-disco-media-slot      : empty placeholder for a logo asset.
+    data-disco-comment-anchor  : stable anchor on the form that survives edits.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="index.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-disco-field="page_title">Lead capture</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --accent:#2563eb; --bg:#f8fafc; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           color:var(--ink); background:var(--bg); line-height:1.5; }
+    .wrap { max-width:560px; margin:0 auto; padding:3rem 1.5rem; }
+    .logo-slot { display:flex; align-items:center; justify-content:center;
+                 height:64px; width:160px; margin-bottom:2rem;
+                 border:1px dashed var(--line); border-radius:8px;
+                 color:var(--muted); font-size:.8rem; background:#fff; }
+    h1 { font-size:1.875rem; margin:0 0 .5rem; }
+    .subhead { color:var(--muted); font-size:1.05rem; margin:0 0 2rem; }
+    form { background:#fff; border:1px solid var(--line); border-radius:12px; padding:1.5rem; }
+    label { display:block; font-weight:600; font-size:.85rem; margin:0 0 .35rem; }
+    input { width:100%; padding:.6rem .75rem; border:1px solid var(--line);
+            border-radius:8px; font-size:1rem; margin-bottom:1rem; }
+    button { width:100%; padding:.75rem; border:0; border-radius:8px;
+             background:var(--accent); color:#fff; font-size:1rem; font-weight:600;
+             cursor:pointer; }
+    .cta-note { text-align:center; color:var(--muted); font-size:.85rem; margin-top:1rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- Empty media slot: no fake logo. Real asset arrives via resource manifest. -->
+    <div class="logo-slot"
+         data-disco-media-slot="logo"
+         data-disco-aspect-ratio="5:2"
+         data-alt="Company logo (placeholder — no asset provided)">
+      Logo placeholder
+    </div>
+
+    <section data-disco-section="hero" data-disco-screen-label="Hero">
+      <h1 data-disco-field="headline">Your headline goes here</h1>
+      <p class="subhead" data-disco-field="subhead">
+        One short sentence describing the offer. Replace this placeholder copy.
+      </p>
+    </section>
+
+    <!-- comment-anchor must survive edits to the form's contents. -->
+    <section data-disco-section="form" data-disco-screen-label="Lead form"
+             data-disco-comment-anchor="lead-form-main">
+      <form>
+        <label data-disco-field="label_name" for="lf-name">Full name</label>
+        <input id="lf-name" type="text" placeholder="e.g. Jane Doe">
+
+        <label data-disco-field="label_email" for="lf-email">Email address</label>
+        <input id="lf-email" type="email" placeholder="e.g. jane@example.com">
+
+        <button type="submit" data-disco-field="submit_text">Get started</button>
+      </form>
+      <p class="cta-note" data-disco-field="cta_text">No credit card required — placeholder reassurance line.</p>
+    </section>
+  </div>
+</body>
+</html>

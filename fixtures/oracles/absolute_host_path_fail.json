@@ -1,0 +1,33 @@
+{
+  "_meta": {
+    "fixture": "absolute_host_path_fail.json",
+    "category": "resource",
+    "spec_refs": [
+      "_GROUNDING.md §11 (self-contained artifacts)",
+      "_GROUNDING.md §10 (resource rules — resource_manifest)"
+    ]
+  },
+  "purpose": "Proves the resource rule that an artifact may not reference an absolute host filesystem path. Resources must be project-relative; absolute host paths leak the build environment and break portability of the delivered artifact.",
+  "required_evidence": [
+    "entrypoint source referencing an absolute path (leading '/', 'file://', or a Windows drive prefix)",
+    "path classification (absolute host vs project-relative)",
+    "resource_manifest entries"
+  ],
+  "expected_oracle": "resource_provenance_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "ASSET_ABSOLUTE_HOST_PATH",
+  "minimal_example_payload": {
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html",
+      "project_root": "/work/projects/acme-site"
+    },
+    "entrypoint_source": "<!doctype html>\n<html><head>\n  <link rel=\"stylesheet\" href=\"file:///home/dylan/assets/theme.css\">\n</head><body>\n  <img src=\"/home/dylan/Downloads/hero.jpg\" alt=\"hero\">\n</body></html>\n",
+    "offending_references": [
+      { "raw": "file:///home/dylan/assets/theme.css", "class": "absolute_host_path" },
+      { "raw": "/home/dylan/Downloads/hero.jpg", "class": "absolute_host_path" }
+    ],
+    "resource_manifest": { "assets": [] }
+  },
+  "rationale": "Both references point at absolute host paths outside the project workspace. They are non-portable, leak the build host layout, and are absent from the resource_manifest, so the resource/provenance oracle returns fail."
+}

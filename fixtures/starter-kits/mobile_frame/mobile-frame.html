@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: mobile_frame (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : mobile_frame
+  Purpose  : Phone device frame (notch + home indicator) wrapping a content
+             slot. Used to present a mobile web preview.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             mobile_frame is a (GAP) kit — not a real kit id in
+             kits/starter.py; proposed as new kit data.
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : the wrapped content area.
+    data-disco-field         : editable content text.
+    data-disco-screen-label  : human-facing label for the framed screen.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="mobile-frame.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mobile device frame</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#e2e8f0; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           background:var(--bg); min-height:100vh; display:flex; align-items:center;
+           justify-content:center; padding:2rem; color:var(--ink); }
+    .device { position:relative; width:320px; height:660px; background:#111827; border-radius:44px;
+              padding:14px; box-shadow:0 20px 60px rgba(15,23,42,.3); }
+    .screen { position:relative; width:100%; height:100%; background:#fff; border-radius:32px;
+              overflow:hidden; display:flex; flex-direction:column; }
+    .notch { position:absolute; top:0; left:50%; transform:translateX(-50%);
+             width:130px; height:24px; background:#111827; border-radius:0 0 16px 16px; z-index:2; }
+    .home { position:absolute; bottom:8px; left:50%; transform:translateX(-50%);
+            width:110px; height:5px; background:#111827; border-radius:999px; opacity:.85; }
+    .content { padding:3rem 1.5rem 2rem; flex:1; overflow:auto; }
+    .content h1 { margin:0 0 .5rem; font-size:1.25rem; }
+    .content p { margin:0; color:var(--muted); font-size:.95rem; }
+  </style>
+</head>
+<body>
+  <div class="device" data-disco-screen-label="Mobile preview (phone)">
+    <span class="notch" aria-hidden="true"></span>
+    <div class="screen">
+      <section class="content" data-disco-section="content_slot" data-disco-screen-label="Mobile content">
+        <h1 data-disco-field="content_title">Mobile content placeholder</h1>
+        <p data-disco-field="content_body">
+          This is the content slot of the mobile frame. Replace it with the
+          screen you want to present inside the phone device chrome.
+        </p>
+      </section>
+      <span class="home" aria-hidden="true"></span>
+    </div>
+  </div>
+</body>
+</html>

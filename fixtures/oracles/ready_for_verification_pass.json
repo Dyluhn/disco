@@ -1,0 +1,43 @@
+{
+  "_meta": {
+    "fixture": "ready_for_verification_pass.json",
+    "category": "verification",
+    "spec_refs": [
+      "_GROUNDING.md §2 (VerificationContract.finalizer regex ^ready_for_[a-z0-9_]+_verification$)",
+      "_GROUNDING.md §3 (static.site finalizer ready_for_static_site_verification, level standard)",
+      "_GROUNDING.md §9 (no elision markers in editable source)"
+    ]
+  },
+  "purpose": "Proves the ready-for-verification gate passes when the working tree is clean (no uncommitted/dirty entrypoint edits in flight), the artifact was shown to the user, required files exist, and rendered evidence (a real screenshot) is present.",
+  "required_evidence": [
+    "finalizer name matches ^ready_for_[a-z0-9_]+_verification$",
+    "working tree clean: no pending/elided/uncommitted entrypoint mutation",
+    "required_files all present per ArtifactContract",
+    "show_artifact_to_user state set true",
+    "rendered evidence: verify_web_app screenshot artifact present and non-empty"
+  ],
+  "expected_oracle": "ready_for_verification_gate_oracle",
+  "expected_verdict": "pass",
+  "failure_code": null,
+  "minimal_example_payload": {
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html",
+      "required_files": ["index.html"]
+    },
+    "working_tree": {
+      "dirty": false,
+      "pending_edits": [],
+      "files_present": ["index.html", "styles.css"]
+    },
+    "show_artifact_to_user_state": true,
+    "rendered_evidence": {
+      "tool": "verify_web_app",
+      "screenshot_path": ".disco/evidence/index-1280x800.png",
+      "screenshot_bytes": 184213,
+      "console_errors": []
+    },
+    "finalizer": { "name": "ready_for_static_site_verification", "level": "standard" }
+  },
+  "rationale": "The standard-level static.site finalizer requires a clean tree, present required files, a user-visible artifact, and rendered proof it loads. All conditions hold and the finalizer name matches the pinned regex, so the gate oracle returns pass."
+}

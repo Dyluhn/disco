@@ -1,0 +1,153 @@
+{
+  "_meta": {
+    "fixture": "document_print.artifact.json",
+    "purpose": "document artifact: report.md authored via file_write/file_edit, exported through document_pdf, with open_for_print expectations. Files delivery mode. Exercises the document finalizer + PDF export oracle.",
+    "maps_to_contract_kind": "document",
+    "delivery_mode": "files",
+    "spec_refs": [
+      "DISCO_ARTIFACT_VM_SPEC.md",
+      "EXPORT_PIPELINE_SPEC.md",
+      "CONTENT_AND_DESIGN_DISCIPLINE_SPEC.md",
+      "RESOURCE_AND_PROVENANCE_SPEC.md"
+    ],
+    "expected_verdict": "PASS"
+  },
+  "artifact_kind": "document",
+  "required_files": [
+    "report.md"
+  ],
+  "manifest": {
+    "kind": "document",
+    "required_files": [
+      "report.md"
+    ],
+    "starter_kit": null,
+    "starter_kit_note": "registry registers no starter_kit for document; this fixture references the proposed document_frame kit (GAP) only for the print layout shell. Not in kits/starter.py yet.",
+    "bootstrap_tools": [
+      "file_write"
+    ],
+    "edit_tools": [
+      "file_edit",
+      "file_replace_lines"
+    ],
+    "repair_tools": [],
+    "rewrite_allowed": false,
+    "prompt_pack": "build_document",
+    "ui_card": "DocumentCard",
+    "skills": [],
+    "verify": {
+      "finalizer": "ready_for_document_verification",
+      "level": "standard"
+    },
+    "export": {
+      "name": "document_pdf",
+      "pipeline": [
+        "preflight",
+        "bundle",
+        "validate",
+        "deliver"
+      ]
+    }
+  },
+  "semantic_metadata": {
+    "note": "Markdown carries no DOM, so data-disco-* anchors apply at the PRINT-RENDER layer (the HTML the PDF pipeline produces). Comment anchors map review notes to source spans.",
+    "attributes": [
+      {
+        "element": "<section data-disco-section=\"executive-summary\"> (rendered)",
+        "attribute": "data-disco-section",
+        "value": "executive-summary",
+        "source": "report.md '## Executive summary' heading slug"
+      },
+      {
+        "element": "<span data-disco-metric-id=\"arr-2026\">$4.2M</span> (rendered)",
+        "attribute": "data-disco-metric-id",
+        "value": "arr-2026",
+        "source": "research figure -> resource_manifest res-arr-citation"
+      },
+      {
+        "element": "<span data-disco-comment-anchor=\"c1\"> (rendered)",
+        "attribute": "data-disco-comment-anchor",
+        "value": "c1",
+        "source": "reviewer note anchored to a report.md span"
+      }
+    ]
+  },
+  "tweak_metadata": {
+    "note": "document kind has no registered TweakSpec; documents are edited via file_edit on report.md. Empty by design.",
+    "fields": []
+  },
+  "resource_manifest": {
+    "entries": [
+      {
+        "id": "res-report-md",
+        "source_kind": "generated",
+        "source_ref": "file_write -> report.md",
+        "copied_path": "report.md",
+        "media_type": "text/markdown",
+        "status": "resolved"
+      },
+      {
+        "id": "res-arr-citation",
+        "source_kind": "research",
+        "source_ref": "search:company-arr-2026 -> citation",
+        "copied_path": null,
+        "media_type": "text/plain",
+        "status": "cited"
+      },
+      {
+        "id": "res-figure-chart",
+        "source_kind": "generated",
+        "source_ref": "media-slot:figure-1 (image_generate pending)",
+        "copied_path": "assets/figure-1.placeholder.png",
+        "media_type": "image/png",
+        "status": "placeholder"
+      }
+    ]
+  },
+  "verification_expectations": {
+    "finalizer": "ready_for_document_verification",
+    "level": "standard",
+    "evidence_host_must_observe": [
+      "report.md exists and is non-empty markdown",
+      "document renders to a print layout (open_for_print) with headings/sections resolved",
+      "cited metrics resolve to a source_ref in the resource_manifest (no orphan figures)",
+      "print render shows visible content (not a blank page)"
+    ],
+    "open_for_print": {
+      "expectation": "host opens the rendered document in a print-ready view before PDF export; pagination + page size applied",
+      "page_size_default": "Letter"
+    }
+  },
+  "export_expectations": {
+    "pipeline_name": "document_pdf",
+    "stages": [
+      "preflight",
+      "bundle",
+      "validate",
+      "deliver"
+    ],
+    "expected_output": {
+      "artifact": "report.pdf",
+      "bytes_gt_zero": true,
+      "emitted_via": "DeliverableEvent"
+    },
+    "delivery_mode": "files"
+  },
+  "known_invalid_variants": [
+    {
+      "name": "missing_report_md",
+      "mutation": "no report.md at project root (only an exported PDF present)",
+      "expected_failure": "ready_for_document_verification rejects: required file report.md missing"
+    },
+    {
+      "name": "empty_report",
+      "mutation": "report.md exists but is empty / whitespace only",
+      "expected_failure": "document finalizer rejects: print render shows blank page, fails visible-content evidence"
+    },
+    {
+      "name": "zero_byte_pdf",
+      "mutation": "document_pdf deliver stage emits a 0-byte report.pdf",
+      "expected_failure": "document_pdf validate/deliver rejects: export output must be bytes>0 (DeliverableEvent bytes check)"
+    }
+  ]
+}

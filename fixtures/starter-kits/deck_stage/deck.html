@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: deck_stage (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : deck_stage
+  Purpose  : 16:9 slide stage — a single deck slide region with title, body,
+             and an image slot. Reference layout for the deck pipeline surface.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             deck_stage is a (GAP) kit — not a real kit id in kits/starter.py;
+             proposed as new kit data. The deck kind's real authoring path is
+             slides_generate + deck_patch over deck.authored.json.
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : per-slide-region sections (title / body / media).
+    data-disco-field         : editable slide title and body text.
+    data-disco-media-slot    : empty placeholder for the slide image.
+    data-disco-screen-label  : human-facing label for the slide stage.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="deck.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-disco-field="deck_title">Deck — Slide 1</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --accent:#7c3aed; --bg:#1e1b2e; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           background:var(--bg); display:flex; align-items:center; justify-content:center;
+           min-height:100vh; padding:2rem; }
+    .stage { position:relative; width:100%; max-width:960px; aspect-ratio:16/9;
+             background:#fff; border-radius:14px; overflow:hidden; display:grid;
+             grid-template-columns: 1.1fr .9fr; box-shadow:0 20px 60px rgba(0,0,0,.4); }
+    .copy { padding:3rem; display:flex; flex-direction:column; justify-content:center; }
+    h1 { font-size:2.25rem; margin:0 0 1rem; color:var(--ink); }
+    p { font-size:1.1rem; color:var(--muted); margin:0; }
+    .media { display:flex; align-items:center; justify-content:center;
+             background:#f4f4f8; border-left:1px solid var(--line); color:var(--muted);
+             font-size:.85rem; text-align:center; padding:1rem; }
+  </style>
+</head>
+<body>
+  <article class="stage" data-disco-screen-label="Slide stage (16:9)">
+    <div class="copy">
+      <section data-disco-section="slide_title" data-disco-screen-label="Slide title">
+        <h1 data-disco-field="slide_title">Slide title placeholder</h1>
+      </section>
+      <section data-disco-section="slide_body" data-disco-screen-label="Slide body">
+        <p data-disco-field="slide_body">
+          Replace this with the slide's supporting point. Keep it to one idea.
+        </p>
+      </section>
+    </div>
+    <!-- Empty media slot: no fake image. Real asset arrives via resource manifest. -->
+    <section class="media"
+             data-disco-section="slide_media"
+             data-disco-media-slot="slide_image"
+             data-disco-aspect-ratio="4:3"
+             data-alt="Slide visual (placeholder — no asset provided)"
+             data-disco-screen-label="Slide image">
+      Image placeholder
+    </section>
+  </article>
+</body>
+</html>

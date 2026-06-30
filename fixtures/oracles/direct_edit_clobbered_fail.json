@@ -1,0 +1,50 @@
+{
+  "_meta": {
+    "fixture": "direct_edit_clobbered_fail.json",
+    "category": "direct-edit",
+    "spec_refs": [
+      "_GROUNDING.md §9 (CD-TOOLS fresh-read guard before edits)",
+      "_GROUNDING.md §10 (direct-edit reconciliation — direct_edits.json record (GAP))"
+    ]
+  },
+  "purpose": "Proves direct-edit reconciliation: when the user has made a direct edit recorded in direct_edits.json, a subsequent agent edit that overwrites that user-owned span WITHOUT reconciling against the recorded direct edit fails the oracle.",
+  "required_evidence": [
+    "direct_edits.json record (path, span/anchor, user content, timestamp)",
+    "fresh-read of file at agent edit time",
+    "agent tool_call old_string/new_string targeting the same span",
+    "whether the agent's old_string matches the user's current content (reconciled) or a stale pre-user-edit value (clobber)",
+    "file after-state vs recorded user content"
+  ],
+  "expected_oracle": "direct_edit_reconciliation_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "DIRECT_EDIT_CLOBBERED",
+  "minimal_example_payload": {
+    "artifact": { "kind": "static.site", "entrypoint": "index.html" },
+    "direct_edits": {
+      "records": [
+        {
+          "path": "index.html",
+          "anchor": "hero-title",
+          "user_content": "<h1 data-disco-comment-anchor=\"hero-title\">Acme Freight Co.</h1>",
+          "edited_at": "2026-06-30T14:10:00Z",
+          "source": "user_direct_edit"
+        }
+      ]
+    },
+    "file_at_agent_read": "<header>\n  <h1 data-disco-comment-anchor=\"hero-title\">Acme Freight Co.</h1>\n</header>\n",
+    "agent_tool_call": {
+      "name": "exact_replace",
+      "args": {
+        "path": "index.html",
+        "old_string": "<h1 data-disco-comment-anchor=\"hero-title\">Welcome to Acme</h1>",
+        "new_string": "<h1 data-disco-comment-anchor=\"hero-title\">Welcome to Acme Logistics</h1>"
+      }
+    },
+    "reconciliation": {
+      "old_string_matches_current_user_content": false,
+      "old_string_matches_stale_pre_user_value": true,
+      "outcome": "agent overwrote the user's direct edit using a stale baseline"
+    }
+  },
+  "rationale": "The user directly changed the hero title to 'Acme Freight Co.' (recorded in direct_edits.json). The agent's exact_replace targets the pre-user-edit text 'Welcome to Acme', meaning it edited from a stale baseline and would discard the user's direct edit. Direct-edit reconciliation requires the agent to read fresh and respect recorded user edits, so the oracle returns fail."
+}

@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: metrics_overlay (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : metrics_overlay
+  Purpose  : A grid of metric cards. Each value is a PLACEHOLDER explicitly
+             marked requires_user_input — NO fabricated statistics are ever
+             presented as real.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             metrics_overlay is a (GAP) kit — not a real kit id in
+             kits/starter.py; proposed as new kit data.
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : the metrics grid region.
+    data-disco-metric-id     : stable id for each metric value.
+    data-disco-field         : the editable metric value + label bound to source.
+    data-disco-screen-label  : human-facing label for the overlay.
+  Honesty rule: values are marked data-disco-state="requires_user_input" and
+  read as placeholders — never present fake stats as real.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="metrics.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-disco-field="overlay_title">Metrics</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#f8fafc; --pend:#b45309; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           color:var(--ink); background:var(--bg); line-height:1.5; }
+    .wrap { max-width:880px; margin:0 auto; padding:2.5rem 1.5rem; }
+    h1 { font-size:1.5rem; margin:0 0 1.5rem; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:1rem; }
+    .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:1.25rem; }
+    .value { font-size:2rem; font-weight:700; letter-spacing:-.01em; }
+    .value[data-disco-state="requires_user_input"] { color:var(--pend); font-size:1.1rem;
+            font-weight:600; }
+    .label { color:var(--muted); font-size:.85rem; margin-top:.35rem; }
+    .pending-tag { display:inline-block; margin-top:.5rem; font-size:.7rem; color:var(--pend);
+            background:#fef3c7; border-radius:999px; padding:.1rem .5rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 data-disco-field="overlay_title">Key metrics</h1>
+
+    <section class="grid" data-disco-section="metrics_grid" data-disco-screen-label="Metrics overlay">
+      <div class="card">
+        <div class="value" data-disco-metric-id="total_users"
+             data-disco-field="total_users_value" data-disco-state="requires_user_input">
+          — needs value —
+        </div>
+        <div class="label" data-disco-field="total_users_label">Total users</div>
+        <span class="pending-tag">placeholder · requires_user_input</span>
+      </div>
+
+      <div class="card">
+        <div class="value" data-disco-metric-id="conversion_rate"
+             data-disco-field="conversion_rate_value" data-disco-state="requires_user_input">
+          — needs value —
+        </div>
+        <div class="label" data-disco-field="conversion_rate_label">Conversion rate</div>
+        <span class="pending-tag">placeholder · requires_user_input</span>
+      </div>
+
+      <div class="card">
+        <div class="value" data-disco-metric-id="monthly_revenue"
+             data-disco-field="monthly_revenue_value" data-disco-state="requires_user_input">
+          — needs value —
+        </div>
+        <div class="label" data-disco-field="monthly_revenue_label">Monthly revenue</div>
+        <span class="pending-tag">placeholder · requires_user_input</span>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

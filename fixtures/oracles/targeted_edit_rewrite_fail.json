@@ -1,0 +1,51 @@
+{
+  "_meta": {
+    "fixture": "targeted_edit_rewrite_fail.json",
+    "category": "edit",
+    "spec_refs": [
+      "_GROUNDING.md §4 (safe_write_file, exact_replace)",
+      "_GROUNDING.md §5 (targeted_edit_law)",
+      "_GROUNDING.md §9 (CD-TOOLS 3,4,6: safe writes refuse entrypoint clobber, governed routing, no elision markers)"
+    ]
+  },
+  "purpose": "Proves that rewriting the whole artifact entrypoint during an edit phase — via safe_write_file (raw whole-file write to a governed entrypoint) AND/OR via an exact_replace whose new_string elides untouched code with a '// ... rest unchanged' marker — is rejected by the targeted-edit-law oracle.",
+  "required_evidence": [
+    "phase == 'edit'",
+    "tool_call.name == 'safe_write_file' targeting the governed entrypoint (governed-routing violation)",
+    "OR tool_call.name == 'exact_replace' whose new_string contains an elision marker",
+    "file before/after diff: multiple non-contiguous hunks or full-body replacement",
+    "presence of elision marker token in written content"
+  ],
+  "expected_oracle": "targeted_edit_law_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "EDIT_WHOLE_FILE_REWRITE",
+  "minimal_example_payload": {
+    "phase": "edit",
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html"
+    },
+    "tool_call": {
+      "name": "safe_write_file",
+      "args": {
+        "path": "index.html",
+        "content": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Acme</title></head>\n<body>\n  <header class=\"hero\">\n    <h1 class=\"hero__title\">Welcome to Acme Logistics</h1>\n    <!-- ... rest unchanged ... -->\n  </header>\n</body>\n</html>\n"
+      }
+    },
+    "secondary_tool_call_variant": {
+      "name": "exact_replace",
+      "args": {
+        "path": "index.html",
+        "old_string": "<body>\n  <header class=\"hero\">\n    <h1 class=\"hero__title\">Welcome to Acme</h1>\n    <p class=\"hero__sub\">Same-day freight.</p>\n  </header>\n</body>",
+        "new_string": "<body>\n  <header class=\"hero\">\n    <h1 class=\"hero__title\">Welcome to Acme Logistics</h1>\n    // ... rest unchanged\n  </header>\n</body>"
+      }
+    },
+    "file_before": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Acme</title></head>\n<body>\n  <header class=\"hero\">\n    <h1 class=\"hero__title\">Welcome to Acme</h1>\n    <p class=\"hero__sub\">Same-day freight.</p>\n  </header>\n</body>\n</html>\n",
+    "file_after": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Acme</title></head>\n<body>\n  <header class=\"hero\">\n    <h1 class=\"hero__title\">Welcome to Acme Logistics</h1>\n    <!-- ... rest unchanged ... -->\n  </header>\n</body>\n</html>\n",
+    "violations": [
+      "raw whole-file write to a governed entrypoint (must route through edit tool exact_replace)",
+      "elision marker present, deleting the hero__sub paragraph"
+    ]
+  },
+  "rationale": "CD-TOOLS forbid (a) raw whole-file writes to governed artifact entrypoints during edits and (b) elision markers like '// ... rest unchanged' that silently drop real source. Both are the Mode-B edit-elision thrash the artifact VM was built to kill, so the oracle returns fail."
+}

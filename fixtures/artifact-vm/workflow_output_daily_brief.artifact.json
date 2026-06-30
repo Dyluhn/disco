@@ -1,0 +1,141 @@
+{
+  "_meta": {
+    "fixture": "workflow_output_daily_brief.artifact.json",
+    "purpose": "workflow.output: a recurring 'daily brief' output using the proposed daily_brief_layout kit (GAP). Files delivery. Documents the registry's deepest GAP: empty bootstrap, no edit tools, no prompt pack, no export for workflow.output.",
+    "maps_to_contract_kind": "workflow.output",
+    "delivery_mode": "files",
+    "spec_refs": [
+      "DISCO_ARTIFACT_VM_SPEC.md",
+      "STARTER_KIT_CATALOG.md",
+      "PROMPT_PACK_REQUIREMENTS.md",
+      "EXPORT_PIPELINE_SPEC.md",
+      "RESOURCE_AND_PROVENANCE_SPEC.md"
+    ],
+    "expected_verdict": "PASS (verification only); bootstrap/pack/export are GAP"
+  },
+  "artifact_kind": "workflow.output",
+  "required_files": [],
+  "required_files_note": "registry registers NO required_files for workflow.output today. This fixture proposes 'brief.md' as the conventional output but it is NOT contract-enforced (GAP).",
+  "manifest": {
+    "kind": "workflow.output",
+    "required_files": [],
+    "proposed_output_files": [
+      "brief.md"
+    ],
+    "starter_kit": null,
+    "starter_kit_note": "registry registers no starter_kit; this fixture references the proposed daily_brief_layout kit (GAP), absent from kits/starter.py.",
+    "bootstrap_tools": [],
+    "bootstrap_note": "GAP: workflow.output registers an EMPTY bootstrap tool pack. Nothing scaffolds the output today.",
+    "edit_tools": [],
+    "edit_note": "GAP: no edit tools registered for workflow.output.",
+    "repair_tools": [],
+    "rewrite_allowed": false,
+    "prompt_pack": null,
+    "prompt_pack_note": "GAP: no build_workflow_output.md pack exists. Proposed in PROMPT_PACK_REQUIREMENTS.md.",
+    "ui_card": "WorkflowCard",
+    "skills": [],
+    "verify": {
+      "finalizer": "ready_for_workflow_output_verification",
+      "level": "standard"
+    },
+    "export": null,
+    "export_note": "GAP: no export pipeline registered for workflow.output."
+  },
+  "semantic_metadata": {
+    "note": "Daily brief output is sectioned and time-stamped so each run is distinguishable. data-disco-version distinguishes successive daily runs; metric-id anchors tracked numbers.",
+    "attributes": [
+      {
+        "element": "<article data-disco-version=\"2026-06-30\">",
+        "attribute": "data-disco-version",
+        "value": "2026-06-30",
+        "source": "workflow run date (one version per daily run)"
+      },
+      {
+        "element": "<section data-disco-section=\"top-stories\">",
+        "attribute": "data-disco-section",
+        "value": "top-stories",
+        "source": "daily_brief_layout section 'top-stories'"
+      },
+      {
+        "element": "<span data-disco-metric-id=\"open-prs\">7</span>",
+        "attribute": "data-disco-metric-id",
+        "value": "open-prs",
+        "source": "research/external pull -> resource_manifest res-prs-feed"
+      }
+    ]
+  },
+  "tweak_metadata": {
+    "note": "workflow.output has no registered TweakSpec. Empty by design (and bootstrap/edit are GAP regardless).",
+    "fields": []
+  },
+  "resource_manifest": {
+    "entries": [
+      {
+        "id": "res-brief-md",
+        "source_kind": "generated",
+        "source_ref": "workflow run -> brief.md (no governed bootstrap tool; GAP)",
+        "copied_path": "brief.md",
+        "media_type": "text/markdown",
+        "status": "resolved"
+      },
+      {
+        "id": "res-prs-feed",
+        "source_kind": "external",
+        "source_ref": "api:github -> open PR count",
+        "copied_path": null,
+        "media_type": "application/json",
+        "status": "fetched"
+      },
+      {
+        "id": "res-news-search",
+        "source_kind": "research",
+        "source_ref": "search:industry-news-2026-06-30 -> citations",
+        "copied_path": null,
+        "media_type": "text/plain",
+        "status": "cited"
+      },
+      {
+        "id": "res-banner-slot",
+        "source_kind": "generated",
+        "source_ref": "media-slot:brief-banner (image_generate pending)",
+        "copied_path": "assets/brief-banner.placeholder.png",
+        "media_type": "image/png",
+        "status": "placeholder"
+      }
+    ]
+  },
+  "verification_expectations": {
+    "finalizer": "ready_for_workflow_output_verification",
+    "level": "standard",
+    "evidence_host_must_observe": [
+      "a workflow output artifact exists (proposed brief.md) and is non-empty",
+      "the output is inspectable/downloadable (files delivery mode)",
+      "cited metrics/figures resolve to resource_manifest source_refs",
+      "GAP: because bootstrap/edit are empty, the host cannot assert HOW the output was produced via governed tools — verification can only check the resulting file, not the production path"
+    ]
+  },
+  "export_expectations": {
+    "pipeline_name": null,
+    "stages": [],
+    "expected_output": null,
+    "delivery_mode": "files",
+    "gap_note": "GAP: no export pipeline for workflow.output. The output is delivered as raw files only. Proposed remediation = a workflow_output export (e.g. bundle the brief + assets), see EXPORT_PIPELINE_SPEC.md."
+  },
+  "known_invalid_variants": [
+    {
+      "name": "no_output_produced",
+      "mutation": "workflow run completes but emits no output file at all",
+      "expected_failure": "ready_for_workflow_output_verification rejects: no inspectable output artifact to verify"
+    },
+    {
+      "name": "assumes_bootstrap_tool",
+      "mutation": "manifest declares bootstrap_tools (e.g. ['file_write']) for workflow.output",
+      "expected_failure": "registry mismatch: workflow.output registers an empty bootstrap pack (GAP); declaring tools contradicts the registered contract until the GAP is filled"
+    },
+    {
+      "name": "assumes_export",
+      "mutation": "manifest declares export.name for workflow.output",
+      "expected_failure": "registry rejects: workflow.output registers export=None (GAP); no export pipeline exists for this kind"
+    }
+  ]
+}

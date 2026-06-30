@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: document_frame (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : document_frame
+  Purpose  : Print-friendly A4/Letter document layout (report/brief surface)
+             with @media print rules for clean paging.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             document_frame is a (GAP) kit — not a real kit id in
+             kits/starter.py; proposed as new kit data. The document kind's
+             real authoring path is file_write/file_edit over report.md with a
+             document_pdf export pipeline.
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : document regions (header / body / appendix).
+    data-disco-field         : editable headings and paragraphs.
+    data-disco-screen-label  : human-facing label for the document.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="document.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-disco-field="doc_title">Untitled document</title>
+  <style>
+    :root { --ink:#1f2937; --muted:#6b7280; --line:#d1d5db; --bg:#e5e7eb; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--ink);
+           font-family: Georgia, "Times New Roman", serif; line-height:1.65; }
+    .page { width:210mm; min-height:297mm; margin:2rem auto; padding:25mm 22mm;
+            background:#fff; box-shadow:0 6px 24px rgba(0,0,0,.12); }
+    h1 { font-size:1.9rem; margin:0 0 .25rem; }
+    .doc-meta { color:var(--muted); font-size:.9rem; margin:0 0 2rem;
+                border-bottom:1px solid var(--line); padding-bottom:1rem; }
+    h2 { font-size:1.25rem; margin:1.75rem 0 .5rem; }
+    p { margin:0 0 1rem; }
+    @media print {
+      body { background:#fff; }
+      .page { width:auto; min-height:auto; margin:0; padding:0; box-shadow:none; }
+      h2 { break-after:avoid; }
+      section { break-inside:avoid; }
+      @page { size: A4; margin: 20mm; }
+    }
+  </style>
+</head>
+<body>
+  <article class="page" data-disco-screen-label="Document page (A4)">
+    <header data-disco-section="doc_header" data-disco-screen-label="Document header">
+      <h1 data-disco-field="doc_title">Document title placeholder</h1>
+      <p class="doc-meta" data-disco-field="doc_meta">Author placeholder · Date placeholder</p>
+    </header>
+
+    <section data-disco-section="doc_body" data-disco-screen-label="Document body">
+      <h2 data-disco-field="section_1_heading">Section heading placeholder</h2>
+      <p data-disco-field="section_1_body">
+        Replace this placeholder paragraph with the document's first section of
+        content. The layout is tuned for printing to A4/Letter with the print
+        rules above.
+      </p>
+      <h2 data-disco-field="section_2_heading">Second section heading</h2>
+      <p data-disco-field="section_2_body">
+        Another placeholder paragraph. Sections are independently editable and
+        marked to avoid awkward page breaks when printed.
+      </p>
+    </section>
+
+    <section data-disco-section="doc_appendix" data-disco-screen-label="Appendix">
+      <h2 data-disco-field="appendix_heading">Appendix</h2>
+      <p data-disco-field="appendix_body">Placeholder appendix content.</p>
+    </section>
+  </article>
+</body>
+</html>

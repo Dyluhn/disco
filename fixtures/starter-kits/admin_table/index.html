@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: admin_table (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : admin_table
+  Purpose  : Admin / data-table screen — sortable column headers + sample rows,
+             the canonical "list view" surface for an admin app.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             admin_table is a (GAP) kit — not yet a real kit id in
+             kits/starter.py; proposed as new kit data. Demonstrates the
+             data-disco-* direct-manipulation grammar.
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : the table region.
+    data-disco-field         : editable column-header labels.
+    data-disco-screen-label  : human-facing label for the screen.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="index.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-disco-field="page_title">Admin — Records</title>
+  <style>
+    :root { --ink:#111827; --muted:#6b7280; --line:#e5e7eb; --head:#f9fafb; --bg:#fff; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           color:var(--ink); background:var(--bg); line-height:1.5; }
+    .wrap { max-width:960px; margin:0 auto; padding:2.5rem 1.5rem; }
+    h1 { font-size:1.5rem; margin:0 0 1.5rem; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    thead th { text-align:left; background:var(--head); color:var(--muted);
+               font-weight:600; padding:.65rem .75rem; border-bottom:1px solid var(--line);
+               text-transform:uppercase; letter-spacing:.02em; font-size:.75rem; }
+    tbody td { padding:.65rem .75rem; border-bottom:1px solid var(--line); }
+    tbody tr:hover { background:var(--head); }
+    .status { display:inline-block; padding:.15rem .5rem; border-radius:999px;
+              font-size:.75rem; background:#eef2ff; color:#3730a3; }
+  </style>
+</head>
+<body>
+  <div class="wrap" data-disco-screen-label="Records list">
+    <h1 data-disco-field="screen_title">Records</h1>
+
+    <section data-disco-section="records_table" data-disco-screen-label="Records table">
+      <table>
+        <thead>
+          <tr>
+            <th data-disco-field="col_name">Name</th>
+            <th data-disco-field="col_email">Email</th>
+            <th data-disco-field="col_role">Role</th>
+            <th data-disco-field="col_status">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Sample Record One</td>
+            <td>record1@example.com</td>
+            <td>Editor</td>
+            <td><span class="status">Placeholder</span></td>
+          </tr>
+          <tr>
+            <td>Sample Record Two</td>
+            <td>record2@example.com</td>
+            <td>Viewer</td>
+            <td><span class="status">Placeholder</span></td>
+          </tr>
+          <tr>
+            <td>Sample Record Three</td>
+            <td>record3@example.com</td>
+            <td>Admin</td>
+            <td><span class="status">Placeholder</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </div>
+</body>
+</html>

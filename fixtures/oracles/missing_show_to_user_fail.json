@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "fixture": "missing_show_to_user_fail.json",
+    "category": "delivery",
+    "spec_refs": [
+      "_GROUNDING.md §10 (show_artifact_to_user GAP; show_artifact_to_agent GAP)",
+      "_GROUNDING.md §3 (finalizers per kind)",
+      "_GROUNDING.md §1 (DeliveryMode app vs files)"
+    ]
+  },
+  "purpose": "Proves the show-to-user vs verification separation: a ready_for_*_verification finalizer that fires while no show_artifact_to_user state was ever set fails. The user must have been shown the artifact before it is declared ready.",
+  "required_evidence": [
+    "ordered event log for the build session",
+    "presence/absence of a show_artifact_to_user state transition (GAP capability)",
+    "finalizer call ready_for_static_site_verification",
+    "show_artifact_to_agent (private preview) may exist but does NOT satisfy the user-facing requirement"
+  ],
+  "expected_oracle": "show_to_user_before_verification_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "VERIFY_WITHOUT_SHOW_TO_USER",
+  "minimal_example_payload": {
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html",
+      "delivery_mode": "app"
+    },
+    "event_log": [
+      { "seq": 1, "type": "tool_call", "name": "scaffold_starter", "args": { "kit": "app_shell" } },
+      { "seq": 2, "type": "tool_call", "name": "preview_start", "args": { "path": "index.html" } },
+      { "seq": 3, "type": "state", "name": "show_artifact_to_agent", "value": true },
+      { "seq": 4, "type": "tool_call", "name": "exact_replace", "args": { "path": "index.html", "old_string": "Hello", "new_string": "Hello World" } },
+      { "seq": 5, "type": "finalizer", "name": "ready_for_static_site_verification" }
+    ],
+    "show_artifact_to_user_state": null
+  },
+  "rationale": "Verification readiness presupposes the artifact was surfaced to the user. The agent only previewed it privately (show_artifact_to_agent) and never set show_artifact_to_user, so firing the finalizer violates the show-to-user vs verification separation and the oracle returns fail."
+}

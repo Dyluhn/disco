@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "fixture": "media_slot_placeholder_pass.json",
+    "category": "resource",
+    "spec_refs": [
+      "_GROUNDING.md §6 (image_slot kit (GAP))",
+      "_GROUNDING.md §10 (data-disco-media-slot placeholder convention)",
+      "_GROUNDING.md §11 (self-contained artifacts)"
+    ]
+  },
+  "purpose": "Proves the allowed case: when a real asset is not yet available, the entrypoint may use a declared data-disco-media-slot placeholder element instead of referencing a missing/foreign file. A placeholder slot is allowed and passes the resource oracle.",
+  "required_evidence": [
+    "entrypoint contains an element carrying data-disco-media-slot",
+    "the slot has NO src pointing at a missing/cross-project/absolute path",
+    "resource_manifest declares the slot as a pending media slot",
+    "no broken/dangling real-file reference"
+  ],
+  "expected_oracle": "resource_provenance_oracle",
+  "expected_verdict": "pass",
+  "failure_code": null,
+  "minimal_example_payload": {
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html",
+      "project_root": "/work/projects/acme-site"
+    },
+    "entrypoint_source": "<!doctype html>\n<html><body>\n  <div class=\"hero__media\" data-disco-media-slot=\"hero_image\" role=\"img\" aria-label=\"Hero image pending\"></div>\n</body></html>\n",
+    "files_present": ["index.html"],
+    "resource_manifest": {
+      "assets": [],
+      "media_slots": [
+        { "slot": "hero_image", "status": "pending", "suggested_kind": "image" }
+      ]
+    }
+  },
+  "rationale": "Rather than reference a missing or foreign asset, the artifact uses a declared data-disco-media-slot placeholder recorded in resource_manifest.media_slots. No dangling file reference exists, so the resource rule is satisfied and the oracle returns pass."
+}

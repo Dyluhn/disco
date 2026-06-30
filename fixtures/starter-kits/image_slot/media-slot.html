@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: image_slot (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : image_slot
+  Purpose  : Reusable media-slot component showing the EMPTY placeholder state.
+             No fake image is ever rendered — the slot advertises the asset it
+             expects and waits for a real asset from the resource manifest.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             image_slot is a (GAP) kit — not a real kit id in kits/starter.py;
+             proposed as new kit data.
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : the media-slot region.
+    data-disco-media-slot    : placeholder for a real asset not yet provided;
+                               carries data-alt + data-disco-aspect-ratio
+                               metadata so the host knows what to fill.
+    data-disco-screen-label  : human-facing label for the slot.
+  Note: a real asset REPLACES the placeholder via the resource manifest; this
+        fixture deliberately renders NO fake image.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="media-slot.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Media slot — empty state</title>
+  <style>
+    :root { --muted:#6b7280; --line:#cbd5e1; --bg:#f8fafc; --tint:#f1f5f9; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           background:var(--bg); color:var(--muted); min-height:100vh;
+           display:flex; align-items:center; justify-content:center; padding:2rem; }
+    .slot { width:100%; max-width:480px; aspect-ratio:16/9; background:var(--tint);
+            border:2px dashed var(--line); border-radius:12px;
+            display:flex; flex-direction:column; align-items:center; justify-content:center;
+            text-align:center; gap:.5rem; padding:1.5rem; }
+    .slot .icon { width:42px; height:42px; border:2px solid var(--line); border-radius:8px;
+                  display:flex; align-items:center; justify-content:center; font-size:1.25rem; }
+    .slot .title { font-weight:600; color:#334155; }
+    .slot .meta { font-size:.8rem; }
+    .slot .hint { font-size:.75rem; opacity:.8; }
+  </style>
+</head>
+<body>
+  <section data-disco-section="media_block" data-disco-screen-label="Media slot">
+    <!-- EMPTY state — no fake image. Real asset arrives via resource manifest. -->
+    <figure class="slot"
+            data-disco-media-slot="primary_image"
+            data-disco-aspect-ratio="16:9"
+            data-alt="Primary image (placeholder — no asset provided)"
+            data-disco-screen-label="Primary image slot">
+      <span class="icon" aria-hidden="true">▢</span>
+      <span class="title">Image placeholder</span>
+      <span class="meta">slot: primary_image · aspect 16:9</span>
+      <span class="hint">A real asset replaces this via the resource manifest.</span>
+    </figure>
+  </section>
+</body>
+</html>

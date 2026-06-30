@@ -1,0 +1,37 @@
+{
+  "_meta": {
+    "fixture": "comment_anchor_duplicated_fail.json",
+    "category": "anchor",
+    "spec_refs": [
+      "_GROUNDING.md §10 (data-disco-comment-anchor convention)",
+      "_GROUNDING.md §9 (CD-TOOLS targeted edits must not duplicate structure)"
+    ]
+  },
+  "purpose": "Proves that an edit which duplicates a data-disco-comment-anchor id (e.g. by copy-pasting an anchored block during a 'duplicate section' edit) fails the comment-anchor integrity oracle: an anchor id must be unique across the artifact.",
+  "required_evidence": [
+    "file before/after",
+    "count of each data-disco-comment-anchor id before and after",
+    "after count > 1 for at least one id (duplicate)",
+    "tool_call that introduced the duplicate"
+  ],
+  "expected_oracle": "comment_anchor_integrity_oracle",
+  "expected_verdict": "fail",
+  "failure_code": "COMMENT_ANCHOR_DUPLICATED",
+  "minimal_example_payload": {
+    "artifact": { "kind": "static.site", "entrypoint": "index.html" },
+    "tool_call": {
+      "name": "exact_replace",
+      "args": {
+        "path": "index.html",
+        "old_string": "<section data-disco-comment-anchor=\"feature-1\">\n      <h2>Fast</h2>\n    </section>",
+        "new_string": "<section data-disco-comment-anchor=\"feature-1\">\n      <h2>Fast</h2>\n    </section>\n    <section data-disco-comment-anchor=\"feature-1\">\n      <h2>Reliable</h2>\n    </section>"
+      }
+    },
+    "file_before": "<main>\n    <section data-disco-comment-anchor=\"feature-1\">\n      <h2>Fast</h2>\n    </section>\n  </main>\n",
+    "file_after": "<main>\n    <section data-disco-comment-anchor=\"feature-1\">\n      <h2>Fast</h2>\n    </section>\n    <section data-disco-comment-anchor=\"feature-1\">\n      <h2>Reliable</h2>\n    </section>\n  </main>\n",
+    "anchor_counts": {
+      "feature-1": { "before": 1, "after": 2 }
+    }
+  },
+  "rationale": "The new section was created by copying the anchored block, leaving two elements with data-disco-comment-anchor=\"feature-1\". A user comment bound to that id would now be ambiguous. Anchor ids must be unique, so the oracle returns fail."
+}

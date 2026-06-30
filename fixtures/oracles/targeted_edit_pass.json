@@ -1,0 +1,47 @@
+{
+  "_meta": {
+    "fixture": "targeted_edit_pass.json",
+    "category": "edit",
+    "spec_refs": [
+      "_GROUNDING.md §4 (exact_replace)",
+      "_GROUNDING.md §5 (REQUIRED_SECTIONS: targeted_edit_law)",
+      "_GROUNDING.md §9 (CD-TOOLS 1,2: fresh-read guard + atomic exact replacement)"
+    ]
+  },
+  "purpose": "Proves that a single-span exact_replace which changes ONLY the targeted text (one headline) and leaves the rest of the entrypoint byte-for-byte identical is accepted by the targeted-edit-law oracle.",
+  "required_evidence": [
+    "tool_call.name == 'exact_replace'",
+    "tool_call.args.old_string and tool_call.args.new_string",
+    "file before (full source captured by fresh-read guard)",
+    "file after (full source as written by exact_replace)",
+    "diff: span-bounded — exactly one contiguous hunk changed, all other bytes identical",
+    "absence of elision markers in new_string"
+  ],
+  "expected_oracle": "targeted_edit_law_oracle",
+  "expected_verdict": "pass",
+  "failure_code": null,
+  "minimal_example_payload": {
+    "phase": "edit",
+    "artifact": {
+      "kind": "static.site",
+      "entrypoint": "index.html"
+    },
+    "tool_call": {
+      "name": "exact_replace",
+      "args": {
+        "path": "index.html",
+        "old_string": "    <h1 class=\"hero__title\">Welcome to Acme</h1>",
+        "new_string": "    <h1 class=\"hero__title\">Welcome to Acme Logistics</h1>"
+      }
+    },
+    "file_before": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Acme</title></head>\n<body>\n  <header class=\"hero\">\n    <h1 class=\"hero__title\">Welcome to Acme</h1>\n    <p class=\"hero__sub\">Same-day freight.</p>\n  </header>\n</body>\n</html>\n",
+    "file_after": "<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>Acme</title></head>\n<body>\n  <header class=\"hero\">\n    <h1 class=\"hero__title\">Welcome to Acme Logistics</h1>\n    <p class=\"hero__sub\">Same-day freight.</p>\n  </header>\n</body>\n</html>\n",
+    "diff_summary": {
+      "hunks": 1,
+      "lines_added": 1,
+      "lines_removed": 1,
+      "bytes_outside_span_changed": 0
+    }
+  },
+  "rationale": "The targeted-edit law (CD-TOOLS) requires edits during the edit phase to be localized atomic replacements via exact_replace, not whole-file rewrites. Here only the matched headline span changes and every other byte is preserved, so the oracle returns pass."
+}

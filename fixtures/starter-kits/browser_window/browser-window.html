@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: browser_window (GAP)
+  ----------------------------------------------------------------------------
+  Kit name : browser_window
+  Purpose  : Chrome "browser window" frame (traffic-light dots + address bar)
+             wrapping a content slot. Used to present a desktop web preview.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. NOT production runtime.
+             browser_window is a (GAP) kit — not a real kit id in
+             kits/starter.py; proposed as new kit data.
+  Reliability: single self-contained HTML5 file, CSS inline, no external assets.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : source file this DOM subtree came from.
+    data-disco-section       : the wrapped content area.
+    data-disco-field         : the editable address-bar URL.
+    data-disco-screen-label  : human-facing label for the framed screen.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="browser-window.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser window frame</title>
+  <style>
+    :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --bg:#e2e8f0; --chrome:#f1f5f9; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           background:var(--bg); min-height:100vh; display:flex; align-items:center;
+           justify-content:center; padding:2rem; color:var(--ink); }
+    .window { width:100%; max-width:880px; background:#fff; border-radius:12px; overflow:hidden;
+              box-shadow:0 18px 50px rgba(15,23,42,.18); border:1px solid var(--line); }
+    .chrome { display:flex; align-items:center; gap:.75rem; padding:.6rem .9rem;
+              background:var(--chrome); border-bottom:1px solid var(--line); }
+    .dots { display:flex; gap:.4rem; }
+    .dot { width:12px; height:12px; border-radius:50%; }
+    .dot.r { background:#ef4444; } .dot.y { background:#f59e0b; } .dot.g { background:#22c55e; }
+    .addr { flex:1; background:#fff; border:1px solid var(--line); border-radius:999px;
+            padding:.35rem .8rem; font-size:.8rem; color:var(--muted); }
+    .content { padding:2.5rem; min-height:280px; }
+    .content h1 { margin:0 0 .5rem; font-size:1.4rem; }
+    .content p { margin:0; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="window" data-disco-screen-label="Desktop browser preview">
+    <div class="chrome">
+      <div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+      <div class="addr" data-disco-field="address_url">https://example.com</div>
+    </div>
+    <section class="content" data-disco-section="content_slot" data-disco-screen-label="Window content">
+      <h1 data-disco-field="content_title">Framed content placeholder</h1>
+      <p data-disco-field="content_body">
+        This is the content slot of the browser-window frame. Replace it with the
+        screen you want to present inside the desktop chrome.
+      </p>
+    </section>
+  </div>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  Disco Artifact-VM Reference Fixture — Starter Kit: app_shell
+  ----------------------------------------------------------------------------
+  Kit name : app_shell
+  Purpose  : Baseline static-site shell (header / main / footer) used as the
+             scaffold for static.site and interactive.prototype builds.
+  STATUS   : FIXTURE / REFERENCE EXAMPLE ONLY. This is NOT production runtime.
+             It demonstrates the data-disco-* direct-manipulation grammar the
+             Artifact-VM uses to bind DOM to editable source. app_shell is a
+             REAL starter kit id (kits/starter.py).
+  Reliability: single self-contained HTML5 file, CSS inline, no external
+             assets, no <script src> — renders without companion files.
+  ----------------------------------------------------------------------------
+  data-disco-* attributes demonstrated:
+    data-disco-version       : artifact version, on the document root.
+    data-disco-file          : which source file this DOM subtree came from.
+    data-disco-section       : a movable / removable region (header/main/footer).
+    data-disco-field         : an editable text/value bound to source.
+    data-disco-screen-label  : human-facing label for a screen / region.
+  ============================================================================
+-->
+<html lang="en" data-disco-version="1" data-disco-file="index.html">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title data-disco-field="page_title">Untitled Project</title>
+  <style>
+    :root { --ink:#1a1a1a; --muted:#6b7280; --line:#e5e7eb; --accent:#2563eb; --bg:#ffffff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+           color: var(--ink); background: var(--bg); line-height: 1.5; }
+    header, footer { padding: 1rem 1.5rem; }
+    header { display:flex; align-items:center; justify-content:space-between;
+             border-bottom:1px solid var(--line); }
+    .brand { font-weight:700; font-size:1.125rem; }
+    nav a { margin-left:1.25rem; text-decoration:none; color:var(--muted); }
+    nav a:hover { color: var(--accent); }
+    main { max-width: 880px; margin: 0 auto; padding: 3rem 1.5rem; }
+    h1 { font-size: 2rem; margin: 0 0 .5rem; }
+    .lead { color: var(--muted); font-size: 1.125rem; }
+    footer { border-top:1px solid var(--line); color:var(--muted); font-size:.875rem; }
+  </style>
+</head>
+<body>
+  <header data-disco-section="header" data-disco-screen-label="Site header">
+    <span class="brand" data-disco-field="brand_name">Project Name</span>
+    <nav data-disco-screen-label="Primary navigation">
+      <a href="#" data-disco-field="nav_item_1">Home</a>
+      <a href="#" data-disco-field="nav_item_2">About</a>
+      <a href="#" data-disco-field="nav_item_3">Contact</a>
+    </nav>
+  </header>
+
+  <main data-disco-section="main" data-disco-screen-label="Main content">
+    <h1 data-disco-field="main_title">Main heading goes here</h1>
+    <p class="lead" data-disco-field="main_lead">
+      Replace this placeholder lead paragraph with a short description of the
+      project. This region is the primary editable content area of the shell.
+    </p>
+  </main>
+
+  <footer data-disco-section="footer" data-disco-screen-label="Site footer">
+    <span data-disco-field="footer_text">© Year — Placeholder footer text.</span>
+  </footer>
+</body>
+</html>
