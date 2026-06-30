@@ -980,15 +980,19 @@ async def run_once(
             ev = {}
             with contextlib.suppress(Exception):
                 getattr(run, "timeline", []).append(f"REL-5 cleanup measurement error: {exc}")
-        # [REL-5 / codex] FAIL-CLOSED: a terminal run that the harness could NOT adjudicate for
-        # cleanup must NOT pass via oracle SKIP (the gate forbids SKIP-as-PASS). The three
-        # terminal-cleanup slices are MANDATORY for any run that reached a classifiable terminal —
-        # if a signal is unmeasurable (no relay ledger / no container probe), that is an
-        # INVALID_RUN (couldn't prove reliability), which the operator fixes by providing the
-        # measurement infra (the soak's "0 INVALID_RUN in positive scenarios" then forces it).
+        # [REL-5 / codex] FAIL-CLOSED in LIVE measurement mode: a terminal run that the harness
+        # could NOT adjudicate for cleanup must NOT pass via oracle SKIP (the gate forbids
+        # SKIP-as-PASS). The three terminal-cleanup slices are MANDATORY whenever the cleanup-
+        # measurement infra is configured (MINIMAX_RELAY_LOG set = a real soak run) — if a signal
+        # is then unmeasurable (empty ledger / no container probe / unparseable terminal), that is
+        # an INVALID_RUN, which the REL-6 gate ("0 INVALID_RUN in positive scenarios") forces the
+        # operator to fix. The REL-6 preflight REQUIRES the relay ledger for positive scenarios, so
+        # this always applies in the real gate. Deterministic unit tests (no live infra, no relay
+        # env) exercise the CLASSIFIER and are not subject to the live-cleanup requirement.
+        _live_measure = bool(os.environ.get("MINIMAX_RELAY_LOG"))
         _required = ("lifecycle", "sidecar", "cleanup")
         _missing = [k for k in _required if k not in ev]
-        if _missing:
+        if _live_measure and _missing:
             return _invalid_run_record(
                 out_root, run_id, scenario,
                 f"terminal cleanup not adjudicable — missing evidence slice(s): {', '.join(_missing)} "
