@@ -3076,3 +3076,13 @@ given match-against-fresh-disk + shrink guard; insufficient negatives.
 - New code: FRESH_READ_REQUIRED (reused from CD-TOOLS-1 family) for ungrounded save.
 - TESTS add: save over an existing UNREAD file → FRESH_READ_REQUIRED + no writes; save after {op:read} same path →
   OK; save after replace_text same path → OK; save with matching expected_sha256 → OK; save of a NEW file → OK.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-7 SHIPPED (run_project_script)
+- Buffered transactional file-transform batch (read/ls/replace_text/save). Validate-all-in-memory → atomic commit;
+  ANY failure → ZERO writes. Reuses CD-TOOLS-2/3/4 guards. save-over-existing requires grounding (read/replace_text/
+  read_since_write/expected_sha256); new files exempt. Keyed by REAL resolve_relpath path so no symlink/.. alias can
+  split check from commit (all guards + commit use canon). Codex APPROVE after 3 REAL rounds (blind-clobber; lexical-
+  alias redirect+governed-bypass; binary-ext-from-alias). 16 tests; BOTH suites 0 new fails; pyright 0/0.
+- NEXT: CD-TOOLS-8 (prompt-pack — add exact_replace/safe_write_file/run_project_script to the WorkflowPromptPack so
+  models USE them; the weak-prompt-contamination test in test_policy_tool_surface.py MUST still pass — withheld tools
+  not named to the weak tier). Then 9 (LIVE MiniMax targeted-edit harness — the campaign's proof), 10 (survey→P10b).
