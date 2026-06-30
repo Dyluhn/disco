@@ -5067,3 +5067,17 @@ single FRESH_READ → no auto-read (nudge as today); different paths → no prem
 path per streak). Then restart server + re-soak revise x5 → consistent high PASS (REVISION_CHAIN must be 100% for
 REL-6's 10 runs). Codex CODE-gate (loop control-flow + injects a tool call adjacent to the circuit breaker → must
 preserve action/observation tool-pairing observe.py:226 + bounded-retry).
+
+### REL-RC-B plan r1 (Codex REVISE): the one-read sentinel must be DURABLE (survive the injected Observation)
+Codex: "the auto-read Observation RESETS the failure streak, so the one-read sentinel must persist across that
+injected success; otherwise it re-arms forever instead of falling through to STUCK." CORRECT — the streak is "since
+last successful Observation", and the injected file_read's ObservationEvent ends the streak → next FRESH_READ starts a
+fresh streak → re-injects → infinite. FIX: the "already auto-read path P" sentinel is a DURABLE event-log scan, NOT
+the streak counter. When the gate injects the auto-read, it stamps a distinguishable marker in the event log (e.g. the
+injected ActionEvent carries a meta flag `auto_ground_read=True`, OR a StatusEvent detail="auto_ground_read:{path}").
+The gate, before injecting, scans events SINCE THE LAST USER MESSAGE (the revision boundary) for an existing
+auto_ground_read marker on path P: if present → do NOT re-inject; fall through to gate_circuit_breaker → recovery →
+clean STUCK. So: at most ONE auto-read per path per revision; if the file STILL FRESH_READ_REQUIREDs after a real read
+(genuinely huge/condensed/un-coverable) it terminates cleanly via the existing breaker — NO new infinite loop. The
+threshold-2 streak counter only TRIGGERS the first auto-read; the durable marker BOUNDS it. Everything else
+(real-read-not-bit-flip, paired action+obs per observe.py:226, preserves safety) unchanged.
