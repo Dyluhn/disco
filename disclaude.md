@@ -2367,3 +2367,19 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   Gate + re-run. (b) THEN P10 (Export/Handoff). The finalize-on-bookkeeping-stuck engine fix stays scoped (reuse
   finish.py maybe_honest_unverifiable_static_actionless_finish pattern + _is_web_deliverable; my case is the
   VERIFIED-and-delivered variant, even stronger than the unverifiable one) for if the stuck rate proves still high.
+
+### HEARTBEAT 2026-06-29 — durable spec HARDENED + live-green (Codex APPROVE)
+- Root-caused the preview-shown flake: a FINISHED build's preview IS renderable (probed conv_717885a3 → iframe
+  innerText 1787 chars "☕ Hearth & Bean / About / Hours / Contact") — the failure was pure TIMING (iframe not
+  loaded at the 30s one-shot capture). Hardened the spec: waitPreviewRendered() polls the iframe for a real
+  non-empty render (>50 chars, not a keyword) up to 90s + Refresh nudge; bounded-retry the whole build+capture (2
+  attempts, log every failure, 0 PASS still fails). LIVE-PASSED 4.4m attempt 1. Codex APPROVE (retry can't mask a
+  broken product; verification stays fail-closed). The durable product-harness automation is now CI-reliable.
+- P10 (Export/Handoff) landscape read: ExportDownloadOracle + export slice {requested,download_present,
+  download_bytes} ALREADY exist (HARN-2 done); HandoffRef(kind,rel_path) in the context ledger. So P10 = the
+  PRODUCT-side export/handoff feature — serve(kind='files') downloadable deliverable + an export-REQUIRING
+  scenario + harness export-slice capture + the host-owned finalizer truth (global gate: no false affordances, no
+  finish without host truth). The per-PR P10 decomposition is NOT pre-written — DESIGN it next.
+- NEXT: BEGIN P10 — read disco's serve/export/download path (serve tool kind='files', the app-server download
+  route, _is_web_deliverable/serve handling), DESIGN the P10 PR decomposition, write the plan, Codex PLAN-gate →
+  implement → tests → Codex CODE-gate → commit. Then P11→P17.
