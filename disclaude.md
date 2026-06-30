@@ -2318,3 +2318,17 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
 - DURABLE-AUTOMATION FOLLOW-UP (not a gate on completion): encode this exact capture→classify flow as
   frontend/e2e-live/build-artifact-runtime-smoke.spec.ts so CI can re-run it. Then P10→P17 (P17 soak = this MiniMax
   relay).
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE durable automation COMMITTED (Codex APPROVE, live-passed 4.3m)
+- frontend/e2e-live/build-artifact-runtime-smoke.spec.ts + harness/product_build/classify_captured.py (+4 unit
+  tests) committed. The spec drives a REAL autonomous MiniMax build, captures all 6 slices from the real UI, kills
+  + verifies cleanup, sources the provider ledger from relay.jsonl (api.minimaxi.chat), and asserts
+  classify_dossier PASS. LIVE-PASSED end-to-end in 4.3m.
+- Codex gate took 3 REVISEs on the verification capture (good adversarial value): (1) missing verify obs read as
+  PASS → fail-closed; (2) tool_result.success only means the tool RAN → also require structured.passed===true (the
+  real verdict; structured={passed,verdict,http_status,console_errors,...}); (3) find() took the FIRST verify but a
+  build may verify multiple times → assert the FINAL finish-gate verify. APPROVE after all three.
+- A background live RE-RUN of the final hardened spec is in flight (spec2.out) to re-confirm; check next heartbeat.
+- P1 (Product Harness, HARN-1..3) = DONE. NEXT: P10 (Export/Handoff) — phase order P10→P11 Resource Import/
+  Provenance→P12 Content/Design→P13 Deck/Doc→...→P17. Read the addendum (disclaude.md ~line 25 + the P1B-LIVE/
+  contract sections) for P10's spec, plan it, Codex plan-gate, implement, Codex code-gate, commit.
