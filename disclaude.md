@@ -2825,3 +2825,43 @@ honest (not a hidden stub); no false affordance (unmapped path names no tool); i
 - NEXT: CD-TOOLS-5 (show/ready_for_verification first-class — make the host show/verify handoff an explicit tool, not
   an inferred convention). Then 6 (verifier-only diagnostics split), 7 (buffered run_project_script), 8 (prompt-pack),
   9 (LIVE MiniMax targeted-edit harness), 10 (survey→unblock P10b).
+
+### PR CD-TOOLS-5 — first-class show tools (PLAN, ratification-pending)
+GROUNDING: the product_evidence "shown" slice schema is {"artifact_shown":bool, "preview_shown":bool}
+(harness/build_soak/product_evidence.py:27). TODAY those are INFERRED by the live capture (stability-run.spec.ts:200
+computes artifactShown/previewShown) — there is NO explicit model action for "I am showing the user X" (the campaign's
+exact complaint). The verification gate already exists + works: verify_web_app + finish.py _drive_verify_web_app (the
+browser-verify finish gate). ready_for_*_verification are contract finalizer NAMES (registry.py), NOT callable tools.
+SCOPE DECISION (sound/bounded/low-risk; matches "reuse the gate, don't fork" + the no-weaken-verification non-
+negotiable): CD-TOOLS-5 = the first-class SHOW tools (tool + harness layer). The ready_for_verification first-class
+finalizer-tool + verifier-fork + the 3 new event CLASSES touch finish.py (the sensitive gate) and the core event
+schema — carved to a separate focused gated PR CD-TOOLS-5b so the verification gate is changed deliberately, not
+rushed. CD-TOOLS-5 does NOT add a parallel verify path; the existing verify_web_app/finish gate stays the ONLY
+verification authority.
+GOAL: make "shown" an EXPLICIT, TRUTHFUL model action, separate from verified. file-write alone is NOT shown.
+TOOLS (new, in builtin/ — a new show.py or appended): 
+- show_to_user(path:str, caption:str|None) — OUTPUT-TRUTH: the artifact path MUST exist (ctx.sandbox.file_exists)
+  else refuse SHOW_ARTIFACT_MISSING (can't claim shown without a real artifact). On success: structured
+  {kind:"artifact_shown", path, caption} + artifacts=[path]. Does NOT touch verification (shown != verified).
+- show_preview_to_user(url:str) — surfaces the running preview; structured {kind:"preview_shown", url}. (URL
+  existence isn't a file check; it asserts the preview was surfaced — the preview slice/ownership oracle still
+  independently checks the preview is real, so this can't fake a preview.)
+HARNESS: drive product_evidence["shown"].artifact_shown / preview_shown from the EXPLICIT show_to_user /
+show_preview_to_user tool-calls in the event log (replace the inference in stability-run.spec.ts) — the ShowToUser
+oracle then reads a truthful explicit signal. A successful show_to_user (artifact exists) sets artifact_shown=true;
+NOTHING about verification changes (the verification slice stays driven ONLY by verify_web_app/browser per STAB-2b
+decideVerification).
+SHOWN != VERIFIED (the core guarantee): show_to_user has ZERO effect on the verification slice or the finish gate;
+a build that ONLY show_to_user's (no verify_web_app/browser-verify) is still NOT verified. Tested both in tools
+(structured output carries no verified flag) and in the harness (decideVerification ignores show events).
+ERROR CODES (tool-level, NOT build_soak): SHOW_ARTIFACT_MISSING.
+REGISTER: builtin/__init__ + registry.AGENT_TOOLS + ARTIFACT_TOOLS (finishing actions, all tiers).
+TESTS: show_to_user on an existing artifact → success + artifact_shown structured + artifacts; show_to_user on a
+MISSING path → SHOW_ARTIFACT_MISSING + no shown signal; file_write alone produces NO shown signal (only show_to_user
+does); show_preview_to_user → preview_shown structured; show_to_user does NOT set any verified flag (shown!=verified);
+harness: a dossier whose event log has show_to_user but NO verify → shown slice true BUT verification slice still
+unverified (decideVerification unchanged).
+CODEX FOCUS (§9): show_to_user can't double as verification (zero verify side-effect); output-truth (no shown
+without a real existing artifact); show_preview_to_user can't fake a preview (preview oracle independent); no false
+affordance; is carving ready_for_verification/verifier-fork/events to 5b honest + acceptable for THIS PR; insufficient
+negatives.
