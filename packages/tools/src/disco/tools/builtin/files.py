@@ -1131,6 +1131,36 @@ def _all_occurrences(text: str, sub: str) -> list[int]:
     return out
 
 
+async def _atomic_write(sandbox: Any, path: str, data: bytes) -> None:
+    """CD-TOOLS-3: commit `data` to `path` atomically where the backend supports it (a sibling
+    tmp + os.replace — ProcessSandbox.atomic_write), else fall back to a single write_file (still
+    logical all-or-nothing — the caller has already validated everything in memory)."""
+    aw = getattr(sandbox, "atomic_write", None)
+    if aw is None:
+        await sandbox.write_file(path, data)
+    else:
+        await aw(path, data)
+
+
+def _governed_relpath(sandbox: Any, path: str) -> str:
+    """The REAL (symlink-followed) workspace-relative path, forward-slashed. Uses the sandbox's
+    resolve_relpath (which follows symlinks + rejects jail escapes) so a symlink can't forge a
+    non-governed name; falls back to the lexical canonical strip on exec-only backends."""
+    rr = getattr(sandbox, "resolve_relpath", None)
+    if callable(rr):
+        try:
+            return str(rr(path)).replace("\\", "/")
+        except Exception:  # noqa: BLE001 — an escaping path is rejected by the write itself
+            pass
+    return _canonical(path)
+
+
+def _is_governed_artifact(relpath: str) -> bool:
+    """True for the host-reserved `.disco/` namespace (appspec/tweaks/versions/context) — those
+    are authored only by semantic tools, never the generic writer."""
+    return relpath == ".disco" or relpath.startswith(".disco/")
+
+
 class ExactReplaceEdit(BaseModel):
     old_string: str = Field(description="Exact text to find — must occur once unless multi=true.")
     new_string: str = Field(
@@ -1296,9 +1326,9 @@ class ExactReplaceTool:
                 ),
             )
 
-        # (8) all checks passed → ONE write (never write-then-revert). Logical all-or-nothing.
+        # (8) all checks passed → ONE atomic write (never write-then-revert). All-or-nothing.
         new_bytes = new_text.encode("utf-8")
-        await ctx.sandbox.write_file(args.path, new_bytes)
+        await _atomic_write(ctx.sandbox, args.path, new_bytes)
         _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
         return ToolOutcome(
             success=True,
@@ -1309,5 +1339,162 @@ class ExactReplaceTool:
                 "bytes": len(new_bytes),
                 "sha256": hashlib.sha256(new_bytes).hexdigest(),
                 "applied": applied,
+            },
+        )
+
+
+class SafeWriteFileArgs(BaseModel):
+    path: str = Field(description="Workspace-relative file to write (create or overwrite).")
+    content: str = Field(description="Full UTF-8 content to write.")
+    allow_shrink: bool = Field(
+        default=False,
+        description="Set true to permit a write that shrinks an existing file by >50% (otherwise refused).",
+    )
+    expected_sha256: str | None = Field(
+        default=None,
+        description="If set, refuse unless the file's CURRENT sha256 equals this (also grounds the write).",
+    )
+
+
+class SafeWriteFileTool:
+    """CD-TOOLS-3 — the SAFER whole-file writer (a superset of file_write) for governed/large
+    artifacts. Validates everything IN MEMORY, then commits atomically (tmp+rename). Guards the
+    weak-model whole-file-clobber (a >50% shrink that truncates a built file), refuses writing a
+    host-governed `.disco/` artifact via the generic path, and rejects an elision marker."""
+
+    definition = ToolDef(
+        name="safe_write_file",
+        description=(
+            "Write a whole file safely (create or overwrite). Like file_write but with guards: it "
+            "refuses to shrink an existing file by >50% (pass allow_shrink=true if intended), "
+            "refuses to clobber a host-managed .disco/ artifact (use the semantic tool), rejects "
+            "elision placeholders, and writes atomically. Read the file first to overwrite it; "
+            "pass expected_sha256 to confirm you have the current version."
+        ),
+        args_model=SafeWriteFileArgs,
+        needs=_FS,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: SafeWriteFileArgs, ctx: ToolContext) -> ToolOutcome:
+        import hashlib
+
+        assert ctx.sandbox is not None
+        # (1) never let a render elision placeholder become file content.
+        if _has_elision_marker(args.content):
+            return ToolOutcome(
+                success=False,
+                error="ELISION_MARKER_REJECTED",
+                content=(
+                    f"safe_write_file refused — content for {args.path} contains an internal elision "
+                    "placeholder (e.g. '<… chars elided …>'); read the file and write the real text."
+                ),
+                structured={
+                    "kind": "elision_marker_rejected",
+                    "path": args.path,
+                    "next_required_action": "file_read",
+                },
+            )
+        # (2) governed-artifact guard — resolve the REAL (symlink-followed) path so a symlink can't
+        # forge a non-governed name.
+        rel = _governed_relpath(ctx.sandbox, args.path)
+        if _is_governed_artifact(rel):
+            return ToolOutcome(
+                success=False,
+                error="SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED",
+                content=(
+                    f"safe_write_file refused — {args.path} resolves to the host-managed .disco/ "
+                    f"namespace ({rel}); edit it with its semantic tool, not the generic writer."
+                ),
+                structured={"kind": "safe_write_governed_artifact_rejected", "path": args.path, "resolved": rel},
+            )
+        # (3) inspect the existing file (None = new).
+        old_text: str | None = None
+        old_bytes = b""
+        try:
+            old_bytes = await ctx.sandbox.read_file(args.path)
+            old_text = old_bytes.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001 — absent file → a new write, no prior content to guard
+            old_text = None
+        matching_sha = False
+        if old_text is not None:
+            cur_sha = hashlib.sha256(old_bytes).hexdigest()
+            if args.expected_sha256 is not None:
+                if args.expected_sha256 != cur_sha:
+                    return ToolOutcome(
+                        success=False,
+                        error="STALE_FILE_CONTEXT",
+                        content=(
+                            f"safe_write_file refused — {args.path} now hashes to {cur_sha[:12]}…, not "
+                            f"the expected {args.expected_sha256[:12]}…; it changed since you read it."
+                        ),
+                        structured={
+                            "kind": "stale_file_context",
+                            "path": args.path,
+                            "next_required_action": "file_read",
+                        },
+                    )
+                matching_sha = True
+            # binary-deliverable clobber (parity with file_write) — a text write corrupts a binary.
+            ext = args.path.rsplit(".", 1)[-1].lower() if "." in args.path else ""
+            if ext in _BINARY_DELIVERABLE_EXTS:
+                return ToolOutcome(
+                    success=False,
+                    error="binary_deliverable_clobber",
+                    content=(
+                        f"safe_write_file refused — {args.path} is an existing {ext} (a generated binary); "
+                        "a text write would corrupt it. It is already delivered."
+                    ),
+                )
+            grounded = _canonical(args.path) in (
+                (_read_state.get(ctx.conversation_id) or {}).get("read_since_write") or set()
+            )
+            # read-before-rewrite (F1 parity): overwrite an existing file only if grounded (read
+            # since last write) OR proven current via a matching expected_sha256.
+            if not grounded and not matching_sha:
+                return _fresh_read_required(
+                    args.path, "you have not read this file's current content since it last changed"
+                )
+            # SHRINK guard — a >50% char shrink truncates a built file (the weak-model clobber).
+            if len(args.content) < 0.5 * len(old_text) and not args.allow_shrink and not matching_sha:
+                return ToolOutcome(
+                    success=False,
+                    error="SAFE_WRITE_SHRINK_REJECTED",
+                    content=(
+                        f"safe_write_file refused — this would shrink {args.path} from {len(old_text)} to "
+                        f"{len(args.content)} chars (>50% smaller), which usually means an accidental "
+                        "truncation/clobber. Pass allow_shrink=true (or expected_sha256) if intended."
+                    ),
+                    structured={
+                        "kind": "safe_write_shrink_rejected",
+                        "path": args.path,
+                        "old_chars": len(old_text),
+                        "new_chars": len(args.content),
+                    },
+                )
+        # (4) syntax pre-check IN MEMORY — never introduce a new syntax error (no write-then-revert).
+        pre = _syntax_errors(args.path, old_text or "")
+        introduced = [e for e in _syntax_errors(args.path, args.content) if e not in pre]
+        if introduced:
+            return ToolOutcome(
+                success=False,
+                error="syntax_gate_rejected",
+                content=(
+                    f"safe_write_file refused — this content introduces syntax error(s) in {args.path}: "
+                    f"{'; '.join(introduced)} — NOT written. Fix it and retry."
+                ),
+            )
+        # (5) all checks passed → ONE atomic commit (tmp+rename where supported).
+        new_bytes = args.content.encode("utf-8")
+        await _atomic_write(ctx.sandbox, args.path, new_bytes)
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        return ToolOutcome(
+            success=True,
+            content=f"safe_write_file wrote {len(new_bytes)} bytes to {args.path}.",
+            artifacts=[args.path],
+            structured={
+                "path": args.path,
+                "bytes": len(new_bytes),
+                "sha256": hashlib.sha256(new_bytes).hexdigest(),
             },
         )

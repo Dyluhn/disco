@@ -18,6 +18,7 @@ than production.
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import shlex
 import shutil
@@ -265,6 +266,37 @@ class ProcessSandboxInstance:
         target = self._resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
+
+    async def atomic_write(self, path: str, data: bytes) -> None:
+        """CD-TOOLS-3: write `data` to `path` atomically — a tmp in the SAME dir + os.replace, so
+        a reader/crash never observes a partially-written file (os.replace is atomic on the same
+        filesystem). Used by safe_write_file + exact_replace for the final commit.
+
+        Security (codex round-1): the tmp is created with tempfile.mkstemp — a RANDOM name +
+        O_CREAT|O_EXCL|O_NOFOLLOW semantics — so a model CANNOT pre-create a predictable
+        ``<target>.disco-tmp`` symlink that the write would follow into a governed path. os.replace
+        targets the link itself (never follows a symlinked target), so the final swap is safe too."""
+        self._alive()
+        target = self._resolve(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=target.parent, prefix=".disco-tmp-")
+        tmp = Path(tmp_name)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            os.replace(tmp, target)
+        finally:
+            tmp.unlink(missing_ok=True)  # clean a leftover tmp if os.replace failed
+
+    def resolve_relpath(self, path: str) -> str:
+        """CD-TOOLS-3: the REAL (symlink-followed) path of `path`, RELATIVE to the workspace
+        root, as a forward-slash string. Lets the governed-artifact guard see through a symlink
+        (link.json -> .disco/appspec.json) — `_resolve` already follows symlinks + rejects jail
+        escapes. Raises (SandboxPermissionError) on an escaping path, same as the file ops."""
+        target = self._resolve(path)
+        if target == self._workspace:
+            return "."
+        return target.relative_to(self._workspace).as_posix()
 
     async def list_dir(self, path: str) -> list[str]:
         self._alive()

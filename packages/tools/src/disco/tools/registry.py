@@ -65,6 +65,8 @@ AGENT_TOOLS = frozenset(
         "extract",
         "file_read",
         "file_write",
+        # CD-TOOLS-3 — guarded whole-file writer (shrink/governed/atomic); general writer, all tiers.
+        "safe_write_file",
         "file_append",
         "file_edit",
         # line-number-targeted edits — the reliable way to edit LARGE files (any model)
@@ -150,6 +152,7 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
     {
         "file_read",
         "file_write",
+        "safe_write_file",  # CD-TOOLS-3 — guarded whole-file writer (artifacts stay safely writable)
         "file_append",
         "file_edit",
         # line-number-targeted edits — present so artifacts are editable without shell
