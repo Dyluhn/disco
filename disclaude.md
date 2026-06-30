@@ -2252,3 +2252,18 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   the steps arg (e.g. ['']→drop/ignore, or accept + normalize) OR don't let plan-progress validation spam trip the
   no-progress breaker once a deliverable exists; then re-run → clean FINISHED → the UI/Playwright product-harness →
   classify_dossier PASS + screenshots. (Mirrors memory disco-plan-progress-unify / disco-build-loop-fixes.)
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b: root-cause CORRECTED (verified, not assumed)
+- I almost built a fix for already-correct code. Interrogated the given: stuck.py _repeated_action_error ALREADY
+  exempts _NONCRITICAL_FAILURE_TOOLS (update_plan_progress) for THIS exact MiniMax-M3 reason (comment names it).
+  So the pause was NOT a missing stuck-detector exemption.
+- ACTUAL mechanism: turn_control.gate_bookkeeping_streak — a soft nudge at _BOOKKEEPING_STREAK_NUDGE_AT, then a
+  STUCK/HALT at max(_BOOKKEEPING_STREAK_HALT_AT, plan_steps+slack) when a model spams plan-tracker calls WITHOUT
+  intervening real work. MiniMax produced the site (file_writes + preview) THEN spammed malformed update_plan_
+  progress → hit the bookkeeping cap → STUCK/HALT (in autonomous mode = clean forfeit). This is ARGUABLY CORRECT:
+  a model that won't call finish + keeps malforming bookkeeping IS stuck. NOT obviously a disco bug.
+- REVISED PLAN (no premature fix): (1) the malform is documented as INTERMITTENT → RE-RUN the build; a fresh run
+  may reach a clean FINISHED. (2) If it finishes → capture dossier + UI/Playwright screenshots → classify_dossier
+  PASS → Product Harness candidate. (3) ONLY if it CONSISTENTLY halts on bookkeeping-with-a-deliverable, scope a
+  real gated PR: finalize-on-stuck-when-a-valid-deliverable-exists (run the finalizer/verify instead of forfeiting
+  a build whose artifact is already good) — a genuine product-quality gap, but verify it's consistent first.
