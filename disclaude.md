@@ -2747,3 +2747,13 @@ elision; insufficient negatives.
 - TEST add: create a symlink link.json -> .disco/appspec.json (via the ProcessSandbox workspace), safe_write_file(
   link.json) → SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED (proves the real-path resolution, not the lexical name).
 - resolve_relpath also lets _atomic_write put its tmp sibling next to the REAL target dir (correct rename domain).
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-3 SHIPPED (safe_write_file)
+- SafeWriteFileTool: validate-all-in-memory (elision/governed-.disco-real-path/stale-sha/binary/read-before-rewrite/
+  >50%-shrink/syntax) → ONE atomic commit. New ProcessSandbox.atomic_write (mkstemp random O_EXCL + os.replace, no
+  symlink follow) + resolve_relpath (symlink-followed governed check); exact_replace retrofitted to _atomic_write.
+  Registered AGENT_TOOLS + ARTIFACT_TOOLS. Codex APPROVE after 2 REAL REVISEs (symlink-evades-lexical-governed-check;
+  predictable-tmp-symlink-clobber). 13 + 15 tests; pyright 0/0; full tools suite no new fails.
+- NEXT: CD-TOOLS-4 (artifact-aware writes) — route governed-artifact updates to the semantic tool + manifest/
+  evidence update on safe_write success where applicable (the deferred (6) from CD-TOOLS-3). Then 5..10 (9=LIVE
+  MiniMax targeted-edit harness; 10=survey→unblock P10b).
