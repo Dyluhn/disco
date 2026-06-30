@@ -2621,3 +2621,41 @@ markers cannot enter source via old/new.
   tests green; pyright 0/0. Pre-existing-only fails: pdfinfo, MCP/node.
 - NEXT: CD-TOOLS-2 (atomic exact_replace tool — the dedicated str-replace primitive with require_fresh_read +
   expected_sha256 + multi + atomic batch, reusing guard_fresh_edit). Then 3..10.
+
+### PR CD-TOOLS-2 — atomic exact_replace tool (PLAN, ratification-pending)
+GROUNDING: tools register via builtin/__init__.py (__all__ + the instantiation list) + registry.py AGENT_TOOLS
+(name set) / _ANCHORED_EDIT_TOOLS (weak-tier withhold). scopes.py per-phase allowlists derive from the CONTRACT
+(edit=contract.edit.edit_tools), NOT a hardcoded list — so wiring exact_replace into the EDIT-phase ToolScope is a
+contract-config change deferred to the §6 ToolScope integration (don't half-wire contracts now). CD-TOOLS-2 adds +
+registers the tool (callable); reuses CD-TOOLS-1's guard_fresh_edit + _has_elision_marker.
+GOAL: a dedicated atomic exact-replacement primitive (Claude Design dc_*_str_replace) replacing fragile broad
+file_edit for targeted edits.
+TOOL: exact_replace, args {path:str, edits:list[{old_string:str, new_string:str}], require_fresh_read:bool=True,
+expected_sha256:str|None=None, multi:bool=False}.
+RULES (all fail-closed, NO partial writes):
+- elision: any old_string/new_string contains an internal elision marker (_has_elision_marker) → ELISION_MARKER_
+  REJECTED, no write.
+- stale: expected_sha256 given AND sha256(current disk bytes) != it → STALE_FILE_CONTEXT, no write.
+- fresh-read: require_fresh_read (default True) → reuse guard_fresh_edit for elision+stale+grounding+coverage
+  (size-gated at 1500B like CD-TOOLS-1; per-edit coverage uses each old_string's matched line span).
+- match: each old_string must occur EXACTLY ONCE in the CURRENT text unless multi=True (then ALL its occurrences
+  replace). 0 → EXACT_REPLACE_NO_MATCH; >1 and not multi → EXACT_REPLACE_DUPLICATE_MATCH.
+- atomic + non-overlap: compute ALL match spans on the ORIGINAL text first; if any two spans OVERLAP → EXACT_
+  REPLACE_BATCH_FAILED (no write); if ANY edit fails match → EXACT_REPLACE_BATCH_FAILED (no write); else splice all
+  edits by position into one new text + ONE atomic write (reuse _gated_write so the W3 syntax gate still applies).
+- literal-safe: use str slicing / str.replace (NOT re.sub) so '$', backrefs, ${...} template strings in new_string
+  are literal.
+- returns structured {applied:[{old_string(trunc), occurrences, replaced}], path, bytes, sha256}.
+ERROR CODES (tool-level strings, NOT build_soak): EXACT_REPLACE_NO_MATCH, EXACT_REPLACE_DUPLICATE_MATCH, EXACT_
+REPLACE_BATCH_FAILED (+ reuse ELISION_MARKER_REJECTED, STALE_FILE_CONTEXT, FRESH_READ_REQUIRED).
+FILES (single-writer = me): builtin/files.py (new tool) + builtin/__init__.py (export+instantiate) + registry.py
+(AGENT_TOOLS add; weak tier: exact_replace is a CAPABLE-friendly anchored edit → add to _ANCHORED_EDIT_TOOLS so
+it's withheld from the weak advertised set like file_str_replace, but callable). NOT scopes.py (deferred to §6).
+TESTS (pytest): single replace OK; multi=True replaces all; no-match→no change+EXACT_REPLACE_NO_MATCH; duplicate
+(multi=False)→no change+EXACT_REPLACE_DUPLICATE_MATCH; one failed edit in a batch→NO file change (atomic)+EXACT_
+REPLACE_BATCH_FAILED; overlapping edits→no change; stale expected_sha256→no change+STALE_FILE_CONTEXT; elision
+marker in old/new→no change+ELISION_MARKER_REJECTED; new_string with '$' / '${x}' / '\\1' stays literal; require_
+fresh_read on a large file with no read→FRESH_READ_REQUIRED; small file (≤1500B) no read needed. Run packages/tools
+pytest + basedpyright.
+CODEX FOCUS (§9): no edit bypasses fresh-read; partial writes impossible (all-or-nothing); stale sha handled;
+elision can't enter source; overlapping edits rejected; literal-safety; insufficient negatives.
