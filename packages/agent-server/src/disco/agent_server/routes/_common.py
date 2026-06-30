@@ -9,7 +9,6 @@ explicit parameters, and the constants are plain module-level values.
 from __future__ import annotations
 
 import contextlib
-import posixpath
 import re
 import unicodedata
 from pathlib import Path
@@ -17,9 +16,8 @@ from typing import TYPE_CHECKING, Literal
 
 from disco.core import (
     DEFAULT_OWNER_ID,
-    DeliverableEvent,
-    ObservationEvent,
 )
+from disco.core.context.artifact_projection import artifact_paths_from_events
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -150,37 +148,15 @@ async def _declared_artifacts(store: SqliteEventStore, conversation_id: str) -> 
       image_generate   — structured["path"]
       audio_overview   — structured["mp3_path"] + structured["transcript_path"]
       DeliverableEvent artifact_kind="files" — e.path
+
+    [REL-2a] The projection logic now lives in the single-source core helper
+    ``artifact_paths_from_events`` so the download jail and the artifact-manifest fold can never
+    drift. This wrapper preserves the original fail-soft behavior (any store/projection error →
+    empty set, never a 500).
     """
     out: set[str] = set()
     with contextlib.suppress(Exception):
-        for e in await store.get_events(conversation_id):
-            if (
-                isinstance(e, ObservationEvent)
-                and e.tool_result.success
-                and e.tool_result.structured
-            ):
-                tn = e.tool_result.tool_name
-                s = e.tool_result.structured
-                if tn in ("sheet_generate", "slides_generate"):
-                    fn = s.get("filename")
-                    if isinstance(fn, str) and fn:
-                        out.add(posixpath.normpath(fn))
-                    # A2.0: the editable AuthoredDeck sidecar (slides C2 path) is a
-                    # reachable artifact so the deck-editor route can read it back.
-                    es = s.get("editable_source")
-                    if isinstance(es, str) and es:
-                        out.add(posixpath.normpath(es))
-                elif tn == "image_generate":
-                    p = s.get("path")
-                    if isinstance(p, str) and p:
-                        out.add(posixpath.normpath(p))
-                elif tn == "audio_overview":
-                    for key in ("mp3_path", "transcript_path"):
-                        p = s.get(key)
-                        if isinstance(p, str) and p:
-                            out.add(posixpath.normpath(p))
-            elif isinstance(e, DeliverableEvent) and e.artifact_kind == "files":
-                out.add(posixpath.normpath(e.path))
+        out = artifact_paths_from_events(await store.get_events(conversation_id))
     return out
 
 
