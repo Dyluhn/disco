@@ -4563,3 +4563,16 @@ STUCK/ERROR from the guard itself; no-followup classes still 3/3; full suite gre
 infinite re-nudge (BOUNDED by counter + fall-through); over-broad guard regressing simple summary-only initial plans
 (scoped to revision>1); A2 changing the transcript for non-MiniMax providers (synthesize only when a tool_call would
 be left unpaired — additive, provider-agnostic, safe).
+
+### REL-RC plan r1 (Codex REVISE): A1 bound must NOT fall-through-accept a zero-step revision
+Codex: "A1's bound is wrong if it falls through to accept a zero-step revision after K nudges — that recreates the
+stranded execution/no-tracker STUCK path. Bound it by durable force-submit/non-empty resubmission or a controlled
+terminal, not zero-step approval." CORRECT. REVISED A1 bound: on a zero-step REVISION (plan.revision>1 AND not
+plan.steps), re-nudge for concrete steps (STAY in PLANNING) up to the _plan_nudges cap; on cap-exhaustion DO NOT
+accept the empty plan — emit a CONTROLLED, adjudicable TERMINAL (a clean STUCK with detail="revision_no_concrete_
+steps", reusing the existing stuck-terminal path) so the residual "model never produced steps" case ends as a CLEAN
+classifiable FAIL, never a stranded monologue. The re-nudge gives the model its recovery chances (most recover →
+PASS, like run001); the bound is a controlled terminal, NOT zero-step approval. A zero-step INITIAL plan
+(revision==1) still auto-approves (summary-only, no regression). REL-6 REVISION_CHAIN PASS still requires the model
+to actually submit real steps + FINISH — the guard removes the engine amplifier so recovery is possible, it does not
+fake a pass.
