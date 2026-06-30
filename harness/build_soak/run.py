@@ -761,6 +761,103 @@ async def _release_conversation(
             )
 
 
+def _live_disco_container_count() -> int | None:
+    """[REL-5] Count live disco sandbox + egress-sidecar containers via the podman CLI — the
+    host-side orphan signal for the CleanupOracle on the LOCAL PODMAN iteration backend. Returns
+    None if podman is unavailable (the count is then unknown, NOT zero — we never fake 0). The
+    gVisor FINAL REL-6 run needs the gVisor-equivalent probe (tracked as a follow-up)."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["podman", "ps", "-a", "--format", "{{.Names}}"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return sum(
+        1 for ln in out.stdout.splitlines()
+        if ln.startswith("disco-sbx-") or ln.startswith("disco-egr-")
+    )
+
+
+def _relay_line_count(path: str | None) -> int | None:
+    """Lines in the MiniMax relay ledger (one per upstream provider request). None if unset/absent
+    — provider-after-terminal is then UNKNOWN (we never fake 0)."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return sum(1 for ln in f if ln.strip())
+    except Exception:
+        return None
+
+
+async def _collect_terminal_cleanup_evidence(
+    client: DiscoApiClient,
+    cid: str,
+    run: Any,
+    *,
+    baseline_containers: int | None,
+    relay_log: str | None,
+    timeline: list[str],
+    grace_s: float = 8.0,
+) -> dict[str, Any]:
+    """[REL-5] Make terminal cleanup ADJUDICATED instead of SKIPPED on the headless soak. The
+    build has reached terminal and its §6 evidence is already frozen into `run`; here we measure
+    the post-terminal provider calls (grace window on the relay ledger), RELEASE the conversation
+    (destroy the sandbox + egress-sidecar containers), and verify zero orphans — populating the
+    lifecycle / sidecar / cleanup product_evidence slices from REAL signals so the reliability
+    oracles RUN. Every signal is measured truthfully: an unmeasurable signal is OMITTED (its oracle
+    skips), never stubbed to a passing value."""
+    ev: dict[str, Any] = dict(getattr(run, "product_evidence", None) or {})
+
+    # lifecycle — the terminal + status path (from the frozen final state + the drive timeline).
+    terminal = ""
+    with contextlib.suppress(Exception):
+        terminal = DiscoApiClient._status_of(getattr(run, "state_final", {}) or {})
+    if terminal:
+        ev["lifecycle"] = {"terminal": terminal, "statuses": list(getattr(run, "timeline", []) or [])}
+
+    # provider-after-terminal — snapshot the relay ledger, wait a grace window to catch any stray
+    # post-terminal upstream call, then count the delta. Released AFTER this window so the token is
+    # still live during the window we are auditing (a real "did anything call after terminal?").
+    n0 = _relay_line_count(relay_log)
+    if n0 is not None:
+        await asyncio.sleep(grace_s)
+        n1 = _relay_line_count(relay_log)
+        calls_after = (n1 - n0) if (n1 is not None) else None
+    else:
+        calls_after = None
+
+    # release — destroy the sandbox + sidecar containers (REL-4 path), then measure orphans.
+    released_ok = False
+    with contextlib.suppress(Exception):
+        resp = await client.kill(cid)
+        released_ok = True
+        timeline.append(f"REL-5 released {cid} for cleanup adjudication (http {resp.get('http_status')})")
+    await asyncio.sleep(4.0)
+    after_containers = _live_disco_container_count()
+
+    # sidecar — stopped_at_terminal iff the release tore the containers down; provider calls only if
+    # we could actually measure them (else the slice is omitted → oracle skips, honest).
+    if calls_after is not None:
+        ev["sidecar"] = {"stopped_at_terminal": released_ok, "provider_calls_after_terminal": calls_after}
+
+    # cleanup — orphans = containers attributable to THIS run still alive after release (the count
+    # rose during the run and must return to the pre-run baseline). Only populated when BOTH the
+    # baseline and the post-release count are known (else omitted → oracle skips, never faked 0).
+    if baseline_containers is not None and after_containers is not None:
+        orphans = max(0, after_containers - baseline_containers)
+        ev["cleanup"] = {"orphans": orphans, "workspace_released": released_ok and orphans == 0}
+
+    with contextlib.suppress(Exception):
+        run.product_evidence = ev  # CollectedRun is a plain dataclass — attach the populated slices
+    return ev
+
+
 # ---- one full run -----------------------------------------------------------
 
 
@@ -788,6 +885,9 @@ async def run_once(
     # only ever kills the conversation THIS run created (the client is reused across a
     # batch of iterations).
     client.last_conversation_id = None
+    # [REL-5] pre-run orphan baseline (host-side container count) so the CleanupOracle can tell
+    # THIS run's leftovers from pre-existing ones. Measured once, before any conversation exists.
+    baseline_containers = _live_disco_container_count()
     try:
         # A mid-run transport loss (the shared server crashed / network dropped AFTER
         # create) is not adjudicable — degrade to INVALID_RUN instead of a raw traceback,
@@ -845,6 +945,18 @@ async def run_once(
         except Exception as exc:  # noqa: BLE001 — surface the real reason as INVALID_RUN
             return _invalid_run_record(
                 out_root, run_id, scenario, f"{type(exc).__name__}: {exc}"
+            )
+
+        # [REL-5] Measure terminal cleanup + release BEFORE freezing the dossier, so the
+        # lifecycle / sidecar / cleanup oracles ADJUDICATE (instead of SKIP "no evidence
+        # (headless run)"). The build's §6 evidence is already frozen into `run` by
+        # drive_scenario, so releasing here never races it. Populates run.product_evidence.
+        with contextlib.suppress(Exception):
+            await _collect_terminal_cleanup_evidence(
+                client, run.conversation_id, run,
+                baseline_containers=baseline_containers,
+                relay_log=os.environ.get("MINIMAX_RELAY_LOG"),
+                timeline=getattr(run, "timeline", []),
             )
 
         base = assemble_dossier(
