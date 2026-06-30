@@ -9,7 +9,13 @@ from dataclasses import replace
 import pytest
 
 from harness.build_soak import failure_codes as fc
-from harness.product_build import EXPORT_SMOKE, STATIC_SITE_SMOKE, classify_dossier, write_dossier
+from harness.product_build import (
+    EXPORT_SMOKE,
+    STATIC_SITE_SMOKE,
+    STATIC_SMOKE_STRICT,
+    classify_dossier,
+    write_dossier,
+)
 
 from _eventlog import action, clean_smoke_log, msg, observation, plan, status
 
@@ -116,6 +122,26 @@ def test_autonomous_log_without_flag_fails_approval_chain(tmp_path) -> None:
     )
     c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
     assert c["status"] == "FAIL" and c["code"] == "PLAN_APPROVED_STATUS_MISSING", c
+
+
+# --- P1B-LIVE-STABILITY: the STRICT scenario ENFORCES the sidecar slice --------
+def test_strict_scenario_green_passes(tmp_path) -> None:
+    _write(tmp_path)  # _green_pe carries a clean sidecar slice
+    assert classify_dossier(tmp_path, STATIC_SMOKE_STRICT)["status"] == "PASS"
+
+
+def test_strict_scenario_missing_sidecar_is_invalid(tmp_path) -> None:
+    # under STATIC_SITE_SMOKE the sidecar oracle SKIPs (sidecar not required); under the STRICT
+    # scenario an absent sidecar slice is INVALID_RUN (it is required evidence).
+    pe = _green_pe()
+    del pe["sidecar"]
+    _write(tmp_path, pe=pe)
+    c = classify_dossier(tmp_path, STATIC_SMOKE_STRICT)
+    assert c["status"] == "INVALID_RUN" and c["code"] == fc.MISSING_REQUIRED_EVIDENCE, c
+    assert "sidecar" in c["facts"]["missing_slices"], c
+    # the SAME dossier still PASSes the non-strict scenario (sidecar optional there) — proving the
+    # strictness is scenario-scoped, not a global change.
+    assert classify_dossier(tmp_path, STATIC_SITE_SMOKE)["status"] == "PASS"
 
 
 # --- P10: the EXPORT-requiring scenario (export/handoff) ----------------------

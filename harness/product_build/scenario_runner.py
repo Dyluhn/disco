@@ -59,6 +59,30 @@ STATIC_SITE_SMOKE = ProductScenario(
 )
 
 
+# P1B-LIVE-STABILITY: the STRICT static smoke. Identical to STATIC_SITE_SMOKE but ENFORCES the
+# `sidecar` slice {stopped_at_terminal, provider_calls_after_terminal} — so the SidecarStopOracle
+# adjudicates (not SKIPs) "the provider/sidecar stopped at the terminal state, zero calls after".
+# The stability runner captures sidecar via a ledger-native per-run relay-offset window; this is
+# the scenario the x10 consecutive STATIC_SMOKE matrix classifies against. A NEW scenario (not a
+# change to STATIC_SITE_SMOKE) so the existing durable spec — which does not capture sidecar —
+# is unaffected.
+STATIC_SMOKE_STRICT = ProductScenario(
+    id="static_smoke_strict",
+    build_prompt="Build a simple one-page static website for a neighbourhood coffee shop.",
+    kind="static.site",
+    requires_export=False,
+    required_slices=(
+        "browser_ws",
+        "lifecycle",
+        "sidecar",
+        "preview",
+        "shown",
+        "verification",
+        "cleanup",
+    ),
+)
+
+
 # P10 (Export/Handoff): an EXPORT-requiring scenario. The build must ALSO hand off a
 # downloadable artifact (serve kind='files'), so `classify_dossier` enforces export.requested
 # (absent ⇒ INVALID_RUN) and the ExportDownloadOracle requires a REAL non-empty download
