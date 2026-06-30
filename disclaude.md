@@ -3282,3 +3282,17 @@ NON-NEGOTIABLE: real GET bytes, MiniMax direct, 0 OpenRouter, 0 post-terminal, o
 404s, REPORT honestly + iterate the prompt/route — do not fake. CODEX FOCUS: real DeliverableEvent
 detection (not fabricated); download_bytes from the REAL GET not a claim; ExportDownloadOracle used
 right; fail-closed on missing deliverable; 0 OpenRouter/0 post-terminal; insufficient negatives.
+
+### P10b plan — r1 revision (Codex): pin to a concrete fetchable file
+Codex caught: GET /artifacts/{path} serves INDIVIDUAL files (rejects directories + .zip), so a
+"downloadable bundle/files" deliverable can 404 despite a real DeliverableEvent(files). REVISE:
+- PROMPT pins a concrete single self-contained file: "Build a small self-contained landing page as a
+  single file `export.html` (inline CSS, no external assets). Then serve `export.html` as a downloadable
+  file." → serve(kind='files', path='export.html').
+- DETECT the DeliverableEvent (artifact_kind in {'files','app'}) → take .path; GET /artifacts/{that path}.
+  If .path is a directory/non-200, fall back to GET /artifacts/export.html (the pinned file) — and the
+  verdict records WHICH path produced the bytes (no silent substitution; both are real GETs).
+- download_present = HTTP 200 AND len(bytes)>0; download_bytes = len; assert the bytes look like the file
+  (e.g. contains '<html' / a known token from the build) for output-truth, not just non-empty.
+- PASS unchanged: DeliverableEvent(files|app) present + download_present + download_bytes>0 + bytes-are-
+  real + 0 OpenRouter + 0 post-terminal. Fail-closed; real GET bytes only.
