@@ -3086,3 +3086,39 @@ given match-against-fresh-disk + shrink guard; insufficient negatives.
 - NEXT: CD-TOOLS-8 (prompt-pack — add exact_replace/safe_write_file/run_project_script to the WorkflowPromptPack so
   models USE them; the weak-prompt-contamination test in test_policy_tool_surface.py MUST still pass — withheld tools
   not named to the weak tier). Then 9 (LIVE MiniMax targeted-edit harness — the campaign's proof), 10 (survey→P10b).
+
+### PR CD-TOOLS-8 — tool prompt-pack update (PLAN, ratification-pending)
+GROUNDING: prompts.py has _EXECUTION_DRIVER_PROMPT (CAPABLE, assist=False; has an "EDITING AN EXISTING FILE — prefer
+targeted edits" section naming file_edit/file_replace_lines/file_insert_lines/file_write) + _EXECUTION_DRIVER_PROMPT_
+SMALL (WEAK, assist=True). The campaign's generic rules name show_to_user + ready_for_*_verification which disco does
+NOT have (CD-TOOLS-5: `serve` is the real handoff; verify_web_app + finish is verification) — ADAPT to disco's REAL
+tools (interrogate-the-given). The build-prompt snapshot tests compare OUTPUT==CONSTANT (test_build_agent_isolation:
+got == _EXECUTION_DRIVER_PROMPT), so editing the constants keeps them PASSING; the only hard constraint is the
+weak-prompt CONTAMINATION test (test_policy_tool_surface.py — today forbids plan_step/update_plan_progress in the
+weak prompt). The anchored-edit tools exact_replace + file_str_replace are WITHHELD from a weak/non-anchored model
+(exec_policy.withheld_tools), so the WEAK prompt must NOT name them.
+DELIVERABLE (prompt prose only — no logic):
+- CAPABLE _EXECUTION_DRIVER_PROMPT "EDITING AN EXISTING FILE" section: add Claude Design discipline naming the new
+  tools — exact_replace (SMALL exact targeted edit; file_read first), run_project_script (MANY deterministic edits as
+  ONE atomic batch), safe_write_file (the guarded full-rewrite/bootstrap writer); fresh-read-before-edit; "if you see
+  FRESH_READ_REQUIRED, read the file then retry"; "never echo a `<… elided …>` marker into a tool arg"; "never
+  rewrite a whole file for a small text/color/element change — use a targeted edit". Keep file_edit/file_replace_
+  lines. Recommend safe_write_file over raw file_write for full rewrites.
+- WEAK _EXECUTION_DRIVER_PROMPT_SMALL section: add run_project_script + safe_write_file (both ALL-tier, not withheld)
+  + "never echo an elision marker" (Mode B hits weak models hardest). Do NOT name exact_replace/file_str_replace
+  (withheld → false affordance). Keep its existing file_read-before-rewrite + line-edit guidance.
+- ADAPT campaign rules to disco: serve (not show_to_user) for user handoff; verify_web_app before finish (not
+  ready_for_*_verification, which isn't a registered tool); never manually choose ports (preview_start owns ports —
+  already in both prompts, reaffirm).
+TESTS:
+- NEW contamination test: weak prompt (assist=True, PLANNING + EXECUTION) does NOT name `exact_replace` or
+  `file_str_replace` (the withheld anchored-edit tools).
+- NEW positive test: the CAPABLE execution prompt (assist=False) NAMES exact_replace + run_project_script +
+  safe_write_file + the fresh-read-before-edit rule + forbids whole-file-rewrite-for-a-small-edit.
+- Existing build-prompt byte tests (output==constant) + identity tests still pass; the existing plan_step/update_
+  plan_progress contamination tests still pass.
+- Run BOTH packages/tools + packages/core.
+CODEX FOCUS (§9): capable prompt names the new tools + the prefer-targeted/fresh-read/no-elision principles; weak
+prompt does NOT name exact_replace/file_str_replace (contamination); adapted to disco's REAL tools (serve/verify_web_
+app, NOT show_to_user/ready_for_*_verification which don't exist); no oracle/output-truth weakening (prose only); the
+new contamination test actually guards it; insufficient negatives.
