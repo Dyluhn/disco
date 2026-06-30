@@ -4979,3 +4979,10 @@ server event loop (the only place concurrent writers run). Respects layering (lo
 Lock binds to an event loop — fine in prod (one loop); tests create locks lazily per cid. NOT runtime-level (layering)
 and NOT per-instance (instances differ). Codex re-gate this placement before implementing the fold + edge dual-writes
 + shadow compare.
+
+### REL-2a step2 lock placement — Codex APPROVE (class-level per-cid lock dict in ArtifactMemoryStore)
+Approved. Implement next: add ArtifactMemoryStore._manifest_locks classvar + async upsert_artifact(record) doing the
+RMW under the per-cid lock; flag DISCO_ARTIFACT_MANIFEST_SHADOW (default OFF); observe.py:517 fold + the edge writers
+(turn_control/lifecycle/finish/report export/preview) dual-write via upsert_artifact when ON; shadow read-COMPARE at
+the legacy readers (log divergence, RETURN legacy); NO reader switched; tests-first (concurrent upsert → no lost
+update; shadow 0-divergence). Then live build_soak with the flag ON → assert 0 divergence → Codex code-gate.
