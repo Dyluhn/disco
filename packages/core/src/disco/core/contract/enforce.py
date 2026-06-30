@@ -40,6 +40,9 @@ class ScopeDecision(BaseModel):
 
     allowed: bool
     reason: str = ""
+    # CD-TOOLS-6 — a machine-readable denial code. Set to VERIFIER_ONLY_TOOL_BLOCKED when a
+    # MUTATING tool is denied because the run is in the VERIFY (read-only diagnostics) phase.
+    code: str = ""
 
 
 def _governed(tool: str, scopes: ContractToolScopes, is_mutating: bool | None) -> bool:
@@ -82,8 +85,13 @@ def decide_tool_in_scope(
             if mutating
             else "This tool belongs to a different build phase."
         )
+        # CD-TOOLS-6 — a mutator denied because we are in the read-only VERIFY phase gets a
+        # machine-readable code so callers/harness can distinguish "verifier may not mutate" from
+        # a generic wrong-phase denial.
+        code = "VERIFIER_ONLY_TOOL_BLOCKED" if (mutating and phase is Phase.VERIFY) else ""
         return ScopeDecision(
             allowed=False,
+            code=code,
             reason=(
                 f"out of contract scope: tool {tool!r} is not permitted in the "
                 f"{phase.value} phase of this contract; permitted here: {permitted}. " + hint

@@ -42,10 +42,13 @@ def test_anchored_edit_capability_is_independent_of_tier():
     # plus plan_step, which is retired for ALL tiers (runthru-v2 #3 state-drift)
     p = ModelExecutionPolicy(tier="standard", anchored_edit=False)
     assert p.assist is False
-    assert p.withheld_tools == frozenset({"plan_step", "file_str_replace"})
-    # weak + non-anchored withholds all three
+    # CD-TOOLS-2 added exact_replace to the anchored-edit set withheld when !anchored_edit.
+    assert p.withheld_tools == frozenset({"plan_step", "file_str_replace", "exact_replace"})
+    # weak + non-anchored withholds those plus update_plan_progress
     q = ModelExecutionPolicy(tier="weak", anchored_edit=False)
-    assert q.withheld_tools == frozenset({"plan_step", "update_plan_progress", "file_str_replace"})
+    assert q.withheld_tools == frozenset(
+        {"plan_step", "update_plan_progress", "file_str_replace", "exact_replace"}
+    )
 
 
 def test_resolve_precedence_override_wins():

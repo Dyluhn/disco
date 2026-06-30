@@ -32,7 +32,10 @@ def test_scopes_project_the_packs_per_phase() -> None:
     assert s.bootstrap == frozenset({"app_create"})
     assert s.edit == frozenset({"app_update_content"})
     assert s.repair == frozenset({"file_write"})
-    assert s.verify == frozenset({"ready_for_artifact_verification"})
+    # CD-TOOLS-6 — verify = finalizer + the read-only diagnostics the verifier needs (no mutators).
+    assert "ready_for_artifact_verification" in s.verify
+    assert {"verify_web_app", "file_read", "server_status"} <= s.verify
+    assert not ({"file_write", "exact_replace", "safe_write_file", "shell"} & s.verify)
     assert s.export == frozenset()
 
 
@@ -53,8 +56,11 @@ def test_repair_scope_is_bounded_to_repair_tools() -> None:
 
 
 def test_verify_scope_is_the_finalizer() -> None:
+    # CD-TOOLS-6 — verify carries the finalizer PLUS read-only diagnostics, and NO mutator.
     s = compile_tool_scopes(_contract(finalizer="ready_for_app_verification"))
-    assert s.verify == frozenset({"ready_for_app_verification"})
+    assert "ready_for_app_verification" in s.verify
+    assert {"verify_web_app", "file_read", "server_status"} <= s.verify
+    assert not ({"file_write", "exact_replace", "safe_write_file", "app_create"} & s.verify)
     assert s.allowed(Phase.VERIFY, "ready_for_app_verification") is True
     assert s.allowed(Phase.VERIFY, "file_write") is False
 
@@ -101,5 +107,7 @@ def test_every_builtin_compiles() -> None:
         c = reg.get(kind)
         assert c is not None
         s = compile_tool_scopes(c)
-        # verify phase always carries exactly the finalizer
-        assert s.verify == frozenset({c.verify.finalizer})
+        # CD-TOOLS-6 — verify carries the finalizer + read-only diagnostics, NEVER a mutator.
+        assert c.verify.finalizer in s.verify
+        assert "verify_web_app" in s.verify
+        assert not ({"file_write", "exact_replace", "safe_write_file", "shell", "browser"} & s.verify)

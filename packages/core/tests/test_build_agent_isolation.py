@@ -209,6 +209,7 @@ _EXPECTED_AGENT_TOOLS = [
     "context_memory",  # CXT-2: durable .disco/context working memory
     "deck_patch",   # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
+    "exact_replace",  # CD-TOOLS-2 — atomic exact-match batch replace (anchored-edit tier)
     "extract",
     "file_append",
     "file_edit",
@@ -225,6 +226,7 @@ _EXPECTED_AGENT_TOOLS = [
     "preview_start",
     "preview_status",
     "preview_stop",
+    "safe_write_file",  # CD-TOOLS-3 — guarded whole-file writer (shrink/governed/atomic)
     "scaffold_starter",  # P7: materialize the contract's host-owned starter frame
     "search",
     "server_status",
