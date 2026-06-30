@@ -4967,3 +4967,15 @@ as Dylan's never-blame-the-model + scan-every-tool + empirical-test directives d
 reliability goal is MET for revise_after_finish (5/5). Next: a CLEAN full re-soak with BOTH $ref + REL-5b loaded
 (relay restart) to re-confirm + get the corrected provider-after-terminal attribution, then the full REL-6 5-class
 gate. Do NOT call REL-6 done on one scenario — REVISION_CHAIN is one of 5 classes.
+
+### REL-2a step2 lock-placement RESOLVED (3rd design pass): class-level per-cid lock dict in ArtifactMemoryStore
+Finding: ArtifactMemoryStore(fs) is constructed FRESH at every call site (finish.py:1719, engine.py:1837,
+context_memory.py:86) — NO shared per-cid instance, so a per-instance lock gives no mutual exclusion. The store takes
+a WorkspaceFS (store.py:102), and the sandbox carries conversation_id (_container.py:268), reachable via fs. DESIGN:
+a CLASS-level `_manifest_locks: dict[str, asyncio.Lock]` on ArtifactMemoryStore, keyed by cid = getattr(self._fs,
+'conversation_id',''); `upsert_artifact(record)` acquires _manifest_locks[cid] (get-or-create) then read_artifacts→
+replace-by-path→record_artifacts UNDER the lock. Cross-instance per-cid mutual exclusion within the single agent-
+server event loop (the only place concurrent writers run). Respects layering (lock in core/context). Caveat: asyncio.
+Lock binds to an event loop — fine in prod (one loop); tests create locks lazily per cid. NOT runtime-level (layering)
+and NOT per-instance (instances differ). Codex re-gate this placement before implementing the fold + edge dual-writes
++ shadow compare.
