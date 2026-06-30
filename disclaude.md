@@ -2528,3 +2528,53 @@ Codex CODE+EVIDENCE review → revise to APPROVE → commit/push → heartbeat. 
 - DECISION POINT: 10/10 consecutive is blocked by GENUINE model+engine thrash (not harness bugs). Reaching it needs
   real reliability work (STAB-2a finalize-on-verified + an elision-recovery fix), OR a survey to quantify rates,
   OR an acceptance-bar adjustment for MiniMax-M3. Surfacing to Dylan for the scope decision (don't weaken oracles).
+
+## ===== CAMPAIGN: CD-TOOLS (Claude Design–style tool runtime) — BLOCKS P10b/P11 =====
+DECISION (Dylan, 2026-06-30): STOP P10b + STAB-2a. Mode B (edit-elision thrash) is a Disco
+TOOL/RUNTIME CONTRACT problem, not a MiniMax capability problem — fix the tool layer toward
+Claude Design's artifact model. 10 PRs, same binding loop (plan→Codex APPROVE→implement→tests→
+Codex APPROVE→commit). NON-NEGOTIABLE: do NOT weaken product-harness oracles / output truth /
+verification gates / provider ledger / MiniMax-direct proof / ToolScope / contract-runtime. NO
+OpenRouter for live runs. NO user-installable Pi packages / external plugins. Do NOT reach P10b
+until CD-TOOLS green (all 10 + the §10 survey). PR list: 1 fresh-edit-guard · 2 atomic
+exact_replace · 3 safe_write_file · 4 artifact-aware writes · 5 show/ready_for_verification
+first-class · 6 verifier-only diagnostics split · 7 buffered run_project_script · 8 prompt-pack ·
+9 live MiniMax targeted-edit harness · 10 survey+gate. New codes: FRESH_READ_REQUIRED,
+STALE_FILE_CONTEXT, ELISION_MARKER_REJECTED, EXACT_REPLACE_NO_MATCH, EXACT_REPLACE_DUPLICATE_MATCH,
+EXACT_REPLACE_BATCH_FAILED, SAFE_WRITE_SHRINK_REJECTED, SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED,
+VERIFIER_ONLY_TOOL_BLOCKED (+existing ARTIFACT_NOT_SHOWN_TO_USER/VERIFICATION_GATE_BYPASSED).
+
+### PR CD-TOOLS-1 — Fresh edit guard (PLAN, ratification-pending)
+GROUNDING (read, not guessed): file_edit (builtin/files.py:581 FileEditTool) ALREADY reads fresh
+disk (line 615) + forgiving-replaces old→new → 'old_text_not_found' on miss. _read_state
+(files.py:80, per conv→path→ranges) tracks reads; read_before_write is enforced for file_write
+(files.py:443) but NOT for the edit family. The elision EXECUTION guard exists (executor.py:425:
+"argument(s) … contain the elision placeholder text", via events.py _ELISION_MARKER_RE/_ELISION_
+PARAPHRASE_RE) — Mode B hit it. ROOT of Mode B: the model's CONTEXT VIEW of a file is elided by
+_snip_args, so it can't supply a correct `old` → old_text_not_found / elision echo → thrash.
+GOAL: an exact edit may not run against stale/incomplete/elided MODEL-VISIBLE source.
+IMPLEMENT:
+- Extend the read-state to record, per (conv,path) at the moment a read is SHOWN to the model:
+  {sha256 of shown bytes, complete:bool (the shown view was NOT elided/truncated), shown_ranges,
+  event_seq, reader_tool}. (Populate from the FileRead render + the workspace-snapshot pin.)
+- Pre-edit guard on the targeted-edit family (file_edit + file_replace_lines/file_insert_lines/
+  file_str_replace): BEFORE touching the file, require a FRESH COMPLETE read covering the edit
+  region — current-disk sha == last-shown sha AND complete==true AND (for file_edit) the `old`
+  text falls within a shown range. If absent/stale/elided → BLOCK (no file mutation) returning a
+  STRUCTURED observation {kind:"fresh_read_required", path, reason, next_required_action:
+  "file_read", suggested_args:{path}} + code FRESH_READ_REQUIRED (or STALE_FILE_CONTEXT if the
+  file changed since the read).
+- Elision: if `old`/`new` contains an internal elision marker, BLOCK with {kind:
+  "elision_marker_rejected", path, next_required_action:"file_read"} + code ELISION_MARKER_REJECTED
+  (wire the existing executor.py:425 guard to this structured shape + code).
+- Add the 3 codes to failure_codes.py + SEVERITY_BY_CODE. A blocked edit is NOT a product failure
+  by itself (it's a corrective nudge); only repeated IGNORE of fresh_read_required escalates via
+  the existing stuck path.
+SCOPE: the GUARD only (exact_replace the dedicated tool is CD-TOOLS-2). Read-only tools unaffected.
+Single-writer files: builtin/files.py + tools/executor.py + failure_codes.py (canonical writer = me).
+TESTS (pytest): edit-after-full-fresh-read succeeds; edit-after-elided-read → fresh_read_required;
+edit-after-file-changed-since-read → STALE_FILE_CONTEXT; edit-with-elision-marker → ELISION_MARKER_
+REJECTED; blocked edit does NOT mutate the file; blocked edit is not itself a product failure;
+read-only tools (file_read/search) unaffected by the guard.
+CODEX FOCUS: no edit path bypasses the guard; not global overreach (read-only unaffected); elision
+markers cannot enter source via old/new.
