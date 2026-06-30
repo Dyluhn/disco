@@ -4943,3 +4943,14 @@ attribution. Verify a clean place to inject extra_headers carrying ModelRole in 
 (core/llm/wiring or the backend that builds the httpx request). Tests-first; Codex-gate (oracle-semantics: prove it
 excludes ONLY non-build roles, still flags a real post-terminal DRIVER call). NOTE: condensation (also SUMMARIZER-ish)
 is pre-terminal, so excluding summarizer AFTER terminal only drops the benign title call.
+
+### REL-5b SHIPPED + Codex APPROVE — has_tools attribution (both post-terminal checkers)
+Fix: relay records has_tools (build driver always sends the tool catalog; summarizer/auto-title never does); BOTH
+post-terminal checkers gated — the sidecar provider_calls_after_terminal count AND the ProviderLedgerOracle
+after_terminal stamp count a record as a runaway ONLY if tool-bearing (driver); tool-less title call excluded;
+unmarked→has_tools=True fail-closed (real runaway never dropped). Codex 2 rounds: REVISE (missed the 2nd checker — the
+after_terminal stamp at run.py:649) → fixed → APPROVE. 26 ledger-oracle tests (23 original RESTORED + 3 REL-5b) +
+harness suite green. HONEST NOTE: I initially clobbered test_provider_ledger_oracle.py (cat > onto an existing 23-test
+file) — caught it immediately, restored the 23 originals from git + appended my 3, verified 26. Takes effect next
+relay restart (harness change; the running soak used the old relay — SIDECAR_NOT_STOPPED on a clean FINISHED run is
+now correctly the title false-positive that this fixes).
