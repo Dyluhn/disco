@@ -4734,3 +4734,16 @@ otherwise deeply parenthesized blobs still reach the parser." Both correct. FINA
   gate — documented as such; the parse safety is size+depth only.
 literal_eval runs ONLY after size+depth pass (try/except ValueError/SyntaxError/TypeError defense-in-depth). Rest
 unchanged. Non-regression + honest-ceiling calls Codex-confirmed fine.
+
+### REL-RC-A3 plan r3 (Codex REVISE): bracket-in-string breaks naive depth count → use total-open-bracket-count
+Codex: "naive counting of closers inside quoted strings can drive the counter negative and mask later real syntactic
+nesting, so max<=12 does not prove actual parse depth is bounded." CORRECT — a string literal containing `]]]` makes
+the running counter unsound. FINAL safety model (mathematically sound, string-content-independent): the parse-safety
+boundary is TWO pre-parse gates — (1) SIZE: skip if len(blob)>65536; (2) COMPLEXITY: skip if the TOTAL count of
+OPENING brackets `blob.count('(')+blob.count('[')+blob.count('{') > _MAX_PLAN_BLOB_BRACKETS=256`. Soundness: every
+level of AST nesting requires ≥1 opening bracket, so total_open_brackets >= max_parse_depth ALWAYS; capping the total
+count therefore caps the depth REGARDLESS of brackets inside string literals (those only INFLATE the count → more
+conservative → never accepts a too-deep blob). No string-state tracking needed; a trivial O(n) precompute. literal_
+eval runs ONLY after size+brackets pass (try/except ValueError/SyntaxError/TypeError defense-in-depth). _MAX_HARVESTED
+_STEPS=64 = post-parse coercion cap (not a parse gate). Rest unchanged (gated on not steps; _coerce_step dict-str-
+title/str only; cannot regress).
