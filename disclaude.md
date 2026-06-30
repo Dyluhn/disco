@@ -2267,3 +2267,22 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   PASS → Product Harness candidate. (3) ONLY if it CONSISTENTLY halts on bookkeeping-with-a-deliverable, scope a
   real gated PR: finalize-on-stuck-when-a-valid-deliverable-exists (run the finalizer/verify instead of forfeiting
   a build whose artifact is already good) — a genuine product-quality gap, but verify it's consistent first.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b: PROMPT FIX WORKS — clean FINISHED build (A/B proven)
+- GATED PR (Codex APPROVE): tightened the _EXECUTION_DRIVER_PROMPT update_plan_progress sentence to mirror the
+  {index,state} OBJECT schema (was loose "list of steps with each one's current state" → now "ARRAY OF OBJECTS,
+  each {index,state}, e.g. [{...}]"). basedpyright 0/0, no pinned test. Committed+pushed. Restarted agent-server to
+  load it.
+- A/B PROOF on a fresh live build (conv_cb9be8…, same prompt, MiniMax-M3 direct):
+    BEFORE (conv_049d…): PAUSED, 5 agent_errors, update_plan_progress malformed steps:[''].
+    AFTER  (conv_cb9be8…): status=FINISHED, iter 9, 0 agent_errors, BOTH update_plan_progress calls well-formed
+    [{index,state}]. Clean sequence: file_list→update_plan_progress→file_write index.html→file_write styles.css→
+    preview_start→verify_web_app→finish+deliverable.
+- Artifact: "Ember & Brew" site (index.html 6057B + styles.css 8526B) — nav, hero+2 CTAs, about+stat cards, 3-col
+  hours table w/ notes, contact card, footer. Rendered + screenshot SENT to Dylan (file_uuid 46d0150a). Evidence:
+  test-record/p1blive3b-finished/. ⇒ MiniMax-M3 now builds AND finishes cleanly end-to-end.
+- REMAINING for the formal classify_dossier PASS / Product Harness COMPLETE: the UI/Playwright capture of the
+  browser_ws + shown slices from the real frontend PreviewPane (STATIC_SITE_SMOKE required_slices = browser_ws,
+  lifecycle, preview, shown, verification, cleanup). The API-driven run gives lifecycle/preview/verification; the UI
+  run supplies browser_ws/shown/cleanup. NEXT: frontend up + /build/{cid} Playwright → buildProductEvidence →
+  write_dossier (provider from relay.jsonl) → classify_dossier PASS → mark Product Harness COMPLETE.
