@@ -44,9 +44,9 @@ def _store() -> tuple[ArtifactMemoryStore, MemFS]:
 
 
 # --- matrix guard -------------------------------------------------------------
-def test_durable_kind_matrix_is_nine_singletons() -> None:
+def test_durable_kind_matrix_is_ten_singletons() -> None:
     assert _MD_KINDS | _JSON_KINDS == _SINGLETON_KINDS
-    assert len(_SINGLETON_KINDS) == 9
+    assert len(_SINGLETON_KINDS) == 10  # [REL-2a] +artifact_manifest
     assert not (_MD_KINDS & _JSON_KINDS)  # disjoint
     # SUMMARY is intentionally excluded (multi-instance, on-demand)
     assert ArtifactMemoryKind.SUMMARY not in _SINGLETON_KINDS
@@ -65,12 +65,12 @@ async def test_writes_create_files_with_correct_paths() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_initialized_creates_all_nine() -> None:
+async def test_ensure_initialized_creates_all_ten() -> None:
     store, fs = _store()
     await store.ensure_initialized()
     paths = {store.path_for(k) for k in _SINGLETON_KINDS}
     assert paths <= set(fs.files)
-    assert len(paths) == 9
+    assert len(paths) == 10  # [REL-2a] +artifact_manifest
 
 
 @pytest.mark.asyncio
@@ -179,3 +179,42 @@ async def test_reconstruct_missing_files_no_spurious_notes() -> None:
     assert res.recovery_errors == ()
     assert res.ledger.active_goal is None
     assert res.ledger.direct_edits == ()
+
+
+# --- [REL-2a] per-artifact runtime manifest --------------------------------------
+@pytest.mark.asyncio
+async def test_artifact_manifest_roundtrip_and_lazy_default() -> None:
+    from disco.core.context.ledger import ArtifactRecord
+
+    store, fs = _store()
+    # missing → safe empty default
+    assert await store.read_artifacts() == ()
+    await store.ensure_initialized()
+    assert ".disco/context/artifact_manifest.json" in fs.files  # singleton, like resource_manifest
+    assert await store.read_artifacts() == ()  # initialized-empty still reads as ()
+
+    recs = (
+        ArtifactRecord(path="index.html", kind="app", sha256="abc", shown=True),
+        ArtifactRecord(path="report.pdf", kind="pdf", verified="passed",
+                       export={"pdf": "2026-06-30T00:00:00Z"}),
+    )
+    await store.record_artifacts(recs)
+    assert ".disco/context/artifact_manifest.json" in fs.files
+    back = await store.read_artifacts()
+    assert back == recs  # frozen models round-trip identically
+    assert back[0].shown is True and back[0].verified == "unverified"
+    assert back[1].verified == "passed" and back[1].export == {"pdf": "2026-06-30T00:00:00Z"}
+
+
+@pytest.mark.asyncio
+async def test_artifact_manifest_upsert_replaces_whole_list() -> None:
+    from disco.core.context.ledger import ArtifactRecord
+
+    store, _ = _store()
+    await store.record_artifacts((ArtifactRecord(path="a.html", shown=False),))
+    # a read-modify-write upsert (what the per-cid-locked caller does): flip shown=True
+    cur = list(await store.read_artifacts())
+    cur[0] = cur[0].model_copy(update={"shown": True, "verified": "passed"})
+    await store.record_artifacts(tuple(cur))
+    back = await store.read_artifacts()
+    assert len(back) == 1 and back[0].shown is True and back[0].verified == "passed"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -82,6 +83,25 @@ class ResourceRef(BaseModel):
     sha256: str | None = None
     license: str | None = None
     copied_at: datetime | None = None
+
+
+class ArtifactRecord(BaseModel):
+    """[REL-2a] One record in the shared per-artifact runtime manifest — the single folded truth
+    for an OUTPUT artifact. Frozen: an upsert reads the whole list, replaces the matching record,
+    and writes it back (no in-place mutation), so each record stays immutable. `verified` is a
+    tri-state string so absence (unverified) is distinct from a real fail."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    path: str
+    kind: str = "files"  # app | files | deck | sheet | pdf | audio | ...
+    sha256: str | None = None
+    size_bytes: int | None = None
+    shown: bool = False
+    verified: Literal["unverified", "passed", "failed"] = "unverified"
+    export: dict[str, str] = Field(default_factory=dict)  # {fmt: iso_ts} — when each export landed
+    preview_status: str | None = None
+    updated_at: datetime | None = None
 
 
 class HandoffRef(BaseModel):

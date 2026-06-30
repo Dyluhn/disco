@@ -27,6 +27,11 @@ class ArtifactMemoryKind(str, Enum):
     UNRESOLVED_COMMENTS = "unresolved_comments"
     SOURCE_PRIORITY = "source_priority"
     SUMMARY = "summary"
+    # [REL-2a] the shared per-artifact runtime manifest — one record per OUTPUT artifact
+    # {id,path,kind,sha,shown,verified,export,preview}. Distinct from RESOURCE_MANIFEST (input
+    # resources); folds the scattered output-artifact truth (existence/sha/shown/verified/export/
+    # preview) so output-truth/export/the REL-1 verifier/product-evidence read ONE source.
+    ARTIFACT_MANIFEST = "artifact_manifest"
 
 
 class ArtifactMemoryRef(BaseModel):

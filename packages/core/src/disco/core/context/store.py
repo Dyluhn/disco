@@ -19,7 +19,13 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from .artifact_memory import ArtifactMemoryKind, ArtifactMemoryRef
-from .ledger import ContextLedger, DirectEditRef, ResourceRef, VerifierFailureRef
+from .ledger import (
+    ArtifactRecord,
+    ContextLedger,
+    DirectEditRef,
+    ResourceRef,
+    VerifierFailureRef,
+)
 from .source_priority import SourcePriority
 
 # --- Durable kind matrix (codified so it cannot silently drift) ----------------
@@ -41,11 +47,13 @@ _JSON_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
         ArtifactMemoryKind.UNRESOLVED_COMMENTS,
         ArtifactMemoryKind.SOURCE_PRIORITY,
         ArtifactMemoryKind.VERIFIER_FAILURES,
+        ArtifactMemoryKind.ARTIFACT_MANIFEST,  # [REL-2a] per-artifact runtime manifest
     }
 )
 _SINGLETON_KINDS: frozenset[ArtifactMemoryKind] = _MD_KINDS | _JSON_KINDS
 
 _RESOURCE_ADAPTER = TypeAdapter(list[ResourceRef])
+_ARTIFACT_ADAPTER = TypeAdapter(list[ArtifactRecord])  # [REL-2a] per-artifact runtime manifest
 _DIRECT_EDIT_ADAPTER = TypeAdapter(list[DirectEditRef])
 _FAILURE_ADAPTER = TypeAdapter(list[VerifierFailureRef])
 _COMMENTS_ADAPTER = TypeAdapter(list[str])
@@ -183,6 +191,27 @@ class ArtifactMemoryStore:
                 f"schema mismatch: {exc}",
             ) from exc
 
+    async def record_artifacts(self, artifacts: tuple[ArtifactRecord, ...]) -> ArtifactMemoryRef:
+        """[REL-2a] Persist the full per-artifact runtime manifest. The caller does the
+        read-modify-write upsert UNDER the per-cid manifest lock (the file write here is atomic
+        per-file via _write_json's tmp+rename, but the RMW guard is the caller's lock)."""
+        return await self._write_json(
+            ArtifactMemoryKind.ARTIFACT_MANIFEST, [a.model_dump(mode="json") for a in artifacts]
+        )
+
+    async def read_artifacts(self) -> tuple[ArtifactRecord, ...]:
+        raw = await self.read_json_raw(ArtifactMemoryKind.ARTIFACT_MANIFEST)
+        if raw is None:
+            return ()
+        try:
+            return tuple(_ARTIFACT_ADAPTER.validate_python(raw))
+        except ValidationError as exc:
+            raise ContextRecoveryError(
+                ArtifactMemoryKind.ARTIFACT_MANIFEST,
+                self.path_for(ArtifactMemoryKind.ARTIFACT_MANIFEST),
+                f"schema mismatch: {exc}",
+            ) from exc
+
     async def record_direct_edits(self, edits: tuple[DirectEditRef, ...]) -> ArtifactMemoryRef:
         return await self._write_json(
             ArtifactMemoryKind.DIRECT_EDITS, [e.model_dump(mode="json") for e in edits]
@@ -253,7 +282,7 @@ class ArtifactMemoryStore:
 
     # --- lifecycle -------------------------------------------------------------
     async def ensure_initialized(self) -> None:
-        """Create any of the 9 durable singleton files that are absent, with safe
+        """Create any of the 10 durable singleton files that are absent, with safe
         defaults. Existing files are left untouched."""
         for kind in sorted(_MD_KINDS, key=lambda k: k.value):
             if await self._read_opt(self.path_for(kind)) is None:
@@ -268,6 +297,8 @@ class ArtifactMemoryStore:
             await self.record_comments(())
         if await self._read_opt(self.path_for(ArtifactMemoryKind.SOURCE_PRIORITY)) is None:
             await self.write_source_priority(SourcePriority.default())
+        if await self._read_opt(self.path_for(ArtifactMemoryKind.ARTIFACT_MANIFEST)) is None:
+            await self.record_artifacts(())  # [REL-2a]
 
     async def reconstruct(
         self, conversation_id: str, workspace_root: str | None = None
