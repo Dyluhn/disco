@@ -4324,3 +4324,42 @@ Claude primary orchestrates; all other agents scout, test, break, or propose; Co
 - **Claude Sonnet subagents** — via the Agent tool (Explore / general-purpose). PRIMARY parallel read-only scouts for Lanes A/B/D/E/G. Told "no workflows/skills/sub-delegation".
 - **opencode** — NOT INSTALLED as a runnable CLI (only the data dir ~/.local/share/opencode/ {auth.json, opencode.db}). So the MiniMax-M3-via-opencode + DeepSeek-via-opencode IMPLEMENTATION/breaker lanes are UNAVAILABLE. MiniMax-M3 SOAK work goes through the RELAY (harness/product_build/minimax_relay.py → api.minimaxi.chat, model MiniMax-M3, ledger relay.jsonl) — the official-validation path is unaffected (relay = direct MiniMax). DeepSeek lane: unavailable until opencode is installed; substitute Sonnet/Gemini/Qwen scouts.
 - FLEET MAP for REL/Build PRs: Sonnet subagents (A/B/D/E/G read-only scouts) · agy/Gemini (C UI scout) · pi/Qwen (D/E ergonomics, free only) · codex (binding gate) · relay→MiniMax-M3 (F soak, direct API). opencode/DeepSeek deferred (not installed).
+
+### REL-5 parallel-lane findings (2026-06-30) — Lane A (oracle false-green) + Lane B (lifecycle leaks), classified
+PARALLEL DISCOVERY (policy §0): two Sonnet scouts ran read-only WHILE I verified the fix. Findings classified
+per §7 (A=user-visible, B=safety/cost, C=oracle-false-pass, D=follow-up, E=ergonomics, F=infra). A/B/C BLOCK.
+
+LANE A — REL-5 oracle adjudication false-greens (Category C, BLOCK):
+- A-B4 [C, BLOCK]: product_evidence is IN-MEMORY ONLY — run.py never writes product-evidence.json nor hash-locks
+  it. classify_run_folder() of a FROZEN REL-5 run sees product_evidence=None → all 8 browser oracles SKIP → GREEN,
+  with NO _live_measure gate on the folder path. Any reclassify/replay bypasses REL-5 entirely. *The biggest gap.*
+- A-B1 [C, BLOCK]: enforcement gated on _relay_log_path() env; unset (or a 4th env name) → _live_measure False →
+  sidecar omitted → SidecarStopOracle SKIPs → GREEN with zero post-terminal enforcement. REL-6 preflight MUST hard-
+  require the relay env (fail-closed) + wire the independent provider_ledger oracle (A-M4).
+- A-M2 [C]: _terminal_status_epoch anchors on MAX over {FINISHED,ERROR,STUCK,IDLE} but the clean set is
+  {FINISHED,VERIFIED}; a FINISHED-then-IDLE pair moves the anchor past post-FINISHED calls → false 0. Anchor on the
+  FIRST clean terminal, not max-over-all-terminal-states.
+- A-B5/M3 [C]: cleanup.orphans = host-GLOBAL disco-container delta (not cid-scoped) + `podman ps -a` counts EXITED-
+  not-pruned → after<baseline → max(0)=0 masks a real leak (sequential carryover / concurrency). Scope to THIS
+  cid's containers + count RUNNING only.
+- A-M4 [C]: provider_ledger never passed to classify_dossier in the live path → the independent HARN-1a after-
+  terminal ledger oracle is DEAD; sidecar slice is the SOLE check (amplifies B1-B3). Wire the parsed ledger.
+- A-B2/B3/M1 [D, lower-risk THIS setup]: cross-clock (relay vs DB) — but SAME host here so no skew; records w/o
+  numeric ts dropped — but this relay always stamps ts; 8s grace < a >8s-cadence runaway — but token-revoke is the
+  real guard. Note + cheap guards; not live-blocking on this setup.
+LANE B — runtime lifecycle leaks (Category B, product-side; soak's REL-4 kill MASKS them):
+- B-B1 [B, BLOCK for product]: a plain FINISHED/ERROR/STUCK terminal tears down NOTHING (sandbox, disco-egr sidecar,
+  preview supervisor) — only revokes Pi token + unpins. Leaks a full sandbox+sidecar+supervisor per finished build
+  until disconnect-suspend(60s)/idle-TTL(1800s). This IS REL-5's directive ("on FINISHED... release sandbox, stop
+  preview/sidecar") but was DEFERRED in the approved plan (resume/suspend UX risk) → REL-5b product PR.
+- B-B2/B3 [B]: runtime.kill/cancel never route to PiKernel → Node PiProcess sidecar + drain task survive + append
+  POST-TERMINAL events; a late Pi bridge tool call RESURRECTS a sandbox post-kill. (disco-kernel soak unaffected;
+  REL-6 DISCONNECT_OR_CANCEL on Pi + a Pi product fix.)
+- B-M3 [validates my design]: provider calls LEGITIMATELY happen after a terminal StatusEvent (_maybe_rekick
+  stranded-followup) → a naive "no call after terminal event" oracle false-positives; my terminal-status-anchor +
+  liveness approach is the right one (assert on the FINAL terminal + token-revoked quiescence).
+- B-M1/M2/M5/m* [A/B/D]: cancel frees no sandbox; disconnect-suspend is one-shot (never re-armed → multi-min orphan
+  window); idle can't free a live Pi sandbox; kill-by-handle not by-label. → REL-6 DISCONNECT_OR_CANCEL assertions.
+TRIAGE: REL-5 (this PR, harness soundness) must fix A-B4, A-B1(+preflight), A-M2, A-B5/M3, A-M4 before it's sound.
+REL-5b (product teardown-at-terminal, deferred) = B-B1 + the Pi-sidecar gap (B-B2/B3). REL-6 DISCONNECT_OR_CANCEL
+consumes the Lane B cancel/disconnect/Pi assertions. Issue discovery NOT reduced (policy §0).
