@@ -3307,3 +3307,20 @@ Codex caught: GET /artifacts/{path} serves INDIVIDUAL files (rejects directories
   404 / 0 bytes → inspect dossier (did the model serve(kind='files')? is the path fetchable?), iterate the prompt
   or detection HONESTLY (do not fake); the export path itself (P10a) is shipped. If build STUCK (no export.html) →
   re-run (MiniMax ~50% finish).
+
+### P10b DONE — LIVE export-smoke PROVEN (2026-06-30)
+- Run e1 PASS: MiniMax-M3 built export.html + served kind='files' → DeliverableEvent{artifact_kind:'files',
+  path:'export.html'} → GET /artifacts/export.html HTTP 200, 6100 REAL bytes, real HTML w/ the build marker token
+  (3x, re-verified independently). Ledger 15 calls all api.minimaxi.chat, 0 OpenRouter, 0 post-terminal. Codex
+  EVIDENCE APPROVE on real bytes tied to the DeliverableEvent. Evidence: docs/p10b-export-smoke-evidence.md.
+- The export/download path is LIVE-PROVEN end-to-end (serve(kind='files') → DeliverableEvent → /artifacts GET real
+  bytes). P10b COMPLETE.
+
+### SESSION CLOSE (2026-06-30) — CD-TOOLS 1..10 + P10b ALL live-proven
+- CD-TOOLS campaign (1..10) COMPLETE + live-proven: Mode B (edit-elision thrash) is GONE — 8/8 live MiniMax-M3
+  targeted-edit runs non-thrashing + edits applied (output-truth); 0 OpenRouter + 0 post-terminal across the soak.
+- P10b export-smoke COMPLETE + live-proven.
+- ALL gated by Codex (gpt-5.5) plan + code/evidence gates; one canonical writer; MiniMax-direct only throughout.
+- NEXT (future sessions, not started — no concrete actionable spec queued this session): P11 (Resource Import/
+  Provenance); P1B-LIVE-STABILITY browser-harness gaps (G1 SIDECAR slice capture etc.); carried CD-TOOLS follow-ups
+  (5b finalizer-tool, 4b runtime manifest-fold, §6 full ToolScope wiring, soak 409-retry).
