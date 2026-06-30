@@ -2498,3 +2498,16 @@ Codex CODE+EVIDENCE review → revise to APPROVE → commit/push → heartbeat. 
   run 1. ~45 min wall-clock for 10. Monitor stab2.out + run-N.json across heartbeats. STOPS on first non-PASS →
   classify (product/harness/model/infra), fix if clear, regression fixture, restart count. If bookkeeping-stuck
   blocks 10/10 → STAB-2a engine fix (finalize-on-bookkeeping-stuck) before resuming.
+
+### HEARTBEAT 2026-06-29 — STAB-2 run 2 FAILED → classified HARNESS bug → STAB-2b fix → restart count
+- STAB-2 run 1 PASS (sidecar 0-after-terminal, ledger 31 calls/0 OR — the new wiring works). Run 2 STOPPED the
+  matrix: verdict surfaced as CLASSIFIER_ERROR but the embedded code was VERIFICATION_GATE_BYPASSED.
+- CLASSIFIED (2 HARNESS bugs, NOT product): (a) run 2's build genuinely verified via the `browser` tool (navigate→
+  screenshot→console_view) + reached clean FINISHED (detail=None, not unverified_release) — disco verified it via
+  the browser path — but the harness recognized ONLY verify_web_app → false VERIFICATION_GATE_BYPASSED. (b) the
+  spec mislabeled the real FAIL as CLASSIFIER_ERROR (classify_captured exits non-zero on non-PASS + execFileSync
+  throws).
+- STAB-2b SHIPPED (Codex APPROVE): decideVerification() mirrors disco's real gate (verify_web_app pass OR browser-
+  inspect + clean non-unverified terminal; fail-closed) + vitest 8 cases; classify-verdict parsed from stdout in
+  both exit branches. NO oracle weakening.
+- PROTOCOL: count restarts. Relaunching STAB-2 x10 from 0.
