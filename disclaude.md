@@ -2578,3 +2578,19 @@ REJECTED; blocked edit does NOT mutate the file; blocked edit is not itself a pr
 read-only tools (file_read/search) unaffected by the guard.
 CODEX FOCUS: no edit path bypasses the guard; not global overreach (read-only unaffected); elision
 markers cannot enter source via old/new.
+
+### CD-TOOLS-1 — PLAN round-1 revision (Codex REVISE: freshness proof)
+- FIX the read-state shape: record at SHOW time per (conv,path): {full_file_disk_sha256 (the WHOLE file's sha at
+  read time — NOT sha of the shown slice), shown_ranges:list[(start,end)] actually shown to the model (line- or
+  byte-ranges), range_complete:bool per range (the shown range was NOT elided/truncated), event_seq, reader_tool}.
+- Pre-edit guard, TWO independent checks (so ranged reads stay valid — no forced whole-file read):
+  (1) STALE: current disk full-file sha == recorded full_file_disk_sha256 → else STALE_FILE_CONTEXT (re-read; the
+      file changed under the model since it last read).
+  (2) COVERAGE: the edit region was SHOWN COMPLETE — for file_edit, the `old` text occurs inside a shown_range
+      whose range_complete==true; for file_replace_lines/file_insert_lines, the target lines fall inside a
+      complete shown_range → else FRESH_READ_REQUIRED (read that region). A full file_read sets one shown_range
+      covering the whole file (complete) so a full read + edit always passes; a ranged read covering the edited
+      section also passes (no whole-file read forced).
+- This removes the sha(shown)≠sha(disk) inconsistency: disk-sha is full-file (stale check); coverage is by raw
+  shown ranges + completeness (saw-it check). Elision check unchanged (old/new contains a marker → ELISION_MARKER_
+  REJECTED). Everything else in the CD-TOOLS-1 plan stands.
