@@ -3241,3 +3241,14 @@ weakening; insufficient negatives.
 - REPORT will use DUAL metrics: (A) MODE-B-GONE = built_ok runs with onf-loop=0 + no elision + edits applied (the
   campaign's actual fix); (B) clean-finish PASS = A + terminal-FINISHED + phase-2 read-ordering (folds in MiniMax's
   separate ~50% finish rate = Mode A, NOT what CD-TOOLS fixes). Honest separation.
+
+### CD-TOOLS CAMPAIGN COMPLETE (1..10) — Mode B PROVEN GONE · P10b UNPARKED (2026-06-30)
+- CD-TOOLS-10 soak: 10 consecutive LIVE MiniMax-M3 runs. MODE-B-GONE = 8/8 built_ok runs (onf=0 + no-elision +
+  edits-applied output-truth). clean-finish 7/10 (s5 benign timeout = Mode A; s2/s9 = HTTP 409 transient). ACROSS
+  ALL 10: 0 OpenRouter, 0 post-terminal, all api.minimaxi.chat/MiniMax-M3. Codex FINAL APPROVE. Report:
+  docs/cd-tools-9-10-report.md.
+- The CD-TOOLS campaign (1..10) is DONE + LIVE-PROVEN. Mode B (edit-elision thrash) no longer occurs on a real model.
+- **P10b is UNPARKED** (the CD-TOOLS green gate is met). Next: resume P10b per its concrete task in this ledger /
+  the campaign doc; if none specified, await direction. Carried follow-ups (deferred, honest): CD-TOOLS-5b
+  (ready_for_verification finalizer-tool + verifier-fork); CD-TOOLS-4b (runtime manifest-fold); §6 full ToolScope
+  phase wiring; soak hardening (409-retry + inter-run kill/sleep). None block the Mode-B proof.
