@@ -78,6 +78,85 @@ def _strip_plan_tags(text: object | None) -> str:
     return _PLAN_TAG_RE.sub("", str(text)).strip()
 
 
+def _coerce_step(s: object) -> PlanStep | None:
+    """Coerce one raw submit_plan step element into a PlanStep (or None if it has no title).
+    Shared by the normal `steps[]` path and the A3 harvest so both apply identical lenient
+    shape handling (dict with title/step/name + optional detail + optional done_condition; or a
+    bare string title)."""
+    if isinstance(s, dict):
+        title = _strip_plan_tags(s.get("title") or s.get("step") or s.get("name"))
+        detail = _strip_plan_tags(s.get("detail") or s.get("description")) or None
+        cond = s.get("done_condition")
+        dc = None
+        if isinstance(cond, dict):
+            try:
+                dc = predicate_from_obj(cond)
+            except Exception:  # noqa: BLE001 — malformed predicate is advisory-only
+                dc = None
+        if title:
+            return PlanStep(title=title, detail=detail, done_condition=dc)
+    elif isinstance(s, str):
+        title = _strip_plan_tags(s)
+        if title:
+            return PlanStep(title=title)
+    return None
+
+
+# [REL-RC A3] Recovery for MiniMax-M3's nested-array tool-arg SERIALIZATION failure: the model
+# authors correct structured steps but routes the whole {steps:[{title,…}],…} object STRINGIFIED
+# into the wrong submit_plan parameter, leaving the real `steps` kwarg empty (live-proven:
+# revise_after_finish run001 rev4). We recover the step titles WITHOUT invoking any parser/eval —
+# a bounded, non-backtracking regex over a size-capped input (Codex-gated x5: ast.literal_eval has
+# unbounded parser-stack-overflow surface via in-string brackets and unbracketed unary nesting; a
+# regex has none). Strictly gated on `not steps` by the caller, so worst case (0 matches) is
+# exactly today's behavior — it can never regress a plan that already parsed steps.
+_MAX_PLAN_BLOB_BYTES = 65_536  # size pre-cap before any scan
+_MAX_HARVESTED_STEPS = 64  # post-match coercion cap
+# Non-backtracking + bounded: a `title` key (single or double quoted) → its quoted string value,
+# capped at 200 chars. Single-quoted value = no inner single quotes; double-quoted = escapes ok.
+# Bounded char classes with no nested/overlapping quantifiers → linear time, no ReDoS.
+_TITLE_HARVEST_RE = re.compile(
+    r"""(?:'title'|"title")\s*:\s*(?:'([^']{1,200})'|"((?:[^"\\]|\\.){1,200})")"""
+)
+# A `steps` key marker — required before harvesting from summary/context/rationale so an incidental
+# `title:` outside a mis-routed steps payload can NEVER fabricate a step (Codex r5 fail-closed).
+_STEPS_ENVELOPE_RE = re.compile(r"""(?:'steps'|"steps")\s*:""")
+
+
+def _harvest_steps(arguments: dict) -> list[PlanStep]:
+    """[REL-RC A3] Recover step titles the model mis-routed into the wrong submit_plan parameter.
+    The `steps` param when it arrived AS A STRING is harvested directly (a title there is a step by
+    definition); summary/context/rationale are harvested ONLY past a `steps:` envelope. No parser
+    is ever invoked. Returns [] if nothing is safely recoverable."""
+    out: list[PlanStep] = []
+    candidates: list[tuple[str, bool]] = []  # (blob, require_steps_envelope)
+    raw_steps = arguments.get("steps")
+    if isinstance(raw_steps, str):
+        candidates.append((raw_steps, False))  # the steps slot itself — harvest directly
+    for key in ("summary", "context", "rationale"):
+        v = arguments.get(key)
+        if isinstance(v, str):
+            candidates.append((v, True))  # require a steps: envelope (no false positives)
+    for blob, require_envelope in candidates:
+        if len(blob) > _MAX_PLAN_BLOB_BYTES:
+            continue
+        start = 0
+        if require_envelope:
+            env = _STEPS_ENVELOPE_RE.search(blob)
+            if env is None:
+                continue
+            start = env.end()
+        for mt in _TITLE_HARVEST_RE.finditer(blob, start):
+            title = _strip_plan_tags(mt.group(1) or mt.group(2))
+            if title:
+                out.append(PlanStep(title=title))
+            if len(out) >= _MAX_HARVESTED_STEPS:
+                break
+        if out:
+            break  # first blob that yields a real step wins
+    return out
+
+
 class Planner:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
@@ -160,26 +239,20 @@ class Planner:
         # Re-seed per-plan-revision (a re-plan supersedes the prior map; we
         # don't keep stale predicates from an obsolete revision).
         revision = 1 + sum(1 for e in events if isinstance(e, PlanEvent))
-        for s in arguments.get("steps") or []:
-            if isinstance(s, dict):
-                title = _strip_plan_tags(s.get("title") or s.get("step") or s.get("name"))
-                detail = _strip_plan_tags(s.get("detail") or s.get("description")) or None
-                # Parse the optional done_condition ONTO the PlanStep so it persists on the
-                # PlanEvent (resume-durable). A malformed predicate degrades to None exactly
-                # like the C18 harvest below — advisory, never a plan-parse failure.
-                cond = s.get("done_condition")
-                dc = None
-                if isinstance(cond, dict):
-                    try:
-                        dc = predicate_from_obj(cond)
-                    except Exception:  # noqa: BLE001 — malformed predicate is advisory-only
-                        dc = None
-                if title:
-                    steps.append(PlanStep(title=title, detail=detail, done_condition=dc))
-            elif isinstance(s, str):
-                title = _strip_plan_tags(s)
-                if title:
-                    steps.append(PlanStep(title=title))
+        # [REL-RC A3] Only ITERATE `steps` when it is a real list. A model that mis-routes the
+        # step array as a STRING into the `steps` slot would otherwise char-iterate ("abc" →
+        # 'a','b','c' → bogus single-char steps); that string is instead routed to _harvest_steps
+        # below. done_condition is parsed ONTO each PlanStep via _coerce_step (resume-durable).
+        _raw_steps = arguments.get("steps")
+        if isinstance(_raw_steps, list):
+            for s in _raw_steps:
+                step = _coerce_step(s)
+                if step is not None:
+                    steps.append(step)
+        # [REL-RC A3] If no steps parsed, attempt the bounded regex-harvest recovery for steps the
+        # model serialized into the wrong submit_plan parameter (no parser invoked; fail-closed).
+        if not steps:
+            steps.extend(_harvest_steps(arguments))
         # When the model submits a summary but NO real steps, keep `steps` EMPTY
         # rather than inserting a fake "(the planner returned no concrete steps)"
         # placeholder — that rendered as a broken numbered "1." step in the UI.
@@ -192,7 +265,9 @@ class Planner:
         # C18 — harvest the predicates (revision-scoped). We walk the raw
         # args (not the rebuilt `steps`) so we can preserve the 1-based
         # step index even when the title/format was leniently coerced.
-        raw_steps = arguments.get("steps") or []
+        # [REL-RC A3] guard: only a real list carries indexed predicates (a string never does).
+        _rs = arguments.get("steps")
+        raw_steps = _rs if isinstance(_rs, list) else []
         for one_based, raw in enumerate(raw_steps, start=1):
             if not isinstance(raw, dict):
                 continue
