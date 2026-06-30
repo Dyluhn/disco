@@ -37,8 +37,14 @@ def _args(tool, **kw):
 
 async def test_replace_lines_edits_a_large_file_by_line_number():
     ctx, inst = await _ctx()
-    body = "\n".join(f"line {i}" for i in range(1, 501))  # 500-line file
+    body = "\n".join(f"line {i}" for i in range(1, 501))  # 500-line file (>1.5KB)
     await inst.write_file("big.txt", body.encode())
+    # CD-TOOLS-1: a LARGE file must be read (grounded) before a targeted line edit — the
+    # fresh-edit guard requires it (Mode B fix). The read fits in one page → grounds the file.
+    from disco.tools.builtin import FileReadTool
+
+    rt = FileReadTool()
+    await rt.run(_args(rt, path="big.txt"), ctx)
     t = FileReplaceLinesTool()
     res = await t.run(_args(t, path="big.txt", start_line=250, end_line=252, new_text="X\nY"), ctx)
     assert res.success, res.content

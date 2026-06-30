@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -77,7 +78,7 @@ _BINARY_DELIVERABLE_EXTS = frozenset(
 # Module-level so it's per-process; the per-conversation key keeps state
 # isolated between agents/sessions. Applies to ALL model tiers (not gated on
 # ctx.assist) — the thrash root-cause hits capable models too.
-_read_state: dict[str, dict[str, set[str]]] = {}
+_read_state: dict[str, dict[str, Any]] = {}
 
 
 def reset_read_tracker() -> None:
@@ -128,12 +129,172 @@ def clear_conversation_read_state(conv_id: str) -> None:
     _read_state.pop(conv_id, None)
 
 
-def _conv_state(conv_id: str) -> dict[str, set[str]]:
+def _conv_state(conv_id: str) -> dict[str, Any]:
     s = _read_state.get(conv_id)
     if s is None:
-        s = {"read_since_write": set()}
+        # read_since_write: the coarse F1 bit (path grounded since last write).
+        # reads: CD-TOOLS-1 sha-aware per-path read records for the fresh-edit guard —
+        #   {canonical_path: {"sha": <full-file sha at read>, "ranges": [(start,end)],
+        #    "full": bool}}. `ranges` are 1-based inclusive line spans the model SAW
+        #   un-elided (a real file_read page); `full` is True for a whole-file read.
+        s = {"read_since_write": set(), "reads": {}}
         _read_state[conv_id] = s
+    s.setdefault("reads", {})  # back-compat for buckets created before CD-TOOLS-1
     return s
+
+
+# CD-TOOLS-1 — the internal elision-marker family, re-expressed locally so the tools
+# package does not import from disco.core (layering). Mirrors core.events
+# _ELISION_MARKER_RE / _ELISION_PARAPHRASE_RE: an "<N chars … elided|full content …>"
+# render marker the model must never echo back into source.
+_EDIT_ELISION_RE = re.compile(
+    r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full\s+content|placeholder)\b[^>]*>",
+    re.IGNORECASE,
+)
+
+# CD-TOOLS-1: the fresh-read REQUIREMENT applies only to files large enough that their content
+# is elided from the model's context view — i.e. over the arg-snip threshold (core.events
+# _ARG_SNIP_CHARS = 1500). Below it, a file_write's body / a read stays in context un-elided, so
+# the model reliably has the bytes and reproducing `old` is safe — requiring a read there would
+# only break legitimate small-file edits (Mode B is a LARGE-file phenomenon). The elision-MARKER
+# rejection is unconditional (a marker is never valid source, at any size).
+_GUARD_FRESH_READ_MIN_BYTES = 1_500
+
+
+def _has_elision_marker(*texts: str | None) -> bool:
+    return any(t is not None and _EDIT_ELISION_RE.search(t) is not None for t in texts)
+
+
+def record_read(
+    conv_id: str, path: str, *, sha: str, start_line: int, end_line: int, full: bool
+) -> None:
+    """CD-TOOLS-1: record that the model SAW lines [start_line, end_line] of `path`'s
+    CURRENT bytes (sha) un-elided. A new sha (the file changed) resets the ranges."""
+    if not isinstance(path, str) or not path:
+        return
+    reads = _conv_state(conv_id)["reads"]
+    key = _canonical(path)
+    rec = reads.get(key)
+    if rec is None or rec.get("sha") != sha:
+        rec = {"sha": sha, "ranges": [], "full": False}
+        reads[key] = rec
+    rec["ranges"].append((int(start_line), int(end_line)))
+    if full:
+        rec["full"] = True
+
+
+def _covers(ranges: list[tuple[int, int]], lo: int, hi: int) -> bool:
+    """True if the line span [lo,hi] is fully inside the union of shown ranges."""
+    need = set(range(lo, hi + 1))
+    for a, b in ranges:
+        need -= set(range(a, b + 1))
+        if not need:
+            return True
+    return not need
+
+
+def _fresh_read_required(path: str, why: str) -> ToolOutcome:
+    return ToolOutcome(
+        success=False,
+        error="FRESH_READ_REQUIRED",
+        content=(
+            f"Edit refused — {why}. Read {path} first (file_read), then edit using the exact "
+            "text you see. (This is a corrective nudge, not a failure — nothing was changed.)"
+        ),
+        structured={
+            "kind": "fresh_read_required",
+            "path": path,
+            "reason": why,
+            "next_required_action": "file_read",
+            "suggested_args": {"path": path},
+        },
+    )
+
+
+def guard_fresh_edit(
+    conv_id: str,
+    path: str,
+    *,
+    current_bytes: bytes,
+    old: str | None = None,
+    new: str | None = None,
+    edit_lines: tuple[int, int] | None = None,
+) -> ToolOutcome | None:
+    """CD-TOOLS-1 fresh-edit guard. Returns a BLOCKING ToolOutcome (the caller must NOT mutate
+    the file) when the model lacks fresh, complete grounding of the edit region — else None.
+
+    Checks, in order: (1) an internal elision marker in old/new → ELISION_MARKER_REJECTED;
+    (2) the file changed under the model since its last read → STALE_FILE_CONTEXT;
+    (3) the model has no current grounding since the last write (editing blind) → FRESH_READ_
+    REQUIRED; (4) the only grounding is a PARTIAL read not covering the edit region → FRESH_READ_
+    REQUIRED. `read_since_write` (set by file_read AND the workspace-snapshot pin / F9 dedup, and
+    CLEARED on every mutation) is the current-grounding signal — so a small file pinned in full,
+    or a freshly-read file, passes; the Mode-B case (wrote-then-edited a large elided file with
+    no fresh read) is blocked."""
+    import hashlib
+
+    if _has_elision_marker(old, new):
+        return ToolOutcome(
+            success=False,
+            error="ELISION_MARKER_REJECTED",
+            content=(
+                f"Edit refused — the edit text for {path} contains an internal elision "
+                "placeholder (e.g. '<… chars elided …>'); that marker is render-only and must "
+                "never be written into a file. Read the file, then edit with the real text."
+            ),
+            structured={
+                "kind": "elision_marker_rejected",
+                "path": path,
+                "next_required_action": "file_read",
+                "suggested_args": {"path": path},
+            },
+        )
+    # Small files stay fully in the model's context (never elided) → the model has the bytes;
+    # requiring a fresh read there would only break legitimate small-file edits.
+    if len(current_bytes) <= _GUARD_FRESH_READ_MIN_BYTES:
+        return None
+    sha = hashlib.sha256(current_bytes).hexdigest()
+    st = _read_state.get(conv_id) or {}
+    canon = _canonical(path)
+    rec = (st.get("reads") or {}).get(canon)
+    grounded = canon in (st.get("read_since_write") or set())
+    if rec is not None and rec.get("sha") != sha:
+        return ToolOutcome(
+            success=False,
+            error="STALE_FILE_CONTEXT",
+            content=(
+                f"Edit refused — {path} has changed since you last read it, so your edit text "
+                "may target stale content. Read it again (file_read), then edit."
+            ),
+            structured={
+                "kind": "stale_file_context",
+                "path": path,
+                "next_required_action": "file_read",
+                "suggested_args": {"path": path},
+            },
+        )
+    if not grounded:
+        return _fresh_read_required(
+            path, "you have not read this file's current content since it last changed"
+        )
+    # grounded, current sha: if the only sha-aware grounding is a PARTIAL read (not the whole
+    # file), the edited region must fall inside what was actually read. A FULL read (rec.full)
+    # covers everything, so it is exempt. When the region is UNDETERMINED (edit_lines is None —
+    # e.g. file_edit/file_str_replace matched `old` via the forgiving/whitespace-tolerant path
+    # after an exact find missed), we cannot prove the mutated lines were seen → fail closed so a
+    # partial read can't mutate unread lines (Codex round-1).
+    if rec is not None and not rec.get("full"):
+        if edit_lines is None:
+            return _fresh_read_required(
+                path,
+                "could not confirm the exact lines you are editing were in the part of the file "
+                "you read",
+            )
+        if not _covers(rec.get("ranges", []), edit_lines[0], edit_lines[1]):
+            return _fresh_read_required(
+                path, "the lines you are editing were not in the part of the file you read"
+            )
+    return None
 
 
 def _canonical(path: str) -> str:
@@ -290,6 +451,9 @@ class FileReadTool:
         # own read do NOT go through this method, so they do NOT set the bit —
         # only an explicit model-issued file_read counts as grounding evidence.
         _conv_state(ctx.conversation_id)["read_since_write"].add(_canonical(args.path))
+        import hashlib
+
+        _disk_sha = hashlib.sha256(data).hexdigest()  # CD-TOOLS-1 fresh-edit grounding
         text = data.decode("utf-8", errors="replace")
         lines = text.splitlines()
         total = len(lines)
@@ -329,6 +493,10 @@ class FileReadTool:
                 head.append(line)
                 used += len(line) + 1
             head_to = len(head)
+            record_read(
+                ctx.conversation_id, args.path, sha=_disk_sha, start_line=1,
+                end_line=max(head_to, 1), full=(head_to >= total),
+            )
             header = (
                 f"[lines 1-{head_to} of {total} (file: {len(text)} chars) — "
                 f"HEAD-ONLY under context pressure]\n"
@@ -375,6 +543,12 @@ class FileReadTool:
             used += charge
             i += 1
         shown_to = i
+        # CD-TOOLS-1: record the lines the model saw un-elided. full iff this single page
+        # covered the WHOLE file (from line 1 to the last line).
+        record_read(
+            ctx.conversation_id, args.path, sha=_disk_sha, start_line=start + 1,
+            end_line=max(shown_to, start + 1), full=(start == 0 and shown_to >= total),
+        )
         # there's more file to read below if we didn't reach the end (whether we
         # stopped on the char budget or the caller's limit)
         more = f"; read more with offset={shown_to + 1}" if shown_to < total else ""
@@ -612,7 +786,26 @@ class FileEditTool:
                 ),
                 error="no_op_edit",
             )
-        text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+        _raw = await ctx.sandbox.read_file(args.path)
+        text = _raw.decode("utf-8", errors="replace")
+        # CD-TOOLS-1 fresh-edit guard: refuse (no mutation) when the model lacks fresh/complete/
+        # un-elided grounding of the edit region. Compute the region from `old`'s exact location.
+        _idx = text.find(args.old)
+        _elines = (
+            (text.count("\n", 0, _idx) + 1, text.count("\n", 0, _idx) + 1 + args.old.count("\n"))
+            if _idx >= 0
+            else None
+        )
+        _blocked = guard_fresh_edit(
+            ctx.conversation_id,
+            args.path,
+            current_bytes=_raw,
+            old=args.old,
+            new=args.new,
+            edit_lines=_elines,
+        )
+        if _blocked is not None:
+            return _blocked
         updated, how = _forgiving_replace(text, args.old, _strip_line_numbers(args.new))
         if updated is None:
             return ToolOutcome(
@@ -679,7 +872,8 @@ class FileReplaceLinesTool:
 
     async def run(self, args: FileReplaceLinesArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+        _raw = await ctx.sandbox.read_file(args.path)
+        text = _raw.decode("utf-8", errors="replace")
         lines = text.splitlines()
         n = len(lines)
         if args.start_line < 1 or args.end_line < args.start_line or args.start_line > n + 1:
@@ -691,6 +885,14 @@ class FileReplaceLinesTool:
                 ),
                 error="bad_range",
             )
+        # CD-TOOLS-1 fresh-edit guard: line numbers shift after any edit, so a stale/elided
+        # range silently overwrites the wrong lines — require fresh, covering grounding first.
+        _blocked = guard_fresh_edit(
+            ctx.conversation_id, args.path, current_bytes=_raw, new=args.new_text,
+            edit_lines=(args.start_line, min(args.end_line, max(n, 1))),
+        )
+        if _blocked is not None:
+            return _blocked
         # Deletion guard: empty new_text over a real range is the silent-data-loss path
         # (a miscounted range replaced with nothing — the exact gpt-oss-120b failure).
         if _strip_line_numbers(args.new_text).strip() == "":
@@ -754,7 +956,15 @@ class FileInsertLinesTool:
 
     async def run(self, args: FileInsertLinesArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+        _raw = await ctx.sandbox.read_file(args.path)
+        text = _raw.decode("utf-8", errors="replace")
+        # CD-TOOLS-1 guard: the insert point relies on current line numbers — require fresh
+        # grounding + reject an elision marker in the inserted text (no region coverage needed).
+        _blocked = guard_fresh_edit(
+            ctx.conversation_id, args.path, current_bytes=_raw, new=args.text, edit_lines=None
+        )
+        if _blocked is not None:
+            return _blocked
         lines = text.splitlines()
         n = len(lines)
         if args.after_line < 0 or args.after_line > n:
@@ -835,7 +1045,21 @@ class FileStrReplaceTool:
 
     async def run(self, args: FileStrReplaceArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+        _raw = await ctx.sandbox.read_file(args.path)
+        text = _raw.decode("utf-8", errors="replace")
+        # CD-TOOLS-1 fresh-edit guard (anchored exact replace) — region from old_str's location.
+        _idx = text.find(args.old_str)
+        _elines = (
+            (text.count("\n", 0, _idx) + 1, text.count("\n", 0, _idx) + 1 + args.old_str.count("\n"))
+            if _idx >= 0
+            else None
+        )
+        _blocked = guard_fresh_edit(
+            ctx.conversation_id, args.path, current_bytes=_raw,
+            old=args.old_str, new=args.new_str, edit_lines=_elines,
+        )
+        if _blocked is not None:
+            return _blocked
 
         count = text.count(args.old_str)
         if count > 1:
