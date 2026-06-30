@@ -4576,3 +4576,18 @@ PASS, like run001); the bound is a controlled terminal, NOT zero-step approval. 
 (revision==1) still auto-approves (summary-only, no regression). REL-6 REVISION_CHAIN PASS still requires the model
 to actually submit real steps + FINISH — the guard removes the engine amplifier so recovery is possible, it does not
 fake a pass.
+
+## §11 HEARTBEAT — 2026-06-30 — REL-RC A1 implemented (engine)
+- **Current PR:** REL-RC (revision re-entry, blocks REL-6). A1 IMPLEMENTED + committed (zero-step-revision→force-
+  submit→controlled STUCK; no auto-approve, no fake pass; Codex plan APPROVE after r1). compiles, 71 engine tests pass.
+- **Lanes:** B (engine) A1 done. REL-1 verifier scout DONE (integrate to plan). REL-2a re-APPROVE (lock fix) — ready
+  to implement. E (regression): need A1 unit test (zero-step-revision→not-approve; initial→approve). F (soak):
+  pending live re-soak.
+- **External agents:** none running; codex gated REL-RC plan APPROVE + REL-2a r1 APPROVE.
+- **Latest commit:** REL-RC A1 (pushed next).
+- **Tests since last hb:** 71 engine planning/revision tests pass; REL-2a re-gate APPROVE; REL-RC plan APPROVE (r1).
+- **Blockers A/B/C/D/E/F:** A: revision re-entry — A1 fix landed (engine), A2 + LIVE PROOF pending. B: REL-5b deferred.
+- **CRITICAL NEXT:** the agent-server (pid 398937) has the OLD engine — must RESTART it to load A1 before the live
+  re-soak can test the fix (packages/core change, not auto-reload). Then re-soak revise_after_finish x5.
+- **Next action:** restart agent-server (carefully — DISCO_SECRET_KEY + relay wiring intact) → live re-soak revise x5
+  → if A1 moves distribution to PASS, add A2 + unit test + Codex code-gate. Re-arm 120s.
