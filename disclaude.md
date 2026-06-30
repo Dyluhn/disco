@@ -2286,3 +2286,16 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   lifecycle, preview, shown, verification, cleanup). The API-driven run gives lifecycle/preview/verification; the UI
   run supplies browser_ws/shown/cleanup. NEXT: frontend up + /build/{cid} Playwright → buildProductEvidence →
   write_dossier (provider from relay.jsonl) → classify_dossier PASS → mark Product Harness COMPLETE.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b: UI product-harness PROBE green (all slices capturable)
+- Brought up the full UI: vite :5173 (VITE_AGENT_BASE=:8000) + app-server :8800 + agent-server :8000 + relay :8080.
+- Playwright/Firefox PROBE of /build/conv_cb9be8 (the FINISHED MiniMax build) confirms EVERY UI-derived slice is
+  real: FEED_HAS_BUILD_CONTENT=true (artifact_shown), PREVIEW tab + iframe renders the live Ember&Brew site
+  (preview_shown=true), the agent WS ws://localhost:8000/ws/conversations/{cid} connects (browser_ws.connections=1,
+  filtering out the vite HMR socket), 0 console errors. Real-UI screenshot (feed + minimax-m3·Subscription pill +
+  live Preview pane) SENT to Dylan + saved test-record/p1blive3b-finished/ui-real-build-surface.png.
+- So the harness WORKS; remaining is to FORMALIZE: build-artifact-runtime-smoke.spec.ts capturing browser_ws/
+  lifecycle/preview/shown/verification/cleanup → buildProductEvidence → write_dossier(provider from relay.jsonl) →
+  classify_dossier(STATIC_SITE_SMOKE) PASS. The cleanup slice {orphans, workspace_released} needs the conversation
+  KILLED/released then verified (podman has no leftover container for the cid + workspace gone) — do that as the
+  spec teardown. Then mark Product Harness COMPLETE. Codex-gate the spec.
