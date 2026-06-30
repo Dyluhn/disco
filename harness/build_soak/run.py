@@ -763,15 +763,19 @@ async def _release_conversation(
 
 
 def _live_disco_container_count() -> int | None:
-    """[REL-5] Count live disco sandbox + egress-sidecar containers via the podman CLI — the
-    host-side orphan signal for the CleanupOracle on the LOCAL PODMAN iteration backend. Returns
-    None if podman is unavailable (the count is then unknown, NOT zero — we never fake 0). The
-    gVisor FINAL REL-6 run needs the gVisor-equivalent probe (tracked as a follow-up)."""
+    """[REL-5 / Lane A A-B5/M3] Count RUNNING disco sandbox + egress-sidecar containers via the
+    podman CLI — the host-side orphan signal for the CleanupOracle on the LOCAL PODMAN iteration
+    backend. Uses `podman ps` (RUNNING only) NOT `podman ps -a`: `-a` includes exited-but-not-yet-
+    pruned containers, so a correctly-torn-down box still matched the prefix and inflated the count
+    on either side of the baseline→after delta (a real leak could net to 0, or a prune could push
+    after<baseline). Counting only RUNNING containers measures actual liveness. Returns None if
+    podman is unavailable (count UNKNOWN, never faked 0). The gVisor FINAL REL-6 run needs the
+    gVisor-equivalent probe (tracked)."""
     import subprocess
 
     try:
         out = subprocess.run(
-            ["podman", "ps", "-a", "--format", "{{.Names}}"],
+            ["podman", "ps", "--format", "{{.Names}}"],  # RUNNING only (no -a)
             capture_output=True, text=True, timeout=15, check=False,
         )
     except Exception:
@@ -810,12 +814,19 @@ def _event_epoch(e: dict[str, Any]) -> float | None:
         return None
 
 
+# [Lane A A-M2] The BUILD-terminal set for anchoring provider-after-terminal. EXCLUDES IDLE: IDLE is
+# both the pre-kick resting state AND the post-kill state, so anchoring on a (later) IDLE would push
+# the boundary PAST real post-FINISHED calls and hide them. Includes VERIFIED (a clean terminal the
+# LifecycleOracle accepts but TERMINAL_STATES omits) so a VERIFIED run is adjudicable, not INVALID.
+_BUILD_TERMINAL_STATUSES = frozenset({"FINISHED", "VERIFIED", "ERROR", "STUCK"})
+
+
 def _terminal_status_epoch(events: list[dict[str, Any]]) -> float | None:
-    """[codex] Epoch of the LAST `status` event whose status is TERMINAL — the true instant the
-    build went terminal. NOT the max timestamp across ALL events: a durable event appended AFTER
-    the terminal status (a post-finish snapshot/status, an observation) would push a max-of-all
-    anchor PAST a real post-terminal provider call and hide it. Anchoring on the terminal status
-    event itself is gap-free. None if no terminal status event is present."""
+    """[codex/Lane A] Epoch of the LAST `status` event whose status is a BUILD terminal
+    (_BUILD_TERMINAL_STATUSES — NOT IDLE) — the true instant the build went terminal. NOT the max
+    timestamp across ALL events (a durable event appended AFTER the terminal status would push the
+    anchor past a real post-terminal provider call), and NOT anchored on IDLE (the rest/kill state).
+    None if no build-terminal status event is present."""
     best: float | None = None
     for e in events:
         if e.get("kind") != "status":
@@ -832,7 +843,7 @@ def _terminal_status_epoch(events: list[dict[str, Any]]) -> float | None:
                     status = None
             elif isinstance(pl, dict):
                 status = pl.get("status")
-        if str(status or "").upper() not in TERMINAL_STATES:
+        if str(status or "").upper() not in _BUILD_TERMINAL_STATUSES:
             continue
         ep = _event_epoch(e)
         if ep is not None and (best is None or ep > best):
