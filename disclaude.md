@@ -4782,3 +4782,18 @@ Restrict to the steps string or require a bounded nearby steps: envelope." CORRE
 - All prior bounds stand: size<=65536 pre-cap; non-backtracking bounded regex (no ReDoS); <=64 matches; gated on
   `not steps`; worst case 0 titles → 0 steps = today's behavior → cannot regress. NO parser/eval invoked.
 This closes the last non-regression gap. Fix C + honest MiniMax ceiling unchanged.
+
+## §11 HEARTBEAT — 2026-06-30 — REL-RC A3 IMPLEMENTED + loaded; proof re-soak running
+- **REL-RC A3 SHIPPED (code committed+pushed):** regex-harvest of mis-routed plan steps (plans.py _harvest_steps +
+  _coerce_step + list-guard fixing the latent string-steps char-iteration bug). Codex PLAN gate APPROVE after 5
+  REVISEs (converged ast.literal_eval→bounded-regex; the adversarial gate caught every parser-safety hole). 8 harvest
+  tests (verbatim run001 recovery + false-positive/size/count guards) + 225 plan/planning/revision tests GREEN.
+- **Server:** disco-dev-up.sh had a 2nd latent bug (`.venv/bin/python` relative — disclaude has no .venv); FIXED to
+  absolute Disco-Pi venv. Relaunched: agent:8000/relay:8080/bk:8800 all 200; engine source=disclaude; A3 loaded.
+- **A3 proof re-soak RUNNING** (bg bvspmeoyj, revise x5; ~60-75min). Expect lift from 1/5 toward ~2-3/5 (recovers the
+  run001-class mis-route; run000 prose-collapse + run002 execution-serialization remain MiniMax capability limits).
+- **Blockers A-F:** A: revision reliability — A1 floor + A3 lift shipped, LIVE PROOF in flight. F: 2 launcher bugs
+  fixed (stale REPO + relative venv).
+- **Next:** Codex CODE-gate A3 (review the actual diff) + early per-run soak read; then final tally → if lift proven,
+  record honest result + REL-RC done-as-feasible (with the documented MiniMax multi-revision ceiling for REL-6).
+  Continue REL-2a step2 in parallel. Do NOT claim REVISION_CHAIN 100% if the model can't reach it — surface honestly.
