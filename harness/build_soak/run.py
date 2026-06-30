@@ -939,10 +939,18 @@ async def _collect_terminal_cleanup_evidence(
         try:
             with open(relay_log, encoding="utf-8") as f:
                 recs = parse_relay_log(f.read())
-            ts_list = [float(r["ts"]) for r in recs if isinstance(r.get("ts"), (int, float))]
-            calls_during_run = sum(1 for t in ts_list if run_start_epoch <= t <= terminal_epoch)
+            _ts_recs = [
+                (float(r["ts"]), bool(r.get("has_tools", True)))
+                for r in recs
+                if isinstance(r.get("ts"), (int, float))
+            ]
+            calls_during_run = sum(1 for t, _ in _ts_recs if run_start_epoch <= t <= terminal_epoch)
             if calls_during_run > 0:  # relay PROVEN live for this run → trust the after-count
-                calls_after = sum(1 for t in ts_list if t > terminal_epoch)
+                # [REL-5b] count only BUILD-driver (tool-bearing) calls after terminal. A tool-less
+                # SUMMARIZER call — the async auto-title fired off kick() — is NOT a build runaway, so
+                # it must not classify a clean FINISHED run as SIDECAR_NOT_STOPPED. A real post-
+                # terminal driver runaway carries the tool catalog (has_tools=True) → still flagged.
+                calls_after = sum(1 for t, ht in _ts_recs if t > terminal_epoch and ht)
             else:  # relay captured nothing for this run → 0-after is meaningless → omit (fail-closed)
                 calls_after = None
                 timeline.append(

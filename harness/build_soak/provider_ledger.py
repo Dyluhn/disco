@@ -27,8 +27,25 @@ _URL_HOST_RE = re.compile(r"https?://([^/\s\"']+)", re.IGNORECASE)
 _MODEL_RE = re.compile(r"""["']?model["']?\s*[:=]\s*["']?([A-Za-z0-9._\-]+)""", re.IGNORECASE)
 
 
-def _record(host: str, *, model: str = "", ts: str | None = None, after_terminal: bool = False) -> dict[str, Any]:
-    return {"ts": ts, "host": host, "model": model, "after_terminal": bool(after_terminal)}
+def _record(
+    host: str,
+    *,
+    model: str = "",
+    ts: str | None = None,
+    after_terminal: bool = False,
+    has_tools: bool = True,
+) -> dict[str, Any]:
+    # [REL-5b] has_tools defaults True (fail-closed): an UNMARKED record (older relay, or a loose
+    # log line) is treated as a build-driver call so the after-terminal runaway check never silently
+    # under-counts. A tool-less SUMMARIZER/title call is excluded only when the relay explicitly
+    # marks has_tools=False.
+    return {
+        "ts": ts,
+        "host": host,
+        "model": model,
+        "after_terminal": bool(after_terminal),
+        "has_tools": bool(has_tools),
+    }
 
 
 def parse_relay_log_lines(lines: list[str]) -> list[dict[str, Any]]:
@@ -61,6 +78,7 @@ def parse_relay_log_lines(lines: list[str]) -> list[dict[str, Any]]:
                         model=str(obj.get("model") or ""),
                         ts=obj.get("ts") or obj.get("timestamp"),
                         after_terminal=bool(obj.get("after_terminal", False)),
+                        has_tools=bool(obj.get("has_tools", True)),  # [REL-5b] default True=fail-closed
                     )
                 )
             continue

@@ -61,8 +61,19 @@ def upstream_host(url: str) -> str:
     return urlparse(url).hostname or ""
 
 
-def relay_log_record(url: str, model: Any) -> dict[str, Any]:
-    return {"host": upstream_host(url), "url": url, "model": model, "ts": time.time()}
+def relay_log_record(url: str, model: Any, *, has_tools: bool = False) -> dict[str, Any]:
+    # [REL-5b] `has_tools` distinguishes a BUILD-driver request (always carries the tool catalog)
+    # from a tool-less SUMMARIZER request (the async auto-title fires off kick() with NO tools).
+    # The provider-after-terminal oracle counts only build-driver (tool-bearing) calls, so a benign
+    # post-terminal auto-title call is not miscounted as a build runaway — while a REAL post-terminal
+    # driver runaway (which carries tools) is still flagged.
+    return {
+        "host": upstream_host(url),
+        "url": url,
+        "model": model,
+        "ts": time.time(),
+        "has_tools": bool(has_tools),
+    }
 
 
 def create_app() -> Any:
@@ -96,7 +107,13 @@ def create_app() -> Any:
     async def proxy(path: str, request: Request) -> Any:
         body = transform_request(await request.json())
         url = f"{UPSTREAM}/{path}"
-        _log(relay_log_record(url, body.get("model") if isinstance(body, dict) else None))
+        _log(
+            relay_log_record(
+                url,
+                body.get("model") if isinstance(body, dict) else None,
+                has_tools=bool(isinstance(body, dict) and body.get("tools")),
+            )
+        )
         if isinstance(body, dict) and body.get("stream"):
             # send first so we know the REAL upstream status (a 401/400 must NOT surface as 200),
             # then stream the body and close the client when done.

@@ -252,3 +252,35 @@ def test_parser_after_terminal_defaults_false():
     recs = parse_relay_log('{"host": "api.minimaxi.com"}')
     assert recs[0]["after_terminal"] is False
     assert recs[0]["model"] == ""
+
+
+# --- [REL-5b] has_tools attribution: exclude benign post-terminal auto-title from the runaway oracle ---
+from product_build.minimax_relay import relay_log_record as _rel5b_relay_record  # noqa: E402
+
+
+def test_rel5b_relay_record_marks_has_tools() -> None:
+    b = _rel5b_relay_record("https://api.minimaxi.chat/v1/chat/completions", "m", has_tools=True)
+    s = _rel5b_relay_record("https://api.minimaxi.chat/v1/chat/completions", "m", has_tools=False)
+    assert b["has_tools"] is True and s["has_tools"] is False
+
+
+def test_rel5b_parse_preserves_has_tools_default_true_failclosed() -> None:
+    import json as _json
+    lines = [
+        _json.dumps({"host": "api.minimaxi.chat", "model": "m", "ts": 1.0, "has_tools": True}),
+        _json.dumps({"host": "api.minimaxi.chat", "model": "m", "ts": 2.0, "has_tools": False}),
+        _json.dumps({"host": "api.minimaxi.chat", "model": "m", "ts": 3.0}),  # unmarked → fail-closed True
+    ]
+    recs = parse_relay_log("\n".join(lines))
+    assert [r["has_tools"] for r in recs] == [True, False, True]
+
+
+def test_rel5b_after_terminal_counts_only_build_driver_calls() -> None:
+    term = 100.0
+    recs = [
+        {"ts": 101.0, "has_tools": False},  # SUMMARIZER auto-title after terminal — EXCLUDED
+        {"ts": 102.0, "has_tools": True},   # a real DRIVER runaway after terminal — FLAGGED
+        {"ts": 99.0, "has_tools": True},    # before terminal — not counted
+    ]
+    ts_recs = [(float(r["ts"]), bool(r.get("has_tools", True))) for r in recs]
+    assert sum(1 for t, ht in ts_recs if t > term and ht) == 1
