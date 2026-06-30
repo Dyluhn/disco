@@ -2659,3 +2659,13 @@ fresh_read on a large file with no read→FRESH_READ_REQUIRED; small file (≤15
 pytest + basedpyright.
 CODEX FOCUS (§9): no edit bypasses fresh-read; partial writes impossible (all-or-nothing); stale sha handled;
 elision can't enter source; overlapping edits rejected; literal-safety; insufficient negatives.
+
+### CD-TOOLS-2 — PLAN round-1 revision (Codex REVISE: atomicity)
+- _gated_write WRITES candidate bytes then REVERTS on the W3 syntax gate — that is NOT all-or-nothing (observable
+  bad-bytes mid-state; a failure can leave them). FIX: exact_replace pre-validates EVERYTHING IN MEMORY before any
+  write — (a) elision in old/new, (b) expected_sha256 stale, (c) fresh-read/coverage, (d) per-edit match counts
+  (exactly-once / multi), (e) overlap of match spans on the ORIGINAL text, (f) syntax of the COMPUTED new text via
+  _syntax_errors(path, new_text) (a syntax-introducing batch → EXACT_REPLACE_BATCH_FAILED, NO write). ONLY when ALL
+  pass, write the new text ONCE via the sandbox's atomic write (temp + rename if available; else a single
+  write_file) — NOT _gated_write. So a failing batch never touches disk; the W3 syntax discipline is preserved by
+  the in-memory pre-check instead of write-then-revert. This makes 'NO partial writes / all-or-nothing' true.
