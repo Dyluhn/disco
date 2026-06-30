@@ -5032,3 +5032,38 @@ agent-authored files as read-satisfied (it wrote them), OR the recovery_requeste
 (via _ground_read) so the model isn't stuck re-trying blind edits, OR both. Root-cause the read-state machinery
 (observe.py _ground_read, _f8_confirmed_file_writes, the FRESH_READ_REQUIRED gate, the recovery_requested handler).
 NEVER blame the model; REVISION_CHAIN → 100% by fixing this.
+
+## PR REL-RC-B — FRESH_READ_REQUIRED revision loop (PLAN, scout-grounded) — blocks REVISION_CHAIN 100%
+### Root cause (Lane-B scout; CORRECTED my (A) hypothesis)
+Agent-authored files stay edit-grounded across turns ONLY via the workspace-snapshot PIN (_ground_read for each path
+in out_pinned_full, view_render.py:548). The pin is added ONLY for files shown UN-TRUNCATED (view_render.py:312-323);
+a file > per_file_chars (6000, context_budget.py:41 / view_render.py:53) is head/tail-truncated → NOT pinned → never
+grounded → guard_fresh_edit (files.py:214,276) returns FRESH_READ_REQUIRED on every edit. Failing deliverables: run002
+index.html 6223B, run004 9776B (both > 6000). The model relies on the truncated-but-visible snapshot instead of re-
+reading → loop. recovery_requested (turn_control.py:730-740) only nudges (no read, no state) → next failure hard-halts
+→ STUCK. assist=false both runs → capability-independent HARNESS defect, NOT the model.
+### Why (A)/(B) rejected
+(A) ground agent-WROTE files = UNSOUND: grounds edits to files the model can no longer fully SEE (truncated) — the
+exact blind-rewrite-from-stale-memory clobber the gate prevents (the snapshot deliberately grounds only full-shown
+files). My earlier (A) hypothesis was WRONG — scout corrected it. (B) recovery auto-injects _ground_read (bit only,
+no sha) → lets the model edit an unseen region of a truncated file → clobber; + fires too late (threshold 4).
+### Fix (C) — WINNER: auto-REAL-read on the same-path FRESH_READ_REQUIRED streak
+A new gate in turn_control.py BEFORE gate_circuit_breaker (ahead of :684): count the trailing run of AgentErrorEvent
+error=="FRESH_READ_REQUIRED" with the same structured["path"] since the last successful Observation/USER msg; at
+threshold (2: 1st nudges, 2nd recovers) AND no auto-read already injected for this path in this streak → execute ONE
+real file_read of structured["path"] via the loop executor, emitting the PAIRED ActionEvent+ObservationEvent (mirror
+observe.py:337-347 F9 short-circuit), return Disp.CONTINUE. A real read (not a bit-flip) sets read_since_write +
+records the sha (files.py:472,168) AND puts the current bytes before the model → next edit is grounded for real +
+targets real text. Bounded (only on a same-path loop; a single FRESH_READ still just nudges as today). Preserves the
+read-before-write safety for genuinely-unread files (satisfies the contract by ACTUALLY reading). The gate's
+structured next_required_action="file_read"/suggested_args={path} (files.py:204-210) is the consumer this fix uses.
+### Complementary (frequency mitigation, NOT the fix)
+Bump _WS_PER_FILE_CHARS/ASSIST_PER_FILE_CHARS (6000, view_render.py:53/context_budget.py:41) so typical 6-10KB
+deliverables don't truncate → fewer FRESH_READ loops; but a 50KB file still truncates so it does NOT fix the
+structural coupling. Keep (C) as the fix; optional cap bump as mitigation.
+### Tests + Acceptance + Gate
+Tests-first (core): same-path FRESH_READ_REQUIRED ×2 → auto file_read injected (paired action+obs) → Disp.CONTINUE;
+single FRESH_READ → no auto-read (nudge as today); different paths → no premature trigger; bounded (one auto-read per
+path per streak). Then restart server + re-soak revise x5 → consistent high PASS (REVISION_CHAIN must be 100% for
+REL-6's 10 runs). Codex CODE-gate (loop control-flow + injects a tool call adjacent to the circuit breaker → must
+preserve action/observation tool-pairing observe.py:226 + bounded-retry).
