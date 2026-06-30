@@ -2981,3 +2981,22 @@ REFINED DELIVERABLE:
   EDIT phase unchanged (no regression). 
 - Live coverage: artifact mode wires the guard today; build-mode guard wiring (if absent) stays the §6 integration —
   but the verify SCOPE fix is correct + live wherever the guard runs (NOT a dormant-only change).
+
+### CD-TOOLS-6 — FINAL narrow scope (Codex: "narrow latent contract cleanup") + the real latent bug
+- Codex correctly rejected my dormancy claim (ContractScopeGuard IS live in artifact mode, reads BuildPhaseTracker).
+  Deeper read: mutators are ALREADY denied in VERIFY (is_mutating); read-only tools fall through to allowed. BUT
+  verify_web_app + browser are read_only=False (default) → treated as mutating → DENIED in VERIFY (scope={finalizer}
+  only). So IF the VERIFY phase is entered, the VERIFIER ITSELF (verify_web_app/browser) is blocked — it cannot
+  verify/inspect. THAT is the real latent bug worth the narrow cleanup.
+- NARROW DELIVERABLE (real contract-layer fix, live where the guard runs; full build-mode verifier-only split +
+  phase-reachability = §6, honestly carved):
+  1. scopes.compile_tool_scopes: verify = {finalizer} ∪ {file_read, file_list, search, browser, server_status,
+     verify_web_app, preview_status, preview_logs, think} — the verifier's READ-ONLY DIAGNOSTICS. ALL real mutators
+     (file_write/append/edit/replace_lines/insert_lines/str_replace/exact_replace/safe_write_file, shell*/code_exec,
+     app_*, deck_patch/sheets/slides/image, scaffold_starter, preview_start/stop) STAY out → denied in VERIFY.
+  2. enforce.ScopeDecision gains code:str=""; decide_tool_in_scope sets code=VERIFIER_ONLY_TOOL_BLOCKED when a
+     MUTATING tool is denied in the VERIFY phase (today: generic reason only). Finalizer still callable any phase.
+  3. TESTS: VERIFY allows verify_web_app/browser/file_read/server_status; VERIFY denies exact_replace/safe_write_file/
+     file_write/shell with code VERIFIER_ONLY_TOOL_BLOCKED; EDIT/BOOTSTRAP unchanged (no regression). 
+- NOT claiming the full verifier-only context split (verify_web_app already encapsulates the verifier; console capped)
+  nor build-mode guard wiring — those are §6.
