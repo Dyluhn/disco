@@ -4487,3 +4487,25 @@ no verdict changed; full suite green. Codex plan-gate THEN implement.
 two-things-named-manifest (ProjectStore row vs artifact_manifest — keep distinct); structured-key implicit
 contract (centralize the ingest key list, today duplicated _common.py:147 + runner.py:390); imported/read-only
 convs (_reject_if_imported) → manifest empty, never written from foreign structured.
+
+## §11 HEARTBEAT — 2026-06-30 — BASELINE SOAK DONE: revision-followup reliability BLOCKER surfaced
+- **Baseline soak (9 runs, podman+MiniMax-M3):** static_html_minimal 3/3 PASS, multifile_static_site 3/3 PASS,
+  **revise_after_finish 1 PASS / 2 FAIL.** Safety CLEAN: 0 orphan containers (REL-4 working), 0 non-minimax relay
+  hosts. The 7/9 confirms REL-4/5 cleanup is solid AND surfaces a real product/engine reliability gap.
+- **FINDING [Category A — user-visible product failure, BLOCKS REL-6]:** the after-terminal FOLLOWUP / re-plan
+  re-entry STUCKs or ERRORs ~2/3 in revise_after_finish (2 sequential plan-revision followups). Both fails are
+  BUILD_DID_NOT_FINISH (required_finish→terminal_status): run000 terminal=ERROR iter5/500; run002 terminal=STUCK
+  iter1/500 (98 events — base build + followup1 OK, then the 2nd-followup re-entry stuck immediately). NOT a
+  timeout (low iters), NOT caused by REL-4/5 (harness-only). PRE-EXISTING engine re-entry bug; relates to the old
+  "RP-13 clarify+followup ENGINE RISK". REL-6 REVISION_CHAIN (10 runs, 100% clean) CANNOT pass until fixed.
+- **REL-2a plan r1 (Codex REVISE):** "observe fold is NOT under _lock — engine.py drops it before _execute_and_
+  observe, so the per-cid manifest lock must wrap the observe upsert too or report/preview/lifecycle writes can
+  lose updates." FIX: the per-cid manifest mutation lock wraps ALL writers INCLUDING the observe.py:517 fold (not
+  only the edge writers). Single asyncio.Lock per cid acquired around every ArtifactRecord upsert.
+- **Active lanes:** revision-followup root-cause scout (Lane B engine re-entry) dispatched. REL-1 verifier-design
+  scout DONE (5-PR decomp REL-1a..e: extract helpers→events+manifest field→shadow gate→canary wire-dead-edge→
+  promote; integrate to a REL-1 plan next). REL-2 scout DONE+integrated (plan needs the r1 lock fix).
+- **Blockers A/B/C/D/E/F:** **A: revision-followup STUCK/ERROR (NEW, blocks REL-6) — investigating.** B: REL-5b
+  product teardown (deferred). C: none (REL-5 sound). 
+- **Next action:** root-cause the revision re-entry (scout) → classify+fix (likely engine) → re-soak revision class;
+  in parallel finalize REL-2a (lock fix) → Codex re-gate → implement. Re-arm 120s.
