@@ -5083,6 +5083,7 @@ threshold-2 streak counter only TRIGGERS the first auto-read; the durable marker
 (real-read-not-bit-flip, paired action+obs per observe.py:226, preserves safety) unchanged.
 
 ### REL-RC-B plan r2 (Codex REVISE): sentinel must be a SEMANTIC StatusEvent, not volatile ActionEvent.meta
+**Codex PLAN APPROVE (r2): durable StatusEvent sentinel bounds re-injection; real file_read preserves safety+pairing; post-read failure falls through to the breaker. canonical_path = _canonical(failed-action path). READY TO IMPLEMENT.**
 Codex: "ActionEvent.meta is explicitly volatile/non-semantic, so the durable sentinel must be a real semantic marker,
 e.g. StatusEvent(detail='auto_ground_read:{canonical_path}')." CORRECT — meta is not load-bearing. FINAL marker: when
 the gate injects the auto-read, it ALSO emits StatusEvent(detail=f"auto_ground_read:{canonical_path}") (a real,
