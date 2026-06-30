@@ -4409,3 +4409,19 @@ each heartbeat; if dead, restart + audit.
   cheap guards. E: none. F: opencode not installed (MiniMax via relay — unaffected).
 - **Next action:** A-B4 (persist product-evidence.json + §6 hash-lock + classify_run_folder enforces missing-slice)
   → A-B1 (preflight hard-require relay env) → REL-5 Codex code-gate → REL-1/2/3 shadow-canary → REL-6.
+
+## STRUCTURED HEARTBEAT (§11) — 2026-06-30 — REL-5 SHIPPED
+- daemon: pid 1234314 alive; ticks resuming.
+- **Current PR:** REL-5 → SHIPPED + Codex APPROVE ("no SKIP-as-PASS path remains in REL-5 scope").
+- **Lanes:** A (oracle) COMPLETE — 5 false-greens fixed (M2/B5-M3/M4/B4/B1) all live-proven. B (lifecycle)
+  COMPLETE — findings → REL-5b + REL-6. E (regression) — full build_soak suite green each fix.
+- **External agents:** none running; codex gated REL-5 APPROVE.
+- **Latest commit:** b4744abc fix(REL-5): Lane A A-B1 — fail-closed preflight requires the relay ledger for a positive soak (pushed).
+- **Tests since last hb:** build_soak full suite (relay unset) green ×3; ~10 live podman+MiniMax runs PASS w/
+  lifecycle+sidecar_stop+cleanup adjudicating, 0 orphans; A-B4 persist+hash-lock+tamper=INVALID proven;
+  A-B1 no-relay→INFRA_FAILURE exit3 proven.
+- **New issues:** none new this tick (Lane A/B already recorded+classified).
+- **Blockers A/B/C/D/E/F:** C: none open (REL-5 sound). B: B-B1 product teardown leak + Pi-sidecar gap → REL-5b
+  (deferred, classified). A/D/E: none. F: opencode absent (relay path unaffected).
+- **Next action:** BASELINE SOAK on podman+MiniMax (now oracles adjudicate + fail-closed) to measure the real
+  clean rate across scenario classes, before REL-2/1/3 shadow-canary + REL-6.
