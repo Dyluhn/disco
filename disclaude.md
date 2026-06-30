@@ -2476,3 +2476,15 @@ Codex CODE+EVIDENCE review → revise to APPROVE → commit/push → heartbeat. 
   record n_settle. sidecar = {stopped_at_terminal: n_settle==n_terminal,
   provider_calls_after_terminal: n_settle - n_terminal}; run ledger = lines[n_start:n_settle]
   (isolated by sequencing) → all hosts minimax, 0 openrouter. Monotonic, clock-free, run-scoped.
+
+### HEARTBEAT 2026-06-29 — STAB-1a SHIPPED (negative fixtures, fail-closed proven)
+- test_harness_negative_fixtures.py: 18 deterministic fixtures, each a sole-change vs a passing baseline asserting
+  the EXACT failure code (no SKIP-as-PASS, no oracle weakening). Covers the full negative matrix: missing
+  slice/ledger/scenario_id → INVALID_RUN; openrouter host / post-terminal call / sidecar-not-stopped / nothing-
+  shown / orphan / not-released / verification-false → FAIL with the right code. Codex APPROVE after 3 sharp
+  REVISEs (sole-change isolation; assert exact codes; the openrouter host must contain BOTH 'minimax'+'openrouter'
+  to isolate the forbid gate from the require-host miss). pyright 0/0.
+- NEXT: STAB-1b — wire the SIDECAR per-run relay-offset window (n_start/n_terminal/n_settle, ledger-native) + the
+  orphan-process check into a reusable stability runner; add 'sidecar' to the stability scenario required_slices.
+  THEN STAB-2 (STATIC_SMOKE x10 consecutive LIVE, no retry-to-pass, record every run). If the stuck rate blocks
+  10/10, the finalize-on-bookkeeping-stuck engine fix becomes the required STAB-2a prereq. P10b stays PARKED.
