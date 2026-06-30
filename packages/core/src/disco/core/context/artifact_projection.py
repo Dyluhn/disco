@@ -16,7 +16,27 @@ from __future__ import annotations
 
 import posixpath
 
+from ..env import disco_env
 from ..events import DeliverableEvent, Event, ObservationEvent
+
+# [REL-2a step2b] Shadow flag — when ON, the artifact-manifest fold dual-writes AND a core site
+# compares the maintained manifest against this projection, logging divergence (RETURNS legacy; no
+# reader switched). Default OFF → byte-identical to today. Promote only after live 0-divergence.
+_SHADOW_FLAG = "ARTIFACT_MANIFEST_SHADOW"
+
+
+def manifest_shadow_enabled() -> bool:
+    """True iff DISCO_ARTIFACT_MANIFEST_SHADOW is set truthy (default OFF)."""
+    return str(disco_env(_SHADOW_FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def manifest_path_divergence(
+    projected: set[str], manifest_paths: set[str]
+) -> tuple[set[str], set[str]]:
+    """Compare the single-source projection against the maintained manifest's paths. Returns
+    ``(missing, extra)`` — paths the projection has but the manifest lacks, and paths the manifest
+    has but the projection doesn't. Both empty ⇒ the manifest faithfully tracks emitted artifacts."""
+    return (projected - manifest_paths, manifest_paths - projected)
 
 
 def artifact_paths_from_events(events: list[Event]) -> set[str]:

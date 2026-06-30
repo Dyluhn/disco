@@ -251,3 +251,26 @@ async def test_upsert_artifact_concurrent_no_lost_update() -> None:
     recs = await store.read_artifacts()
     assert len(recs) == 20
     assert sorted(r.path for r in recs) == sorted(f"f{i}.html" for i in range(20))
+
+
+# --- [REL-2a step2b] shadow flag + divergence comparator ----------------------
+def test_manifest_shadow_flag_default_off(monkeypatch) -> None:
+    from disco.core.context.artifact_projection import manifest_shadow_enabled
+
+    monkeypatch.delenv("DISCO_ARTIFACT_MANIFEST_SHADOW", raising=False)
+    monkeypatch.delenv("PMX_ARTIFACT_MANIFEST_SHADOW", raising=False)
+    assert manifest_shadow_enabled() is False
+    monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "1")
+    assert manifest_shadow_enabled() is True
+    monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_SHADOW", "off")
+    assert manifest_shadow_enabled() is False
+
+
+def test_manifest_path_divergence() -> None:
+    from disco.core.context.artifact_projection import manifest_path_divergence
+
+    # in sync → no divergence
+    assert manifest_path_divergence({"a", "b"}, {"a", "b"}) == (set(), set())
+    # manifest missing 'b', has stray 'c'
+    missing, extra = manifest_path_divergence({"a", "b"}, {"a", "c"})
+    assert missing == {"b"} and extra == {"c"}
