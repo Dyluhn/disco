@@ -4603,3 +4603,36 @@ fake a pass.
   A1 LOADED. Note for honesty: any prior SERVER-side "loaded" claim (CD-TOOLS tools) may have run stale code — the
   harness-adjudicated proofs are valid; re-verify server-side as needed.
 - **Now re-running the REL-RC A1 re-soak on the CORRECT (disclaude+A1) server** — the first attempt ran stale code.
+
+## PR REL-1 — host-owned ready_for_verification + verifier fork (PLAN, ratification-pending) — Lane-G scout grounded
+### Goal
+Make ready_for_verification a HOST-owned path (surface→host load-diagnostics→fork/queue verifier→verdict sets the
+dead BuildPhaseTracker edge + writes 'verified' into the REL-2 manifest); stop the MAIN agent self-verifying. Ship
+SHADOW→canary→promote so it can't regress the soak clean-rate.
+### Grounding (file:line)
+ready_for_*_verification = virtual finish-alias (agent.py:99-112 canonicalizes →finish). Inline self-verify: finish.py
+gate_browser_verify:1904 → _gate_verify_web_app:1507 → _drive_verify_web_app:996. Dead edge: runtime.note_build_
+verify_result:1217 / phase.py:49 note_verifier_result — NO prod caller. Reusable: verify_app.compute_verdict
+(verify_app.py:157-263, web load-diag), verify/runner._validate_app_deliverables:607 + artifact_validators.* (doc/
+deck/sheet/pdf/audio). Prompts mandate self-verify: prompts.py:223-228,436-439.
+### PR decomposition (small, each independently revertible; only 1e changes finish outcome)
+- REL-1a: extract shared verifier helpers (verify/runner._validate_app_deliverables/_app_body_problem + the verify_
+  web_app structured-probe collection) → a host-callable verify/probe.py reused by runner + the new gate. PURE
+  refactor, no behavior change, fully tested.
+- REL-1b (depends REL-2): add 3 verifier event classes (VerifierStarted/Verdict/Shadow, all NOT LLMConvertible) to
+  events.py; add verified/verify_verdict to the REL-2 manifest schema. No gate wiring.
+- REL-1c: host_verifier injection seam (engine ctor + runtime _make_engine near runtime.py:1581) + gate_host_verify
+  in handle_finish_path (finish.py:2047) returning FALLTHROUGH-only (advisory); thread requested_verification off
+  agent.py:111; emit the events. Host load-diag = verify_app.compute_verdict HOST-driven (no ActionEvent). Fork =
+  await asyncio.wait_for(host_verifier.verify(deliverable), timeout) — NOT run_scenario; degrade via the existing
+  _verifier_unavailable_disposition:1852. OUTCOME UNCHANGED (shadow: run alongside inline self-verify, log agreement).
+- REL-1d (canary, flag): on host verdict call note_build_verify_result (wire the dead edge) + stamp manifest
+  verified. Still no finish-outcome change. Lets REL-6 measure phase/manifest correctness.
+- REL-1e (promote, gated on REL-6 shadow-agreement): gate_host_verify authoritative; gate_browser_verify delegates;
+  delete _drive_verify_web_app + the self-verify branch; delete the prompt mandate (prompts.py:223-228,436-439).
+  KEEP the browserless/non-web path (_browser_verified, _is_web_deliverable gated). Non-web kinds w/o a validator →
+  verdict 'unverifiable' (honest, not pass).
+### Non-negotiables/Risks
+finish.py is core (regression lowers soak clean-rate) → shadow FALLTHROUGH-only + flag; reuse existing refusal/STUCK/
+unverified-release dispositions. VERIFY-phase-reachable changes ToolScope (coordinate EXPORT-empty-scope w/ REL-3).
+No verified badge w/o a verifier pass. Sequenced AFTER REL-2 (manifest is the verified sink). Codex plan+code gate.
