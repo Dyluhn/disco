@@ -4804,3 +4804,12 @@ on the actual diff. 8 harvest tests + 225 plan/planning/revision tests green; lo
 disclaude, _harvest_steps importable). REMAINING for REL-RC = the LIVE PROOF only: A3 re-soak (bvspmeoyj, revise x5)
 running — must SHOW the PASS lift from 1/5. If it lifts → REL-RC done-as-feasible (A1 floor + A3 lift) with the
 documented MiniMax multi-revision capability ceiling carried to REL-6. Gate stays RED until the live lift is proven.
+
+### A3 re-soak EARLY read (run000): A3 fixes PLANNING, execution-layer limit remains
+run000 A3: plans(nsteps)=[2,3,3] — ALL revisions now carry real steps (A1-only soak run000 was [2,3,0,0] →
+revision_no_concrete_steps STUCK). A3 harvest RECOVERED the mis-routed steps at the planning layer (working as
+designed). BUT terminal=STUCK(detail='') = a DIFFERENT, EXECUTION-layer STUCK (the run002-class run_project_script
+serialization failure the scout flagged as UNREACHABLE by plan-parse). So A3 lifts planning-layer failures but the
+MiniMax execution-layer serialization defect persists → this run still fails overall. Confirms the honest ceiling:
+A3 is the right planning fix; multi-revision REVISION_CHAIN 100% is blocked by a SECOND MiniMax-M3 defect at the tool-
+arg execution layer. Awaiting full tally; will report honestly (planning-fixed != run-passed).
