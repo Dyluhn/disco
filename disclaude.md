@@ -2680,3 +2680,13 @@ elision can't enter source; overlapping edits rejected; literal-safety; insuffic
 - NEXT: IMPLEMENT CD-TOOLS-2 — ExactReplaceTool in builtin/files.py (reuse guard_fresh_edit + _has_elision_marker;
   in-memory validate-all → single write; multi/overlap/literal-safe via str-slicing) + register (builtin/__init__,
   registry.AGENT_TOOLS + _ANCHORED_EDIT_TOOLS) + the ~12 tests + basedpyright → Codex CODE-gate → commit. Then 3..10.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-2 SHIPPED (atomic exact_replace)
+- ExactReplaceTool in builtin/files.py: validate-all-in-memory (elision/stale-sha/match-counts/overlap/mandatory-
+  fresh-read/syntax) → ONE write, true all-or-nothing (no write-then-revert). Literal splice (str slicing). multi/
+  expected_sha256. Registered in __init__/AGENT_TOOLS/exec_policy.withheld_tools (anchored-edit tier). Codex APPROVE
+  after 2 REVISEs — both REAL bypass holes: (R1) require_fresh_read settable=false → REMOVED (guard now mandatory);
+  (R2) file_read(offset>EOF) granted grounding showing nothing → moved the read_since_write grant past the past-EOF
+  return (also hardens file_write's read-before-write gate). 15 + 57 tests; pyright 0/0.
+- NEXT: CD-TOOLS-3 (safe_write_file) — phase-scoped whole-file write with shrink>50% guard + elision reject + atomic
+  temp+rename + manifest update. Then 4..10 (9 = LIVE MiniMax targeted-edit harness; 10 = survey→unblock P10b).
