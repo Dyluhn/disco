@@ -38,6 +38,7 @@ from ..events import (
     ObservationEvent,
     PlanEvent,
     StatusEvent,
+    ToolCall,
     ToolResult,
 )
 from ..llm import OperatingMode
@@ -680,6 +681,41 @@ class Valve:
             # else: escape just marked, model hasn't retried yet → fall through
             # and let it act this iteration (with the bumped temperature below).
         return Disp.FALLTHROUGH
+
+    async def gate_fresh_read_autoground(self, events: list[Event]) -> Disp:
+        """[REL-RC-B] Break a FRESH_READ_REQUIRED edit loop deterministically. In a revision the
+        model edits a file it built in a prior turn; the file was un-grounded by that write and is
+        too large to be re-grounded by the (truncated) workspace-snapshot pin, so the read-before-
+        write gate refuses every edit and the model loops without re-reading → circuit breaker →
+        STUCK. On the 2nd same-path FRESH_READ_REQUIRED (and only ONCE per path per revision — the
+        durable `auto_ground_read:{path}` StatusEvent marker survives the injected read's own success
+        Observation), the HARNESS injects ONE REAL file_read of that path. A genuine read sets
+        read_since_write + records the sha AND puts the current bytes before the model, so the next
+        edit is grounded for real and targets real text — preserving the read-before-write safety
+        (it satisfies the contract by ACTUALLY reading) for every genuinely-unread file. A file that
+        STILL fails after one real read (truly huge/un-coverable) falls through to gate_circuit_
+        breaker and STUCKs cleanly — the marker prevents re-arming. Runs BEFORE the circuit breaker."""
+        target = signals.fresh_read_autoground_target(events)
+        if target is None:
+            return Disp.FALLTHROUGH
+        # Durable semantic sentinel (NOT volatile ActionEvent.meta): one auto-read per path/revision.
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING, detail=f"auto_ground_read:{target}"
+            )
+        )
+        # Emit the ActionEvent FIRST (execute_and_observe requires it already on the log for strict
+        # action/observation tool-pairing), then run the REAL file_read → it emits the paired Obs.
+        action = ActionEvent(
+            thought=(
+                f"(auto-ground) The read-before-write gate has refused edits to {target} twice; "
+                "reading its current content so the next edit is grounded against real text."
+            ),
+            tool_call=ToolCall(tool_name="file_read", arguments={"path": target}),
+        )
+        await self._loop._emit(action)
+        await self._loop._execute_and_observe(action)
+        return Disp.CONTINUE
 
     async def gate_circuit_breaker(self, events: list[Event]) -> Disp:
         # (c.2) CIRCUIT BREAKER (Cluster 2). StuckDetector only catches

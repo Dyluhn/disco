@@ -1378,6 +1378,14 @@ class AgentLoop:
                 if disp is Disp.HALT:
                     return await self.get_state()
 
+                # [REL-RC-B] break a FRESH_READ_REQUIRED edit loop (inject one real file_read)
+                # BEFORE the circuit breaker hands off / STUCKs.
+                disp = await self._valve.gate_fresh_read_autoground(events)
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
+
                 disp = await self._valve.gate_circuit_breaker(events)
                 if disp is Disp.CONTINUE:
                     continue
