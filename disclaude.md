@@ -3156,3 +3156,46 @@ plan_step contamination tests still pass. BOTH suites.
   0 OpenRouter; relay :8080 + agent :8000 per RESTART RECIPE; token env-only via opencode auth.json minimax-coding-
   plan. Run a real build exercising exact_replace/safe_write_file/run_project_script on a LARGE file; prove no
   old_text_not_found/elision thrash; provider ledger every run; 0 post-terminal calls. Then 10 (survey → unblock P10b).
+
+### PR CD-TOOLS-9 — live MiniMax targeted-edit harness (PLAN, ratification-pending) — INFRA CONFIRMED LIVE
+LIVE FEASIBILITY (probed, all GREEN): relay :8080 = minimax_relay (GET /v1/models lists MiniMax-M3; a real POST
+/v1/chat/completions returned a live MiniMax-M3 `<think>` reply + real tokens); agent-server :8000 up (FastAPI;
+POST /conversations, /conversations/{cid}/files, /messages, /followup, GET /events, POST /kill). disco-config.json:
+default_model=driver-minimax, base_url=http://localhost:8080/v1, model_id=minimax-m3 → EVERY build uses MiniMax
+DIRECT via the relay. Relay ledger at /tmp/.../p1blive3b/relay.jsonl (MINIMAX_RELAY_LOG; 262 lines, ALL host=
+api.minimaxi.chat model=MiniMax-M3 → 0 OpenRouter). DISCO_SECRET_KEY set. RESTART RECIPE already satisfied.
+HARNESS (new harness/product_build/targeted_edit_run.py — a lightweight LIVE HTTP driver, NOT a cassette):
+1. record relay-ledger line offset N0.
+2. POST /conversations → cid.
+3. POST /conversations/{cid}/files → seed a LARGE index.html (>1500 chars = the _ARG_SNIP_CHARS elision threshold;
+   distinct, greppable hero headline / CTA / footer-year tokens).
+4. POST /conversations/{cid}/messages → "index.html exists in the workspace. Make exactly these THREE TARGETED
+   edits to it: hero headline → '<A>', CTA button text → '<B>', footer year → 2026. Edit precisely; do NOT rewrite
+   the whole file." (Mode-B trigger: edit a large file the model did not just write → it must file_read first, and
+   the file_write content / large reads get elided as context grows.)
+5. poll GET /events until terminal (FINISHED/VERIFIED/STUCK/ERROR/AWAITING_USER) or a hard timeout; capture the full
+   event log + the relay-ledger slice [N0:end].
+6. CLASSIFY (the Mode-B-GONE oracle — checks real edit behavior, NOT just 'finished'); PASS iff ALL:
+   - a TARGETED-EDIT tool was used on index.html (exact_replace / run_project_script / safe_write_file / file_edit /
+     file_replace_lines) AND at least one SUCCEEDED;
+   - fresh-read behavior: a file_read of index.html occurred OR a FRESH_READ_REQUIRED was returned and then a
+     file_read occurred (the CD-TOOLS-1 guard working, not thrashing);
+   - NO edit-thrash: NOT (>=3 old_text_not_found) AND NO elision-marker-rejected (ELISION_MARKER_REJECTED / the
+     executor placeholder reject) AND NOT STUCK-with-recovery_requested-from-edits;
+   - OUTPUT-TRUTH: the on-disk index.html ACTUALLY contains '<A>', '<B>', '2026' (the edits applied) and is NOT a
+     truncated/whole-rewritten stub (size within sane bounds of the seed) — fetch via GET /conversations/{cid}/
+     artifacts/index.html or /files;
+   - PROVIDER LEDGER: the [N0:end] slice has 0 OpenRouter hosts (every host is api.minimaxi.chat/api.minimax.io,
+     model MiniMax-M3) AND 0 provider calls after the terminal event's timestamp/offset.
+   FAIL → record the FULL dossier + classify the failure mode (Mode A bookkeeping / Mode B edit-thrash / other);
+   do NOT fake a pass.
+7. write the dossier JSON (event log + ledger slice + verdict) under RUN_DIR.
+CD-TOOLS-9 = implement the driver/oracle + RUN IT LIVE ONCE → a real PASS dossier (one solid proof Mode B is gone).
+CD-TOOLS-10 = run it 10× consecutive (record every run) → 10/10 + ledger clean → REPORT.md → unblock P10b.
+NON-NEGOTIABLE held: MiniMax direct (relay→api.minimaxi), 0 OpenRouter, provider ledger every run, 0 post-terminal,
+output-truth (edits really applied), no oracle weakened. If a live run can't start/finish (server down, MiniMax
+unreachable, timeout), REPORT honestly + ScheduleWakeup retry — a live model end-to-end is the ONLY proof.
+CODEX FOCUS (§9): is this a REAL live MiniMax-direct run (not a cassette/fake — the agent-server default driver IS
+the relay→MiniMax, confirmed); does the Mode-B oracle actually verify no-edit-thrash + tools-used + edits-APPLIED
+(output-truth), not merely 'finished'; ledger proves 0 OpenRouter + 0 post-terminal; honest fail handling; no oracle
+weakening; insufficient negatives.
