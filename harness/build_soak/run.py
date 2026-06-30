@@ -1177,6 +1177,19 @@ async def _amain(args: argparse.Namespace) -> int:
         print(f"unknown scenario {args.scenario!r}; known: {sorted(scenarios)}", file=sys.stderr)
         return 2
     scenario = scenarios[args.scenario]
+    # [Lane A A-B1] FAIL-CLOSED infra preflight: a reliability soak must be able to adjudicate
+    # terminal cleanup + provider-after-terminal, which REQUIRES the relay ledger. Refuse to START a
+    # positive scenario without it — else run_once's _live_measure is False, the sidecar/cleanup
+    # slices are omitted, the oracles SKIP, and the run classifies SKIP-as-PASS. A scenario opts out
+    # only by explicitly declaring `requires_relay_ledger: false` (a pure classifier/negative case).
+    if scenario.get("requires_relay_ledger", True) and not _relay_log_path():
+        print(
+            "[build-soak] INFRA_FAILURE: scenario requires the relay ledger to adjudicate terminal "
+            "cleanup + provider-after-terminal — set MINIMAX_RELAY_LOG (or PMX_/DISCO_RELAY_LOG). "
+            "Refusing to run a soak that could SKIP-as-PASS.",
+            file=sys.stderr,
+        )
+        return 3
     repo_root = Path(__file__).resolve().parents[2]
     commit = _git_commit(repo_root)
     db_path = args.db or os.environ.get("DISCO_DB") or str(repo_root / "disco.db")
