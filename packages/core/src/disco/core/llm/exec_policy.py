@@ -65,6 +65,7 @@ class ModelExecutionPolicy:
         out: set[str] = set()
         if not self.anchored_edit:
             out.add("file_str_replace")
+            out.add("exact_replace")  # CD-TOOLS-2 — anchored exact-match batch edit (capable tier)
         # Retired for ALL tiers (state-drift); kept callable for defensive back-compat.
         out.add("plan_step")
         if self.tier == "weak":

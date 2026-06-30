@@ -74,6 +74,9 @@ AGENT_TOOLS = frozenset(
         # Callable by all agents (in allowed_tools) but WITHHELD from advertised_tools
         # when model_policy.anchored_edit is False; see agent_scope() below.
         "file_str_replace",
+        # CD-TOOLS-2 — atomic exact-match batch replace; anchored-edit tier (withheld from the
+        # weak advertised set via ModelExecutionPolicy.withheld_tools, callable by all).
+        "exact_replace",
         "file_list",
         "shell",
         "shell_exec",

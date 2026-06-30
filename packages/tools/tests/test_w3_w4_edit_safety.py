@@ -354,9 +354,11 @@ def test_w4_file_str_replace_in_agent_tools():
 
 
 def test_w4_non_anchored_policy_advertised_excludes_str_replace():
-    """standard + anchored_edit=False advertises AGENT_TOOLS minus file_str_replace AND
-    minus plan_step. plan_step is RETIRED from the advertised surface for EVERY tier
-    (runthru-v2 #3, state-drift); the non-anchored capability additionally withholds
-    file_str_replace."""
+    """standard + anchored_edit=False advertises AGENT_TOOLS minus the anchored-edit tools
+    (file_str_replace AND exact_replace) AND minus plan_step. plan_step is RETIRED from the
+    advertised surface for EVERY tier (runthru-v2 #3, state-drift); the non-anchored capability
+    additionally withholds the anchored-edit tools (exact_replace added in CD-TOOLS-2)."""
     scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
-    assert scope.advertised_tools == AGENT_TOOLS - frozenset({"file_str_replace", "plan_step"})
+    assert scope.advertised_tools == AGENT_TOOLS - frozenset(
+        {"file_str_replace", "exact_replace", "plan_step"}
+    )

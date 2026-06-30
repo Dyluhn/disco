@@ -17,6 +17,7 @@ from .scaffold_starter import ScaffoldStarterTool
 from .browser import BrowserTool
 from .context_memory import ContextMemoryTool
 from .files import (
+    ExactReplaceTool,
     FileAppendTool,
     FileEditTool,
     FileInsertLinesTool,
@@ -56,6 +57,7 @@ __all__ = [
     "CodeExecTool",
     "ContextMemoryTool",
     "DeckPatchTool",
+    "ExactReplaceTool",
     "DelegateExploreTool",  # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
     "ExtractTool",
     "FileEditTool",
@@ -102,6 +104,7 @@ def build_default_registry() -> ToolRegistry:
         FileReplaceLinesTool(),
         FileInsertLinesTool(),
         FileStrReplaceTool(),  # W4: anchored str-replace; withheld from weak-tier advertised set
+        ExactReplaceTool(),  # CD-TOOLS-2: atomic exact-match batch replace; anchored-edit tier
         FileListTool(),
         ShellTool(),
         ShellExecTool(),

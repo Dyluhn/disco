@@ -129,12 +129,13 @@ def test_non_anchored_standard_keeps_update_plan_progress():
 
 
 def test_non_anchored_standard_withholds_exactly_file_str_replace():
-    """standard + anchored_edit=False withholds EXACTLY {file_str_replace} — no extras."""
+    """standard + anchored_edit=False withholds EXACTLY the anchored-edit tools
+    {file_str_replace, exact_replace} — no extras (CD-TOOLS-2 added exact_replace to that tier)."""
     standard_names = _tool_names(_STANDARD)
     non_anchored_names = _tool_names(_STANDARD_NO_ANCHORED)
     dropped = standard_names - non_anchored_names
-    assert dropped == {"file_str_replace"}, (
-        f"non-anchored standard should drop only file_str_replace, got: {dropped}"
+    assert dropped == {"file_str_replace", "exact_replace"}, (
+        f"non-anchored standard should drop only the anchored-edit tools, got: {dropped}"
     )
 
 

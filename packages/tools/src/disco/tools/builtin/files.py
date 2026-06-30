@@ -450,7 +450,6 @@ class FileReadTool:
         # ctx.sandbox.read_file() calls inside _gated_write and each mutator's
         # own read do NOT go through this method, so they do NOT set the bit —
         # only an explicit model-issued file_read counts as grounding evidence.
-        _conv_state(ctx.conversation_id)["read_since_write"].add(_canonical(args.path))
         import hashlib
 
         _disk_sha = hashlib.sha256(data).hexdigest()  # CD-TOOLS-1 fresh-edit grounding
@@ -459,10 +458,18 @@ class FileReadTool:
         total = len(lines)
         start = max((args.offset or 1) - 1, 0)
         if start >= total and total > 0:
+            # An offset PAST end-of-file shows NO content — it must NOT grant grounding
+            # (read_since_write) or the CD-TOOLS-1/2 fresh-edit guard could be bypassed by a
+            # `file_read(offset=huge)` that read nothing (Codex CD-TOOLS-2 round-2). A prior real
+            # read's grounding is untouched (we simply don't ADD here).
             return ToolOutcome(
                 success=True,
                 content=f"[lines {start + 1}-{total} of {total} — offset past end of file]",
             )
+        # F1 — grant the read-since-write grounding bit ONLY now that we know content WILL be
+        # shown (the branches below all render real lines, incl. the empty-file fall-through).
+        # Set before file_write's read-before-write gate AND the CD-TOOLS-1 edit guard rely on it.
+        _conv_state(ctx.conversation_id)["read_since_write"].add(_canonical(args.path))
         # F7 — pressure-aware head-only. Fires ONLY when:
         #   - ctx.assist is on (the weak-model tier the gate exists to protect),
         #   - the caller did NOT pass an explicit offset/limit (a targeted read
@@ -1109,4 +1116,198 @@ class FileStrReplaceTool:
             success=True,
             content=f"replaced in {args.path}",
             artifacts=[args.path],
+        )
+
+
+def _all_occurrences(text: str, sub: str) -> list[int]:
+    """Non-overlapping start offsets of `sub` in `text` (advances by len(sub))."""
+    out: list[int] = []
+    if not sub:
+        return out
+    i = text.find(sub)
+    while i != -1:
+        out.append(i)
+        i = text.find(sub, i + len(sub))
+    return out
+
+
+class ExactReplaceEdit(BaseModel):
+    old_string: str = Field(description="Exact text to find — must occur once unless multi=true.")
+    new_string: str = Field(
+        description="Replacement, written LITERALLY (no regex/backref/template expansion)."
+    )
+
+
+class ExactReplaceArgs(BaseModel):
+    path: str = Field(description="Workspace-relative file to edit.")
+    edits: list[ExactReplaceEdit] = Field(
+        description="One or more exact replacements; applied ALL-or-NOTHING (atomic)."
+    )
+    # NOTE: there is deliberately NO `require_fresh_read` toggle — the fresh-read/coverage guard
+    # is MANDATORY and non-bypassable (a model opt-out would re-open the Mode-B large-file thrash;
+    # Codex CD-TOOLS-2 round-1). It is size-gated, so small files never need a separate read.
+    expected_sha256: str | None = Field(
+        default=None,
+        description="If set, refuse unless the file's CURRENT sha256 equals this (optimistic concurrency).",
+    )
+    multi: bool = Field(
+        default=False,
+        description="Allow an old_string to match more than once and replace EVERY occurrence.",
+    )
+
+
+class ExactReplaceTool:
+    """CD-TOOLS-2 — the atomic exact-replacement primitive (Claude Design dc_*_str_replace).
+
+    Replaces fragile broad file_edit for targeted edits: each old_string must match EXACTLY
+    (literal — no whitespace forgiving), the whole batch applies all-or-nothing, and EVERY check
+    runs IN MEMORY before a single byte is written (so a failed batch never touches disk — no
+    write-then-revert). Reuses the CD-TOOLS-1 fresh-edit guard for stale/elision/grounding."""
+
+    definition = ToolDef(
+        name="exact_replace",
+        description=(
+            "Apply one or more EXACT string replacements to a file, atomically. Each `old_string` "
+            "must occur exactly once (set multi=true to replace all occurrences); `new_string` is "
+            "written literally (no regex/backref expansion). The whole batch applies all-or-nothing "
+            "— if ANY edit fails (no match, duplicate, overlap, or it would introduce a syntax "
+            "error) NOTHING is written. Read the file first (the exact text you see is what to "
+            "match). Pass expected_sha256 to refuse if the file changed under you."
+        ),
+        args_model=ExactReplaceArgs,
+        needs=_FS,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: ExactReplaceArgs, ctx: ToolContext) -> ToolOutcome:
+        import hashlib
+
+        assert ctx.sandbox is not None
+        if not args.edits:
+            return ToolOutcome(
+                success=False, error="EXACT_REPLACE_BATCH_FAILED", content="exact_replace: no edits supplied."
+            )
+        raw = await ctx.sandbox.read_file(args.path)
+        text = raw.decode("utf-8", errors="replace")
+
+        # (1) elision marker in any old/new — never let a render placeholder enter source.
+        for e in args.edits:
+            if _has_elision_marker(e.old_string, e.new_string):
+                return ToolOutcome(
+                    success=False,
+                    error="ELISION_MARKER_REJECTED",
+                    content=(
+                        f"exact_replace refused — an edit for {args.path} contains an internal elision "
+                        "placeholder (e.g. '<… chars elided …>'); read the file and use the real text."
+                    ),
+                    structured={
+                        "kind": "elision_marker_rejected",
+                        "path": args.path,
+                        "next_required_action": "file_read",
+                        "suggested_args": {"path": args.path},
+                    },
+                )
+
+        # (2) optimistic concurrency: caller-supplied expected sha must match the current disk bytes.
+        cur_sha = hashlib.sha256(raw).hexdigest()
+        if args.expected_sha256 is not None and args.expected_sha256 != cur_sha:
+            return ToolOutcome(
+                success=False,
+                error="STALE_FILE_CONTEXT",
+                content=(
+                    f"exact_replace refused — {args.path} now hashes to {cur_sha[:12]}…, not the expected "
+                    f"{args.expected_sha256[:12]}…; it changed since you read it. Read it again, then edit."
+                ),
+                structured={
+                    "kind": "stale_file_context",
+                    "path": args.path,
+                    "next_required_action": "file_read",
+                    "suggested_args": {"path": args.path},
+                },
+            )
+
+        # (3) per-edit match counts + collect ALL match spans on the ORIGINAL text.
+        spans: list[tuple[int, int, str]] = []  # (start, end, new_string)
+        applied: list[dict[str, Any]] = []
+        for e in args.edits:
+            occ = _all_occurrences(text, e.old_string)
+            if len(occ) == 0:
+                return ToolOutcome(
+                    success=False,
+                    error="EXACT_REPLACE_NO_MATCH",
+                    content=f"exact_replace: old_string not found in {args.path}: {e.old_string[:60]!r}.",
+                )
+            if len(occ) > 1 and not args.multi:
+                return ToolOutcome(
+                    success=False,
+                    error="EXACT_REPLACE_DUPLICATE_MATCH",
+                    content=(
+                        f"exact_replace: old_string occurs {len(occ)}× in {args.path} — make it unique or "
+                        f"set multi=true to replace all: {e.old_string[:60]!r}."
+                    ),
+                )
+            targets = occ if args.multi else occ[:1]
+            for s in targets:
+                spans.append((s, s + len(e.old_string), e.new_string))
+            applied.append(
+                {"old_string": e.old_string[:60], "occurrences": len(occ), "replaced": len(targets)}
+            )
+
+        # (4) overlap: two matched regions intersecting on the ORIGINAL text → ambiguous, reject.
+        spans.sort(key=lambda t: t[0])
+        for i in range(1, len(spans)):
+            if spans[i][0] < spans[i - 1][1]:
+                return ToolOutcome(
+                    success=False,
+                    error="EXACT_REPLACE_BATCH_FAILED",
+                    content=(
+                        f"exact_replace: edits overlap in {args.path} (matched regions intersect) — "
+                        "split or de-duplicate them."
+                    ),
+                )
+
+        # (5) fresh-read/grounding/coverage — MANDATORY, per edit region (reuse the CD-TOOLS-1
+        # guard; size-gated so small files pass freely). Non-bypassable: no opt-out arg exists.
+        for s, end, _repl in spans:
+            lo_line = text.count("\n", 0, s) + 1
+            hi_line = text.count("\n", 0, end) + 1
+            blocked = guard_fresh_edit(
+                ctx.conversation_id, args.path, current_bytes=raw, edit_lines=(lo_line, hi_line)
+            )
+            if blocked is not None:
+                return blocked
+
+        # (6) splice by position (descending so earlier indices stay valid) — str slicing, NOT re.sub,
+        #     so '$', '${x}', backrefs in new_string are literal.
+        new_text = text
+        for s, end, repl in sorted(spans, key=lambda t: t[0], reverse=True):
+            new_text = new_text[:s] + repl + new_text[end:]
+
+        # (7) syntax pre-check IN MEMORY (no write yet): the batch must not INTRODUCE new errors.
+        pre = _syntax_errors(args.path, text)
+        introduced = [er for er in _syntax_errors(args.path, new_text) if er not in pre]
+        if introduced:
+            return ToolOutcome(
+                success=False,
+                error="EXACT_REPLACE_BATCH_FAILED",
+                content=(
+                    f"exact_replace: the batch would introduce syntax error(s) in {args.path}: "
+                    f"{'; '.join(introduced)} — NOT applied. Fix the snippet and retry."
+                ),
+            )
+
+        # (8) all checks passed → ONE write (never write-then-revert). Logical all-or-nothing.
+        new_bytes = new_text.encode("utf-8")
+        await ctx.sandbox.write_file(args.path, new_bytes)
+        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        return ToolOutcome(
+            success=True,
+            content=f"exact_replace applied {len(spans)} replacement(s) to {args.path}.",
+            artifacts=[args.path],
+            structured={
+                "path": args.path,
+                "bytes": len(new_bytes),
+                "sha256": hashlib.sha256(new_bytes).hexdigest(),
+                "applied": applied,
+            },
         )
