@@ -908,6 +908,48 @@ class AgentLoop:
                 self._plan_explore_reads = 0  # (B2/B6) a plan was proposed
                 plan = self._plan_from_args(tc.arguments, events)
                 await self._emit(plan)
+                # [REL-RC A1] A ZERO-STEP REVISION plan must NOT auto-approve. MiniMax-M3
+                # frequently submits a revision plan with no parseable steps; auto-approving it
+                # drops the model into execution with NO tracker → the actionless/monologue
+                # breaker → STUCK (the 2/3 revise_after_finish soak failure). Route a zero-step
+                # revision into the SAME force-submit recovery used for the prose-no-tool path:
+                # escalate ONCE to force_submit_plan (next step's tools narrowed to submit_plan-
+                # only + a hard directive demanding concrete steps); if it STILL submits zero
+                # steps under force, emit a CONTROLLED, adjudicable terminal (STUCK detail=
+                # "revision_no_concrete_steps") — NEVER accept the empty revision plan into
+                # stranded execution, never fake an approval. An INITIAL zero-step plan (not a
+                # revision) still auto-approves (summary-only is a legitimate simple-build state).
+                if (
+                    not plan.steps
+                    and self._revision_force_submit_enabled
+                    and signals.in_planning_for_revision(events)
+                ):
+                    if not signals.revision_force_submit(events):  # escalate once
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.RUNNING,
+                                detail="force_submit_plan",
+                            )
+                        )
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user", content=_FORCE_SUBMIT_DIRECTIVE
+                                ),
+                            )
+                        )
+                        self._plan_nudges = 0
+                        return Disp.CONTINUE
+                    # Already forced + STILL zero steps → controlled clean terminal, not a
+                    # stranded-execution monologue STUCK and never a faked approval.
+                    await self._emit(
+                        StatusEvent(
+                            status=ConversationStatus.STUCK,
+                            detail="revision_no_concrete_steps",
+                        )
+                    )
+                    return Disp.HALT
                 if self._autonomous:
                     # No human to approve → auto-approve INLINE, emitting the
                     # exact same events approve_plan() would, so the event log
