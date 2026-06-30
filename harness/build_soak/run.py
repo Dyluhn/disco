@@ -951,12 +951,34 @@ async def run_once(
         # lifecycle / sidecar / cleanup oracles ADJUDICATE (instead of SKIP "no evidence
         # (headless run)"). The build's §6 evidence is already frozen into `run` by
         # drive_scenario, so releasing here never races it. Populates run.product_evidence.
-        with contextlib.suppress(Exception):
-            await _collect_terminal_cleanup_evidence(
+        try:
+            ev = await _collect_terminal_cleanup_evidence(
                 client, run.conversation_id, run,
                 baseline_containers=baseline_containers,
                 relay_log=os.environ.get("MINIMAX_RELAY_LOG"),
                 timeline=getattr(run, "timeline", []),
+            )
+        except Exception as exc:  # noqa: BLE001
+            ev = {}
+            with contextlib.suppress(Exception):
+                getattr(run, "timeline", []).append(f"REL-5 cleanup measurement error: {exc}")
+        # [REL-5 / codex] FAIL-CLOSED: a terminal run that the harness could NOT adjudicate for
+        # cleanup must NOT pass via oracle SKIP (the gate forbids SKIP-as-PASS). The three
+        # terminal-cleanup slices are MANDATORY for any run that reached a classifiable terminal —
+        # if a signal is unmeasurable (no relay ledger / no container probe), that is an
+        # INVALID_RUN (couldn't prove reliability), which the operator fixes by providing the
+        # measurement infra (the soak's "0 INVALID_RUN in positive scenarios" then forces it).
+        _required = ("lifecycle", "sidecar", "cleanup")
+        _missing = [k for k in _required if k not in ev]
+        if _missing:
+            return _invalid_run_record(
+                out_root, run_id, scenario,
+                f"terminal cleanup not adjudicable — missing evidence slice(s): {', '.join(_missing)} "
+                "(set MINIMAX_RELAY_LOG and ensure the container probe is available so the "
+                "sidecar/cleanup oracles cannot silently SKIP into a green pass)",
+                code=fc.RUN_INTERRUPTED,
+                first_broken_link="terminal -> cleanup_evidence_unmeasurable",
+                facts={"missing_slices": _missing},
             )
 
         base = assemble_dossier(

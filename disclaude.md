@@ -3560,3 +3560,15 @@ Ran the REAL build_soak runner (static_html_minimal x1) on the production-valid 
   reliability oracles (cleanup, sidecar_stop, lifecycle, preview_ownership, provider-after-terminal, verification,
   export) RUN instead of SKIP; + the runtime.kill→PiKernel.kill Pi-sidecar gap. Then BASELINE soak (now with the
   oracles live) → shadow/canary REL-2/1/3 → final REL-6 on gVisor VM 201.
+
+### REL-5 r1 revision (Codex REVISE: omit→SKIP still let a positive headless run pass green)
+- Codex: "omitted/uncollected cleanup or sidecar evidence still lets the positive headless soak classify green via
+  oracle SKIPs — the original SKIP-as-PASS gap remains." Correct + the gate forbids SKIP-as-PASS.
+- FIX (fail-closed): the three terminal-cleanup slices (lifecycle/sidecar/cleanup) are MANDATORY for any run that
+  reached a classifiable terminal. _collect returns the populated ev; run_once now treats a MISSING required slice
+  as INVALID_RUN (code RUN_INTERRUPTED, "terminal -> cleanup_evidence_unmeasurable"), NOT a silent skip-pass. An
+  unmeasurable signal (no relay ledger / no container probe) → INVALID_RUN, which the gate's "0 INVALID_RUN in
+  positive scenarios" then forces the operator to fix by providing the measurement infra. So a positive PASS now
+  REQUIRES adjudicated cleanup + sidecar + lifecycle. Verifying: run WITH relay log → PASS (3 oracles adjudicate);
+  run with BAD relay path → INVALID_RUN (fail-closed). Note: orphan delta assumes a SEQUENTIAL soak (the runner is
+  sequential); container probe is podman-CLI (gVisor final needs its own).
