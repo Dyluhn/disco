@@ -4954,3 +4954,16 @@ harness suite green. HONEST NOTE: I initially clobbered test_provider_ledger_ora
 file) — caught it immediately, restored the 23 originals from git + appended my 3, verified 26. Takes effect next
 relay restart (harness change; the running soak used the old relay — SIDECAR_NOT_STOPPED on a clean FINISHED run is
 now correctly the title false-positive that this fixes).
+
+## ★ LANDMARK — REVISION_CHAIN 5/5 PASS via the $ref-inlining root fix (2026-06-30)
+revise_after_finish x5 on the $ref-inlining server: **5/5 PASS**, ALL FINISHED, EVERY revision carries real
+submit_plan steps (nsteps 000=[2,4,5] 001=[2,5,6] 002=[2,2,3] 003=[2,3,3] 004=[2,3,3] — NO zero-step collapse),
+0 orphan containers, 0 non-minimax relay hosts, all 5 classification severity=NONE. 
+PROGRESSION (same scenario, same model): A1-only (clean terminal) 1/5 → A3-harvest (downstream step recovery) 2/5 →
+**$ref-inlining (fix submit_plan.steps serialization at the SOURCE) 5/5**. 
+This PROVES the root cause was OUR schema rendering ($ref/$defs the model couldn't resolve), NOT the model — exactly
+as Dylan's never-blame-the-model + scan-every-tool + empirical-test directives drove. A1 (clean controlled terminal)
++ A3 (harvest backstop) remain as defense-in-depth; the $ref inlining is the actual fix. REL-RC = the revision
+reliability goal is MET for revise_after_finish (5/5). Next: a CLEAN full re-soak with BOTH $ref + REL-5b loaded
+(relay restart) to re-confirm + get the corrected provider-after-terminal attribution, then the full REL-6 5-class
+gate. Do NOT call REL-6 done on one scenario — REVISION_CHAIN is one of 5 classes.
