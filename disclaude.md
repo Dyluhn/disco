@@ -2958,3 +2958,26 @@ disco's pre-mitigation; is the read-only verify set actually free of mutators (i
 shell/code_exec/app_*/the line-edit tools); is VERIFIER_ONLY_TOOL_BLOCKED surfaced correctly; OR should CD-TOOLS-6
 instead be SKIPPED as already-satisfied (with the §6 wiring as the only real remaining work) — judge whether the
 bounded deliverable is worth landing vs folding into §6.
+
+### CD-TOOLS-6 — FINDING CORRECTED (Codex caught my wrong grep) + refined LIVE plan
+- MY DORMANCY FINDING WAS WRONG: I grepped ContractPhaseGuard/enforce_tool_call and MISSED ContractScopeGuard — the
+  guard IS live-wired (executor.py:395 check(); runtime.py:1581 _build_scope_guard in artifact mode) and reads a LIVE
+  BuildPhaseTracker (phase.py: BOOTSTRAP→EDIT→VERIFY[finalizer fired]→EXPORT[pass]/REPAIR[fail]). The guard hard-
+  denies an out-of-phase mutator BEFORE execution. So verify-phase enforcement is LIVE (artifact mode).
+- THE REAL GAP (live-meaningful, non-stub): compile_tool_scopes VERIFY = {finalizer} ONLY → in VERIFY the guard
+  allows ONLY the finalizer, so mutators are already denied (good) BUT diagnostics (file_read/browser/verify_web_app/
+  server_status) are ALSO denied (bad) — a verifier literally cannot inspect. CD-TOOLS-6 = expand VERIFY to a READ-
+  ONLY DIAGNOSTICS set so the verifier CAN diagnose while mutators STAY denied. This is a REAL live change to the
+  wired guard (not a stub), reusing the machinery.
+REFINED DELIVERABLE:
+- scopes.compile_tool_scopes: verify = {finalizer} ∪ READ-ONLY DIAGNOSTICS {file_read, file_list, search, browser,
+  server_status, verify_web_app, preview_status, preview_logs, think}. ALL mutators (file_write/append/edit/replace_
+  lines/insert_lines/str_replace/exact_replace/safe_write_file, shell*/code_exec, app_*, deck_patch/sheets/slides/
+  image, scaffold_starter, preview_start/stop) STAY excluded → denied in VERIFY.
+- enforce: when a MUTATING tool is denied specifically because phase==VERIFY, the ScopeDecision.reason/code surfaces
+  VERIFIER_ONLY_TOOL_BLOCKED (today: generic 'denied'). Keep the finalizer callable from any phase (unchanged).
+- TESTS: guard/enforce in VERIFY → mutator (exact_replace/safe_write_file/file_write/shell) DENIED + VERIFIER_ONLY_
+  TOOL_BLOCKED; diagnostics (file_read/browser/verify_web_app/server_status) ALLOWED; finalizer allowed any phase;
+  EDIT phase unchanged (no regression). 
+- Live coverage: artifact mode wires the guard today; build-mode guard wiring (if absent) stays the §6 integration —
+  but the verify SCOPE fix is correct + live wherever the guard runs (NOT a dormant-only change).
