@@ -4986,3 +4986,21 @@ RMW under the per-cid lock; flag DISCO_ARTIFACT_MANIFEST_SHADOW (default OFF); o
 (turn_control/lifecycle/finish/report export/preview) dual-write via upsert_artifact when ON; shadow read-COMPARE at
 the legacy readers (log divergence, RETURN legacy); NO reader switched; tests-first (concurrent upsert → no lost
 update; shadow 0-divergence). Then live build_soak with the flag ON → assert 0 divergence → Codex code-gate.
+
+### REL-2a step2b design (precise, for clean implementation): single-source projection, no drift
+Legacy reader _common._declared_artifacts(store,cid) (agent-server) is a PURE PROJECTION over the event log: collects
+paths from ObservationEvent.structured for sheet_generate/slides_generate (filename + editable_source), image_generate
+(path), audio_overview (mp3_path+transcript_path), and DeliverableEvent(artifact_kind="files").path. Re-derived each
+call. CRITICAL design constraint: the manifest fold MUST derive from the SAME logic or it drifts. PLAN:
+1. Extract the projection into ONE shared helper `artifact_paths_from_events(events)->set[str]` in CORE (core/context),
+   capturing the exact tool/key logic above. Refactor _declared_artifacts to call it (proves no behavior change — its
+   existing tests stay green). This is the anti-drift keystone (do it FIRST, as a pure no-op refactor + gate).
+2. Shadow dual-write (flag DISCO_ARTIFACT_MANIFEST_SHADOW default-OFF): at a point with the store+events (the observe
+   fold is per-tool but the projection is whole-log; simplest = fold at the SAME read sites, or a post-turn hook),
+   when ON upsert_artifact(ArtifactRecord(path=p)) for each p in artifact_paths_from_events(events) not already in the
+   manifest. 
+3. Shadow read-COMPARE: in _declared_artifacts, when ON, ALSO read_artifacts() + compare {r.path} vs the projected
+   set; log divergence (WARNING) but RETURN the legacy projected set. NO reader switched.
+4. Tests: helper == old _declared_artifacts on fixtures; shadow on → manifest paths == projected (0 divergence);
+   shadow off → no manifest I/O. Live build_soak flag-ON → 0 divergence in logs → Codex code-gate → step2c promote.
+This is a focused next-PR (cross-package: core helper + agent-server compare); step2a (upsert+lock) is the substrate.
