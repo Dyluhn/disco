@@ -5108,3 +5108,13 @@ metadata. Order: emit the auto_ground_read StatusEvent marker, then the paired A
 - Tests-first (core): streak×2 same path no-prior-marker → real file_read injected + marker emitted + CONTINUE; single
   FRESH_READ → FALLTHROUGH (nudge as today); marker already present → FALLTHROUGH (one auto-read/path/revision);
   different paths → no premature trigger. Codex CODE-gate after.
+
+## §11 — REL-RC-B IMPLEMENTED + DOUBLE-GATED + LOADED; proof re-soak running
+REL-RC-B (FRESH_READ_REQUIRED revision-loop fix) COMPLETE: signals.fresh_read_autoground_target (part1, 5 tests) +
+Valve.gate_fresh_read_autoground injecting one REAL file_read before gate_circuit_breaker (part2). Plan Codex-APPROVE
+(r2, after durable-sentinel + semantic-marker REVISEs) + CODE Codex-APPROVE. 208 loop/engine/signals tests green.
+Committed+pushed. Server restarted: gate+signal LOADED (class Valve.gate_fresh_read_autoground True), engine source=
+disclaude, agent+relay 200. **Proof re-soak running** (relrcb-soak/revise.log, revise x5) — expect the FRESH_READ loop
+broken (auto-read injected → next edit grounded → FINISHED) → consistent high PASS toward REVISION_CHAIN 100%. Do NOT
+call REVISION_CHAIN done until the re-soak proves it (need consistent PASS, not 3/5). Then: re-run a 2nd revise x5 to
+confirm reliability (stochastic), + the other REL-6 classes.
