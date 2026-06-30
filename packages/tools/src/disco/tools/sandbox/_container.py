@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import secrets
 import logging
 import math
 import posixpath
@@ -515,6 +516,65 @@ class ContainerInstance:
         if real != ws_real and not real.startswith(ws_prefix):
             raise SandboxPermissionError(f"path escapes workspace via symlink: {path!r}")
         return target
+
+    async def atomic_write(self, path: str, data: bytes) -> None:
+        """CD-TOOLS-3/4: atomically commit `data` to `path` IN THE GUEST — stage to a RANDOM tmp
+        sibling (so a model can't pre-create a predictable symlink there) then `mv -f` over the
+        target (atomic on the same filesystem; mv replaces a symlinked target rather than following
+        it). The .disco/ governed guard already ran in the tool, so the target is never governed."""
+        self._alive()
+
+        def _aw() -> None:
+            self._resolve_guest_path(path)  # enforce the jail (raises on escape / unverifiable)
+            # Replace the RESOLVED real target (follow a final symlink), matching ProcessSandbox's
+            # _resolve().resolve() + os.replace and the backend's own write_file — so atomic_write
+            # and write_file have identical symlink semantics (codex round-5 parity). _guest_realpath
+            # is jail-checked by _resolve_guest_path above; for a new file it is the lexical path.
+            real_target = self._guest_realpath(self._container_path(path))
+            if real_target is None:
+                raise SandboxError(f"atomic_write {path!r}: cannot resolve real target")
+            target = real_target
+            parent = posixpath.dirname(target) or self._ws
+            tmp_name = f".disco-tmp-{secrets.token_hex(8)}"
+            self._guest_run(["mkdir", "-p", "--", parent])
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w") as tar:
+                info = tarfile.TarInfo(name=tmp_name)
+                info.size = len(data)
+                info.uid = info.gid = self._workspace_uid
+                info.mtime = int(time.time())
+                tar.addfile(info, io.BytesIO(data))
+            if not self._container.put_archive(parent, buf.getvalue()):
+                raise SandboxError(f"atomic_write {path!r} staging failed")
+            tmp_path = posixpath.join(parent, tmp_name)
+            # -T (--no-target-directory): a TRUE rename/replace. Without it, if `target` is an
+            # existing directory or a symlink-to-directory, `mv` would move tmp INTO it (succeeding
+            # while leaving target unchanged + stranding tmp). -T makes mv replace the target as a
+            # non-directory, or fail (rc!=0) if it is a real dir — which we surface (codex round-4).
+            rc, _ = self._guest_run(["mv", "-fT", "--", tmp_path, target])
+            if rc != 0:
+                self._guest_run(["rm", "-f", "--", tmp_path])
+                raise SandboxError(f"atomic_write {path!r} rename failed (rc={rc})")
+
+        await self._guarded(_aw)
+
+    async def resolve_relpath(self, path: str) -> str:
+        """CD-TOOLS-4: the REAL (symlink-followed) guest path RELATIVE to the workspace root,
+        forward-slashed — so the governed-artifact guard sees through a symlink that reaches INTO
+        `.disco/`. Reuses the P2 guest-realpath jail; fails closed (SandboxPermissionError) when
+        the real location can't be verified, exactly like the file ops."""
+        self._alive()
+
+        def _resolve() -> str:
+            self._resolve_guest_path(path)  # enforce the jail (raises on escape / unverifiable)
+            real = self._guest_realpath(self._container_path(path))
+            ws_real = self._guest_ws_real()
+            if real is None or ws_real is None:
+                raise SandboxPermissionError(f"cannot verify real path stays in workspace: {path!r}")
+            rel = posixpath.relpath(real, ws_real)
+            return "." if rel == "." else rel
+
+        return await self._guarded(_resolve)
 
     async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
         """Run `cmd` in the live container, capturing stdout/stderr/exit code. The

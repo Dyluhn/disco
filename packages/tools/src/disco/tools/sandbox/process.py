@@ -288,11 +288,12 @@ class ProcessSandboxInstance:
         finally:
             tmp.unlink(missing_ok=True)  # clean a leftover tmp if os.replace failed
 
-    def resolve_relpath(self, path: str) -> str:
-        """CD-TOOLS-3: the REAL (symlink-followed) path of `path`, RELATIVE to the workspace
+    async def resolve_relpath(self, path: str) -> str:
+        """CD-TOOLS-3/4: the REAL (symlink-followed) path of `path`, RELATIVE to the workspace
         root, as a forward-slash string. Lets the governed-artifact guard see through a symlink
         (link.json -> .disco/appspec.json) — `_resolve` already follows symlinks + rejects jail
-        escapes. Raises (SandboxPermissionError) on an escaping path, same as the file ops."""
+        escapes. async to match the container backend's exec-based resolve; the body is a cheap
+        in-process path op. Raises (SandboxPermissionError) on an escaping path, like the file ops."""
         target = self._resolve(path)
         if target == self._workspace:
             return "."

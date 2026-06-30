@@ -447,6 +447,28 @@ class SandboxSession:
     async def write_file(self, path: str, data: bytes) -> None:
         await self._resilient(lambda i: i.write_file(path, data))
 
+    async def atomic_write(self, path: str, data: bytes) -> None:
+        """CD-TOOLS-3 — delegate the atomic (tmp+rename) commit to the backend instance so the
+        runtime's safe_write_file / exact_replace actually get FS atomicity. ProcessSandbox and the
+        container backends implement atomic_write; any backend that does NOT falls back to a plain
+        write_file (still logical all-or-nothing — the tool validated in memory first), so this is
+        never a hard failure on an unequipped backend (Codex CD-TOOLS-4 round-3)."""
+
+        async def _aw(i: SandboxInstance) -> None:
+            fn = getattr(i, "atomic_write", None)
+            if fn is not None:
+                await fn(path, data)
+            else:
+                await i.write_file(path, data)
+
+        await self._resilient(_aw)
+
+    async def resolve_relpath(self, path: str) -> str:
+        """CD-TOOLS-4 — delegate the REAL (symlink-followed) workspace-relative resolution so the
+        governed-artifact guard is symlink-proof through this session wrapper too (not just on a
+        raw instance), on every backend."""
+        return await self._resilient(lambda i: i.resolve_relpath(path))
+
     async def list_dir(self, path: str) -> list[str]:
         return await self._resilient(lambda i: i.list_dir(path))
 

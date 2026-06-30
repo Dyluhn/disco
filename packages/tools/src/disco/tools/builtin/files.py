@@ -583,6 +583,8 @@ class FileWriteTool:
 
     async def run(self, args: FileWriteArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+            return g
         # Read existing content once — used by both the F1 guard and the W3 syntax gate.
         old_text: str | None = None
         try:
@@ -667,6 +669,8 @@ class FileAppendTool:
 
     async def run(self, args: FileAppendArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+            return g
         old_text: str | None = None
         existing = b""
         try:
@@ -777,6 +781,8 @@ class FileEditTool:
 
     async def run(self, args: FileEditArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+            return g
         # Intent no-op: old and new are LITERALLY identical (after stripping any
         # line-number prefixes the model copied). This is distinct from a
         # whitespace-only edit (old≠new, which must apply) — here the model asked
@@ -879,6 +885,8 @@ class FileReplaceLinesTool:
 
     async def run(self, args: FileReplaceLinesArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+            return g
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
         lines = text.splitlines()
@@ -963,6 +971,8 @@ class FileInsertLinesTool:
 
     async def run(self, args: FileInsertLinesArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+            return g
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
         # CD-TOOLS-1 guard: the insert point relies on current line numbers — require fresh
@@ -1052,6 +1062,8 @@ class FileStrReplaceTool:
 
     async def run(self, args: FileStrReplaceArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
+        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+            return g
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
         # CD-TOOLS-1 fresh-edit guard (anchored exact replace) — region from old_str's location.
@@ -1142,15 +1154,17 @@ async def _atomic_write(sandbox: Any, path: str, data: bytes) -> None:
         await aw(path, data)
 
 
-def _governed_relpath(sandbox: Any, path: str) -> str:
+async def _governed_relpath(sandbox: Any, path: str) -> str:
     """The REAL (symlink-followed) workspace-relative path, forward-slashed. Uses the sandbox's
-    resolve_relpath (which follows symlinks + rejects jail escapes) so a symlink can't forge a
-    non-governed name; falls back to the lexical canonical strip on exec-only backends."""
+    resolve_relpath (which follows symlinks via the guest realpath + rejects jail escapes) so a
+    symlink can't forge a non-governed name — implemented on BOTH ProcessSandbox and the container
+    backends. Falls back to the lexical canonical strip only if the method is absent or the real
+    location can't be verified; in that case the mutator's own jailed write fails closed anyway."""
     rr = getattr(sandbox, "resolve_relpath", None)
-    if callable(rr):
+    if rr is not None:
         try:
-            return str(rr(path)).replace("\\", "/")
-        except Exception:  # noqa: BLE001 — an escaping path is rejected by the write itself
+            return str(await rr(path)).replace("\\", "/")
+        except Exception:  # noqa: BLE001 — an escaping/unverifiable path is rejected by the write
             pass
     return _canonical(path)
 
@@ -1159,6 +1173,69 @@ def _is_governed_artifact(relpath: str) -> bool:
     """True for the host-reserved `.disco/` namespace (appspec/tweaks/versions/context) — those
     are authored only by semantic tools, never the generic writer."""
     return relpath == ".disco" or relpath.startswith(".disco/")
+
+
+# CD-TOOLS-4 — route a governed-artifact write to the SEMANTIC tool that owns it. (match-rule,
+# tool, why); a rule ending in "/" matches a prefix, else an exact path. Order = most specific
+# first. A governed path with NO match is host-managed with no generic editor (no false tool name).
+_GOVERNED_ROUTING: tuple[tuple[str, str, str], ...] = (
+    (".disco/appspec.json", "app_set_tweak", "it is the AppKit app spec"),
+    (".disco/tweaks.json", "app_set_tweak", "it holds the app's tweak values"),
+    (".disco/versions/", "app_snapshot_version", "it is a version snapshot"),
+    (".disco/context/", "context_memory", "it is durable context memory"),
+)
+
+
+def _route_for_governed(relpath: str) -> tuple[str | None, str]:
+    """The semantic tool (and reason) that owns `relpath`, or (None, '') if it is governed but
+    has no generic editor."""
+    for rule, tool, why in _GOVERNED_ROUTING:
+        if rule.endswith("/"):
+            if relpath.startswith(rule):
+                return tool, why
+        elif relpath == rule:
+            return tool, why
+    return None, ""
+
+
+async def _governed_guard(
+    sandbox: Any, path: str, *, error: str = "GOVERNED_ARTIFACT_REJECTED"
+) -> ToolOutcome | None:
+    """CD-TOOLS-4 artifact-aware guard, shared by ALL generic mutators: refuse a write whose REAL
+    (symlink-followed) path is in the host-governed `.disco/` namespace, ROUTING the model to the
+    owning semantic tool (or saying plainly there is no generic editor). Returns a blocking
+    ToolOutcome, or None if the path is not governed. None of the semantic tools route through the
+    generic mutators (they write `.disco/` via the sandbox directly), so this never blocks them.
+    `error` lets safe_write_file keep its campaign-named SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED code
+    while sharing one routing implementation.
+
+    Short-circuit: a path already LEXICALLY under `.disco/` is governed without resolving (cheap +
+    backend-agnostic); only a non-`.disco` lexical path needs the real-path resolve to catch a
+    symlink that reaches INTO `.disco/`."""
+    rel = _canonical(path)
+    if not _is_governed_artifact(rel):
+        rel = await _governed_relpath(sandbox, path)
+    if not _is_governed_artifact(rel):
+        return None
+    tool, why = _route_for_governed(rel)
+    route = (
+        f"Use {tool} to change it ({why})."
+        if tool
+        else "It is host-managed; do not edit it with a generic write tool."
+    )
+    return ToolOutcome(
+        success=False,
+        error=error,
+        content=(
+            f"Refused — {path} resolves to the host-managed .disco/ namespace ({rel}). {route}"
+        ),
+        structured={
+            "kind": "governed_artifact_rejected",
+            "path": path,
+            "resolved": rel,
+            "route_to": tool,
+        },
+    )
 
 
 class ExactReplaceEdit(BaseModel):
@@ -1213,6 +1290,8 @@ class ExactReplaceTool:
         import hashlib
 
         assert ctx.sandbox is not None
+        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:  # CD-TOOLS-4: close the bypass
+            return g
         if not args.edits:
             return ToolOutcome(
                 success=False, error="EXACT_REPLACE_BATCH_FAILED", content="exact_replace: no edits supplied."
@@ -1395,19 +1474,10 @@ class SafeWriteFileTool:
                     "next_required_action": "file_read",
                 },
             )
-        # (2) governed-artifact guard — resolve the REAL (symlink-followed) path so a symlink can't
-        # forge a non-governed name.
-        rel = _governed_relpath(ctx.sandbox, args.path)
-        if _is_governed_artifact(rel):
-            return ToolOutcome(
-                success=False,
-                error="SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED",
-                content=(
-                    f"safe_write_file refused — {args.path} resolves to the host-managed .disco/ "
-                    f"namespace ({rel}); edit it with its semantic tool, not the generic writer."
-                ),
-                structured={"kind": "safe_write_governed_artifact_rejected", "path": args.path, "resolved": rel},
-            )
+        # (2) governed-artifact guard (CD-TOOLS-4) — shared with all generic mutators; routes to
+        # the owning semantic tool. Keeps the campaign-named code for safe_write_file.
+        if (g := await _governed_guard(ctx.sandbox, args.path, error="SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED")) is not None:
+            return g
         # (3) inspect the existing file (None = new).
         old_text: str | None = None
         old_bytes = b""
