@@ -3012,3 +3012,47 @@ REFINED DELIVERABLE:
   (LIVE MiniMax targeted-edit harness), 10 (survey→unblock P10b).
 - REMINDER for remaining PRs: run BOTH packages/tools AND packages/core suites (CD-TOOLS-2/3 added to AGENT_TOOLS/
   exec_policy → core snapshot tests; tools-only suite missed them).
+
+### PR CD-TOOLS-7 — run_project_script (buffered transactional batch) — PLAN, ratification-pending
+GROUNDING: the campaign's run_project_script is NOT a shell-output buffer — it's a DETERMINISTIC PROJECT-FILE
+TRANSFORMATION with a restricted helper API (readFile/saveFile/ls/replaceText), ALL writes BUFFERED, rollback-on-
+throw, shrink-guard, literal replaceText, no FS escape, no network, bounded. Sound disco mapping = a DECLARATIVE
+TRANSACTIONAL BATCH of file ops (NOT an arbitrary-code sandbox — safer, reuses CD-TOOLS-2/3/4 primitives that all
+exist: _atomic_write, _has_elision_marker, _canonical, _syntax_errors, _BINARY_DELIVERABLE_EXTS, _governed_guard,
+_governed_relpath). No existing batch tool. code_exec is UNGUARDED arbitrary code (not this).
+TOOL: run_project_script(operations: list[Op]) — Op discriminated by `op`:
+  - {op:"read", path} → load current content into the result (inspection, no mutation)
+  - {op:"ls", path} → list dir into the result (inspection)
+  - {op:"replace_text", path, old, new, all:bool=false} → LITERAL replace (str.replace, 1 or all) in the path's
+    CURRENT content (buffer-or-disk); old absent → SCRIPT_NO_MATCH (abort, no writes). '$','${}','\1' literal.
+  - {op:"save", path, content, allow_shrink:bool=false} → whole-file write to the BUFFER; shrink>50% guard +
+    binary-clobber guard + elision reject (reuse safe_write_file logic).
+EXECUTION (validate-ALL-in-memory → commit; reuse CD-TOOLS-2/3 model):
+  1. buffer: dict[canonical_path -> str]; lazily read from disk on first touch.
+  2. per op IN ORDER: elision marker in old/new/content → ELISION_MARKER_REJECTED; governed .disco path (real
+     symlink-followed) → GOVERNED_ARTIFACT_REJECTED; path escape → rejected (sandbox jail + _canonical); replace_text
+     no-match → SCRIPT_NO_MATCH; save shrink/binary → SAFE_WRITE_SHRINK_REJECTED/binary_deliverable_clobber. ANY
+     failure → ABORT with the failing op index + reason, ZERO writes (transactional rollback).
+  3. after all ops pass: per MUTATED buffered path, syntax pre-check (introduced = _syntax_errors(new) - pre) → any
+     → SCRIPT_BATCH_FAILED, no writes.
+  4. COMMIT: _atomic_write each mutated path (logic errors already caught in memory → never partial on a logic
+     fault). clear read_since_write per written path.
+  5. structured {ok, applied:[paths], operations_run, reads:{path->content(capped)}}.
+CAPS/CONSTRAINTS: max ops (e.g. 200) + max total content bytes (e.g. 2MB) → SCRIPT_TOO_LARGE; no network (declarative
+ops have none); no host FS escape (governed + _canonical + sandbox jail); no binary bulk copy (no copy op + binary
+guard); in-process + bounded → no runaway. Freshness: replace_text matches against CURRENT disk literally, so a stale
+`old` → SCRIPT_NO_MATCH (output-truth; no blind clobber). save uses the shrink guard as the clobber protection (the
+batch is one atomic tool call; per-op read_since_write F1 is awkward inside a batch — the shrink+match guards cover
+the clobber risk; flag for Codex).
+NEW CODES (tool-level, NOT build_soak): SCRIPT_NO_MATCH, SCRIPT_BATCH_FAILED, SCRIPT_TOO_LARGE (+ reuse ELISION_/
+SHRINK_/GOVERNED_/binary_deliverable_clobber).
+FILES: builtin/run_script.py (new) + builtin/__init__ (export+instantiate) + registry.AGENT_TOOLS + ARTIFACT_TOOLS +
+UPDATE test_build_agent_isolation.py AGENT_TOOLS snapshot (BOTH-suites rule). Reuse files.py helpers (import them).
+TESTS: all writes commit together (multi-op save+replace → all applied); throw rolls back ALL (a later no-match op →
+NOTHING written incl earlier ops); shrink guard rejects truncation; replaceText preserves literal $/${}/backref;
+path traversal/.disco rejected (no write); elision rejected; syntax-introducing batch rejected; over-cap → SCRIPT_TOO
+_LARGE; read/ls populate result without mutating. Run BOTH packages/tools + packages/core suites.
+CODEX FOCUS (§9): real transactional buffered batch (not a stub); rollback truly all-or-nothing on ANY logic fault
+(validate-in-memory before any write); output-truth (real matches/exit, no faked success); no FS escape/governed
+bypass/binary clobber; literal-safety; caps prevent context-poison/runaway; is skipping per-op read_since_write OK
+given match-against-fresh-disk + shrink guard; insufficient negatives.
