@@ -4918,3 +4918,12 @@ build-call count → 0 after role attribution, the title hypothesis is confirmed
 semantics — must prove it excludes ONLY non-build roles, never a real build runaway). + double-check no OTHER async
 provider caller fires post-terminal. This is a measurement-attribution bug; the build itself was clean (FINISHED, 0
 orphans, release ok).
+
+### Empirical confirmation: $ref-inlining resolves the only tools that actually failed
+With inlining loaded, MiniMax tool_choice=required → run_project_script VALID (operations=[{op,path}]). The earlier
+multi-tool "0 tool_calls" was the model explaining-first under tool_choice=auto + RELAY CONTENTION from the concurrent
+soak (NOT a regression). HONEST scope of "fix all tools": the empirical MiniMax real-call test failed on EXACTLY 2
+tools (run_project_script, exact_replace) — both $ref'd list[Model] — now fixed at the ROOT by inlining. The other
+audit-flagged tools (deck_patch/app_create/app_add_section) PASSED the real-call test (capable model handled them);
+secondary worked examples are optional polish, NOT empirically required. LESSON: do NOT run MiniMax probes while a
+soak holds the relay (contention → noisy results). Run the full 6-tool confirmation AFTER the soak completes.
