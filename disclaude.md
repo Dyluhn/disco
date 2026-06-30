@@ -5081,3 +5081,13 @@ clean STUCK. So: at most ONE auto-read per path per revision; if the file STILL 
 (genuinely huge/condensed/un-coverable) it terminates cleanly via the existing breaker — NO new infinite loop. The
 threshold-2 streak counter only TRIGGERS the first auto-read; the durable marker BOUNDS it. Everything else
 (real-read-not-bit-flip, paired action+obs per observe.py:226, preserves safety) unchanged.
+
+### REL-RC-B plan r2 (Codex REVISE): sentinel must be a SEMANTIC StatusEvent, not volatile ActionEvent.meta
+Codex: "ActionEvent.meta is explicitly volatile/non-semantic, so the durable sentinel must be a real semantic marker,
+e.g. StatusEvent(detail='auto_ground_read:{canonical_path}')." CORRECT — meta is not load-bearing. FINAL marker: when
+the gate injects the auto-read, it ALSO emits StatusEvent(detail=f"auto_ground_read:{canonical_path}") (a real,
+durable, semantic event). The gate scans events SINCE THE LAST USER MESSAGE for a StatusEvent whose detail ==
+f"auto_ground_read:{canonical_path}"; if present → do NOT re-inject → fall through to circuit breaker → clean STUCK.
+Bounds to exactly ONE auto-read per canonical path per revision via a load-bearing event, no reliance on volatile
+metadata. Order: emit the auto_ground_read StatusEvent marker, then the paired ActionEvent(file_read)+ObservationEvent
+(observe.py:226 pairing intact), then Disp.CONTINUE. Everything else unchanged.
