@@ -4425,3 +4425,17 @@ each heartbeat; if dead, restart + audit.
   (deferred, classified). A/D/E: none. F: opencode absent (relay path unaffected).
 - **Next action:** BASELINE SOAK on podman+MiniMax (now oracles adjudicate + fail-closed) to measure the real
   clean rate across scenario classes, before REL-2/1/3 shadow-canary + REL-6.
+
+## §11 HEARTBEAT — 2026-06-30 (tick) — baseline soak in flight
+- daemon pid 1357214 @120s alive.
+- **Current PR:** baseline soak (post REL-5) + parallel discovery for REL-2/REL-1.
+- **Lanes:** baseline soak (Lane F, podman+MiniMax) — 6/6 PASS (static_html_minimal 3/3, multifile_static_site
+  3/3), revise_after_finish 0/3 in flight. REL-2 manifest-design scout (Lane G) running. REL-1 verifier-design
+  scout (Lane G/A) just dispatched.
+- **External agents:** 2 Sonnet scouts running (REL-2 manifest a3b7a68, REL-1 verifier a160f60); codex idle.
+- **Latest commit:** 412ba99a ops(§11)+docs: REL-5 SHIPPED (Codex APPROVE); baseline soak next (pushed).
+- **Tests since last hb:** 6 live baseline runs PASS (oracles adjudicating, 0 OpenRouter).
+- **New issues:** none new (2 containers = the ACTIVE revise build, not orphans — verify 0 post-soak).
+- **Blockers A/B/C/D/E/F:** none new open. B: REL-5b product teardown (deferred). C: none (REL-5 sound).
+- **Next action:** collect baseline soak final tally (expect 9/9) + verify 0 orphans + 0 post-terminal; integrate
+  REL-2 + REL-1 scout designs → REL-2 plan → Codex plan-gate. Re-arm 120s.
