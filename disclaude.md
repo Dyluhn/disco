@@ -2895,3 +2895,19 @@ negatives.
   "shown" slice + its strong UI checks stay UNCHANGED + authoritative (no oracle weakened). Wiring the harness to read
   the DISTINCT artifact_shown signal = additive follow-up CD-TOOLS-5b (with the verifier-fork). shown!=verified: the
   tool has ZERO verification side-effect (no verified flag).
+
+### CD-TOOLS-5 — PIVOT (Codex CODE REVISE → discovered serve already exists)
+- Codex caught that the new show_to_user tool was a FALSE AFFORDANCE: DefaultToolExecutor DROPS ToolOutcome.artifacts,
+  ToolResult has no artifacts field, nothing consumes artifact_shown — so it returned "Shown to the user" while
+  surfacing NOTHING. Investigating the real path found disco ALREADY HAS the first-class show handoff: the `serve`
+  virtual tool (engine.py _SERVE_*; intercepted in turn_control.handle_serve → emits DeliverableEvent → real UI
+  Open-app/Download-files). serve is Claude Design's show_to_user/present_fs_item_for_download, already wired + it
+  already does NOT finish/verify (shown!=verified is already enforced).
+- PIVOT: DELETED the redundant show_to_user tool; the real CD-TOOLS-5 = add OUTPUT-TRUTH to the existing serve:
+  handle_serve now refuses (actionable, valve-routed) to emit a DeliverableEvent for a path that does NOT exist in
+  the workspace (_serve_path_missing via executor.sandbox.file_exists; FAIL-OPEN when no sandbox/unverifiable — serve
+  is a softguard, the verify gate is the hard proof). Closes "a false Open/Download card for a non-existent
+  deliverable" + delivers "can't claim shown without a real artifact." shown!=verified untouched (serve never
+  finishes/verifies). ready_for_verification finalizer-tool + verifier-fork + events stay carved to 5b.
+- Tests: serve missing path → refused, no DeliverableEvent; serve real path → DeliverableEvent; no sandbox →
+  fail-open (existing behavior). Existing dc05 serve tests still green.
