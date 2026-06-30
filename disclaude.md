@@ -3324,3 +3324,36 @@ Codex caught: GET /artifacts/{path} serves INDIVIDUAL files (rejects directories
 - NEXT (future sessions, not started — no concrete actionable spec queued this session): P11 (Resource Import/
   Provenance); P1B-LIVE-STABILITY browser-harness gaps (G1 SIDECAR slice capture etc.); carried CD-TOOLS follow-ups
   (5b finalizer-tool, 4b runtime manifest-fold, §6 full ToolScope wiring, soak 409-retry).
+
+## ===== PHASE: BUILD-RELIABILITY-GATE (2026-06-30) =====
+STOP P11 / no new feature pillars until REL-6 passes. REASON: CD-TOOLS improved Mode B + P10b proved real
+export bytes, but the latest soak is only 7/10 clean-finish — below product standard. GOAL: make the Build
+product path BORINGLY RELIABLE under MiniMax-M3 direct API before any resource/provenance work.
+
+BLOCKING PRs (user directive, verbatim intent):
+- REL-1 ready_for_verification finalizer: host-owned ready_for_verification path — surface the artifact, check
+  load diagnostics, fork/queue verifier work. CLEAN load → proceed to verifier. DIRTY load → structured failure.
+  NO verified badge/state without a verifier pass. Main agent MUST NOT self-verify via screenshots/eval loops.
+- REL-2 runtime manifest-fold / artifact VM state: EVERY artifact has a runtime manifest {artifact id, path, kind,
+  shown status, verification status, export status, sha, latest preview status}. Output-truth, export, finalizer,
+  product-evidence ALL READ this shared manifest. NO duplicate truth sources.
+- REL-3 full ToolScope phase wiring: verify bootstrap/edit/repair/verify/export scopes ACTUALLY enforced in the
+  live Build path. Targeted-edit phase PREFERS exact_replace/file_edit guarded by fresh-read. Raw full writes only
+  in bootstrap/repair/custom. Verifier-only diagnostics NOT available to the main agent.
+- REL-4 409/idempotency/inter-run cleanup: fix HTTP 409 flake OR retry only when proven idempotent + pre-action.
+  Inter-run cleanup: kill prior sidecars, release sandboxes, stop previews, clear stale conversations. No scenario
+  fails from leftover prior-run state.
+- REL-5 terminal cleanup hardening: on FINISHED/PAUSED/STUCK/ERROR/CANCELLED → stop sidecar, revoke provider token,
+  stop preview, snapshot workspace, release sandbox, ASSERT zero provider calls after terminal.
+- REL-6 Reliability soak (MiniMax-M3 DIRECT ONLY, 0 OpenRouter). Matrix: 30 STATIC_SMOKE, 30 TARGETED_EDIT,
+  20 EXPORT_SMOKE, 10 REVISION_CHAIN, 5 DISCONNECT_OR_CANCEL.
+  ACCEPTANCE: 100% clean PASS each class; 0 UNKNOWN_FAILURE; 0 INVALID_RUN in positive scenarios; 0 OpenRouter;
+  0 provider calls after terminal; 0 orphan sidecars/sandboxes/previews; every failed attempt recorded+classified
+  +fixed before restarting that class.
+  DO NOT COUNT: retries that hide failed runs; SKIP as PASS; "benign timeout"; "HTTP 409 but output exists";
+  "Mode-B-gone but not clean terminal"; headless-only success.
+PROCESS: plan→disclaude.md → Codex plan-review → revise to APPROVE → implement PR-by-PR → unit/integration/product
+tests → Codex code/evidence review → commit/push per accepted PR → heartbeat. Do NOT start P11 until REL-6 passes.
+
+### REL grounding — 4 parallel read-only investigations dispatched (REL-1 finalizer/verifier, REL-2 manifest,
+### REL-3 ToolScope wiring, REL-4/5 lifecycle/409). Synthesize into the gated plan when they return.
