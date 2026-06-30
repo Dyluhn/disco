@@ -3550,3 +3550,13 @@ Ran the REAL build_soak runner (static_html_minimal x1) on the production-valid 
 - REL-4 (inter-run cleanup) = _release_conversation releases terminal convs (proven). 409/idle already handled by
   build_soak. REL-5 = populate headless lifecycle/cleanup/sidecar/provider-after-terminal/verification/export
   evidence slices + the Pi-sidecar-kill gap. Both now grounded in MEASURED evidence, not inference.
+
+### REL-4 SHIPPED (2026-06-30) — inter-run cleanup: release terminal convs (orphan teardown)
+- _release_conversation now releases EVERY terminal conv → POST /kill destroys both the sandbox + egress-sidecar
+  containers. LIVE-PROVEN: build_soak static_html_minimal x1 with the fix → PASS, 0 disco containers (was 2). Test
+  flipped to test_cleanly_terminal_run_is_released (old no-kill assertion was measurably wrong); 10 tests pass.
+  Codex APPROVE (release runs after frozen evidence + snapshot; /kill only tears down live resources). 409/idle
+  already handled by build_soak (audit-confirmed). NEXT: REL-5 — populate the headless evidence slices so the
+  reliability oracles (cleanup, sidecar_stop, lifecycle, preview_ownership, provider-after-terminal, verification,
+  export) RUN instead of SKIP; + the runtime.kill→PiKernel.kill Pi-sidecar gap. Then BASELINE soak (now with the
+  oracles live) → shadow/canary REL-2/1/3 → final REL-6 on gVisor VM 201.
