@@ -3056,3 +3056,23 @@ CODEX FOCUS (§9): real transactional buffered batch (not a stub); rollback trul
 (validate-in-memory before any write); output-truth (real matches/exit, no faked success); no FS escape/governed
 bypass/binary clobber; literal-safety; caps prevent context-poison/runaway; is skipping per-op read_since_write OK
 given match-against-fresh-disk + shrink guard; insufficient negatives.
+
+### CD-TOOLS-7 — PLAN round-1 revision (Codex REVISE: blind save clobbers unread files)
+- The shrink guard only catches >50% truncation — a blind save of same-size/modestly-different WRONG content over a
+  file the model never read is silent data loss. FIX: a `save` to an EXISTING file requires GROUNDING; a NEW file
+  (not on disk, not in buffer) is exempt (nothing to clobber). The batch tracks `seen: set[canonical_path]` =
+  grounded paths: (i) a prior {op:read, path} in THIS operations list; (ii) a prior {op:replace_text, path} (it
+  loaded + literally matched the file's REAL current content → the model is transforming KNOWN content); (iii) the
+  path is in read_since_write (a file_read before the batch, CD-TOOLS-1); OR the save op carries expected_sha256 ==
+  sha256(current disk) (proves the model has the current version). A save to an EXISTING path NOT grounded by any of
+  these → FRESH_READ_REQUIRED (abort, ZERO writes — transactional). replace_text stays inherently safe (matches `old`
+  against fresh disk; stale old → SCRIPT_NO_MATCH, never a blind clobber).
+- save op gains optional expected_sha256:str (output-truth grounding, like safe_write_file). NOT size-gated (a batch
+  save is programmatic, not in-context — unlike an interactive small-file edit; require grounding for ANY existing
+  file).
+- COMMIT honesty: validate-everything-in-memory FIRST so a LOGIC fault writes nothing (true rollback). The multi-file
+  write phase is per-file _atomic_write; a rare mid-commit FS error (disk full) is reported honestly (it is NOT
+  claimed cross-file-atomic — POSIX can't — but logic faults never reach commit). Codex (b) acknowledged.
+- New code: FRESH_READ_REQUIRED (reused from CD-TOOLS-1 family) for ungrounded save.
+- TESTS add: save over an existing UNREAD file → FRESH_READ_REQUIRED + no writes; save after {op:read} same path →
+  OK; save after replace_text same path → OK; save with matching expected_sha256 → OK; save of a NEW file → OK.
