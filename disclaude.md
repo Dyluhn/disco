@@ -2397,3 +2397,82 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   artifact_kind='files', GET /conversations/{cid}/artifacts/{the served path} for REAL bytes → export={requested:
   true, download_present:true, download_bytes:N} (sourced from the real GET, NOT a fixture claim — Codex's P10b
   note), classify_captured(export_smoke) PASS live. Then P11 (Resource Import/Provenance).
+
+## PR P1B-LIVE-STABILITY — prove harness stability before export (PLAN, ratification-pending)
+OBJECTIVE (Dylan): before building P10b export capture, PROVE the P1B-LIVE browser product
+harness is STABLE, FAIL-CLOSED, and NOT hiding product failures, via repeated MiniMax-M3
+DIRECT-API runs. Direct MiniMax only (host api.minimaxi.chat|api.minimax.io, model MiniMax-M3,
+OpenRouter count 0, provider ledger required every run). DO NOT proceed to P10b/P11 until green.
+
+### Constraints (hard)
+Don't weaken oracles. Don't mark SKIP as PASS. Record EVERY attempt (no retry-until-pass in the
+stability count). Don't hide flaky runs. Each scenario class needs CONSECUTIVE passes; a fail
+resets that class's count.
+
+### Gaps found (must wire first; the current durable spec lacks them)
+- G1 SIDECAR slice NOT captured → cannot prove "no provider calls after terminal". The
+  SidecarStopOracle exists (checks stopped_at_terminal + provider_calls_after_terminal==0) but
+  SKIPs without the slice. WIRE: per-run relay-ledger window — snapshot relay.jsonl line count
+  + record FINISHED wall-clock; after a settle delay, sidecar={stopped_at_terminal: (no relay
+  record with ts>finished_ts), provider_calls_after_terminal: count(ts>finished_ts)}. Add
+  "sidecar" to the stability scenarios' required_slices so it's ENFORCED, not skipped.
+- G2 "no orphan sidecar/sandbox/preview process" → extend the cleanup check beyond podman: after
+  kill, assert no container for the cid AND no leftover preview/sidecar host process.
+- G3 OUTPUT-TRUTH for the browser harness: the headless OutputTruthOracle (workspace_manifest/
+  preview) SKIPs in the product path. For the browser harness, output-truth == shown.preview_
+  shown(real render) + verification.passed(structured verdict). "FINISHED without output truth"
+  ⇒ the shown/verification oracles FAIL (already fail-closed). The negative fixture asserts THAT
+  mapping (a FINISHED run with preview_shown=false / verification.passed=false → FAIL), and does
+  NOT pretend the headless OutputTruthOracle ran.
+- G4 per-run provider isolation: the relay log is shared; each run must attribute its ledger via
+  the line-count window above so per-run "minimax-only / 0 openrouter / 0 post-terminal" is real.
+
+### Decomposition (gated sub-PRs)
+- STAB-1 (Python+TS, fast, fixture-tested): wire G1 sidecar capture + per-run relay window + G2
+  orphan check into a reusable stability runner module; add the "sidecar" slice to the stability
+  scenario contracts. + HARNESS_NEGATIVE_FIXTURES: a deterministic pytest proving each negative →
+  the exact code: missing scenario_id→INVALID_RUN(raises); unknown scenario_id→INVALID_RUN;
+  missing browser_ws→INVALID_RUN; missing shown→INVALID_RUN; missing preview→INVALID_RUN; missing
+  provider ledger→INVALID_RUN; OpenRouter host in ledger→FAIL; provider_calls_after_terminal>0→
+  FAIL; preview_shown=false→FAIL(shown); no cleanup evidence(cleanup slice absent)→INVALID_RUN or
+  workspace_released!=true→FAIL; FINISHED + verification.passed=false→FAIL. Each maps to an
+  existing oracle/code — NO oracle weakening. (Most already have partial coverage; consolidate +
+  complete into one explicit negative suite.)
+- STAB-2 (LIVE): STATIC_SMOKE x10 CONSECUTIVE single builds (NO retry-to-pass). Per run: real UI
+  path, browser WS connected, plan/build executes, PreviewPane renders non-empty, FINISHED,
+  classify_dossier PASS, provider ledger valid (minimax-only), cleanup passes, no orphan, no
+  post-terminal calls. Record run_id + evidence dir + verdict + ledger summary for EACH. A fail →
+  classify(product/harness/model/infra) → fix only if cause clear → add regression fixture →
+  RESTART the count. Acceptance 10/10.
+- STAB-3 (LIVE): STATIC_REVISION x5 — first build PASS, send a follow-up revision via the UI
+  steer/followup input, harness observes revised output differs in the requested way (no
+  unrelated rewrite if targeted), final classify_dossier PASS. 5/5.
+- STAB-4 (LIVE): DISCONNECT_WHILE_RUNNING x3 — start build, close/disconnect the product WS mid-
+  run, prove active work prevents auto-suspend, reconnect or observe a safe terminal, cleanup
+  passes, no runaway provider calls. 3/3 PASS or fail-closed with the correct code if
+  intentionally destructive.
+- STAB-REPORT: a stability report (run IDs, evidence paths, pass/fail table, failure taxonomy,
+  provider-ledger summary). 0 UNKNOWN_FAILURE, 0 INVALID_RUN in positives, 0 OpenRouter, 0
+  post-terminal calls.
+
+### EXPECTED RISK (surfaced honestly)
+Current build finish rate ~71% (5/7), trending up post prompt-fixes. 10/10 CONSECUTIVE is a high
+bar; the bookkeeping-stuck-after-deliverable failure mode (TRACKED) may prevent it. If STAB-2
+cannot reach 10/10 because of that, the finalize-on-bookkeeping-stuck ENGINE fix (turn_control.
+gate_bookkeeping_streak → honest-finish when a verified deliverable exists, reuse finish.py
+maybe_honest_unverifiable_static_actionless_finish + _is_web_deliverable) becomes a REQUIRED
+prerequisite PR (STAB-2a) — gated, then resume the count. We do NOT weaken the gate to pass.
+
+### Process
+plan (this) → Codex PLAN review → revise to APPROVE → implement STAB-1 → run STAB-2/3/4 live →
+Codex CODE+EVIDENCE review → revise to APPROVE → commit/push → heartbeat. P10b stays PARKED
+(scaffold saved out-of-repo) until this is green.
+
+### P1B-LIVE-STABILITY — PLAN round-1 revision (Codex REVISE: sidecar boundary)
+- G1 RE-SPEC (ledger-native, NO wall-clock): relay.jsonl is append-only + stability runs are
+  STRICTLY SEQUENTIAL (one build at a time), so attribute provider calls by LINE-COUNT OFFSET,
+  never timestamps. Per run record n_start (lines before build), n_terminal (line count at the
+  MOMENT /state first shows FINISHED/VERIFIED), then SETTLE (poll /state stays terminal ~10s) and
+  record n_settle. sidecar = {stopped_at_terminal: n_settle==n_terminal,
+  provider_calls_after_terminal: n_settle - n_terminal}; run ledger = lines[n_start:n_settle]
+  (isolated by sequencing) → all hosts minimax, 0 openrouter. Monotonic, clock-free, run-scoped.
