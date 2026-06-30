@@ -4677,3 +4677,35 @@ PASS ≈ baseline 1/3. **Cleanliness PERFECT: 0 orphan containers, 0 non-minimax
 runs (REL-4/5 terminal-cleanup holds under the failure path — a real positive). HONEST GATE STATE: REL-RC A1 ships
 as a correctness floor (clean adjudicable terminals + clean teardown); REVISION reliability is NOT fixed → A3 (the
 real fix, scout designing) is required before REL-6 REVISION_CHAIN can pass. NOT marking REL-RC done; gate stays red.
+
+## PR REL-RC-A3 — revision blob-harvest (PLAN, ratification-pending) — the real reliability lift
+### Forensic basis (Lane-B scout, live re-soak2)
+A1 fires correctly but revisions = 1/4 PASS. Decisive: MiniMax-M3 AUTHORS correct structured steps but ROUTES the
+whole {steps:[{title,detail,done_condition}],context:…} object (stringified) into the `summary`/`context`/`steps`
+parameter, leaving the real `steps` kwarg empty (run001 rev4 raw summary = a well-formed steps object). It's a
+nested-array tool-arg SERIALIZATION failure, not an inability to plan. plan_from_args (plans.py:163-182) only accepts
+`arguments["steps"]` as a list of dict/str → drops every mis-routed shape → 0 steps → A1 controlled STUCK.
+### Fix B (blob-harvest) — PRIMARY
+SEAM plans.py:182-183 (after the steps loop, before `summary =`). Extract `_coerce_step(s)->PlanStep|None` from the
+loop body (dict→title/detail/done_condition; str→title) so BOTH paths share it. Then: `if not steps:` attempt harvest
+— for blob in (arguments steps-as-str, summary, context, rationale): if str & contains {/[: `ast.literal_eval` (NEVER
+eval) in try/except(ValueError,SyntaxError,TypeError,MemoryError,RecursionError); if parsed is dict w/ list "steps" →
+candidate=parsed["steps"] + recover summary/context from parsed; elif parsed is list → candidate=parsed; coerce each
+via _coerce_step (accepts ONLY dict-with-str-title or str → garbage/nested stays dropped); break on first non-empty.
+Thread the recovered raw into the C18 done_condition harvest (predicates advisory). Use recovered summary/context for
+the PlanEvent when harvested. STRICTLY gated on `not steps` → worst case stays 0 steps (today's behavior) → CANNOT
+regress a passing run. A1 (engine.py reads plan.steps) auto-benefits, no engine change.
+### Fix C (prescriptive directive) — cheap co-fix
+Replace the `[…]` placeholder in _FORCE_SUBMIT_DIRECTIVE (engine.py:207-214) + _REPLAN_FRAMING (messages.py:51-67)
+with a LITERAL `submit_plan(summary="…", steps=[{"title":"…","detail":"…"}])`. Nudges run000's prose-collapse toward
+≥1 step. Does NOT fix run001 (model already emits the shape, mis-routes it — B's job).
+### HONEST MODEL-CEILING (record for REL-6)
+B lifts ~25%→~50% on the largest failure mode. It does NOT reach REVISION_CHAIN 100% on MiniMax-M3: run000 =
+genuine prose-collapse (no steps emitted, nothing to harvest); run002 = EXECUTION-layer serialization (run_project_
+script operations=['operations']) unreachable by any plan-parse fix. Chaining 2 sequential re-plans stacks these
+multiplicatively. These residuals are MiniMax-M3 CAPABILITY LIMITS on multi-revision builds, NOT fixable gate defects.
+REL-6 REVISION_CHAIN target must reflect this honestly (capability caveat or single-revision variant) — NEVER fake.
+### Tests/Acceptance
+core unit: blob-harvest recovers {steps:[…]}-in-summary → real steps (mirror run001 rev4 verbatim); list-in-summary;
+garbage/nested → stays 0 (no regress); normal steps[] path unchanged. LIVE: re-soak revise x5 → prove the lift
+(expect ~2-3/5 not 1/5; document residual run000/run002 classes). Codex plan+code gate.
