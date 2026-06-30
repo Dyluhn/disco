@@ -4439,3 +4439,51 @@ each heartbeat; if dead, restart + audit.
 - **Blockers A/B/C/D/E/F:** none new open. B: REL-5b product teardown (deferred). C: none (REL-5 sound).
 - **Next action:** collect baseline soak final tally (expect 9/9) + verify 0 orphans + 0 post-terminal; integrate
   REL-2 + REL-1 scout designs → REL-2 plan → Codex plan-gate. Re-arm 120s.
+
+## PR REL-2a — passive shared artifact manifest (PLAN, ratification-pending) — grounded in Lane-G scout
+### Goal
+ONE shared per-artifact runtime manifest folding the scattered truth (existence re-derived 3×, sha in 4 places,
+shown=no-server-truth, verified=3-4 authorities, export=not-persisted, preview=in-memory). Ship PASSIVE: dual-write
++ read-COMPARE, log divergences, change NO return value (shadow before REL-2b folds readers).
+### Non-negotiables (policy §3)
+no oracle weakening; no false PASS; /api/projects/{cid}/manifest JSON shape BYTE-IDENTICAL (add fields, never
+remove/rename — it's a consumer surface: verify/runner.get_manifest + frontend Projects); no canonical writes
+outside assigned files; persist+restart-survive.
+### Design (scout-grounded, file:line)
+- SEAM: extend ArtifactMemoryStore (core/context/store.py) — NOT a new module. Add ArtifactMemoryKind.ARTIFACT_
+  MANIFEST (artifact_memory.py:25 neighbor) → .disco/context/artifact_manifest.json; ArtifactRecord {id,path,kind,
+  sha256,bytes,shown,verified∈unverified|passed|failed,export{fmt:at},preview{status,url,at},updated_at} (mirror
+  ResourceRef in context/ledger.py); record_artifacts/read_artifacts modeled byte-for-byte on record_resources/
+  read_resources (store.py:168-185) + ensure_initialized (254-269) + reconstruct (272-340). Free durability:
+  snapshot_workspace (lifecycle.py:672) mirrors .disco/; reconstruct rehydrates on resume.
+- CORE FOLD (the 1 seam = the dead CD-TOOLS-4b consumer): observe.py:517 — every successful ToolResult passes
+  here ONCE under the loop _lock (engine.py:665); inspect result.structured for path/sha256/bytes (+ generator
+  keys filename/mp3_path/...) → upsert ArtifactRecord. Construct ArtifactMemoryStore(sbx) (pattern already at
+  finish.py:1717 / engine.py:1788).
+- 4 EDGE dual-writes (flag-gated, additive): turn_control.py:1091 + lifecycle.py:729 DeliverableEvent→shown;
+  finish.py verify-gate→verified; routes/report.py:240 export_report→export[fmt]=now (the ONLY place export truth
+  is born — today evaporates); preview_service.py PreviewService.preview→preview.status/url.
+- CONCURRENCY (real hazard): observe fold is under the loop lock, but report_export + preview + _maybe_snapshot
+  run OUTSIDE it → per-cid asyncio mutation lock in runtime.py (precedent: _session_view_locks runtime.py:709).
+- SHADOW: flag DISCO_ARTIFACT_MANIFEST_SHADOW; at _declared_artifacts (_common.py:142) + project_manifest
+  (projects.py:122) compute BOTH legacy + read_artifacts(), RETURN legacy, log divergences (path normpath/sha/
+  bytes/shown) as one structured WARN per cid+path. Gate REL-2b on ZERO divergences across build_soak + verify.
+### Parallel assignments
+- Lane A (oracle): codex at gate — ensure the shadow can't change a verdict; the manifest must not become a 2nd
+  truth the oracle trusts before compare is clean. Lane E (regression): unit tests mirror tests/test_artifact_
+  memory.py (record/read/reconstruct/corrupt-degrade). Lane G (contract): DONE (this scout). B/C/D/F: not used
+  (no lifecycle/UI/infra change in 2a).
+### Implementation checklist
+tests-first (core unit) → ArtifactRecord+store methods → observe.py fold (flag) → 4 edge dual-writes (flag) →
+per-cid lock → read-COMPARE shadow + divergence log → docs. NO reader switched (that's REL-2b).
+### Required tests
+unit: core test_artifact_memory record/read/reconstruct/corrupt. integration: a build dual-writes the manifest +
+read-compare logs 0 divergence vs legacy. harness: build_soak run → manifest persisted + 0 divergences. product:
+n/a 2a. soak: divergence-count across the baseline classes must be 0 before REL-2b.
+### Acceptance
+manifest persisted+reconstructs; /manifest shape unchanged; shadow logs 0 divergences across build_soak baseline;
+no verdict changed; full suite green. Codex plan-gate THEN implement.
+### Risks
+two-things-named-manifest (ProjectStore row vs artifact_manifest — keep distinct); structured-key implicit
+contract (centralize the ingest key list, today duplicated _common.py:147 + runner.py:390); imported/read-only
+convs (_reject_if_imported) → manifest empty, never written from foreign structured.
