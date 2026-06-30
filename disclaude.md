@@ -3217,3 +3217,15 @@ weakening; insufficient negatives.
   refused the impossible task). ON r3 COMPLETION: read verdict; if PASS → Codex evidence-gate the real dossier;
   if build STUCK without index.html → honest record + retry (MiniMax ~50% finish, not a Mode-B fail); if a real
   Mode-B regression → root-cause+fix. Then CD-TOOLS-10 (10x).
+
+### CD-TOOLS-9 PROVEN + CD-TOOLS-10 soak in flight (2026-06-30)
+- CD-TOOLS-9 SHIPPED+GATED: live MiniMax-M3 build-then-edit run r3 PASS under a hardened oracle (Codex APPROVE after 2
+  oracle REVISEs). Real proof Mode B is gone: file_read(index.html) BEFORE file_edit x4 on index.html (hero/CTA/
+  footer, real old→new, all SUCCESS), verify_web_app pass, FINISHED; served page NEW-present + OLD-absent; 0 old_text_
+  not_found; 0 elision-rej; ledger 35 calls all api.minimaxi.chat MiniMax-M3 (0 OpenRouter); 0 post-terminal. Evidence
+  RUN_DIR/cd9_dossier_r3.json + test-record/cd-tools/cd9_r3_evidence.json (test-record is gitignored — REPORT goes to
+  docs/ at CD-TOOLS-10).
+- CD-TOOLS-10 LAUNCHED: 10x consecutive soak (bg bjc2llhoh) → soak_summary.jsonl. ON COMPLETION: collect every
+  verdict; the Mode-B-gone proof = every built_ok run passes the hardened oracle (build-STUCK runs = Mode A / ~50%
+  finish rate, recorded but NOT a Mode-B regression); 0 OpenRouter + 0 post-terminal across ALL. Write the REPORT
+  (docs/cd-tools-9-10-report.md, since test-record is gitignored) → Codex final gate → commit → UNBLOCK P10b.
