@@ -2865,3 +2865,22 @@ CODEX FOCUS (§9): show_to_user can't double as verification (zero verify side-e
 without a real existing artifact); show_preview_to_user can't fake a preview (preview oracle independent); no false
 affordance; is carving ready_for_verification/verifier-fork/events to 5b honest + acceptable for THIS PR; insufficient
 negatives.
+
+### CD-TOOLS-5 — PLAN round-1 revision (Codex REVISE: don't weaken the preview-render oracle)
+- A bare show_preview_to_user(url) signal is WEAKER than today's live iframe-RENDER inference (the preview-ownership
+  slice only proves ownership/manual_port, not that the URL actually rendered). Driving preview_shown from the bare
+  call would let a model mark preview_shown without a real render — an oracle weakening. NOT ALLOWED.
+- FIX (no oracle weakened, ADDITIVE only):
+  * artifact_shown: driven by show_to_user with OUTPUT-TRUTH (the artifact path must exist via file_exists) — a REAL
+    check; this is the explicit "shown" signal for FILE artifacts (reports/decks/downloads). file-write alone never
+    sets it (only an explicit show_to_user does). [Codex did not flag this as weakening.]
+  * preview_shown: KEEP today's live render inference as the AUTHORITY — UNCHANGED, not weakened. If show_preview_
+    to_user is recorded at all, preview_shown = (explicit call) AND (real render evidence) — a STRENGTHENING (now you
+    need BOTH), never a replacement. A test proves preview_shown still REQUIRES the real render (a show_preview_to_
+    user call with NO render → preview_shown stays false).
+  * To avoid any risk + redundancy with preview_start (which already surfaces the preview) + the live-render
+    authority, show_preview_to_user is OPTIONAL/deferred; the keystone is show_to_user (file artifacts). If kept, it
+    is purely additive per above.
+- The verification slice + decideVerification + finish gate remain COMPLETELY untouched (shown != verified).
+- Tests add: preview_shown requires real render even with an explicit call (no weakening); show_to_user only sets
+  artifact_shown when the artifact really exists.
