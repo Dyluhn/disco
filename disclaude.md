@@ -3122,3 +3122,26 @@ CODEX FOCUS (§9): capable prompt names the new tools + the prefer-targeted/fres
 prompt does NOT name exact_replace/file_str_replace (contamination); adapted to disco's REAL tools (serve/verify_web_
 app, NOT show_to_user/ready_for_*_verification which don't exist); no oracle/output-truth weakening (prose only); the
 new contamination test actually guards it; insufficient negatives.
+
+### CD-TOOLS-8 — PLAN round-1 revision (Codex REVISE: 2 premise errors)
+- (1) ready_for_*_verification IS a real contract-scoped finish-alias → KEEP it (the campaign rule was right);
+  reaffirm "verify before finish (verify_web_app / the contract's ready_for_*_verification finalizer)".
+- (2) standard + anchored_edit=False STILL withholds exact_replace (withholding is on the ANCHORED_EDIT capability,
+  NOT the tier) — so naming exact_replace in the STATIC capable _EXECUTION_DRIVER_PROMPT is a FALSE AFFORDANCE for a
+  standard-but-non-anchored model. FIX: gate the exact_replace/file_str_replace NAMING behind an ANCHORED-EDIT
+  CONDITIONAL block, mirroring the existing VISION-bullet pattern in _with_skills (capabilities-conditional). The
+  block renders ONLY when Requirement.ANCHORED_EDIT in capabilities (the SAME capability that drives the tool-surface
+  withholding + the existing file_str_replace gating — which is why file_str_replace is ALSO not named statically).
+REVISED DELIVERABLE:
+- UNIVERSAL discipline (ALL-tier-safe tools) → static _EXECUTION_DRIVER_PROMPT + _EXECUTION_DRIVER_PROMPT_SMALL:
+  run_project_script (many edits as ONE atomic batch), safe_write_file (guarded full-rewrite/bootstrap writer; prefer
+  over raw file_write), fresh-read-before-edit, "if FRESH_READ_REQUIRED, read then retry", NEVER echo a `<… elided
+  …>` marker into a tool arg, NEVER rewrite a whole file for a small text/color/element edit, serve to hand off the
+  deliverable, verify before finish. NO exact_replace/file_str_replace named here.
+- ANCHORED-EDIT block (NEW, in _with_skills, gated on Requirement.ANCHORED_EDIT in capabilities): names exact_replace
+  (+ file_str_replace) — "prefer exact_replace for a precise, atomic targeted edit; file_read first". Renders for
+  anchored-capable models only → matches the advertised tool surface exactly (no false affordance).
+TESTS: capable+ANCHORED_EDIT capability → prompt NAMES exact_replace; capable WITHOUT ANCHORED_EDIT → does NOT;
+weak/assist (planning+execution) → does NOT name exact_replace/file_str_replace; universal discipline (run_project_
+script/safe_write_file/fresh-read/no-elision) present in BOTH static prompts; existing build-prompt byte/identity +
+plan_step contamination tests still pass. BOTH suites.
