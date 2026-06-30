@@ -5092,3 +5092,19 @@ f"auto_ground_read:{canonical_path}"; if present → do NOT re-inject → fall t
 Bounds to exactly ONE auto-read per canonical path per revision via a load-bearing event, no reliance on volatile
 metadata. Order: emit the auto_ground_read StatusEvent marker, then the paired ActionEvent(file_read)+ObservationEvent
 (observe.py:226 pairing intact), then Disp.CONTINUE. Everything else unchanged.
+
+### REL-RC-B implementation seams (gathered, ready)
+- INSERT the new gate BEFORE engine.py:1381 (`disp = await self._valve.gate_circuit_breaker(events)`) in the gate chain.
+- The injected read must be a REAL file_read via the executor (real bytes + sha → sets read_since_write + records sha +
+  shows current content), NOT the F9 synthetic-obs bit-flip (observe.py:334-347 = the rejected (B) bit-flip). Find the
+  executor's "run this tool call → ObservationEvent" path (the normal _execute_and_observe flow) to invoke file_read.
+- FRESH_READ_REQUIRED AgentErrorEvent carries structured["path"] + suggested_args={path} (files.py:204-210); canon =
+  _canonical(that path).
+- New signals helper: trailing same-path FRESH_READ_REQUIRED streak count (mirror signals.recovery_requested_since_
+  reset:147 scan shape) + a scan for an existing StatusEvent(detail==f"auto_ground_read:{canon}") since last user msg.
+- Gate logic: streak>=2 on path P AND no prior auto_ground_read marker for P since last user msg → emit StatusEvent
+  (detail=f"auto_ground_read:{canon}") + execute the REAL file_read of P (paired ActionEvent+ObservationEvent,
+  observe.py:226 pairing) → Disp.CONTINUE. Else → Disp.FALLTHROUGH (to gate_circuit_breaker → clean STUCK).
+- Tests-first (core): streak×2 same path no-prior-marker → real file_read injected + marker emitted + CONTINUE; single
+  FRESH_READ → FALLTHROUGH (nudge as today); marker already present → FALLTHROUGH (one auto-read/path/revision);
+  different paths → no premature trigger. Codex CODE-gate after.
