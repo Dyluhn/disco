@@ -2222,3 +2222,16 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   Needs: frontend dev server + a working sandbox (check disco-config sandbox.provider) + the build loop completing
   (minutes on MiniMax). Orchestrate relay+agent+frontend+Playwright in ONE execution so nothing gets reaped.
   Product Harness NOT complete until that run is green with screenshots.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b: REAL MiniMax BUILD RUNNING (driver proven)
+- FULL STACK LIVE + a REAL build executing: podman 5.8.2 + disco-sandbox:base image present; relay :8080 (POST
+  200); agent-server :8000 /health ok (1 model = driver-minimax). Created build conversation
+  conv_049d896830de4d89a7eb14dcd5bd4939 (surface=build, autonomous=true, sandbox_backend=podman), sent a static-
+  site prompt → execution_status RUNNING, made a PLAN + executed 4 actions/observations (iter 4/500). relay.jsonl:
+  10 calls, ALL host=api.minimaxi.chat model=MiniMax-M3 → the build is driven by MiniMax-M3 via the DIRECT API
+  (P17-clean, zero OpenRouter). ⇒ THE MINIMAX DRIVER BUILDS REAL DISCO SOFTWARE — proven live.
+- NOT YET: a finished artifact (index.html not yet written at iter 4), classify_dossier PASS, or screenshots.
+  Product Harness remains NOT complete (per compliance). The build is in the nohup agent-server process; let it run.
+- NEXT: check conv_049d896… for FINISHED + index.html (workspace snapshot / preview); then the UI/Playwright
+  product-harness path (frontend + build-artifact-runtime-smoke.spec.ts) → buildProductEvidence → write_dossier
+  (provider records from relay.jsonl) → classify_dossier(STATIC_SITE_SMOKE) PASS + SCREENSHOTS to Dylan.
