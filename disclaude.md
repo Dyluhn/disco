@@ -4316,3 +4316,11 @@ For every remaining phase:
 ```text
 Claude primary orchestrates; all other agents scout, test, break, or propose; Codex/GPT gates; the harness adjudicates; evidence decides.
 ```
+
+## External Agent Command Discovery (2026-06-30, per policy §4)
+- **codex** (/home/dylan/.npm-global/bin/codex) — GPT-5.5 BINDING GATE. `codex exec --sandbox read-only --model gpt-5.5 "<prompt>"`. Already in use for every plan/code/evidence gate.
+- **agy** (/home/dylan/.local/bin/agy) — Gemini/Antigravity, Lane C frontend/UI scout. Non-interactive: `agy -p "<prompt>" --model "<model>"` (--print/-p, --model, --dangerously-skip-permissions, --sandbox, --add-dir). Models: "Gemini 3.5 Flash (Low/Medium/High)", "Gemini 3.1 Pro (Low/High)", "Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B (Medium)".
+- **pi** (/home/dylan/.npm-global/bin/pi) — local Qwen scout (Lane D/E). `pi [options] [@files...] [messages...]` (read/bash/edit/write tools). FREE models ONLY (per [[pi-code-delegation]]); never paid. Local Qwen via Pi for ergonomics/log/test-summary scouting.
+- **Claude Sonnet subagents** — via the Agent tool (Explore / general-purpose). PRIMARY parallel read-only scouts for Lanes A/B/D/E/G. Told "no workflows/skills/sub-delegation".
+- **opencode** — NOT INSTALLED as a runnable CLI (only the data dir ~/.local/share/opencode/ {auth.json, opencode.db}). So the MiniMax-M3-via-opencode + DeepSeek-via-opencode IMPLEMENTATION/breaker lanes are UNAVAILABLE. MiniMax-M3 SOAK work goes through the RELAY (harness/product_build/minimax_relay.py → api.minimaxi.chat, model MiniMax-M3, ledger relay.jsonl) — the official-validation path is unaffected (relay = direct MiniMax). DeepSeek lane: unavailable until opencode is installed; substitute Sonnet/Gemini/Qwen scouts.
+- FLEET MAP for REL/Build PRs: Sonnet subagents (A/B/D/E/G read-only scouts) · agy/Gemini (C UI scout) · pi/Qwen (D/E ergonomics, free only) · codex (binding gate) · relay→MiniMax-M3 (F soak, direct API). opencode/DeepSeek deferred (not installed).
