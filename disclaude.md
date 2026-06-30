@@ -4591,3 +4591,15 @@ fake a pass.
   re-soak can test the fix (packages/core change, not auto-reload). Then re-soak revise_after_finish x5.
 - **Next action:** restart agent-server (carefully — DISCO_SECRET_KEY + relay wiring intact) → live re-soak revise x5
   → if A1 moves distribution to PASS, add A2 + unit test + Codex code-gate. Re-arm 120s.
+
+## §11 HEARTBEAT — 2026-06-30 — CRITICAL Category-F infra fix: servers ran STALE checkout
+- **F-BLOCKER FOUND+FIXED:** the live agent/app servers were importing `disco` from a STALE separate checkout
+  /var/home/dylan/projects/disco (Jun 24, HEAD 31480c17, no remote) — NOT my disclaude work (HEAD 7c698a3c).
+  disco-dev-up.sh REPO pointed at the stale `disco` + set NO PYTHONPATH → no REL/A1 server-side code loaded; the
+  re-soak failed at kernel-select (the stale code lacks the build-kernel route). The HARNESS (my Bash, PYTHONPATH=
+  disclaude) was always disclaude, so REL-4/5 oracle proofs (harness-side) hold; but SERVER-side engine changes
+  (A1) need the disclaude server. FIX: disco-dev-up.sh REPO→disclaude + export PYTHONPATH=disclaude/packages
+  (durable). Relaunched: agent:8000=200, relay:8080=200, buildkernel:8800=200, engine source=disclaude/packages,
+  A1 LOADED. Note for honesty: any prior SERVER-side "loaded" claim (CD-TOOLS tools) may have run stale code — the
+  harness-adjudicated proofs are valid; re-verify server-side as needed.
+- **Now re-running the REL-RC A1 re-soak on the CORRECT (disclaude+A1) server** — the first attempt ran stale code.
