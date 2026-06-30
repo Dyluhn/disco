@@ -2299,3 +2299,22 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   classify_dossier(STATIC_SITE_SMOKE) PASS. The cleanup slice {orphans, workspace_released} needs the conversation
   KILLED/released then verified (podman has no leftover container for the cid + workspace gone) — do that as the
   spec teardown. Then mark Product Harness COMPLETE. Codex-gate the spec.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b COMPLETE: classify_dossier PASS on a real MiniMax build ✅
+- GATED PR (Codex APPROVE): thread `autonomous` through write_dossier → EvidenceManifest. Root cause found by the
+  live run: an autonomous build (disco-kernel DEFAULT) auto-approves its plan inline (RUNNING/plan_approved, NO
+  AWAITING_PLAN_APPROVAL) → EventChainOracle relaxes that link only when autonomous=True; classify_run_folder
+  already read manifest.autonomous + the field existed, but write_dossier never set it → every dossier was non-
+  autonomous → the default build was unclassifiable as PASS. Fail-closed default. 2 new tests (auto=True→PASS, same
+  log auto=False→FAIL PLAN_APPROVED_STATUS_MISSING) + 11 existing green; basedpyright 0/0.
+- ✅ FORMAL PASS on REAL DATA: write_dossier(autonomous=True) from the live conv_cb9be8 (real events + real captured
+  slices: browser_ws.connections=1, lifecycle FINISHED, preview platform, shown artifact+preview=true [from the
+  Playwright UI probe], verification called+passed, cleanup orphans=0+workspace_released after a real /kill) +
+  provider ledger 56 records ALL api.minimaxi.chat/MiniMax-M3 → classify_dossier(STATIC_SITE_SMOKE) =
+  {status: PASS, scenario_id: static_site_smoke, required_evidence_present: true, accepted_by: oracle}. Proof saved
+  test-record/p1blive3b-finished/dossier/classification.json.
+- PRODUCT HARNESS = COMPLETE (the completion criterion — a real classify_dossier PASS on a live MiniMax-M3 build —
+  is met, P17-clean: minimax host only, zero openrouter). P1 (HARN-1..3) DONE.
+- DURABLE-AUTOMATION FOLLOW-UP (not a gate on completion): encode this exact capture→classify flow as
+  frontend/e2e-live/build-artifact-runtime-smoke.spec.ts so CI can re-run it. Then P10→P17 (P17 soak = this MiniMax
+  relay).
