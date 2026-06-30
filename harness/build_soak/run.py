@@ -50,6 +50,7 @@ from .adapters.disco_api import (
 )
 from .classify import CLASSIFICATION_NAME, classify
 from .evidence import EvidenceManifest, compute_evidence_hashes, write_manifest
+from .product_evidence import PRODUCT_EVIDENCE_NAME, write_product_evidence
 from .provider_ledger import parse_relay_log
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -575,6 +576,16 @@ def assemble_dossier(
             str(run.preview.get("content") or ""), encoding="utf-8"
         )
 
+    # [Lane A A-B4] PERSIST product_evidence so a folder reclassify/replay ADJUDICATES instead of
+    # going green-by-absence (the headless soak's REL-5 cleanup evidence was in-memory only → any
+    # classify_run_folder saw product_evidence=None → all browser oracles SKIP → ungated GREEN).
+    # Written into the conv dir (classify_run_folder rglobs product-evidence.json) and added to the
+    # §6 hash lock so a tamper trips INVALID_RUN. strict=False: persist the truthful evidence as the
+    # oracles saw it (their _int coercion already fails-closed on malformed counts).
+    _pe = getattr(run, "product_evidence", None)
+    if _pe:
+        write_product_evidence(conv, _pe, strict=False)
+
     # Evidence lock: hash the durable §6 set (relative to the run folder).
     conv_rel = f"conversations/{run.conversation_id}"
     evidence_files = {
@@ -582,6 +593,8 @@ def assemble_dossier(
         "state.final.json": f"{conv_rel}/state.final.json",
         "workspace-manifest.json": f"{conv_rel}/workspace-manifest.json",
     }
+    if _pe:
+        evidence_files[PRODUCT_EVIDENCE_NAME] = f"{conv_rel}/{PRODUCT_EVIDENCE_NAME}"
     # P1 (codex): the PREVIEW dossier is preview TRUTH the oracle adjudicates on — it
     # MUST be under the hash lock too, else a preview-health/served-html tamper would
     # not trip the §6 INVALID_RUN. Hash both preview files when a preview was captured.

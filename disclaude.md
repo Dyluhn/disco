@@ -4381,3 +4381,31 @@ consumes the Lane B cancel/disconnect/Pi assertions. Issue discovery NOT reduced
   suspend UX care. REL-6 DISCONNECT_OR_CANCEL consumes Lane B cancel/disconnect/Pi assertions.
 - NEXT: A-B4 (persist+tamper-lock+folder-enforce) → A-B1 (preflight) → REL-5 Codex code-gate → then REL-1/2/3
   shadow-canary + REL-6. Parallel lanes (policy §2) on each.
+
+## ===== STRUCTURED HEARTBEAT (policy §11) — 2026-06-30 =====
+**MISSED-HEARTBEAT AUDIT (§11):** the .claude/heartbeat.py daemon DIED — stale pid 122882, last
+HEARTBEAT_DUE tick 2026-06-29T16:01Z (~24h+ ago). All of CD-TOOLS-8/9/10, P10b, the parallel-policy
+adoption, REL-4, and REL-5 were done WITHOUT structured heartbeats keyed to the daemon (freeform notes
+appended instead). Daemon now RESTARTED (10-min cadence); structured §11 heartbeats resume from here.
+Gap cause: daemon not under a supervisor + never health-checked. Mitigation: health-check the pid at
+each heartbeat; if dead, restart + audit.
+
+- **Current PR:** REL-5 (terminal cleanup hardening) — in_progress.
+- **Active lanes:** A (Harness-truth/oracle) — COMPLETE, integrated (3 fixes). B (Runtime-lifecycle) —
+  COMPLETE, findings → REL-5b/REL-6. E (Regression/test) — 79 build_soak tests green each fix. C/D/F/G —
+  not used this sub-PR (no UI/contract/infra change beyond the harness).
+- **Lane status:** A → A-M2 + A-B5/M3 + A-M4 landed live-proven; A-B4 + A-B1 remaining (BLOCK). B → B-B1
+  product-teardown + Pi-sidecar gap deferred to REL-5b; cancel/disconnect → REL-6.
+- **External agents running:** none now (2 Sonnet scouts completed + integrated). codex = binding gate.
+- **Latest commit:** 4e305da9 docs(REL-5): status — Lane-A M2/B5/M3/M4 landed; A-B4/A-B1 + REL-5b/REL-6 remaining, classified (pushed; HEAD==origin).
+- **Tests since last heartbeat:** build_soak test_api_runner 79/79 (×5 across the fixes); 6 live podman
+  build_soak runs (static_html_minimal) — PASS w/ lifecycle+sidecar_stop+cleanup adjudicating, 0 orphan
+  containers; REL-4 + CD-TOOLS suites earlier green.
+- **New issues surfaced:** Lane A 5 oracle false-greens (A-B1/B2/B3/B4/B5 + M1-M4); Lane B 3 BLOCKERs
+  (product terminal leak, Pi-sidecar kill gap, post-terminal Pi resurrection) + 5 MAJORs. All recorded+classified.
+- **Blockers by category:** A(user-visible): none open. B(safety/cost): B-B1 product sandbox/egress/preview
+  leak per FINISHED build (→REL-5b); B-B2/B3 Pi sidecar survives kill (→REL-5b). C(oracle-false-pass):
+  A-B4 evidence-not-persisted→reclassify-green, A-B1 env-gated-enforcement (→ finish REL-5). D: A-B2/B3/M1
+  cheap guards. E: none. F: opencode not installed (MiniMax via relay — unaffected).
+- **Next action:** A-B4 (persist product-evidence.json + §6 hash-lock + classify_run_folder enforces missing-slice)
+  → A-B1 (preflight hard-require relay env) → REL-5 Codex code-gate → REL-1/2/3 shadow-canary → REL-6.
