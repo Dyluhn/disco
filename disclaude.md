@@ -2611,3 +2611,13 @@ markers cannot enter source via old/new.
   next_required_action:'file_read',suggested_args}). NOTE: these are TOOL-level error strings/structured obs
   (like the existing old_text_not_found/read_before_write), NOT build_soak classifier codes. Tests per the plan.
 - NEXT: implement CD-TOOLS-1 → tests → Codex CODE-gate → commit. Then CD-TOOLS-2..10.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-1 SHIPPED (fresh edit guard)
+- guard_fresh_edit in builtin/files.py: sha-aware read records (FileReadTool populates) + the guard wired into all
+  4 targeted-edit tools (file_edit/replace_lines/insert_lines/str_replace), pre-mutation. ELISION_MARKER_REJECTED
+  (unconditional) / STALE_FILE_CONTEXT / FRESH_READ_REQUIRED, structured nudges. Size-gated at 1500 bytes (=
+  _ARG_SNIP_CHARS) so small-file edits are NEVER blocked — Mode B is large-file only. Codex APPROVE after 1 REVISE
+  (forgiving-match edit_lines=None skipped coverage → now fail-closed on partial reads). 10 guard tests + 36 edit
+  tests green; pyright 0/0. Pre-existing-only fails: pdfinfo, MCP/node.
+- NEXT: CD-TOOLS-2 (atomic exact_replace tool — the dedicated str-replace primitive with require_fresh_read +
+  expected_sha256 + multi + atomic batch, reusing guard_fresh_edit). Then 3..10.
