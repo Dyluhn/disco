@@ -3296,3 +3296,14 @@ Codex caught: GET /artifacts/{path} serves INDIVIDUAL files (rejects directories
   (e.g. contains '<html' / a known token from the build) for output-truth, not just non-empty.
 - PASS unchanged: DeliverableEvent(files|app) present + download_present + download_bytes>0 + bytes-are-
   real + 0 OpenRouter + 0 post-terminal. Fail-closed; real GET bytes only.
+
+### P10b — live run in flight (e1)
+- export_smoke_run.py committed (Codex plan APPROVE after 1 REVISE: pin to concrete fetchable export.html;
+  /artifacts serves files not dirs/.zip). LAUNCHED bg (tag e1): build self-contained export.html w/ token →
+  serve as downloadable → detect DeliverableEvent(files|app) → GET /artifacts/{path} (fallback export.html) for
+  REAL bytes → download_present + download_bytes + bytes-are-real(html+token) + 0 OpenRouter + 0 post-terminal.
+  Dossier → RUN_DIR/p10b_dossier_e1.json.
+- ON COMPLETION: if PASS → Codex evidence-gate the real dossier → commit → P10b DONE. If no DeliverableEvent /
+  404 / 0 bytes → inspect dossier (did the model serve(kind='files')? is the path fetchable?), iterate the prompt
+  or detection HONESTLY (do not fake); the export path itself (P10a) is shipped. If build STUCK (no export.html) →
+  re-run (MiniMax ~50% finish).
