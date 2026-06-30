@@ -120,9 +120,10 @@ def main() -> int:
     os.makedirs(RUN_DIR, exist_ok=True)
     n0 = len(_ledger())
 
-    cid = (_post_json("/conversations", {"owner_id": "local", "surface": "build", "autonomous": True,
-                                         "title": f"cd9 {tag}"}).get("id"))
-    assert cid, "no conversation id"
+    _conv = _post_json("/conversations", {"owner_id": "local", "surface": "build", "autonomous": True,
+                                          "title": f"cd9 {tag}"})
+    cid = _conv.get("conversation_id") or _conv.get("id")
+    assert cid, f"no conversation id in {_conv}"
 
     # PHASE 1 — build the large index.html
     _post_json(f"/conversations/{cid}/messages", {"content": BUILD_PROMPT})
