@@ -59,6 +59,32 @@ STATIC_SITE_SMOKE = ProductScenario(
 )
 
 
+# P10 (Export/Handoff): an EXPORT-requiring scenario. The build must ALSO hand off a
+# downloadable artifact (serve kind='files'), so `classify_dossier` enforces export.requested
+# (absent ⇒ INVALID_RUN) and the ExportDownloadOracle requires a REAL non-empty download
+# (download_present + download_bytes>0). Same UI/preview/verify/cleanup path as the static
+# smoke, plus the export slice — exercising disco's serve(kind='files') → DeliverableEvent →
+# /conversations/{cid}/artifacts/{path} download path end to end (the live capture is P10b).
+EXPORT_SMOKE = ProductScenario(
+    id="export_smoke",
+    build_prompt=(
+        "Build a one-page static website for a neighbourhood coffee shop, then serve its "
+        "source files as a downloadable bundle the user can download."
+    ),
+    kind="static.site",
+    requires_export=True,
+    required_slices=(
+        "browser_ws",
+        "lifecycle",
+        "preview",
+        "shown",
+        "verification",
+        "export",
+        "cleanup",
+    ),
+)
+
+
 def _missing(reason: str, facts: dict[str, Any]) -> dict[str, Any]:
     return {
         "status": fc.INVALID_RUN,

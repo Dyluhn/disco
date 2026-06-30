@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from harness.build_soak import failure_codes as fc
-from harness.product_build import STATIC_SITE_SMOKE, classify_dossier, write_dossier
+from harness.product_build import EXPORT_SMOKE, STATIC_SITE_SMOKE, classify_dossier, write_dossier
 
 from _eventlog import action, clean_smoke_log, msg, observation, plan, status
 
@@ -116,6 +116,55 @@ def test_autonomous_log_without_flag_fails_approval_chain(tmp_path) -> None:
     )
     c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
     assert c["status"] == "FAIL" and c["code"] == "PLAN_APPROVED_STATUS_MISSING", c
+
+
+# --- P10: the EXPORT-requiring scenario (export/handoff) ----------------------
+def _green_export_pe() -> dict:
+    pe = _green_pe()
+    pe["export"] = {"requested": True, "download_present": True, "download_bytes": 2048}
+    return pe
+
+
+def _write_export(tmp_path, *, pe=None):
+    return write_dossier(
+        tmp_path,
+        product_evidence=pe if pe is not None else _green_export_pe(),
+        provider_records=_MINIMAX_LEDGER,
+        events=clean_smoke_log(),  # the full awaiting+approval chain (non-autonomous)
+        run_id="ex1",
+        scenario_id="export_smoke",
+    )
+
+
+def test_export_scenario_green_classifies_pass(tmp_path) -> None:
+    _write_export(tmp_path)
+    c = classify_dossier(tmp_path, EXPORT_SMOKE)
+    assert c["status"] == "PASS", c
+
+
+def test_export_scenario_no_export_requested_is_invalid(tmp_path) -> None:
+    # the export slice is present but requested=False — requires_export ⇒ INVALID_RUN (an export
+    # scenario that delivered no export is incomplete, NOT a pass via the oracle's skip).
+    pe = _green_export_pe()
+    pe["export"] = {"requested": False}
+    _write_export(tmp_path, pe=pe)
+    c = classify_dossier(tmp_path, EXPORT_SMOKE)
+    assert c["status"] == "INVALID_RUN" and c["code"] == fc.MISSING_REQUIRED_EVIDENCE, c
+
+
+def test_export_scenario_empty_download_fails(tmp_path) -> None:
+    # requested but the download is absent / zero bytes — the ExportDownloadOracle FAILS.
+    pe = _green_export_pe()
+    pe["export"] = {"requested": True, "download_present": False, "download_bytes": 0}
+    _write_export(tmp_path, pe=pe)
+    c = classify_dossier(tmp_path, EXPORT_SMOKE)
+    assert c["status"] == "FAIL" and c["code"] == "EXPORT_DOWNLOAD_MISSING", c
+
+
+def test_static_scenario_unaffected_by_export_requirement(tmp_path) -> None:
+    # the no-export static scenario still PASSes with export.requested=False (no cross-contam).
+    _write(tmp_path)  # _green_pe has export={"requested": False}
+    assert classify_dossier(tmp_path, STATIC_SITE_SMOKE)["status"] == "PASS"
 
 
 # --- broken slices / provider -------------------------------------------------

@@ -26,24 +26,39 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from harness.product_build import STATIC_SITE_SMOKE, classify_dossier, write_dossier
+from harness.product_build import EXPORT_SMOKE, STATIC_SITE_SMOKE, classify_dossier, write_dossier
+
+# The product scenarios this bridge can adjudicate, keyed by id. The capture file names which
+# one it ran (`scenario_id`); an UNKNOWN id raises (never silently falls back to a laxer
+# scenario — e.g. a typo'd export run must NOT be classified as the no-export static smoke).
+_SCENARIOS = {s.id: s for s in (STATIC_SITE_SMOKE, EXPORT_SMOKE)}
 
 
 def classify_capture(capture_path: str | Path, dossier_dir: str | Path) -> dict[str, Any]:
-    """Read a capture file, assemble the dossier under ``dossier_dir``, and classify it.
-    Raises KeyError/ValueError if the capture is missing a required field or malformed (a
-    capture bug must surface loudly, never silently pass)."""
+    """Read a capture file, assemble the dossier under ``dossier_dir``, and classify it against
+    the scenario it names. Raises KeyError/ValueError if the capture is missing a required field,
+    malformed, or names an unknown scenario (a capture bug must surface loudly, never silently
+    pass)."""
     cap = json.loads(Path(capture_path).read_text(encoding="utf-8"))
+    # The capture MUST name its scenario explicitly. A MISSING (or unknown) scenario_id raises —
+    # never default to the laxer static scenario, or an export capture that forgot the field would
+    # silently classify with NO export required (a fail-open PASS).
+    scenario_id = cap.get("scenario_id")
+    scenario = _SCENARIOS.get(scenario_id) if scenario_id else None
+    if scenario is None:
+        raise ValueError(
+            f"capture must name a known scenario_id; got {scenario_id!r}; known: {sorted(_SCENARIOS)}"
+        )
     write_dossier(
         dossier_dir,
         product_evidence=cap["product_evidence"],
         provider_records=cap["provider_records"],
         events=cap["events"],
         run_id=cap.get("run_id", ""),
-        scenario_id=cap.get("scenario_id", STATIC_SITE_SMOKE.id),
+        scenario_id=scenario_id,
         autonomous=bool(cap.get("autonomous", False)),
     )
-    return classify_dossier(dossier_dir, STATIC_SITE_SMOKE)
+    return classify_dossier(dossier_dir, scenario)
 
 
 def main(argv: list[str]) -> int:

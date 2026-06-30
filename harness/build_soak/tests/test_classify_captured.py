@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from harness.product_build.classify_captured import classify_capture, main
 
 from _eventlog import action, msg, observation, plan, status
@@ -74,3 +76,42 @@ def test_main_nonzero_on_broken_slice(tmp_path) -> None:
     bad["product_evidence"]["browser_ws"]["connections"] = 0  # WS never connected
     cap = _write_capture(tmp_path, bad)
     assert main(["classify_captured", cap, str(tmp_path / "dossier")]) == 1
+
+
+# --- P10: scenario-aware routing (export scenario) ----------------------------
+def _green_export_capture() -> dict:
+    cap = _green_capture()
+    cap["product_evidence"]["export"] = {"requested": True, "download_present": True, "download_bytes": 2048}
+    cap["scenario_id"] = "export_smoke"
+    return cap
+
+
+def test_export_capture_classifies_pass(tmp_path) -> None:
+    cap = _write_capture(tmp_path, _green_export_capture())
+    assert classify_capture(cap, tmp_path / "dossier")["status"] == "PASS"
+
+
+def test_export_capture_without_download_is_nonzero(tmp_path) -> None:
+    bad = _green_export_capture()
+    bad["product_evidence"]["export"] = {"requested": True, "download_present": False, "download_bytes": 0}
+    cap = _write_capture(tmp_path, bad)
+    assert main(["classify_captured", cap, str(tmp_path / "dossier")]) == 1
+
+
+def test_unknown_scenario_id_raises(tmp_path) -> None:
+    # a typo'd / unknown scenario must NOT silently fall back to a laxer scenario.
+    bad = _green_capture()
+    bad["scenario_id"] = "bogus_scenario"
+    cap = _write_capture(tmp_path, bad)
+    with pytest.raises(ValueError, match="known scenario_id"):
+        classify_capture(cap, tmp_path / "dossier")
+
+
+def test_missing_scenario_id_raises(tmp_path) -> None:
+    # a capture with NO scenario_id must raise — never default to the laxer static scenario
+    # (else an export capture that forgot the field would fail-open to a no-export PASS).
+    bad = _green_export_capture()
+    del bad["scenario_id"]
+    cap = _write_capture(tmp_path, bad)
+    with pytest.raises(ValueError, match="known scenario_id"):
+        classify_capture(cap, tmp_path / "dossier")

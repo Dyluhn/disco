@@ -15,9 +15,15 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # static visibility for __all__ without a runtime disco import
     from .evidence_writer import write_dossier
-    from .scenario_runner import STATIC_SITE_SMOKE, ProductScenario, classify_dossier
+    from .scenario_runner import EXPORT_SMOKE, STATIC_SITE_SMOKE, ProductScenario, classify_dossier
 
-__all__ = ["write_dossier", "ProductScenario", "STATIC_SITE_SMOKE", "classify_dossier"]
+__all__ = [
+    "write_dossier",
+    "ProductScenario",
+    "STATIC_SITE_SMOKE",
+    "EXPORT_SMOKE",
+    "classify_dossier",
+]
 
 
 def __getattr__(name: str) -> Any:
@@ -25,7 +31,7 @@ def __getattr__(name: str) -> Any:
         from .evidence_writer import write_dossier
 
         return write_dossier
-    if name in ("ProductScenario", "STATIC_SITE_SMOKE", "classify_dossier"):
+    if name in ("ProductScenario", "STATIC_SITE_SMOKE", "EXPORT_SMOKE", "classify_dossier"):
         from . import scenario_runner
 
         return getattr(scenario_runner, name)
