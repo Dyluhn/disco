@@ -43,9 +43,18 @@ def write_dossier(
     artifacts: dict[str, str] | None = None,
     run_id: str = "",
     scenario_id: str = "",
+    autonomous: bool = False,
 ) -> Path:
     """Write the dossier into ``run_dir`` and return it. Raises ValueError on malformed
-    product_evidence (preflight, before any write) or an unsafe artifact path."""
+    product_evidence (preflight, before any write) or an unsafe artifact path.
+
+    ``autonomous`` is a RUN fact (was this build driven in autonomous mode, auto-approving
+    its plan inline?) recorded on the manifest so the classifier's EventChainOracle relaxes
+    the AWAITING_PLAN_APPROVAL link — an autonomous build legitimately emits no awaiting-
+    approval status, so without this an otherwise-clean autonomous run fails
+    PLAN_APPROVED_STATUS_MISSING. It is the disco-kernel's DEFAULT drive mode, so the live
+    product harness MUST thread it; the synthetic green fixture is a non-autonomous drive
+    (full awaiting+approval chain), which is why it passed without this."""
     # PREFLIGHT — validate before touching the filesystem (no partial untrusted dossier).
     problems = validate_product_evidence(product_evidence)
     if problems:
@@ -81,6 +90,7 @@ def write_dossier(
         scenario_id=scenario_id,
         mode="ui",
         kernel="disco",
+        autonomous=autonomous,
         evidence_files=evidence_files,
         evidence_hashes=compute_evidence_hashes(base, evidence_files),
     )

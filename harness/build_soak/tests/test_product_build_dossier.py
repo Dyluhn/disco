@@ -11,7 +11,23 @@ import pytest
 from harness.build_soak import failure_codes as fc
 from harness.product_build import STATIC_SITE_SMOKE, classify_dossier, write_dossier
 
-from _eventlog import clean_smoke_log
+from _eventlog import action, clean_smoke_log, msg, observation, plan, status
+
+
+def _autonomous_log() -> list[dict]:
+    """An AUTONOMOUS drive: the agent auto-approves its plan inline, so there is NO
+    AWAITING_PLAN_APPROVAL status (the disco-kernel default; matches the live MiniMax run)."""
+    # Mirrors the real live MiniMax shape: the plan is auto-approved inline (a RUNNING/
+    # plan_approved status, NO preceding AWAITING_PLAN_APPROVAL), then execution + finish.
+    return [
+        msg(1, "user", "Build a one-page coffee shop site."),
+        status(2, "RUNNING"),
+        plan(3, steps=2),
+        status(4, "RUNNING", "plan_approved"),
+        action(5, "file_write", args={"path": "index.html"}, action_id="a5"),
+        observation(6, "a5", tool="file_write", success=True),
+        status(7, "FINISHED"),
+    ]
 
 # --- TEST-ONLY green fixtures (never a production passing default) -------------
 _MINIMAX_LEDGER = [{"host": "api.minimaxi.com", "model": "MiniMax-M3", "tokens": 128}]
@@ -66,6 +82,40 @@ def test_artifact_cannot_clobber_a_core_dossier_file(tmp_path) -> None:
     assert (tmp_path / "artifacts" / "product-evidence.json").read_text() == "EVIL"
     # the run still classifies normally (hash lock intact)
     assert classify_dossier(tmp_path, STATIC_SITE_SMOKE)["status"] == "PASS"
+
+
+# --- autonomous drive (the disco-kernel default; the live MiniMax run) ---------
+def test_autonomous_dossier_classifies_pass(tmp_path) -> None:
+    # An autonomous build emits NO AWAITING_PLAN_APPROVAL; recording autonomous=True on the
+    # manifest relaxes the approval-gate link so an otherwise-clean run PASSes. This is the
+    # exact gap the live MiniMax-M3 product-harness run hit (PLAN_APPROVED_STATUS_MISSING).
+    write_dossier(
+        tmp_path,
+        product_evidence=_green_pe(),
+        provider_records=_MINIMAX_LEDGER,
+        events=_autonomous_log(),
+        run_id="auto1",
+        scenario_id="static_site_smoke",
+        autonomous=True,
+    )
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "PASS", c
+
+
+def test_autonomous_log_without_flag_fails_approval_chain(tmp_path) -> None:
+    # The SAME autonomous-shaped log WITHOUT the autonomous manifest flag fails the approval
+    # ordering — proving the flag (not a fixture accident) is what relaxes the gate.
+    write_dossier(
+        tmp_path,
+        product_evidence=_green_pe(),
+        provider_records=_MINIMAX_LEDGER,
+        events=_autonomous_log(),
+        run_id="auto2",
+        scenario_id="static_site_smoke",
+        autonomous=False,
+    )
+    c = classify_dossier(tmp_path, STATIC_SITE_SMOKE)
+    assert c["status"] == "FAIL" and c["code"] == "PLAN_APPROVED_STATUS_MISSING", c
 
 
 # --- broken slices / provider -------------------------------------------------
