@@ -3517,3 +3517,19 @@ any regression rolls back that PR's enforcement (shadow stays). Start P11 only a
   catches the prod-only docker-py container-recreate-under-load bug.
 - NEXT: stand up local podman as the agent-server backend (config switch + image + verify a real build works),
   then run the BASELINE soak to measure the true clean rate + real container-orphan/cleanup behavior.
+
+### REL-4 backend CORRECTION (resolved) — already on production-valid podman; no setup needed
+- disco-config: backend="local" + docker_socket=unix:///run/user/1000/podman/podman.sock → service_from_config
+  maps to PodmanSandboxService (libpod CLI path, the DURABLE-#3 404-under-load fix) = PRODUCTION-VALID
+  (sandbox/__init__.py:36-52; require_production_valid_backend lists gvisor/local/podman as valid:84). Live build
+  confirms sandbox_backend=podman. So "local" is NOT the dev ProcessSandbox — "process" is. My earlier "local=not
+  production-valid" was WRONG (corrected by reading service_from_config). Dylan's "local podman now" is ALREADY the
+  live setup — NO backend switch needed.
+- 0 orphan disco podman containers currently → the production backend does NOT leak containers like the local
+  /tmp roots. The 1740 /tmp/disco-sbx roots were process-backend or podman host-staging; the REAL podman orphan/
+  cleanup behavior must be MEASURED by the baseline soak, not inferred.
+- NEXT (clean checkpoint): run the BASELINE soak on the current podman backend (python -m harness.build_soak.run
+  --scenario <id> --iterations N --autonomous, with --model MiniMax-M3 via the relay, DISCO_ALLOW_PROCESS_SANDBOX
+  _FOR_DEV unset so it stays on podman). Measure the true clean rate + what (if anything) lingers (containers /
+  host-staging dirs / previews) per scenario. THEN target REL-4/5 fixes at the real measured gaps + the 409/idle
+  audit. REL-4 status: backend grounded + premature fix reverted; the real fix waits on the baseline measurement.
