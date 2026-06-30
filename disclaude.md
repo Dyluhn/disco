@@ -3229,3 +3229,15 @@ weakening; insufficient negatives.
   verdict; the Mode-B-gone proof = every built_ok run passes the hardened oracle (build-STUCK runs = Mode A / ~50%
   finish rate, recorded but NOT a Mode-B regression); 0 OpenRouter + 0 post-terminal across ALL. Write the REPORT
   (docs/cd-tools-9-10-report.md, since test-record is gitignored) → Codex final gate → commit → UNBLOCK P10b.
+
+### CD-TOOLS-10 soak — interim (5/10), dual-metric framing
+- 0 OpenRouter + 0 post-terminal across ALL runs (the hard non-negotiable HOLDS).
+- s1/s3/s4: full PASS (file_edit/file_replace_lines, onf=0, edits applied, clean finish).
+- s5: built_ok, edits APPLIED, onf=0, no elision → MODE B GONE; but edit phase TIMEOUT + edited-before-phase2-read
+  (grounded from phase 1 → guard correctly didn't force a redundant read). NOT a Mode-B regression; a finish-rate
+  (Mode A) miss.
+- s2: HTTP 409 Conflict on the message POST (transient server/timing; prior-conv teardown lag) — build never ran,
+  no dossier. Not Mode-B, not OpenRouter. (For re-runs: add inter-run kill+sleep or 409-retry.)
+- REPORT will use DUAL metrics: (A) MODE-B-GONE = built_ok runs with onf-loop=0 + no elision + edits applied (the
+  campaign's actual fix); (B) clean-finish PASS = A + terminal-FINISHED + phase-2 read-ordering (folds in MiniMax's
+  separate ~50% finish rate = Mode A, NOT what CD-TOOLS fixes). Honest separation.
