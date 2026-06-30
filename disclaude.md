@@ -3473,3 +3473,22 @@ path first (soak DELETE cid + Pi-sidecar-kill fix + un-skip/live oracle); full f
 resume/suspend UX tests.
 GATE DISCIPLINE: REL-6 (or a scaled soak) re-runs after each of REL-2/1/3 to prove the clean rate did not drop;
 any regression rolls back that PR's enforcement (shadow stays). Start P11 only after the FULL REL-6 passes 100%.
+
+### REL-4 grounding — mature build_soak harness + EMPIRICAL orphan confirmation (2026-06-30)
+- The 7/10 that triggered this phase was measured by my NAIVE product_build quick-driver (sent /followup after a
+  TIMEOUT → not_finished 409 → crash on s2/s9). The MATURE harness/build_soak ALREADY handles the IDLE/kick race:
+  WS-frame followups (not the REST route that 409s), wait_for_followup_pickup after each send, IDLE-race documented
+  (disco_api.py:591), per-run cid teardown. So part of the observed unreliability was a HARNESS artifact — REL-6
+  must measure the BASELINE with build_soak, not the quick-driver.
+- build_soak is a real CLI runner: `python -m harness.build_soak.run --scenario <id> --iterations N --model ...
+  --base-url http://127.0.0.1:8000 --autonomous --kernel disco`. Existing scenarios (scenarios.yaml): static_html_
+  minimal, multifile_static_site, revise_after_finish, revise_twice_complex, verify_catches_broken_then_fixed,
+  diag_* — partial overlap with the REL-6 5-class matrix (need explicit EXPORT_SMOKE + DISCONNECT_OR_CANCEL).
+- EMPIRICAL ORPHAN GAP CONFIRMED: 1740 leaked /tmp/disco-sbx-* roots, 0 tracked conversations. _release_conversation
+  (run.py:729-758) SKIPS terminal convs ("already-terminal needs no kill") — but a headless FINISHED conv's sandbox
+  is NOT destroyed at terminal (REL-5 finding: best-effort to idle-TTL 1800s), so roots accumulate. Tiny (36K, empty
+  dirs, NO quota risk — /tmp 1% used) but it WOULD fail the soak's 0-orphans acceptance. Swept the 1740 for a clean
+  baseline.
+- REL-4 fix: _release_conversation must RELEASE the sandbox even for TERMINAL convs (kill destroys sandbox + revokes
+  token + idempotent + best-effort; evidence already frozen + FINISHED-snapshot already taken via kick). + a pre-soak
+  stale-root sweep. The 409/idle handling is already robust (audit-confirmed) — do NOT rebuild it.
