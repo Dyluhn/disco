@@ -3533,3 +3533,20 @@ any regression rolls back that PR's enforcement (shadow stays). Start P11 only a
   _FOR_DEV unset so it stays on podman). Measure the true clean rate + what (if anything) lingers (containers /
   host-staging dirs / previews) per scenario. THEN target REL-4/5 fixes at the real measured gaps + the 409/idle
   audit. REL-4 status: backend grounded + premature fix reverted; the real fix waits on the baseline measurement.
+
+### REL-4/5 — MEASURED baseline evidence on podman (2026-06-30) — the real, grounded targets
+Ran the REAL build_soak runner (static_html_minimal x1) on the production-valid podman backend + MiniMax. Results:
+- Scenario PASSED, but the PASS is BLIND: the headless soak SKIPS the reliability oracles — cleanup, sidecar_stop,
+  lifecycle, preview_ownership, verification_gate, provider_ledger, export_download — ALL "SKIP (no <x> evidence
+  (headless run))". The gate currently passes WITHOUT checking cleanup/after-terminal/provider. (ToolScopeOracle
+  also SKIPs WRITE_TOOL_ALLOWED_IN_PLANNING — "needs captured per-turn tool scope, not in the durable event log —
+  TODO live-runner slice S3".) → REL-5 core: POPULATE these headless evidence slices so the oracles RUN, not skip.
+- ORPHAN CONTAINERS CONFIRMED (the real podman mechanism, NOT the /tmp roots): one build left 2 containers — the
+  sandbox `disco-sbx-sbx_<id>` AND the egress sidecar `disco-egr-sbx_<id>` — both still "Up" after terminal,
+  conversation untracked. _release_conversation SKIPS terminal convs → 2 containers/run linger (×95 runs ≈ ~190
+  orphans → fails 0-orphans). PROVEN FIX: POST /kill on the terminal conv tore down BOTH containers → 0 remaining.
+  So _release_conversation MUST release terminal convs too (kill is the correct, proven teardown). The
+  test_cleanly_terminal_run_is_not_killed encodes a decision that is MEASURABLY WRONG for the 0-orphans gate.
+- REL-4 (inter-run cleanup) = _release_conversation releases terminal convs (proven). 409/idle already handled by
+  build_soak. REL-5 = populate headless lifecycle/cleanup/sidecar/provider-after-terminal/verification/export
+  evidence slices + the Pi-sidecar-kill gap. Both now grounded in MEASURED evidence, not inference.
