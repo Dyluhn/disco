@@ -3357,3 +3357,83 @@ tests → Codex code/evidence review → commit/push per accepted PR → heartbe
 
 ### REL grounding — 4 parallel read-only investigations dispatched (REL-1 finalizer/verifier, REL-2 manifest,
 ### REL-3 ToolScope wiring, REL-4/5 lifecycle/409). Synthesize into the gated plan when they return.
+
+## BUILD-RELIABILITY-GATE — PLAN (ratification-pending) — grounded in 4 read-only investigations
+The investigations found the same theme campaign-wide: **the reliability machinery EXISTS but is DEAD/
+DORMANT in the default product path.** Sequencing is dictated by interlock: REL-2 (shared truth) → REL-1
+(verifier writes it) → REL-3 (phases read+enforce it) → REL-4/5 (lifecycle) → REL-6 (soak).
+
+### Grounded findings (file:line)
+- **REL-3 DORMANT:** ContractScopeGuard wired only if `artifact_mode` (default False, runtime_settings.py:
+  502-504; only set via create-body flag conversations.py:89-91). Default build → executor._scope_guard=None
+  (executor.py:395), no phase tracker. Even with artifact_mode on: contract always CUSTOM (set_build_kind has
+  NO prod caller, runtime.py:1170); VERIFY/EXPORT/REPAIR UNREACHABLE (note_finalizer_called/note_verifier_
+  result test-only; finalizer is a finish-alias intercepted at boundaries.py:40/engine.py:1423, never hits
+  executor on_tool_success). Only BOOTSTRAP→EDIT can fire.
+- **REL-1 NO host verifier:** ready_for_*_verification = virtual finish-aliases (agent.py:108-111). Main agent
+  SELF-verifies inline via verify_web_app (finish.py gate_browser_verify:1904, _drive_verify_web_app:996) —
+  what REL-1 FORBIDS; prompts MANDATE it (prompts.py:223-227,436-439). No "verified" state exists. note_build_
+  verify_result (runtime.py:1217-1225) has NO prod caller → VERIFY edge dead. CD-TOOLS-5b never built. ASSET:
+  an out-of-band verifier EXISTS (agent-server verify/runner.py: _validate_app_deliverables:607, _locate_
+  deliverables:378) + load-diagnostics builder verify_app.py:160-263 — REL-1 builds on these.
+- **REL-2 NO shared manifest:** /api/projects/{cid}/manifest (projects.py:109-153) = files+bytes+last
+  DeliverableEvent only. Scattered/duplicate truth: existence re-derived 3× (_common._declared_artifacts:142,
+  verify/runner._locate_deliverables:378, manifest walk); sha in 4+ places (files.py:136/1419, file_state.py:39,
+  artifact_memory.py:38, view.py:500); shown = NO server truth (harness DOM-inferred); verified = 3-4
+  authorities; export = none persisted; preview = in-memory PreviewSession (preview.py:179). Write tools ALREADY
+  emit {path,sha256,bytes} (files.py:1419) — no runtime consumer folds it (CD-TOOLS-4b never built).
+- **REL-4 409 = IDLE/kick async race**, NOT a concurrency cap (none exists). POST /conversations never 409s;
+  /messages 409 only imported-read-only; /followup 409 `not_finished` when status∉{FINISHED,IDLE}
+  (conversations.py:179). kick() is async (disco_api.py:591-595) → fresh conv reads IDLE before RUNNING; a
+  state-sensitive call in that window (resume→already_running, settings PATCH→not_pristine) spuriously 409s.
+  Soak's followup likely 409'd because build phase wasn't FINISHED/IDLE. Inter-run cleanup = only _release_
+  conversation (run.py:729-758, kills just this run's cid). No reset/release-all endpoint; DELETE /conversations
+  /{cid}→forget_conversation is the only full HTTP release.
+- **REL-5 cleanup best-effort, NOT at terminal:** GUARANTEED on terminal = Pi token revoke + kernel-pin clear
+  (_unpin_if_current_generation, runtime.py:2849-2850, every path). NOT guaranteed on plain FINISHED/ERROR/STUCK
+  with UI attached: sandbox destroy, preview stop, noVNC stop, snapshot (only on suspend/kick-FINISHED), Pi
+  PiProcess sidecar stop (runtime.kill does NOT call PiKernel.kill — gap). Sandbox lingers to idle-TTL 1800s /
+  suspend-60s. "Zero provider calls after terminal" oracle EXISTS (SidecarStopOracle browser_evidence.py:97-121)
+  but SKIPS on headless soak (no sidecar evidence slice populated) — dormant assertion.
+
+### PR scope (each its own gated PR; risk flagged)
+- **REL-2 (FOUNDATION):** new shared per-conversation `ArtifactManifest` (persisted): one record per artifact
+  {id, path, kind, sha, shown, verification, export, latest_preview_status}. ONE existence-derivation (fold the
+  3 copies → one); write tools' {path,sha256} fold in at the runtime consumer (the missing CD-TOOLS-4b seam).
+  /manifest reads it. Readers: serve(shown), verifier(verification, REL-1), export(export), preview(preview).
+  Risk: MED (new state object + runtime consumer; must not break existing /manifest contract).
+- **REL-1 (host verifier):** ready_for_verification stops being a pure finish-alias → host-owned path: surface
+  artifact → host load-diagnostics (reuse verify_app.py verdict builder, host-driven not agent-driven) → CLEAN
+  → fork/queue verifier (verify/runner.py) → verdict sets BuildPhaseTracker VERIFY→EXPORT/REPAIR (wire the dead
+  note_verifier_result edge) + writes verification into the REL-2 manifest; DIRTY → structured failure. REMOVE
+  main-agent self-verify (drop _drive_verify_web_app from the finish gate + the self-verify prompt mandate) when
+  host verifier owns it. NO verified state without verifier pass. Risk: HIGH (finish.py is core; behavior change).
+- **REL-3 (turn ToolScope ON for default builds):** enforce bootstrap/edit/repair/verify/export scopes in the
+  DEFAULT build path (not artifact_mode-gated). Wire set_build_kind from the build brief/classification so the
+  contract isn't always CUSTOM. EDIT phase: deny raw file_write (allow only in bootstrap/repair/custom), prefer
+  exact_replace/file_edit, couple to the CD-TOOLS-1 fresh-read guard. Verifier-only diagnostics not reachable by
+  the main agent. Risk: HIGH (changes default build behavior — must be soak-validated; may regress builds).
+- **REL-4 (409/idempotency/cleanup):** kill the IDLE/kick race — harness waits for a stable RUNNING (or a
+  deterministic post-kick state) before any state-sensitive call; followup only after a real terminal (poll
+  FINISHED, not TIMEOUT); retries only on idempotent pre-action ops. Add a real inter-run cleanup the soak calls
+  (DELETE /conversations/{cid} for the prior cid + a release-all-sandboxes/stale-convs path). No scenario fails
+  from leftover state.
+- **REL-5 (terminal cleanup):** force the soak-relevant teardown AT the terminal event (or a deterministic
+  post-terminal hook the soak can trust): stop sidecar (fix runtime.kill→PiKernel.kill gap), stop preview,
+  snapshot workspace, release sandbox; assert ZERO provider calls after terminal by populating the sidecar/
+  cleanup evidence slice in the HEADLESS soak (un-skip SidecarStopOracle). Risk: MED.
+- **REL-6 (soak):** build the 5 scenario classes (STATIC_SMOKE, TARGETED_EDIT, EXPORT_SMOKE, REVISION_CHAIN,
+  DISCONNECT_OR_CANCEL) on harness/build_soak; strict acceptance (100% clean/class, 0 UNKNOWN_FAILURE/INVALID_
+  RUN, 0 OpenRouter, 0 post-terminal, 0 orphans; no excuse counted). Record+classify+fix every failed attempt
+  before restarting that class.
+
+### OPEN DECISIONS for the gate (flag, don't guess)
+1. REL-3 default-on is a real behavior change to every build — acceptable, or keep a kind-classified contract
+   that's stricter-than-CUSTOM but not full per-kind? (Recommend: classify kind from brief; fall back to a
+   tightened CUSTOM, not permissive CUSTOM.)
+2. REL-1 removing the main-agent self-verify: do we keep a fast inline pre-check AND a host verifier, or host
+   verifier ONLY? (Recommend: host verifier is the sole authority for "verified"; inline check downgraded to a
+   non-authoritative hint or removed to honor "no self-verify".)
+3. REL-5 force-teardown-at-terminal vs keep best-effort + make the soak DELETE each cid: minimal-risk path is
+   the soak deletes its cid (REL-4 cleanup) + REL-5 only fixes the Pi-sidecar gap + un-skips the oracle.
+   Full force-teardown-at-terminal is higher-risk (affects the live product's resume/suspend UX).
