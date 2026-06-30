@@ -2732,3 +2732,18 @@ CODEX FOCUS (§9): shrink guard not trivially bypassable (allow_shrink is explic
 real grounding); governed detection sound (.disco/ prefix on the CANONICAL path, not substring-spoofable); atomic
 temp+rename real on ProcessSandbox + safe fallback; no false-block of a legit small rewrite that ISN'T >50% shrink;
 elision; insufficient negatives.
+
+### CD-TOOLS-3 — PLAN round-1 revision (Codex REVISE: governed check must be spoof-proof)
+- A lexical `.disco/` prefix on the normpath'd path MISSES a symlink reach: `ln -s .disco/appspec.json link.json`
+  then safe_write_file(link.json) — "link.json" isn't under .disco/ but the write follows the symlink to a governed
+  file. FIX: resolve the REAL (symlink-followed) jail-relative path. ProcessSandbox._resolve ALREADY does
+  `(workspace/path).resolve()` (follows symlinks, rejects jail escapes) — expose it: add sandbox.resolve_relpath(
+  path)->str returning the symlink-followed path RELATIVE to the workspace root. The governed check =
+  resolve_relpath(path) is under `.disco/`. A new helper _governed_target(sandbox,path): use getattr(sandbox,
+  'resolve_relpath',None) when present (ProcessSandbox), else fall back to the lexical canonical strip. So on the
+  local/test backend the symlink-spoof is CLOSED + provable; on exec-only backends the lexical check remains as a
+  documented STEERING softguard (note: the sandbox jail is the true boundary, and shell can write .disco/ regardless
+  — this guard STEERS the generic writer to the semantic tool, it is not a security control).
+- TEST add: create a symlink link.json -> .disco/appspec.json (via the ProcessSandbox workspace), safe_write_file(
+  link.json) → SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED (proves the real-path resolution, not the lexical name).
+- resolve_relpath also lets _atomic_write put its tmp sibling next to the REAL target dir (correct rename domain).
