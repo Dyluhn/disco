@@ -729,31 +729,34 @@ def _invalid_run_record(
 async def _release_conversation(
     client: DiscoApiClient, cid: str | None, timeline: list[str] | None = None
 ) -> None:
-    """Tear down the conversation the runner is DONE with so it doesn't leak as a RUNNING
-    build on the shared server. Called from run_once's `finally` AFTER evidence has been
-    collected + frozen (the §6 read of the terminal events already happened in
-    drive_scenario), so the kill never races the dossier.
+    """Tear down the conversation the runner is DONE with — INCLUDING its sandbox + egress
+    sidecar CONTAINERS — so nothing leaks between runs. Called from run_once's `finally` AFTER
+    evidence has been collected + frozen (the §6 read of the terminal events already happened in
+    drive_scenario), so the release never races the dossier.
 
-    Kills ONLY a STILL-NON-TERMINAL conversation (RUNNING / PAUSED / AWAITING_*): one that
-    already reached a genuine terminal (FINISHED / ERROR / STUCK / IDLE) needs no kill. The
-    kill is BEST-EFFORT + IDEMPOTENT — any error (server gone, already terminal) is swallowed
-    so teardown never turns a real verdict into a crash, and an already-terminal conv is
-    never double-killed (we don't kill it at all)."""
+    [REL-4] We release the conversation even when it is already TERMINAL. MEASURED on the
+    production podman backend: a single FINISHED build leaves TWO live containers — the sandbox
+    `disco-sbx-sbx_<id>` and the egress sidecar `disco-egr-sbx_<id>` — both still "Up" after the
+    terminal event (the sandbox is not destroyed at terminal; it lingers to the idle-TTL). Across
+    a 95-run soak that is ~190 orphan containers and FAILS the 0-orphans acceptance. `POST /kill`
+    on the terminal conversation tears down BOTH containers (measured: 2 → 0), revokes the provider
+    token, and stops the preview, and is IDEMPOTENT + BEST-EFFORT (any error — server gone, already
+    torn down — is swallowed so teardown never turns a real verdict into a crash). The FINISHED
+    workspace snapshot is already taken (kick post-run) and evidence is frozen, so releasing here
+    is safe."""
     if not cid:
         return
     status = ""
     with contextlib.suppress(Exception):
         status = DiscoApiClient._status_of(await client.get_state(cid))
-    if status in TERMINAL_STATES:
-        if timeline is not None:
-            timeline.append(f"released conversation {cid}: already terminal ({status}); no kill")
-        return
-    # Non-terminal (or undeterminable) → the runner is abandoning a live build: kill it.
+    # Release regardless of terminal status — the orphan-container teardown. kill is idempotent +
+    # suppressed, so a non-terminal abandon and a terminal release share the one proven path.
     with contextlib.suppress(Exception):
         resp = await client.kill(cid)
         if timeline is not None:
+            verb = "released terminal" if status in TERMINAL_STATES else "killed abandoned"
             timeline.append(
-                f"killed abandoned conversation {cid} "
+                f"{verb} conversation {cid} — sandbox + sidecar containers destroyed "
                 f"(was {status or 'unknown'}, http {resp.get('http_status')})"
             )
 

@@ -2331,10 +2331,13 @@ async def test_abandoned_run_kills_its_conversation(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_cleanly_terminal_run_is_not_killed(tmp_path):
-    # The flip side: a run that reached a genuine terminal (FINISHED) needs NO kill — the
-    # runner must NOT kill an already-terminal conversation (no wasted teardown, no
-    # double-kill). A clean smoke PASS must issue zero /kill posts.
+async def test_cleanly_terminal_run_is_released(tmp_path):
+    # [REL-4] A run that reached a genuine terminal (FINISHED) IS released — the runner must
+    # kill it to tear down the lingering sandbox + egress sidecar containers. MEASURED on the
+    # podman backend: a FINISHED build leaves 2 live containers (disco-sbx-* + disco-egr-*) that
+    # are NOT destroyed at the terminal event; POST /kill clears both (2 -> 0). Releasing every
+    # terminal conv is what keeps a long soak at 0 orphan containers. A clean smoke PASS must
+    # therefore issue exactly the /kill teardown post (evidence is already frozen, so it's safe).
     db = tmp_path / "disco.db"
     _seed_db(db, _CID, clean_smoke_log())
     transport = FakeTransport(
@@ -2347,7 +2350,7 @@ async def test_cleanly_terminal_run_is_not_killed(tmp_path):
     record = await run_once(
         client,
         _smoke_scenario(),
-        run_id="run_nokill_001",
+        run_id="run_release_001",
         out_root=tmp_path / "out",
         model="m",
         autonomous=False,
@@ -2355,14 +2358,15 @@ async def test_cleanly_terminal_run_is_not_killed(tmp_path):
         timeout_s=5,
     )
     assert record["status"] == "PASS", record
-    assert not any(p[0].endswith("/kill") for p in transport.posts)  # already terminal → no kill
+    assert any(p[0].endswith("/kill") for p in transport.posts)  # terminal → released (orphan teardown)
 
 
 @pytest.mark.asyncio
 async def test_kill_is_idempotent_on_already_terminal_conv(tmp_path):
     # The kill adapter method is harmless/idempotent on an already-terminal conversation
-    # (the route is always-available); _release_conversation skips it, but a direct kill
-    # must still succeed cleanly so a belt-and-suspenders call never crashes teardown.
+    # (the route is always-available); [REL-4] _release_conversation now RELEASES terminal
+    # convs too (to tear down the lingering sandbox + sidecar containers), so this idempotent
+    # kill must succeed cleanly and never crash teardown.
     db = tmp_path / "disco.db"
     transport = FakeTransport(db, states=["FINISHED"])
     client = _client(transport, tmp_path)
