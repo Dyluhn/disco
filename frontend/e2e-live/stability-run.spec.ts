@@ -4,6 +4,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { decideVerification } from "../src/lib/harness/verificationCapture";
+
 /**
  * P1B-LIVE-STABILITY — ONE stability build (single build, NO retry-to-pass).
  *
@@ -144,10 +146,10 @@ test("one stability build → classify_dossier PASS (static_smoke_strict)", asyn
   const events = await allEvents(request, cid);
   const previewStart = events.find((e) => e.tool_call?.tool_name === "preview_start");
   const manualPort = Boolean((previewStart?.tool_call?.arguments ?? {}).port);
-  const verifyActions = events.filter((e) => e.tool_call?.tool_name === "verify_web_app");
-  const verifyAction = verifyActions[verifyActions.length - 1];
-  const verifyObs = events.find((e) => e.kind === "observation" && e.action_id === verifyAction?.id);
   const lifecycleStatuses = events.filter((e) => e.kind === "status" && e.status).map((e) => e.status!);
+  // disco verifies via verify_web_app OR a browser inspection of the served app; decideVerification
+  // mirrors disco's actual finish-verification gate (fail-closed on an unverified release).
+  const verification = decideVerification(events, terminal);
 
   // ── UI slices.
   await page.setViewportSize({ width: 1400, height: 1600 });
@@ -196,10 +198,7 @@ test("one stability build → classify_dossier PASS (static_smoke_strict)", asyn
     sidecar,
     preview: { owner: "platform", manual_port: manualPort },
     shown: { artifact_shown: artifactShown, preview_shown: previewShown },
-    verification: {
-      ready_for_verification_called: Boolean(verifyAction),
-      passed: verifyObs?.tool_result?.success === true && verifyObs?.tool_result?.structured?.passed === true,
-    },
+    verification,
     cleanup: { orphans, workspace_released: orphans === 0 },
   };
 
@@ -218,27 +217,38 @@ test("one stability build → classify_dossier PASS (static_smoke_strict)", asyn
     "utf-8",
   );
 
+  // classify_captured prints the verdict JSON to stdout, then exits NON-ZERO on any non-PASS
+  // verdict (by design). execFileSync throws on non-zero exit — so we must parse the REAL verdict
+  // from stdout in BOTH branches; CLASSIFIER_ERROR is reserved for genuinely-unparseable output.
+  const parseVerdict = (out: string): { status?: string; code?: string } | null => {
+    const last = out.trim().split("\n").pop() ?? "";
+    try {
+      return JSON.parse(last);
+    } catch {
+      return null;
+    }
+  };
   let verdict: { status?: string; code?: string } = {};
+  const classifyArgs = ["-m", "harness.product_build.classify_captured", capPath, path.join(work, "dossier")];
+  const classifyOpts = {
+    cwd: REPO_ROOT,
+    encoding: "utf-8" as const,
+    timeout: 60_000,
+    env: {
+      ...process.env,
+      PYTHONPATH: ["packages/core/src", "packages/tools/src", "packages/agent-server/src", "."]
+        .map((p) => path.join(REPO_ROOT, p))
+        .join(":"),
+    },
+  };
   try {
-    const stdout = execFileSync(
-      VENV_PY,
-      ["-m", "harness.product_build.classify_captured", capPath, path.join(work, "dossier")],
-      {
-        cwd: REPO_ROOT,
-        encoding: "utf-8",
-        timeout: 60_000,
-        env: {
-          ...process.env,
-          PYTHONPATH: ["packages/core/src", "packages/tools/src", "packages/agent-server/src", "."]
-            .map((p) => path.join(REPO_ROOT, p))
-            .join(":"),
-        },
-      },
-    );
-    verdict = JSON.parse(stdout.trim().split("\n").pop() ?? "{}");
+    verdict = parseVerdict(execFileSync(VENV_PY, classifyArgs, classifyOpts)) ?? { status: "CLASSIFIER_ERROR" };
   } catch (e) {
     const err = e as { stdout?: string; stderr?: string };
-    verdict = { status: "CLASSIFIER_ERROR", code: `${err.stdout ?? ""}${err.stderr ?? String(e)}`.slice(0, 400) };
+    verdict = parseVerdict(err.stdout ?? "") ?? {
+      status: "CLASSIFIER_ERROR",
+      code: `${err.stdout ?? ""}${err.stderr ?? String(e)}`.slice(0, 400),
+    };
   }
 
   finish({
