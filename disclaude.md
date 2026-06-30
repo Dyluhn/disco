@@ -4893,3 +4893,12 @@ object/structured-string/interdependent fields) + NO example in its description 
   reinforcement, still worth adding but no longer the primary lever. 
 - **Next:** collect inlining re-soak (honest tally) → Codex code-gate the anatomy fix → fix SIDECAR_NOT_STOPPED
   (REL-5b) → add the secondary per-tool examples → keep driving REVISION_CHAIN to 100% in OUR code.
+
+### $ref-inlining fix — Codex CODE-gate APPROVE (after discriminator REVISE→fix)
+Codex caught a real edge: discriminated unions (submit_plan done_condition) emit discriminator.mapping with dangling
+'#/$defs/X' values after $defs stripped. FIXED (drop mapping, keep propertyName; oneOf branches already inlined).
+Verified 0 '#/$defs/' across all 47 schemas; done_condition union intact+inlined; tools suite green; Codex re-gate
+APPROVE. The $ref-inlining root-cause fix is now COMPLETE + double-gated + committed+pushed+loaded. Killed the soak
+that ran on the pre-discriminator schema; CLEAN inlining re-soak running (rel-inline-resoak2, complete fix loaded).
+NEXT: collect clean re-soak (honest tally) → fix SIDECAR_NOT_STOPPED (REL-5b) → secondary per-tool examples → keep
+REVISION_CHAIN→100% in OUR code.
