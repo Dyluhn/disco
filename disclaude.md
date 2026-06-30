@@ -3209,3 +3209,11 @@ weakening; insufficient negatives.
   FAIL → record dossier, classify the failure mode (Mode A bookkeeping vs Mode B edit-thrash vs harness bug), fix
   ONLY if root cause clear, do NOT fake. If the event-shape parsing is off, inspect the raw dossier + fix the
   classifier (the build itself is real regardless).
+
+### CD-TOOLS-9 — r2 cid-bug fixed; r3 live in flight
+- r1: real+clean but 3 harness bugs (upload≠workspace, planning-mode, blob-substring classifier) → rewrote to
+  build-then-edit + real-event parsing + served-page output-truth. r2: crashed (POST /conversations returns
+  conversation_id NOT id) → fixed. r3 launched (build-then-edit). The model behaved HONESTLY throughout (r1 it
+  refused the impossible task). ON r3 COMPLETION: read verdict; if PASS → Codex evidence-gate the real dossier;
+  if build STUCK without index.html → honest record + retry (MiniMax ~50% finish, not a Mode-B fail); if a real
+  Mode-B regression → root-cause+fix. Then CD-TOOLS-10 (10x).
