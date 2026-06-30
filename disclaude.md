@@ -2884,3 +2884,14 @@ negatives.
 - The verification slice + decideVerification + finish gate remain COMPLETELY untouched (shown != verified).
 - Tests add: preview_shown requires real render even with an explicit call (no weakening); show_to_user only sets
   artifact_shown when the artifact really exists.
+
+### CD-TOOLS-5 — IMPL scope refinement (found during implement: current artifact_shown is ALSO a strong UI check)
+- stability-run.spec.ts: artifactShown = a build-feed ROW is VISIBLE (real UI evidence); previewShown = preview tab
+  innerText>50 (real render). BOTH are strong UI-evidence checks. So driving EITHER from show_to_user+file_exists
+  would WEAKEN them (file_exists != UI-displayed). DO NOT replace either.
+- REFINED SCOPE: CD-TOOLS-5 = the show_to_user TOOL only (tools layer). It (a) enforces OUTPUT-TRUTH (refuses to show
+  a non-existent artifact → SHOW_ARTIFACT_MISSING), (b) emits a DISTINCT structured signal {kind:artifact_shown,...}
+  (distinguishable from edit-artifacts), (c) surfaces the artifact via artifacts=[path] (real UI effect). The harness
+  "shown" slice + its strong UI checks stay UNCHANGED + authoritative (no oracle weakened). Wiring the harness to read
+  the DISTINCT artifact_shown signal = additive follow-up CD-TOOLS-5b (with the verifier-fork). shown!=verified: the
+  tool has ZERO verification side-effect (no verified flag).
