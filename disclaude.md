@@ -2594,3 +2594,20 @@ markers cannot enter source via old/new.
 - This removes the sha(shown)≠sha(disk) inconsistency: disk-sha is full-file (stale check); coverage is by raw
   shown ranges + completeness (saw-it check). Elision check unchanged (old/new contains a marker → ELISION_MARKER_
   REJECTED). Everything else in the CD-TOOLS-1 plan stands.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS campaign STARTED; STAB-2/STAB-2a STOPPED (Dylan)
+- Pivoted to CD-TOOLS per Dylan's campaign doc (fix Mode B at the tool-runtime layer, not finalize-on-stuck).
+  STAB-1a/1b/2b stay (they're proven harness work); the live STAB-2 x10 matrix is STOPPED. P10b PARKED behind
+  CD-TOOLS. The stability matrix's role is fulfilled by CD-TOOLS-9 (live targeted-edit harness) + CD-TOOLS-10
+  (survey/gate).
+- CD-TOOLS-1 (fresh edit guard) PLAN = Codex APPROVE (after 1 REVISE: freshness proof = full-file disk sha +
+  raw shown ranges + per-range completeness, NOT sha-of-shown-slice — so ranged reads don't false-block).
+- GROUNDING for impl: _read_state (files.py:80) is currently just {conv: {read_since_write: set[path]}} (coarse).
+  Enrich to also hold {conv: {reads: {canonical_path: {disk_sha, ranges:[(start,end,complete)], event_seq,
+  reader_tool}}}}. FileReadTool.run populates it (full-file sha + shown line-range + complete flag). Pre-edit guard
+  in FileEditTool.run (+ file_replace_lines/file_insert_lines/file_str_replace): STALE (disk sha != recorded) →
+  STALE_FILE_CONTEXT; COVERAGE (edit region not in a complete shown range) → FRESH_READ_REQUIRED; old/new has an
+  elision marker → ELISION_MARKER_REJECTED. Return ToolOutcome(success=False, error=CODE, structured={kind,path,
+  next_required_action:'file_read',suggested_args}). NOTE: these are TOOL-level error strings/structured obs
+  (like the existing old_text_not_found/read_before_write), NOT build_soak classifier codes. Tests per the plan.
+- NEXT: implement CD-TOOLS-1 → tests → Codex CODE-gate → commit. Then CD-TOOLS-2..10.
