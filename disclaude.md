@@ -4651,3 +4651,21 @@ No verified badge w/o a verifier pass. Sequenced AFTER REL-2 (manifest is the ve
 - **Next:** continue REL-2a step2 (observe.py:517 fold + 4 edge dual-writes under per-cid lock + shadow read-compare,
   all flag-gated DISCO_ARTIFACT_MANIFEST_SHADOW, NO reader switched) as productive work while the soak runs; collect
   re-soak when done → REL-RC A2/unit-test/code-gate decision.
+
+## §11 HEARTBEAT — 2026-06-30 — A1 NECESSARY-NOT-SUFFICIENT (honest interim re-soak read)
+- **A1 re-soak2 early read (4/5 runs terminal, soak still running):** 1 FINISHED (completed_via_notify) + 3 STUCK
+  (run000/001 = A1's CONTROLLED `revision_no_concrete_steps` fired correctly; run002 = a DIFFERENT non-A1 STUCK).
+  → **A1 WORKS as designed** (turns stranded-execution into a CLEAN adjudicable terminal) BUT does NOT make revisions
+  RELIABLE: still ~1/4 PASS ≈ baseline 1/3. HONEST: REL-RC A1 alone does NOT satisfy REL-6 REVISION_CHAIN 100%.
+- **Mechanism (from raw events):** the engine's RE-PLANNING + "Still in PLANNING call submit_plan" + A1 force-submit
+  "Stop narrating: call submit_plan NOW, do not reply in prose" reminders ALL fire correctly; the model narrates the
+  plan as prose ("Plan (revision 2): … 1. Headline…") and when it DOES call submit_plan (3 plan events present) the
+  steps come back zero/unparsed or it agent_errors (6 agent_error events) → controlled STUCK. Root = MiniMax weak
+  re-plan structured output, NOT an engine gate failure.
+- **REAL FIX needed (REL-RC A3, beyond A1+A2):** candidates — (a) HARVEST numbered steps from the assistant prose
+  into the plan when submit_plan returns empty during a revision (the steps EXIST in text), or (b) a more
+  prescriptive force-submit directive with a concrete submit_plan(steps=[…]) example, or (c) lenient _plan_from_args
+  parsing of MiniMax's step shape. Must Codex-gate the choice. A2 (toolcall-pairing) addresses ERROR not these STUCKs.
+- **Decision:** do NOT mark REL-RC done / gate green. A1 ships as a correctness floor (clean terminals); A3 is the
+  reliability fix. Dispatching a forensic scout (all 5 runs: per-plan-event nsteps, why each terminal, harvest-vs-
+  directive-vs-parser) to design A3.
