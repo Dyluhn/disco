@@ -2669,3 +2669,14 @@ elision can't enter source; overlapping edits rejected; literal-safety; insuffic
   pass, write the new text ONCE via the sandbox's atomic write (temp + rename if available; else a single
   write_file) — NOT _gated_write. So a failing batch never touches disk; the W3 syntax discipline is preserved by
   the in-memory pre-check instead of write-then-revert. This makes 'NO partial writes / all-or-nothing' true.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-2 plan design-approved (atomicity reworked)
+- CD-TOOLS-2 plan: atomic exact_replace. Codex round-1 caught a REAL design flaw — _gated_write writes-then-reverts
+  (not all-or-nothing); reworked to PRE-VALIDATE EVERYTHING IN MEMORY (elision/stale/fresh-read/coverage/match-
+  counts/overlap/SYNTAX-of-computed-text) then a SINGLE write only on full success (atomic temp+rename if available)
+  — never write-then-revert. Codex round-2 returned 'REVISE: not implemented' — a plan-stage artifact (it inspects
+  the tree, exact_replace doesn't exist yet); it did NOT fault the atomicity design. The design is sound; the real
+  gate is the CODE review after implementation.
+- NEXT: IMPLEMENT CD-TOOLS-2 — ExactReplaceTool in builtin/files.py (reuse guard_fresh_edit + _has_elision_marker;
+  in-memory validate-all → single write; multi/overlap/literal-safe via str-slicing) + register (builtin/__init__,
+  registry.AGENT_TOOLS + _ANCHORED_EDIT_TOOLS) + the ~12 tests + basedpyright → Codex CODE-gate → commit. Then 3..10.
