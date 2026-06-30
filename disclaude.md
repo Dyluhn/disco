@@ -3437,3 +3437,39 @@ DORMANT in the default product path.** Sequencing is dictated by interlock: REL-
 3. REL-5 force-teardown-at-terminal vs keep best-effort + make the soak DELETE each cid: minimal-risk path is
    the soak deletes its cid (REL-4 cleanup) + REL-5 only fixes the Pi-sidecar gap + un-skips the oracle.
    Full force-teardown-at-terminal is higher-risk (affects the live product's resume/suspend UX).
+
+### BUILD-RELIABILITY-GATE plan — r1 revision (Codex REVISE: fix-observed-first + shadow/canary)
+Codex corrected two things: (1) the REL numbering is NOT the build order — the OBSERVED soak blockers are REL-4
+(409 race) + REL-5 (skipped after-terminal oracle), which are cheap/low-risk; fix those FIRST + run a BASELINE
+soak to measure the real clean rate before the architectural work. REL-1/2/3 are correctness hardening, not
+required to prove the 409/timeout gone. (2) REL-1 (finish authority) + REL-3 (default build behavior) can REGRESS
+the clean rate → ship them SHADOW/CANARY so they can't make REL-6 go backwards.
+
+REVISED IMPLEMENTATION ORDER (decoupled from the REL numbering):
+1. **REL-4** — kill the IDLE/kick race (harness waits for a deterministic stable state before any state-sensitive
+   call; followup only after a real terminal, never on TIMEOUT/RUNNING; retries only on idempotent pre-action ops)
+   + real inter-run cleanup (soak DELETEs prior cid).
+2. **REL-5-minimal** — soak DELETEs its cid each run; fix the runtime.kill→PiKernel.kill Pi-sidecar gap; UN-SKIP +
+   LIVE-POPULATE the after-terminal oracle in the HEADLESS soak (provider-ledger after_terminal stamped from the
+   relay log; SidecarStopOracle/CleanupOracle no longer skip). DEFER full force-teardown-at-terminal (higher risk
+   to resume/suspend UX — needs UX tests).
+3. **BASELINE SOAK** — run the 5-class matrix (or a scaled subset) to MEASURE the clean rate after the cheap
+   fixes. This tells us how much REL-1/2/3 are actually needed to reach 100%, and catches any residual flake class.
+4. **REL-2** — shared ArtifactManifest, but PASSIVE first: dual-write + read-COMPARE against the existing scattered
+   truth (log divergences); do NOT switch readers until the compare is clean. Then fold readers.
+5. **REL-1** — host verifier in SHADOW first: run it alongside the existing inline self-verify, compare verdicts,
+   log agreement; PROMOTE to sole 'verified' authority only once shadow agrees. Then downgrade/remove the main-
+   agent self-verify (inline check non-authoritative or removed). Wire the dead note_verifier_result edge.
+6. **REL-3** — AUDIT/DENY-LOG first: log what WOULD be denied for default builds (kind-classified contract +
+   tightened-CUSTOM fallback, NOT permissive CUSTOM); enforce default-on only after the deny-log shows it won't
+   regress real builds. EDIT prefers exact_replace/file_edit guarded by fresh-read; raw file_write bootstrap/
+   repair/custom only.
+7. **REL-6** — final gate soak: full 5-class matrix, 100% clean/class, 0 OpenRouter, 0 post-terminal, 0 orphans,
+   no excuse counted. Re-run after each hardening PR to prove no regression vs the baseline.
+
+RESOLVED OPEN DECISIONS (Codex-aligned): (1) REL-3 = kind-classified + tightened-CUSTOM fallback. (2) REL-1 =
+host verifier SOLE authority for 'verified'; inline check non-authoritative or removed. (3) REL-5 = minimal gate
+path first (soak DELETE cid + Pi-sidecar-kill fix + un-skip/live oracle); full force-teardown deferred behind
+resume/suspend UX tests.
+GATE DISCIPLINE: REL-6 (or a scaled soak) re-runs after each of REL-2/1/3 to prove the clean rate did not drop;
+any regression rolls back that PR's enforcement (shadow stays). Start P11 only after the FULL REL-6 passes 100%.
