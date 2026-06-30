@@ -2922,3 +2922,39 @@ negatives.
 - NEXT: CD-TOOLS-6 (verifier-only diagnostics split — verify-phase tools can't mutate; a read-only diagnostics set
   for the verify phase). Then 7 (buffered run_project_script), 8 (prompt-pack), 9 (LIVE MiniMax targeted-edit
   harness), 10 (survey→unblock P10b).
+
+### PR CD-TOOLS-6 — verifier-only diagnostics split (PLAN, ratification-pending) — w/ a major FINDING
+FINDING (interrogate-the-given: the prompt assumed verify-phase enforcement EXISTS; it does NOT):
+- The contract phase machinery (scopes.compile_tool_scopes + enforce.enforce_tool_call + enforce.ContractPhaseGuard)
+  is DORMANT — defined + unit-tested but NEVER instantiated in the live loop/executor/runtime (grep-proven repo-wide).
+  There is NO live phase state; disco's loop is PHASE-FLUID (edit↔verify freely), so there is no discrete VERIFY
+  phase to gate on. Wiring live phase enforcement into a phase-fluid loop is a LARGE architectural integration
+  touching the NON-NEGOTIABLE verification path — that is the deferred "§6 ToolScope integration", not a heartbeat PR.
+- disco ALSO already substantially addresses the campaign's CD-TOOLS-6 INTENT:
+  * verify_web_app ENCAPSULATES the verifier — it drives browser navigate/console/screenshot INTERNALLY and returns
+    a structured PASS/FAIL/DEGRADED verdict; the finish gate consumes the VERDICT, not raw screenshots. There is no
+    standalone eval_js tool; screenshot/console are `browser` SUB-ACTIONS, and browser console is CAPPED
+    (_MAX_CONSOLE_LINES) — so "main agent poisons context with eval/screenshot loops" is already mitigated.
+  * failure_fingerprint blocks re-verify-without-a-productive-edit (anti-spin), and the finish gate's verdict
+    consumption means a raw main-agent screenshot is NOT a self-certification.
+- Net: the campaign's CD-TOOLS-6 is MOSTLY pre-satisfied in disco; its only net-new piece (a hard verifier-only
+  ToolScope split) needs the dormant phase guard wired live — the §6 architectural integration.
+BOUNDED DELIVERABLE (real, tested contract-layer hardening; NOT a stub-presented-as-live):
+- Fix the VERIFY-phase scope in scopes.compile_tool_scopes: today verify = {finalizer} ONLY — so if the guard were
+  wired, a verifier could not even file_read to diagnose (a latent bug). Make verify = a READ-ONLY DIAGNOSTICS set:
+  {finalizer, file_read, file_list, search, browser, server_status, verify_web_app, preview_status, preview_logs}
+  (all read-only/diagnostic) — ALL mutators excluded.
+- enforce.enforce_tool_call: when a MUTATING tool is denied because the phase is VERIFY, surface the campaign code
+  VERIFIER_ONLY_TOOL_BLOCKED (today the denial is generic). 
+- TESTS: enforce_tool_call(VERIFY, file_write/exact_replace/safe_write_file/shell) → DENIED + VERIFIER_ONLY_TOOL_
+  BLOCKED; enforce_tool_call(VERIFY, file_read/browser/verify_web_app/server_status) → ALLOWED; the finalizer remains
+  callable from any phase (unchanged).
+HONEST CARVE: LIVE wiring of the phase guard into the (phase-fluid) loop = the §6 ToolScope integration, a separate
+large architectural PR. CD-TOOLS-6 lands the verify-scope CORRECTNESS + the failure code + the enforce-primitive
+behavior; it does NOT claim live in-build verify-no-mutate (which disco already largely achieves via verify_web_app
+encapsulation + console caps).
+CODEX FOCUS (§9): is this bounded scope HONEST (not a stub presented as live enforcement) given the dormancy +
+disco's pre-mitigation; is the read-only verify set actually free of mutators (incl exact_replace/safe_write_file/
+shell/code_exec/app_*/the line-edit tools); is VERIFIER_ONLY_TOOL_BLOCKED surfaced correctly; OR should CD-TOOLS-6
+instead be SKIPPED as already-satisfied (with the §6 wiring as the only real remaining work) — judge whether the
+bounded deliverable is worth landing vs folding into §6.
