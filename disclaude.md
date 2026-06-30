@@ -2690,3 +2690,45 @@ elision can't enter source; overlapping edits rejected; literal-safety; insuffic
   return (also hardens file_write's read-before-write gate). 15 + 57 tests; pyright 0/0.
 - NEXT: CD-TOOLS-3 (safe_write_file) — phase-scoped whole-file write with shrink>50% guard + elision reject + atomic
   temp+rename + manifest update. Then 4..10 (9 = LIVE MiniMax targeted-edit harness; 10 = survey→unblock P10b).
+
+### PR CD-TOOLS-3 — safe_write_file (PLAN, ratification-pending)
+GROUNDING: file_write today = read old → F1 read-before-rewrite gate (refuse overwrite of an EXISTING file with no
+fresh read) → binary-deliverable clobber guard (_BINARY_DELIVERABLE_EXTS) → _gated_write (writes-then-reverts on
+syntax). Governed artifacts = the host-reserved `.disco/` namespace (.disco/appspec.json, .disco/tweaks.json,
+.disco/versions/*, .disco/context/*) — authored ONLY by semantic tools (app_create/set_tweak/context_memory), never
+the generic writer. ProcessSandbox.write_file = plain target.write_bytes (NOT atomic); NO rename/move in the sandbox
+protocol (read_file/write_file/list_dir/file_exists only).
+GOAL: safe_write_file — a SAFER whole-file write (superset of file_write) that REPLACES naive file_write for
+governed/large artifacts. args {path:str, content:str, allow_shrink:bool=False, expected_sha256:str|None=None}.
+run() — ALL checks in memory before any write:
+- (1) elision marker in content (_has_elision_marker) → ELISION_MARKER_REJECTED.
+- (2) GOVERNED path: canonical path under `.disco/` → SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED (use the semantic tool;
+  sound path-prefix rule, .disco/ is the host's reserved namespace — NOT a guess).
+- (3) read old_text (None if absent). EXISTING file:
+   - expected_sha256 given + sha256(old bytes) != it → STALE_FILE_CONTEXT.
+   - binary-deliverable clobber (reuse _BINARY_DELIVERABLE_EXTS) → refuse (parity with file_write).
+   - read-before-rewrite (F1): path not in read_since_write AND no matching expected_sha256 → FRESH_READ_REQUIRED
+     (parity with file_write; a matching expected_sha256 counts as grounding).
+   - SHRINK guard: len(content) < 0.5*len(old_text) AND not allow_shrink AND not matching-expected_sha256 →
+     SAFE_WRITE_SHRINK_REJECTED (the weak-model whole-file-clobber/truncation guard; explicit override only).
+- (4) syntax pre-check: introduced = _syntax_errors(content) - _syntax_errors(old_text or "") → if any, refuse
+  (PRE-write, NO revert) — reuse the diff-filter idea but never write bad bytes.
+- (5) ATOMIC write: new _atomic_write(sandbox, path, bytes) — writes a sibling tmp then os.replace on backends that
+  support it; ProcessSandbox gains a concrete atomic_write (tmp in resolved dir + os.replace); the helper falls back
+  to a single write_file where unsupported (still logical all-or-nothing). RETROFIT exact_replace's final write to
+  use _atomic_write too. Clear read_since_write on success.
+- (6) manifest/artifact-memory update is deferred to CD-TOOLS-4 (artifact-aware writes).
+ERROR CODES (tool-level, NOT build_soak): SAFE_WRITE_SHRINK_REJECTED, SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED (+ reuse
+ELISION_MARKER_REJECTED, STALE_FILE_CONTEXT, FRESH_READ_REQUIRED).
+FILES (single-writer=me): builtin/files.py (SafeWriteFileTool + _atomic_write + retrofit exact_replace) +
+sandbox/process.py (atomic_write) + builtin/__init__ + registry.AGENT_TOOLS (add 'safe_write_file'; NOT anchored-
+edit — it's a general writer, advertise to all tiers). NOT scopes.py (deferred to §6).
+TESTS: normal create OK + bytes atomic; overwrite-after-read OK; >50% shrink → SAFE_WRITE_SHRINK_REJECTED + file
+UNCHANGED; allow_shrink=True → applies; matching expected_sha256 bypasses shrink+F1; .disco/ path → SAFE_WRITE_
+GOVERNED_ARTIFACT_REJECTED + no write; elision → rejected; syntax-introducing (.py) → rejected + unchanged; existing
+binary (.pdf) → refused; overwrite-without-read large file → FRESH_READ_REQUIRED; atomic_write leaves NO leftover
+tmp + original intact when a later check fails (failure happens BEFORE the write, so original is never touched).
+CODEX FOCUS (§9): shrink guard not trivially bypassable (allow_shrink is explicit + intentional, expected_sha256 is
+real grounding); governed detection sound (.disco/ prefix on the CANONICAL path, not substring-spoofable); atomic
+temp+rename real on ProcessSandbox + safe fallback; no false-block of a legit small rewrite that ISN'T >50% shrink;
+elision; insufficient negatives.
