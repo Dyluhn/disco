@@ -3252,3 +3252,33 @@ weakening; insufficient negatives.
   the campaign doc; if none specified, await direction. Carried follow-ups (deferred, honest): CD-TOOLS-5b
   (ready_for_verification finalizer-tool + verifier-fork); CD-TOOLS-4b (runtime manifest-fold); §6 full ToolScope
   phase wiring; soak hardening (409-retry + inter-run kill/sleep). None block the Mode-B proof.
+
+## PR P10b — LIVE export-smoke deliverable capture (PLAN, ratification-pending) — CD-TOOLS green, UNPARKED
+Goal: prove the export/download path end-to-end on a REAL live MiniMax-M3 run — the model produces a
+DOWNLOADABLE deliverable and the bytes are fetched from the REAL GET (NOT a fixture claim — Codex's
+P10b note). Reuses the CD-TOOLS-9 sibling-driver pattern (live-proven stable: 10 runs, fail-closed,
+0 OpenRouter). Grounding (verified this turn): DeliverableEvent (events.py:744) has artifact_kind
+Literal["app","files"] + path; serve(kind='files',path) [engine-intercepted virtual tool,
+turn_control.py:1070/1095] → DeliverableEvent{artifact_kind:'files',path} → _declared_artifacts
+download jail → GET /conversations/{cid}/artifacts/{path}. ExportDownloadOracle (harness/build_soak/
+oracles/browser_evidence.py:195) requires export={requested:true, download_present:true,
+download_bytes>0}. P10a already shipped EXPORT_SMOKE ProductScenario + scenario-aware classify_captured.
+HARNESS (new harness/product_build/export_smoke_run.py, sibling of targeted_edit_run.py):
+1. record relay-ledger offset; POST /conversations (build, autonomous).
+2. POST /messages: "Build a small static site (index.html + style.css), then PACKAGE IT AS DOWNLOADABLE
+   FILES and serve it so I can download the files." (elicits serve(kind='files')).
+3. poll /state to terminal; capture events.
+4. detect a DeliverableEvent with artifact_kind=='files' (scan events for the deliverable kind+path —
+   real, not fabricated); FAIL-CLOSED if none.
+5. GET /conversations/{cid}/artifacts/{the served path} → REAL bytes → download_present=(HTTP 200 AND
+   len>0), download_bytes=len(bytes). NOT a fixture claim.
+6. build export={requested:true, download_present, download_bytes} → run ExportDownloadOracle (import
+   from harness.build_soak.oracles) AND/OR classify_captured(export_smoke); PASS iff deliverable(files)
+   present + download_present + download_bytes>0 + ledger 0 OpenRouter + 0 post-terminal.
+7. dossier + verdict → RUN_DIR.
+P10b = implement + RUN LIVE once → real PASS dossier (deliverable detected + real bytes downloaded).
+NON-NEGOTIABLE: real GET bytes, MiniMax direct, 0 OpenRouter, 0 post-terminal, output-truth, fail-closed
+(no deliverable / 0 bytes = FAIL, never faked). If serve(kind='files') isn't elicited or the download
+404s, REPORT honestly + iterate the prompt/route — do not fake. CODEX FOCUS: real DeliverableEvent
+detection (not fabricated); download_bytes from the REAL GET not a claim; ExportDownloadOracle used
+right; fail-closed on missing deliverable; 0 OpenRouter/0 post-terminal; insufficient negatives.
