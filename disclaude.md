@@ -2813,3 +2813,15 @@ honest (not a hidden stub); no false affordance (unmapped path names no tool); i
   explicit ctx flag (NOT a path heuristic). Confirm before landing.
 - TESTS expand: EACH of the 8 generic mutators rejects a write to .disco/appspec.json with route_to; a normal non-
   governed write via each still succeeds; the semantic tools still write .disco/ successfully (regression).
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-4 SHIPPED (artifact-aware governed routing)
+- Shared _governed_guard on ALL 8 generic mutators: real-path (symlink-followed) .disco/ write → routed to the
+  owning semantic tool. resolve_relpath + atomic_write now on BOTH ProcessSandbox AND the ContainerInstance base
+  (guest realpath; mkstemp-random tmp + mv -fT onto the RESOLVED target = parity w/ os.replace), delegated by
+  SandboxSession (closed a latent CD-TOOLS-3 runtime atomic_write gap). Codex APPROVE after SIX real REVISEs
+  (bypass-via-other-mutators, container-backend-missing-methods, session-no-delegation, session-crash-no-fallback,
+  mv-into-dir, symlink-parity). 13+53 tests; pyright 0/0; suite no new fails. Runtime manifest-fold (4b) + artifact_*
+  per-contract wrappers = honest follow-ups.
+- NEXT: CD-TOOLS-5 (show/ready_for_verification first-class — make the host show/verify handoff an explicit tool, not
+  an inferred convention). Then 6 (verifier-only diagnostics split), 7 (buffered run_project_script), 8 (prompt-pack),
+  9 (LIVE MiniMax targeted-edit harness), 10 (survey→unblock P10b).
