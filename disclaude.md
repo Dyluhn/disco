@@ -4827,3 +4827,22 @@ So a runtime-level lock is UNREACHABLE from the core observe fold. The lock must
 - VERDICT: (X) shared-per-cid store + lock-in-store is the right design; REL-2a step2 must FIRST confirm/establish a
   single shared ArtifactMemoryStore per cid in the runtime, then put the RMW lock there. This is a plan refinement —
   re-gate the lock-placement with Codex before implementing. Did NOT make a half-edit that would violate layering.
+
+## CORRECTION (2026-06-30, Dylan) — RETRACT all "MiniMax capability ceiling" framing; those are OUR bugs
+Dylan: NEVER blame the model; not authorized under any circumstances; MiniMax-M3 > Sonnet > GPT-5.3. RETRACTED:
+every prior entry calling revision failures a "MiniMax-M3 capability limit / multi-revision ceiling / weak structured
+output / model can't" is WRONG. Those are ENGINE/HARNESS/PROMPT/SCHEMA defects WE must fix. Reframe of the 3 revise
+failure modes — all OURS, all fixable, REVISION_CHAIN target stays 100% by fixing OUR code:
+- run001 "mis-routed steps" → OUR submit_plan parser only accepted steps[] + OUR prompt/schema made it ambiguous
+  where steps go. A3 harvest is a real fix (accept the model's valid output); the framing "work around model defect"
+  was wrong — it's "fix our parser/schema to accept correct intent." STILL TO DO: fix the submit_plan tool
+  schema/prompt so steps land in steps[] directly (the proper fix, not just downstream harvest).
+- run002 "execution-layer run_project_script operations=['operations']" → OUR run_project_script tool SCHEMA/prompt/
+  examples led the model to emit the PARAM NAME as the value. FIX: clearer schema + examples + lenient arg
+  coercion in run_project_script. NOT a model limit — a tool-definition bug. ROOT-CAUSE + FIX it.
+- run000 "prose-collapse" → OUR planning/re-planning prompt + force-submit affordance didn't make structured
+  submit_plan the obvious path. FIX: better re-plan framing + a worked submit_plan(steps=[{...}]) example +
+  tool affordance. NOT a model limit.
+NEW DIRECTIVE for REL-RC/REL-6: drive REVISION_CHAIN to 100% by fixing OUR engine/schema/prompt for EACH failure
+mode. No "capability caveat", no "single-revision variant as a concession", no "done-as-feasible with a ceiling".
+Each remaining failure = a bug to root-cause in our code. (See memory: never-blame-the-model.)
