@@ -267,8 +267,18 @@ _EXECUTION_DRIVER_PROMPT = (
     "range, or `file_insert_lines(path, after_line, text)` to ADD a block without replacing. "
     "These target by line number, so they work reliably regardless of file size. This is the "
     "right way to add a feature to a big existing file: read → find the lines → replace/insert.\n"
-    "  • For a FULL REWRITE: `file_read` the file first, then `file_write` with the complete "
-    "new content. Skipping the read will be refused.\n"
+    "  • For a FULL REWRITE: `file_read` the file first, then `safe_write_file` with the complete "
+    "new content — it is the guarded writer (it refuses an accidental truncation/clobber). Plain "
+    "`file_write` also works; skipping the read will be refused either way.\n"
+    "  • For MANY edits at once: `run_project_script` applies a batch of read/replace_text/save "
+    "operations as ONE atomic transaction — all commit together, or none do (a clean rollback on "
+    "any failure). Use it for a multi-file refactor instead of many separate edits.\n"
+    "  • Read a file immediately BEFORE editing it. If a tool returns FRESH_READ_REQUIRED or "
+    "STALE_FILE_CONTEXT, `file_read` it and retry with the real current text.\n"
+    "  • NEVER copy a `<… chars elided …>` placeholder from your history into a tool argument — "
+    "it is render-only; `file_read` to get the real bytes.\n"
+    "  • NEVER rewrite a whole file for a small text / color / single-element change — make a "
+    "TARGETED edit (above). Reserve full rewrites for a genuine rewrite or repair.\n"
     "Do NOT write files with shell redirection — no `cat <<EOF`, no `>`/`>>`, no in-place "
     "`sed`/`awk`/`tee` (they corrupt on quotes, `$`, backticks, newlines). Shell is for "
     "running things (installs, builds, tests, git).\n"
@@ -380,6 +390,12 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "line numbers, then `file_replace_lines(path, start_line, end_line, "
     "new_text)` or `file_insert_lines(path, after_line, text)`. These work "
     "regardless of file size and do NOT require a prior read.\n"
+    "  • For MANY edits at once: `run_project_script` runs a batch of read / "
+    "replace_text / save operations as ONE transaction — all apply together, or "
+    "none do. For a guarded full rewrite use `safe_write_file` (it refuses an "
+    "accidental truncation).\n"
+    "  • NEVER copy a `<… elided …>` placeholder from your history into a tool "
+    "argument — it is render-only; `file_read` to get the real text.\n"
     "  • NEVER use shell for file work: no `cat <<EOF`, no `>`/`>>`, no in-place "
     "`sed`/`awk`/`tee`. Shell is for running things (installs, builds, tests, "
     "git).\n"
@@ -555,10 +571,23 @@ class DriverPrompts:
                 "moving on.\n"
             )
 
+        # [CD-TOOLS-8] Anchored-edit bullet: NAMES exact_replace / file_str_replace ONLY for an
+        # anchored-edit-capable driver — the SAME capability the tool surface withholds on (a
+        # standard-but-non-anchored model is NOT offered exact_replace), so naming it here can
+        # never be a false affordance. Mirrors the VISION-bullet capabilities gate.
+        anchored_bullet = ""
+        if capabilities and Requirement.ANCHORED_EDIT in capabilities:
+            anchored_bullet = (
+                "  • For a PRECISE targeted edit, prefer `exact_replace` (an atomic exact-string "
+                "replace — `file_read` first so your `old` matches the file verbatim) over a broad "
+                "rewrite; `file_str_replace` is the single-occurrence variant.\n"
+            )
+
+        bullets = vision_bullet + anchored_bullet
         if not self._skills_block:
-            return f"{vision_bullet}\n{prompt}" if vision_bullet else prompt
-        if vision_bullet:
-            return f"{self._skills_block}\n\n---\n\n{vision_bullet}\n{prompt}"
+            return f"{bullets}\n{prompt}" if bullets else prompt
+        if bullets:
+            return f"{self._skills_block}\n\n---\n\n{bullets}\n{prompt}"
         return f"{self._skills_block}\n\n---\n\n{prompt}"
 
     def system_prompt(
