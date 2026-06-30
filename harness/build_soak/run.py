@@ -797,22 +797,55 @@ def _relay_log_path() -> str | None:
     return None
 
 
-def _max_event_epoch(events: list[dict[str, Any]]) -> float | None:
-    """The epoch of the build's LAST recorded event (its terminal moment), parsed from the frozen
-    ISO-8601 UTC event timestamps (e.g. '2026-06-30T16:59:28.755769Z'). Used to anchor the
-    provider-after-terminal count on the true terminal instant. None if no timestamp parses."""
+def _event_epoch(e: dict[str, Any]) -> float | None:
+    """Epoch of one event from its ISO-8601 UTC timestamp ('2026-06-30T16:59:28.755769Z')."""
     from datetime import datetime
 
+    ts = e.get("timestamp") or e.get("created_at")
+    if not isinstance(ts, str):
+        return None
+    try:
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _terminal_status_epoch(events: list[dict[str, Any]]) -> float | None:
+    """[codex] Epoch of the LAST `status` event whose status is TERMINAL — the true instant the
+    build went terminal. NOT the max timestamp across ALL events: a durable event appended AFTER
+    the terminal status (a post-finish snapshot/status, an observation) would push a max-of-all
+    anchor PAST a real post-terminal provider call and hide it. Anchoring on the terminal status
+    event itself is gap-free. None if no terminal status event is present."""
     best: float | None = None
     for e in events:
-        ts = e.get("timestamp") or e.get("created_at")
-        if not isinstance(ts, str):
+        if e.get("kind") != "status":
             continue
-        try:
-            ep = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-        except Exception:
+        # run.events are raw DB rows {seq,kind,created_at,payload(JSON string)} — the status lives
+        # INSIDE `payload`, not as a top-level field. Accept both shapes (flattened + DB-row).
+        status = e.get("status")
+        if status is None:
+            pl = e.get("payload")
+            if isinstance(pl, str):
+                try:
+                    status = (json.loads(pl) or {}).get("status")
+                except Exception:
+                    status = None
+            elif isinstance(pl, dict):
+                status = pl.get("status")
+        if str(status or "").upper() not in TERMINAL_STATES:
             continue
-        if best is None or ep > best:
+        ep = _event_epoch(e)
+        if ep is not None and (best is None or ep > best):
+            best = ep
+    return best
+
+
+def _min_event_epoch(events: list[dict[str, Any]]) -> float | None:
+    """Epoch of the build's FIRST event (run start) — the lower bound of this run's relay window."""
+    best: float | None = None
+    for e in events:
+        ep = _event_epoch(e)
+        if ep is not None and (best is None or ep < best):
             best = ep
     return best
 
@@ -843,23 +876,33 @@ async def _collect_terminal_cleanup_evidence(
     if terminal:
         ev["lifecycle"] = {"terminal": terminal, "statuses": list(getattr(run, "timeline", []) or [])}
 
-    # provider-after-terminal — [codex] anchor on the TERMINAL EVENT'S timestamp taken from the
-    # FROZEN run.events, then count relay calls whose ts is strictly AFTER it. A post-hoc baseline
-    # sampled now (after drive_scenario already collected terminal evidence) would fold any call
-    # made BETWEEN the terminal event and the sample into the baseline and hide it. Anchoring on
-    # the terminal event's own epoch closes that gap. The release happens AFTER the grace window so
-    # the token is still live during the audited window (a real "did anything call after terminal?").
-    terminal_epoch = _max_event_epoch(getattr(run, "events", []) or [])
+    # provider-after-terminal — [codex] anchor on the TERMINAL STATUS event's epoch (from the FROZEN
+    # run.events), then count relay calls whose ts is strictly AFTER it. A post-hoc baseline or a
+    # max-of-all-events anchor would hide a call made between terminal and a later durable event.
+    # LIVENESS GUARD: trust "0 calls after terminal" ONLY if the relay actually captured THIS run —
+    # i.e. it logged >=1 call inside the run window [run_start, terminal]. An empty/stale relay log
+    # (relay not wired) yields a meaningless 0; we OMIT the slice instead (-> fail-closed INVALID in
+    # live mode) so a false 0 can't classify green. Release happens AFTER the grace window so the
+    # token is live during the audited window.
+    events = getattr(run, "events", []) or []
+    terminal_epoch = _terminal_status_epoch(events)
+    run_start_epoch = _min_event_epoch(events)
     calls_after: int | None = None
-    if relay_log and os.path.exists(relay_log) and terminal_epoch is not None:
+    if relay_log and os.path.exists(relay_log) and terminal_epoch is not None and run_start_epoch is not None:
         await asyncio.sleep(grace_s)
         try:
             with open(relay_log, encoding="utf-8") as f:
                 recs = parse_relay_log(f.read())
-            calls_after = sum(
-                1 for r in recs
-                if isinstance(r.get("ts"), (int, float)) and float(r["ts"]) > terminal_epoch
-            )
+            ts_list = [float(r["ts"]) for r in recs if isinstance(r.get("ts"), (int, float))]
+            calls_during_run = sum(1 for t in ts_list if run_start_epoch <= t <= terminal_epoch)
+            if calls_during_run > 0:  # relay PROVEN live for this run → trust the after-count
+                calls_after = sum(1 for t in ts_list if t > terminal_epoch)
+            else:  # relay captured nothing for this run → 0-after is meaningless → omit (fail-closed)
+                calls_after = None
+                timeline.append(
+                    "REL-5: relay ledger captured 0 calls in this run's window — provider-after-"
+                    "terminal not adjudicable (relay not wired for this run)"
+                )
         except Exception:
             calls_after = None
 
