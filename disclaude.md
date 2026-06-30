@@ -2383,3 +2383,17 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
 - NEXT: BEGIN P10 — read disco's serve/export/download path (serve tool kind='files', the app-server download
   route, _is_web_deliverable/serve handling), DESIGN the P10 PR decomposition, write the plan, Codex PLAN-gate →
   implement → tests → Codex CODE-gate → commit. Then P11→P17.
+
+### HEARTBEAT 2026-06-29 — P10a SHIPPED (Export/Handoff scenario + scenario-aware classify)
+- P10 design (read, not guessed): disco's export/download path EXISTS end-to-end — serve(kind='files',path)
+  [engine-intercepted virtual tool] → DeliverableEvent{artifact_kind:'files',path} → _declared_artifacts (download
+  jail, files.py) → GET /conversations/{cid}/artifacts/{path}. CLASSIFY side EXISTS (classify_dossier requires_
+  export + ExportDownloadOracle HARN-2). GAP = harness coverage.
+- P10a (gated, Codex APPROVE after 1 REVISE): EXPORT_SMOKE ProductScenario (requires_export=True + 'export' in
+  required_slices, fail-closed) + classify_captured made SCENARIO-AWARE (_SCENARIOS registry; missing/unknown
+  scenario_id RAISES — Codex caught the missing-id fail-open). 25 tests, pyright 0/0. Fixture-tested (the classify
+  side is fixture-provable; LIVE capture is P10b).
+- NEXT: P10b (LIVE) — extend the durable spec (or a sibling) to drive EXPORT_SMOKE: detect the DeliverableEvent
+  artifact_kind='files', GET /conversations/{cid}/artifacts/{the served path} for REAL bytes → export={requested:
+  true, download_present:true, download_bytes:N} (sourced from the real GET, NOT a fixture claim — Codex's P10b
+  note), classify_captured(export_smoke) PASS live. Then P11 (Resource Import/Provenance).
