@@ -2332,3 +2332,21 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
 - P1 (Product Harness, HARN-1..3) = DONE. NEXT: P10 (Export/Handoff) — phase order P10→P11 Resource Import/
   Provenance→P12 Content/Design→P13 Deck/Doc→...→P17. Read the addendum (disclaude.md ~line 25 + the P1B-LIVE/
   contract sections) for P10's spec, plan it, Codex plan-gate, implement, Codex code-gate, commit.
+
+### HEARTBEAT 2026-06-29 — durable-spec re-run caught a REAL recurring reliability gap
+- The live RE-RUN of build-artifact-runtime-smoke.spec.ts FAILED — correctly, loudly: the build went STUCK
+  (bookkeeping_only) at iter 21, NOT a spec bug. The spec fails honestly when a build doesn't finish (good).
+- ROOT: MiniMax-M3 intermittently malforms STRUCTURED plan args — this build: submit_plan ×4 (missing required
+  summary; steps.0.done_condition wrong shape) + update_plan_progress ×6 → gate_bookkeeping_streak halted it
+  bookkeeping_only AFTER a deliverable was produced. So ~1/2 post-fix builds still stall (matches memory
+  disco-m3-real-build-capability: ~50% completion, long-context actionless-stall dominant).
+- FIX 1 SHIPPED (gated, Codex APPROVE): submit_plan prompt now mirrors the PlanStepInput {title, done_condition?}
+  object schema (same proven pattern as the update_plan_progress fix) + done_condition OMIT-rather-than-guess.
+- STILL OPEN (the deeper, higher-leverage gap — candidate next): gate_bookkeeping_streak FORFEITS (STUCK) a build
+  that already produced a valid deliverable when the model spams malformed bookkeeping. A capable build that
+  delivered should FINALIZE-not-forfeit (run the finish/verify path) rather than lose the work. This is an ENGINE
+  change (turn_control.gate_bookkeeping_streak + finalizer) — sensitive; design carefully + gate hard. AND: the
+  durable spec should bounded-RETRY the build (drive up to N, pass on first clean finish, log stuck attempts) so
+  CI isn't hostage to one flaky build — honest (logs flakiness), not masking.
+- NEXT: (a) re-run the spec to see if the 2 prompt fixes lift the finish rate; (b) decide/scope the finalize-on-
+  bookkeeping-stuck engine fix + spec retry; (c) then P10 (Export/Handoff).
