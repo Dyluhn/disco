@@ -2911,3 +2911,14 @@ negatives.
   finishes/verifies). ready_for_verification finalizer-tool + verifier-fork + events stay carved to 5b.
 - Tests: serve missing path → refused, no DeliverableEvent; serve real path → DeliverableEvent; no sandbox →
   fail-open (existing behavior). Existing dc05 serve tests still green.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-5 SHIPPED (serve output-truth)
+- Pivoted from a redundant/false-affordance show_to_user tool to HARDENING the existing real show handoff (serve):
+  handle_serve refuses to emit a DeliverableEvent for a verifiably-missing path (fail-open w/o sandbox). Found +
+  reverted the false affordance (artifacts dropped by the executor). shown!=verified already held (serve never
+  finishes). Codex APPROVE after the false-affordance REVISE. 3 tests + dc05 green; pyright clean.
+- CARVED to CD-TOOLS-5b: ready_for_verification first-class finalizer-tool + verifier-fork + the 3 event classes
+  (touch finish.py / core event schema — deserve a focused gated PR).
+- NEXT: CD-TOOLS-6 (verifier-only diagnostics split — verify-phase tools can't mutate; a read-only diagnostics set
+  for the verify phase). Then 7 (buffered run_project_script), 8 (prompt-pack), 9 (LIVE MiniMax targeted-edit
+  harness), 10 (survey→unblock P10b).
