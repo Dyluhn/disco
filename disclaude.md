@@ -3510,3 +3510,10 @@ any regression rolls back that PR's enforcement (shadow stays). Start P11 only a
   backend. Options: local podman (available — `podman ps` works; fastest), gVisor VM 201 (100.81.82.115, BACK;
   closest to real prod — catches the prod-only docker-py container-recreate bug per [[disco-gvisor-404-
   generalization]]), or keep local-dev (NOT production-valid → gate is meaningless for sandbox reliability).
+
+### REL backend DECISION (Dylan, 2026-06-30): local podman NOW, gVisor VM 201 for FINAL REL-6
+- Iterate REL-4/5 + baseline soak + shadow/canary REL-2/1/3 on LOCAL PODMAN (production-valid, fast).
+- Run the FINAL REL-6 acceptance soak (the gate that blocks P11) on gVisor VM 201 (100.81.82.115) — real-prod,
+  catches the prod-only docker-py container-recreate-under-load bug.
+- NEXT: stand up local podman as the agent-server backend (config switch + image + verify a real build works),
+  then run the BASELINE soak to measure the true clean rate + real container-orphan/cleanup behavior.
