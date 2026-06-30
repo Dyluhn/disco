@@ -4927,3 +4927,19 @@ tools (run_project_script, exact_replace) — both $ref'd list[Model] — now fi
 audit-flagged tools (deck_patch/app_create/app_add_section) PASSED the real-call test (capable model handled them);
 secondary worked examples are optional polish, NOT empirically required. LESSON: do NOT run MiniMax probes while a
 soak holds the relay (contention → noisy results). Run the full 6-tool confirmation AFTER the soak completes.
+
+### REL-5b implementation design (decided next-tick): role marker — config has assignments:{} so model-name can't distinguish
+Finding: soak disco-config.json default_model=driver-minimax, assignments={} → build driver AND title summarizer both
+resolve to "driver-minimax"; relay transform_request maps model→MiniMax and logs POST-transform (always MiniMax). So
+the relay CANNOT distinguish build vs summarizer by model name today. Two clean fixes:
+- (A) X-Disco-Role HEADER: the Disco provider/backend adds X-Disco-Role:<role> on every provider request; relay reads
+  request.headers + logs it; harness excludes non-DRIVER roles after terminal. CONFIG-INDEPENDENT + robust, but a CORE
+  router/backend change (thread ModelRole → backend httpx headers). PREFERRED for correctness.
+- (B) per-role model assignment: set assignments {SUMMARIZER: "summarizer-minimax"} in the soak config; relay logs the
+  PRE-transform model (role-indicative); MODEL_MAP maps it → MiniMax; harness excludes "summarizer-*" after terminal.
+  Harness/config-only (no core change) but config-coupled + only distinguishes roles that have a distinct assignment.
+DECISION: do (A) — the role is always known at the completion call site, config-independent, and the right long-term
+attribution. Verify a clean place to inject extra_headers carrying ModelRole in the OpenAI-compatible backend
+(core/llm/wiring or the backend that builds the httpx request). Tests-first; Codex-gate (oracle-semantics: prove it
+excludes ONLY non-build roles, still flags a real post-terminal DRIVER call). NOTE: condensation (also SUMMARIZER-ish)
+is pre-terminal, so excluding summarizer AFTER terminal only drops the benign title call.
