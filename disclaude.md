@@ -4528,3 +4528,38 @@ CLASSIFICATION: Category A (user-visible: revision fails), P1, BLOCKS REL-6 REVI
 STUCK/ERROR) but DETERMINISTIC root cause; A1 is a deterministic guard that should move the distribution to PASS even
 with MiniMax's weak structured output. REL-RC = A1 (primary) + A2 (secondary), then re-soak the revision class to
 prove consecutive PASS. REL-2a re-gate APPROVE (lock fix) — implement in parallel.
+
+## PR REL-RC — revision re-entry reliability (PLAN, ratification-pending) — BLOCKS REL-6 REVISION_CHAIN
+### Goal
+Stop the after-terminal re-plan from STUCK/ERROR-ing ~2/3 (MiniMax weak structured output on revisions) via 2
+deterministic ENGINE guards that turn a recoverable model slip into a clean recovery instead of a Category-A terminal.
+### Non-negotiables (§3)
+no oracle weakening; no false PASS; fix must NOT create a new loop (bounded); must not regress the no-followup 3/3
+PASS classes; live-MiniMax proven (re-soak the revision class to consecutive PASS).
+### Fix A1 (PRIMARY, deterministic) — zero-step REVISION must not auto-approve
+SEAM: _gate_planning_mode (core/loop/engine.py:905-925) auto-approves inline with NO plan.steps guard; plan_from_args
+(plans.py:183-188) keeps steps EMPTY when none parse. CHANGE: if `not plan.steps` AND it's a revision (plan.revision
+>1), do NOT auto-approve — emit a concrete-steps nudge ("a revision needs the changed steps as submit_plan steps;
+resubmit") + STAY in PLANNING, BOUNDED by a per-revision counter (e.g. reuse/add _plan_nudges; after K=2 re-nudges
+accept-and-fall-through so it can NEVER infinite-loop — the existing stuck breaker then handles a truly-stuck model,
+same as today, but most runs recover like run001). KEEP initial summary-only plans (revision==1) unchanged → no
+regression to simple builds.
+### Fix A2 (secondary) — pair every assistant tool_call before the MiniMax request
+SEAM: a validation-failed assistant tool_call left UNPAIRED → MiniMax 2013 "tool call result does not follow tool
+call" → hard ERROR (run000). Mirror refusal-pairing (engine.py:1571-1582): synthesize a tool-role result for a
+validation-failed/dropped tool_call so the transcript handed to MiniMax (view.py:798-808 turn-boundary) always has
+adjacency → a malformed call degrades to a recoverable error turn, not a terminal model_error.
+### Parallel assignments
+Lane B (engine) — this scout DONE (root cause). Lane E (regression) — unit tests: zero-step-revision→re-nudge-not-
+approve (+ bound), zero-step-initial→still-approve, unpaired-toolcall→synthesized-pair. Lane F (soak) — re-run
+revise_after_finish x5 live to prove the fix moves the distribution to PASS. A/C/D/G: codex gate.
+### Required tests
+unit (core): _gate_planning_mode zero-step-revision path + bound; A2 pairing. live: revise_after_finish x5 → target
+consecutive PASS (was 1/3). BOTH core+tools suites green.
+### Acceptance
+revise_after_finish live re-soak ≥ a strong majority PASS (ideally 5/5; the A1 guard is deterministic) with NO new
+STUCK/ERROR from the guard itself; no-followup classes still 3/3; full suite green. Codex plan+code gate.
+### Risks
+infinite re-nudge (BOUNDED by counter + fall-through); over-broad guard regressing simple summary-only initial plans
+(scoped to revision>1); A2 changing the transcript for non-MiniMax providers (synthesize only when a tool_call would
+be left unpaired — additive, provider-agnostic, safe).
