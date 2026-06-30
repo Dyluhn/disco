@@ -4669,3 +4669,11 @@ No verified badge w/o a verifier pass. Sequenced AFTER REL-2 (manifest is the ve
 - **Decision:** do NOT mark REL-RC done / gate green. A1 ships as a correctness floor (clean terminals); A3 is the
   reliability fix. Dispatching a forensic scout (all 5 runs: per-plan-event nsteps, why each terminal, harvest-vs-
   directive-vs-parser) to design A3.
+
+### REL-RC A1 re-soak2 FINAL: 1/5 PASS (confirms A1 necessary-not-sufficient)
+revise_after_finish x5 on the disclaude+A1 server: run003 PASS (FINISHED via notify); 000/001/004 STUCK
+revision_no_concrete_steps (A1 controlled clean terminal — fired correctly 3×); 002 STUCK (other breaker). =1/5
+PASS ≈ baseline 1/3. **Cleanliness PERFECT: 0 orphan containers, 0 non-minimax relay hosts** even across 4 failing
+runs (REL-4/5 terminal-cleanup holds under the failure path — a real positive). HONEST GATE STATE: REL-RC A1 ships
+as a correctness floor (clean adjudicable terminals + clean teardown); REVISION reliability is NOT fixed → A3 (the
+real fix, scout designing) is required before REL-6 REVISION_CHAIN can pass. NOT marking REL-RC done; gate stays red.
