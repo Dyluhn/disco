@@ -2350,3 +2350,20 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   CI isn't hostage to one flaky build — honest (logs flakiness), not masking.
 - NEXT: (a) re-run the spec to see if the 2 prompt fixes lift the finish rate; (b) decide/scope the finalize-on-
   bookkeeping-stuck engine fix + spec retry; (c) then P10 (Export/Handoff).
+
+### HEARTBEAT 2026-06-29 — prompt fixes lifted finish rate; preview-shown capture is the new flake
+- Spec re-run #3 (post submit_plan+update_plan_progress prompt fixes): the build REACHED FINISHED this time (the
+  terminal check PASSED — no bookkeeping-stuck) → the two prompt fixes measurably improved build completion. BUT it
+  failed on a DIFFERENT assertion: "the Preview pane never rendered the built site" (previewShown=false, line 151).
+- So TWO independent flakiness sources, now disentangled: (1) build-going-stuck (bookkeeping) — IMPROVED by the
+  prompt fixes; (2) preview-shown capture timing/content — the live preview isn't reliably renderable at capture
+  time for THIS finished build (cb9be8's was, via idle TTL; this one's wasn't), and/or the content regex
+  /coffee|hours|about|contact/ is too specific.
+- REVISED next steps (the engine finalize-on-bookkeeping-stuck fix is now LOWER priority — prompt fixes lifted the
+  finish rate; keep it TRACKED, re-measure over more runs): (a) HARDEN the durable spec: broaden preview-shown to
+  "iframe rendered NON-TRIVIAL content" (body innerText length threshold, not keyword match — more honest:
+  preview_shown = a real render, not the word 'coffee') + bounded-RETRY the whole build+capture (up to 3, pass on
+  the first that FINISHES + renders + classifies PASS, console.log each failed attempt so flakiness stays visible).
+  Gate + re-run. (b) THEN P10 (Export/Handoff). The finalize-on-bookkeeping-stuck engine fix stays scoped (reuse
+  finish.py maybe_honest_unverifiable_static_actionless_finish pattern + _is_web_deliverable; my case is the
+  VERIFIED-and-delivered variant, even stronger than the unverifiable one) for if the stuck rate proves still high.
