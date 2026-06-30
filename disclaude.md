@@ -2206,3 +2206,19 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
   minimax, api_key_env null (relay holds the key)}, default_model=driver-minimax (template = Disco-Pi which already
   had a working driver-minimax entry). NEXT: bring up the disclaude stack (agent-server :8000 + frontend) + drive
   ONE real Playwright build → dossier → classify_dossier PASS + screenshots.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b: BACKEND STACK LIVE with MiniMax driver
+- MILESTONE: relay :8080 (200) + agent-server :8000 BOTH UP. Agent-server startup log proves it found driver-
+  minimax + verified the relay: `GET http://localhost:8080/v1/models → 200 OK`. So disco's BUILD driver is wired
+  to MiniMax-M3 via the relay, live + connected. (/ returns 404 = no root route, normal; API is under /api.)
+- Cleaned disco-config.json to ONLY driver-minimax (removed or-gemini-3-flash → NO OpenRouter anywhere, P17-clean;
+  the earlier startup hit openrouter.ai/models for that stray model — gone now).
+- RESTART RECIPE (nohup, survive task reaping): relay = MINIMAX_API_KEY/MODEL=MiniMax-M3/UPSTREAM=api.minimaxi.chat
+  /v1/RELAY_LOG/PORT=8080 python -m harness.product_build.minimax_relay; agent-server = DISCO_HOST=127.0.0.1
+  DISCO_PORT=8000 DISCO_CONFIG=$PWD/disco-config.json DISCO_SECRET_KEY=$(cat ~/.config/disco/dev_secret_key)
+  python -m disco.agent_server. Both from /home/dylan/projects/disclaude with PYTHONPATH=packages/*/src:$PWD.
+- NEXT (the live build): bring up the frontend, drive ONE real Playwright build of STATIC_SITE_SMOKE through the UI
+  (MiniMax builds index.html → preview), capture observations → write_dossier → classify_dossier PASS + SCREENSHOTS.
+  Needs: frontend dev server + a working sandbox (check disco-config sandbox.provider) + the build loop completing
+  (minutes on MiniMax). Orchestrate relay+agent+frontend+Playwright in ONE execution so nothing gets reaped.
+  Product Harness NOT complete until that run is green with screenshots.
