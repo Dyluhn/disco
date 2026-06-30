@@ -4846,3 +4846,18 @@ failure modes — all OURS, all fixable, REVISION_CHAIN target stays 100% by fix
 NEW DIRECTIVE for REL-RC/REL-6: drive REVISION_CHAIN to 100% by fixing OUR engine/schema/prompt for EACH failure
 mode. No "capability caveat", no "single-revision variant as a concession", no "done-as-feasible with a ceiling".
 Each remaining failure = a bug to root-cause in our code. (See memory: never-blame-the-model.)
+
+### REL-RC continuation — OUR-code fixes for the remaining revision failures (no model-blaming)
+Reframed: drive REVISION_CHAIN → 100% by fixing OUR code per failure mode. Grounded next-fixes (read-only investig.):
+- **run_project_script arg clarity (run002 `operations=['operations']`):** run_script.py:77-84 description explains
+  `operations` in PROSE with NO concrete worked example of the nested {op,path,old,new} array shape → nothing exact
+  for the model to anchor the nested tool-call on. FIX: add a literal worked example to the ToolDef description +
+  lenient arg coercion (recover a malformed operations payload, same spirit as A3 plan-harvest). + investigate the
+  5× STALE_FILE_CONTEXT→recovery_requested loop in the same run (our read-state gating).
+- **submit_plan upstream (run001):** beyond A3's downstream harvest, fix the submit_plan ToolDef/schema + re-plan
+  prompt so steps land in steps[] directly (worked submit_plan(steps=[{title,detail}]) example in the description +
+  _FORCE_SUBMIT_DIRECTIVE/_REPLAN_FRAMING).
+- **re-plan affordance (run000):** the planning/re-planning prompt must make structured submit_plan the obvious path.
+PLAN: after the A3 soak completes (don't disrupt the live server), root-cause EACH A3-soak failure in OUR code +
+fix → re-soak → repeat until REVISION_CHAIN clean. Each = a PR (worked-examples + lenient-coercion + prompt), Codex-
+gated, live-proven. No concessions, no caveats, no "model limit".
