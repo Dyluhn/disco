@@ -3000,3 +3000,15 @@ REFINED DELIVERABLE:
      file_write/shell with code VERIFIER_ONLY_TOOL_BLOCKED; EDIT/BOOTSTRAP unchanged (no regression). 
 - NOT claiming the full verifier-only context split (verify_web_app already encapsulates the verifier; console capped)
   nor build-mode guard wiring — those are §6.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-6 SHIPPED (VERIFY = read-only diagnostics)
+- Live fix to the wired ContractScopeGuard: VERIFY scope = finalizer + read-only diagnostics (verify_web_app/file_
+  read/search/server_status/preview_status/logs/think); raw browser EXCLUDED (click/fill/submit = automation, guard
+  is name-only) → verifier inspects via verify_web_app only; mutators denied w/ VERIFIER_ONLY_TOOL_BLOCKED. Corrected
+  my wrong dormancy finding (Codex caught ContractScopeGuard live). Fixed 2 LATENT snapshot regressions from CD-
+  TOOLS-2/3 (AGENT_TOOLS + exec_policy snapshots — I'd been running tools-suite not core; LESSON: run BOTH suites).
+  Codex APPROVE after raw-browser REVISE. Full core 0 new fails; pyright 0/0. Full build-mode verifier split = §6.
+- NEXT: CD-TOOLS-7 (buffered run_project_script — atomic/buffered script+batch runner). Then 8 (prompt-pack), 9
+  (LIVE MiniMax targeted-edit harness), 10 (survey→unblock P10b).
+- REMINDER for remaining PRs: run BOTH packages/tools AND packages/core suites (CD-TOOLS-2/3 added to AGENT_TOOLS/
+  exec_policy → core snapshot tests; tools-only suite missed them).
