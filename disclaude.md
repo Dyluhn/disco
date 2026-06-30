@@ -2488,3 +2488,13 @@ Codex CODE+EVIDENCE review → revise to APPROVE → commit/push → heartbeat. 
   orphan-process check into a reusable stability runner; add 'sidecar' to the stability scenario required_slices.
   THEN STAB-2 (STATIC_SMOKE x10 consecutive LIVE, no retry-to-pass, record every run). If the stuck rate blocks
   10/10, the finalize-on-bookkeeping-stuck engine fix becomes the required STAB-2a prereq. P10b stays PARKED.
+
+### HEARTBEAT 2026-06-29 — STAB-1b SHIPPED + STAB-2 LAUNCHED (x10 live matrix running)
+- STAB-1b (Codex APPROVE after 1 REVISE): STATIC_SMOKE_STRICT scenario (sidecar enforced) + stability-run.spec.ts
+  (single build, no retry, ledger-native sidecar window with the boundary snapshot BEFORE the terminal state-read
+  so a racing call can't be swallowed) + run_stability_matrix.sh (sequential, stop-on-first-fail, record every
+  run). 44 product tests + 18 negative fixtures green; pyright 0/0.
+- STAB-2 LAUNCHED: run_stability_matrix.sh 10 → orchestrator pid 515190, report at RUN_DIR/stab2-report/. Building
+  run 1. ~45 min wall-clock for 10. Monitor stab2.out + run-N.json across heartbeats. STOPS on first non-PASS →
+  classify (product/harness/model/infra), fix if clear, regression fixture, restart count. If bookkeeping-stuck
+  blocks 10/10 → STAB-2a engine fix (finalize-on-bookkeeping-stuck) before resuming.
