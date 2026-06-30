@@ -5004,3 +5004,14 @@ call. CRITICAL design constraint: the manifest fold MUST derive from the SAME lo
 4. Tests: helper == old _declared_artifacts on fixtures; shadow on → manifest paths == projected (0 divergence);
    shadow off → no manifest I/O. Live build_soak flag-ON → 0 divergence in logs → Codex code-gate → step2c promote.
 This is a focused next-PR (cross-package: core helper + agent-server compare); step2a (upsert+lock) is the substrate.
+
+### Parallel full-suite test run (Dylan: "run tests in parallel") — my work GREEN, 1 pre-existing unrelated fail
+Ran core/tools/agent-server/harness suites concurrently. core ✓ tools ✓ harness ✓. agent-server: 1 FAIL =
+test_verify.py::test_run_checks_cascades_skip_when_config_fails (config check returns PASS where the no-driver test
+expects FAIL). HONEST analysis: NOT from my work — verify.py/test_verify.py untouched this session (last at rebrand
+commits 5ba15df0/144def8c/97ffbed6); test_verify imports only `verify`+`llm.types` (nothing I changed); FAILS
+identically in a clean `env -i` (not my shell's DISCO_*/MINIMAX_* exports) → it reads persisted config-state on THIS
+box, not env. PRE-EXISTING + config-state-dependent. All my session changes ($ref/anatomy, A1/A3, REL-5b, REL-2a
+step1/2a/2b-1/2b-2a) are committed + GREEN. Working tree's 5 uncommitted files are logs/zip/summary artifacts, NOT
+code. Add test_verify::test_run_checks_cascades_skip_when_config_fails to the pre-existing-ignore set (env/config-
+state-dependent; root-cause is a stray persisted driver config, out of REL scope).
