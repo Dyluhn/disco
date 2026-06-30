@@ -2235,3 +2235,20 @@ TESTS (pure, no fastapi): model map (minimax-m3→MiniMax-M3, unknown→MiniMax-
 - NEXT: check conv_049d896… for FINISHED + index.html (workspace snapshot / preview); then the UI/Playwright
   product-harness path (frontend + build-artifact-runtime-smoke.spec.ts) → buildProductEvidence → write_dossier
   (provider records from relay.jsonl) → classify_dossier(STATIC_SITE_SMOKE) PASS + SCREENSHOTS to Dylan.
+
+### HEARTBEAT 2026-06-29 — P1B-LIVE-3b: MiniMax-M3 BUILT A REAL SITE (visual proof sent) + a real finding
+- ✅ PROVEN END-TO-END: MiniMax-M3 (direct api.minimaxi.chat, zero OpenRouter) drove a real disco build in the
+  podman sandbox and produced "The Corner Cup" coffee-shop site: file_write index.html (4341B, real semantic HTML)
+  + file_write styles.css (6114B) + preview_start(name=corner-cup) + verify_web_app. Rendered + screenshotted via
+  Playwright/Firefox → SENT TO DYLAN (file_uuid 70eeb52a). Evidence in test-record/p1blive3b/ (png + html + css +
+  relay.jsonl). THE MINIMAX DRIVER BUILDS REAL, WELL-DESIGNED SOFTWARE.
+- ⚠️ REAL FINDING (build PAUSED at iter 12, not FINISHED): MiniMax-M3 malforms update_plan_progress — sent
+  steps:[''] / steps:['',''] (list of empty strings) instead of [{index:int, state:pending|active|done}] → 5
+  agent_error validation rejections → the no-progress/loop breaker PAUSED the build AFTER the site+preview were
+  already produced. So lifecycle.terminal != FINISHED ⇒ classify_dossier would NOT pass. PRODUCT HARNESS NOT
+  COMPLETE (no clean FINISHED build + no UI/PreviewPane dossier yet). This is exactly the engine-robustness gap the
+  harness exists to surface (capable model mangles a structured tool arg → stall).
+- NEXT (a real gated PR): harden the build loop for a capable model malforming update_plan_progress — coerce/repair
+  the steps arg (e.g. ['']→drop/ignore, or accept + normalize) OR don't let plan-progress validation spam trip the
+  no-progress breaker once a deliverable exists; then re-run → clean FINISHED → the UI/Playwright product-harness →
+  classify_dossier PASS + screenshots. (Mirrors memory disco-plan-progress-unify / disco-build-loop-fixes.)
