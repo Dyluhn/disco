@@ -4872,3 +4872,24 @@ object/structured-string/interdependent fields) + NO example in its description 
 - Full per-tool audit scout RUNNING (a543c0d8b6d39c70d) → will list every NEEDS_EXAMPLE tool + the proposed example;
   I (canonical writer) batch-fix all, compile+test, then restart+re-soak. No model-blaming — these are OUR schema/
   description bugs.
+
+## §11 HEARTBEAT — 2026-06-30 — ROOT-CAUSE FOUND via Dylan's empirical test: $ref schema rendering
+- **Dylan's never-blame-the-model + scan-every-tool + empirical-test directives → the REAL bug** (which model-
+  blaming had buried as a "capability ceiling"): OUR ToolDef.to_spec() emits nested-model args as {"$ref":"#/$defs/
+  X"}; MiniMax-M3 (and likely all models) emit empty-string placeholders for $ref'd array items because the fields
+  are hidden behind the reference. Method: dumped the exact 47 build-mode tool specs → gave a subagent ONLY those →
+  clean-room Claude 47/47 OK (necessary-not-sufficient) → FAITHFUL test (MiniMax real tool-calling) REPRODUCED the
+  bug: run_project_script operations=["",""], exact_replace edits=[""]. FIX = _inline_schema_refs() in to_spec()
+  (cycle-safe); PROVEN live: MiniMax then emits perfect nested objects. ONE fix repairs EVERY list[Model] tool incl.
+  submit_plan.steps → the revision mis-serialization at the SOURCE (upstream of A3's harvest, which becomes a belt-
+  and-suspenders backstop). All 47 tools now $ref-free; tools suite green. COMMITTED+PUSHED.
+- **A3-harvest soak (old server, pre-inlining): 2/5 PASS** (up from A1-only 1/5) — run001/003 PASS; run000/004
+  BUILD_DID_NOT_FINISH; run002 SIDECAR_NOT_STOPPED (a NEW cleanup defect = REL-5b, egress sidecar teardown — fix
+  separately, OUR bug). 
+- **Inlining-fix re-soak RUNNING** (bg bcx65bcut, revise x5) — should show the real lift (submit_plan.steps now
+  serializes correctly at the source). 
+- **Tool-example audit:** the $ref-inlining is the GENERAL root-cause fix; per-tool worked examples (run_project_
+  script done; exact_replace/deck_patch/app_create/app_add_section/ask_user from the static audit) are now secondary
+  reinforcement, still worth adding but no longer the primary lever. 
+- **Next:** collect inlining re-soak (honest tally) → Codex code-gate the anatomy fix → fix SIDECAR_NOT_STOPPED
+  (REL-5b) → add the secondary per-tool examples → keep driving REVISION_CHAIN to 100% in OUR code.
