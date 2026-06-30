@@ -2511,3 +2511,20 @@ Codex CODE+EVIDENCE review → revise to APPROVE → commit/push → heartbeat. 
   inspect + clean non-unverified terminal; fail-closed) + vitest 8 cases; classify-verdict parsed from stdout in
   both exit branches. NO oracle weakening.
 - PROTOCOL: count restarts. Relaunching STAB-2 x10 from 0.
+
+### HEARTBEAT 2026-06-29 — STAB-2 v2 run-1 FAIL: a SECOND distinct non-finish mode (edit-elision thrash)
+- v2 run-1 NO_CLEAN_TERMINAL (STUCK iter 55). Classified: NOT harness, NOT bookkeeping. ROOT = the _snip_args
+  ELISION interaction (memory disco-runthru-v2-snipargs-keystone): disco elides large tool-arg bodies (file_write
+  content) in the model's context; MiniMax then file_edits that file and either ECHOES the elision marker
+  ("Argument(s) ['new'] contain an internal elision placeholder" — executor rejects, correctly) or guesses
+  (old_text_not_found) → 12 failed edits (seq 44-116) → recovery_requested → STUCK. browser-navigate at seq 26
+  (early), NO verify_web_app, deliverable event only at seq 120 (the terminal auto-handoff). Final state is
+  mid-broken-edit → NOT a verified deliverable → finalize-on-stuck would be UNSAFE here (distinct from the
+  bookkeeping case where the deliverable WAS verified).
+- TWO distinct non-finish modes now observed: (1) bookkeeping-malform → bookkeeping_only STUCK (after a VERIFIED
+  deliverable — finalize-on-verified is the clean fix); (2) edit-elision thrash → STUCK (mid-edit, unverified —
+  needs elision/read-before-write recovery robustness, a deeper+riskier engine change). Both = MiniMax-M3 thrashing
+  after an initial deliverable. ~50% finish rate (memory disco-m3-real-build-capability).
+- DECISION POINT: 10/10 consecutive is blocked by GENUINE model+engine thrash (not harness bugs). Reaching it needs
+  real reliability work (STAB-2a finalize-on-verified + an elision-recovery fix), OR a survey to quantify rates,
+  OR an acceptance-bar adjustment for MiniMax-M3. Surfacing to Dylan for the scope decision (don't weaken oracles).
