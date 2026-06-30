@@ -3492,3 +3492,21 @@ any regression rolls back that PR's enforcement (shadow stays). Start P11 only a
 - REL-4 fix: _release_conversation must RELEASE the sandbox even for TERMINAL convs (kill destroys sandbox + revokes
   token + idempotent + best-effort; evidence already frozen + FINISHED-snapshot already taken via kick). + a pre-soak
   stale-root sweep. The 409/idle handling is already robust (audit-confirmed) — do NOT rebuild it.
+
+### REL-4 reframe (CRITICAL, interrogate-the-given) — backend reality (2026-06-30)
+- The `local` ProcessSandbox backend (current dev agent-server, disco-config sandbox.backend="local") is
+  `is_production_valid=False` (process.py:389): shared host PID/net namespace, dev-only; its destroy_by_
+  conversation is a NO-OP (process.py:431); its /tmp/disco-sbx-* roots are cleaned only by sweep_stale_workspaces
+  (startup/>7day), NOT by kill. The 1740 leaked roots were a LOCAL-DEV artifact of my CD-TOOLS/P10b runs — NOT the
+  soak's orphan mechanism.
+- Production-valid backends = gVisor (gvisor.py:180) + podman (podman.py:329); both have a REAL destroy_by_
+  conversation (gvisor.py:620) + _sweep_orphan_containers. The Build-Soak path enforces require_production_valid_
+  backend (__init__.py:81, fail-closed) → REL-6 CANNOT run on the local backend (it would be a meaningless sandbox-
+  reliability gate). Orphans on the real backend = CONTAINERS, not /tmp roots.
+- REVERTED my premature _release_conversation change: it fought a deliberate tested decision (test_cleanly_
+  terminal_run_is_not_killed) AND targeted the wrong backend's orphan mechanism. The real REL-4/5 orphan/cleanup
+  fix + proof must come from the PRODUCTION backend under a baseline soak — not inferred from local-dev roots.
+- BLOCKER/DECISION: REL-6 (and the baseline soak that REL-4/5 measure against) must run on a production-valid
+  backend. Options: local podman (available — `podman ps` works; fastest), gVisor VM 201 (100.81.82.115, BACK;
+  closest to real prod — catches the prod-only docker-py container-recreate bug per [[disco-gvisor-404-
+  generalization]]), or keep local-dev (NOT production-valid → gate is meaningless for sandbox reliability).
