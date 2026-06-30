@@ -218,3 +218,36 @@ async def test_artifact_manifest_upsert_replaces_whole_list() -> None:
     await store.record_artifacts(tuple(cur))
     back = await store.read_artifacts()
     assert len(back) == 1 and back[0].shown is True and back[0].verified == "passed"
+
+
+# --- [REL-2a] upsert_artifact: per-cid-locked RMW, insert-or-replace, no lost update ----------
+@pytest.mark.asyncio
+async def test_upsert_artifact_insert_then_replace() -> None:
+    from disco.core.context.ledger import ArtifactRecord
+
+    store, _ = _store()
+    await store.upsert_artifact(ArtifactRecord(path="index.html", kind="app", shown=False))
+    await store.upsert_artifact(ArtifactRecord(path="styles.css", kind="files"))
+    # replace index.html (same path) — must NOT duplicate
+    await store.upsert_artifact(ArtifactRecord(path="index.html", kind="app", shown=True, verified="passed"))
+    recs = await store.read_artifacts()
+    assert sorted(r.path for r in recs) == ["index.html", "styles.css"]
+    idx = next(r for r in recs if r.path == "index.html")
+    assert idx.shown is True and idx.verified == "passed"
+
+
+@pytest.mark.asyncio
+async def test_upsert_artifact_concurrent_no_lost_update() -> None:
+    import asyncio
+
+    from disco.core.context.ledger import ArtifactRecord
+
+    store, _ = _store()
+    # 20 concurrent upserts of DISTINCT paths — without the per-cid RMW lock, the read-modify-write
+    # would race and lose updates; with it, all 20 must survive.
+    await asyncio.gather(
+        *(store.upsert_artifact(ArtifactRecord(path=f"f{i}.html")) for i in range(20))
+    )
+    recs = await store.read_artifacts()
+    assert len(recs) == 20
+    assert sorted(r.path for r in recs) == sorted(f"f{i}.html" for i in range(20))

@@ -13,8 +13,9 @@ MISSING vs CORRUPT (the durability contract):
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -99,9 +100,44 @@ class ReconstructResult(BaseModel):
 class ArtifactMemoryStore:
     """Reads/writes the durable ``.disco/context/*`` files over a WorkspaceFS."""
 
+    # [REL-2a] Per-conversation manifest mutation locks. The store is constructed FRESH at each call
+    # site (finish/engine/context_memory), so a per-INSTANCE lock would not mutually-exclude the
+    # concurrent writers of one cid's artifact_manifest (the observe fold runs OUTSIDE the loop
+    # _lock; edge writers run in API handlers). This class-level dict, keyed by conversation_id,
+    # gives cross-instance per-cid exclusion within the single agent-server event loop. (Codex-
+    # approved placement: core can't reach the runtime lock — layering — and the store is per-call.)
+    _manifest_locks: ClassVar[dict[str, asyncio.Lock]] = {}
+
     def __init__(self, fs: WorkspaceFS, *, base: str = ".disco/context") -> None:
         self._fs = fs
         self._base = base.rstrip("/")
+
+    def _manifest_lock(self) -> asyncio.Lock:
+        """The asyncio.Lock guarding artifact_manifest RMW for THIS store's conversation. Keyed by
+        the fs's conversation_id (empty string for non-build/test paths — they share one lock,
+        which is harmless since they don't contend)."""
+        cid = str(getattr(self._fs, "conversation_id", "") or "")
+        lock = self._manifest_locks.get(cid)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._manifest_locks[cid] = lock
+        return lock
+
+    async def upsert_artifact(self, record: ArtifactRecord) -> ArtifactMemoryRef:
+        """[REL-2a] Insert-or-replace one ArtifactRecord (matched by `path`) in the per-artifact
+        manifest, as an atomic read-modify-write UNDER the per-cid lock so two concurrent writers
+        can never lose each other's update. Returns the manifest ref."""
+        async with self._manifest_lock():
+            current = list(await self.read_artifacts())
+            replaced = False
+            for i, existing in enumerate(current):
+                if existing.path == record.path:
+                    current[i] = record
+                    replaced = True
+                    break
+            if not replaced:
+                current.append(record)
+            return await self.record_artifacts(tuple(current))
 
     # --- paths -----------------------------------------------------------------
     def path_for(self, kind: ArtifactMemoryKind) -> str:
