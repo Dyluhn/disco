@@ -4636,3 +4636,18 @@ deck/sheet/pdf/audio). Prompts mandate self-verify: prompts.py:223-228,436-439.
 finish.py is core (regression lowers soak clean-rate) → shadow FALLTHROUGH-only + flag; reuse existing refusal/STUCK/
 unverified-release dispositions. VERIFY-phase-reachable changes ToolScope (coordinate EXPORT-empty-scope w/ REL-3).
 No verified badge w/o a verifier pass. Sequenced AFTER REL-2 (manifest is the verified sink). Codex plan+code gate.
+
+## §11 HEARTBEAT — 2026-06-30 — REL-2a step1 shipped; A1 re-soak slow-but-progressing
+- **PRs in flight:** REL-RC (A1 committed, live re-soak running) + REL-2a (step1 committed).
+- **REL-2a step1 DONE+committed+pushed:** ArtifactRecord (ledger.py) + ARTIFACT_MANIFEST JSON singleton
+  (artifact_memory.py + store.py _JSON_KINDS + ensure_initialized seed) + record/read_artifacts (mirror resources).
+  12 artifact_memory tests pass; full context suite (174) green — NO regression. NO writer/reader wired (step2).
+- **REL-1 plan WRITTEN** (5-PR shadow→canary→promote). REL-2a re-APPROVE holds.
+- **A1 re-soak2 (revise x5):** SLOW but PROGRESSING — relay called MiniMax 4.8s ago (NOT wedged), on run _002,
+  sandbox CPU low (model-bound). revise runs ~15min each (A1 force-submit adds recovery turns) → ~60-75min total.
+  0/5 logged yet. Will collect on completion. 0 non-minimax relay hosts.
+- **Tests:** 12 artifact + 174 context green; 71 engine planning green (A1).
+- **Blockers A-F:** A: revision blocker — A1 fix landed, LIVE PROOF in flight (slow). F: stale-checkout FIXED.
+- **Next:** continue REL-2a step2 (observe.py:517 fold + 4 edge dual-writes under per-cid lock + shadow read-compare,
+  all flag-gated DISCO_ARTIFACT_MANIFEST_SHADOW, NO reader switched) as productive work while the soak runs; collect
+  re-soak when done → REL-RC A2/unit-test/code-gate decision.
