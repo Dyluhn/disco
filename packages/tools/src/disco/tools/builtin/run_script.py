@@ -80,7 +80,13 @@ class RunProjectScriptTool:
             "— pass exact `old` + `new`, optional replace_all), or 'save' (write full `content`). "
             "All edits commit together; if ANY op fails (no match, shrink, an unread file, a "
             ".disco/ artifact, a syntax error) NOTHING is written. To save over an existing file, "
-            "read it first (a 'read' op on it, or a prior replace_text, or pass expected_sha256)."
+            "read it first (a 'read' op on it, or a prior replace_text, or pass expected_sha256). "
+            "Each element of `operations` is an OBJECT, never a bare string. Example call:\n"
+            '  run_project_script(operations=[\n'
+            '    {"op": "read", "path": "index.html"},\n'
+            '    {"op": "replace_text", "path": "index.html", "old": "Launch Day", "new": "Grand Opening"},\n'
+            '    {"op": "save", "path": "styles.css", "content": "body { margin: 0; }"}\n'
+            '  ])'
         ),
         args_model=RunScriptArgs,
         needs=_FS,

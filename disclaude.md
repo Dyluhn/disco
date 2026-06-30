@@ -4861,3 +4861,14 @@ Reframed: drive REVISION_CHAIN → 100% by fixing OUR code per failure mode. Gro
 PLAN: after the A3 soak completes (don't disrupt the live server), root-cause EACH A3-soak failure in OUR code +
 fix → re-soak → repeat until REVISION_CHAIN clean. Each = a PR (worked-examples + lenient-coercion + prompt), Codex-
 gated, live-proven. No concessions, no caveats, no "model limit".
+
+## TOOL-EXAMPLE AUDIT (Dylan: "scan every tool for this deficiency, fix all") — in progress
+FIX LEVER confirmed: ToolDef.to_spec() sends the model BOTH description text AND args_model.model_json_schema()
+(nested $defs included) — so the STRUCTURE is visible, but a concrete WORKED EXAMPLE is missing for complex/nested
+args. Primary fix = a literal worked example IN the `description` (guaranteed to reach the model); optionally also
+pydantic json_schema_extra={"examples":[…]}. Criteria: any tool with a COMPLEX arg (list[Model]/list[dict]/nested
+object/structured-string/interdependent fields) + NO example in its description = NEEDS_EXAMPLE → fix.
+- DONE: run_project_script — added operations=[{op,path,old,new/content}] worked example (the proven run002 failure).
+- Full per-tool audit scout RUNNING (a543c0d8b6d39c70d) → will list every NEEDS_EXAMPLE tool + the proposed example;
+  I (canonical writer) batch-fix all, compile+test, then restart+re-soak. No model-blaming — these are OUR schema/
+  description bugs.
