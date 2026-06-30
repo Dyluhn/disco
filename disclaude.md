@@ -2798,3 +2798,18 @@ governed write/replace still succeeds (no over-block).
 CODEX FOCUS (§9): is the routing sound (real path, not lexical; correct tool per path); does adding the governed
 guard to exact_replace close the bypass without false-blocking a normal edit; is carving the manifest-fold to 4b
 honest (not a hidden stub); no false affordance (unmapped path names no tool); insufficient negatives.
+
+### CD-TOOLS-4 — PLAN round-1 revision (Codex REVISE: governed guard must cover ALL generic mutators)
+- Guarding only exact_replace + safe_write_file MOVES the bypass: file_write/file_append/file_edit/file_replace_
+  lines/file_insert_lines/file_str_replace are still callable mutators with NO governed .disco/ check. FIX: a SHARED
+  helper _governed_guard(sandbox, path) -> ToolOutcome|None (resolves the REAL symlink-followed path via _governed_
+  relpath; governed → GOVERNED_ARTIFACT_REJECTED + route_to:<semantic tool>) called at the TOP of EVERY generic
+  mutator: file_write, file_append, file_edit, file_replace_lines, file_insert_lines, file_str_replace, exact_
+  replace, safe_write_file. So NO generic write path can touch a .disco/ governed artifact; the model is routed to
+  the owning semantic tool everywhere.
+- INVARIANT TO VERIFY at implement time: the SEMANTIC tools (app_create/app_set_tweak/context_memory/app_snapshot_
+  version) write .disco/ via ctx.sandbox.write_file DIRECTLY (their own run()), NOT by invoking these generic mutator
+  tools — so the guard does NOT break them. If any semantic tool routes through a generic mutator, exempt it via an
+  explicit ctx flag (NOT a path heuristic). Confirm before landing.
+- TESTS expand: EACH of the 8 generic mutators rejects a write to .disco/appspec.json with route_to; a normal non-
+  governed write via each still succeeds; the semantic tools still write .disco/ successfully (regression).
