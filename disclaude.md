@@ -3572,3 +3572,747 @@ Ran the REAL build_soak runner (static_html_minimal x1) on the production-valid 
   REQUIRES adjudicated cleanup + sidecar + lifecycle. Verifying: run WITH relay log → PASS (3 oracles adjudicate);
   run with BAD relay path → INVALID_RUN (fail-closed). Note: orphan delta assumes a SEQUENTIAL soak (the runner is
   sequential); container probe is podman-CLI (gVisor final needs its own).
+
+## ============================================================================
+## PERMANENT PARALLEL OPERATING POLICY (SPINE — GOVERNS ALL REMAINING WORK)
+## Adopted 2026-06-30. Source: DISCLAUDE_PERMANENT_PARALLEL_POLICY.md.
+## Applies to every remaining REL/Build-runtime/AppKit/Agent/export/harness/soak PR.
+## ============================================================================
+
+# Disclaude Permanent Parallel Operating Policy
+
+**Purpose:** make exhaustive parallel discovery the default operating mode for the rest of the buildout, not a one-off campaign rule.
+
+This policy should be appended near the top of `disclaude.md` and treated as part of the immutable spine. It applies to every remaining reliability PR, Build runtime PR, AppKit PR, Agent workflow PR, export PR, harness PR, and soak run.
+
+---
+
+## 0. Non-negotiable principle
+
+Do **not** reduce issue discovery.
+
+Do **not** cap reliability surfacing.
+
+Do **not** move faster by hiding failures.
+
+Move faster by running independent discovery, tests, fixtures, logs, and breaker work in parallel while keeping integration, commits, and promotion gates serialized.
+
+Default operating model:
+
+```text
+parallel discovery
+parallel fixture/test generation
+parallel breaker runs
+parallel read-only audits
+serial canonical integration
+serial Codex/GPT gate
+evidence-first commit
+```
+
+---
+
+## 1. Primary roles
+
+### Claude Code primary
+
+Claude Code primary is the **conductor** and the only canonical writer.
+
+Responsibilities:
+
+```text
+- owns /home/dylan/projects/disclaude
+- writes every PR plan into disclaude.md
+- assigns parallel lanes
+- owns file-ownership locks
+- integrates patches
+- runs canonical tests
+- requests Codex/GPT plan review and code/evidence review
+- commits and pushes
+- maintains heartbeat ledger
+- decides which external-agent outputs are accepted or rejected
+```
+
+Claude primary must not outsource final integration, final test judgment, or final promotion decisions.
+
+### Claude Sonnet subagents
+
+Use up to four Sonnet subagents where useful.
+
+Default Sonnet lane roles:
+
+```text
+Sonnet A — source scout
+Sonnet B — test/fixture scout
+Sonnet C — narrow implementation scout
+Sonnet D — risk/regression scout
+```
+
+They may work read-only, in separate worktrees, or produce patch files. They do not push.
+
+### MiniMax-M3 via opencode
+
+Use MiniMax-M3 through `opencode` for high-volume implementation, breaker, and soak work.
+
+Default roles:
+
+```text
+MiniMax 1 — implementation alternate / patch proposal
+MiniMax 2 — test runner / failure reproducer
+MiniMax 3 — breaker / fuzzer / soak runner
+```
+
+MiniMax must use the direct MiniMax API where the task is part of official MiniMax validation.
+
+For official build/product/final soak evidence:
+
+```text
+host must be api.minimaxi.chat, api.minimax.io, or the approved direct MiniMax endpoint
+model must be MiniMax-M3
+OpenRouter call count must be 0
+provider ledger must be attached
+provider calls after terminal must be 0
+```
+
+MiniMax does not approve PRs or promotions.
+
+### DeepSeek via opencode
+
+Use DeepSeek through `opencode` as a cheap high-volume scout.
+
+Default roles:
+
+```text
+- negative fixture generator
+- schema edge-case generator
+- simple helper implementation proposal
+- log summarizer
+- test-output summarizer
+- docs/handoff draft generator
+- additional read-only review
+```
+
+DeepSeek does not approve PRs or promotions.
+
+### Gemini / Antigravity via `agy`
+
+Use Gemini/Antigravity through `agy` for frontend/product-harness scouting.
+
+Default roles:
+
+```text
+- Playwright product-harness scout
+- browser WebSocket scout
+- PreviewPane scout
+- AppCard / TweakPanel / ExportPanel UI scout
+- frontend component-test scout
+```
+
+Gemini/Antigravity does not own runtime/lifecycle/provider/sandbox changes unless Claude primary imports a patch after review.
+
+### Local Qwen through Pi
+
+Pi is allowed as the local Qwen runner.
+
+Use:
+
+```text
+Qwen 35B via Pi:
+  - scenario expansion
+  - agent ergonomics cases
+  - observation variants
+  - failure taxonomy drafts
+  - WorldSim-style environment examples
+  - human-reference phrase generation
+
+Qwen 27B via Pi:
+  - log compression
+  - heartbeat summaries
+  - test-output summarization
+  - grep/result clustering
+  - report drafts
+```
+
+Pi is **not** to be used as the MiniMax orchestrator for this campaign because MiniMax conversations were unstable through Pi.
+
+Pi/Qwen does not approve PRs or promotions.
+
+### GPT-5.5 / Codex gate
+
+GPT-5.5 / Codex remains the binding reviewer gate.
+
+Use it for:
+
+```text
+- plan review
+- code review
+- evidence review
+- oracle weakening detection
+- promotion decision review
+- final soak report review
+```
+
+Allowed gate outputs:
+
+```text
+APPROVE
+REVISE
+BLOCKED
+```
+
+No other model can replace this gate.
+
+---
+
+## 2. Mandatory parallel lanes for every PR
+
+Every PR plan must include a `Parallel assignments` section.
+
+If a lane is not used, Claude must write `not used` and why.
+
+Default lanes:
+
+### Lane A — Harness truth / oracle lane
+
+Goal:
+
+```text
+Find SKIP-as-PASS, missing-evidence pass paths, duplicate truth sources, stale evidence, weak negative fixtures, false green paths.
+```
+
+Typical owners:
+
+```text
+Sonnet risk scout
+DeepSeek fixture scout
+GPT/Codex during gate
+```
+
+Outputs:
+
+```text
+oracle_risks.md
+negative_fixture_candidates.md
+```
+
+### Lane B — Runtime lifecycle lane
+
+Goal:
+
+```text
+Find sidecar leaks, provider-after-terminal calls, sandbox release failures, preview cleanup failures, terminal-state races, suspend/resume/cancel bugs.
+```
+
+Typical owners:
+
+```text
+Sonnet source scout
+MiniMax breaker
+```
+
+Outputs:
+
+```text
+lifecycle_risks.md
+cleanup_repro.md
+```
+
+### Lane C — Product/UI lane
+
+Goal:
+
+```text
+Find browser WebSocket gaps, PreviewPane timing gaps, UI false affordances, missing screenshots, Playwright evidence holes, component-state mismatches.
+```
+
+Typical owners:
+
+```text
+Gemini/agy
+Sonnet frontend scout
+```
+
+Outputs:
+
+```text
+ui_harness_risks.md
+playwright_fixture_notes.md
+```
+
+### Lane D — Tool/model ergonomics lane
+
+Goal:
+
+```text
+Find prompt/schema mismatch, malformed tool calls, exact-edit loops, fresh-read failures, progress telemetry loops, poor recovery observations.
+```
+
+Typical owners:
+
+```text
+MiniMax/opencode
+Qwen 35B via Pi
+```
+
+Outputs:
+
+```text
+tool_ergonomics_cases.md
+malformed_call_examples.md
+```
+
+### Lane E — Regression/test lane
+
+Goal:
+
+```text
+Generate or update unit tests, negative fixtures, replay cases, classifier fixtures, edge-case matrices.
+```
+
+Typical owners:
+
+```text
+DeepSeek/opencode
+Sonnet test scout
+Qwen 27B via Pi
+```
+
+Outputs:
+
+```text
+test_plan.md
+fixture_patch.diff
+```
+
+### Lane F — Soak/breaker lane
+
+Goal:
+
+```text
+Run batches, record every failure, do not patch during batch, classify all outcomes, produce failure taxonomy.
+```
+
+Typical owners:
+
+```text
+MiniMax/opencode
+```
+
+Outputs:
+
+```text
+soak_report.md
+failure_taxonomy.md
+provider_ledger_summary.md
+```
+
+### Lane G — Context/contract lane
+
+Goal:
+
+```text
+Check whether the change affects ContextPack, BuildContract, ToolScope, prompt packs, artifact runtime, or finalizer contracts.
+```
+
+Typical owners:
+
+```text
+Sonnet source scout
+Qwen local scout
+```
+
+Outputs:
+
+```text
+context_contract_impact.md
+```
+
+---
+
+## 3. Mandatory PR plan template
+
+Every PR in `disclaude.md` must use this template.
+
+```md
+## PR <ID> — <Title>
+
+### Goal
+
+<one or two sentences>
+
+### Non-negotiables
+
+- no oracle weakening
+- no false PASS
+- no OpenRouter for MiniMax evidence
+- no provider calls after terminal
+- no user-visible affordance without evidence
+- no canonical repo writes outside assigned files
+- no promotion from headless-only evidence
+
+### File ownership
+
+Canonical writer:
+- Claude primary
+
+Locked files:
+- <list files only Claude primary may edit>
+
+Parallel-safe files:
+- <list fixtures/docs/tests/scout files that other agents may patch>
+
+### Parallel assignments
+
+- Lane A — Harness truth / oracle:
+  owner:
+  task:
+  output:
+- Lane B — Runtime lifecycle:
+  owner:
+  task:
+  output:
+- Lane C — Product/UI:
+  owner:
+  task:
+  output:
+- Lane D — Tool/model ergonomics:
+  owner:
+  task:
+  output:
+- Lane E — Regression/test:
+  owner:
+  task:
+  output:
+- Lane F — Soak/breaker:
+  owner:
+  task:
+  output:
+- Lane G — Context/contract:
+  owner:
+  task:
+  output:
+
+### Codex/GPT plan gate
+
+Status:
+- PENDING / APPROVED / REVISE / BLOCKED
+
+### Implementation checklist
+
+- [ ] tests/fixtures first
+- [ ] implementation
+- [ ] product evidence if UI/runtime touched
+- [ ] provider ledger if MiniMax touched
+- [ ] cleanup evidence if lifecycle touched
+- [ ] docs/disclaude update
+
+### Required tests
+
+- unit:
+- integration:
+- harness:
+- product:
+- soak/breaker:
+
+### Acceptance
+
+- <exact pass/fail criteria>
+
+### Gate result
+
+- Codex/GPT code review:
+- fixes required:
+- final status:
+```
+
+---
+
+## 4. External agent command discovery
+
+Before using an external tool for the first time in a session, Claude must discover and record the exact local command.
+
+Required:
+
+```text
+agy models
+agy --help
+
+opencode --help
+opencode model/provider/profile listing command if available
+
+pi --help
+local Qwen model invocation details
+```
+
+Do not guess flags.
+
+Write discovered invocations into `disclaude.md` under:
+
+```md
+## External Agent Command Discovery
+```
+
+---
+
+## 5. Worktree discipline
+
+Canonical worktree:
+
+```text
+/home/dylan/projects/disclaude
+```
+
+Only Claude primary commits/pushes from this worktree.
+
+Recommended scratch worktrees:
+
+```text
+/home/dylan/projects/disclaude-sonnet-source
+/home/dylan/projects/disclaude-sonnet-tests
+/home/dylan/projects/disclaude-opencode-minimax-impl
+/home/dylan/projects/disclaude-opencode-minimax-test
+/home/dylan/projects/disclaude-opencode-deepseek
+/home/dylan/projects/disclaude-agy-ui
+/home/dylan/projects/disclaude-qwen-scout
+```
+
+External agents return:
+
+```text
+patch.diff
+scout_report.md
+risk_notes.md
+test_output.txt
+failure_taxonomy.md
+```
+
+Claude primary may accept, reject, or partially apply.
+
+Every accepted or rejected external result must be recorded:
+
+```md
+### External patch intake
+
+Source:
+Accepted:
+Rejected:
+Reason:
+Tests added:
+Risks added:
+```
+
+---
+
+## 6. File ownership and single-writer rules
+
+### Single-writer only
+
+These file families require single-writer mode. Parallel agents may inspect but not edit.
+
+```text
+runtime / lifecycle
+inference gateway
+provider relay / provider ledger
+tool executor
+contract-to-scope compiler
+BuildPhaseTracker
+ContextPack renderer
+PreviewManager
+finalizer dispatch
+PiKernel sidecar lifecycle
+browser WebSocket client/server route
+sandbox backend
+product evidence classifier
+promotion policy
+```
+
+### Parallel-safe
+
+These can be worked on by subagents in scratch/patch mode.
+
+```text
+fixtures
+negative test cases
+docs
+scenario YAML
+harness reports
+component tests
+small frontend component snapshots
+content lint fixtures
+resource fixtures
+ergonomics cases
+WorldSim prompts
+soak report generation
+```
+
+---
+
+## 7. Permanent reliability rule
+
+The reliability campaign remains exhaustive.
+
+Do not stop surfacing issues.
+
+Do not suppress new issue classes.
+
+But every issue must be classified before it blocks the campaign.
+
+Blocking categories:
+
+```text
+A — user-visible product failure
+  preview broken, export fake/missing, final state lies, UI false affordance
+
+B — safety/cost failure
+  provider call after terminal, orphan sidecar/sandbox/preview, OpenRouter leak, secrets leak
+
+C — oracle false-pass
+  run can PASS without required evidence, SKIP-as-PASS, missing negative fixture
+
+D — follow-up hardening
+  useful improvement, but not product/safety/oracle blocking
+
+E — model ergonomics
+  malformed tool call or recovery friction; may be blocking if it prevents clean product pass
+
+F — infra
+  machine/service/setup issue; must be separated from product failure
+```
+
+A/B/C always block.
+
+D does not block unless Codex/GPT elevates it.
+
+E blocks if it prevents the required product/soak matrix.
+
+F blocks only until the run is adjudicable.
+
+---
+
+## 8. Permanent soak/breaker rule
+
+Any product-harness or reliability phase must include a no-stop batch after the implementation is green.
+
+No-stop means:
+
+```text
+- record every run
+- do not patch mid-batch
+- do not retry-to-hide
+- classify every dossier
+- keep failed attempts
+- produce failure taxonomy
+```
+
+MiniMax official runs require direct MiniMax API proof:
+
+```text
+OpenRouter = 0
+MiniMax-M3 only
+provider ledger present
+provider calls after terminal = 0
+```
+
+No simulated run can count as release-valid.
+
+---
+
+## 9. Permanent product-harness rule
+
+No engine/headless result can promote a product path by itself.
+
+A product path must be proven through browser/UI evidence when it affects the user-visible Build surface.
+
+Required slices when applicable:
+
+```text
+browser_ws
+lifecycle
+sidecar
+preview
+shown
+verification
+export
+cleanup
+provider_ledger
+```
+
+Missing mandatory evidence is:
+
+```text
+INVALID_RUN
+```
+
+not SKIP/PASS.
+
+---
+
+## 10. Permanent tool-runtime rule
+
+The Build tool layer should continue converging toward Claude-Design-style artifact runtime behavior.
+
+Required direction:
+
+```text
+- host-owned artifact VM
+- exact targeted edits
+- fresh-read guard before exact edit
+- no destructive elision in editable source paths
+- safe full writes only in allowed phases
+- artifact-aware mutation tools
+- show_to_user / show_preview semantics
+- ready_for_verification finalizer
+- verifier-only diagnostics split
+- export/download as host-owned delivery
+- no user-visible affordance without evidence
+```
+
+If a PR touches tools, prompt packs, contracts, finalizers, or preview, the plan must include a Tool Runtime Impact section.
+
+---
+
+## 11. Permanent heartbeat update
+
+Every heartbeat entry must include:
+
+```text
+- current PR
+- active lanes
+- lane status
+- external agents running
+- latest push/commit
+- tests run since last heartbeat
+- new issues surfaced
+- blockers by category A/B/C/D/E/F
+- next action
+```
+
+If no heartbeat entry is written for a tick, the next heartbeat must include a missed-heartbeat audit.
+
+---
+
+## 12. Default remaining work order
+
+Keep this order unless Codex/GPT approves a change:
+
+```text
+1. Finish active REL gate / reliability gate.
+2. Ensure P1B-LIVE product harness remains fail-closed.
+3. P10 export/handoff only when harness reliability is acceptable.
+4. P11 resources/provenance.
+5. P12 content/design discipline.
+6. P13 deck/document/prototype/media contracts.
+7. P14 ergonomics/worldsim.
+8. P15 PiKernel product integration only after product harness green.
+9. P16 AppKit return-to-mainline.
+10. P17 final MiniMax-M3 direct soak.
+```
+
+---
+
+## 13. One-line operating command
+
+For every remaining phase:
+
+```text
+Claude primary orchestrates; all other agents scout, test, break, or propose; Codex/GPT gates; the harness adjudicates; evidence decides.
+```
