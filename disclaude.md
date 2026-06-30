@@ -4768,3 +4768,17 @@ Python/JSON parser:
 Fix C (literal directive example) + HONEST MiniMax multi-revision ceiling (run000 prose-collapse, run002 execution-
 layer serialization → REL-6 capability caveat, never faked) unchanged. _coerce_step helper still extracted + shared
 by the normal steps[] path.
+
+### REL-RC-A3 plan r5 (Codex REVISE x5 — parse-safety SOLVED, fix false-positive): require a steps envelope
+Codex: "parse-safety is solved, but non-regressing is not fully sound — harvesting title: from summary/context/
+rationale can create false-positive steps from any quoted title: field outside the mis-routed steps payload.
+Restrict to the steps string or require a bounded nearby steps: envelope." CORRECT. FINAL harvest scoping:
+- Candidate = `arguments.get("steps")` AS A STRING → harvest titles DIRECTLY (this param IS the steps slot; a title:
+  here is by definition a step).
+- Candidate = summary / context / rationale → harvest ONLY if the blob contains a `'steps'`/`"steps"` key marker
+  (followed by optional ws + `:`), and ONLY match title: occurrences AFTER that marker's index (within the 64KB cap).
+  An incidental `title:` with no `steps:` envelope (e.g. a page-title mention in prose) is IGNORED → no false-positive
+  plan steps, no spurious auto-approve. 
+- All prior bounds stand: size<=65536 pre-cap; non-backtracking bounded regex (no ReDoS); <=64 matches; gated on
+  `not steps`; worst case 0 titles → 0 steps = today's behavior → cannot regress. NO parser/eval invoked.
+This closes the last non-regression gap. Fix C + honest MiniMax ceiling unchanged.
