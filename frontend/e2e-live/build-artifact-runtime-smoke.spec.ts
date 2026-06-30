@@ -33,7 +33,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API = "http://127.0.0.1:8000";
 const REPO_ROOT = process.env.PMX_REPO_ROOT ?? path.resolve(__dirname, "../..");
-const RELAY_LOG = process.env.PMX_RELAY_LOG ?? "";
+// The relay WRITES MINIMAX_RELAY_LOG (minimax_relay.py); accept it as primary, keep PMX_RELAY_LOG
+// as a legacy alias so the relay-ledger source can never silently drift to empty (-> a false skip).
+const RELAY_LOG = process.env.MINIMAX_RELAY_LOG ?? process.env.PMX_RELAY_LOG ?? "";
 const VENV_PY = process.env.PMX_VENV_PY ?? "python3";
 const SCREENSHOT_DIR = path.resolve(REPO_ROOT, "test-record/screenshots/build-artifact-runtime");
 const MAX_ATTEMPTS = 2; // each build is ~4-5m; the live config budgets 15m

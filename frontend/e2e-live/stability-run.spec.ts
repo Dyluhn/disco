@@ -23,7 +23,8 @@ import { decideVerification } from "../src/lib/harness/verificationCapture";
 
 const API = "http://127.0.0.1:8000";
 const REPO_ROOT = process.env.PMX_REPO_ROOT ?? path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
-const RELAY_LOG = process.env.PMX_RELAY_LOG ?? "";
+// relay WRITES MINIMAX_RELAY_LOG (minimax_relay.py); primary, with PMX_RELAY_LOG legacy alias.
+const RELAY_LOG = process.env.MINIMAX_RELAY_LOG ?? process.env.PMX_RELAY_LOG ?? "";
 const VENV_PY = process.env.PMX_VENV_PY ?? "python3";
 const RUN_INDEX = process.env.STAB_RUN_INDEX ?? "0";
 const REPORT_DIR = process.env.STAB_REPORT_DIR ?? path.join(os.tmpdir(), "disclaude-stability");

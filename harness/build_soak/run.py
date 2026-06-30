@@ -784,6 +784,19 @@ def _live_disco_container_count() -> int | None:
     )
 
 
+def _relay_log_path() -> str | None:
+    """[codex] ONE canonical resolver for the MiniMax relay-ledger path — the SINGLE source for
+    BOTH reading the ledger AND the `_live_measure` fail-closed gate, so the rule can never key on
+    a different env var than the one that actually carries the ledger. The relay WRITES
+    MINIMAX_RELAY_LOG (minimax_relay.py); we also accept the legacy PMX_RELAY_LOG (Playwright live
+    specs) and DISCO_RELAY_LOG so no driver path can drift into a silent SKIP-as-PASS."""
+    for name in ("MINIMAX_RELAY_LOG", "PMX_RELAY_LOG", "DISCO_RELAY_LOG"):
+        v = os.environ.get(name)
+        if v:
+            return v
+    return None
+
+
 def _max_event_epoch(events: list[dict[str, Any]]) -> float | None:
     """The epoch of the build's LAST recorded event (its terminal moment), parsed from the frozen
     ISO-8601 UTC event timestamps (e.g. '2026-06-30T16:59:28.755769Z'). Used to anchor the
@@ -973,7 +986,7 @@ async def run_once(
             ev = await _collect_terminal_cleanup_evidence(
                 client, run.conversation_id, run,
                 baseline_containers=baseline_containers,
-                relay_log=os.environ.get("MINIMAX_RELAY_LOG"),
+                relay_log=_relay_log_path(),
                 timeline=getattr(run, "timeline", []),
             )
         except Exception as exc:  # noqa: BLE001
@@ -989,7 +1002,7 @@ async def run_once(
         # operator to fix. The REL-6 preflight REQUIRES the relay ledger for positive scenarios, so
         # this always applies in the real gate. Deterministic unit tests (no live infra, no relay
         # env) exercise the CLASSIFIER and are not subject to the live-cleanup requirement.
-        _live_measure = bool(os.environ.get("MINIMAX_RELAY_LOG"))
+        _live_measure = bool(_relay_log_path())
         _required = ("lifecycle", "sidecar", "cleanup")
         _missing = [k for k in _required if k not in ev]
         if _live_measure and _missing:
