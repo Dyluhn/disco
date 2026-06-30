@@ -160,6 +160,54 @@ def recovery_requested_since_reset(events: list[Event]) -> bool:
     return False
 
 
+def fresh_read_autoground_target(events: list[Event]) -> str | None:
+    """[REL-RC-B] The workspace path the build is LOOPING on at the read-before-write gate — the
+    path to auto-read once to break a FRESH_READ_REQUIRED edit loop in a revision, or None.
+
+    Returns the path of the most-recent FRESH_READ_REQUIRED edit error IFF that path has produced
+    >= 2 such errors since the last successful Observation or USER message (the streak), AND no
+    ``auto_ground_read:{path}`` marker exists since the last USER message (the durable one-auto-read-
+    per-path-per-revision sentinel). The marker scan stops only at the USER message, so it SURVIVES
+    the injected read's own success Observation — a file that STILL fails after one genuine read
+    falls through to the circuit breaker and STUCKs cleanly, never re-arming the auto-read.
+
+    AgentErrorEvent carries no path (only ``error`` + ``action_id``), so the edited path is resolved
+    via the failed ActionEvent's tool_call ``path`` argument. Matched on the RAW path string
+    (consistent within a loop; the file_read tool canonicalizes internally) because core cannot
+    import the tool-layer canonicalizer."""
+    path_by_action: dict[str, str] = {}
+    for e in events:
+        if isinstance(e, ActionEvent) and e.tool_call:
+            p = e.tool_call.arguments.get("path")
+            if isinstance(p, str) and p:
+                path_by_action[e.id] = p
+    # streak: same-path FRESH_READ_REQUIRED count, reset by a successful Observation OR a USER msg.
+    target: str | None = None
+    count = 0
+    for e in reversed(events):
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            break
+        if isinstance(e, ObservationEvent) and e.tool_result.success:
+            break
+        if isinstance(e, AgentErrorEvent) and e.error == "FRESH_READ_REQUIRED":
+            p = path_by_action.get(e.action_id or "")
+            if p:
+                if target is None:
+                    target = p
+                if p == target:
+                    count += 1
+    if target is None or count < 2:
+        return None
+    # durable sentinel: have we ALREADY auto-read this path since the last USER message?
+    marker = f"auto_ground_read:{target}"
+    for e in reversed(events):
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            break
+        if isinstance(e, StatusEvent) and e.detail == marker:
+            return None
+    return target
+
+
 def stuck_escape_seq(events: list[Event]) -> int | None:
     """The seq of the most recent `stuck_escape` marker since the last USER
     message, else None. Reset only on a USER message — NOT on a successful
