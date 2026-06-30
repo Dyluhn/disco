@@ -3199,3 +3199,13 @@ CODEX FOCUS (§9): is this a REAL live MiniMax-direct run (not a cassette/fake �
 the relay→MiniMax, confirmed); does the Mode-B oracle actually verify no-edit-thrash + tools-used + edits-APPLIED
 (output-truth), not merely 'finished'; ledger proves 0 OpenRouter + 0 post-terminal; honest fail handling; no oracle
 weakening; insufficient negatives.
+
+### CD-TOOLS-9 — LIVE RUN IN FLIGHT (2026-06-30)
+- Infra confirmed live (relay :8080→MiniMax-M3, agent :8000, disco-config default driver=relay, ledger clean).
+- targeted_edit_run.py written + LAUNCHED in background (tag r1): seed large index.html → 3 targeted edits → poll to
+  terminal → classify (targeted-tool-used + fresh-read + no-thrash + edits-applied[output-truth] + 0 OpenRouter + 0
+  post-terminal). Dossier → RUN_DIR/cd9_dossier_r1.json; log → cd9_r1.log.
+- ON COMPLETION: read the verdict; if PASS → Codex EVIDENCE-gate the real dossier → commit → CD-TOOLS-10 (10x). If
+  FAIL → record dossier, classify the failure mode (Mode A bookkeeping vs Mode B edit-thrash vs harness bug), fix
+  ONLY if root cause clear, do NOT fake. If the event-shape parsing is off, inspect the raw dossier + fix the
+  classifier (the build itself is real regardless).
