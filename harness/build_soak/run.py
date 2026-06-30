@@ -50,6 +50,7 @@ from .adapters.disco_api import (
 )
 from .classify import CLASSIFICATION_NAME, classify
 from .evidence import EvidenceManifest, compute_evidence_hashes, write_manifest
+from .provider_ledger import parse_relay_log
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 _DEFAULT_OUT = "test-record/build-soak"
@@ -783,16 +784,24 @@ def _live_disco_container_count() -> int | None:
     )
 
 
-def _relay_line_count(path: str | None) -> int | None:
-    """Lines in the MiniMax relay ledger (one per upstream provider request). None if unset/absent
-    — provider-after-terminal is then UNKNOWN (we never fake 0)."""
-    if not path or not os.path.exists(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return sum(1 for ln in f if ln.strip())
-    except Exception:
-        return None
+def _max_event_epoch(events: list[dict[str, Any]]) -> float | None:
+    """The epoch of the build's LAST recorded event (its terminal moment), parsed from the frozen
+    ISO-8601 UTC event timestamps (e.g. '2026-06-30T16:59:28.755769Z'). Used to anchor the
+    provider-after-terminal count on the true terminal instant. None if no timestamp parses."""
+    from datetime import datetime
+
+    best: float | None = None
+    for e in events:
+        ts = e.get("timestamp") or e.get("created_at")
+        if not isinstance(ts, str):
+            continue
+        try:
+            ep = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        if best is None or ep > best:
+            best = ep
+    return best
 
 
 async def _collect_terminal_cleanup_evidence(
@@ -821,16 +830,25 @@ async def _collect_terminal_cleanup_evidence(
     if terminal:
         ev["lifecycle"] = {"terminal": terminal, "statuses": list(getattr(run, "timeline", []) or [])}
 
-    # provider-after-terminal — snapshot the relay ledger, wait a grace window to catch any stray
-    # post-terminal upstream call, then count the delta. Released AFTER this window so the token is
-    # still live during the window we are auditing (a real "did anything call after terminal?").
-    n0 = _relay_line_count(relay_log)
-    if n0 is not None:
+    # provider-after-terminal — [codex] anchor on the TERMINAL EVENT'S timestamp taken from the
+    # FROZEN run.events, then count relay calls whose ts is strictly AFTER it. A post-hoc baseline
+    # sampled now (after drive_scenario already collected terminal evidence) would fold any call
+    # made BETWEEN the terminal event and the sample into the baseline and hide it. Anchoring on
+    # the terminal event's own epoch closes that gap. The release happens AFTER the grace window so
+    # the token is still live during the audited window (a real "did anything call after terminal?").
+    terminal_epoch = _max_event_epoch(getattr(run, "events", []) or [])
+    calls_after: int | None = None
+    if relay_log and os.path.exists(relay_log) and terminal_epoch is not None:
         await asyncio.sleep(grace_s)
-        n1 = _relay_line_count(relay_log)
-        calls_after = (n1 - n0) if (n1 is not None) else None
-    else:
-        calls_after = None
+        try:
+            with open(relay_log, encoding="utf-8") as f:
+                recs = parse_relay_log(f.read())
+            calls_after = sum(
+                1 for r in recs
+                if isinstance(r.get("ts"), (int, float)) and float(r["ts"]) > terminal_epoch
+            )
+        except Exception:
+            calls_after = None
 
     # release — destroy the sandbox + sidecar containers (REL-4 path), then measure orphans.
     released_ok = False
