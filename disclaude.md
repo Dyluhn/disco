@@ -4797,3 +4797,10 @@ This closes the last non-regression gap. Fix C + honest MiniMax ceiling unchange
 - **Next:** Codex CODE-gate A3 (review the actual diff) + early per-run soak read; then final tally → if lift proven,
   record honest result + REL-RC done-as-feasible (with the documented MiniMax multi-revision ceiling for REL-6).
   Continue REL-2a step2 in parallel. Do NOT claim REVISION_CHAIN 100% if the model can't reach it — surface honestly.
+
+### REL-RC-A3 Codex CODE-gate: APPROVE (no blocking correctness/safety issue)
+A3 now DOUBLE-gated: plan APPROVE (r5, 6-round adversarial convergence ast.literal_eval→bounded-regex) + CODE APPROVE
+on the actual diff. 8 harvest tests + 225 plan/planning/revision tests green; loaded on live server (engine source=
+disclaude, _harvest_steps importable). REMAINING for REL-RC = the LIVE PROOF only: A3 re-soak (bvspmeoyj, revise x5)
+running — must SHOW the PASS lift from 1/5. If it lifts → REL-RC done-as-feasible (A1 floor + A3 lift) with the
+documented MiniMax multi-revision capability ceiling carried to REL-6. Gate stays RED until the live lift is proven.
