@@ -162,6 +162,40 @@ def main() -> int:
     targeted_calls = [n for n, _ in calls(phase2) if n in _EDIT_TOOLS]
     targeted_success = any(tr.get("success") for n, tr in results(phase2) if n in _EDIT_TOOLS)
     did_read = any(n == "file_read" for n, _ in calls(phase2))
+
+    # ORDERING (codex r3): a file_read of index.html must come BEFORE the first SUCCESSFUL targeted
+    # edit — the actual fresh-read-BEFORE-edit guarantee, not just "a read happened somewhere".
+    ok_edit_call_ids = {tr.get("call_id") for n, tr in results(phase2) if n in _EDIT_TOOLS and tr.get("success")}
+
+    def _seq_first_read() -> int | None:
+        for e in phase2:
+            tc = e.get("tool_call") or {}
+            if tc.get("tool_name") == "file_read" and "index.html" in str((tc.get("arguments") or {}).get("path", "")):
+                return int(e.get("seq") or 0)
+        return None
+
+    def _seq_first_edit_ok() -> int | None:
+        for e in phase2:
+            tc = e.get("tool_call") or {}
+            if tc.get("tool_name") in _EDIT_TOOLS and tc.get("call_id") in ok_edit_call_ids:
+                return int(e.get("seq") or 0)
+        return None
+
+    rseq, eseq = _seq_first_read(), _seq_first_edit_ok()
+    fresh_read_before_edit = rseq is not None and eseq is not None and rseq < eseq
+
+    # the SUCCESSFUL targeted edit must be on index.html (not a misdirected edit on another file).
+    def _targets_index(name: str, a: dict) -> bool:
+        if name == "run_project_script":
+            return any("index.html" in str((o or {}).get("path", "")) for o in (a.get("operations") or []))
+        return "index.html" in str(a.get("path", ""))
+
+    edit_on_index = any(
+        (e.get("tool_call") or {}).get("call_id") in ok_edit_call_ids
+        and (e.get("tool_call") or {}).get("tool_name") in _EDIT_TOOLS
+        and _targets_index((e.get("tool_call") or {}).get("tool_name") or "", (e.get("tool_call") or {}).get("arguments") or {})
+        for e in phase2
+    )
     old_not_found = sum(1 for _, tr in results(phase2) if "old_text_not_found" in str(tr.get("error") or ""))
     fresh_required = any(
         "FRESH_READ_REQUIRED" in str(tr.get("error") or "")
@@ -174,25 +208,36 @@ def main() -> int:
         for _, tr in results(phase2)
     )
     served_after = _get_text(f"/conversations/{cid}/preview-app/")
-    edits_applied = all(t in served_after for t in (HERO_NEW, CTA_NEW)) and (f"{YEAR_NEW}" in served_after)
+    new_present = all(t in served_after for t in (HERO_NEW, CTA_NEW)) and (f"© {YEAR_NEW}" in served_after)
+    # OLD tokens must be GONE (codex r3): a real IN-PLACE replace, not an append that leaves the old
+    # content alongside the new (which a partial/append edit would).
+    old_absent = (HERO_OLD not in served_after) and (CTA_OLD not in served_after) and (f"© {YEAR_OLD}" not in served_after)
+    edits_applied = new_present and old_absent
     openrouter = sum(1 for ln in slice_ if "openrouter" in str(ln.get("host") or "").lower())
     all_minimax = bool(slice_) and openrouter == 0 and all("minimax" in str(ln.get("host") or "").lower() for ln in slice_)
+    # the BUILD must have produced ALL three old sentinels (else 'old absent' after is vacuous —
+    # a build that never wrote them would trivially pass). Proven from the served page after build.
+    old_present_before = all(t in served_before for t in (HERO_OLD, CTA_OLD, f"© {YEAR_OLD}"))
 
     verdict = {
         "tag": tag, "cid": cid, "build_status": build_status, "edit_status": edit_status,
         "built_ok": built_ok,
         "PASS": bool(
-            built_ok and targeted_calls and targeted_success and (did_read or fresh_required)
-            and old_not_found < 3 and not elision_rej and edits_applied and all_minimax and post_terminal == 0
+            built_ok and old_present_before and targeted_calls and targeted_success and edit_on_index
+            and fresh_read_before_edit and old_not_found < 3 and not elision_rej and edits_applied
+            and all_minimax and post_terminal == 0
         ),
         "checks": {
             "build_produced_file": built_ok,
+            "old_sentinels_present_before_edit": old_present_before,
             "targeted_edit_tools_called": targeted_calls,
             "a_targeted_edit_succeeded": targeted_success,
-            "fresh_read_behavior": did_read or fresh_required,
+            "successful_edit_on_index_html": edit_on_index,
+            "fresh_read_before_first_edit": fresh_read_before_edit,
+            "any_fresh_read_or_required": did_read or fresh_required,
             "old_text_not_found_count": old_not_found,
             "no_elision_marker_rejected": not elision_rej,
-            "edits_applied_on_served_page": edits_applied,
+            "edits_applied_new_present_old_absent": edits_applied,
             "ledger_all_minimax_0_openrouter": all_minimax,
             "openrouter_count": openrouter,
             "ledger_hosts": sorted({str(ln.get("host")) for ln in slice_ if ln.get("host")}),
@@ -202,7 +247,7 @@ def main() -> int:
         "served_after_len": len(served_after),
     }
     dossier = {"verdict": verdict, "phase2_events": phase2, "ledger_slice": slice_,
-               "served_after": served_after[:20000]}
+               "served_before": served_before[:20000], "served_after": served_after[:20000]}
     with open(os.path.join(RUN_DIR, f"cd9_dossier_{tag}.json"), "w", encoding="utf-8") as f:
         json.dump(dossier, f, indent=2)
     print(json.dumps(verdict, indent=2))
