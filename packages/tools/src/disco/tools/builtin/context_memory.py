@@ -21,7 +21,10 @@ from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
-_DURABLE_KINDS: list[str] = sorted(k.value for k in _SINGLETON_KINDS)
+# [REL-2a] ARTIFACT_MANIFEST is an INTERNAL runtime manifest (host-folded per-artifact state), not
+# narrative/context memory the model reads or writes — exclude it from the model-facing kind list.
+_INTERNAL_KINDS: frozenset[ArtifactMemoryKind] = frozenset({ArtifactMemoryKind.ARTIFACT_MANIFEST})
+_DURABLE_KINDS: list[str] = sorted(k.value for k in _SINGLETON_KINDS - _INTERNAL_KINDS)
 _WRITABLE_KINDS: list[str] = sorted(k.value for k in _MD_KINDS)
 
 
@@ -72,7 +75,7 @@ class ContextMemoryTool:
                 error="invalid_kind",
                 content=f"unknown context kind {args.kind!r}; valid: {_DURABLE_KINDS}",
             )
-        if kind not in _SINGLETON_KINDS:
+        if kind not in _SINGLETON_KINDS or kind in _INTERNAL_KINDS:
             return ToolOutcome(
                 success=False,
                 error="invalid_kind",

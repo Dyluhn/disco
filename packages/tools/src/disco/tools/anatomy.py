@@ -16,6 +16,7 @@ patched to reference `Capability`.
 
 from __future__ import annotations
 
+import copy
 from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -120,8 +121,46 @@ class ToolDef(BaseModel):
         return ToolSpec(
             name=self.name,
             description=self.description,
-            parameters_schema=self.args_model.model_json_schema(),
+            parameters_schema=_inline_schema_refs(self.args_model.model_json_schema()),
         )
+
+
+def _inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Dereference $defs/$ref so every nested object's fields appear INLINE in the parameters
+    schema the model sees. Pydantic renders a nested-model arg (e.g. `operations: list[RunScriptOp]`)
+    as ``{"$ref": "#/$defs/RunScriptOp"}`` with the actual fields hidden under ``$defs``. Open-weight
+    function-calling models frequently CANNOT resolve a ``$ref`` to the item's fields and emit empty
+    placeholders — LIVE-PROVEN: MiniMax-M3 emitted ``operations=["",""]`` / ``edits=[""]`` for the
+    ``$ref``'d shape, and correct nested objects the instant the schema was inlined. Inlining the
+    refs (the fields land directly in ``items``) is the single root-cause fix for EVERY ``list[Model]``
+    / nested-model tool argument; it produces standard, more verbose JSON Schema that every provider
+    accepts. Cycle-safe: a model that (transitively) references itself leaves a bare
+    ``{"type": "object"}`` at the recursion point rather than expanding forever."""
+    defs = schema.get("$defs")
+    if not defs:
+        return schema
+
+    def resolve(node: Any, seen: frozenset[str]) -> Any:
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str) and ref.startswith("#/$defs/"):
+                name = ref.rsplit("/", 1)[-1]
+                if name in seen:  # cycle guard — do not expand a self/mutual reference forever
+                    return {"type": "object"}
+                target = copy.deepcopy(defs.get(name, {}))
+                for k, v in node.items():  # carry sibling keys (e.g. an overriding description)
+                    if k != "$ref":
+                        target.setdefault(k, v)
+                return resolve(target, seen | {name})
+            return {k: resolve(v, seen) for k, v in node.items() if k != "$defs"}
+        if isinstance(node, list):
+            return [resolve(x, seen) for x in node]
+        return node
+
+    out = resolve(schema, frozenset())
+    if isinstance(out, dict):
+        out.pop("$defs", None)
+    return out
 
 
 @runtime_checkable
