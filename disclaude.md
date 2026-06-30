@@ -4723,3 +4723,14 @@ Only after ALL three pre-parse gates pass do we call ast.literal_eval (still wra
 Error/TypeError as defense-in-depth, but the bounds — not the excepts — are the safety boundary). Everything else
 unchanged (gated on not steps, _coerce_step accepts only dict-with-str-title/str, break on first non-empty, cannot
 regress). This makes the harvest safe on adversarial/huge model strings.
+
+### REL-RC-A3 plan r2 (Codex REVISE): depth scan must bound () too; count is post-parse
+Codex: "count truncation is post-parse, not a literal_eval safety gate, and the depth scan must bound () too;
+otherwise deeply parenthesized blobs still reach the parser." Both correct. FINAL Fix B safety model:
+- The PARSE-SAFETY BOUNDARY is exactly TWO pre-parse gates: (1) SIZE len(blob)<=65536; (2) DEPTH — linear char
+  pre-scan counting ALL bracket types incl. PARENS: `([{` → +1, `)]}` → -1, track max, skip if max>12 BEFORE
+  literal_eval (literal_eval parses tuples (), so deeply parenthesized blobs must be bounded too).
+- _MAX_HARVESTED_STEPS=64 is a POST-parse COERCION bound (sanity-cap the recovered list length), NOT a parse-safety
+  gate — documented as such; the parse safety is size+depth only.
+literal_eval runs ONLY after size+depth pass (try/except ValueError/SyntaxError/TypeError defense-in-depth). Rest
+unchanged. Non-regression + honest-ceiling calls Codex-confirmed fine.
