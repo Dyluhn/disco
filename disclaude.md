@@ -4709,3 +4709,17 @@ REL-6 REVISION_CHAIN target must reflect this honestly (capability caveat or sin
 core unit: blob-harvest recovers {steps:[…]}-in-summary → real steps (mirror run001 rev4 verbatim); list-in-summary;
 garbage/nested → stays 0 (no regress); normal steps[] path unchanged. LIVE: re-soak revise x5 → prove the lift
 (expect ~2-3/5 not 1/5; document residual run000/run002 classes). Codex plan+code gate.
+
+### REL-RC-A3 plan r1 (Codex REVISE): ast.literal_eval needs HARD PRE-PARSE bounds
+Codex: "ast.literal_eval needs hard pre-parse bounds on blob size/depth/step count; catching MemoryError/Recursion
+Error AFTER parsing is not a safety boundary for model-controlled strings." CORRECT — the resource exhaustion happens
+DURING parse. REVISED Fix B with pre-parse gates applied BEFORE any literal_eval:
+- `_MAX_PLAN_BLOB_BYTES = 65_536`: skip harvest if `len(blob) > _MAX_PLAN_BLOB_BYTES` (size bound, pre-parse).
+- `_MAX_PLAN_BLOB_DEPTH = 12`: a cheap linear pre-scan of the blob counting bracket nesting ({[ → +1, }] → -1,
+  track max); if max depth > _MAX_PLAN_BLOB_DEPTH, skip BEFORE literal_eval (depth bound, pre-parse — prevents the
+  deep-nest parser blowup, not relying on catching RecursionError).
+- `_MAX_HARVESTED_STEPS = 64`: truncate the recovered candidate list to the first N BEFORE coercion (count bound).
+Only after ALL three pre-parse gates pass do we call ast.literal_eval (still wrapped in try/except ValueError/Syntax
+Error/TypeError as defense-in-depth, but the bounds — not the excepts — are the safety boundary). Everything else
+unchanged (gated on not steps, _coerce_step accepts only dict-with-str-title/str, break on first non-empty, cannot
+regress). This makes the harvest safe on adversarial/huge model strings.
