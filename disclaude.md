@@ -3145,3 +3145,14 @@ TESTS: capable+ANCHORED_EDIT capability → prompt NAMES exact_replace; capable 
 weak/assist (planning+execution) → does NOT name exact_replace/file_str_replace; universal discipline (run_project_
 script/safe_write_file/fresh-read/no-elision) present in BOTH static prompts; existing build-prompt byte/identity +
 plan_step contamination tests still pass. BOTH suites.
+
+### HEARTBEAT 2026-06-30 — CD-TOOLS-8 SHIPPED (prompt-pack)
+- Capable prompt names exact_replace ONLY via the anchored_bullet (gated on Requirement.ANCHORED_EDIT in
+  capabilities, mirroring the VISION-bullet gate = the withholding axis); universal discipline (run_project_script/
+  safe_write_file/fresh-read/no-elision/no-whole-rewrite) in BOTH static prompts. Codex corrected 2 premises (kept
+  ready_for_*_verification finalizer alias; gated exact_replace on capability not tier). Prose-only. 8 tests; BOTH
+  suites 0 new fails; pyright 0/0.
+- NEXT: CD-TOOLS-9 — THE LIVE MiniMax targeted-edit harness (campaign's PROOF Mode B is gone). MiniMax DIRECT ONLY,
+  0 OpenRouter; relay :8080 + agent :8000 per RESTART RECIPE; token env-only via opencode auth.json minimax-coding-
+  plan. Run a real build exercising exact_replace/safe_write_file/run_project_script on a LARGE file; prove no
+  old_text_not_found/elision thrash; provider ledger every run; 0 post-terminal calls. Then 10 (survey → unblock P10b).
