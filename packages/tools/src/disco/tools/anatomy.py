@@ -152,7 +152,18 @@ def _inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
                     if k != "$ref":
                         target.setdefault(k, v)
                 return resolve(target, seen | {name})
-            return {k: resolve(v, seen) for k, v in node.items() if k != "$defs"}
+            out: dict[str, Any] = {}
+            for k, v in node.items():
+                if k == "$defs":
+                    continue
+                if k == "discriminator" and isinstance(v, dict):
+                    # A discriminated union (e.g. submit_plan done_condition) emits
+                    # discriminator.mapping whose VALUES are "#/$defs/X" strings — NOT $ref keys,
+                    # so they would dangle once $defs is stripped. The oneOf/anyOf branches are
+                    # already inlined, so the mapping is redundant; drop it, keep propertyName.
+                    v = {dk: dv for dk, dv in v.items() if dk != "mapping"}
+                out[k] = resolve(v, seen)
+            return out
         if isinstance(node, list):
             return [resolve(x, seen) for x in node]
         return node
