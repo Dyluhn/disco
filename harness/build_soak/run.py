@@ -619,6 +619,27 @@ def classify_dossier(
     """Run the deterministic classifier on the collected run, passing workspace +
     preview + autonomy DIRECTLY (codex #2 — so OutputTruth/preview actually run),
     and write classification.json into the dossier."""
+    # [Lane A A-M4] Wire the parsed relay ledger so the INDEPENDENT ProviderLedgerOracle runs
+    # alongside the sidecar slice (defense-in-depth: two after-terminal checks, not one). Scope to
+    # THIS run's window [run_start, ...] and stamp after_terminal on records past the build-terminal
+    # epoch; ran AFTER _collect's grace+release so any straggler post-terminal call is already
+    # logged. Live-mode only (relay env set) so deterministic unit tests are unaffected.
+    provider_ledger: list[dict[str, Any]] | None = None
+    _rl = _relay_log_path()
+    if _rl and os.path.exists(_rl):
+        try:
+            with open(_rl, encoding="utf-8") as _f:
+                _recs = parse_relay_log(_f.read())
+            _t = _terminal_status_epoch(run.events)
+            _s = _min_event_epoch(run.events)
+            if _t is not None and _s is not None:
+                provider_ledger = [
+                    {**r, "after_terminal": float(r["ts"]) > _t}
+                    for r in _recs
+                    if isinstance(r.get("ts"), (int, float)) and float(r["ts"]) >= _s
+                ]
+        except Exception:
+            provider_ledger = None
     classification = classify(
         run.events,
         scenario=scenario,
@@ -629,6 +650,7 @@ def classify_dossier(
         workspace_manifest=run.workspace_manifest,
         preview=run.preview,
         autonomous=autonomous,
+        provider_ledger=provider_ledger,
         # HARN-2: browser product-harness evidence (None until HARN-1b populates it on
         # CollectedRun; the browser oracles SKIP without it, so headless runs are unaffected).
         product_evidence=getattr(run, "product_evidence", None),
