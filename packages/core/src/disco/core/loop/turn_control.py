@@ -1010,6 +1010,19 @@ class MetaToolHandlers:
             return Disp.HALT
         return Disp.CONTINUE
 
+    async def _serve_path_missing(self, path: str) -> bool:
+        """CD-TOOLS-5 OUTPUT-TRUTH: True iff the deliverable path is VERIFIABLY absent in the
+        workspace. Fail-OPEN (return False) when there's no sandbox or the existence check errors —
+        serve is the handoff softguard, not a hard gate, and the verify gate is the real proof; an
+        unverifiable check must never block a legitimate handoff."""
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is None:
+            return False
+        try:
+            return not await sbx.file_exists(path)
+        except Exception:  # noqa: BLE001 — unverifiable → don't block the handoff
+            return False
+
     async def handle_serve(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
@@ -1062,6 +1075,17 @@ class MetaToolHandlers:
                 # the few-shot spam prompt for the next one.
                 _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
                 self._loop._invisible_steps += 1
+            elif await self._serve_path_missing(path):
+                # CD-TOOLS-5 OUTPUT-TRUTH: never hand off a deliverable whose path does not exist
+                # in the workspace — that is a false "Open / Download" card for nothing. Refuse with
+                # actionable feedback (counted + valve-routed) instead of emitting a fake handoff.
+                # (serve is the SHOW handoff, not verification — the verify gate still proves it works.)
+                return await self._loop._valve.refuse_fresh_session(
+                    step,
+                    f"serve refused: the deliverable path {path!r} does not exist in the "
+                    "workspace yet. Create it (write the file / build the app at that path), "
+                    "then serve it.",
+                )
             else:
                 await self._loop._emit(
                     DeliverableEvent(
