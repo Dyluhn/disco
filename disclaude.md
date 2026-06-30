@@ -4509,3 +4509,22 @@ convs (_reject_if_imported) → manifest empty, never written from foreign struc
   product teardown (deferred). C: none (REL-5 sound). 
 - **Next action:** root-cause the revision re-entry (scout) → classify+fix (likely engine) → re-soak revision class;
   in parallel finalize REL-2a (lock fix) → Codex re-gate → implement. Re-arm 120s.
+
+### REL-RC — revision-reentry blocker ROOT-CAUSED (Lane-B scout, 2026-06-30) — NEXT PR (blocks REL-6)
+Root cause of revise_after_finish 2/3 FAIL = MiniMax-M3 weak structured output on the RE-PLAN (narrates plan as
+prose not submit_plan; emits ZERO-STEP plans; malformed update_plan_progress {'steps':['']}), AMPLIFIED by 2
+deterministic ENGINE bugs that turn a recoverable model slip into a Category-A terminal:
+- **A1 (PRIMARY, deterministic, smallest fix):** a ZERO-STEP submit_plan is AUTO-APPROVED. plan_from_args keeps
+  steps empty when nothing parses (core/loop/plans.py:183-188); _gate_planning_mode auto-approves with NO non-empty
+  guard (core/loop/engine.py:908-920) → zero-step revision strands the model in execution w/ no tracker → monologue/
+  loop breaker → STUCK (run002 iter1). FIX SEAM: on a REVISION (plan.revision>1) a zero-step plan must NOT auto-
+  approve — re-prompt for concrete steps (reuse the existing _PLAN_NUDGE path) instead of plan_approved. Matches the
+  run001 PASS shape (real multi-step plan).
+- **A2 (secondary):** an unpaired assistant tool_call survives into the MiniMax request → provider 2013 "tool call
+  result does not follow tool call" → hard ERROR (run000). FIX SEAM: guarantee every assistant tool_call keeps a
+  paired tool-role result (synthesize for validation-failed calls, like refusal-pairing engine.py:1571-1582) before
+  the transcript → MiniMax (view.py:798-808 turn-boundary). 
+CLASSIFICATION: Category A (user-visible: revision fails), P1, BLOCKS REL-6 REVISION_CHAIN. Flaky terminal (FINISHED/
+STUCK/ERROR) but DETERMINISTIC root cause; A1 is a deterministic guard that should move the distribution to PASS even
+with MiniMax's weak structured output. REL-RC = A1 (primary) + A2 (secondary), then re-soak the revision class to
+prove consecutive PASS. REL-2a re-gate APPROVE (lock fix) — implement in parallel.
