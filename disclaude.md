@@ -5015,3 +5015,20 @@ box, not env. PRE-EXISTING + config-state-dependent. All my session changes ($re
 step1/2a/2b-1/2b-2a) are committed + GREEN. Working tree's 5 uncommitted files are logs/zip/summary artifacts, NOT
 code. Add test_verify::test_run_checks_cascades_skip_when_config_fails to the pre-existing-ignore set (env/config-
 state-dependent; root-cause is a stray persisted driver config, out of REL scope).
+
+## ★ DEFINITIVE clean re-soak (both fixes): REVISION_CHAIN 3/5 — NOT 100% (honest); next OUR-bug = FRESH_READ_REQUIRED loop
+HONEST CORRECTION (I mis-read an earlier "5/5" — that grep counted DONE not PASS): clean both-fixes re-soak =
+**3/5 PASS** (000/001/003 PASS; 002/004 FAIL BUILD_DID_NOT_FINISH). REVISION_CHAIN is STOCHASTIC (5/5 one run, 3/5
+next) — the $ref fix is a major lift (1/5→mostly) but NOT reliably 100%. REL-5b CONFIRMED WORKING LIVE: provider_
+calls_after_terminal=0, stopped_at_terminal=True, 0 SIDECAR false-positive, 22 summarizer calls correctly has_tools=
+false-excluded, 0 orphans, 0 non-minimax.
+ROOT CAUSE of the 2 fails (OUR code, NOT the model): a **FRESH_READ_REQUIRED edit loop** in the EXECUTION layer during
+revisions. run002: file_edit→no_op_edit, run_project_script→SCRIPT_NO_MATCH, file_edit→FRESH_READ_REQUIRED×, STUCK.
+run004: file_replace_lines→FRESH_READ_REQUIRED×3 → recovery_requested → file_edit→FRESH_READ_REQUIRED → STUCK. The
+read-before-write gate rejects edits to a file the agent BUILT in a prior turn (read-state invalidated across the
+revision), and the recovery path does NOT break the loop → STUCK. $ref fixed planning (nsteps non-zero [2,4,1]/[2,3,3])
+but this is a SECOND execution-layer OUR-bug. FIX (REL-RC-B): the read-state across a revision/followup should treat
+agent-authored files as read-satisfied (it wrote them), OR the recovery_requested path must AUTO-INJECT the fresh read
+(via _ground_read) so the model isn't stuck re-trying blind edits, OR both. Root-cause the read-state machinery
+(observe.py _ground_read, _f8_confirmed_file_writes, the FRESH_READ_REQUIRED gate, the recovery_requested handler).
+NEVER blame the model; REVISION_CHAIN → 100% by fixing this.
