@@ -304,9 +304,10 @@ def test_no_contamination_standard_scope_withholds_exactly_plan_step(
     """Standard policy withholds EXACTLY {plan_step} — nothing unintended leaks in.
 
     plan_step is retired for ALL tiers (runthru-v2 #3 state-drift), so even standard
-    withholds it. file_str_replace is withheld only by anchored_edit=False;
-    update_plan_progress is withheld only on the weak tier. The anti-contamination
-    intent is intact: this still fails if any UNINTENDED tool joins the withheld set.
+    withholds it. file_str_replace and exact_replace are withheld only by
+    anchored_edit=False; update_plan_progress is withheld only on the weak tier. The
+    anti-contamination intent is intact: this still fails if any UNINTENDED tool joins
+    the withheld set.
     """
     # Standard with anchored_edit → withheld set is exactly the retired plan_step
     assert standard_policy.withheld_tools == frozenset({"plan_step"}), (
@@ -316,16 +317,20 @@ def test_no_contamination_standard_scope_withholds_exactly_plan_step(
 
 
 def test_no_contamination_non_anchored_standard_withholds_str_replace_and_plan_step() -> None:
-    """Non-anchored standard withholds {plan_step, file_str_replace} — not update_plan_progress.
+    """Non-anchored standard withholds {plan_step, file_str_replace, exact_replace}.
 
-    plan_step is retired for ALL tiers (runthru-v2 #3) and file_str_replace is dropped
-    when anchored_edit=False. A capable model that can't do anchored edits still gets
-    update_plan_progress — that one is gated by tier, not by anchored_edit.
+    plan_step is retired for ALL tiers (runthru-v2 #3), and file_str_replace plus
+    exact_replace are dropped when anchored_edit=False. A capable model that can't do
+    anchored edits still gets update_plan_progress — that one is gated by tier, not by
+    anchored_edit.
     """
     non_anchored = ModelExecutionPolicy(tier="standard", anchored_edit=False)
-    assert non_anchored.withheld_tools == frozenset({"plan_step", "file_str_replace"}), (
+    assert non_anchored.withheld_tools == frozenset(
+        {"plan_step", "file_str_replace", "exact_replace"}
+    ), (
         "non-anchored standard must withhold plan_step (retired for all tiers) and "
-        "file_str_replace (capability-gated), but NOT update_plan_progress (tier-gated)"
+        "file_str_replace/exact_replace (capability-gated), but NOT "
+        "update_plan_progress (tier-gated)"
     )
 
 
@@ -411,7 +416,11 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
                 message=LLMMessage(role="user", content="build something"),
             ),
         )
-        rt.kick(cid)
+        with patch(
+            "disco.agent_server.runtime._probe_live_model",
+            return_value={"model_id": None, "n_ctx": None},
+        ):
+            rt.kick(cid)
 
         # Wait for the loop to compose the executor (it runs in a background task)
         import asyncio
@@ -513,7 +522,11 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
                 message=LLMMessage(role="user", content="build something"),
             ),
         )
-        rt.kick(cid)
+        with patch(
+            "disco.agent_server.runtime._probe_live_model",
+            return_value={"model_id": None, "n_ctx": None},
+        ):
+            rt.kick(cid)
 
         import asyncio
         for _ in range(20):

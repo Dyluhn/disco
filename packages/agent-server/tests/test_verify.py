@@ -11,6 +11,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from disco.agent_server import verify
+from disco.agent_server.verify import _setup_checks
 from disco.core.llm.types import (
     CompletionResponse,
     ProposedToolCall,
@@ -147,7 +148,7 @@ async def test_tool_calling_fail_wrong_tool():
 
 async def test_run_checks_cascades_skip_when_config_fails(monkeypatch):
     # No driver → config FAIL → the live checks must SKIP, never crash on a missing model.
-    monkeypatch.setattr(verify, "_build_runtime", lambda: _rt(cfg=_cfg()))
+    monkeypatch.setattr(_setup_checks, "_build_runtime", lambda: _rt(cfg=_cfg()))
     results = await verify.run_checks(quick=True, network=False)
     by = {c.name: c.status for c in results}
     assert by["config"] == "FAIL"
