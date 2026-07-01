@@ -16,12 +16,15 @@ from typing import TYPE_CHECKING, cast
 
 from ..events import (
     ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
     ErrorEvent,
     Event,
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
+    PlanEvent,
     StatusEvent,
 )
 from ..llm import (
@@ -39,14 +42,6 @@ from .boundaries import AgentStep
 from .control import Disp
 from .fc_kit import _nearest_tool_name
 from .messages import _PLAN_EXPLORE_READ_CAP, _describe_llm_error
-
-# FORCED-SUBMIT read grace: how many ADDITIONAL grounding reads a model may make AFTER
-# force_submit fired (at _PLAN_EXPLORE_READ_CAP) before the offered tools collapse to
-# submit_plan only. ~30% of revision re-plans want to file_read the current files to ground
-# the diff BEFORE submitting; narrowing to submit-only stranded them (file_read rejected →
-# actionless → killed). A few grounding reads then submit-only bounds a runaway (the
-# actionless valve already catches tool-LESS prose turns; this bounds tool-CALL read loops).
-_FORCE_SUBMIT_READ_GRACE = 3
 from .stream_extract import extract_partial_string_field
 from .tool_specs import (
     _ask_user_tool_singleton,
@@ -66,6 +61,14 @@ _LOG = logging.getLogger("disco.loop")
 
 _sleep = asyncio.sleep
 _DRIVER_RETRY_BACKOFFS_S: tuple = (10.0, 30.0, 90.0)
+
+# FORCED-SUBMIT read grace: how many ADDITIONAL grounding reads a model may make AFTER
+# force_submit fired (at _PLAN_EXPLORE_READ_CAP) before the offered tools collapse to
+# submit_plan only. ~30% of revision re-plans want to file_read the current files to ground
+# the diff BEFORE submitting; narrowing to submit-only stranded them (file_read rejected →
+# actionless → killed). A few grounding reads then submit-only bounds a runaway (the
+# actionless valve already catches tool-LESS prose turns; this bounds tool-CALL read loops).
+_FORCE_SUBMIT_READ_GRACE = 3
 
 
 def _escalated_provider_prefs(n: int) -> dict:
@@ -88,6 +91,39 @@ def _escalated_provider_prefs(n: int) -> dict:
 # reminder would echo it back verbatim and the escape wouldn't break the
 # self-imitation chain (the test on test_loop_stuck.py locks this in).
 _STUCK_ESCAPE_TEMP = 0.9
+_PLANNING_TOOL_REFUSAL_NEEDLE = "is not available in PLANNING mode"
+_PLANNING_TOOL_REFUSAL_ESCALATE_AT = 2
+_PLANNING_TOOL_REFUSAL_NARROW_AT = 3
+_PLANNING_TOOL_REFUSAL_READ_TOOLS = frozenset({"file_read"})
+
+
+def _is_planning_tool_refusal(event: Event) -> bool:
+    return (
+        isinstance(event, AgentErrorEvent)
+        and _PLANNING_TOOL_REFUSAL_NEEDLE in event.error
+    )
+
+
+def planning_tool_refusal_streak(events: list[Event]) -> int:
+    """Consecutive planning-gate tool refusals at the event-log tail.
+
+    ActionEvents are pairing noise between refusal observations. Successful
+    observations, a submitted plan, or a user message reset the streak.
+    """
+    streak = 0
+    for event in reversed(events):
+        if _is_planning_tool_refusal(event):
+            streak += 1
+            continue
+        if isinstance(event, ActionEvent):
+            continue
+        if isinstance(event, ObservationEvent | PlanEvent):
+            break
+        if isinstance(event, MessageEvent) and event.source == EventSource.USER:
+            break
+        if isinstance(event, AgentErrorEvent):
+            break
+    return streak
 
 
 class Driver:
@@ -222,8 +258,19 @@ class Driver:
         names.update({"ask_user", "clarify"})  # virtual escape hatches
         return frozenset(names)
 
+    def force_submit_read_calls_remaining(self) -> int:
+        return max(
+            0,
+            (_PLAN_EXPLORE_READ_CAP + _FORCE_SUBMIT_READ_GRACE)
+            - self._loop._plan_explore_reads,
+        )
+
     def tools_for_step(
-        self, *, suppress_meta_tools: bool = False, force_submit_only: bool = False
+        self,
+        *,
+        suppress_meta_tools: bool = False,
+        force_submit_only: bool = False,
+        force_read_tools: frozenset[str] | None = None,
     ) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the
@@ -277,9 +324,7 @@ class Driver:
                 # Read grace: allow grounding reads until the read counter exceeds the cap
                 # by _FORCE_SUBMIT_READ_GRACE, THEN collapse to submit-only so a read loop
                 # can't run to the iteration hard cap.
-                reads_allowed = self._loop._plan_explore_reads < (
-                    _PLAN_EXPLORE_READ_CAP + _FORCE_SUBMIT_READ_GRACE
-                )
+                reads_allowed = self.force_submit_read_calls_remaining() > 0
                 readonly_names = self.readonly_tool_names()
                 force_readonly: frozenset[str] = (
                     readonly_names if readonly_names is not None else frozenset()
@@ -288,6 +333,8 @@ class Driver:
                 if planning_tools:
                     # Keep allowlist semantics; never widen beyond read-only tools.
                     force_readonly = force_readonly & planning_tools
+                if force_read_tools is not None:
+                    force_readonly = force_readonly & force_read_tools
 
                 def _force_keep(name: str | None) -> bool:
                     if name == plan_name:
@@ -468,11 +515,18 @@ class Driver:
             self._loop.mode != OperatingMode.PLANNING
             and signals.actions_since_last_resume(events) == 0
         )
-        # Forced-submit recovery for a stuck revision re-plan: narrow the offered tools
-        # to submit_plan only (derived from the replayed event marker, so it holds across
-        # resume). Engine emits the marker after K prose-only revision-planning nudges.
+        # Forced-submit recovery narrows the offered tools to submit_plan plus a bounded
+        # read set. Revision re-plans key off a replayed event marker; repeated planning
+        # refusals key off the tail refusal streak in the same event log.
+        planning_refusal_force = (
+            self._loop.mode == OperatingMode.PLANNING
+            and planning_tool_refusal_streak(events) >= _PLANNING_TOOL_REFUSAL_NARROW_AT
+        )
         force_submit_only = self._loop.mode == OperatingMode.PLANNING and (
-            signals.revision_force_submit(events)
+            signals.revision_force_submit(events) or planning_refusal_force
+        )
+        force_read_tools = (
+            _PLANNING_TOOL_REFUSAL_READ_TOOLS if planning_refusal_force else None
         )
         try:
             attempts = 0
@@ -494,6 +548,7 @@ class Driver:
                         self.tools_for_step(
                             suppress_meta_tools=fresh_session,
                             force_submit_only=force_submit_only,
+                            force_read_tools=force_read_tools,
                         ),
                         mode=self._loop.mode,
                         overflow_signal=view_render.overflow_signal(events),
@@ -551,6 +606,7 @@ class Driver:
                             offered_tools = self.tools_for_step(
                                 suppress_meta_tools=fresh_session,
                                 force_submit_only=force_submit_only,
+                                force_read_tools=force_read_tools,
                             )
                             offered_names = {t.name for t in offered_tools}
                             # Mirror the assistant's turn so the next call's

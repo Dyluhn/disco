@@ -143,6 +143,47 @@ async def test_non_allowlist_tool_rejected_in_planning(tool):
     assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
 
+async def test_repeated_planning_shell_refusals_escalate_and_narrow_to_submit_or_read():
+    agent = ScriptedAgent(
+        [
+            action_step("shell", {"cmd": "pwd"}),
+            action_step("shell", {"cmd": "pwd"}),
+            action_step("shell", {"cmd": "pwd"}),
+            _submit_plan_step("plan after refusal escalation"),
+        ]
+    )
+    executor = BuildExecutor()
+    executor.readonly_tool_names = lambda: frozenset(  # type: ignore[attr-defined]
+        {"file_read", "file_list", "search", "extract", "think"}
+    )
+    loop, store = build_plan_loop(
+        agent, conversation_id="pw-shell-refusal-escalates", executor=executor
+    )
+    await loop.send_message("create a page")
+    await loop.run()
+
+    events = await store.get_events("pw-shell-refusal-escalates")
+    refusals = [
+        e
+        for e in events
+        if isinstance(e, AgentErrorEvent)
+        and "is not available in PLANNING mode" in e.error
+    ]
+    assert len(refusals) == 3
+    assert "ONLY valid next action" not in refusals[0].error
+    assert "Planning-mode refusal 2" in refusals[1].error
+    assert "You have " in refusals[1].error
+    assert "Your ONLY valid next action is `submit_plan`" in refusals[1].error
+    assert "Planning-mode refusal 3" in refusals[2].error
+    assert "only `submit_plan` + `file_read`" in refusals[2].error
+
+    assert len(agent.seen_tools) >= 4
+    assert set(agent.seen_tools[3]) == {"submit_plan", "file_read"}
+    assert not any(c.tool_name == "shell" for c in executor.calls), "shell reached executor"
+    assert len([e for e in events if isinstance(e, PlanEvent)]) == 1
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
 async def test_allowlist_read_tools_still_execute_in_planning():
     """The planning allowlist (read/explore) still runs in PLANNING — the gate
     rejects ONLY non-allowlist tools, it does not block exploration."""

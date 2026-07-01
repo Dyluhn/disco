@@ -62,7 +62,12 @@ from .boundaries import (
     is_finish_tool_name,  # P6 — re-exported; canonical def lives in boundaries
 )
 from .control import Disp
-from .driver import Driver
+from .driver import (
+    _PLANNING_TOOL_REFUSAL_ESCALATE_AT,
+    _PLANNING_TOOL_REFUSAL_NARROW_AT,
+    Driver,
+    planning_tool_refusal_streak,
+)
 from .finish import (  # noqa: F401 — finish helpers/consts re-exported for back-compat
     _DOD_REFUSAL_CAP,
     _EXECUTION_NUDGE,
@@ -234,6 +239,29 @@ _MIDSTEP_STEER_REFUSAL = (
 )
 
 # _STUCK_ESCAPE_TEMP moved to loop/driver.py (with the drive step that applies it).
+
+
+def _planning_tool_refusal_message(
+    tool_name: str, *, streak: int, read_calls_remaining: int
+) -> str:
+    detail = (
+        f"REFUSED: `{tool_name}` is not available in PLANNING mode. No workspace "
+        "mutation or execution is allowed before plan approval. Call `submit_plan`, "
+        "use a safe read tool (file_read/file_list/search/extract), or ask/clarify "
+        "if details are missing."
+    )
+    if streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT:
+        detail += (
+            f"\n\nPlanning-mode refusal {streak}: You have {read_calls_remaining} "
+            "read calls remaining. Your ONLY valid next action is `submit_plan` "
+            "with your plan as-is - do it now; exploration can continue during "
+            "execution."
+        )
+    if streak >= _PLANNING_TOOL_REFUSAL_NARROW_AT:
+        detail += (
+            "\nThe next turn will offer only `submit_plan` + `file_read`."
+        )
+    return f"<system-reminder>\n{detail}\n</system-reminder>"
 
 # _EXECUTION_NUDGE moved to loop/finish.py (with the execution-nudge gate).
 
@@ -1089,6 +1117,7 @@ class AgentLoop:
             planning_noncounting = planning_virtuals | {"think"}
             allowed = self._driver.planning_allowed_tool_names()
             if tc.tool_name not in allowed:
+                refusal_streak = planning_tool_refusal_streak(events) + 1
                 action = ActionEvent(
                     thought=step.thought,
                     tool_call=tc,
@@ -1098,14 +1127,12 @@ class AgentLoop:
                 await self._emit(action)
                 await self._emit(
                     AgentErrorEvent(
-                        error=(
-                            "<system-reminder>\n"
-                            f"REFUSED: `{tc.tool_name}` is not available in PLANNING "
-                            "mode. No workspace mutation or execution is allowed "
-                            "before plan approval. Call `submit_plan`, use a safe "
-                            "read tool (file_read/file_list/search/extract), or "
-                            "ask/clarify if details are missing.\n"
-                            "</system-reminder>"
+                        error=_planning_tool_refusal_message(
+                            tc.tool_name,
+                            streak=refusal_streak,
+                            read_calls_remaining=(
+                                self._driver.force_submit_read_calls_remaining()
+                            ),
                         ),
                         action_id=action.id,
                         tool_call_id=tc.call_id,
