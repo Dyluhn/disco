@@ -1522,21 +1522,13 @@ def _shell_removes(command: str, norm_path: str) -> bool:
     return base in {t.rsplit("/", 1)[-1] for t in targets}
 
 
-# A non-rm shell command counts as a POSSIBLE content mutation of a declared path when it both
-# references the path (full relpath or basename) AND carries a write-ish operator. Over-matching is
-# SAFE here — it only degrades a sha expectation to present_unproven (accepted best-effort), never
-# creates a false INVALID; the goal is that an unmodeled shell edit after the last modeled write can
-# never leave a stale sha standing as the "final" expected.
-_SHELL_WRITE_HINTS = (">", ">>", "sed -i", "tee ", " mv ", " cp ", "install ", "truncate", "printf ")
+# OPAQUE mutation tools. A shell command (either shell tool name) or a project-script can rewrite a
+# declared path in a way we cannot reconstruct from the action alone, so after one of these the path
+# degrades to content-unprovable (present_unproven) rather than leaving an earlier modeled write's
+# sha standing as the "final" expected — which false-INVALIDs a snapshot that correctly holds the
+# post-mutation bytes. Fail-safe by design: only ever relaxes a sha to present, never a false INVALID.
+_SHELL_TOOLS = frozenset({"shell", "shell_exec"})
 _SCRIPT_MUTATE_TOOLS = frozenset({"run_project_script"})
-
-
-def _shell_writes_path(command: str, norm_path: str) -> bool:
-    """True iff `command` plausibly WRITES `norm_path` (references it + a write-ish operator)."""
-    base = norm_path.rsplit("/", 1)[-1]
-    if norm_path not in command and base not in command:
-        return False
-    return any(h in command for h in _SHELL_WRITE_HINTS)
 
 
 def _full_readback_body(args: dict[str, Any], content: Any) -> str | None:
@@ -1650,17 +1642,20 @@ def _agent_declared_expected(
             body = _full_readback_body(args, obs_content.get(cid))
             if body is not None:
                 last_read[np] = (seq, body)
-        elif name == "shell":
+        elif name in _SHELL_TOOLS:
             command = str(args.get("command") or args.get("cmd") or "")
             for np in want:
                 if _shell_removes(command, np):
                     last_mut[np] = (seq, "absent", None)
-                elif _shell_writes_path(command, np):
-                    # A non-rm shell command that WRITES a declared path (sed -i / redirect / tee /
-                    # mv|cp into it) may mutate it in a way we can't reconstruct → downgrade to
-                    # content-unprovable so an EARLIER modeled write's sha doesn't stand as the final
-                    # expected (which false-INVALIDs a snapshot correctly holding the post-shell
-                    # bytes). Seq-ordered → this only overwrites a sha when the shell is LATER.
+                else:
+                    # OPAQUE mutation. A shell command can rewrite a declared path (sed -i / redirect
+                    # / heredoc / an interpreter one-liner) in a way we cannot reconstruct — and we
+                    # can't reliably tell a write from a read from the command string. Enumerating
+                    # "which shell forms write" lost twice (missed `shell_exec`, missed heredocs), so
+                    # fail SAFE: any non-rm shell op downgrades every declared path to
+                    # content-unprovable. Seq-ordered, so this only overrides an EARLIER modeled
+                    # write's sha (a later real file_write re-establishes a precise sha). Cost is
+                    # precision (present_unproven vs sha) — never a false INVALID, which is the point.
                     last_mut[np] = (seq, "present", None)
         elif name in _SCRIPT_MUTATE_TOOLS:
             # run_project_script mutates via its `operations` list; a save/replace_text op on a
