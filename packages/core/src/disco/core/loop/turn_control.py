@@ -667,17 +667,6 @@ class Valve:
                 )
                 return Disp.CONTINUE
             if acted_since_escape:
-                # [REL-RC-E] Defer the STUCK for a re-groundable repeated EDIT error: when the model
-                # is looping on the same path's line-target/read errors (repeated_action_error) and an
-                # auto-read target still exists, FALL THROUGH so gate_fresh_read_autoground injects ONE
-                # real file_read (re-grounds it on the true line numbers). Bounded by the durable
-                # auto_ground_read:{path} marker — fresh_read_autoground_target returns None once the
-                # rescue is spent, so a path that STILL loops after its read reaches here again and
-                # STUCKs cleanly. This closes the bad_range→STUCK wedge without weakening the breaker.
-                if stuck_result.reason == "repeated_action_error" and (
-                    signals.fresh_read_autoground_target(events) is not None
-                ):
-                    return Disp.FALLTHROUGH
                 # The high-temp retry happened and it's STILL stuck → halt now.
                 # W-31: NAME the breaker that fired (`detail`) so logs/UI don't
                 # surface an undifferentiated STUCK — every sibling gate stamps a
