@@ -5133,3 +5133,30 @@ across the PAUSE→RESUME boundary; on resume the executor has no valid sandbox 
 re-attach the sandbox. Root-cause the pause/resume sandbox lifecycle (why the instance is revoked during pause; the
 resume path's sandbox re-attach). REVISION_CHAIN → 100% needs REL-RC-C too. Each fix removes one failure mode; keep
 going. NEVER blame the model.
+
+## PR REL-RC-C — sandbox revoked on pause/resume (scout-grounded, SYSTEMATIC not infra)
+### Root cause (Lane-B scout, decisive)
+"executor killed; instance revoked" = OUR permanent kill gate (executor.py:376-377 `if self._killed`), set ONLY by
+executor.kill() (executor.py:490-496). During a PAUSE, LifecycleManager._teardown_sandbox (lifecycle.py:75-95) — via
+auto-suspend (_suspend 302-321; a PAUSED build passes its guards: status!=RUNNING + no active work) triggered by
+on_disconnect's 60s grace (lifecycle.py:264-278, a WS drop between soak runs) — kills the executor. THE BUG: teardown
+`await executor.kill()` (line 83, YIELDS, _killed=True) BEFORE popping _loops (line 95). The cached AgentLoop holds a
+direct executor ref; resume kick→_loop_for (runtime.py:1791) returns the cached loop if _loops still has it, never
+re-checks _killed. In the window between 83 and 95 a resume gets the STALE loop → every tool → _killed → STUCK
+(exactly run001). control_ops.kill() (control_ops.py:213-229) does it RIGHT: pops _executors+_pending_sessions+_loops
+SYNCHRONOUSLY (no await between) BEFORE awaiting teardown. _teardown_sandbox violates that discipline. SYSTEMATIC
+(the error is our in-process _killed gate; only pause-time caller is _teardown_sandbox; cache-invalidation order
+inverted vs the proven-correct control_ops.kill).
+### Fix #1 (THE fix, smallest): reorder the pops in _teardown_sandbox (lifecycle.py:80-95)
+Pop _executors, _pending_sessions, _loops SYNCHRONOUSLY up front (no await between the pops), THEN await executor.kill()
+/ pending.destroy(). Mirror control_ops.py:218-224 verbatim. A resume _loop_for after the pops finds _loops empty →
+rebuilds fresh loop+executor+SandboxSession → rehydrates from snapshot (_maybe_rehydrate lifecycle.py:543). ~3-line
+reorder, one file, low blast radius.
+### Fix #2 (optional defensive backstop): _loop_for treats a cached loop whose executor is _killed as STALE → rebuild
+Closes the residual TOCTOU (resume whose _loop_for returns cached loop before teardown starts but task not yet in
+_tasks → _has_active_work misses it). Secondary; #1 fixes the dominant path. Consider if cheap.
+### NOT: auto-recreate on _killed (it's the BoD §13.6 security kill switch; SandboxSession._recreate is the right layer
+### for a dead INSTANCE, below the _killed gate — wrong layer here).
+### Gate + Acceptance
+Codex CODE-gate (concurrency/lifecycle ordering). Tests-first if tractable (teardown-during-resume → fresh loop, not
+stale). Then restart server + re-soak revise x5 (need run001-class gone + consistent PASS toward REVISION_CHAIN 100%).
