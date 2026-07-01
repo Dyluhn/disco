@@ -5233,3 +5233,11 @@ Explore-mapped (definitive): NOT a product snapshot-flush race (the product snap
 Three harness robustness fixes now: HttpTransport 30→120s (cold-start ReadTimeout), snapshot-wait 15→45s (flush headroom), expected-sha tool model (this). soak-rcd3 (pre-REL-RC-E) = 3 PASS + 1 false-INVALID(this bug) + 1 running; REL-RC-D holds (0 bad_range, 0 executor-killed; 11 STALE_FILE_CONTEXT all inside PASSING runs = recoverable line-edit re-reads).
 
 NEXT: soak-rcd3 finishes → restart (deploy REL-RC-E) → REL-RC-E verification soak (now also free of the false snapshot INVALIDs). Expect materially cleaner PASS rate.
+
+## §11 HEARTBEAT — REL-RC-F found: revision_no_concrete_steps STUCK (actionless revision plan)
+
+REL-RC-E verification soak (soak-rce, all fixes deployed): iter 000 PASS (+ snapshot fix CONFIRMED via present_unproven acceptance, 0 false INVALID), iter 001 FAIL/STUCK detail=**revision_no_concrete_steps**. NOT bad_range, NOT STALE — a NEW distinct mode. On follow-up 2 ("change every CTA button to Get Started") MiniMax explored (repeated file_read+think = actionless stall, the known dominant real-build failure) then submitted a ZERO-STEP revision plan; engine force-submitted once (engine.py:922-943) and on the still-empty plan emitted the DELIBERATE controlled terminal STUCK(revision_no_concrete_steps) (engine.py:944-952, from prior fix REL-RC A1: never fake-approve an empty revision plan, never strand execution).
+
+This is OUR engine's recovery gap (never the model): a simple one-file text revision the model can't articulate as formal plan steps → STUCK instead of just executing the edit. Explore agent (aabc89165925d66d6) mapping fix options: (A) improve _FORCE_SUBMIT_DIRECTIVE wording, (B) synthesize ONE implicit step from the follow-up msg + proceed to execution with a minimal tracker (vs STUCK), (C) let a trivial single-file revision skip PLANNING. Lowest-risk likely (B) — aligns with REL-RC A1 intent (no fake approval, no stranded exec) but recovers instead of terminating. Codex plan-gate before implementing.
+
+soak-rce still running (2/5: 1 PASS, 1 STUCK) — gathering frequency. REL-RC-D + REL-RC-E (bad_range) + 3 harness fixes all holding (0 bad_range, 0 STALE storm, 0 executor-killed, 0 false snapshot INVALID).
