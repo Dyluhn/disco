@@ -1734,7 +1734,7 @@ class HttpTransport:
     """httpx + websockets transport against a running agent-server. Imported lazily
     so the deterministic test path never needs the live deps loaded."""
 
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = 30.0) -> None:
+    def __init__(self, base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = 120.0) -> None:
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout_s
 
