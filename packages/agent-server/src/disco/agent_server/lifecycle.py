@@ -331,6 +331,18 @@ class LifecycleManager:
             return
         with contextlib.suppress(Exception):
             await self._rt._maybe_snapshot(conversation_id)
+            # [REL-RC-C] RE-VALIDATE after the snapshot await — it yields, and a POST /resume (or a
+            # new message) during it can re-kick the still-cached loop. Tearing down now would kill
+            # the executor out from under the resumed run → "executor killed; instance revoked" →
+            # STUCK. Re-check the SAME guards right before teardown; if the conversation resumed,
+            # abort the suspend (the snapshot is harmless — the live sandbox keeps serving).
+            if conversation_id not in self._rt._executors:
+                return
+            state = await self._rt._store.get_state(conversation_id)
+            if state.execution_status is ConversationStatus.RUNNING or self._has_active_work(
+                conversation_id
+            ):
+                return
             await self._rt._teardown_sandbox(conversation_id)
             _LOG.info("auto-suspended idle conversation %s (no UI connected)", conversation_id)
 
