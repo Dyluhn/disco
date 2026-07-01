@@ -5191,3 +5191,15 @@ Fixed the false STALE_FILE_CONTEXT (root cause above). Design (Codex plan-gated 
 - guard_fresh_edit gained `anchored: bool=True`; grounded = read_since_write OR (anchored AND edit_grounded). LINE-BASED callers (file_replace_lines / file_insert_lines) pass anchored=False (Codex code-gate catch: an anchored edit shifts line numbers → line targets could silently mis-hit) → they require a genuine fresh read.
 - Line-based/full/blind writes + external run_script commits → `_clear_grounding` (both bits).
 6 REL-RC-D regression tests + f3/edit_guards/write_loop suites all green. Codex code-gate: APPROVE. Committed+pushed. Restarting stack + re-running revise_thrice_complex ×5 (then a 2nd ×5 if clean).
+
+## §11 HEARTBEAT — REL-RC-D verified WORKING (STALE storm gone); 2 new early-iteration issues
+
+Soak #2 (revise_thrice_complex ×5, warm-ish, 120s HttpTransport): **3 PASS (002/003/004), 1 STUCK (000), 1 INVALID (001)**. Relay 582 records, all MiniMax-M3, 0 OpenRouter.
+
+**REL-RC-D CONFIRMED WORKING**: the failure scan shows **0 STALE_FILE_CONTEXT** — the exact storm REL-RC-D targeted is GONE, and all 3 warm iterations PASS. The 2 failures are DIFFERENT + both in the cold-start iterations (000/001):
+- **iter 001 = harness INVALID (WORKSPACE_SNAPSHOT_NOT_READY)**: on-disk index.html sha didn't reach the agent's final sha within the 15s snapshot-wait (cold-start flush lag). FIX: `--snapshot-wait` default 15s→45s. Committed.
+- **iter 000 = STUCK via a NEW symptom `bad_range`** (line-based file_replace_lines with out-of-range line numbers), 3× then a shell obs then STUCK — NOT the STALE storm. Candidate REL-RC-E (repeated line-range errors → loop wedges instead of recovering). The bad_range MESSAGE already gives valid ranges, so the gap is loop-recovery, not guidance.
+
+Two harness robustness fixes shipped this session: HttpTransport 30→120s (ReadTimeout on cold-start POST), snapshot-wait 15→45s. Both prevented false INVALID_RUNs that blocked measurement.
+
+Next: soak #3 (×5, WARM server, 45s snapshot-wait) to isolate whether bad_range→STUCK RECURS (systemic → REL-RC-E deep fix w/ Codex plan→code gate) or was cold-start variance. If clean → 2nd confirming ×5 → REL-RC-D DONE.
