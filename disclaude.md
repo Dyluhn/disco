@@ -5252,3 +5252,12 @@ REL-RC-F fix Codex plan-gate = APPROVE-with-refinements (A+B):
 NEXT (implement REL-RC-F): (A) directive text + (B) synth-step at STUCK site + current_revision_instruction signal → unit tests (zero-step revision force→synth→approve, not STUCK; initial zero-step still auto-approves; Q&A exempt) → Codex CODE-gate → restart → re-soak revise_thrice ×5.
 
 ALSO committed: snapshot widening #2 — shell(non-rm write-op referencing declared path) + run_project_script save/replace_text → present_unproven (soak-rce iter 002 false-INVALID = unmodeled shell/script edit AFTER last modeled write left a stale sha; over-match is safe = never false-INVALID). soak-rce (pre-these-fixes): iter000 PASS, iter001 STUCK(REL-RC-F), iter002 false-INVALID(snapshot, now fixed). REL-RC-D/E + bad_range recovery all holding.
+
+## §11 HEARTBEAT — REL-RC-F IMPLEMENTED + Codex CODE-gate APPROVE, deployed, re-soak in flight
+
+REL-RC-F (revision_no_concrete_steps STUCK) fixed A+B, Codex APPROVE:
+- (A) _FORCE_SUBMIT_DIRECTIVE rewritten: names the real failure (empty steps, not narration), shape example, permits ONE step.
+- (B) at the STUCK site: synthesize a FRESH PlanEvent(steps=[PlanStep(title=current_revision_instruction[:200])], revision+1) — NOT model_copy (Codex catch: model_copy preserves the empty plan's id → _emit dedups → _latest_plan stranded on empty). Fresh construction → new evt_ id → persists → _latest_plan wins → autonomous approve arms DoD + seeds context from the 1-step plan. Fallback STUCK only if instruction unrecoverable. A1 invariants held (no fake approval: step = user's literal adjudicable ask; no stranded exec: real tracker).
+- new signal current_revision_instruction(events): latest source=USER msg with seq<=current 'planning' marker (session-tied, excludes ENVIRONMENT force-submit directive). 6 unit tests (4 sourcing + 2 fresh-id regression); planning/replan/plan-approval suites (76) green.
+
+Deployed (restart verified: signal + synth + snapshot-widening#2 all loaded). soak-rcf ×5 in flight. This run tests the FULL stack: REL-RC-C (pause/resume) + D (anchored reground) + E (bad_range recovery) + F (revision synth-step) + 3 harness fixes (120s transport, 45s snapshot-wait, expected-sha tool model + shell/script downgrade). Target: 5/5 PASS, 0 STUCK, 0 INVALID. If clean → 2nd confirming ×5 → REL-RC-*+harness DONE → REL-1/REL-3/REL-6.
