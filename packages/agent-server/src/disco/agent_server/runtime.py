@@ -25,13 +25,6 @@ from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
-from disco.core.contract import (
-    BuildContract,
-    BuildContractRegistry,
-    BuildPhaseTracker,
-    ContractKind,
-    ContractScopeGuard,
-)
 from disco.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
@@ -50,6 +43,20 @@ from disco.core import (
     ToolCall,
     ToolResult,
     render_skills_for_prompt,
+)
+from disco.core.context.artifact_projection import (
+    artifact_paths_from_events,
+    manifest_path_divergence,
+    manifest_shadow_enabled,
+)
+from disco.core.context.ledger import ArtifactRecord
+from disco.core.context.store import ArtifactMemoryStore
+from disco.core.contract import (
+    BuildContract,
+    BuildContractRegistry,
+    BuildPhaseTracker,
+    ContractKind,
+    ContractScopeGuard,
 )
 from disco.core.env import disco_env
 from disco.core.inspect import inspect_enabled, routing_sink_for
@@ -1966,6 +1973,13 @@ class ConversationRuntime:
             # it out from under that newer run.
             if status in self._KERNEL_UNPIN_STATUSES:
                 self._unpin_if_current_generation(conversation_id, generation)
+                # [REL-2a step2b-2b] On genuine finish-SUCCESS only (FINISHED, not the
+                # ERROR/STUCK/IDLE failure/idle terminals that also live in this set), and only
+                # when the shadow flag is ON (default OFF → zero behavior change), fold the emitted
+                # artifacts into the runtime manifest and log any divergence vs the single-source
+                # projection. Reader stays legacy; this is dual-write + divergence telemetry only.
+                if status is ConversationStatus.FINISHED and manifest_shadow_enabled():
+                    await self._shadow_fold_manifest(conversation_id)
                 # Engine-rekick fix: only a genuinely TERMINAL conclusion
                 # (FINISHED/ERROR/STUCK/IDLE — the unpin set) can strand a follow-up
                 # that landed during finalization. A deliberate PARK (PAUSED /
@@ -2025,6 +2039,41 @@ class ConversationRuntime:
             await self._maybe_rekick_for_stranded_followup(conversation_id)
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("stall terminalization failed for %s", conversation_id)
+
+    async def _shadow_fold_manifest(self, conversation_id: str) -> None:
+        """[REL-2a step2b-2b] SHADOW dual-write of the artifact manifest at finish-success.
+
+        Gated by the caller on ``manifest_shadow_enabled()`` (default OFF). Projects the emitted
+        artifact paths from the event log (the single-source truth the download jail uses), reads
+        the maintained manifest, LOGS any divergence, then upserts the projected paths so the
+        manifest tracks reality. No reader is switched — this is dual-write + telemetry only, so
+        the campaign can prove the manifest faithfully mirrors the projection over many live runs
+        before any consumer is migrated onto it. Best-effort: a fold failure never affects the run
+        (finish already succeeded); the executor may be evicted by now → the sandbox guard no-ops.
+        """
+        try:
+            sbx = getattr(self._executors.get(conversation_id), "sandbox", None)
+            if sbx is None:
+                return  # sandbox already torn down → nothing durable to fold into; fail-soft
+            events = await self._store.get_events(conversation_id)
+            projected = artifact_paths_from_events(events)
+            store = ArtifactMemoryStore(sbx)
+            manifest = await store.read_artifacts()
+            manifest_paths = {r.path for r in manifest}
+            missing, extra = manifest_path_divergence(projected, manifest_paths)
+            if missing or extra:
+                logger.info(
+                    "artifact-manifest shadow divergence for %s: missing=%s extra=%s",
+                    conversation_id,
+                    sorted(missing),
+                    sorted(extra),
+                )
+            # Dual-write: fold the projection into the manifest (upsert is per-cid RMW-locked, so
+            # concurrent folds can't lose an entry). Only paths the manifest lacks need writing.
+            for path in sorted(missing):
+                await store.upsert_artifact(ArtifactRecord(path=path))
+        except Exception:  # noqa: BLE001 — shadow is telemetry; never perturb a finished run
+            logger.exception("artifact-manifest shadow fold failed for %s", conversation_id)
 
     async def sweep_stranded_runs_once(self) -> int:
         """W11 backstop watchdog (idle-sweep cadence). A conversation whose status is
