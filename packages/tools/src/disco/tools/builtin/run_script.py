@@ -22,7 +22,7 @@ from .files import (
     _BINARY_DELIVERABLE_EXTS,
     _atomic_write,
     _canonical,
-    _conv_state,
+    _clear_grounding,
     _has_elision_marker,
     _is_governed_artifact,
     _read_state,
@@ -248,7 +248,9 @@ class RunProjectScriptTool:
         applied: list[str] = []
         for canon in sorted(mutated):
             await _atomic_write(sbx, canon, buffer[canon].encode("utf-8"))
-            _conv_state(ctx.conversation_id)["read_since_write"].discard(canon)
+            # [REL-RC-D] a script commit is an EXTERNAL (non-anchored) mutation → fully un-ground
+            # both bits so the next edit/write requires a genuine fresh read.
+            _clear_grounding(ctx.conversation_id, canon)
             applied.append(canon)
         return ToolOutcome(
             success=True,

@@ -137,10 +137,22 @@ def _conv_state(conv_id: str) -> dict[str, Any]:
         #   {canonical_path: {"sha": <full-file sha at read>, "ranges": [(start,end)],
         #    "full": bool}}. `ranges` are 1-based inclusive line spans the model SAW
         #   un-elided (a real file_read page); `full` is True for a whole-file read.
-        s = {"read_since_write": set(), "reads": {}}
+        s = {"read_since_write": set(), "edit_grounded": set(), "reads": {}}
         _read_state[conv_id] = s
     s.setdefault("reads", {})  # back-compat for buckets created before CD-TOOLS-1
+    s.setdefault("edit_grounded", set())  # back-compat for buckets created before REL-RC-D
     return s
+
+
+def _clear_grounding(conv_id: str, path: str) -> None:
+    """[REL-RC-D] Fully un-ground `path`: drop BOTH the read-since-write bit AND the edit-grounded
+    bit. Called by every NON-anchored mutation (full/blind file_write & file_append & safe_write,
+    line-based file_replace_lines & file_insert_lines, and external run_script edits) — after any of
+    those the model must do a genuine fresh read before it can edit or rewrite again."""
+    canon = _canonical(path)
+    st = _conv_state(conv_id)
+    st["read_since_write"].discard(canon)
+    st["edit_grounded"].discard(canon)
 
 
 # CD-TOOLS-1 — the internal elision-marker family, re-expressed locally so the tools
@@ -257,7 +269,13 @@ def guard_fresh_edit(
     st = _read_state.get(conv_id) or {}
     canon = _canonical(path)
     rec = (st.get("reads") or {}).get(canon)
-    grounded = canon in (st.get("read_since_write") or set())
+    # [REL-RC-D] grounding for an EDIT comes from a genuine read OR from a prior host-validated
+    # anchored edit (edit_grounded) whose exact post-edit bytes the engine advanced the sha to —
+    # so back-to-back same-file anchored edits don't false-STALE. (file_write's own guard checks
+    # read_since_write ONLY, so a blind rewrite still requires a real read.)
+    grounded = canon in (st.get("read_since_write") or set()) or canon in (
+        st.get("edit_grounded") or set()
+    )
     if rec is not None and rec.get("sha") != sha:
         return ToolOutcome(
             success=False,
@@ -295,6 +313,57 @@ def guard_fresh_edit(
                 path, "the lines you are editing were not in the part of the file you read"
             )
     return None
+
+
+def reground_after_anchored_edit(conv_id: str, path: str, new_bytes: bytes) -> None:
+    """[REL-RC-D] After a HOST-VALIDATED ANCHORED edit (file_edit / file_str_replace / exact_replace
+    — the model's `old` text is matched against LIVE disk content and the engine computes the exact
+    result), ADVANCE the file's grounding to the just-written bytes instead of discarding it.
+
+    Root cause this fixes: the successful-mutation paths discarded only the coarse read_since_write
+    bit and left `reads[path].sha` at the PRE-edit value. So the model's OWN next same-file edit saw
+    rec.sha(v1) != disk_sha(v2) and was refused as STALE_FILE_CONTEXT — the guard misreporting a
+    tracked, deterministic, host-validated edit as EXTERNAL drift. Back-to-back same-file edits then
+    wedged the loop into STUCK (the REL-RC-D revise_thrice failure).
+
+    Preserves the PRIOR grounding SHAPE (Codex plan gate): keep whole-file grounding ONLY if the
+    read was already full; NEVER promote a partial read to whole-file. A partial/absent prior
+    grounding is DROPPED (not advanced) — advancing it would either lie about whole-file knowledge
+    or carry line ranges that this edit may have shifted; the next edit then honestly requires a
+    fresh read (auto-groundable) rather than inheriting a stale-but-fresh-sha partial window.
+
+    Grounding is granted on the SEPARATE `edit_grounded` signal, NOT `read_since_write`: an anchored
+    edit lets the model make its NEXT anchored edit (guard_fresh_edit honors edit_grounded), but the
+    coarse read bit stays cleared so a blind full file_write is STILL refused until a genuine read
+    (the Mode-B rewrite-from-memory protection is untouched).
+
+    Deliberately NOT called for line-based edits (file_replace_lines / file_insert_lines) or
+    full/blind writes (file_write / file_append / safe_write_file) or external mutations (run_script):
+    a later numeric line target or a from-memory rewrite can be stale even under a correct fresh sha,
+    so those keep clearing grounding and force a real re-read."""
+    import hashlib
+
+    canon = _canonical(path)
+    st = _conv_state(conv_id)
+    prior = (st.get("reads") or {}).get(canon)
+    # The read bit is always cleared on mutation (a blind full rewrite still needs a fresh read).
+    st["read_since_write"].discard(canon)
+    if prior is not None and prior.get("full"):
+        # Whole-file grounding stays whole-file, advanced to the post-edit bytes the engine wrote,
+        # and re-grants EDIT grounding so the model's own next anchored edit isn't false-STALE.
+        new_line_count = new_bytes.count(b"\n") + 1
+        st["reads"][canon] = {
+            "sha": hashlib.sha256(new_bytes).hexdigest(),
+            "full": True,
+            "ranges": [(1, new_line_count)],
+        }
+        st["edit_grounded"].add(canon)
+    else:
+        # Partial/absent grounding: drop the stale sha record so it can't produce a FALSE
+        # STALE_FILE_CONTEXT, and clear edit grounding → the next edit gets an honest
+        # FRESH_READ_REQUIRED (never promote partial context to whole-file).
+        (st.get("reads") or {}).pop(canon, None)
+        st["edit_grounded"].discard(canon)
 
 
 def _canonical(path: str) -> str:
@@ -639,7 +708,7 @@ class FileWriteTool:
             return gated
         # F1 — clear the read-since-write bit: the file has been mutated, so the
         # next file_write must be preceded by another file_read.
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True, content=f"wrote {len(raw)} bytes to {args.path}", artifacts=[args.path]
         )
@@ -685,7 +754,7 @@ class FileAppendTool:
         if gated is not None:
             return gated
         # F1 — file_append is a successful mutation: clear the read-since-write bit.
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True,
             content=f"appended {len(args.content.encode('utf-8'))} bytes to {args.path}",
@@ -850,8 +919,9 @@ class FileEditTool:
         gated = await _gated_write(ctx, args.path, updated.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # F1 — file_edit is a successful mutation: clear the read-since-write bit.
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        # [REL-RC-D] file_edit is a HOST-VALIDATED ANCHORED mutation: advance grounding to the
+        # post-edit bytes (don't discard) so the model's own next same-file edit isn't false-STALE.
+        reground_after_anchored_edit(ctx.conversation_id, args.path, updated.encode("utf-8"))
         return ToolOutcome(
             success=True, content=f"edited {args.path} ({how})", artifacts=[args.path]
         )
@@ -935,7 +1005,7 @@ class FileReplaceLinesTool:
         if gated is not None:
             return gated
         # F1 — file_replace_lines is a successful mutation: clear the read-since-write bit.
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        _clear_grounding(ctx.conversation_id, args.path)
         replaced = max(0, end - args.start_line + 1)
         return ToolOutcome(
             success=True,
@@ -1000,7 +1070,7 @@ class FileInsertLinesTool:
         if gated is not None:
             return gated
         # F1 — file_insert_lines is a successful mutation: clear the read-since-write bit.
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True,
             content=f"inserted {len(ins)} lines after line {args.after_line} of {args.path}",
@@ -1102,9 +1172,9 @@ class FileStrReplaceTool:
                     gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
                     if gated is not None:
                         return gated
-                    # F1 — successful mutation: clear the read-since-write bit.
-                    _conv_state(ctx.conversation_id)["read_since_write"].discard(
-                        _canonical(args.path)
+                    # [REL-RC-D] anchored mutation → advance grounding to the post-edit bytes.
+                    reground_after_anchored_edit(
+                        ctx.conversation_id, args.path, new_text.encode("utf-8")
                     )
                     return ToolOutcome(
                         success=True,
@@ -1122,8 +1192,8 @@ class FileStrReplaceTool:
         gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # F1 — successful mutation: clear the read-since-write bit.
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        # [REL-RC-D] anchored mutation → advance grounding to the post-edit bytes.
+        reground_after_anchored_edit(ctx.conversation_id, args.path, new_text.encode("utf-8"))
         return ToolOutcome(
             success=True,
             content=f"replaced in {args.path}",
@@ -1408,7 +1478,9 @@ class ExactReplaceTool:
         # (8) all checks passed → ONE atomic write (never write-then-revert). All-or-nothing.
         new_bytes = new_text.encode("utf-8")
         await _atomic_write(ctx.sandbox, args.path, new_bytes)
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        # [REL-RC-D] exact_replace is anchored (position-spliced from live-disk snippet matches) →
+        # advance grounding to the post-edit bytes so a follow-up same-file edit isn't false-STALE.
+        reground_after_anchored_edit(ctx.conversation_id, args.path, new_bytes)
         return ToolOutcome(
             success=True,
             content=f"exact_replace applied {len(spans)} replacement(s) to {args.path}.",
@@ -1557,7 +1629,7 @@ class SafeWriteFileTool:
         # (5) all checks passed → ONE atomic commit (tmp+rename where supported).
         new_bytes = args.content.encode("utf-8")
         await _atomic_write(ctx.sandbox, args.path, new_bytes)
-        _conv_state(ctx.conversation_id)["read_since_write"].discard(_canonical(args.path))
+        _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True,
             content=f"safe_write_file wrote {len(new_bytes)} bytes to {args.path}.",
