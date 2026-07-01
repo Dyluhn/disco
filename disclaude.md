@@ -5215,3 +5215,13 @@ Root cause (deterministic, OUR engine — never the model): a build issuing 3 id
 - Part A (targeted recovery): broaden fresh_read_autoground_target (signals.py:192) to also match line-target domain errors (bad_range + siblings) → gate_fresh_read_autoground injects a real file_read → re-grounds the model on true line numbers; + fix ORDERING so the autoground gate preempts gate_stuck for a re-groundable repeated_action_error (move the gate, or have gate_stuck defer when reason=repeated_action_error and an autoground target exists). Bounded by the durable auto_ground_read:{path} marker (one rescue/path).
 
 Deploy needs a server restart → do NOT interrupt soak #3; implement after it finishes, then Codex code-gate → restart → re-soak. Fix is justified even if soak #3 doesn't recur (deterministic gap, REL-6 needs 100%).
+
+## §11 HEARTBEAT — REL-RC-E IMPLEMENTED + Codex CODE-gate APPROVE (A+B; C dropped)
+
+bad_range→STUCK fix, committed+pushed, Codex APPROVE:
+- Part A: AgentErrorEvent.detail (capped 600) carries the tool's recovery guidance; observe.py _error_detail fills it; to_llm_message renders "ERROR: {code}\n{detail}". `error` stays the canonical code (stuck-detector byte-match + classifier unaffected). +TS mirror field (contract is kind-level; 2 pre-existing frontend tsc errors are NOT mine — proven by revert-test).
+- Part B: fresh_read_autoground_target matches FRESH_READ_REQUIRED + bad_range + bad_line → gate_fresh_read_autoground injects a real file_read to re-ground on true line numbers.
+- Part C (gate_stuck defer) DROPPED per Codex code-gate: it STUCKed before the model could act on the injected read (after CONTINUE, _repeated_action_error still counts the prior pairs + the marker nulls the target). Unnecessary anyway: autoground threshold (2 same-path) < stuck threshold (3 identical), so Part B fires the read at the 2nd bad_range, one step before gate_stuck trips at the 3rd.
+9 unit tests (5 signals + 4 detail) + stuck/loop suites green. Types: uv basedpyright env is BROKEN here (520 import-resolution failures → 185 cascade); my 4 files show only Unknown-cascade on UN-edited lines; py_compile + pytest green. Size: execute_and_observe 283→285 (pre-existing >200 debt, extracted _error_detail helper to minimize). NOT yet deployed (needs restart).
+
+NEXT (do NOT restart mid-soak): when soak-rcd3 finishes → restart stack (deploy REL-RC-E) → REL-RC-E verification soak revise_thrice ×5, then a 2nd ×5. ALSO investigate: WORKSPACE_SNAPSHOT_NOT_READY recurring even at 45s snapshot-wait (agent final-bytes sha != flushed disk sha within 45s) — harness-measurement INVALID, root-cause whether snapshot flush is genuinely slow or the oracle's sha expectation races the agent's last write.
