@@ -175,9 +175,23 @@ _SNAPSHOT_UNPROVEN_STABLE_POLLS = 4
 # payload"), so a successful file_write gives a sha-PRECISE expected identity. The partial
 # mutators rewrite only part of the file, so their post-state can't be reconstructed from a
 # single action → they fall back to content-stability.
-_FILE_WRITE_FULL_TOOLS = frozenset({"file_write"})
+# safe_write_file writes its FULL `content` arg verbatim (via _atomic_write tmp+rename), exactly
+# like file_write → sha-precise expected identity. Without it, a revision whose FINAL touch is a
+# safe_write_file was invisible and `expected` pinned to an EARLIER file_write's sha → false
+# WORKSPACE_SNAPSHOT_NOT_READY on a snapshot that actually holds the correct latest bytes.
+_FILE_WRITE_FULL_TOOLS = frozenset({"file_write", "safe_write_file"})
+# exact_replace is a TARGETED partial mutator (the promoted replacement for file_edit on revise
+# follow-ups) — its post-state can't be reconstructed from one action, so it degrades to
+# content-stability (present_unproven, accepted best-effort) instead of resurrecting a stale sha.
 _FILE_WRITE_PARTIAL_TOOLS = frozenset(
-    {"file_append", "file_edit", "file_replace_lines", "file_insert_lines", "file_str_replace"}
+    {
+        "file_append",
+        "file_edit",
+        "file_replace_lines",
+        "file_insert_lines",
+        "file_str_replace",
+        "exact_replace",
+    }
 )
 # A partial mutator can't be reconstructed from its action alone, but a later FULL
 # ``file_read`` readback carries the agent's TRUE post-edit bytes — in the file_read RENDERED
