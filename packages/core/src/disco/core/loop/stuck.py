@@ -382,8 +382,12 @@ class StuckDetector:
         pairs = [
             (a, e)
             for (a, e) in _consecutive_pairs(events, ActionEvent, AgentErrorEvent)
-            if a.tool_call is None
-            or a.tool_call.tool_name not in _NONCRITICAL_FAILURE_TOOLS
+            if isinstance(a, ActionEvent)
+            and isinstance(e, AgentErrorEvent)
+            and (
+                a.tool_call is None
+                or a.tool_call.tool_name not in _NONCRITICAL_FAILURE_TOOLS
+            )
         ]
         if len(pairs) < n:
             return False

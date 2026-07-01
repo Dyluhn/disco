@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import re
+from typing import cast
 
 import openpyxl
 from openpyxl.cell.cell import MergedCell
@@ -267,7 +268,7 @@ class SheetsTool:
         wb.remove(default_ws)
 
         for sheet_spec in args.sheets:
-            ws: Worksheet = wb.create_sheet(title=sheet_spec.name)
+            ws = cast(Worksheet, wb.create_sheet(title=sheet_spec.name))
 
             # Write column headers (row 1).
             for ci, col_name in enumerate(sheet_spec.columns):

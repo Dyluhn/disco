@@ -134,7 +134,11 @@ def count_recent_failures(events: list[Event]) -> int:
     streak = 0
     for e in reversed(events):
         if isinstance(e, AgentErrorEvent):
-            if tool_by_action.get(e.action_id) in _NONCRITICAL_FAILURE_TOOLS:
+            action_id = e.action_id
+            if (
+                action_id is not None
+                and tool_by_action.get(action_id) in _NONCRITICAL_FAILURE_TOOLS
+            ):
                 continue  # cosmetic bookkeeping error — transparent to the breaker
             streak += 1
         elif isinstance(e, ObservationEvent):

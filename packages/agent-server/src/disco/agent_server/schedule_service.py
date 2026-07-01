@@ -75,6 +75,12 @@ class ScheduleService:
         """Delete a schedule. OWNER-SCOPED. Returns True if a row was removed."""
         return self._schedule_manager().delete_schedule(schedule_id, owner_id=owner_id)
 
+    async def fire_now(self, schedule_id: str, *, owner_id: str) -> bool:
+        """Run a schedule immediately, out of band. False if not found."""
+        return await self._schedule_manager().fire_now(
+            schedule_id, owner_id=owner_id
+        )
+
     def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
         """Preview next N run times for a cron expression (ISO-8601 strings).
         Returns [] for invalid expressions."""

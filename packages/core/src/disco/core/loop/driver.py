@@ -280,15 +280,21 @@ class Driver:
                 reads_allowed = self._loop._plan_explore_reads < (
                     _PLAN_EXPLORE_READ_CAP + _FORCE_SUBMIT_READ_GRACE
                 )
-                readonly = self.readonly_tool_names() or frozenset()
-                if self._loop._planning_tools:
+                readonly_names = self.readonly_tool_names()
+                force_readonly: frozenset[str] = (
+                    readonly_names if readonly_names is not None else frozenset()
+                )
+                planning_tools = self._loop._planning_tools
+                if planning_tools:
                     # Keep allowlist semantics; never widen beyond read-only tools.
-                    readonly = readonly & self._loop._planning_tools
+                    force_readonly = force_readonly & planning_tools
 
                 def _force_keep(name: str | None) -> bool:
                     if name == plan_name:
                         return True
-                    return reads_allowed and name in readonly
+                    if name is None:
+                        return False
+                    return reads_allowed and name in force_readonly
 
                 narrowed = [
                     t for t in tools if _force_keep(getattr(t, "name", None))
