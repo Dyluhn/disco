@@ -1522,6 +1522,23 @@ def _shell_removes(command: str, norm_path: str) -> bool:
     return base in {t.rsplit("/", 1)[-1] for t in targets}
 
 
+# A non-rm shell command counts as a POSSIBLE content mutation of a declared path when it both
+# references the path (full relpath or basename) AND carries a write-ish operator. Over-matching is
+# SAFE here — it only degrades a sha expectation to present_unproven (accepted best-effort), never
+# creates a false INVALID; the goal is that an unmodeled shell edit after the last modeled write can
+# never leave a stale sha standing as the "final" expected.
+_SHELL_WRITE_HINTS = (">", ">>", "sed -i", "tee ", " mv ", " cp ", "install ", "truncate", "printf ")
+_SCRIPT_MUTATE_TOOLS = frozenset({"run_project_script"})
+
+
+def _shell_writes_path(command: str, norm_path: str) -> bool:
+    """True iff `command` plausibly WRITES `norm_path` (references it + a write-ish operator)."""
+    base = norm_path.rsplit("/", 1)[-1]
+    if norm_path not in command and base not in command:
+        return False
+    return any(h in command for h in _SHELL_WRITE_HINTS)
+
+
 def _full_readback_body(args: dict[str, Any], content: Any) -> str | None:
     """Return the RENDERED body of a FULL, GENUINELY-RENDERED ``file_read`` observation, or
     None when the read is paged / truncated / synthetic (and so cannot define the agent's
@@ -1638,6 +1655,24 @@ def _agent_declared_expected(
             for np in want:
                 if _shell_removes(command, np):
                     last_mut[np] = (seq, "absent", None)
+                elif _shell_writes_path(command, np):
+                    # A non-rm shell command that WRITES a declared path (sed -i / redirect / tee /
+                    # mv|cp into it) may mutate it in a way we can't reconstruct → downgrade to
+                    # content-unprovable so an EARLIER modeled write's sha doesn't stand as the final
+                    # expected (which false-INVALIDs a snapshot correctly holding the post-shell
+                    # bytes). Seq-ordered → this only overwrites a sha when the shell is LATER.
+                    last_mut[np] = (seq, "present", None)
+        elif name in _SCRIPT_MUTATE_TOOLS:
+            # run_project_script mutates via its `operations` list; a save/replace_text op on a
+            # declared path is a content-unprovable mutation (multi-op splice, not reconstructable).
+            ops = args.get("operations")
+            if isinstance(ops, list):
+                for op in ops:
+                    if not isinstance(op, dict) or op.get("op") not in ("save", "replace_text"):
+                        continue
+                    npx = _norm_rel(str(op.get("path", "")))
+                    if npx in want:
+                        last_mut[npx] = (seq, "present", None)
 
     by_norm: dict[str, tuple[Any, ...]] = {}
     for np in want:
