@@ -5182,3 +5182,12 @@ Re-soak #2 (correctly wired, relay=clean-soak/relay.jsonl, all MiniMax-M3, 0 Ope
 **Proposed fix (design-gating with Codex before implementing):** on a successful mutation, re-ground `reads[path]` to the newly-written bytes (sha=sha256(new), preserve/repair full+ranges) and re-add the coarse bit — the engine has authoritative post-write content (file_edit already re-reads live disk to anchor-match `old`, files.py:802/806). Safety question under review: does re-grounding-full after a surgical edit reopen Mode-B (large-elided-file rewrite-from-memory) or a line-shift hole for a subsequent line-number-based file_replace_lines? Fix will distinguish anchor-based edits (safe to re-ground) from line-based/full-rewrite paths.
 
 REL-2a step2b-2b (shadow-fold, flag default-OFF) COMMITTED+pushed in parallel (4 unit tests, gates clean) while root-causing this.
+
+## §11 HEARTBEAT — REL-RC-D IMPLEMENTED + Codex CODE-gate APPROVE
+
+Fixed the false STALE_FILE_CONTEXT (root cause above). Design (Codex plan-gated then code-gated):
+- New per-conv `edit_grounded` signal + `_clear_grounding` helper + `reground_after_anchored_edit`.
+- ANCHORED host-validated edits (file_edit / file_str_replace / exact_replace) advance reads[path].sha to the just-written bytes + grant edit_grounded (preserving prior shape — never promote partial→full); read_since_write stays cleared so a blind file_write is still refused (Mode-B intact).
+- guard_fresh_edit gained `anchored: bool=True`; grounded = read_since_write OR (anchored AND edit_grounded). LINE-BASED callers (file_replace_lines / file_insert_lines) pass anchored=False (Codex code-gate catch: an anchored edit shifts line numbers → line targets could silently mis-hit) → they require a genuine fresh read.
+- Line-based/full/blind writes + external run_script commits → `_clear_grounding` (both bits).
+6 REL-RC-D regression tests + f3/edit_guards/write_loop suites all green. Codex code-gate: APPROVE. Committed+pushed. Restarting stack + re-running revise_thrice_complex ×5 (then a 2nd ×5 if clean).
