@@ -5160,3 +5160,13 @@ _tasks → _has_active_work misses it). Secondary; #1 fixes the dominant path. C
 ### Gate + Acceptance
 Codex CODE-gate (concurrency/lifecycle ordering). Tests-first if tractable (teardown-during-resume → fresh loop, not
 stale). Then restart server + re-soak revise x5 (need run001-class gone + consistent PASS toward REVISION_CHAIN 100%).
+
+## §11 HEARTBEAT — REL-RC-C CLOSED (Codex APPROVE) → re-soak in flight
+
+**REL-RC-C (pause/resume sandbox revocation, run001 "executor killed; instance revoked" → STUCK) = two stacked concurrency defects, both fixed + Codex-APPROVED:**
+- **Layer 1 — teardown cancellation** (`_teardown_sandbox`, lifecycle.py:75-126): all synchronous resume-critical state (pop `_executors`/`_pending_sessions`/`_loops`, clear read-state, BP-14 view caches, `_rehydrated.discard`) now runs UP FRONT before the `await executor.kill()`/`await pending.destroy()`. A cancellation can only skip best-effort reclaim, never a correctness invariant.
+- **Layer 2 — `_suspend` snapshot-await TOCTOU** (lifecycle.py:316-345): the "safe to tear down" decision was made stale by `await _maybe_snapshot`. Now RE-VALIDATES the same guards (still in `_executors`? re-fetched `execution_status` RUNNING? `_has_active_work`?) immediately before `_teardown_sandbox`; a resume that landed during the snapshot await aborts the suspend.
+
+Codex verdict: **APPROVE** — "post-snapshot revalidation closes the TOCTOU, and teardown evicts resume-critical caches before any kill/destroy await. The residual 'kicked but neither RUNNING nor task-registered' window is not reachable in practice because RUNNING is appended before start(), and kick() registers _tasks[cid] synchronously." Committed + pushed.
+
+Server restarted on the disclaude checkout (PYTHONPATH + cwd confirmed = disclaude; both fixes verified present in the loaded file). Re-soak `revise_thrice_complex` ×5 launched (each iteration = plan + 3 follow-ups + verify, teardown/resume between every follow-up = the REL-RC-C path). Watching for: 0 run001-class STUCK, consistent high REVISION_CHAIN PASS (2 confirming runs required — stochastic), 0 OpenRouter, 0 post-terminal has_tools BUILD calls.
