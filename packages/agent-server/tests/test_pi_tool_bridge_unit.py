@@ -173,7 +173,12 @@ class FakeHost:
             isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
         ):
             return False
-        text = signals.latest_unprocessed_user_text(events)
+        if signals.pending_revision_steer(events):
+            text = signals.latest_user_text(events)
+        else:
+            text = signals.latest_unprocessed_user_text(events)
+            if text is None:
+                text = signals.latest_terminal_idle_followup_user_text(events)
         if text is None or not signals.is_revision_intent(text):
             return False
         self.mode = OperatingMode.PLANNING
@@ -612,6 +617,33 @@ async def test_stale_plan_write_blocked_after_change_request() -> None:
     assert out.decision is BridgeDecision.REFUSED  # never lands on the stale plan
     assert host.executor.calls == []
     assert host.mode is OperatingMode.PLANNING  # the replan gate re-entered planning
+    assert out.error is not None and "PLANNING" in out.error.error
+
+
+@pytest.mark.asyncio
+async def test_terminal_idle_pickup_write_blocked_even_when_followup_is_masked() -> None:
+    host = _default_host(status=ConversationStatus.IDLE, wire_replan=True)
+    host.log = [
+        StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved", seq=1),
+        StatusEvent(status=ConversationStatus.IDLE, detail="inactive_timeout", seq=2),
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="change the header to blue"),
+            seq=3,
+        ),
+        MessageEvent(
+            source=EventSource.AGENT,
+            message=LLMMessage(role="assistant", content="Picking that up."),
+            seq=4,
+        ),
+    ]
+    assert signals.latest_unprocessed_user_text(host.log) is None
+
+    out = await _bridge(host).route(_tc("file_write", path="a.txt", content="x"))
+
+    assert out.decision is BridgeDecision.REFUSED
+    assert host.executor.calls == []
+    assert host.mode is OperatingMode.PLANNING
     assert out.error is not None and "PLANNING" in out.error.error
 
 

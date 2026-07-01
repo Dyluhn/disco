@@ -24,7 +24,7 @@ from disco.core import (
     StatusEvent,
 )
 from disco.core.llm import OperatingMode
-from disco.core.loop import AgentStep
+from disco.core.loop import AgentStep, signals
 from loop_fakes import ScriptedAgent, action_step, finish_step
 
 
@@ -117,6 +117,62 @@ async def test_change_followup_after_finish_reenters_planning_and_defers_write()
     assert (
         await loop.get_state()
     ).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+async def test_change_followup_after_terminal_idle_timeout_replans_even_when_pickup_masked():
+    """REL-RC-H: terminal IDLE/INACTIVE_TIMEOUT must behave like FINISHED.
+
+    The follow-up is already "picked up" by an assistant event before the next write
+    gate runs, so latest_unprocessed_user_text is masked. The terminal-idle follow-up
+    signal must still force a revised plan before any write is allowed.
+    """
+    cid = "relrch-idle-timeout"
+    loop, store = await _finished_first_build(cid)
+    executor: BuildExecutor = loop.executor  # type: ignore[assignment]
+
+    await store.append(
+        cid, StatusEvent(status=ConversationStatus.IDLE, detail="inactive_timeout")
+    )
+    await loop.send_message(
+        "Revise the hero heading to 'Grand Opening' and add a pricing section."
+    )
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.AGENT,
+            message=LLMMessage(role="assistant", content="I'll make that update."),
+        ),
+    )
+    masked_events = await store.get_events(cid)
+    assert signals.latest_unprocessed_user_text(masked_events) is None
+    assert (
+        signals.latest_terminal_idle_followup_user_text(masked_events)
+        == "Revise the hero heading to 'Grand Opening' and add a pricing section."
+    )
+
+    loop.agent = ScriptedAgent(
+        [_write_step("<h1>Grand Opening</h1>"), _submit_plan_step("second")]
+    )
+    await loop.run()
+
+    events = await store.get_events(cid)
+    followup_seq = _seq_of_user(events, "Grand Opening")
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.detail == "planning"
+        and (e.seq or 0) > followup_seq
+        for e in events
+    ), "terminal-idle follow-up did not re-enter PLANNING"
+    assert "Grand Opening" not in (executor.world.get("index.html") or "")
+    assert not any(
+        isinstance(e, ObservationEvent)
+        and e.tool_result.tool_name == "file_write"
+        and e.tool_result.success
+        and (e.seq or 0) > followup_seq
+        for e in events
+    ), "a write executed before the terminal-idle follow-up revision was approved"
+    assert [p.revision for p in events if isinstance(p, PlanEvent)] == [1, 2]
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
 
 # --------------------------------------------------------------------------- #

@@ -847,6 +847,43 @@ def latest_unprocessed_user_text(events: list[Event]) -> str | None:
     return (latest.message.content or "").strip() or None
 
 
+_TERMINAL_IDLE_FOLLOWUP_STATUSES = frozenset(
+    {
+        ConversationStatus.IDLE,
+        ConversationStatus.FINISHED,
+        ConversationStatus.STUCK,
+        ConversationStatus.ERROR,
+    }
+)
+
+
+def latest_terminal_idle_followup_user_text(events: list[Event]) -> str | None:
+    """Latest USER text that arrived after a terminal/idle status and has not been
+    consumed by a re-plan boundary.
+
+    This is intentionally narrower than ``latest_unprocessed_user_text`` in one
+    direction and broader in another: it requires a preceding terminal/idle marker
+    (so non-terminal mid-run steer semantics stay unchanged), but it ignores later
+    agent activity until a ``planning``/``plan_approved`` marker consumes the
+    follow-up. That covers terminal-IDLE pickups where an assistant/action event has
+    already masked the usual unprocessed-user predicate before the write gate runs.
+    """
+    latest_user: MessageEvent | None = None
+    for e in reversed(events):
+        if latest_user is None:
+            if isinstance(e, StatusEvent) and e.detail in ("planning", "plan_approved"):
+                return None
+            if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+                latest_user = e
+            continue
+        if isinstance(e, StatusEvent):
+            if e.detail in ("planning", "plan_approved"):
+                return None
+            if e.status in _TERMINAL_IDLE_FOLLOWUP_STATUSES:
+                return (latest_user.message.content or "").strip() or None
+    return None
+
+
 # Bug 12 (§11.4) — change/revision verbs that mark a follow-up as MUTATING (it
 # asks for a workspace change), so a follow-up on an approved/finished build must
 # re-enter PLANNING and go through a revised plan rather than a free write on the

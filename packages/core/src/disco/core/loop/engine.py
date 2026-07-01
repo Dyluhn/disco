@@ -2125,7 +2125,13 @@ class AgentLoop:
             await self._enter_revision_planning(signals.latest_user_text(events) or "")
             return True
         # FALLBACK (non-kernel / direct send_message ingress): text-based detection.
+        # First use the usual unprocessed-user predicate. If pickup activity after a
+        # terminal/idle status has already masked that predicate, fall back to the
+        # terminal-idle scoped signal so INACTIVE_TIMEOUT/IDLE follows the same
+        # revised-plan gate as FINISHED/STUCK/ERROR.
         text = signals.latest_unprocessed_user_text(events)
+        if text is None:
+            text = signals.latest_terminal_idle_followup_user_text(events)
         if text is None:
             return False
         if not signals.is_revision_intent(text):
