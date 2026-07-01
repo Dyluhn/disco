@@ -75,6 +75,7 @@ export interface ObservationEvent extends EventBase {
 export interface AgentErrorEvent extends EventBase {
   kind: "agent_error";
   error: string;
+  detail?: string | null; // [REL-RC-E] tool recovery guidance (capped); `error` stays the code
   action_id?: string | null;
 }
 export interface CondensationEvent extends EventBase {

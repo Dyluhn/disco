@@ -160,9 +160,16 @@ def recovery_requested_since_reset(events: list[Event]) -> bool:
     return False
 
 
+# [REL-RC-E] Re-groundable edit error codes: repeating any of these on the same path means the model
+# is editing against a stale view of the file, which one real file_read fixes. FRESH_READ_REQUIRED is
+# the read-before-write gate; bad_range / bad_line are line-target edits (file_replace_lines /
+# file_insert_lines) whose numbers fell outside the current file — a fresh read shows the true lines.
+_AUTOGROUND_ERROR_CODES = frozenset({"FRESH_READ_REQUIRED", "bad_range", "bad_line"})
+
+
 def fresh_read_autoground_target(events: list[Event]) -> str | None:
-    """[REL-RC-B] The workspace path the build is LOOPING on at the read-before-write gate — the
-    path to auto-read once to break a FRESH_READ_REQUIRED edit loop in a revision, or None.
+    """[REL-RC-B/REL-RC-E] The workspace path the build is LOOPING on at an edit gate — the path to
+    auto-read once to break a repeating FRESH_READ_REQUIRED / bad_range / bad_line edit loop, or None.
 
     Returns the path of the most-recent FRESH_READ_REQUIRED edit error IFF that path has produced
     >= 2 such errors since the last successful Observation or USER message (the streak), AND no
@@ -189,7 +196,7 @@ def fresh_read_autoground_target(events: list[Event]) -> str | None:
             break
         if isinstance(e, ObservationEvent) and e.tool_result.success:
             break
-        if isinstance(e, AgentErrorEvent) and e.error == "FRESH_READ_REQUIRED":
+        if isinstance(e, AgentErrorEvent) and e.error in _AUTOGROUND_ERROR_CODES:
             p = path_by_action.get(e.action_id or "")
             if p:
                 if target is None:

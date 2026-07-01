@@ -41,6 +41,16 @@ if TYPE_CHECKING:
 
 _LOG = logging.getLogger("disco.loop")
 
+_ERROR_DETAIL_CAP = 600
+
+
+def _error_detail(err: str, content: str | None) -> str | None:
+    """[REL-RC-E] The tool's human-readable recovery guidance (ToolOutcome.content), capped, iff it
+    adds information beyond the bare error CODE. Carried on AgentErrorEvent.detail so a domain error
+    like bad_range shows the model the valid range/line-count instead of just 'ERROR: bad_range'."""
+    c = (content or "").strip()
+    return c[:_ERROR_DETAIL_CAP] if c and c != err else None
+
 
 def _ground_read(loop: AgentLoop, path: str) -> None:
     """Satisfy the read-before-write gate for `path` via the executor when the
@@ -535,9 +545,11 @@ class Observer:
             # a predicate are an immediate no-op (back-compat).
             await self._loop._maybe_emit_plan_step_done_condition_note(action)
         else:
+            _err = result.error or "tool failed"
             await self._loop._emit(
                 AgentErrorEvent(
-                    error=result.error or "tool failed",
+                    error=_err,
+                    detail=_error_detail(_err, result.content),  # [REL-RC-E] recovery guidance
                     action_id=action.id,
                     tool_call_id=action.tool_call.call_id if action.tool_call else None,
                 )

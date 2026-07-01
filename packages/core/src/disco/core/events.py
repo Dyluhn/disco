@@ -544,6 +544,11 @@ class AgentErrorEvent(BaseEvent, LLMConvertible):
     kind: Literal[EventKind.AGENT_ERROR] = EventKind.AGENT_ERROR
     source: EventSource = EventSource.ENVIRONMENT
     error: str
+    # [REL-RC-E] The tool's human-readable recovery guidance (ToolOutcome.content), capped. `error`
+    # stays the canonical CODE (e.g. "bad_range") — the stuck-detector's byte-identical matching and
+    # the classifier key on it — while `detail` carries the actionable text ("(N lines) valid range
+    # 1..N+1") so the model isn't left retrying blind against a bare error code.
+    detail: str | None = None
     action_id: str | None = None  # the action that failed, if any
     tool_call_id: str | None = None  # for pairing with the assistant tool_call
 
@@ -552,7 +557,15 @@ class AgentErrorEvent(BaseEvent, LLMConvertible):
         # rendered as-is; raw error strings get the "ERROR:" prefix for the
         # model's parse. This lets the rejection path inject ambient reminders
         # without the user-tone framing of a tool-failure message.
-        content = self.error if self.error.startswith("<") else f"ERROR: {self.error}"
+        if self.error.startswith("<"):
+            content = self.error
+        else:
+            content = f"ERROR: {self.error}"
+            # [REL-RC-E] surface the tool's recovery guidance (if it adds info beyond the code) so a
+            # domain error like bad_range shows the model the valid range instead of a bare code.
+            detail = (self.detail or "").strip()
+            if detail and detail != self.error.strip():
+                content = f"{content}\n{detail}"
         return LLMMessage(role="tool", content=content, tool_call_id=self.tool_call_id)
 
 
