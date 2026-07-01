@@ -5203,3 +5203,15 @@ Soak #2 (revise_thrice_complex ×5, warm-ish, 120s HttpTransport): **3 PASS (002
 Two harness robustness fixes shipped this session: HttpTransport 30→120s (ReadTimeout on cold-start POST), snapshot-wait 15→45s. Both prevented false INVALID_RUNs that blocked measurement.
 
 Next: soak #3 (×5, WARM server, 45s snapshot-wait) to isolate whether bad_range→STUCK RECURS (systemic → REL-RC-E deep fix w/ Codex plan→code gate) or was cold-start variance. If clean → 2nd confirming ×5 → REL-RC-D DONE.
+
+## §11 HEARTBEAT — REL-RC-E design (bad_range→STUCK loop-recovery gap) — Explore-mapped
+
+Root cause (deterministic, OUR engine — never the model): a build issuing 3 identical file_replace_lines bad_range errors STUCKs. Two stacked defects:
+1. **Discarded recovery guidance**: files.py bad_range builds a helpful message ("[s,e] for path (N lines); start_line 1..N+1") in ToolOutcome.content, but observe.py:538-544 stores only result.error ("bad_range") into AgentErrorEvent → result.content DROPPED → model retries BLIND (never sees the valid range / line count). Affects EVERY domain error.
+2. **Stuck-gate preempts recovery**: engine.py gate order runs gate_stuck (1375) BEFORE gate_fresh_read_autoground (1383). Pattern-2 _repeated_action_error (stuck.py:370-393, threshold 3) trips on 3 identical bad_range pairs; an intervening successful shell = (Action,Observation) doesn't clear the 3 trailing identical (Action,AgentError) pairs, so is_stuck stays True → STUCK at turn_control.py:676. The only auto-read recovery (signals.fresh_read_autoground_target, signals.py:192) is hard-coded to error=="FRESH_READ_REQUIRED" so never fires for bad_range.
+
+**REL-RC-E fix (Codex plan-gating):**
+- Part B (minimal, broad): carry result.content into the AgentErrorEvent so the model SEES the recovery guidance, not a bare "ERROR: bad_range" (observe.py:538-544).
+- Part A (targeted recovery): broaden fresh_read_autoground_target (signals.py:192) to also match line-target domain errors (bad_range + siblings) → gate_fresh_read_autoground injects a real file_read → re-grounds the model on true line numbers; + fix ORDERING so the autoground gate preempts gate_stuck for a re-groundable repeated_action_error (move the gate, or have gate_stuck defer when reason=repeated_action_error and an autoground target exists). Bounded by the durable auto_ground_read:{path} marker (one rescue/path).
+
+Deploy needs a server restart → do NOT interrupt soak #3; implement after it finishes, then Codex code-gate → restart → re-soak. Fix is justified even if soak #3 doesn't recur (deterministic gap, REL-6 needs 100%).
