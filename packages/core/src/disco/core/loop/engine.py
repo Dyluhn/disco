@@ -955,11 +955,15 @@ class AgentLoop:
                     # do we keep the original controlled STUCK terminal.
                     instruction = signals.current_revision_instruction(events)
                     if instruction:
-                        synth = plan.model_copy(
-                            update={
-                                "steps": [PlanStep(title=instruction[:200])],
-                                "revision": plan.revision + 1,
-                            }
+                        # Construct a FRESH PlanEvent (new id) — NOT plan.model_copy, which preserves
+                        # the already-emitted empty plan's id, so _emit would dedup it (idempotent on
+                        # (conversation_id, id)) and _latest_plan would still return the EMPTY plan →
+                        # stranded execution (Codex code-gate catch).
+                        synth = PlanEvent(
+                            summary=plan.summary or instruction[:120],
+                            steps=[PlanStep(title=instruction[:200])],
+                            revision=plan.revision + 1,
+                            context=plan.context,
                         )
                         await self._emit(synth)
                         plan = synth  # fall through to the approve path with the 1-step plan

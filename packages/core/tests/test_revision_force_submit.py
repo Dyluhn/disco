@@ -12,6 +12,7 @@ reconstructed the same unsubmitted state → pause "actionless" → STUCK loop. 
   (3) the marker is an event → survives resume (no soft-nudge loop after a pause).
 """
 
+import pytest
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -227,3 +228,36 @@ def test_current_revision_instruction_ignores_user_msg_after_planning():
 def test_current_revision_instruction_none_when_no_user():
     events = [StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=6)]
     assert signals.current_revision_instruction(events) is None
+
+
+# --- [REL-RC-F] the synth plan MUST be a fresh PlanEvent (new id), not model_copy -----------------
+
+
+def test_synth_planevent_needs_fresh_id_not_model_copy():
+    """Codex code-gate pin: model_copy PRESERVES the id → the store dedups it (idempotent on
+    (conversation_id, id)) and _latest_plan keeps returning the EMPTY plan → stranded execution.
+    A freshly-constructed PlanEvent gets a distinct id and persists as a new event."""
+    from disco.core.events import PlanEvent, PlanStep
+
+    empty = PlanEvent(summary="s", steps=[])
+    synth = PlanEvent(summary="s", steps=[PlanStep(title="do the edit")], revision=2)
+    assert synth.id != empty.id  # fresh construction → distinct id (the fix)
+    # the trap the fix avoids: model_copy reuses the id
+    assert empty.model_copy(update={"steps": [PlanStep(title="do the edit")]}).id == empty.id
+
+
+@pytest.mark.asyncio
+async def test_fresh_synth_plan_wins_latest_plan_in_store():
+    """End-to-end pin: after an empty plan, a fresh synth PlanEvent persists and _latest_plan
+    returns IT (with the step), so _arm_dod_from_plan/_seed_context see the real 1-step plan."""
+    from disco.core import SqliteEventStore
+    from disco.core.events import PlanEvent, PlanStep
+    from disco.core.view import _latest_plan
+
+    store = SqliteEventStore(":memory:")
+    await store.append("c", PlanEvent(summary="s", steps=[]))
+    await store.append(
+        "c", PlanEvent(summary="s", steps=[PlanStep(title="do the edit")], revision=2)
+    )
+    latest = _latest_plan(await store.get_events("c"))
+    assert latest is not None and [s.title for s in latest.steps] == ["do the edit"]
