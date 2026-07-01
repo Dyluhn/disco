@@ -5118,3 +5118,18 @@ disclaude, agent+relay 200. **Proof re-soak running** (relrcb-soak/revise.log, r
 broken (auto-read injected → next edit grounded → FINISHED) → consistent high PASS toward REVISION_CHAIN 100%. Do NOT
 call REVISION_CHAIN done until the re-soak proves it (need consistent PASS, not 3/5). Then: re-run a 2nd revise x5 to
 confirm reliability (stochastic), + the other REL-6 classes.
+
+## ★ REL-RC-B PROVEN LIVE (4/5) + new distinct failure mode found (run001 = sandbox revoked on resume)
+REL-RC-B re-soak = **4/5 PASS** (up from $ref 3/5; trend A1 1/5→A3 2/5→$ref 3/5→REL-RC-B 4/5), 0 orphans. THE FIX
+WORKS: in one run the gate FIRED (auto_ground_read x1) → an edit SUCCEEDED after the injected read → that run
+FINISHED (a FRESH_READ loop that would have STUCK, broken). REL-RC-B is proven end-to-end + double-gated.
+HONEST: REVISION_CHAIN is 4/5, NOT 100%. The 1 remaining FAIL (run001) is a DIFFERENT, distinct OUR-bug — NOT
+FRESH_READ (auto_ground_read did NOT fire, correctly). run001: plans [2,2,1], terminal STUCK, error counts =
+{'executor killed; instance revoked': 5}. Sequence: ...browser → PAUSED/actionless → RESUMED → RUNNING → shell_exec
+ERR 'executor killed; instance revoked' → server_status/preview_status/file_read/verify_web_app all ERR same →
+recovery_requested → STUCK. ROOT CAUSE (OUR sandbox lifecycle, NOT the model): the SANDBOX INSTANCE was REVOKED/killed
+across the PAUSE→RESUME boundary; on resume the executor has no valid sandbox → every tool 'instance revoked' → STUCK.
+= REL-RC-C (next OUR-bug): sandbox must NOT be revoked while a build is paused+resumable, OR resume must re-provision/
+re-attach the sandbox. Root-cause the pause/resume sandbox lifecycle (why the instance is revoked during pause; the
+resume path's sandbox re-attach). REVISION_CHAIN → 100% needs REL-RC-C too. Each fix removes one failure mode; keep
+going. NEVER blame the model.
