@@ -5340,3 +5340,58 @@ granted full authority to rework PRs.
 
 **Implementation:** Codex (workspace-write), Fable reviews the diff and reworks as needed.
 Gates: harness test suite + `uv run basedpyright` (zero errors, tree-wide) before commit.
+
+### SOAK-FIX4 RESULTS + REL-RC-G/H/I root causes — 2026-07-01
+
+**soak-fix4 (revise_thrice_complex ×5, post-fix#4 stack): 2 PASS / 3 FAIL, 0 INVALID.** Measurement
+layer now honest (zero UNVERIFIED/NOT_READY); all three failures are PRODUCT defects, DB-verified:
+
+**REL-RC-G — self-invalidating staleness (iter 000, conv_a6710ddb, seq 165-187).** file_read(165) →
+file_replace_lines OK(169) → file_replace_lines STALE(171): the tracker treats the agent's OWN
+successful write as an external change, so edit #2 of a batch is refused; shell-cat(175) doesn't
+credit freshness; 5× STALE → STUCK(187). The refusal text says "read again" but the refusal carries
+NO content. Design (playbook §3/§6 — host-owned re-grounding, recoverable refusals):
+  (a) successful anchored-edit observations return the updated, line-numbered region (fresh anchors
+      handed back on every write);
+  (b) STALE_FILE_CONTEXT refusals INCLUDE the current line-numbered file content (self-recovering
+      refusal — no read round-trip);
+  (c) the tracker credits the agent's own successful writes as freshness (safe only WITH (a)).
+
+**REL-RC-H — pickup-after-timeout skips the replan gate (iter 002, conv_cddd0de7).** Follow-up 1
+ended INACTIVE_TIMEOUT; follow-up 2 was FOLLOWUP_PICKED_UP (not REPLANNED) → writes proceeded with
+no revised-plan approval → WRITE_BEFORE_REVISION_APPROVAL. The replan requirement must hold on the
+pickup path regardless of the prior terminal (FINISHED vs INACTIVE_TIMEOUT). Secondary: the
+INACTIVE_TIMEOUT itself is an actionless stall to keep on the pauses ledger.
+
+**REL-RC-I — planning-mode refusal loop (iter 004, conv_cf9d331c).** Model calls shell in PLANNING,
+gets REFUSED (correct), but never adapts to submit_plan → STUCK. Needs graduated escalation: after
+N planning-mode refusals, steer harder (inject an explicit next-action instruction / narrow to
+submit_plan+reads), never idle to STUCK.
+
+All three land squarely in Dylan's named failure modes (pauses, loops, discipline). Fix order:
+G first (dominant, 2/3 of failures incl. likely the 002 stall), then H, then I; re-soak ×5 after G+H+I.
+
+### REL-RC-G ruling (post code-read) — 2026-07-01
+
+Codex pushback run was killed mid-exploration; Fable read the tracker directly (files.py
+guard_fresh_edit + reground_after_anchored_edit). REL-RC-D already fixed self-invalidation for
+CONTENT-anchored edits (edit_grounded + sha-advance) and deliberately excluded LINE-based edits
+(numbers shift — sound). The defect is that the line-based refusal is a DEAD END. Ruling:
+
+  (G-a) file_replace_lines / file_insert_lines SUCCESS observations include the updated content,
+        line-numbered (window around the edited region + total-line-count + "numbers may have
+        shifted — use these"), via existing _number_lines.
+  (G-b) THE CORE FIX — STALE_FILE_CONTEXT / FRESH_READ_REQUIRED refusals CARRY fresh line-numbered
+        content (full file when small, else a bounded window around the attempted range) AND the
+        tracker CREDITS that refusal content as a read (reads[canon] with true sha + the delivered
+        ranges; read_since_write NOT set — full blind rewrites still need a real read). The refusal
+        IS the read: the model's corrected retry is then legal, grounded, and loop-free.
+  (G-c) line-count-preserving line edits (replace N lines with N lines) don't shift numbers →
+        advance grounding like anchored edits (sha advance + edit_grounded when prior read full).
+
+REL-RC-H spec: follow-up pickup must require a fresh plan revision REGARDLESS of the prior
+terminal status (INACTIVE_TIMEOUT pickups currently skip the replan gate → unapproved writes).
+REL-RC-I spec: consecutive planning-mode tool refusals must escalate steering (reuse the existing
+nudge/valve machinery), never idle to STUCK.
+
+Parallel implementation: G=tools layer, H=agent-server runtime, I=core loop — disjoint, Codex ×3.
