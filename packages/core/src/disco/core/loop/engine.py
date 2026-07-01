@@ -38,6 +38,7 @@ from ..events import (
     LLMMessage,
     MessageEvent,
     PlanEvent,
+    PlanStep,
     StatusEvent,
     ToolCall,
     ToolResult,
@@ -206,10 +207,12 @@ _PLAN_NUDGE = (
 # in the event log, so a RESUMED build replays it and stays forced (no soft-nudge loop).
 _FORCE_SUBMIT_DIRECTIVE = (
     "<system-reminder>\n"
-    "You have already DESCRIBED the revised plan but have not SUBMITTED it. Stop "
-    "narrating: call the `submit_plan` tool NOW with the revised plan (summary, ordered "
-    "steps, and a markdown `context` block). It is the only available action — do not "
-    "reply in prose.\n"
+    "Call the `submit_plan` tool NOW with a NON-EMPTY `steps` array — the plan you last "
+    "submitted had no steps, which cannot be executed. Give the concrete change(s) as "
+    "ordered steps, e.g. submit_plan(summary=\"…\", steps=[\"Change every call-to-action "
+    "button label to 'Get Started'\"]). Even a SINGLE step is enough for a small revision — "
+    "one step naming the exact edit is a valid, complete plan. `submit_plan` is the only "
+    "available action; do not reply in prose and do not submit an empty steps list.\n"
     "</system-reminder>"
 )
 # After this many consecutive prose-only nudges during a REVISION re-plan, escalate to the
@@ -941,15 +944,33 @@ class AgentLoop:
                         )
                         self._plan_nudges = 0
                         return Disp.CONTINUE
-                    # Already forced + STILL zero steps → controlled clean terminal, not a
-                    # stranded-execution monologue STUCK and never a faked approval.
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.STUCK,
-                            detail="revision_no_concrete_steps",
+                    # [REL-RC-F] Already forced + STILL zero steps. LAST-RESORT recovery: rather
+                    # than STUCK, synthesize ONE concrete step from the USER's own revision
+                    # instruction and proceed. This is NOT a faked approval — the step is the
+                    # user's literal, adjudicable ask, and the DoD/finish gate still judges the real
+                    # deliverable — and it is NOT a stranded execution — emitting a real 1-step
+                    # PlanEvent means the approve path below arms the DoD tracker + seeds context
+                    # from it (via _latest_plan), so the actionless/monologue breaker has a concrete
+                    # target (the A1 hazard this replaces). Only if the instruction is unrecoverable
+                    # do we keep the original controlled STUCK terminal.
+                    instruction = signals.current_revision_instruction(events)
+                    if instruction:
+                        synth = plan.model_copy(
+                            update={
+                                "steps": [PlanStep(title=instruction[:200])],
+                                "revision": plan.revision + 1,
+                            }
                         )
-                    )
-                    return Disp.HALT
+                        await self._emit(synth)
+                        plan = synth  # fall through to the approve path with the 1-step plan
+                    else:
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.STUCK,
+                                detail="revision_no_concrete_steps",
+                            )
+                        )
+                        return Disp.HALT
                 if self._autonomous:
                     # No human to approve → auto-approve INLINE, emitting the
                     # exact same events approve_plan() would, so the event log

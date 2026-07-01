@@ -473,6 +473,33 @@ def latest_user_text(events: list[Event]) -> str | None:
     return (latest.message.content or "").strip() or None
 
 
+def current_revision_instruction(events: list[Event]) -> str | None:
+    """[REL-RC-F] The USER's revision instruction for the CURRENT revision-planning session — the
+    latest genuine ``source=USER`` MessageEvent at or before the most recent ``planning`` marker.
+
+    Session-tied on purpose (NOT a blind latest-user-text): it excludes the ENVIRONMENT-injected
+    ``force_submit_plan`` directive (source is ENVIRONMENT, not USER) AND any user message that
+    arrived AFTER this planning segment began, so the synthesized-step fallback always uses the
+    literal instruction that TRIGGERED this replan. Durable (event-sourced) → survives resume."""
+    planning_seq: int | None = None
+    for e in events:
+        if isinstance(e, StatusEvent) and e.detail == "planning":
+            s = e.seq or 0
+            if planning_seq is None or s >= planning_seq:
+                planning_seq = s
+    best: MessageEvent | None = None
+    for e in events:
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            s = e.seq or 0
+            if planning_seq is not None and s > planning_seq:
+                continue  # a user msg AFTER planning began is not what triggered this replan
+            if best is None or s >= (best.seq or 0):
+                best = e
+    if best is None:
+        return None
+    return (best.message.content or "").strip() or None
+
+
 def planning_turns_since_replan(events: list[Event]) -> int:
     """BW-01 follow-up 2 — count tool-less PLANNING turns spent since the build
     most recently (re-)entered planning (StatusEvent detail=="planning"), as long

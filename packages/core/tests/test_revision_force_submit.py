@@ -175,3 +175,55 @@ def test_tools_for_step_force_submit_narrows_to_plan_tool():
     # default (not forced) offers more than just the plan tool while planning.
     normal = driver.tools_for_step()
     assert {getattr(t, "name", None) for t in normal} != {plan_name}
+
+
+# --- [REL-RC-F] current_revision_instruction: session-tied source for the synth-step fallback ---
+
+
+def _user_msg(text, seq):
+    return MessageEvent(
+        source=EventSource.USER, message=LLMMessage(role="user", content=text), seq=seq
+    )
+
+
+def _env_msg(text, seq):  # the force_submit_plan directive is ENVIRONMENT-injected (role=user)
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT, message=LLMMessage(role="user", content=text), seq=seq
+    )
+
+
+def test_current_revision_instruction_returns_user_followup():
+    events = [
+        StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved", seq=2),
+        _user_msg("change every CTA button to Get Started", seq=5),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=6),
+    ]
+    assert (
+        signals.current_revision_instruction(events)
+        == "change every CTA button to Get Started"
+    )
+
+
+def test_current_revision_instruction_excludes_env_force_submit_directive():
+    # The ENVIRONMENT force-submit directive must NOT be mistaken for the user's instruction.
+    events = [
+        _user_msg("add a footer with Copyright 2026", seq=5),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=6),
+        _env_msg("<system-reminder>call submit_plan NOW…</system-reminder>", seq=8),
+    ]
+    assert signals.current_revision_instruction(events) == "add a footer with Copyright 2026"
+
+
+def test_current_revision_instruction_ignores_user_msg_after_planning():
+    # Session-tied: only a user msg AT/BEFORE the current planning marker triggered this replan.
+    events = [
+        _user_msg("the revision instruction", seq=5),
+        StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=6),
+        _user_msg("a later unrelated message", seq=9),
+    ]
+    assert signals.current_revision_instruction(events) == "the revision instruction"
+
+
+def test_current_revision_instruction_none_when_no_user():
+    events = [StatusEvent(status=ConversationStatus.RUNNING, detail="planning", seq=6)]
+    assert signals.current_revision_instruction(events) is None
