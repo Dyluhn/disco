@@ -231,6 +231,7 @@ def guard_fresh_edit(
     old: str | None = None,
     new: str | None = None,
     edit_lines: tuple[int, int] | None = None,
+    anchored: bool = True,
 ) -> ToolOutcome | None:
     """CD-TOOLS-1 fresh-edit guard. Returns a BLOCKING ToolOutcome (the caller must NOT mutate
     the file) when the model lacks fresh, complete grounding of the edit region — else None.
@@ -269,12 +270,15 @@ def guard_fresh_edit(
     st = _read_state.get(conv_id) or {}
     canon = _canonical(path)
     rec = (st.get("reads") or {}).get(canon)
-    # [REL-RC-D] grounding for an EDIT comes from a genuine read OR from a prior host-validated
-    # anchored edit (edit_grounded) whose exact post-edit bytes the engine advanced the sha to —
-    # so back-to-back same-file anchored edits don't false-STALE. (file_write's own guard checks
-    # read_since_write ONLY, so a blind rewrite still requires a real read.)
-    grounded = canon in (st.get("read_since_write") or set()) or canon in (
-        st.get("edit_grounded") or set()
+    # [REL-RC-D] grounding for an EDIT comes from a genuine read OR — for ANCHORED callers only —
+    # from a prior host-validated anchored edit (edit_grounded) whose exact post-edit bytes the
+    # engine advanced the sha to, so back-to-back same-file anchored edits don't false-STALE.
+    # edit_grounded does NOT count for LINE-BASED callers (file_replace_lines / file_insert_lines,
+    # anchored=False): an anchored edit shifts line numbers, so their numeric targets could be stale
+    # even though the file's bytes are known — they must re-read. (file_write checks read_since_write
+    # only, so a blind rewrite-from-memory still requires a real read regardless.)
+    grounded = canon in (st.get("read_since_write") or set()) or (
+        anchored and canon in (st.get("edit_grounded") or set())
     )
     if rec is not None and rec.get("sha") != sha:
         return ToolOutcome(
@@ -975,6 +979,7 @@ class FileReplaceLinesTool:
         _blocked = guard_fresh_edit(
             ctx.conversation_id, args.path, current_bytes=_raw, new=args.new_text,
             edit_lines=(args.start_line, min(args.end_line, max(n, 1))),
+            anchored=False,  # [REL-RC-D] line-based: a prior edit's line-shift can stale these numbers
         )
         if _blocked is not None:
             return _blocked
@@ -1048,7 +1053,8 @@ class FileInsertLinesTool:
         # CD-TOOLS-1 guard: the insert point relies on current line numbers — require fresh
         # grounding + reject an elision marker in the inserted text (no region coverage needed).
         _blocked = guard_fresh_edit(
-            ctx.conversation_id, args.path, current_bytes=_raw, new=args.text, edit_lines=None
+            ctx.conversation_id, args.path, current_bytes=_raw, new=args.text, edit_lines=None,
+            anchored=False,  # [REL-RC-D] line-based: a prior edit's line-shift can stale this insert point
         )
         if _blocked is not None:
             return _blocked

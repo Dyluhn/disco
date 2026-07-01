@@ -22,6 +22,8 @@ from disco.tools.builtin.files import (
     FileEditTool,
     FileReadArgs,
     FileReadTool,
+    FileReplaceLinesArgs,
+    FileReplaceLinesTool,
     FileWriteArgs,
     FileWriteTool,
     reset_read_tracker,
@@ -165,3 +167,27 @@ async def test_failed_edit_does_not_falsely_ground():
     assert w.success is False
     assert w.error == "read_before_write"
     assert sbx._fs["index.html"] == BIG_BYTES  # untouched
+
+
+@pytest.mark.asyncio
+async def test_line_based_edit_does_not_ride_edit_grounding():
+    """Codex code-gate catch: a LINE-BASED edit must NOT ride edit_grounded after an anchored edit.
+    An anchored edit can shift line numbers, so a line target could silently hit the wrong lines —
+    file_replace_lines / file_insert_lines require a genuine fresh read (anchored=False)."""
+    sbx = _FakeSandbox({"index.html": BIG_BYTES})
+    ctx = _ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="index.html"), ctx)
+    # Anchored edit that ADDS a line → every line below shifts by one.
+    a = await FileEditTool().run(
+        FileEditArgs(
+            path="index.html", old="<h1>Acme Cloud</h1>", new="<h1>Acme</h1>\n<h2>Cloud</h2>"
+        ),
+        ctx,
+    )
+    assert a.success, a.content
+    # A line-based edit with NO fresh read must be refused (edit_grounded doesn't count here).
+    rl = await FileReplaceLinesTool().run(
+        FileReplaceLinesArgs(path="index.html", start_line=2, end_line=2, new_text="X"), ctx
+    )
+    assert rl.success is False
+    assert "read" in (rl.content or "").lower()
