@@ -77,10 +77,22 @@ class LifecycleManager:
         the idle preview server) while KEEPING the event log + the project snapshot. A
         later run re-creates the sandbox and rehydrates. Callers MUST ensure the
         workspace is durable (snapshotted) first — this does not snapshot."""
+        # [REL-RC-C] Do ALL synchronous resume-critical state resets UP FRONT — BEFORE any await —
+        # then do the best-effort awaited resource reclaim (kill/destroy) LAST. This is both:
+        #   (1) POP the three caches (executors/pending/loops) synchronously so a RESUME/re-kick
+        #       lands during the awaits below rebuilds a FRESH executor+loop+session via _loop_for
+        #       instead of reusing the cached loop bound to the now-_killed executor (which returns
+        #       "executor killed; instance revoked" for every call → STUCK — the pause→resume fail);
+        #   (2) CANCELLATION-SAFE: on_connect can cancel this suspend task mid-`await`. If the
+        #       rehydrate-once discard + cache cleanup ran after the awaits, a cancellation
+        #       would skip them and the resumed fresh loop would start in an EMPTY workspace.
+        #       Doing them synchronously up front means a cancellation only skips the best-effort
+        #       kill/destroy (the container is reaped by the next teardown / idle TTL anyway) — the
+        #       resume-critical invariants (fresh rebuild + rehydrate) always hold.
+        # Mirrors + strengthens the already-correct control_ops.kill() (control_ops.py:218-224).
         executor = self._rt._executors.pop(conversation_id, None)
-        if executor is not None:
-            with contextlib.suppress(Exception):
-                await executor.kill()  # destroys the sandbox instance (§6.4)
+        pending = self._rt._pending_sessions.pop(conversation_id, None)
+        self._rt._loops.pop(conversation_id, None)  # force a fresh sandbox on the next run
         # F3: clear the read-before-write tracker UNCONDITIONALLY on teardown — the
         # executor's own kill() clears it too, but a teardown where the executor was
         # already popped/absent would otherwise leave the module-global entry behind.
@@ -88,11 +100,6 @@ class LifecycleManager:
             from disco.tools.builtin.files import clear_conversation_read_state
 
             clear_conversation_read_state(conversation_id)
-        pending = self._rt._pending_sessions.pop(conversation_id, None)
-        if pending is not None:
-            with contextlib.suppress(Exception):
-                await pending.destroy()
-        self._rt._loops.pop(conversation_id, None)  # force a fresh sandbox on the next run
         # BP-14: drop the capture-pane coalescing cache + locks for this conversation —
         # each cache entry pins up to 100KB of captured output and would otherwise
         # accumulate for the life of the server process.
@@ -110,6 +117,13 @@ class LifecycleManager:
         rehydrated = getattr(self._rt, "_rehydrated", None)
         if rehydrated is not None:
             rehydrated.discard(conversation_id)
+        # Best-effort resource reclaim LAST (safe to cancel — resume state already consistent).
+        if executor is not None:
+            with contextlib.suppress(Exception):
+                await executor.kill()  # destroys the sandbox instance (§6.4)
+        if pending is not None:
+            with contextlib.suppress(Exception):
+                await pending.destroy()
 
     async def reconcile_orphaned_runs(self, *, owner_id: str = DEFAULT_OWNER_ID) -> int:
         """Startup reconciliation. A conversation whose latest status is RUNNING but
