@@ -5170,3 +5170,15 @@ stale). Then restart server + re-soak revise x5 (need run001-class gone + consis
 Codex verdict: **APPROVE** — "post-snapshot revalidation closes the TOCTOU, and teardown evicts resume-critical caches before any kill/destroy await. The residual 'kicked but neither RUNNING nor task-registered' window is not reachable in practice because RUNNING is appended before start(), and kick() registers _tasks[cid] synchronously." Committed + pushed.
 
 Server restarted on the disclaude checkout (PYTHONPATH + cwd confirmed = disclaude; both fixes verified present in the loaded file). Re-soak `revise_thrice_complex` ×5 launched (each iteration = plan + 3 follow-ups + verify, teardown/resume between every follow-up = the REL-RC-C path). Watching for: 0 run001-class STUCK, consistent high REVISION_CHAIN PASS (2 confirming runs required — stochastic), 0 OpenRouter, 0 post-terminal has_tools BUILD calls.
+
+## §11 HEARTBEAT — REL-6 blocker root-caused: false STALE_FILE_CONTEXT after the model's OWN edit
+
+Re-soak #2 (correctly wired, relay=clean-soak/relay.jsonl, all MiniMax-M3, 0 OpenRouter) iteration 000: **BUILD_DID_NOT_FINISH / terminal_status STUCK**. REL-RC-C HOLDS (0 "executor killed"/"instance revoked"). This is a SEPARATE, older defect exposed on the 4th revision follow-up ("add a footer"):
+
+**Symptom** (event tail): read → ONE ok file_edit → then 5× `STALE_FILE_CONTEXT` agent_errors → loop terminalized to STUCK. Follow-ups 1–3 finished; only the 4th (index.html grown over 3 revisions) wedged.
+
+**Root cause (OUR bug, files.py):** the read-before-write guard keeps two grounding signals — coarse `read_since_write` bit + fine `reads[path].sha`. On a successful mutation (files.py:642 file_write / 688 file_append / 854 file_edit) it discards ONLY the coarse bit and **never refreshes `reads[path].sha`**. So after the model's own edit: disk sha=v2, recorded rec.sha=v1 (stale) → next edit hits `rec.sha(v1) != sha(v2)` at files.py:261 → **STALE_FILE_CONTEXT** — the guard misreports the model's own tracked, deterministic, successful edit as an EXTERNAL mutation. Back-to-back same-file edits therefore wedge; REL-RC-B auto-ground fires once/path (durable marker) then can't help → escalating errors → STUCK.
+
+**Proposed fix (design-gating with Codex before implementing):** on a successful mutation, re-ground `reads[path]` to the newly-written bytes (sha=sha256(new), preserve/repair full+ranges) and re-add the coarse bit — the engine has authoritative post-write content (file_edit already re-reads live disk to anchor-match `old`, files.py:802/806). Safety question under review: does re-grounding-full after a surgical edit reopen Mode-B (large-elided-file rewrite-from-memory) or a line-shift hole for a subsequent line-number-based file_replace_lines? Fix will distinguish anchor-based edits (safe to re-ground) from line-based/full-rewrite paths.
+
+REL-2a step2b-2b (shadow-fold, flag default-OFF) COMMITTED+pushed in parallel (4 unit tests, gates clean) while root-causing this.
