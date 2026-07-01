@@ -1291,8 +1291,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--snapshot-wait",
         type=float,
-        default=15.0,
-        help="seconds to wait for a just-finished build's workspace snapshot to flush",
+        default=45.0,
+        help="seconds to wait for a just-finished build's workspace snapshot to flush "
+        "(cold-start flush lag after a fresh sandbox can exceed the old 15s → INVALID_RUN)",
     )
     p.add_argument(
         "--timeout",
