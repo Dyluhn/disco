@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from _eventlog import clean_smoke_log
 
 from harness.build_soak.events import normalize_events
@@ -47,7 +49,7 @@ def test_no_output_assertion_skips():
     assert results[0].skipped
 
 
-# ---- Part A: snapshot proof-level precedence fold over content mismatches ----------------
+# ---- HARNESS-FIX-4 rev2: proof + content-stability precedence fold -----------------------
 
 _SCN2 = {
     "id": "two_files",
@@ -62,58 +64,128 @@ _SCN2 = {
     },
 }
 
-_SCN_FORBID = {
-    "id": "forbid",
-    "assertions": {
-        "workspace": {"files": [{"path": "index.html", "must_not_contain": ["SECRET"]}]},
-        "terminal_status_in": ["FINISHED"],
-    },
-}
+_CHECK_MATRIX = [
+    (
+        "must_contain",
+        {"must_contain": ["TARGET"]},
+        "plain text",
+        "missing_substring",
+        "TARGET",
+    ),
+    (
+        "must_not_contain",
+        {"must_not_contain": ["SECRET"]},
+        "has SECRET inside",
+        "forbidden_substring",
+        "SECRET",
+    ),
+    (
+        "equals",
+        {"equals": "TARGET"},
+        "different",
+        None,
+        None,
+    ),
+]
+
+_AUTHORITY_MATRIX = [
+    (
+        "authoritative-proof",
+        {"proof": "raw_sha", "content_stable": False},
+        "ARTIFACT_TRUTH_MISMATCH",
+        "raw_sha",
+        False,
+    ),
+    (
+        "stable-unproven",
+        {"proof": "unproven_extended_stability", "content_stable": True},
+        "ARTIFACT_TRUTH_MISMATCH",
+        "unproven_extended_stability",
+        True,
+    ),
+    (
+        "churning-unproven",
+        {"proof": "unproven_extended_stability", "content_stable": False},
+        "WORKSPACE_SNAPSHOT_UNVERIFIED",
+        "unproven_extended_stability",
+        False,
+    ),
+    (
+        "unknown+stable",
+        {"proof": "unknown", "content_stable": True},
+        "ARTIFACT_TRUTH_MISMATCH",
+        "unknown",
+        True,
+    ),
+    (
+        "unknown+churning",
+        {"proof": "unknown", "content_stable": False},
+        "WORKSPACE_SNAPSHOT_UNVERIFIED",
+        "unknown",
+        False,
+    ),
+    (
+        "legacy-no-field",
+        {},
+        "ARTIFACT_TRUTH_MISMATCH",
+        None,
+        False,
+    ),
+]
 
 
-def test_unproven_content_mismatch_is_snapshot_unverified():
-    # A must_contain mismatch on a NON-AUTHORITATIVE capture (extended-stability, no proof) is
-    # UNRELIABLE → INVALID_RUN WORKSPACE_SNAPSHOT_UNVERIFIED (never a false product failure).
-    ws = {"index.html": {"content": "<h1>nope</h1>", "proof": "unproven_extended_stability"}}
-    results = _run(workspace=ws)
-    assert results[0].code == "WORKSPACE_SNAPSHOT_UNVERIFIED"
-    m = results[0].facts["mismatches"][0]
-    assert m["proof"] == "unproven_extended_stability"  # facts carry proof + path + class
-    assert m["path"] == "index.html"
-    assert m["check"] == "must_contain"
-    assert m["missing_substring"] == "Build Smoke OK"
+def _scenario_for_file_spec(spec):
+    return {
+        "id": "content_check",
+        "assertions": {
+            "workspace": {"files": [{"path": "index.html", **spec}]},
+            "terminal_status_in": ["FINISHED"],
+        },
+    }
 
 
-def test_unknown_proof_content_mismatch_is_snapshot_unverified():
-    ws = {"index.html": {"content": "<h1>nope</h1>", "proof": "unknown"}}
-    assert _run(workspace=ws)[0].code == "WORKSPACE_SNAPSHOT_UNVERIFIED"
+@pytest.mark.parametrize(
+    ("check", "spec", "bad_content", "evidence_key", "evidence_value"), _CHECK_MATRIX
+)
+@pytest.mark.parametrize(
+    ("authority_case", "entry_fields", "expected_code", "expected_proof", "expected_stable"),
+    _AUTHORITY_MATRIX,
+)
+def test_content_mismatch_authority_matrix(
+    check,
+    spec,
+    bad_content,
+    evidence_key,
+    evidence_value,
+    authority_case,
+    entry_fields,
+    expected_code,
+    expected_proof,
+    expected_stable,
+):
+    del authority_case
+    ws = {"index.html": {"content": bad_content, **entry_fields}}
+    results = _run(scenario=_scenario_for_file_spec(spec), workspace=ws)
+
+    assert results[0].code == expected_code
+    mismatch = results[0].facts["mismatches"][0]
+    assert mismatch["check"] == check
+    assert mismatch["proof"] == expected_proof
+    assert mismatch["content_stable"] is expected_stable
+    if evidence_key is not None:
+        assert mismatch[evidence_key] == evidence_value
 
 
-def test_proven_sha_content_mismatch_stays_artifact_mismatch():
-    # raw_sha is PROVEN: a real content regression is NEVER downgraded.
-    ws = {"index.html": {"content": "<h1>nope</h1>", "proof": "raw_sha"}}
-    results = _run(workspace=ws)
-    assert results[0].code == "ARTIFACT_TRUTH_MISMATCH"
-    assert results[0].facts["missing_substring"] == "Build Smoke OK"  # back-compat fact
-
-
-def test_proven_rendered_readback_content_mismatch_stays_artifact_mismatch():
-    ws = {"index.html": {"content": "<h1>nope</h1>", "proof": "rendered_readback"}}
-    assert _run(workspace=ws)[0].code == "ARTIFACT_TRUTH_MISMATCH"
-
-
-def test_unannotated_content_mismatch_stays_authoritative():
-    # A legacy / proxy entry with NO proof key is treated as AUTHORITATIVE (never silently
-    # downgraded) — stays a hard ARTIFACT_TRUTH_MISMATCH.
-    assert _run(workspace={"index.html": "<h1>nope</h1>"})[0].code == "ARTIFACT_TRUTH_MISMATCH"
-
-
-def test_mixed_proven_and_unproven_mismatch_artifact_wins():
-    # PRECEDENCE: one PROVEN mismatch (b.html raw_sha) + one unproven (a.html) → the proven
-    # regression WINS → hard ARTIFACT_TRUTH_MISMATCH; both are recorded as evidence.
+def test_mixed_multi_file_authoritative_mismatch_wins():
+    # PRECEDENCE: one authoritative mismatch (b.html raw_sha) + one churning-unproven (a.html)
+    # → the authoritative regression wins; both are recorded as evidence.
     ws = {
-        "a.html": {"content": "x", "proof": "unproven_extended_stability"},
-        "b.html": {"content": "x", "proof": "raw_sha"},
+        "a.html": {
+            "content": "x",
+            "proof": "unproven_extended_stability",
+            "content_stable": False,
+        },
+        "b.html": {"content": "x", "proof": "raw_sha", "content_stable": False},
     }
     results = _run(scenario=_SCN2, workspace=ws)
     assert results[0].code == "ARTIFACT_TRUTH_MISMATCH"
@@ -125,33 +197,30 @@ def test_mixed_proven_and_unproven_mismatch_artifact_wins():
     }
 
 
-def test_all_unproven_multi_file_mismatch_is_unverified():
+def test_all_churning_unproven_multi_file_mismatch_is_unverified():
     ws = {
-        "a.html": {"content": "x", "proof": "unproven_extended_stability"},
-        "b.html": {"content": "x", "proof": "unknown"},
+        "a.html": {
+            "content": "x",
+            "proof": "unproven_extended_stability",
+            "content_stable": False,
+        },
+        "b.html": {"content": "x", "proof": "unknown", "content_stable": False},
     }
     results = _run(scenario=_SCN2, workspace=ws)
     assert results[0].code == "WORKSPACE_SNAPSHOT_UNVERIFIED"
     assert len(results[0].facts["mismatches"]) == 2
 
 
-def test_forbidden_substring_proven_is_artifact_mismatch():
-    # COVERAGE: the proof-fold applies to must_not_contain too, not just must_contain.
-    ws = {"index.html": {"content": "has SECRET inside", "proof": "raw_sha"}}
-    results = _run(scenario=_SCN_FORBID, workspace=ws)
-    assert results[0].code == "ARTIFACT_TRUTH_MISMATCH"
-    assert results[0].facts["mismatches"][0]["check"] == "must_not_contain"
-    assert results[0].facts["mismatches"][0]["forbidden_substring"] == "SECRET"
-
-
-def test_forbidden_substring_unproven_is_unverified():
-    ws = {"index.html": {"content": "has SECRET inside", "proof": "unknown"}}
-    assert _run(scenario=_SCN_FORBID, workspace=ws)[0].code == "WORKSPACE_SNAPSHOT_UNVERIFIED"
-
-
-def test_proven_content_present_still_passes():
-    # A correct, proven capture passes (proof present, content matches) — no spurious fold.
-    ws = {"index.html": {"content": "<h1>Build Smoke OK</h1>", "proof": "raw_sha"}}
+def test_stable_unproven_content_present_still_passes():
+    # Correct content passes even when sha identity is unproven; stability only promotes
+    # mismatches, it does not create a failure on matching content.
+    ws = {
+        "index.html": {
+            "content": "<h1>Build Smoke OK</h1>",
+            "proof": "unproven_extended_stability",
+            "content_stable": True,
+        }
+    }
     assert _run(workspace=ws)[0].passed
 
 

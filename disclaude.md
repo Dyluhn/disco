@@ -5277,3 +5277,66 @@ TWO findings:
 2. My snapshot fix #3 (downgrade-any-opaque-shell to present_unproven) OVER-CORRECTED: it turns a GENUINE content mismatch into UNVERIFIED (masks it) instead of a hard ARTIFACT_TRUTH_MISMATCH. A present+STABLE file's content SHOULD be authoritatively must_contain-checkable (that's fix #4). output_truth.py:41 _NON_AUTHORITATIVE_PROOF gates it.
 
 DECISION FORK (surfaced to Dylan, loop paused): (a) is "Hobby"≠"Starter" a real build FAILURE to pursue via prompt/engine instruction-following work, or is a functionally-correct pricing section acceptable / the strict must_contain too strict for a creative build gate? (b) narrow fix #3 so present+stable content is authoritative (honest FAIL not masked UNVERIFIED)? MECHANICAL CAMPAIGN (REL-RC-C/D/E/F + timeouts) = DONE+verified regardless.
+
+### PLAN — HARNESS-FIX-4 + SCENARIO-SOFTEN (fork resolution) — 2026-07-01
+
+**Decision input (Dylan, direct):** Hobby≠Starter label fidelity is NOT a reliability failure;
+functional correctness passes. Dislikes to optimize for: random pauses, loop-stuck, false
+affordances. Worker policy change: Codex writes code (preferred over Gemini); MiniMax stays;
+NO Opus/Sonnet subagents. Playbook distilled at docs/claude-design-playbook.md.
+
+**Problem:** snapshot fix #3 (fail-safe opaque-mutation downgrade → present_unproven) over-corrects:
+content assertions (must_contain) on a present + stability-polled file get reported as
+INVALID_RUN/WORKSPACE_SNAPSHOT_UNVERIFIED instead of being checked. A stable on-disk file's bytes
+ARE ground truth — reporting "unverifiable" when we hold the bytes is a false affordance in our own
+oracle (soak-rcf2 iter 003: 'Starter' genuinely absent, masked as UNVERIFIED instead of MISMATCH).
+
+**Change 1 — output_truth.py (fix #4):** when the deliverable is present and passed the stability
+poll (present_unproven / unproven_extended_stability), evaluate must_contain / must_not_contain /
+exact content checks AUTHORITATIVELY against the stable on-disk bytes: needle absent → hard
+ARTIFACT_TRUTH_MISMATCH (or PREVIEW_TRUTH_MISMATCH for preview specs); present → check passes.
+WORKSPACE_SNAPSHOT_UNVERIFIED remains only for checks that genuinely require the agent-declared
+sha identity, and for files that are absent or failed the stability poll. No enumeration of tools —
+the fail-safe sha downgrade from fix #3 stays; only the downstream content-check masking is removed.
+
+**Change 2 — scenarios.yaml (lines ~180 and ~379):** drop the verbatim creative label 'Starter'
+from both must_contain lists (keep 'Pro', 'Enterprise', 'Acme Cloud', 'Get Started', copyright).
+Structural intent (3 pricing tiers) may be asserted via a non-creative marker if cheap (e.g. three
+'/month' occurrences); do not require any verbatim synonym-class label.
+
+**Tests:** test_output_truth_oracle.py — (a) stable-file + needle present → PASS not UNVERIFIED;
+(b) stable-file + needle absent → ARTIFACT_TRUTH_MISMATCH not UNVERIFIED; (c) unstable/absent file
+→ UNVERIFIED preserved; (d) regression: fix #3 sha-downgrade path unchanged.
+
+**After merge:** re-run soak ×5 (bar: 5/5 PASS, 0 STUCK, 0 INVALID), then confirming ×5, then
+REL-1 → REL-3 → REL-6 gate. P11 stays blocked until REL-6 is 100%.
+
+**Implementation worker:** Codex (per new policy). Reviewer: Codex read-only, APPROVE required.
+
+### HARNESS-FIX-4 — REVISION 2 + gate-model change — 2026-07-01
+
+**Gate model (Dylan):** Fable drives with final decision say-so; Codex provides pushback (valuable,
+non-binding). Ledger records rulings on review points instead of looping to APPROVE. Dylan also
+granted full authority to rework PRs.
+
+**Rulings on Codex review points (harness-fix4-plan-rr.log):**
+1. ACCEPTED, refined. Root cause is `_fold_content_mismatches` keying authoritativeness purely on
+   sha-derived proof. RULING: content truth ≠ sha identity. The adapter polls unproven files to the
+   FULL deadline (late-flush hardening, disco_api.py ~1060-1105) and those bytes already are
+   authoritative for existence + elision. NEW DESIGN: stamp achieved stability per entry
+   (`content_stable` = stable-read count ≥ the same threshold `_evaluate_snapshot_readiness` uses);
+   a content mismatch is authoritative iff proof is authoritative OR content_stable. UNVERIFIED
+   survives ONLY for the genuinely-uncertain case: bytes still churning at the capture deadline
+   (and legacy manifests lacking the field → not stable → unchanged behavior).
+2. ACCEPTED. The change lands inside `_fold_content_mismatches` + the mismatch dicts (carry
+   content_stable alongside proof) + the adapter stamping loop (~line 1111).
+3. ACCEPTED. Test matrix: {must_contain, must_not_contain, equals} × {authoritative-proof,
+   stable-unproven, churning-unproven, unknown+stable, unknown+churning, legacy-no-field}; mixed
+   multi-file precedence (any authoritative mismatch → ARTIFACT_TRUTH_MISMATCH); missing required
+   file stays FALSE_FINISH_NO_OUTPUT (plan v1 misstated this); fix #3 sha-downgrade path unchanged.
+4. ACCEPTED. Explicit post-edit lists: scenarios.yaml line ~180 → ["Acme Cloud", "Pro",
+   "Enterprise", "Get Started"]; line ~379 → ["Acme Cloud", "Pro", "Enterprise", "Get Started",
+   "Copyright Acme Cloud 2026"]. No other assertion lines touched.
+
+**Implementation:** Codex (workspace-write), Fable reviews the diff and reworks as needed.
+Gates: harness test suite + `uv run basedpyright` (zero errors, tree-wide) before commit.

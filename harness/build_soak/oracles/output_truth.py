@@ -32,12 +32,12 @@ _ORACLE = "OutputTruthOracle"
 
 _FINISHED_STATES = frozenset({"FINISHED", "VERIFIED"})
 
-# A content mismatch on a file captured on one of these NON-AUTHORITATIVE bases (the snapshot
-# readiness gate accepted it via extended content-stability, with NO file_write raw-sha and no
-# qualifying full readback) is UNRELIABLE — the capture may be a stale pre-flush copy. Any
-# OTHER proof level (raw_sha / rendered_readback / absent) OR an UNANNOTATED entry (a legacy /
-# proxy capture with no `proof` key — treated as authoritative so we never silently downgrade)
-# is PROVEN and a mismatch on it stays a hard ARTIFACT_TRUTH_MISMATCH.
+# A content mismatch on one of these proof levels is non-authoritative ONLY while the adapter
+# also reports that the captured bytes failed to reach the readiness gate's stability threshold.
+# Once `content_stable is True`, content truth is authoritative even when sha identity remains
+# unproven. Any OTHER proof level (raw_sha / rendered_readback / absent) OR an UNANNOTATED entry
+# (legacy / proxy capture with no `proof` key — treated as authoritative so we never silently
+# downgrade) stays a hard ARTIFACT_TRUTH_MISMATCH.
 _NON_AUTHORITATIVE_PROOF = frozenset({"unproven_extended_stability", "unknown"})
 
 
@@ -71,15 +71,36 @@ def _proof_for(manifest: dict[str, Any] | None, path: str) -> str | None:
     return None
 
 
+def _content_stable_for(manifest: dict[str, Any] | None, path: str) -> bool:
+    """Whether the adapter observed this entry stable for the readiness threshold.
+
+    Missing field / non-dict legacy entries are treated as not stable; legacy behavior is
+    still preserved by the proof fold because a missing proof remains authoritative.
+    """
+    files = _nested_files(manifest)
+    entry = files.get(path)
+    if entry is None:
+        entry = files.get(path.lstrip("/"))
+    return isinstance(entry, dict) and entry.get("content_stable") is True
+
+
+def _authoritative_mismatch(mismatch: dict[str, Any]) -> bool:
+    return (
+        mismatch.get("proof") not in _NON_AUTHORITATIVE_PROOF
+        or mismatch.get("content_stable") is True
+    )
+
+
 def _fold_content_mismatches(mismatches: list[dict[str, Any]]):
     """DETERMINISTIC PRECEDENCE fold over ALL workspace-content mismatches in the run
-    (Part A). A mismatch is AUTHORITATIVE unless its file's proof is non-authoritative
-    (`unproven_extended_stability` / `unknown`). If ANY mismatch is authoritative → a hard
-    ``ARTIFACT_TRUTH_MISMATCH`` (the proven regression WINS; never masked). ONLY if EVERY
-    mismatch is non-authoritative → INVALID_RUN ``WORKSPACE_SNAPSHOT_UNVERIFIED`` (the capture
-    is too uncertain to call a product failure). The full per-file evidence (proof + path +
-    check class) rides in `facts["mismatches"]` either way."""
-    proven = [m for m in mismatches if m.get("proof") not in _NON_AUTHORITATIVE_PROOF]
+    (Part A). A mismatch is AUTHORITATIVE iff its proof is authoritative OR its captured
+    bytes reached the adapter's content-stability threshold. If ANY mismatch is authoritative
+    → a hard ``ARTIFACT_TRUTH_MISMATCH`` (the content regression WINS; never masked). ONLY if
+    EVERY mismatch is non-authoritative → INVALID_RUN ``WORKSPACE_SNAPSHOT_UNVERIFIED`` (the
+    bytes were still churning at the capture deadline, so the capture is too uncertain to call
+    a product failure). The full per-file evidence (proof + content_stable + path + check
+    class) rides in `facts["mismatches"]` either way."""
+    proven = [m for m in mismatches if _authoritative_mismatch(m)]
     first = mismatches[0]
     facts: dict[str, Any] = {
         "mismatches": mismatches,
@@ -155,9 +176,10 @@ class OutputTruthOracle:
         # --- workspace file existence + content truth ---
         # Existence is judged FIRST and hard (a missing required deliverable is FALSE_FINISH,
         # never softened). Content checks (must_contain / must_not_contain / exact) across ALL
-        # asserted files are COLLECTED with each file's capture proof level, then folded by
-        # deterministic precedence (Part A): one PROVEN mismatch makes the whole run a hard
-        # ARTIFACT_TRUTH_MISMATCH; all-non-authoritative → INVALID_RUN snapshot-unverified.
+        # asserted files are COLLECTED with each file's capture proof + content-stability
+        # level, then folded by deterministic precedence (Part A): one authoritative mismatch
+        # makes the whole run a hard ARTIFACT_TRUTH_MISMATCH; all-non-authoritative →
+        # INVALID_RUN snapshot-unverified.
         content_mismatches: list[dict[str, Any]] = []
         for spec in workspace_assert.get("files") or []:
             path = spec.get("path")
@@ -174,22 +196,26 @@ class OutputTruthOracle:
                 ]
             content = files[path]
             proof = _proof_for(workspace_manifest, path)
+            content_stable = _content_stable_for(workspace_manifest, path)
             for needle in spec.get("must_contain") or []:
                 if needle not in content:
                     content_mismatches.append({
                         "path": path, "check": "must_contain",
                         "missing_substring": needle, "proof": proof,
+                        "content_stable": content_stable,
                     })
             for needle in spec.get("must_not_contain") or []:
                 if needle in content:
                     content_mismatches.append({
                         "path": path, "check": "must_not_contain",
                         "forbidden_substring": needle, "proof": proof,
+                        "content_stable": content_stable,
                     })
             exact = spec.get("equals")
             if exact is not None and content != str(exact):
                 content_mismatches.append({
                     "path": path, "check": "equals", "proof": proof,
+                    "content_stable": content_stable,
                 })
         if content_mismatches:
             return [_fold_content_mismatches(content_mismatches)]

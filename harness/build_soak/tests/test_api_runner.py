@@ -588,7 +588,10 @@ async def test_snapshot_non_declared_churn_does_not_block_declared_set(tmp_path,
     manifest = await client.collect_workspace(_CID, ["index.html"])
 
     assert manifest["index.html"]["content"] == content
+    assert manifest["index.html"]["proof"] == "raw_sha"
+    assert manifest["index.html"]["content_stable"] is False
     assert manifest["scratch.log"]["present"] is True  # faithfully reflected, just not gated on
+    assert "content_stable" not in manifest["scratch.log"]  # non-declared entries are unstamped
     assert clock.polls == 0  # declared signal already satisfied → no needless wait
 
 
@@ -636,6 +639,8 @@ async def test_snapshot_already_consistent_accepts_promptly(tmp_path, monkeypatc
     manifest = await client.collect_workspace(_CID, ["index.html"])
 
     assert manifest["index.html"]["content"] == content
+    assert manifest["index.html"]["proof"] == "raw_sha"
+    assert manifest["index.html"]["content_stable"] is False
     assert clock.polls == 0  # already consistent → no needless wait
 
 
@@ -873,8 +878,37 @@ async def test_snapshot_present_unproven_extended_stability_not_bare_present(tmp
     manifest = await client.collect_workspace(_CID, ["index.html"])
 
     assert manifest["index.html"]["present"] is True
+    assert manifest["index.html"]["proof"] == "unproven_extended_stability"
+    assert manifest["index.html"]["content_stable"] is True
     # accepted only AFTER it stopped changing → needed the extended settle (not bare poll-1 present)
     assert clock.polls >= _disco_mod._SNAPSHOT_UNPROVEN_STABLE_POLLS - 1
+
+
+@pytest.mark.asyncio
+async def test_snapshot_churning_unproven_stamps_content_stable_false(tmp_path, monkeypatch):
+    # At the deadline, an unproven declared file can be accepted best-effort before it reaches
+    # the readiness stability threshold. The manifest must say those bytes are still unstable so
+    # the content oracle reports WORKSPACE_SNAPSHOT_UNVERIFIED on a mismatch.
+    db = tmp_path / "disco.db"
+    proj = tmp_path / "projects"
+    ws = _plant_snapshot(proj, _CID, {"index.html": "<h1>v0</h1>"})
+    _seed_db(db, _CID, _edit_then_read_log("index.html", "irrelevant", include_read=False))
+
+    def churn(step):
+        (ws / "index.html").write_text(f"<h1>v{step}</h1>", encoding="utf-8")
+
+    clock = _FakeClock(on_poll=churn)
+    _install_clock(monkeypatch, clock)
+    client = DiscoApiClient(
+        FakeTransport(db, states=["FINISHED"], workspace={}),
+        db_path=str(db), poll_interval_s=0.0, projects_root=str(proj), snapshot_wait_s=1.0,
+    )
+
+    manifest = await client.collect_workspace(_CID, ["index.html"])
+
+    assert manifest["index.html"]["present"] is True
+    assert manifest["index.html"]["proof"] == "unproven_extended_stability"
+    assert manifest["index.html"]["content_stable"] is False
 
 
 # ---- Bug 10: durable PREVIEW collection (no ephemeral-proxy false-fail) ------

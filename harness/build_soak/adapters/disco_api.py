@@ -1106,12 +1106,16 @@ class DiscoApiClient:
         # Stamp each PRESENT declared file's acceptance PROOF LEVEL onto its manifest entry so
         # the OutputTruthOracle can proof-gate a content mismatch (Part A): a mismatch on a
         # non-authoritative capture (unproven_extended_stability / unknown) is unreliable and
-        # must not be a definitive product failure; a proven one (raw_sha / rendered_readback)
-        # stays hard. Absent declared files carry no entry (existence is judged separately).
+        # must not be a definitive product failure unless the bytes reached the same stability
+        # threshold the readiness gate uses; a proven one (raw_sha / rendered_readback) stays
+        # hard. Absent declared files carry no entry (existence is judged separately).
         for p in declared:
             entry = _manifest_lookup(manifest, p)
             if entry is not None:
                 entry["proof"] = _proof_level(expected.get(p))
+                entry["content_stable"] = (
+                    stable_n.get(p, 0) >= _SNAPSHOT_UNPROVEN_STABLE_POLLS
+                )
         return manifest, snapshot_dir
 
     def _read_snapshot_manifest(

@@ -139,14 +139,14 @@ RUN_TIMEOUT_WHILE_PROGRESSING = "RUN_TIMEOUT_WHILE_PROGRESSING"
 # silent best-effort pass, so §17 re-runs it. Bounded — never hangs.
 WORKSPACE_SNAPSHOT_NOT_READY = "WORKSPACE_SNAPSHOT_NOT_READY"
 # A content (must_contain / must_not_contain / exact) assertion mismatched, but EVERY
-# mismatching file was captured on a NON-AUTHORITATIVE basis (`unproven_extended_stability`
-# / `unknown` — accepted via extended content-stability, with NO file_write raw-sha and no
-# qualifying full readback to prove the bytes). The captured snapshot may be a stale
-# pre-flush copy while the ProjectStore is actually correct, so the mismatch is UNRELIABLE
-# and must NOT be reported as a definitive product ARTIFACT_TRUTH_MISMATCH. It is recorded
-# as harness-validity evidence → INVALID_RUN so §17 re-runs it. A mismatch on a PROVEN basis
-# (raw_sha / rendered_readback / absent) in the SAME run always WINS this fold and stays a
-# hard ARTIFACT_TRUTH_MISMATCH (a proven regression is NEVER masked by an unproven one).
+# mismatching file was captured while its bytes were still churning at the capture deadline:
+# proof is non-authoritative (`unproven_extended_stability` / `unknown`) AND the adapter did
+# not observe the file stable for the readiness threshold. The captured snapshot may be a
+# stale pre-flush copy while the ProjectStore is actually correct, so the mismatch is
+# UNRELIABLE and must NOT be reported as a definitive product ARTIFACT_TRUTH_MISMATCH. It is
+# recorded as harness-validity evidence → INVALID_RUN so §17 re-runs it. A mismatch on a
+# PROVEN basis (raw_sha / rendered_readback / absent) OR on content-stable bytes in the SAME
+# run always WINS this fold and stays a hard ARTIFACT_TRUTH_MISMATCH.
 WORKSPACE_SNAPSHOT_UNVERIFIED = "WORKSPACE_SNAPSHOT_UNVERIFIED"
 
 HARNESS_VALIDITY_CODES = frozenset(

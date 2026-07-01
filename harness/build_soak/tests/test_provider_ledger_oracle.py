@@ -255,7 +255,7 @@ def test_parser_after_terminal_defaults_false():
 
 
 # --- [REL-5b] has_tools attribution: exclude benign post-terminal auto-title from the runaway oracle ---
-from product_build.minimax_relay import relay_log_record as _rel5b_relay_record  # noqa: E402
+from harness.product_build.minimax_relay import relay_log_record as _rel5b_relay_record  # noqa: E402
 
 
 def test_rel5b_relay_record_marks_has_tools() -> None:

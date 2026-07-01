@@ -177,7 +177,7 @@ scenarios:
       workspace:
         files:
           - path: "index.html"
-            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started"]
+            must_contain: ["Acme Cloud", "Pro", "Enterprise", "Get Started"]
       terminal_status_in: ["FINISHED", "VERIFIED"]
 
   # ---- §28 richer build->verify->finish (achievable, single-pass) -----------
@@ -376,5 +376,5 @@ scenarios:
       workspace:
         files:
           - path: "index.html"
-            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started", "Copyright Acme Cloud 2026"]
+            must_contain: ["Acme Cloud", "Pro", "Enterprise", "Get Started", "Copyright Acme Cloud 2026"]
       terminal_status_in: ["FINISHED", "VERIFIED"]

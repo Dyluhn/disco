@@ -1,6 +1,6 @@
 """EPIC K bake-off scorecard gate logic (§K3)."""
 
-from build_soak.bakeoff import evaluate_gate, tally
+from harness.build_soak.bakeoff import evaluate_gate, tally
 
 
 def _runs(kernel, scenario, statuses, severities=None):
@@ -51,7 +51,7 @@ def test_missing_kernel_blocks():
 def test_manifest_round_trips_kernel():
     """REGRESSION (live-caught 2026-06-25): to_dict had a hardcoded field list that
     dropped `kernel`, so the scorecard saw every run as disco. Lock the round-trip."""
-    from build_soak.evidence import EvidenceManifest
+    from harness.build_soak.evidence import EvidenceManifest
 
     m = EvidenceManifest(run_id="r", scenario_id="s", kernel="pi")
     assert m.to_dict()["kernel"] == "pi"
