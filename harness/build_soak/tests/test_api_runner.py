@@ -9,6 +9,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 import httpx
 import pytest
@@ -2137,6 +2138,124 @@ class _DeadWindowTransport(FakeTransport):
             self.send_log.append((self._sends, self._total_reads))
 
 
+class _CancelAtRecoveryTransport(FakeTransport):
+    """A deterministic cancel_at recovery fake.
+
+    The first drive starts RUNNING, exposes a file_write on the second state read,
+    and stays live until the runner posts /kill. The kill appends the product's
+    post-kill IDLE status. A later after-terminal send_message appends a user turn,
+    then the fake emits a re-plan pickup and a new FINISHED terminal.
+    """
+
+    def __init__(self, db_path, **kw):
+        super().__init__(
+            db_path,
+            states=["RUNNING"],
+            workspace={
+                "index.html": "<h1>Beacon Status</h1><table><td>All systems nominal</td></table>"
+            },
+            **kw,
+        )
+        self._seq = 5
+        self._state_reads = 0
+        self._file_write_inserted = False
+        self._killed = False
+        self._recovery_reads: int | None = None
+        self._recovery_progress_inserted = False
+        self._recovery_terminal_inserted = False
+        self.kill_log: list[int] = []
+        self.send_log: list[int] = []
+        self.pickup_log: list[int] = []
+        self.terminal_log: list[int] = []
+        self.idle_reads_before_followup = 0
+
+    def _append(self, event):
+        _insert_event(self.db_path, self.cid, event)
+
+    def _next_seq(self) -> int:
+        self._seq += 1
+        return self._seq
+
+    async def post_json(self, path, body):
+        self.posts.append((path, body))
+        if path.endswith("/kill"):
+            self._killed = True
+            self.kill_log.append(self._state_reads)
+            self._append(status(self._next_seq(), "IDLE", "killed"))
+            return 200, {"killed": True, "state": {"execution_status": "IDLE"}}
+        if path == "/conversations":
+            return 200, {"conversation_id": self.cid, "surface": "build"}
+        if path.endswith("/resume"):
+            return 200, {"ok": True, "status": "RUNNING"}
+        return 200, {"event_id": "e", "seq": 1}
+
+    async def get_json(self, path):
+        if path.endswith("/state"):
+            self._state_reads += 1
+
+            if (
+                not self._file_write_inserted
+                and not self._killed
+                and self._state_reads >= 2
+            ):
+                seq = self._next_seq()
+                self._append(
+                    action(
+                        seq,
+                        "file_write",
+                        args={"path": "index.html", "content": "<h1>partial</h1>"},
+                        action_id=f"act{seq}",
+                    )
+                )
+                self._file_write_inserted = True
+
+            if self._recovery_reads is not None:
+                self._recovery_reads += 1
+                if self._recovery_reads == 2 and not self._recovery_progress_inserted:
+                    self._append(status(self._next_seq(), "RUNNING", "planning"))
+                    self._append(plan(self._next_seq(), revision=2))
+                    self._recovery_progress_inserted = True
+                    self.pickup_log.append(self._state_reads)
+                elif self._recovery_reads == 4 and not self._recovery_terminal_inserted:
+                    seq = self._next_seq()
+                    self._append(
+                        action(
+                            seq,
+                            "file_write",
+                            args={
+                                "path": "index.html",
+                                "content": (
+                                    "<h1>Beacon Status</h1>"
+                                    "<table><td>All systems nominal</td></table>"
+                                ),
+                            },
+                            action_id=f"act{seq}",
+                        )
+                    )
+                    self._append(status(self._next_seq(), "FINISHED"))
+                    self._recovery_terminal_inserted = True
+                    self.terminal_log.append(self._state_reads)
+
+                if self._recovery_terminal_inserted:
+                    return 200, {"execution_status": "FINISHED"}
+                if self._recovery_progress_inserted:
+                    return 200, {"execution_status": "RUNNING"}
+                return 200, {"execution_status": "IDLE"}
+
+            if self._killed:
+                self.idle_reads_before_followup += 1
+                return 200, {"execution_status": "IDLE"}
+            return 200, {"execution_status": "RUNNING"}
+        return await super().get_json(path)
+
+    async def ws_control(self, conversation_id, frame):
+        await super().ws_control(conversation_id, frame)
+        if frame.get("type") == "send_message":
+            self.send_log.append(self._state_reads)
+            self._append(msg(self._next_seq(), "user", str(frame.get("content") or "")))
+            self._recovery_reads = 0
+
+
 @pytest.mark.asyncio
 async def test_after_terminal_followups_are_serialized(tmp_path):
     # THE H1/V2 pin: revise_after_finish has TWO after_terminal follow-ups. With the FAITHFUL
@@ -2171,6 +2290,67 @@ async def test_after_terminal_followups_are_serialized(tmp_path):
     assert pickup1_at - send1_at > 1
     # The two re-plans were detected from distinct higher-seq plan events (revisions 2 then 3).
     assert client._latest_plan_revision(_CID) == 3
+
+
+@pytest.mark.asyncio
+async def test_cancel_at_after_first_file_write_kills_then_followup_recovers(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build Beacon Status"),
+            status(2, "RUNNING"),
+            plan(3, revision=1),
+            status(4, "AWAITING_PLAN_APPROVAL", "evt_3"),
+            status(5, "RUNNING", "plan_approved"),
+        ],
+    )
+    transport = _CancelAtRecoveryTransport(db)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = {
+        "id": "disconnect_cancel_recovery",
+        "mode": "api",
+        "prompt": (
+            "Create index.html for 'Beacon Status' with a services table containing "
+            "the exact cell text 'All systems nominal'."
+        ),
+        "cancel_at": {"trigger": "after_first_file_write"},
+        "followups": [
+            {
+                "text": "Continue and finish the page exactly as originally requested.",
+                "requires_plan_revision": True,
+                "trigger": "after_terminal",
+            }
+        ],
+        "assertions": {
+            "workspace": {
+                "files": [
+                    {
+                        "path": "index.html",
+                        "must_contain": ["Beacon Status", "All systems nominal"],
+                    }
+                ]
+            },
+            "terminal_status_in": ["FINISHED", "VERIFIED"],
+        },
+    }
+
+    run = await drive_scenario(client, scenario, model="m", autonomous=False, timeout_s=5)
+
+    kills = [p for p in transport.posts if p[0] == f"/conversations/{_CID}/kill"]
+    sends = [f for f in transport.ws_frames if f.get("type") == "send_message"]
+    assert len(kills) == 1
+    assert len(sends) == 1
+    assert transport.idle_reads_before_followup >= 2
+    assert transport.kill_log[0] < transport.send_log[0] < transport.pickup_log[0]
+    assert transport.pickup_log[0] < transport.terminal_log[0]
+    assert run.state_final["execution_status"] == "FINISHED"
+    assert run.workspace_manifest["index.html"]["present"] is True
+    assert run.declared_followup_seqs
+    assert run.declared_followup_requires_revision == [True]
+    assert any("cancel_at fired at after_first_file_write" in t for t in run.timeline)
+    assert any("cancel_at settled to stable IDLE" in t for t in run.timeline)
 
 
 @pytest.mark.asyncio
@@ -2717,6 +2897,14 @@ def test_every_scenario_loads_with_a_valid_schema():
             assert "expected_final_plan_revision" in (a.get("revisions") or {}), (
                 f"{sid}: revision followups need revisions.expected_final_plan_revision"
             )
+
+
+def test_rel6_draft_cancel_at_uses_followup_trigger_vocabulary():
+    scen = load_scenarios(Path(__file__).resolve().parents[1] / "scenarios_rel6_draft.yaml")
+    s = scen["disconnect_cancel_recovery"]
+    assert s["cancel_at"]["trigger"] in _FOLLOWUP_TRIGGERS
+    assert s["cancel_at"]["trigger"] == "after_first_file_write"
+    assert [f["trigger"] for f in s["followups"]] == ["after_terminal"]
 
 
 def test_new_scenarios_assert_deterministic_oracle_checkable_output():

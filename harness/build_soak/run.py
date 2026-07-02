@@ -81,6 +81,8 @@ _GENERIC_CLARIFY_ANSWER = (
 # terminal rather than being frozen mid-flight + mislabeled BUILD_DID_NOT_FINISH.
 _DEFAULT_INACTIVITY_S = 180.0
 _DEFAULT_HARD_CAP_S = 1200.0
+_TRIGGER_AFTER_FIRST_FILE_WRITE = "after_first_file_write"
+_TRIGGER_AFTER_TERMINAL = "after_terminal"
 
 
 # ---- scenario loading -------------------------------------------------------
@@ -101,6 +103,13 @@ def _preview_required(scenario: dict[str, Any]) -> bool:
     return bool(((scenario.get("assertions") or {}).get("preview") or {}).get("required"))
 
 
+def _is_cancel_after_first_write(cancel_at: dict[str, Any] | None) -> bool:
+    return (
+        isinstance(cancel_at, dict)
+        and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
+    )
+
+
 # ---- orchestration (acts as the user) ---------------------------------------
 
 
@@ -108,19 +117,34 @@ async def _inject_when_writing(
     client: DiscoApiClient,
     cid: str,
     mid_run: list[dict[str, Any]],
+    cancel_at: dict[str, Any] | None,
     timeline: list[str],
     timeout_s: float,
     declared_seqs: list[int] | None = None,
     declared_requires: list[bool] | None = None,
 ) -> None:
-    """Background: wait for the first MUTATING action, then inject the §15.4 steer
-    follow-up (a real mid-run redirect). Runs concurrently with the terminal poll so
-    it works whether or not the run paused at an approval gate first."""
-    for f in mid_run:
-        seq = await client.wait_for_first_file_write(cid, timeout_s=timeout_s)
-        if seq is None:
+    """Background trigger watcher for after-first-file-write actions.
+
+    It handles all current users of that trigger (mid-run steer follow-ups and the
+    REL-6 cancel_at kill) from one task so the runner does not race two independent
+    DB pollers against the same first-write boundary.
+    """
+    wants_cancel = (
+        isinstance(cancel_at, dict)
+        and cancel_at.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE
+    )
+    if not mid_run and not wants_cancel:
+        return
+
+    seq = await client.wait_for_first_file_write(cid, timeout_s=timeout_s)
+    if seq is None:
+        if mid_run:
             timeline.append("mid-run steer skipped: run produced no file write to steer on")
-            return
+        if wants_cancel:
+            timeline.append("cancel_at skipped: run produced no file write to cancel on")
+        return
+
+    for f in mid_run:
         before_user_seq = client.latest_user_message_seq(cid)
         await client.send_followup(cid, str(f["text"]), kind="steer")
         timeline.append(f"steered after first file write (seq={seq}): {f['text']!r}")
@@ -134,6 +158,76 @@ async def _inject_when_writing(
                 declared_seqs.append(new)
                 declared_requires.append(bool(f.get("requires_plan_revision")))
 
+    if wants_cancel:
+        await _cancel_at_trigger(
+            client,
+            cid,
+            timeline,
+            trigger=_TRIGGER_AFTER_FIRST_FILE_WRITE,
+            trigger_seq=seq,
+            timeout_s=timeout_s,
+        )
+
+
+async def _wait_for_cancel_idle(
+    client: DiscoApiClient,
+    cid: str,
+    *,
+    previous_status: str,
+    timeout_s: float,
+) -> str:
+    """Wait until a kill settles into the product's resting state.
+
+    The kill route appends `IDLE` with detail `killed`. We require two consecutive IDLE
+    reads to avoid racing the state projection immediately after the POST.
+    """
+    deadline = time.monotonic() + timeout_s
+    last = previous_status
+    if previous_status and previous_status != "IDLE":
+        remaining = max(0.0, deadline - time.monotonic())
+        last = await client.wait_until_status_leaves(
+            cid, previous_status, timeout_s=remaining
+        )
+
+    stable_idle_reads = 1 if last == "IDLE" else 0
+    while time.monotonic() < deadline:
+        last = DiscoApiClient._status_of(await client.get_state(cid))
+        if last == "IDLE":
+            stable_idle_reads += 1
+            if stable_idle_reads >= 2:
+                return last
+        else:
+            stable_idle_reads = 0
+        await asyncio.sleep(getattr(client, "_poll", 0.1))
+    raise TimeoutError(f"cancel did not settle to stable IDLE (last status={last!r})")
+
+
+async def _cancel_at_trigger(
+    client: DiscoApiClient,
+    cid: str,
+    timeline: list[str],
+    *,
+    trigger: str,
+    timeout_s: float,
+    trigger_seq: int | None = None,
+) -> None:
+    before_status = ""
+    with contextlib.suppress(Exception):
+        before_status = DiscoApiClient._status_of(await client.get_state(cid))
+    resp = await client.kill(cid)
+    seq_note = f" (seq={trigger_seq})" if trigger_seq is not None else ""
+    timeline.append(
+        f"cancel_at fired at {trigger}{seq_note}: POST /conversations/{cid}/kill "
+        f"(was {before_status or 'unknown'}, http {resp.get('http_status')})"
+    )
+    settled = await _wait_for_cancel_idle(
+        client,
+        cid,
+        previous_status=before_status,
+        timeout_s=min(timeout_s, 60.0),
+    )
+    timeline.append(f"cancel_at settled to stable {settled}; continuing scenario")
+
 
 async def _drive_to_terminal(
     client: DiscoApiClient,
@@ -141,6 +235,7 @@ async def _drive_to_terminal(
     *,
     autonomous: bool,
     mid_run: list[dict[str, Any]],
+    cancel_at: dict[str, Any] | None = None,
     timeline: list[str],
     inactivity_s: float,
     hard_cap_s: float,
@@ -167,10 +262,15 @@ async def _drive_to_terminal(
     hard-cap cutoff WHILE STILL PROGRESSING (PROGRESSING_TIMEOUT) is INCONCLUSIVE, not a
     product failure → raise InconclusiveRunError so the run records INVALID_RUN (§17)."""
     injector: asyncio.Task[None] | None = None
-    if mid_run:
+    if mid_run or _is_cancel_after_first_write(cancel_at):
         injector = asyncio.create_task(
             _inject_when_writing(
-                client, cid, mid_run, timeline, hard_cap_s,
+                client,
+                cid,
+                mid_run,
+                cancel_at,
+                timeline,
+                hard_cap_s,
                 declared_seqs=declared_followup_seqs,
                 declared_requires=declared_followup_requires_revision,
             )
@@ -328,10 +428,19 @@ async def _drive_to_terminal(
                     cid, PAUSED_STATE, timeout_s=min(inactivity_s, 60.0)
                 )
                 continue
+            if (
+                injector is not None
+                and _is_cancel_after_first_write(cancel_at)
+                and not injector.done()
+            ):
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(
+                        asyncio.shield(injector), timeout=min(inactivity_s, 60.0)
+                    )
             timeline.append(f"reached terminal/stop status: {status}")
             return status
     finally:
-        if injector is not None:
+        if injector is not None and not injector.done():
             injector.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await injector
@@ -380,8 +489,9 @@ async def drive_scenario(
     harness_injected_user_seqs: list[int] = []
 
     followups = scenario.get("followups") or []
-    mid_run = [f for f in followups if f.get("trigger") == "after_first_file_write"]
-    after_terminal = [f for f in followups if f.get("trigger") != "after_first_file_write"]
+    cancel_at = scenario.get("cancel_at") if isinstance(scenario.get("cancel_at"), dict) else None
+    mid_run = [f for f in followups if f.get("trigger") == _TRIGGER_AFTER_FIRST_FILE_WRITE]
+    after_terminal = [f for f in followups if f.get("trigger") != _TRIGGER_AFTER_FIRST_FILE_WRITE]
 
     # Phase 1: the initial build (+ any mid-run steer) to terminal.
     await _drive_to_terminal(
@@ -389,6 +499,7 @@ async def drive_scenario(
         cid,
         autonomous=autonomous,
         mid_run=mid_run,
+        cancel_at=cancel_at,
         timeline=timeline,
         inactivity_s=timeout_s,
         hard_cap_s=hard_cap_s,
@@ -399,6 +510,15 @@ async def drive_scenario(
         declared_followup_seqs=declared_followup_seqs,
         declared_followup_requires_revision=declared_followup_requires_revision,
     )
+
+    if cancel_at and cancel_at.get("trigger") == _TRIGGER_AFTER_TERMINAL:
+        await _cancel_at_trigger(
+            client,
+            cid,
+            timeline,
+            trigger=_TRIGGER_AFTER_TERMINAL,
+            timeout_s=hard_cap_s,
+        )
 
     # Phase 2: after-terminal follow-ups — each is its own re-plan→approve→terminal
     # cycle (the user types a follow-up; the PRODUCT decides to re-plan).
