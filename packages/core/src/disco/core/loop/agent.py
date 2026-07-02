@@ -96,20 +96,27 @@ def _has_unclosed_think(text: str) -> bool:
     return text.lower().count("<think>") > text.lower().count("</think>")
 
 
-def _pick_tool_call(tool_calls, finish_alias):  # noqa: ANN001 — duck-typed provider calls
+def _pick_tool_call_detail(tool_calls, finish_alias):  # noqa: ANN001 — duck-typed provider calls
     """P6/W-32 — pick the single action from a (possibly batched) response. Prefer the
     first NON-finish call so a batched [finish/finalizer, real action] still executes the
     real work (the finish/finalizer must then come on its own turn, where the gates run).
     The contract finalizer alias counts as finish — so it can't shadow a real action — and
     the chosen name is CANONICALIZED to "finish" when it is the finish signal, so the alias
     name never reaches the engine/event log; every downstream surface sees plain "finish".
-    Returns (tool_name, arguments)."""
+    Returns (tool_name, arguments, requested_verification)."""
     pc = next(
         (c for c in tool_calls if not is_finish_tool_name(c.tool_name, finish_alias)),
         tool_calls[0],
     )
+    requested_verification = finish_alias is not None and pc.tool_name == finish_alias
     name = "finish" if is_finish_tool_name(pc.tool_name, finish_alias) else pc.tool_name
-    return name, pc.arguments
+    return name, pc.arguments, requested_verification
+
+
+def _pick_tool_call(tool_calls, finish_alias):  # noqa: ANN001 — duck-typed provider calls
+    """Compatibility wrapper for tests/importers that only need name + args."""
+    name, args, _requested_verification = _pick_tool_call_detail(tool_calls, finish_alias)
+    return name, args
 
 
 class RouterAgent:
@@ -259,11 +266,14 @@ class RouterAgent:
             # batched [finish, real_action] still executes the work; the
             # affirmative finish must then come on its own turn (where the finish
             # gates run). All-finish / single-finish falls back to the first call.
-            _name, _args = _pick_tool_call(resp.tool_calls, self._finish_alias)
+            _name, _args, _requested_verification = _pick_tool_call_detail(
+                resp.tool_calls, self._finish_alias
+            )
             return AgentStep(
                 thought=_clean_thought(resp.text),
                 tool_call=ToolCall(tool_name=_name, arguments=_args),
                 finished=False,
+                requested_verification=_requested_verification,
                 llm_response_id=resp.request_id,
             )
         # No tool call → a tool-less PROSE turn. Completion semantics are owned

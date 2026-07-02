@@ -14,7 +14,7 @@ about the interiors behind these seams.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -58,7 +58,38 @@ class AgentStep(BaseModel):
     # as a complete turn (it injects a "continue where you left off" reminder and
     # re-steps). Only meaningful on a tool-less prose step.
     truncated: bool = False
+    # REL-1c — true when this finish originated from the contract's
+    # ready_for_*_verification finalizer alias rather than plain `finish`.
+    requested_verification: bool = False
     llm_response_id: str | None = None  # carried into ActionEvent
+
+
+class HostVerificationDeliverable(BaseModel):
+    """Host-verifier input reconstructed by the finish path.
+
+    Core owns only this neutral payload shape; the production verifier lives in
+    agent-server and may use sandbox/browser/server helpers behind the protocol.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    conversation_id: str
+    artifact_path: str
+    artifact_kind: str = "files"
+    deployment_url: str = ""
+    requested_verification: bool = False
+
+
+@runtime_checkable
+class HostVerifier(Protocol):
+    """REL-1c host-owned verifier seam.
+
+    Implementations return a verdict-shaped dictionary compatible with
+    verify_web_app/compute_verdict. The loop treats it as audit-only shadow
+    telemetry in REL-1c.
+    """
+
+    async def verify(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]: ...
 
 
 @runtime_checkable

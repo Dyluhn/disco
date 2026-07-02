@@ -145,6 +145,7 @@ from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
 from .title_service import TitleService
+from .verify.host import HostWebAppVerifier
 
 # WALK-18 — max seconds resume waits for a cooperatively-cancelled loop task to
 # wind down before hard-cancelling it (a cooperative Stop already persisted the
@@ -1665,6 +1666,12 @@ class ConversationRuntime:
         # `finish`. Bound on BOTH the loop (dispatch/advertisement/requery) and the agent
         # (batched-call selection); guard the agent hook for test fakes that don't have it.
         _finish_alias = self._finalizer_alias_for(conversation_id)
+        # REL-1c: inject for ALL build-like loops — the gate self-skips non-web
+        # deliverables, and shadow-agreement telemetry must cover DEFAULT builds
+        # (plain builds have no resolved contract, so gating injection on the
+        # finalizer alias would starve the shadow exactly like the REL-2a dead
+        # hook). The alias still separately drives requested_verification.
+        host_verifier = HostWebAppVerifier(executor)
         _set_alias = getattr(agent, "set_finish_alias", None)
         if callable(_set_alias):
             _set_alias(_finish_alias)
@@ -1694,6 +1701,7 @@ class ConversationRuntime:
                 autonomous=self._effective_autonomous(conversation_id),
                 model_policy=model_policy,
                 finish_alias=_finish_alias,  # P6 contract finalizer alias
+                host_verifier=host_verifier,
             )
         return AgentLoop(
             conversation_id,
@@ -1732,6 +1740,7 @@ class ConversationRuntime:
             autonomous=self._effective_autonomous(conversation_id),
             model_policy=model_policy,
             finish_alias=_finish_alias,  # P6 contract finalizer alias
+            host_verifier=host_verifier,
         )
 
     # ---- deep research surface ---------------------------------------------

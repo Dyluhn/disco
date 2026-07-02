@@ -56,6 +56,7 @@ from .boundaries import (
     Agent,
     AgentStep,
     ConfirmationPolicy,
+    HostVerifier,
     SecurityAnalyzer,
     StopHook,
     ToolExecutor,
@@ -576,6 +577,10 @@ class AgentLoop:
         dod_evaluator_factory: (
             Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
         ) = None,
+        # REL-1c — host-owned verifier shadow seam. None means no host verifier
+        # is available and the existing finish flow is byte-identical.
+        host_verifier: HostVerifier | None = None,
+        host_verify_timeout_s: float = 30.0,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -689,6 +694,8 @@ class AgentLoop:
         self._dod_evaluator_factory: (
             Callable[[], DoDEvaluator | Coroutine[Any, Any, DoDEvaluator]] | None
         ) = dod_evaluator_factory
+        self._host_verifier = host_verifier
+        self._host_verify_timeout_s = float(host_verify_timeout_s)
         # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
         # loop's max_iterations + the user's kill switch are the ultimate exit,
         # same as the browser-verify and execution-nudge gates).
@@ -1595,9 +1602,24 @@ class AgentLoop:
                     # finish signal: normalize the name to "finish" so the host-truth gate
                     # + every downstream reader behaves byte-identically regardless of the
                     # contract-specific name (the gate is name-agnostic; this is defensive).
-                    if step.tool_call.tool_name != "finish":
+                    requested_verification = (
+                        step.requested_verification
+                        or (
+                            self._finish_alias is not None
+                            and step.tool_call.tool_name == self._finish_alias
+                        )
+                    )
+                    if (
+                        step.tool_call.tool_name != "finish"
+                        or requested_verification != step.requested_verification
+                    ):
                         step = step.model_copy(
-                            update={"tool_call": step.tool_call.model_copy(update={"tool_name": "finish"})}
+                            update={
+                                "requested_verification": requested_verification,
+                                "tool_call": step.tool_call.model_copy(
+                                    update={"tool_name": "finish"}
+                                ),
+                            }
                         )
                     step, disp = await self._finish.normalize_finish_step(step, events)
                     if disp is Disp.CONTINUE:

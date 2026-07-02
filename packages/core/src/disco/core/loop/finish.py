@@ -12,6 +12,7 @@ in-collaborator).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import posixpath
 import re
@@ -33,12 +34,15 @@ from ..events import (
     PlanEvent,
     StatusEvent,
     ToolCall,
+    VerifierShadowEvent,
+    VerifierStartedEvent,
+    VerifierVerdictEvent,
 )
 from ..llm import OperatingMode
 from ..state import ConversationState
 from ..view import effective_plan_progress
 from . import signals
-from .boundaries import AgentStep
+from .boundaries import AgentStep, HostVerificationDeliverable
 from .control import Disp
 from .plan_conditions import (
     DictatedContentCondition,
@@ -259,6 +263,13 @@ def _deliverable_event_paths(events: list[Event]) -> list[str]:
         if p is not None:
             out.append(p)
     return out
+
+
+def _latest_app_deliverable_event(events: list[Event]) -> DeliverableEvent | None:
+    for ev in reversed(events):
+        if isinstance(ev, DeliverableEvent) and ev.artifact_kind == "app":
+            return ev
+    return None
 
 
 # ---- Bug 6: actionless honest-unverifiable-static finish helpers ------------
@@ -994,6 +1005,165 @@ class FinishGate:
         except Exception:  # noqa: BLE001 — introspection failure → degrade safely
             return False
         return "verify_web_app" in tool_names
+
+    def _host_verify_deliverable(
+        self, step: AgentStep, events: list[Event]
+    ) -> HostVerificationDeliverable | None:
+        """REL-1c — reconstruct the web-like deliverable for host shadow verify.
+
+        The host verifier is advisory in this PR, so missing/ambiguous delivery
+        evidence simply skips the shadow path. A first-class app handoff wins;
+        otherwise the existing web-finish convention (index.html/server_status)
+        is treated as an app rooted at index.html.
+        """
+
+        app_event = _latest_app_deliverable_event(events)
+        if app_event is None and not _is_web_deliverable(events):
+            return None
+        path = app_event.path if app_event is not None else "index.html"
+        deployment_url = app_event.deployment_url if app_event is not None else ""
+        return HostVerificationDeliverable(
+            conversation_id=self._loop.conversation_id,
+            artifact_path=path or "index.html",
+            artifact_kind="app",
+            deployment_url=deployment_url or "",
+            requested_verification=step.requested_verification,
+        )
+
+    @staticmethod
+    def _verdict_label(verdict: dict | None) -> str | None:
+        if not verdict:
+            return None
+        label = verdict.get("verdict")
+        if label is not None:
+            return str(label)
+        if "passed" in verdict:
+            return "pass" if verdict.get("passed") else "fail"
+        return None
+
+    @staticmethod
+    def _verdict_failures(verdict: dict) -> list[dict[str, object]]:
+        failures: list[dict[str, object]] = []
+        for err in verdict.get("console_errors") or []:
+            if isinstance(err, dict):
+                failures.append({"kind": "console_error", **err})
+        for err in verdict.get("network_failures") or []:
+            if isinstance(err, dict):
+                failures.append({"kind": "network_failure", **err})
+        if not verdict.get("passed") and not failures:
+            summary = str(verdict.get("summary") or verdict.get("detail") or "").strip()
+            if summary:
+                failures.append({"kind": "summary", "message": summary})
+        return failures
+
+    @staticmethod
+    def _host_unavailable_verdict(
+        deliverable: HostVerificationDeliverable, detail: str
+    ) -> dict[str, object]:
+        return {
+            "passed": False,
+            "verdict": "unavailable",
+            "url": deliverable.deployment_url,
+            "http_status": 0,
+            "summary": detail,
+            "next_action": "",
+            "console_errors": [],
+            "network_failures": [],
+            "failure_fingerprint": "host_verifier_unavailable",
+        }
+
+    async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp:
+        """REL-1c — run the host verifier in SHADOW and emit audit telemetry only.
+
+        This gate is deliberately FALLTHROUGH-only. The authoritative finish
+        behavior remains the existing inline self-verify/browser gate; host
+        verdicts are logged for REL-1e promotion analysis and are not consumed.
+        """
+
+        host_verifier = getattr(self._loop, "_host_verifier", None)
+        if host_verifier is None:
+            return Disp.FALLTHROUGH
+
+        deliverable = self._host_verify_deliverable(step, events)
+        if deliverable is None:
+            return Disp.FALLTHROUGH
+
+        await self._loop._emit(
+            VerifierStartedEvent(
+                artifact_path=deliverable.artifact_path,
+                artifact_kind=deliverable.artifact_kind,
+                requested_by_event_id=None,
+                meta={"requested_verification": deliverable.requested_verification},
+            )
+        )
+
+        try:
+            raw_host_verdict = await asyncio.wait_for(
+                host_verifier.verify(deliverable),
+                timeout=max(
+                    0.001,
+                    float(getattr(self._loop, "_host_verify_timeout_s", 30.0)),
+                ),
+            )
+            if not isinstance(raw_host_verdict, dict):
+                host_verdict = self._host_unavailable_verdict(
+                    deliverable,
+                    "verification could not run: host verifier did not return a usable verdict.",
+                )
+            else:
+                host_verdict = raw_host_verdict
+        except asyncio.TimeoutError:
+            host_verdict = self._host_unavailable_verdict(
+                deliverable,
+                "verification could not run: host verifier timed out.",
+            )
+        except Exception as exc:  # noqa: BLE001 — shadow verifier never changes finish flow
+            _LOG.warning(
+                "REL-1c host verifier failed for %s:%s",
+                self._loop.conversation_id,
+                deliverable.artifact_path,
+                exc_info=True,
+            )
+            host_verdict = self._host_unavailable_verdict(
+                deliverable,
+                f"verification could not run: host verifier failed ({exc}).",
+            )
+
+        inline_verdict = _latest_verify_verdict(
+            events, _last_productive_seq(events), target_url=None
+        )
+        host_label = self._verdict_label(host_verdict)
+        inline_label = self._verdict_label(inline_verdict)
+        agreement = (
+            host_label == inline_label
+            if host_label is not None and inline_label is not None
+            else None
+        )
+        detail = str(host_verdict.get("summary") or host_verdict.get("detail") or "")
+
+        await self._loop._emit(
+            VerifierShadowEvent(
+                artifact_path=deliverable.artifact_path,
+                artifact_kind=deliverable.artifact_kind,
+                inline_verdict=inline_label,
+                host_verdict=host_label,
+                agreement=agreement,
+                detail=detail or None,
+                meta={"requested_verification": deliverable.requested_verification},
+            )
+        )
+        await self._loop._emit(
+            VerifierVerdictEvent(
+                artifact_path=deliverable.artifact_path,
+                artifact_kind=deliverable.artifact_kind,
+                verified=bool(host_verdict.get("passed")),
+                verdict=host_label,
+                detail=detail or None,
+                failures=self._verdict_failures(host_verdict),
+                meta={"requested_verification": deliverable.requested_verification},
+            )
+        )
+        return Disp.FALLTHROUGH
 
     def _contract_required_deliverable_paths(self) -> list[str]:
         """Best-effort bridge from a contract finalizer alias to required files.
@@ -2354,6 +2524,8 @@ class FinishGate:
 
         events = await self._loop._events()
         disp = await self.gate_browser_verify(step, events)
+        events = await self._loop._events()
+        await self.gate_host_verify(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
         if disp is Disp.HALT:

@@ -111,3 +111,15 @@ def test_alias_alone_canonicalizes_to_finish() -> None:
     assert _pick_tool_call(_calls("finish"), _ALIAS)[0] == "finish"
     # without a contract, the alias is just a normal tool (not finish)
     assert _pick_tool_call(_calls(_ALIAS), None)[0] == _ALIAS
+
+
+def test_alias_alone_marks_requested_verification() -> None:
+    from disco.core.loop.agent import _pick_tool_call_detail
+
+    name, _args, requested = _pick_tool_call_detail(_calls(_ALIAS), _ALIAS)
+    assert name == "finish"
+    assert requested is True
+
+    name, _args, requested = _pick_tool_call_detail(_calls("finish"), _ALIAS)
+    assert name == "finish"
+    assert requested is False

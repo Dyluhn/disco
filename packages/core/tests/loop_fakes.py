@@ -234,6 +234,8 @@ def build_loop(
     plan_tool: str = "submit_plan",
     execution_mode: OperatingMode = OperatingMode.LONG_HORIZON,
     dod_evaluator_factory=None,
+    host_verifier=None,
+    host_verify_timeout_s: float = 30.0,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed.
@@ -263,6 +265,8 @@ def build_loop(
         plan_tool=plan_tool,
         execution_mode=execution_mode,
         dod_evaluator_factory=dod_evaluator_factory,
+        host_verifier=host_verifier,
+        host_verify_timeout_s=host_verify_timeout_s,
     )
     return loop, store
 

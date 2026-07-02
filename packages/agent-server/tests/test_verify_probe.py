@@ -10,6 +10,8 @@ from disco.agent_server.verify.probe import (
     compute_web_app_verdict,
     validate_app_deliverables,
 )
+from disco.agent_server.verify.host import HostWebAppVerifier
+from disco.core.loop import HostVerificationDeliverable
 
 
 def test_app_probe_targets_collects_url_and_preview_targets() -> None:
@@ -84,6 +86,24 @@ async def test_validate_app_deliverables_fetches_collected_targets() -> None:
         ("fetch_preview", "conv_123"),
     ]
     assert problems == ["app deliverable preview not available (503): site"]
+
+
+async def test_host_web_app_verifier_client_fallback_uses_shared_verdict() -> None:
+    client = _ProbeClient()
+    verifier = HostWebAppVerifier(client=client)
+
+    verdict = await verifier.verify(
+        HostVerificationDeliverable(
+            conversation_id="conv_123",
+            artifact_path="site",
+            artifact_kind="app",
+        )
+    )
+
+    assert client.calls == [("fetch_preview", "conv_123")]
+    assert verdict["passed"] is False
+    assert verdict["verdict"] == "fail"
+    assert "preview not available" in verdict["summary"]
 
 
 def test_collect_web_app_probe_extracts_structured_diagnostics() -> None:
