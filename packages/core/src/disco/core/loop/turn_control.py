@@ -504,6 +504,9 @@ class Valve:
             return False
         if disp is Disp.HALT:
             return True
+        events = await self._loop._events()
+        if not await finish.dictated_content_gate_passed(events):
+            return False
         # (2) browser-verify gate — THE W-32 catch for web builds: refuses to
         # finish until a clean browser observation exists since the last
         # state-changing edit (it drives its own probe + is bounded by a

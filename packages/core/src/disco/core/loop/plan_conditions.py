@@ -9,7 +9,10 @@ byte-identical to the former AgentLoop methods.
 
 from __future__ import annotations
 
+import shlex
 import os
+import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..dod import (
@@ -20,15 +23,200 @@ from ..dod import (
 )
 from ..events import (
     ActionEvent,
+    Event,
     EventSource,
     LLMMessage,
     MessageEvent,
     PlanEvent,
+    StatusEvent,
 )
 from ..view import effective_plan_progress
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
+
+
+@dataclass(frozen=True)
+class DictatedContentCondition:
+    """A quoted user literal that must survive into the final deliverable.
+
+    This is intentionally derived from the event log instead of persisted as a
+    separate mutable store row: replaying USER MessageEvents + PlanEvents
+    reconstructs the same requirements after resume/condensation.
+    """
+
+    revision: int
+    literal: str
+    source_event_id: str
+    source_seq: int | None = None
+
+
+# (?<!\w) blocks apostrophe-contractions from OPENING a match ("don't ... 'X'"
+# must not capture "t ... " between don't and the real quote); (?!\w) blocks the
+# symmetric close-side bridge ("...' s" possessives).
+_QUOTED_LITERAL_RE = re.compile(r"(?<!\w)'([^'\n]{2,80})'(?!\w)|(?<!\w)\"([^\"\n]{2,80})\"(?!\w)")
+_FILE_LIKE_LITERAL_RE = re.compile(
+    r"^(?:[\w.-]+\.(?:html?|css|mjs|cjs|jsx?|tsx?|py|md|json|ya?ml|txt|csv|"
+    r"png|jpe?g|gif|webp|svg|pdf|docx?|xlsx?|pptx?)|\.env(?:\.[\w.-]+)?)$",
+    re.IGNORECASE,
+)
+_SHELL_COMMAND_WORDS = frozenset(
+    {
+        "ag",
+        "bun",
+        "cat",
+        "cd",
+        "chmod",
+        "chown",
+        "cp",
+        "curl",
+        "deno",
+        "docker",
+        "echo",
+        "git",
+        "grep",
+        "head",
+        "ls",
+        "make",
+        "mkdir",
+        "mv",
+        "node",
+        "npm",
+        "npx",
+        "pnpm",
+        "pytest",
+        "python",
+        "python3",
+        "rm",
+        "ruff",
+        "sed",
+        "sh",
+        "tail",
+        "tox",
+        "uv",
+        "vite",
+        "yarn",
+    }
+)
+_SHELL_OPERATOR_RE = re.compile(r"(?:^|\s)(?:&&|\|\||[|;<>])(?:\s|$)|`|\$\(")
+
+
+def _has_unspaced_slash(text: str) -> bool:
+    for idx, ch in enumerate(text):
+        if ch != "/":
+            continue
+        before = text[idx - 1] if idx > 0 else ""
+        after = text[idx + 1] if idx + 1 < len(text) else ""
+        if not (before.isspace() and after.isspace()):
+            return True
+    return False
+
+
+def _looks_like_shell_command(text: str) -> bool:
+    s = text.strip()
+    if not s:
+        return False
+    if s.startswith("$ "):
+        return True
+    if _SHELL_OPERATOR_RE.search(s):
+        return True
+    try:
+        parts = shlex.split(s)
+    except ValueError:
+        parts = s.split()
+    if not parts:
+        return False
+    first = parts[0].rsplit("/", 1)[-1].lower()
+    return first in _SHELL_COMMAND_WORDS
+
+
+def _skip_dictated_literal(text: str) -> bool:
+    s = text.strip()
+    if len(s) != len(text) or not (2 <= len(s) <= 80):
+        return True
+    if _has_unspaced_slash(s):
+        return True
+    if _FILE_LIKE_LITERAL_RE.match(s):
+        return True
+    return _looks_like_shell_command(s)
+
+
+def extract_dictated_content_literals(text: str) -> list[str]:
+    """Extract quoted user-authored content literals from a build instruction.
+
+    Only single/double quoted strings 2..80 chars are considered. Shell-looking
+    snippets and path-looking strings are skipped so quoted commands like
+    "npm run build" or paths like "src/app.js" do not become content floors.
+    De-duplicates per message while preserving first occurrence order.
+    """
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for mt in _QUOTED_LITERAL_RE.finditer(text or ""):
+        literal = mt.group(1) if mt.group(1) is not None else mt.group(2)
+        if literal is None or _skip_dictated_literal(literal):
+            continue
+        if literal in seen:
+            continue
+        seen.add(literal)
+        out.append(literal)
+    return out
+
+
+def dictated_content_conditions_from_events(
+    events: list[Event],
+) -> list[DictatedContentCondition]:
+    """Bind quoted USER literals to the PlanEvent revision that serves them.
+
+    For the initial plan, every USER instruction before the first plan can
+    contribute literals. For later revisions, only mutating/revision-intent USER
+    messages in the revision window contribute, which avoids turning a quoted
+    Q&A phrase into a deliverable requirement for a later change.
+    """
+
+    indexed = list(enumerate(events))
+    plans = [(idx, e) for idx, e in indexed if isinstance(e, PlanEvent)]
+    out: list[DictatedContentCondition] = []
+    seen: set[tuple[int, str]] = set()
+    prev_plan_idx = -1
+
+    for plan_idx, plan in plans:
+        planning_idx: int | None = None
+        for idx, e in indexed:
+            if idx <= prev_plan_idx or idx > plan_idx:
+                continue
+            if isinstance(e, StatusEvent) and e.detail == "planning":
+                planning_idx = idx
+        upper_idx = planning_idx if planning_idx is not None else plan_idx
+        users = [
+            e
+            for idx, e in indexed
+            if prev_plan_idx < idx <= upper_idx
+            and isinstance(e, MessageEvent)
+            and e.source == EventSource.USER
+        ]
+        if plan.revision > 1:
+            from . import signals
+
+            users = [
+                e for e in users if signals.is_revision_intent(e.message.content or "")
+            ]
+        for user in users:
+            for literal in extract_dictated_content_literals(user.message.content or ""):
+                key = (plan.revision, literal)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(
+                    DictatedContentCondition(
+                        revision=plan.revision,
+                        literal=literal,
+                        source_event_id=user.id,
+                        source_seq=user.seq,
+                    )
+                )
+        prev_plan_idx = plan_idx
+    return out
 
 
 class PlanStepConditions:

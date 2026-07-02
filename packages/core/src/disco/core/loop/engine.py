@@ -693,6 +693,9 @@ class AgentLoop:
         # loop's max_iterations + the user's kill switch are the ultimate exit,
         # same as the browser-verify and execution-nudge gates).
         self._dod_refusals = 0
+        # REL-RC-O — consecutive dictated-content finish refusals. The actual
+        # literals are event-derived; this counter only bounds refuse/continue.
+        self._dictated_content_refusals = 0
         self._lock = asyncio.Lock()
         # WALK-18 — cooperative pause flag. pause() SETS it WITHOUT taking
         # self._lock (so a pause lands while the in-flight turn holds the lock,
@@ -1301,6 +1304,8 @@ class AgentLoop:
         # C1c — fresh segment → fresh DoD-refusal streak (telemetry; the gate
         # has no cap, but a resume/steer should not carry a streak across).
         self._dod_refusals = 0
+        # REL-RC-O — fresh segment → fresh dictated-content refusal budget.
+        self._dictated_content_refusals = 0
         # C20 — fresh segment → fresh fan-out budget. The cap is per-run-
         # segment so a resume/steer gets a fresh budget (a steered user
         # message is a clean slate; the prior segment's helper round-trips

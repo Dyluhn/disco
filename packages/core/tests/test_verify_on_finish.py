@@ -7,6 +7,8 @@ action.
 
 from __future__ import annotations
 
+import pytest
+
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -232,10 +234,13 @@ def test_app_verify_command_distinguishes_serving_from_not(tmp_path):
     from disco.core.loop.engine import _app_verify_command
 
     # a real one-request server on an ephemeral port, serving a non-trivial body
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
+    try:
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+    except PermissionError as exc:
+        pytest.skip(f"local socket binding unavailable in this sandbox: {exc}")
 
     class _H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802

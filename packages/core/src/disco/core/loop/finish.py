@@ -13,20 +13,24 @@ in-collaborator).
 from __future__ import annotations
 
 import logging
+import posixpath
 import re
 from typing import TYPE_CHECKING, cast
 
+from ..dod import FileExistsPredicate
 from ..dod_evaluator import DoDEvaluator, HttpProbeResult
 from ..env import disco_env
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
     ConversationStatus,
+    DeliverableEvent,
     Event,
     EventSource,
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    PlanEvent,
     StatusEvent,
     ToolCall,
 )
@@ -36,6 +40,10 @@ from ..view import effective_plan_progress
 from . import signals
 from .boundaries import AgentStep
 from .control import Disp
+from .plan_conditions import (
+    DictatedContentCondition,
+    dictated_content_conditions_from_events,
+)
 from .preview_target import (
     PREVIEW_PORTS,
     backend_shares_host_network,
@@ -67,6 +75,10 @@ _FINISH_VERIFY_CAP = 3
 # refusals the gate RELEASES (finish lands) with a LOUD warning; the prior
 # refusal events remain the visible audit trail.
 _DOD_REFUSAL_CAP = 3
+
+# REL-RC-O — quoted user literals are hard content floors at finish, but the
+# refusal must be bounded so a model that cannot repair does not deadlock.
+_DICTATED_CONTENT_REFUSAL_CAP = 3
 
 # W5 — execution-nudge cap. The execution gate was the ONE uncapped gate in the
 # finish path (the comment "No cap" in the old code). After _EXECUTION_NUDGE_CAP
@@ -194,6 +206,59 @@ def _is_web_deliverable(events: list[Event]) -> bool:
                     if session != "preview":
                         return True
     return False
+
+
+def _latest_plan_revision(events: list[Event]) -> int | None:
+    rev: int | None = None
+    for ev in events:
+        if isinstance(ev, PlanEvent):
+            rev = ev.revision if rev is None else max(rev, ev.revision)
+    return rev
+
+
+def _safe_deliverable_file_path(path: str, *, app_root: bool = False) -> str | None:
+    raw = (path or "").strip()
+    if not raw:
+        return None
+    norm = posixpath.normpath(raw)
+    if norm in ("", "."):
+        return "index.html" if app_root else None
+    if norm.startswith("/") or norm == ".." or norm.startswith("../"):
+        return None
+    if app_root:
+        base = norm.rstrip("/")
+        if posixpath.basename(base) == "index.html":
+            return base
+        return posixpath.normpath(posixpath.join(base, "index.html"))
+    return norm
+
+
+def _plan_file_exists_paths(events: list[Event]) -> list[str]:
+    out: list[str] = []
+    for ev in events:
+        if not isinstance(ev, PlanEvent):
+            continue
+        for step in ev.steps:
+            dc = getattr(step, "done_condition", None)
+            if isinstance(dc, FileExistsPredicate):
+                p = _safe_deliverable_file_path(dc.path)
+                if p is not None:
+                    out.append(p)
+    return out
+
+
+def _deliverable_event_paths(events: list[Event]) -> list[str]:
+    out: list[str] = []
+    for ev in events:
+        if not isinstance(ev, DeliverableEvent):
+            continue
+        p = _safe_deliverable_file_path(
+            ev.path,
+            app_root=(ev.artifact_kind == "app"),
+        )
+        if p is not None:
+            out.append(p)
+    return out
 
 
 # ---- Bug 6: actionless honest-unverifiable-static finish helpers ------------
@@ -929,6 +994,227 @@ class FinishGate:
         except Exception:  # noqa: BLE001 — introspection failure → degrade safely
             return False
         return "verify_web_app" in tool_names
+
+    def _contract_required_deliverable_paths(self) -> list[str]:
+        """Best-effort bridge from a contract finalizer alias to required files.
+
+        The loop only stores the finalizer alias, not the whole contract. When
+        present, match it against the registry and reuse the contract's required
+        files as primary deliverable candidates. No alias/no match is inert.
+        """
+
+        alias = getattr(self._loop, "_finish_alias", None)
+        if not alias:
+            return []
+        try:
+            from ..contract.registry import BuildContractRegistry
+
+            reg = BuildContractRegistry.default()
+            out: list[str] = []
+            for kind in reg.kinds():
+                c = reg.get(kind)
+                if c is None or c.verify.finalizer != alias:
+                    continue
+                for p in c.artifact.required_files:
+                    safe = _safe_deliverable_file_path(p)
+                    if safe is not None:
+                        out.append(safe)
+            return out
+        except Exception:  # noqa: BLE001 — finish gate degrades to other path sources
+            return []
+
+    async def _dictated_content_deliverable_paths(self, events: list[Event]) -> list[str]:
+        """Primary deliverable files for dictated-content checking.
+
+        Sources are deliberately narrow: files named by Plan/DoD/contract
+        deliverable declarations, explicit handoff events, plus the existing web
+        finish-gate convention that an index.html write makes a static web
+        deliverable. This avoids scanning arbitrary workspace files.
+        """
+
+        paths: list[str] = []
+        paths.extend(_plan_file_exists_paths(events))
+        paths.extend(_deliverable_event_paths(events))
+        spec = await self._loop.store.get_dod_spec(self._loop.conversation_id)
+        if spec is not None:
+            for pred in spec.predicates:
+                if isinstance(pred, FileExistsPredicate):
+                    p = _safe_deliverable_file_path(pred.path)
+                    if p is not None:
+                        paths.append(p)
+        paths.extend(self._contract_required_deliverable_paths())
+        if _is_web_deliverable(events):
+            paths.append("index.html")
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for path in paths:
+            norm = posixpath.normpath(path)
+            if norm in seen:
+                continue
+            seen.add(norm)
+            out.append(norm)
+        return out
+
+    async def _read_deliverable_bytes(self, path: str) -> bytes | None:
+        """Read one deliverable file, returning None only when no host/sandbox
+        read surface is available. Missing/empty files return b"" so the content
+        condition fails loudly against the named file."""
+
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is not None and hasattr(sbx, "read_file"):
+            try:
+                data = await sbx.read_file(path)
+            except FileNotFoundError:
+                return b""
+            except Exception as exc:  # noqa: BLE001 — gate is best-effort if read infra breaks
+                _LOG.warning(
+                    "dictated-content read failed for %s:%s via sandbox: %s",
+                    self._loop.conversation_id,
+                    path,
+                    exc,
+                )
+                return b""
+            if isinstance(data, bytes):
+                return data
+            return str(data).encode("utf-8", "surrogatepass")
+
+        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
+        if not workspace:
+            return None
+        from pathlib import Path
+
+        try:
+            root = Path(workspace).resolve()
+            candidate = (root / path).resolve()
+            root_s = str(root)
+            cand_s = str(candidate)
+            if not (cand_s == root_s or cand_s.startswith(root_s.rstrip("/") + "/")):
+                return b""
+            if not candidate.is_file():
+                return b""
+            return candidate.read_bytes()
+        except OSError as exc:
+            _LOG.warning(
+                "dictated-content read failed for %s:%s from workspace: %s",
+                self._loop.conversation_id,
+                path,
+                exc,
+            )
+            return b""
+
+    async def _first_dictated_content_miss(
+        self,
+        conditions: list[DictatedContentCondition],
+        paths: list[str],
+    ) -> tuple[DictatedContentCondition, list[str]] | None:
+        readable = False
+        contents: list[tuple[str, bytes]] = []
+        for path in paths:
+            data = await self._read_deliverable_bytes(path)
+            if data is None:
+                continue
+            readable = True
+            contents.append((path, data))
+        if not readable:
+            _LOG.warning(
+                "dictated-content conditions present for %s, but no readable "
+                "deliverable file surface is available; skipping gate.",
+                self._loop.conversation_id,
+            )
+            return None
+
+        for cond in conditions:
+            needle = cond.literal.encode("utf-8", "surrogatepass")
+            if any(needle in data for _, data in contents):
+                continue
+            checked = [path for path, _ in contents] or paths
+            return cond, checked
+        return None
+
+    async def dictated_content_gate_passed(self, events: list[Event]) -> bool:
+        """REL-RC-O finish gate: quoted user literals must be present verbatim.
+
+        Conditions are reconstructed from USER messages bound to PlanEvent
+        revisions. The current revision inherits all prior revisions, so a later
+        phase cannot silently drop content quoted earlier in the conversation.
+        """
+
+        if not self._loop._planning_tools or self._loop.mode == OperatingMode.PLANNING:
+            return True
+        current_revision = _latest_plan_revision(events)
+        if current_revision is None:
+            return True
+        conditions = [
+            c
+            for c in dictated_content_conditions_from_events(events)
+            if c.revision <= current_revision
+        ]
+        if not conditions:
+            self._loop._dictated_content_refusals = 0
+            return True
+        paths = await self._dictated_content_deliverable_paths(events)
+        if not paths:
+            return True
+
+        miss = await self._first_dictated_content_miss(conditions, paths)
+        if miss is None:
+            self._loop._dictated_content_refusals = 0
+            return True
+
+        cond, checked_paths = miss
+        file_word = "file" if len(checked_paths) == 1 else "files"
+        files = ", ".join(f"`{p}`" for p in checked_paths)
+        literal = cond.literal
+
+        if self._loop._dictated_content_refusals >= _DICTATED_CONTENT_REFUSAL_CAP:
+            if self._loop._dictated_content_refusals == _DICTATED_CONTENT_REFUSAL_CAP:
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail="dictated_content_release",
+                    )
+                )
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "⚠ Finished despite missing dictated content after "
+                                f"{self._loop._dictated_content_refusals} refusals: "
+                                f"literal {literal!r} from plan revision {cond.revision} "
+                                f"still was not found in deliverable {file_word} {files}. "
+                                "Releasing the finish gate to avoid an unbounded loop; "
+                                "the deliverable may fail content review."
+                            ),
+                        ),
+                    )
+                )
+                self._loop._dictated_content_refusals += 1
+            return True
+
+        self._loop._dictated_content_refusals += 1
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "You called finish, but a quoted user literal is missing "
+                        f"from the deliverable {file_word} {files}: {literal!r}.\n\n"
+                        f"This literal was dictated in the user instruction for plan "
+                        f"revision {cond.revision} and is carried forward into the "
+                        "current revision. The match is case-sensitive and exact. "
+                        "Update the deliverable so it contains that exact text, then "
+                        "finish again.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
+        return False
 
     async def _detect_preview_url(self) -> str | None:
         """P1-1 — detect the URL the live deliverable currently serves on, using the
@@ -2062,6 +2348,11 @@ class FinishGate:
         if disp is Disp.HALT:
             return Disp.HALT
 
+        events = await self._loop._events()
+        if not await self.dictated_content_gate_passed(events):
+            return Disp.CONTINUE
+
+        events = await self._loop._events()
         disp = await self.gate_browser_verify(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
