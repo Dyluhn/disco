@@ -9,9 +9,9 @@ use the semantic app_* tools); raw rewrite is reachable only in REPAIR.
 
 Governed surface: a tool is enforced if the contract scopes it to SOME phase (a build
 tool the contract knows) OR it is a known escape-hatch mutator (file_write/shell/…).
-Everything else — think, preview_*, read-only utilities, the finalizer — is ungoverned
-and always passes, so enforcement constrains the BUILD surface without breaking the
-universal tools. Pure decision logic + a thin guard; no runtime imports.
+Neutral control/inspection tools are scoped into every phase by the compiler, so
+enforcement constrains the BUILD mutation surface without breaking bookkeeping,
+preview, verifier, or read tools. Pure decision logic + a thin guard; no runtime imports.
 """
 
 from __future__ import annotations
@@ -50,16 +50,17 @@ def _governed(tool: str, scopes: ContractToolScopes, is_mutating: bool | None) -
 
     Governed = a MUTATING tool (derived from the registry's read_only flag at the
     dispatch boundary — so a writer/exec is gated whatever its name), OR a build tool
-    the contract scopes to bootstrap/edit/repair/export. When ``is_mutating`` is None
+    the contract scopes to any phase. When ``is_mutating`` is None
     (a caller with no tool metadata, e.g. a pure unit test) it falls back to the
-    best-effort DANGEROUS_TOOLS name list. The verify finalizer is deliberately
-    EXCLUDED: it is a control signal ('I think this is ready') that requests the phase
-    transition, so it must remain callable from any phase — blocking it strands the run.
+    best-effort DANGEROUS_TOOLS name list. Phase-neutral controls, including the
+    active finalizer, are compiled into every phase before this governed check runs.
     """
     mutating = is_mutating if is_mutating is not None else (tool in DANGEROUS_TOOLS)
     if mutating:
         return True
-    return tool in (scopes.bootstrap | scopes.edit | scopes.repair | scopes.export)
+    return tool in (
+        scopes.bootstrap | scopes.edit | scopes.repair | scopes.verify | scopes.export
+    )
 
 
 def decide_tool_in_scope(
@@ -69,7 +70,7 @@ def decide_tool_in_scope(
 
     - permitted in this phase → allow
     - governed (a mutating tool, or one scoped to another phase) but NOT in this phase → DENY
-    - ungoverned read-only utility (think / preview / read / finalizer) → allow
+    - ungoverned read-only utility not named by the contract → allow
 
     ``is_mutating`` should be passed by the dispatch boundary (``not read_only``) so
     enforcement is metadata-driven, not dependent on a hand-maintained name list.

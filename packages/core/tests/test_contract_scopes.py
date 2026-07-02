@@ -9,6 +9,7 @@ from disco.core.contract import (
     ContractKind,
     ContractToolScopes,
     EditContract,
+    PHASE_NEUTRAL_TOOLS,
     Phase,
     ToolPack,
     VerificationContract,
@@ -26,17 +27,23 @@ def _contract(*, bootstrap=(), edit=(), repair=(), rewrite=False, finalizer="rea
     )
 
 
+def _neutral(finalizer: str = "ready_for_artifact_verification") -> frozenset[str]:
+    return PHASE_NEUTRAL_TOOLS | frozenset({finalizer})
+
+
 def test_scopes_project_the_packs_per_phase() -> None:
     c = _contract(bootstrap=("app_create",), edit=("app_update_content",), repair=("file_write",))
     s = compile_tool_scopes(c)
-    assert s.bootstrap == frozenset({"app_create"})
-    assert s.edit == frozenset({"app_update_content"})
-    assert s.repair == frozenset({"file_write"})
-    # CD-TOOLS-6 — verify = finalizer + the read-only diagnostics the verifier needs (no mutators).
+    neutral = _neutral()
+    assert s.bootstrap == neutral | frozenset({"app_create"})
+    assert s.edit == neutral | frozenset({"app_update_content"})
+    assert s.repair == neutral | frozenset({"file_write"})
+    # REL-3 — verify/export carry only the phase-neutral tools; mutation packs do not bleed in.
+    assert s.verify == neutral
+    assert s.export == neutral
     assert "ready_for_artifact_verification" in s.verify
-    assert {"verify_web_app", "file_read", "server_status"} <= s.verify
+    assert {"verify_web_app", "file_read", "server_status", "preview_start"} <= s.verify
     assert not ({"file_write", "exact_replace", "safe_write_file", "shell"} & s.verify)
-    assert s.export == frozenset()
 
 
 def test_tool_absent_from_phase_is_hard_excluded() -> None:
@@ -55,11 +62,12 @@ def test_repair_scope_is_bounded_to_repair_tools() -> None:
     assert s.allowed(Phase.EDIT, "file_write") is False  # rewrite stays out of edit
 
 
-def test_verify_scope_is_the_finalizer() -> None:
-    # CD-TOOLS-6 — verify carries the finalizer PLUS read-only diagnostics, and NO mutator.
+def test_verify_scope_is_neutral_finalizer_without_mutators() -> None:
+    # CD-TOOLS-6 / REL-3 — verify carries the finalizer plus phase-neutral diagnostics,
+    # and NO contract mutation tool.
     s = compile_tool_scopes(_contract(finalizer="ready_for_app_verification"))
     assert "ready_for_app_verification" in s.verify
-    assert {"verify_web_app", "file_read", "server_status"} <= s.verify
+    assert {"verify_web_app", "file_read", "server_status", "preview_start"} <= s.verify
     assert not ({"file_write", "exact_replace", "safe_write_file", "app_create"} & s.verify)
     assert s.allowed(Phase.VERIFY, "ready_for_app_verification") is True
     assert s.allowed(Phase.VERIFY, "file_write") is False
@@ -101,13 +109,22 @@ def test_scopes_roundtrip() -> None:
     assert ContractToolScopes.model_validate(s.model_dump(mode="json")) == s
 
 
+def test_phase_neutral_tools_are_projected_to_every_phase() -> None:
+    s = compile_tool_scopes(_contract(bootstrap=("app_create",), edit=("file_edit",)))
+    for phase in Phase:
+        for tool in PHASE_NEUTRAL_TOOLS | frozenset({"ready_for_artifact_verification"}):
+            assert s.allowed(phase, tool) is True, f"{tool} should be neutral in {phase.value}"
+
+
 def test_every_builtin_compiles() -> None:
     reg = BuildContractRegistry.default()
     for kind in ContractKind:
         c = reg.get(kind)
         assert c is not None
         s = compile_tool_scopes(c)
-        # CD-TOOLS-6 — verify carries the finalizer + read-only diagnostics, NEVER a mutator.
-        assert c.verify.finalizer in s.verify
-        assert "verify_web_app" in s.verify
+        # REL-3 — every phase gets the neutral set + active finalizer, NEVER broad mutators.
+        for phase in Phase:
+            assert c.verify.finalizer in s.for_phase(phase)
+            assert "verify_web_app" in s.for_phase(phase)
+            assert "update_plan_progress" in s.for_phase(phase)
         assert not ({"file_write", "exact_replace", "safe_write_file", "shell", "browser"} & s.verify)

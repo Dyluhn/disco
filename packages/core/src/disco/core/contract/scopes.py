@@ -1,10 +1,11 @@
 """Contract → ToolScope compiler (CONTRACT-3).
 
 Compiles a BuildContract into HARD per-phase tool allowlists: in each phase
-(bootstrap / edit / repair / verify / export) the model may call ONLY the tools the
-contract declared for that phase. A tool absent from a phase's pack is hard-excluded —
-so e.g. a contract whose bootstrap pack is the semantic app_* tools cannot fall back to
-a generic file_write during bootstrap.
+(bootstrap / edit / repair / verify / export) the model may call ONLY phase-neutral
+control/inspection tools plus the tools the contract declared for that phase. A
+mutation tool absent from a phase's pack is hard-excluded — so e.g. a contract whose
+bootstrap pack is the semantic app_* tools cannot fall back to a generic file_write
+during bootstrap.
 
 Pure projection of the contract's tool packs onto phases; no tool-runtime import. The
 executor-side enforcement (intersect with the registry + deny out-of-scope calls) is a
@@ -54,27 +55,34 @@ class ContractToolScopes(BaseModel):
         return tool in self.for_phase(phase)
 
 
-# CD-TOOLS-6 — the VERIFY phase is a READ-ONLY DIAGNOSTICS phase: the verifier must be able to
-# INSPECT the deliverable but must NOT mutate or DRIVE it. The verifier's inspect tool is
-# verify_web_app — the STRUCTURED self-test that internally runs the read-only browser checks
-# (navigate/console/screenshot) and returns a verdict; it is read_only=False (drives the sandbox)
-# so it must be listed explicitly or the guard would deny the verifier itself. Raw `browser` is
-# DELIBERATELY EXCLUDED: BrowserArgs admits click/fill/submit/back, and the scope guard is tool-
-# name-only, so admitting raw browser would turn VERIFY into general browser AUTOMATION, not read-
-# only diagnostics (codex CD-TOOLS-6 round-1). The rest are genuinely read-only (would already fall
-# through to allowed); listing them makes the verify allowlist explicit + self-documenting. NO
-# mutator (file_write/edit/exact_replace/safe_write_file/shell/code_exec/app_*/deck/sheets/slides/
-# image/scaffold/preview_start/stop) — NOR raw browser — is here → all stay DENIED in VERIFY.
-_VERIFY_DIAGNOSTICS: frozenset[str] = frozenset(
+# REL-3: tools that are not contract mutations. They may update host bookkeeping,
+# inspect the workspace/web, drive the host-owned preview/verifier, or signal the
+# finalization boundary, but they do not author or rewrite the deliverable. These
+# are allowed in every contract phase; phase-specific mutation tools remain owned by
+# the contract packs below.
+PHASE_NEUTRAL_TOOLS: frozenset[str] = frozenset(
     {
-        "verify_web_app",
-        "file_read",
+        # bookkeeping / virtual meta
+        "ask_user",
+        "clarify",
+        "finish",
+        "notify_user",
+        "plan_step",
+        "think",
+        "update_plan_progress",
+        # read / inspect
+        "extract",
         "file_list",
+        "file_read",
         "search",
         "server_status",
-        "preview_status",
+        # host-owned preview controls
         "preview_logs",
-        "think",
+        "preview_start",
+        "preview_status",
+        "preview_stop",
+        # verification / host verifier probe
+        "verify_web_app",
     }
 )
 
@@ -82,20 +90,21 @@ _VERIFY_DIAGNOSTICS: frozenset[str] = frozenset(
 def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
     """Project a contract's tool packs onto the five execution phases.
 
-    - bootstrap → the bootstrap ToolPack's tools (scaffold the artifact)
-    - edit      → the EditContract's edit_tools (targeted, semantic edits)
-    - repair    → the EditContract's repair_tools (bounded recovery set; broad/rewrite
-                  tools appear here ONLY when the contract declared them, which a custom
-                  contract does via rewrite_allowed + its repair pack)
-    - verify    → the host finalizer + the read-only DIAGNOSTICS the verifier needs to inspect
-                  (CD-TOOLS-6); NO mutator is permitted here
-    - export    → empty for now; export TOOLS ship in P10 (the ExportContract today
-                  declares a pipeline of stage names, not tool names)
+    - every phase → phase-neutral control/read/preview/verify tools + active finalizer
+    - bootstrap   → the bootstrap ToolPack's tools (scaffold the artifact)
+    - edit        → the EditContract's edit_tools (targeted, semantic edits)
+    - repair      → the EditContract's repair_tools (bounded recovery set; broad/rewrite
+                    tools appear here ONLY when the contract declared them, which a custom
+                    contract does via rewrite_allowed + its repair pack)
+    - verify      → neutral diagnostics/finalizer only; no contract mutation tools
+    - export      → neutral tools only for now; export TOOLS ship in P10 (the
+                    ExportContract today declares a pipeline of stage names, not tool names)
     """
+    neutral = PHASE_NEUTRAL_TOOLS | frozenset({contract.verify.finalizer})
     return ContractToolScopes(
-        bootstrap=frozenset(contract.bootstrap.tools),
-        edit=frozenset(contract.edit.edit_tools),
-        repair=frozenset(contract.edit.repair_tools),
-        verify=frozenset({contract.verify.finalizer}) | _VERIFY_DIAGNOSTICS,
-        export=frozenset(),
+        bootstrap=neutral | frozenset(contract.bootstrap.tools),
+        edit=neutral | frozenset(contract.edit.edit_tools),
+        repair=neutral | frozenset(contract.edit.repair_tools),
+        verify=neutral,
+        export=neutral,
     )

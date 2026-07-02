@@ -1,6 +1,5 @@
-"""CD-TOOLS-6 — the VERIFY phase is a READ-ONLY DIAGNOSTICS phase. The wired ContractScopeGuard
-must let the verifier INSPECT (verify_web_app / browser / file_read / server_status) while DENYING
-every mutator (with the VERIFIER_ONLY_TOOL_BLOCKED code). EDIT/REPAIR are unchanged."""
+"""CD-TOOLS-6 / REL-3 — VERIFY permits neutral diagnostics/preview controls while DENYING
+deliverable mutators (with the VERIFIER_ONLY_TOOL_BLOCKED code). EDIT/REPAIR are unchanged."""
 
 from __future__ import annotations
 
@@ -11,11 +10,11 @@ from disco.core.contract.registry import BuildContractRegistry
 from disco.core.contract.scopes import Phase
 
 _DIAGNOSTICS = ["verify_web_app", "file_read", "file_list", "search", "server_status",
-                "preview_status", "preview_logs", "think"]
+                "preview_start", "preview_status", "preview_logs", "preview_stop", "think"]
 # raw `browser` is a MUTATOR-grade tool here (BrowserArgs admits click/fill/submit) → DENIED in
 # VERIFY; the verifier inspects via verify_web_app's encapsulated read-only checks instead.
 _MUTATORS = ["file_write", "file_edit", "file_replace_lines", "exact_replace", "safe_write_file",
-             "shell", "code_exec", "app_create", "deck_patch", "preview_start", "browser"]
+             "shell", "code_exec", "app_create", "deck_patch", "browser"]
 
 _FINALIZER = "ready_for_static_site_verification"
 
@@ -38,6 +37,14 @@ def test_verify_phase_allows_verify_web_app_even_though_it_is_not_read_only():
     # it'd be denied as a mutator, stranding the verifier. It must be ALLOWED.
     s = _scopes()
     assert decide_tool_in_scope(s, Phase.VERIFY, "verify_web_app", is_mutating=True).allowed
+
+
+def test_verify_phase_allows_preview_controls_even_though_they_are_not_read_only():
+    # REL-3: preview_start/stop drive the host-owned preview, but do not mutate the
+    # deliverable; they are neutral and callable in every phase.
+    s = _scopes()
+    for tool in ("preview_start", "preview_stop"):
+        assert decide_tool_in_scope(s, Phase.VERIFY, tool, is_mutating=True).allowed
 
 
 def test_raw_browser_is_denied_in_verify():

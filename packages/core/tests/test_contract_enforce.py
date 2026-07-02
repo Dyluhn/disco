@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from disco.core.contract import (
     BuildContractRegistry,
     ContractKind,
@@ -24,12 +26,54 @@ def test_in_phase_tool_allowed() -> None:
     assert decide_tool_in_scope(s, Phase.BOOTSTRAP, "app_create").allowed is True
 
 
+def test_static_site_semantic_edits_allowed_in_edit() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.STATIC_SITE)
+    assert c is not None
+    s = compile_tool_scopes(c)
+    assert decide_tool_in_scope(s, Phase.EDIT, "file_edit", is_mutating=True).allowed
+    assert decide_tool_in_scope(s, Phase.EDIT, "file_replace_lines", is_mutating=True).allowed
+
+
 def test_dangerous_tool_denied_outside_its_phase() -> None:
     s = compile_tool_scopes(_appkit())
     # file_write is repair-only for appkit → DENIED in EDIT, allowed in REPAIR
     d_edit = decide_tool_in_scope(s, Phase.EDIT, "file_write")
     assert d_edit.allowed is False and "file_write" in d_edit.reason
     assert decide_tool_in_scope(s, Phase.REPAIR, "file_write").allowed is True
+
+
+@pytest.mark.parametrize("phase", tuple(Phase))
+@pytest.mark.parametrize(
+    ("tool", "is_mutating"),
+    (
+        # bookkeeping / virtual meta
+        ("update_plan_progress", True),
+        ("plan_step", True),
+        ("think", False),
+        ("notify_user", False),
+        ("ask_user", False),
+        ("clarify", False),
+        ("finish", False),
+        ("ready_for_app_verification", False),
+        # read / inspect
+        ("file_read", False),
+        ("file_list", False),
+        ("search", False),
+        ("extract", False),
+        ("server_status", False),
+        # preview / verification tools whose registry metadata may be non-read-only
+        ("preview_start", True),
+        ("preview_status", False),
+        ("preview_logs", False),
+        ("preview_stop", True),
+        ("verify_web_app", True),
+    ),
+)
+def test_phase_neutral_tools_allowed_in_every_phase(
+    phase: Phase, tool: str, is_mutating: bool
+) -> None:
+    s = compile_tool_scopes(_appkit())
+    assert decide_tool_in_scope(s, phase, tool, is_mutating=is_mutating).allowed is True
 
 
 def test_bootstrap_tool_denied_during_edit() -> None:
@@ -54,7 +98,7 @@ def test_unlisted_mutator_gated_via_metadata_not_name() -> None:
     assert decide_tool_in_scope(s, Phase.EDIT, "some_reader", is_mutating=False).allowed is True
 
 
-def test_ungoverned_utilities_always_pass() -> None:
+def test_phase_neutral_utilities_pass_in_edit() -> None:
     s = compile_tool_scopes(_appkit())
     for util in ("think", "preview_start", "file_read", "ready_for_app_verification"):
         assert decide_tool_in_scope(s, Phase.EDIT, util).allowed is True, util

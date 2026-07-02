@@ -33,7 +33,7 @@ from .enforce import (
 )
 from .phase import BuildPhaseTracker
 from .registry import BuildContractRegistry
-from .scopes import ContractToolScopes, Phase, compile_tool_scopes
+from .scopes import PHASE_NEUTRAL_TOOLS, ContractToolScopes, Phase, compile_tool_scopes
 
 __all__ = [
     "DANGEROUS_TOOLS",
@@ -48,6 +48,7 @@ __all__ = [
     "EditContract",
     "ExportContract",
     "Phase",
+    "PHASE_NEUTRAL_TOOLS",
     "ScopeDecision",
     "ToolPack",
     "VerificationContract",

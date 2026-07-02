@@ -77,6 +77,10 @@ scenarios:
         trigger: after_terminal
     assertions:
       event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+      revisions:
+        initial_plan_revision: 1
+        expected_final_plan_revision: 2
+        forbid_write_before_revision_approval: true
       workspace:
         files:
           - path: "index.html"
