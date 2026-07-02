@@ -5537,3 +5537,26 @@ checks bytes, loud reminder names the missing text). Carry conditions across rev
 follow-up must not silently drop an earlier phase's dictated content) — that closes BOTH failure
 arms (never-applied AND reverted). Queued behind REL-RC-N (same engine area; serialize workers).
 Also consider: per-phase workspace snapshots in the runner evidence for precise attribution.
+
+### ★ BAR MET — REL-RC + harness campaign COMPLETE — 2026-07-02 06:55Z
+
+Bar attempt 7 (commit 9cc17ef8, all fixes live): **10/10 PASS, 0 STUCK, 0 INVALID** —
+revise_thrice_complex ×10 across 3 parallel lanes (4+4+2), MiniMax-direct, conversation-scoped
+adjudication, relay ledger clean. The ×10 collapsed bar satisfies both the gating ×5 and the
+confirming ×5 of the original REL-RC bar.
+
+Fix inventory that got here (14 commits, 2026-07-01→02): harness fix #4 (content truth on stable
+bytes) · type-gate restore · REL-RC-G/G2 (self-recovering edit refusals, 64KB cap) · H (replan gate
+on all pickups) · I (planning-refusal escalation→narrowing) · J (finish counts OUTCOMES) · K
+(pair-atomic history render + protocol retry) · L (no-op-edit escalation) · M (no_op_write) · N
+(prose-plan harvest + force-marker hole) · O (dictated-content finish floors) · PARALLEL-1/2/3
+(conversation-scoped provider/orphan evidence + lane recipe) · frontend type-debt clear · infra:
+disco-dev.slice for servers+relay.
+
+Attempt trajectory: 2/5 → 3/5 → 9/10 → 7/10 → **10/10**; every fixed category showed ZERO
+recurrence after its fix. Zero INVALID across attempts 5-7 (measurement layer honest under
+parallelism).
+
+Next per the standing roadmap: REL-1 → REL-3 → REL-6 gate (P11 unblocks at REL-6 100%), and the
+playbook gap plan (docs/claude-design-playbook.md §12) drives P8+. The 3-lane ×10 recipe is the
+standing verification cadence.
