@@ -23,7 +23,14 @@ _ORACLE_READS: dict[str, set[str]] = {
     "shown": {"artifact_shown", "preview_shown"},
     "verification": {"ready_for_verification_called", "passed"},
     "export": {"requested", "download_present", "download_bytes"},
-    "cleanup": {"orphans", "workspace_released"},
+    "cleanup": {
+        "orphans",
+        "workspace_released",
+        "scope",
+        "container_orphans",
+        "volume_orphans",
+        "volume_scope",
+    },
 }
 
 

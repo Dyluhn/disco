@@ -102,6 +102,27 @@ def test_cleanup_orphans_fail():
     assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
 
 
+def test_cleanup_volume_orphans_fail():
+    ev = _green_evidence()
+    ev["cleanup"] = {
+        "orphans": 1,
+        "workspace_released": False,
+        "scope": "conversation",
+        "container_orphans": 0,
+        "volume_orphans": 1,
+        "volume_scope": "conversation",
+    }
+    r = CleanupOracle().check(product_evidence=ev)[0]
+    assert r.code == "WORKSPACE_NOT_CLEANED"
+    assert r.facts["volume_orphans"] == 1
+
+
+def test_cleanup_back_compat_without_volume_fields_still_passes():
+    ev = _green_evidence()
+    ev["cleanup"] = {"orphans": 0, "workspace_released": True}
+    assert CleanupOracle().check(product_evidence=ev)[0].passed
+
+
 # --- classify integration -----------------------------------------------------
 def _scn():
     return {"id": "s", "assertions": {"event_chain": {"require_plan_before_execution": True}}}

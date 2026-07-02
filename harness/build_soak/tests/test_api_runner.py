@@ -2668,7 +2668,13 @@ def _cleanup_run(state_final=None):
     return run
 
 
-def _fake_podman_ps(monkeypatch, stdout: str) -> None:
+def _fake_podman(
+    monkeypatch,
+    *,
+    ps_stdout: str = "",
+    volume_stdout: str = "",
+    dangling_stdout: str = "",
+) -> None:
     class _Result:
         returncode = 0
 
@@ -2676,8 +2682,22 @@ def _fake_podman_ps(monkeypatch, stdout: str) -> None:
             self.stdout = text
 
     def fake_run(*args, **kwargs):
-        assert args[0] == ["podman", "ps", "--format", "{{.Names}}"]
-        return _Result(stdout)
+        argv = args[0]
+        if argv == ["podman", "ps", "--format", "{{.Names}}"]:
+            return _Result(ps_stdout)
+        if argv == ["podman", "volume", "ls", "--format", "{{.Name}}"]:
+            return _Result(volume_stdout)
+        if argv == [
+            "podman",
+            "volume",
+            "ls",
+            "--filter",
+            "dangling=true",
+            "--format",
+            "{{.Name}}",
+        ]:
+            return _Result(dangling_stdout)
+        raise AssertionError(f"unexpected podman command: {argv!r}")
 
     monkeypatch.setattr(_run_mod.subprocess, "run", fake_run)
 
@@ -2688,9 +2708,9 @@ async def test_cleanup_orphans_are_scoped_to_this_conversation_sandbox_ids(monke
         return None
 
     monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
-    _fake_podman_ps(
+    _fake_podman(
         monkeypatch,
-        "\n".join(
+        ps_stdout="\n".join(
             [
                 "disco-sbx-sbx_this_conv",
                 "disco-sbx-sbx_other_conv",
@@ -2698,6 +2718,8 @@ async def test_cleanup_orphans_are_scoped_to_this_conversation_sandbox_ids(monke
                 "unrelated-container",
             ]
         ),
+        volume_stdout="",
+        dangling_stdout="",
     )
     run = _cleanup_run(
         {"status": "FINISHED", "extras": {"sandbox_instance_ids": ["sbx_this_conv"]}}
@@ -2710,6 +2732,7 @@ async def test_cleanup_orphans_are_scoped_to_this_conversation_sandbox_ids(monke
         baseline_containers=0,
         relay_log=None,
         timeline=[],
+        baseline_dangling_volumes=set(),
         grace_s=0.0,
     )
 
@@ -2717,6 +2740,9 @@ async def test_cleanup_orphans_are_scoped_to_this_conversation_sandbox_ids(monke
         "orphans": 1,
         "workspace_released": False,
         "scope": "conversation",
+        "container_orphans": 1,
+        "volume_orphans": 0,
+        "volume_scope": "conversation",
     }
 
 
@@ -2726,9 +2752,11 @@ async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(mo
         return None
 
     monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
-    _fake_podman_ps(
+    _fake_podman(
         monkeypatch,
-        "\n".join(["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]),
+        ps_stdout="\n".join(["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]),
+        volume_stdout="",
+        dangling_stdout="",
     )
     run = _cleanup_run()
 
@@ -2739,6 +2767,7 @@ async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(mo
         baseline_containers=0,
         relay_log=None,
         timeline=[],
+        baseline_dangling_volumes=set(),
         grace_s=0.0,
     )
 
@@ -2746,6 +2775,46 @@ async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(mo
         "orphans": 0,
         "workspace_released": True,
         "scope": "conversation",
+        "container_orphans": 0,
+        "volume_orphans": 0,
+        "volume_scope": "conversation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_counts_scoped_leftover_workspace_volume_as_orphan(monkeypatch):
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman(
+        monkeypatch,
+        ps_stdout="",
+        volume_stdout="\n".join(["disco-ws-sbx_this_conv", "disco-ws-sbx_other_conv"]),
+        dangling_stdout="",
+    )
+    run = _cleanup_run(
+        {"status": "FINISHED", "extras": {"sandbox_instance_ids": ["sbx_this_conv"]}}
+    )
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        _CleanupKillClient(),
+        "conv_terminal",
+        run,
+        baseline_containers=0,
+        relay_log=None,
+        timeline=[],
+        baseline_dangling_volumes=set(),
+        grace_s=0.0,
+    )
+
+    assert ev["cleanup"] == {
+        "orphans": 1,
+        "workspace_released": False,
+        "scope": "conversation",
+        "container_orphans": 0,
+        "volume_orphans": 1,
+        "volume_scope": "conversation",
     }
 
 
@@ -2755,9 +2824,9 @@ async def test_cleanup_orphan_count_falls_back_to_global_delta_without_sandbox_i
         return None
 
     monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
-    _fake_podman_ps(
+    _fake_podman(
         monkeypatch,
-        "\n".join(
+        ps_stdout="\n".join(
             [
                 "disco-sbx-sbx_before_a",
                 "disco-egr-sbx_before_a",
@@ -2765,6 +2834,8 @@ async def test_cleanup_orphan_count_falls_back_to_global_delta_without_sandbox_i
                 "disco-egr-sbx_after_b",
             ]
         ),
+        volume_stdout="",
+        dangling_stdout="\n".join(["pre_existing", "new_run_volume"]),
     )
     run = _cleanup_run({"status": "FINISHED", "extras": {}})
 
@@ -2775,13 +2846,17 @@ async def test_cleanup_orphan_count_falls_back_to_global_delta_without_sandbox_i
         baseline_containers=2,
         relay_log=None,
         timeline=[],
+        baseline_dangling_volumes={"pre_existing"},
         grace_s=0.0,
     )
 
     assert ev["cleanup"] == {
-        "orphans": 2,
+        "orphans": 3,
         "workspace_released": False,
         "scope": "global",
+        "container_orphans": 2,
+        "volume_orphans": 1,
+        "volume_scope": "global_dangling",
     }
 
 
@@ -2931,3 +3006,19 @@ def test_new_scenarios_assert_deterministic_oracle_checkable_output():
     rt = scen["revise_twice_complex"]
     assert sum(bool(f.get("requires_plan_revision")) for f in rt["followups"]) == 2
     assert rt["assertions"]["revisions"]["expected_final_plan_revision"] == 3
+
+
+# ---- REL-6 finding #5: _shell_removes strictness (basename false-absent) --------------------
+def test_shell_removes_requires_exact_path_and_pure_rm():
+    from harness.build_soak.adapters.disco_api import _shell_removes
+
+    # The export-flow false positive: rm of a COPY must not mark the root deliverable absent.
+    assert not _shell_removes("rm export/index.html", "index.html")
+    # Compound commands are not deterministic deletes.
+    assert not _shell_removes("zip site.zip index.html && rm index.html", "index.html")
+    assert not _shell_removes("cp index.html /tmp; rm index.html", "index.html")
+    # rm not the program.
+    assert not _shell_removes("echo rm index.html", "index.html")
+    # The genuine case still detects.
+    assert _shell_removes("rm index.html", "index.html")
+    assert _shell_removes("rm -f index.html", "index.html")

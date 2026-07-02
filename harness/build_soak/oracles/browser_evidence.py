@@ -16,7 +16,9 @@ product_evidence (the HARN-1b dossier, all keys optional):
       "shown":        {"artifact_shown": bool, "preview_shown": bool},
       "verification": {"ready_for_verification_called": bool, "passed": bool},
       "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
-      "cleanup":      {"orphans": int, "workspace_released": bool, "scope"?: str},
+      "cleanup":      {"orphans": int, "workspace_released": bool, "scope"?: str,
+                       "container_orphans"?: int, "volume_orphans"?: int,
+                       "volume_scope"?: str},
     }
 """
 
@@ -229,8 +231,15 @@ class CleanupOracle:
         if cu is None:
             return [skipping(self._NAME, reason="no cleanup evidence (headless run)")]
         orphans = _int(cu.get("orphans", 0))
+        volume_present = "volume_orphans" in cu
+        volume_orphans = _int(cu.get("volume_orphans", 0))
         # fail-closed: malformed orphan count, any orphan, or a non-explicit release.
-        if orphans is None or orphans > 0 or cu.get("workspace_released", False) is not True:
+        if (
+            orphans is None
+            or orphans > 0
+            or (volume_present and (volume_orphans is None or volume_orphans > 0))
+            or cu.get("workspace_released", False) is not True
+        ):
             return [
                 failing(
                     self._NAME,
@@ -238,12 +247,25 @@ class CleanupOracle:
                     first_broken_link="terminal -> resources_released",
                     facts={
                         "orphans": cu.get("orphans"),
+                        "container_orphans": cu.get("container_orphans"),
+                        "volume_orphans": cu.get("volume_orphans"),
                         "workspace_released": cu.get("workspace_released"),
                         "scope": cu.get("scope"),
+                        "volume_scope": cu.get("volume_scope"),
                     },
                 )
             ]
-        return [passing(self._NAME, facts={"orphans": 0, "scope": cu.get("scope")})]
+        return [
+            passing(
+                self._NAME,
+                facts={
+                    "orphans": 0,
+                    "volume_orphans": volume_orphans,
+                    "scope": cu.get("scope"),
+                    "volume_scope": cu.get("volume_scope"),
+                },
+            )
+        ]
 
 
 # The ordered family the classifier runs (each SKIPs without its evidence slice).

@@ -5618,3 +5618,15 @@ NOT product signal. RULE (handoff doc): never run disco-dev-up.sh while build_so
 check pgrep first; commits during a matrix defer their restart to the next lane boundary.
 Scoreboard: STATIC_SMOKE 30/30 ✓ (complete, pre-restart). Relaunching on f3695250:
 A=targeted ×30, B=export ×20 + disconnect ×5, C=revision ×10.
+
+### REL-6 finding #4 — sandbox volume leak (podman lock exhaustion) — 2026-07-02
+
+EXPORT class iter 4 FAIL/BUILD_DID_NOT_FINISH: podman "exceeded num_locks (2048)" — 2045 ORPHANED
+VOLUMES from ~200 soak sandboxes (REL-5 removes containers, never their volumes; each volume holds
+a lock). Host pruned (2045→3), container creation verified. HONEST ACCOUNTING: iteration failed on
+host lock exhaustion (infra, cause = product volume leak); after the cleanup fix lands, ONE
+replacement export iteration runs so the class score reflects 20 product-clean runs — recorded
+here, not hidden. Product fix: sandbox destroy must remove its volumes; orphan adjudication gains
+volume counting (volumes are orphans within the "0 orphan sandboxes" acceptance).
+ADDENDUM: TARGETED iter 4 (rel6-A3 003, same minute) = identical num_locks error — both round-3
+failures so far are the ONE pre-prune infra event. +1 replacement iteration for TARGETED too.

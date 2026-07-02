@@ -922,6 +922,7 @@ async def _release_conversation(
 
 
 _DISCO_CONTAINER_PREFIXES = ("disco-sbx-", "disco-egr-")
+_DISCO_VOLUME_PREFIXES = ("disco-ws-", "pmx-ws-")
 
 
 def _live_disco_container_names() -> list[str] | None:
@@ -957,12 +958,72 @@ def _live_disco_container_count() -> int | None:
     return None if names is None else len(names)
 
 
+def _podman_volume_names(args: list[str]) -> list[str] | None:
+    try:
+        out = subprocess.run(
+            args,
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    names: list[str] = []
+    for line in out.stdout.splitlines():
+        clean = line.strip()
+        if clean:
+            names.append(clean)
+    return names
+
+
+def _disco_volume_names() -> list[str] | None:
+    """All disco workspace volumes, independent of whether their container is running."""
+    names = _podman_volume_names(["podman", "volume", "ls", "--format", "{{.Name}}"])
+    if names is None:
+        return None
+    return [name for name in names if name.startswith(_DISCO_VOLUME_PREFIXES)]
+
+
+def _dangling_volume_names() -> set[str] | None:
+    """Global dangling Podman volumes for unnamed-volume fallback accounting."""
+    names = _podman_volume_names(
+        ["podman", "volume", "ls", "--filter", "dangling=true", "--format", "{{.Name}}"]
+    )
+    return None if names is None else set(names)
+
+
 def _scoped_disco_container_count(
     names: list[str], sandbox_instance_ids: list[str]
 ) -> int:
     """Count live disco containers whose name embeds one of this conversation's sandbox ids."""
     ids = [sid for sid in sandbox_instance_ids if sid]
     return sum(1 for name in names if any(sid in name for sid in ids))
+
+
+def _scoped_disco_volume_count(names: list[str], sandbox_instance_ids: list[str]) -> int:
+    """Count disco workspace volumes whose name embeds one of this conversation's sandbox ids."""
+    ids = [sid for sid in sandbox_instance_ids if sid]
+    return sum(1 for name in names if any(sid in name for sid in ids))
+
+
+def _new_dangling_volume_count(
+    baseline: set[str] | None,
+    after: set[str] | None,
+    *,
+    exclude_disco_named: bool,
+) -> int | None:
+    """Count volumes newly dangling since run start.
+
+    Named disco workspace volumes are counted by sandbox id when possible; exclude
+    them there to avoid double-counting the same leaked volume as both named and
+    dangling.
+    """
+    if baseline is None or after is None:
+        return None
+    created = after - baseline
+    if exclude_disco_named:
+        created = {name for name in created if not name.startswith(_DISCO_VOLUME_PREFIXES)}
+    return len(created)
 
 
 def _extract_sandbox_instance_ids(*payloads: Any) -> list[str]:
@@ -1078,6 +1139,7 @@ async def _collect_terminal_cleanup_evidence(
     baseline_containers: int | None,
     relay_log: str | None,
     timeline: list[str],
+    baseline_dangling_volumes: set[str] | None = None,
     grace_s: float = 8.0,
 ) -> dict[str, Any]:
     """[REL-5] Make terminal cleanup ADJUDICATED instead of SKIPPED on the headless soak. The
@@ -1134,7 +1196,8 @@ async def _collect_terminal_cleanup_evidence(
         except Exception:
             calls_after = None
 
-    # release — destroy the sandbox + sidecar containers (REL-4 path), then measure orphans.
+    # release — destroy the sandbox + sidecar containers and workspace volumes
+    # (REL-4/REL-6 path), then measure orphans.
     released_ok = False
     release_resp: dict[str, Any] = {}
     with contextlib.suppress(Exception):
@@ -1146,31 +1209,66 @@ async def _collect_terminal_cleanup_evidence(
         )
     await asyncio.sleep(4.0)
     after_container_names = _live_disco_container_names()
+    after_volume_names = _disco_volume_names()
+    after_dangling_volumes = _dangling_volume_names()
 
     # sidecar — stopped_at_terminal iff the release tore the containers down; provider calls only if
     # we could actually measure them (else the slice is omitted → oracle skips, honest).
     if calls_after is not None:
         ev["sidecar"] = {"stopped_at_terminal": released_ok, "provider_calls_after_terminal": calls_after}
 
-    # cleanup — preferred path: count only containers whose names embed THIS conversation's sandbox
+    # cleanup — preferred path: count only resources whose names embed THIS conversation's sandbox
     # instance id(s). Parallel lanes may have live sandboxes after our release; those are not this
-    # run's orphans. If the server version cannot expose ids, keep the old global baseline delta as
-    # the serial/fail-closed fallback.
+    # run's orphans. Volumes are RUNNING-independent: a leaked `disco-ws-{sandbox_id}` still counts
+    # after the container is gone. If the server version cannot expose ids, keep the old global
+    # baseline delta as the serial/fail-closed fallback; for unnamed image VOLUME leaks, use the
+    # newly-dangling volume delta from the run window.
     sandbox_ids = _extract_sandbox_instance_ids(getattr(run, "state_final", {}) or {}, release_resp)
     if sandbox_ids and after_container_names is not None:
-        orphans = _scoped_disco_container_count(after_container_names, sandbox_ids)
+        container_orphans = _scoped_disco_container_count(after_container_names, sandbox_ids)
+        named_volume_orphans = (
+            _scoped_disco_volume_count(after_volume_names, sandbox_ids)
+            if after_volume_names is not None
+            else None
+        )
+        unnamed_volume_orphans = _new_dangling_volume_count(
+            baseline_dangling_volumes, after_dangling_volumes, exclude_disco_named=True
+        )
+        volume_parts = [
+            count for count in (named_volume_orphans, unnamed_volume_orphans) if count is not None
+        ]
+        volume_orphans = sum(volume_parts) if volume_parts else None
+        total_orphans = (
+            container_orphans + volume_orphans
+            if volume_orphans is not None
+            else container_orphans
+        )
         ev["cleanup"] = {
-            "orphans": orphans,
-            "workspace_released": released_ok and orphans == 0,
+            "orphans": total_orphans,
+            "workspace_released": released_ok and volume_orphans is not None and total_orphans == 0,
             "scope": "conversation",
+            "container_orphans": container_orphans,
+            "volume_orphans": volume_orphans,
+            "volume_scope": "conversation",
         }
     elif baseline_containers is not None and after_container_names is not None:
         after_containers = len(after_container_names)
-        orphans = max(0, after_containers - baseline_containers)
+        container_orphans = max(0, after_containers - baseline_containers)
+        volume_orphans = _new_dangling_volume_count(
+            baseline_dangling_volumes, after_dangling_volumes, exclude_disco_named=False
+        )
+        total_orphans = (
+            container_orphans + volume_orphans
+            if volume_orphans is not None
+            else container_orphans
+        )
         ev["cleanup"] = {
-            "orphans": orphans,
-            "workspace_released": released_ok and orphans == 0,
+            "orphans": total_orphans,
+            "workspace_released": released_ok and volume_orphans is not None and total_orphans == 0,
             "scope": "global",
+            "container_orphans": container_orphans,
+            "volume_orphans": volume_orphans,
+            "volume_scope": "global_dangling",
         }
 
     with contextlib.suppress(Exception):
@@ -1208,6 +1306,7 @@ async def run_once(
     # [REL-5] pre-run orphan baseline. The scoped sandbox-id path does not need this, but older
     # servers that cannot expose ids still fall back to the serial-era global delta.
     baseline_containers = _live_disco_container_count()
+    baseline_dangling_volumes = _dangling_volume_names()
     try:
         # A mid-run transport loss (the shared server crashed / network dropped AFTER
         # create) is not adjudicable — degrade to INVALID_RUN instead of a raw traceback,
@@ -1277,6 +1376,7 @@ async def run_once(
                 baseline_containers=baseline_containers,
                 relay_log=_relay_log_path(),
                 timeline=getattr(run, "timeline", []),
+                baseline_dangling_volumes=baseline_dangling_volumes,
             )
         except Exception as exc:  # noqa: BLE001
             ev = {}

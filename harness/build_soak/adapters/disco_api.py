@@ -1512,18 +1512,27 @@ def _manifest_ident(manifest: dict[str, Any], path: str) -> tuple[Any, Any] | No
 
 
 def _shell_removes(command: str, norm_path: str) -> bool:
-    """True iff `command` is an ``rm`` that targets `norm_path` (a deterministic delete
-    signal — there is no file-delete tool; deletes go through shell). Conservative: an
-    ``rm`` token must be present and the path (full relpath or basename) appears as a
-    non-flag argument."""
+    """True iff `command` is a PURE ``rm`` that targets `norm_path` EXACTLY.
+
+    Marking a declared file ABSENT is fail-FAST (unsatisfied → hard INVALID), so this must
+    be strict, not fuzzy: the old basename fallback marked the ROOT deliverable absent when
+    an export flow rm'd a COPY (export/index.html) — REL-6 EXPORT class false-INVALID
+    (conv_bc52c276). Now: every token must be rm / a flag / a path (no zip/cp/&&/; compound
+    ops — those go to the fail-safe OPAQUE downgrade instead), and the declared path must
+    match by exact normalized relpath. Anything less certain degrades to present_unproven,
+    which only ever relaxes — never false-INVALIDs."""
     toks = command.split()
     if "rm" not in toks:
         return False
-    targets = {_norm_rel(t) for t in toks if not t.startswith("-") and t != "rm"}
-    if norm_path in targets:
-        return True
-    base = norm_path.rsplit("/", 1)[-1]
-    return base in {t.rsplit("/", 1)[-1] for t in targets}
+    # Compound/composite commands (&&, ;, |, redirects) or other program tokens before/after
+    # rm mean the rm may target a copy or may not even run — not a deterministic delete.
+    shell_meta = {"&&", "||", ";", "|", ">", ">>", "<"}
+    if any(t in shell_meta or any(m in t for m in ("&&", "||", ";", "|")) for t in toks):
+        return False
+    if toks[0] != "rm":
+        return False
+    targets = {_norm_rel(t) for t in toks[1:] if not t.startswith("-")}
+    return norm_path in targets
 
 
 # OPAQUE mutation tools. A shell command (either shell tool name) or a project-script can rewrite a

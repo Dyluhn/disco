@@ -29,7 +29,14 @@ _SLICE_FIELDS: dict[str, dict[str, type]] = {
     # download_present/download_bytes ARE adjudicated by ExportDownloadOracle — they must be
     # type-validated here too, else e.g. a bool download_bytes capture bug evades validation.
     "export": {"requested": bool, "download_present": bool, "download_bytes": int},
-    "cleanup": {"orphans": int, "workspace_released": bool, "scope": str},
+    "cleanup": {
+        "orphans": int,
+        "workspace_released": bool,
+        "scope": str,
+        "container_orphans": int,
+        "volume_orphans": int,
+        "volume_scope": str,
+    },
 }
 
 PRODUCT_EVIDENCE_NAME = "product-evidence.json"
