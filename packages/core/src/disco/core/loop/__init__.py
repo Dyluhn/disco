@@ -20,6 +20,7 @@ from .boundaries import (
     ToolExecutor,
 )
 from .engine import AgentLoop
+from .finish import host_verify_authoritative_enabled
 from .policies import (
     AlwaysConfirm,
     BlastRadiusConfirm,
@@ -40,6 +41,7 @@ __all__ = [
     "ConfirmationPolicy",
     "HostVerificationDeliverable",
     "HostVerifier",
+    "host_verify_authoritative_enabled",
     "NeverConfirm",
     "NullSecurityAnalyzer",
     "BuildAgent",

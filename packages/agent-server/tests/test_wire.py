@@ -7,6 +7,7 @@ external services). Each test gets a fresh in-memory store via create_app.
 from __future__ import annotations
 
 import pytest
+import httpx
 from disco.agent_server import create_app
 from disco.core import SqliteEventStore
 from fastapi.testclient import TestClient
@@ -60,10 +61,17 @@ def test_events_pagination(client):
     assert [e["seq"] for e in page2["events"]] == [3, 4]
 
 
-def test_list_conversations_is_owner_scoped(client):
-    a = _create(client, owner_id="alice")
-    _create(client, owner_id="bob")
-    alice = client.get("/conversations?owner_id=alice").json()["conversation_ids"]
+@pytest.mark.asyncio
+async def test_list_conversations_is_owner_scoped():
+    store = SqliteEventStore(":memory:")
+    transport = httpx.ASGITransport(app=create_app(store))
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        resp = await client.post("/conversations", json={"owner_id": "alice"})
+        assert resp.status_code == 200
+        a = resp.json()["conversation_id"]
+        resp = await client.post("/conversations", json={"owner_id": "bob"})
+        assert resp.status_code == 200
+        alice = (await client.get("/conversations?owner_id=alice")).json()["conversation_ids"]
     assert alice == [a]  # §6.1: no cross-owner data
 
 

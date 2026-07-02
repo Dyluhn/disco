@@ -47,6 +47,7 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
     fake._pinned_kernels = {}
     fake._run_generation = {}
     fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
+    fake._emit_toolscope_audit_summary = MagicMock()  # REL-3 audit terminal summary
     fake.kick = MagicMock()
 
     control = MagicMock()
@@ -371,7 +372,9 @@ def _finalize_fake(store: SqliteEventStore):
     fake._post_terminal_rekick_seq = {}  # engine-rekick fix: post-terminal re-kick guard
     fake.kick = MagicMock()
     fake._emit_persistence_reminder = AsyncMock()
+    fake._emit_toolscope_audit_summary = MagicMock()  # REL-3 audit terminal summary
     fake._maybe_shadow_fold_finished_manifest = AsyncMock()  # REL-2a backstop hook
+    fake._emit_toolscope_audit_summary = MagicMock()  # REL-3 audit terminal summary
     for attr in (
         "_CONCLUDED_STATUSES",
         "_RUN_PARKED_STATUSES",
@@ -463,6 +466,7 @@ def _crash_fake(store: SqliteEventStore):
     fake._run_generation = {}
     fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
     fake._emit_persistence_reminder = AsyncMock()
+    fake._emit_toolscope_audit_summary = MagicMock()  # REL-3 audit terminal summary
     fake._CONCLUDED_STATUSES = ConversationRuntime._CONCLUDED_STATUSES
     for name in (
         "_terminalize_crashed",

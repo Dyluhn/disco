@@ -18,7 +18,7 @@ from disco.agent_server.runtime import ConversationRuntime
 from disco.core import SqliteEventStore
 from disco.core.llm import DefaultLLMRouter, OperatingMode
 from disco.core.loop import RouterAgent
-from disco.tools import AGENT_TOOLS, ARTIFACT_TOOLS
+from disco.tools import AGENT_TOOLS, ARTIFACT_TOOLS, ProcessSandboxService
 
 # ---------------------------------------------------------------------------
 # ARTIFACT_TOOLS boundary guard (no import of runtime needed)
@@ -81,12 +81,11 @@ def _loop_for(rt, cid, *, artifact_mode: bool = False):
         rt.set_artifact_mode(cid, True)
     router = mock.MagicMock(spec=DefaultLLMRouter)
     agent = mock.MagicMock(spec=RouterAgent)
-    with mock.patch.object(rt, "_sandbox_service_now"):
+    with mock.patch.object(rt, "_sandbox_service_now", return_value=ProcessSandboxService()):
         return rt._compose_build_loop(cid, router, agent)
 
 
-@pytest.mark.asyncio
-async def test_compose_artifact_mode_on_uses_never_confirm():
+def test_compose_artifact_mode_on_uses_never_confirm():
     """artifact_mode=True → NeverConfirm gate (no per-action approval)."""
     from disco.core.loop.policies import NeverConfirm
 
@@ -97,8 +96,7 @@ async def test_compose_artifact_mode_on_uses_never_confirm():
     )
 
 
-@pytest.mark.asyncio
-async def test_compose_artifact_mode_on_uses_interactive_mode():
+def test_compose_artifact_mode_on_uses_interactive_mode():
     """artifact_mode=True → OperatingMode.INTERACTIVE (no plan-gate)."""
     rt = _rt()
     loop = _loop_for(rt, "art2", artifact_mode=True)
@@ -107,8 +105,7 @@ async def test_compose_artifact_mode_on_uses_interactive_mode():
     )
 
 
-@pytest.mark.asyncio
-async def test_compose_artifact_mode_on_uses_artifact_scope():
+def test_compose_artifact_mode_on_uses_artifact_scope():
     """artifact_mode=True → executor scope == ARTIFACT_TOOLS (no shell/browser)."""
     rt = _rt()
     loop = _loop_for(rt, "art3", artifact_mode=True)
@@ -117,8 +114,7 @@ async def test_compose_artifact_mode_on_uses_artifact_scope():
     )
 
 
-@pytest.mark.asyncio
-async def test_compose_artifact_mode_off_uses_blast_radius_confirm():
+def test_compose_artifact_mode_off_uses_blast_radius_confirm():
     """artifact_mode=False → BlastRadiusConfirm gate (unchanged build loop)."""
     from disco.core.loop.policies import BlastRadiusConfirm
 
@@ -129,8 +125,7 @@ async def test_compose_artifact_mode_off_uses_blast_radius_confirm():
     )
 
 
-@pytest.mark.asyncio
-async def test_compose_artifact_mode_off_uses_planning_mode():
+def test_compose_artifact_mode_off_uses_planning_mode():
     """artifact_mode=False → OperatingMode.PLANNING (unchanged build loop)."""
     rt = _rt()
     loop = _loop_for(rt, "bld2", artifact_mode=False)
@@ -139,8 +134,7 @@ async def test_compose_artifact_mode_off_uses_planning_mode():
     )
 
 
-@pytest.mark.asyncio
-async def test_compose_artifact_mode_off_uses_agent_scope():
+def test_compose_artifact_mode_off_uses_agent_scope():
     """artifact_mode=False → executor scope covers AGENT_TOOLS (unchanged build loop)."""
     rt = _rt()
     loop = _loop_for(rt, "bld3", artifact_mode=False)

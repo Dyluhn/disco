@@ -1,0 +1,84 @@
+# REL-6 matrix draft — the three missing scenario classes (Fable-authored, 2026-07-02).
+# Review + fold into scenarios.yaml before the REL-6 run. House rules honored: every
+# content floor is a DICTATED verbatim marker; mutating follow-ups require a plan
+# revision; assertions are the strongest HONEST checks available in api mode.
+
+scenarios:
+  # ---- TARGETED_EDIT (matrix: 30) --------------------------------------------
+  # One precise localized edit against a multifile build: the dictated new heading
+  # must land, the OLD heading must be gone, and every other dictated marker must
+  # SURVIVE (the carry-forward failure class REL-RC-O closed). Exercises the
+  # anchored/line-edit path (G/G2/L/M guards) rather than whole-file rewrites.
+  - id: targeted_edit_smoke
+    mode: api
+    prompt: "Create a two-file static site: index.html with the exact heading 'Orbit Analytics' and a tagline 'Insight at light speed', plus style.css with a dark theme. Link the stylesheet from the page."
+    followups:
+      - text: "Change the main heading to exactly 'Orbit Analytics Cloud' — change nothing else on the page."
+        requires_plan_revision: true
+        trigger: after_terminal
+    assertions:
+      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+      revisions:
+        initial_plan_revision: 1
+        expected_final_plan_revision: 2
+        forbid_write_before_revision_approval: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Orbit Analytics Cloud", "Insight at light speed", "style.css"]
+            must_not_contain: ["<h1>Orbit Analytics</h1>"]
+          - path: "style.css"
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- EXPORT_SMOKE (matrix: 20) ----------------------------------------------
+  # Build then explicitly request the deliverable be prepared for download/export.
+  # HONESTY GAP (documented): in api mode the ExportDownloadOracle's evidence slice
+  # (download_present/download_bytes) is populated by the BROWSER harness, not this
+  # runner — so this scenario asserts the export REQUEST is served without wrecking
+  # the workspace (deliverable + markers intact, clean terminal). The byte-level
+  # export proof stays owned by the P10b evidence harness; wire the api-mode export
+  # slice before counting this class at full strength.
+  - id: export_smoke
+    mode: api
+    prompt: "Create a one-page product site index.html for 'Lumen Notes' with a features section containing the exact phrase 'Capture everything, forget nothing'."
+    followups:
+      - text: "Package the site for download as a zip export of the deliverable."
+        requires_plan_revision: true
+        trigger: after_terminal
+    assertions:
+      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+      revisions:
+        initial_plan_revision: 1
+        expected_final_plan_revision: 2
+        forbid_write_before_revision_approval: true
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Lumen Notes", "Capture everything, forget nothing"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- DISCONNECT_OR_CANCEL (matrix: 5) ---------------------------------------
+  # RUNNER EXTENSION REQUIRED (spec below): mid-run cancel then recovery. The runner
+  # gains a scenario key `cancel_at: {trigger: after_first_file_write}` which fires
+  # POST /conversations/{cid}/kill at the trigger (reusing the followup-injector
+  # machinery at run.py:335 area), waits for a stable killed/IDLE state, asserts REL-5
+  # cleanup held (sidecar stopped, zero post-terminal provider calls for THIS conv —
+  # both already conversation-scoped), then sends a follow-up "resume" message and
+  # requires the build to complete cleanly. Kill-mid-write is the harshest recovery
+  # test the product path offers.
+  - id: disconnect_cancel_recovery
+    mode: api
+    prompt: "Create index.html for 'Beacon Status' with a services table containing the exact cell text 'All systems nominal'."
+    cancel_at:
+      trigger: after_first_file_write
+    followups:
+      - text: "Continue and finish the page exactly as originally requested."
+        requires_plan_revision: true
+        trigger: after_terminal
+    assertions:
+      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+      workspace:
+        files:
+          - path: "index.html"
+            must_contain: ["Beacon Status", "All systems nominal"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]

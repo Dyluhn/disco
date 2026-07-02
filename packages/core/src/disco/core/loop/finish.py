@@ -84,6 +84,14 @@ _DOD_REFUSAL_CAP = 3
 # refusal must be bounded so a model that cannot repair does not deadlock.
 _DICTATED_CONTENT_REFUSAL_CAP = 3
 
+_HOST_VERIFY_AUTHORITATIVE_FLAG = "HOST_VERIFY_AUTHORITATIVE"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def host_verify_authoritative_enabled() -> bool:
+    """True iff DISCO_HOST_VERIFY_AUTHORITATIVE is truthy (default OFF)."""
+    return str(disco_env(_HOST_VERIFY_AUTHORITATIVE_FLAG) or "").strip().lower() in _TRUTHY
+
 # W5 — execution-nudge cap. The execution gate was the ONE uncapped gate in the
 # finish path (the comment "No cap" in the old code). After _EXECUTION_NUDGE_CAP
 # consecutive nudges the gate RELEASES with a LOUD warning so an agent that cannot
@@ -268,6 +276,13 @@ def _deliverable_event_paths(events: list[Event]) -> list[str]:
 def _latest_app_deliverable_event(events: list[Event]) -> DeliverableEvent | None:
     for ev in reversed(events):
         if isinstance(ev, DeliverableEvent) and ev.artifact_kind == "app":
+            return ev
+    return None
+
+
+def _latest_deliverable_event(events: list[Event]) -> DeliverableEvent | None:
+    for ev in reversed(events):
+        if isinstance(ev, DeliverableEvent):
             return ev
     return None
 
@@ -1030,8 +1045,15 @@ class FinishGate:
             return None
         return path
 
+    def _host_verify_authoritative(self) -> bool:
+        return bool(getattr(self._loop, "_host_verify_authoritative", False))
+
     async def _host_verify_deliverable(
-        self, step: AgentStep, events: list[Event]
+        self,
+        step: AgentStep,
+        events: list[Event],
+        *,
+        include_unverifiable: bool = False,
     ) -> HostVerificationDeliverable | None:
         """REL-1c — reconstruct the web-like deliverable for host shadow verify.
 
@@ -1044,18 +1066,23 @@ class FinishGate:
         """
 
         app_event = _latest_app_deliverable_event(events)
-        if app_event is None and not _is_web_deliverable(events):
+        any_event = _latest_deliverable_event(events) if include_unverifiable else app_event
+        if any_event is None and not _is_web_deliverable(events):
             return None
-        path = await self._host_verify_artifact_path(
-            app_event.path if app_event is not None else "index.html"
-        )
+        if any_event is not None and any_event.artifact_kind != "app":
+            path = _safe_deliverable_file_path(any_event.path)
+        else:
+            path = await self._host_verify_artifact_path(
+                any_event.path if any_event is not None else "index.html"
+            )
         if path is None:
             return None
-        deployment_url = app_event.deployment_url if app_event is not None else ""
+        deployment_url = any_event.deployment_url if any_event is not None else ""
+        artifact_kind = any_event.artifact_kind if any_event is not None else "app"
         return HostVerificationDeliverable(
             conversation_id=self._loop.conversation_id,
             artifact_path=path,
-            artifact_kind="app",
+            artifact_kind=artifact_kind,
             deployment_url=deployment_url or "",
             requested_verification=step.requested_verification,
         )
@@ -1102,19 +1129,122 @@ class FinishGate:
             "failure_fingerprint": "host_verifier_unavailable",
         }
 
-    async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp:
-        """REL-1c — run the host verifier in SHADOW and emit audit telemetry only.
+    @staticmethod
+    def _host_unverifiable_verdict(
+        deliverable: HostVerificationDeliverable,
+    ) -> dict[str, object]:
+        return {
+            "passed": False,
+            "verdict": "unverifiable",
+            "url": deliverable.deployment_url,
+            "http_status": 0,
+            "summary": (
+                f"No host validator is available for artifact kind "
+                f"{deliverable.artifact_kind!r}; verification was not claimed."
+            ),
+            "next_action": "",
+            "console_errors": [],
+            "network_failures": [],
+            "failure_fingerprint": f"host_verifier_unverifiable:{deliverable.artifact_kind}",
+        }
 
-        This gate is deliberately FALLTHROUGH-only. The authoritative finish
-        behavior remains the existing inline self-verify/browser gate; host
-        verdicts are logged for REL-1e promotion analysis and are not consumed.
+    @staticmethod
+    def _verdict_first_failure(verdict: dict) -> str:
+        errs = verdict.get("console_errors") or []
+        nets = verdict.get("network_failures") or []
+        if errs:
+            e0 = errs[0]
+            if isinstance(e0, dict):
+                where = f" @ {e0.get('source')}" if e0.get("source") else ""
+                return f"{e0.get('text', '')}{where}".strip()
+        if nets:
+            n0 = nets[0]
+            if isinstance(n0, dict):
+                marker = n0.get("status") or n0.get("failure") or "failed"
+                return f"{n0.get('method', 'GET')} {n0.get('url', '')} -> {marker}".strip()
+        failures = FinishGate._verdict_failures(verdict)
+        if failures:
+            message = failures[0].get("message")
+            if message:
+                return str(message)
+        return ""
+
+    async def _host_verify_failure_disposition(
+        self, deliverable: HostVerificationDeliverable, verdict: dict
+    ) -> Disp:
+        label = self._verdict_label(verdict) or "fail"
+        summary = str(
+            verdict.get("summary")
+            or verdict.get("detail")
+            or "host verifier did not pass"
+        )
+        next_action = str(verdict.get("next_action") or "")
+        first_failure = self._verdict_first_failure(verdict)
+        await self._record_verifier_failure_to_context(
+            message=(first_failure or summary), rel_path=None
+        )
+        if self._loop._browser_verify_refusals < 3:
+            self._loop._browser_verify_refusals += 1
+            payload = (
+                "<system-reminder>\n"
+                f"Host verification did not pass for {deliverable.artifact_kind} "
+                f"artifact {deliverable.artifact_path!r} ({label}). {summary}\n"
+                + (f"first failure: {first_failure}\n" if first_failure else "")
+                + (
+                    f"next step: {next_action}\n"
+                    if next_action
+                    else "Fix the issue surfaced by the host verifier, then finish again.\n"
+                )
+                + "The task is NOT complete until the host verifier passes.\n"
+                "</system-reminder>"
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=payload),
+                )
+            )
+            return Disp.CONTINUE
+
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="unverified_release",
+            )
+        )
+        warn = (
+            "⚠ Finished WITHOUT a passing host verifier verdict (3 attempts) — "
+            f"the deliverable is UNVERIFIED and may be INCOMPLETE. {summary}"
+            + (f" Outstanding: {next_action}" if next_action else "")
+            + " Note this clearly in your summary."
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=warn),
+            )
+        )
+        self._loop._browser_verify_refusals = 0
+        return Disp.FALLTHROUGH
+
+    async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp:
+        """REL-1c/1e — run the host verifier and emit audit telemetry.
+
+        Default behavior is REL-1c shadow: FALLTHROUGH-only, preserving the
+        existing inline self-verify/browser gate. When
+        DISCO_HOST_VERIFY_AUTHORITATIVE is enabled at loop construction, app
+        verdicts become authoritative and non-app/no-validator handoffs record
+        an honest ``unverifiable`` verdict without claiming verification.
         """
 
+        authoritative = self._host_verify_authoritative()
         host_verifier = getattr(self._loop, "_host_verifier", None)
-        if host_verifier is None:
+        if host_verifier is None and not authoritative:
             return Disp.FALLTHROUGH
 
-        deliverable = await self._host_verify_deliverable(step, events)
+        deliverable = await self._host_verify_deliverable(
+            step, events, include_unverifiable=authoritative
+        )
         if deliverable is None:
             return Disp.FALLTHROUGH
 
@@ -1127,37 +1257,44 @@ class FinishGate:
             )
         )
 
-        try:
-            raw_host_verdict = await asyncio.wait_for(
-                host_verifier.verify(deliverable),
-                timeout=max(
-                    0.001,
-                    float(getattr(self._loop, "_host_verify_timeout_s", 30.0)),
-                ),
-            )
-            if not isinstance(raw_host_verdict, dict):
+        if deliverable.artifact_kind != "app":
+            if not authoritative:
+                return Disp.FALLTHROUGH
+            host_verdict = self._host_unverifiable_verdict(deliverable)
+        elif host_verifier is None:
+            return Disp.FALLTHROUGH
+        else:
+            try:
+                raw_host_verdict = await asyncio.wait_for(
+                    host_verifier.verify(deliverable),
+                    timeout=max(
+                        0.001,
+                        float(getattr(self._loop, "_host_verify_timeout_s", 30.0)),
+                    ),
+                )
+                if not isinstance(raw_host_verdict, dict):
+                    host_verdict = self._host_unavailable_verdict(
+                        deliverable,
+                        "verification could not run: host verifier did not return a usable verdict.",
+                    )
+                else:
+                    host_verdict = raw_host_verdict
+            except asyncio.TimeoutError:
                 host_verdict = self._host_unavailable_verdict(
                     deliverable,
-                    "verification could not run: host verifier did not return a usable verdict.",
+                    "verification could not run: host verifier timed out.",
                 )
-            else:
-                host_verdict = raw_host_verdict
-        except asyncio.TimeoutError:
-            host_verdict = self._host_unavailable_verdict(
-                deliverable,
-                "verification could not run: host verifier timed out.",
-            )
-        except Exception as exc:  # noqa: BLE001 — shadow verifier never changes finish flow
-            _LOG.warning(
-                "REL-1c host verifier failed for %s:%s",
-                self._loop.conversation_id,
-                deliverable.artifact_path,
-                exc_info=True,
-            )
-            host_verdict = self._host_unavailable_verdict(
-                deliverable,
-                f"verification could not run: host verifier failed ({exc}).",
-            )
+            except Exception as exc:  # noqa: BLE001 — shadow verifier never crashes finish flow
+                _LOG.warning(
+                    "REL-1c host verifier failed for %s:%s",
+                    self._loop.conversation_id,
+                    deliverable.artifact_path,
+                    exc_info=True,
+                )
+                host_verdict = self._host_unavailable_verdict(
+                    deliverable,
+                    f"verification could not run: host verifier failed ({exc}).",
+                )
 
         inline_verdict = _latest_verify_verdict(
             events, _last_productive_seq(events), target_url=None
@@ -1204,6 +1341,11 @@ class FinishGate:
                     deliverable.artifact_path,
                     exc_info=True,
                 )
+        if authoritative and deliverable.artifact_kind == "app":
+            if host_verdict.get("passed"):
+                self._loop._browser_verify_refusals = 0
+                return Disp.FALLTHROUGH
+            return await self._host_verify_failure_disposition(deliverable, host_verdict)
         return Disp.FALLTHROUGH
 
     def _contract_required_deliverable_paths(self) -> list[str]:
@@ -2407,6 +2549,16 @@ class FinishGate:
         self._loop._browser_verify_refusals = 0
         return Disp.FALLTHROUGH
 
+    async def _browser_verify_delegated_to_host(
+        self, step: AgentStep, events: list[Event]
+    ) -> bool:
+        if not self._host_verify_authoritative():
+            return False
+        if getattr(self._loop, "_host_verifier", None) is None:
+            return False
+        deliverable = await self._host_verify_deliverable(step, events)
+        return deliverable is not None and deliverable.artifact_kind == "app"
+
     async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
         # until a clean browser observation (zero console errors) exists
@@ -2422,6 +2574,8 @@ class FinishGate:
             # raw-observation path below stays for browserless backends / tests
             # without the tool (non-web + assist paths are untouched: this whole
             # block is gated on _is_web_deliverable).
+            if await self._browser_verify_delegated_to_host(step, events):
+                return Disp.FALLTHROUGH
             if self._verify_tool_available():
                 return await self._gate_verify_web_app(events)
             since_seq = _last_productive_seq(events)
@@ -2564,9 +2718,18 @@ class FinishGate:
             return Disp.CONTINUE
 
         events = await self._loop._events()
-        disp = await self.gate_browser_verify(step, events)
-        events = await self._loop._events()
-        await self.gate_host_verify(step, events)
+        if self._host_verify_authoritative():
+            disp = await self.gate_host_verify(step, events)
+            if disp is Disp.CONTINUE:
+                return Disp.CONTINUE
+            if disp is Disp.HALT:
+                return Disp.HALT
+            events = await self._loop._events()
+            disp = await self.gate_browser_verify(step, events)
+        else:
+            disp = await self.gate_browser_verify(step, events)
+            events = await self._loop._events()
+            await self.gate_host_verify(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
         if disp is Disp.HALT:

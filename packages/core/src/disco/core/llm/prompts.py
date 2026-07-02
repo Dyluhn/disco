@@ -439,6 +439,41 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "finish. Verify once and stop — do not loop on visual checks."
 )
 
+_SELF_VERIFY_MANDATE_CAPABLE = (
+    "  • Before declaring a web build finished, do ONE verify-pass: start the preview "
+    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
+    "guessed :8000) in the browser tool once, read the console for errors, then move "
+    "on. Verify once and stop — do not loop on visual checks; when you have vision the "
+    "screenshot gives you what you need, when you do not the console output is the "
+    "finish gate.\n\n"
+)
+_HOST_VERIFY_MANDATE_CAPABLE = (
+    "  • Before finishing a web build, hand it off with `serve(...)`, then call "
+    "`finish`. The platform runs the host verifier at the finish gate. If it fails, "
+    "you will get a system reminder naming what to fix. Use `preview_start` and the "
+    "browser while debugging, but do not run a mandatory self-verify loop just to "
+    "satisfy finish.\n\n"
+)
+_SELF_VERIFY_MANDATE_SMALL = (
+    "WEB BUILDS — before declaring finished, do ONE verify-pass: start the preview "
+    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
+    "guessed :8000) in the browser tool once, read the console for errors, then "
+    "finish. Verify once and stop — do not loop on visual checks."
+)
+_HOST_VERIFY_MANDATE_SMALL = (
+    "WEB BUILDS — hand off the app with `serve(...)`, then call `finish`. The "
+    "platform runs the host verifier at the finish gate and will refuse finish with "
+    "a concrete failure if it does not pass. Use `preview_start` and the browser "
+    "while debugging, but do not loop on self-verification just to finish."
+)
+
+
+def _soften_self_verify_mandate(prompt: str) -> str:
+    return (
+        prompt.replace(_SELF_VERIFY_MANDATE_CAPABLE, _HOST_VERIFY_MANDATE_CAPABLE)
+        .replace(_SELF_VERIFY_MANDATE_SMALL, _HOST_VERIFY_MANDATE_SMALL)
+    )
+
 
 _AUTONOMOUS_PROMPT_PREFIX = (
     "AUTONOMOUS MODE — no human is available to answer questions or approve your "
@@ -516,6 +551,7 @@ class DriverPrompts:
         skills_block: str = "",
         flavor: str = "build",
         autonomous: bool = False,
+        host_verify_authoritative: bool = False,
     ) -> None:
         self._base = base or StaticPromptProvider()
         # Autonomous mode (issue A): reinforce the tool-level suppression of ask_user
@@ -544,6 +580,9 @@ class DriverPrompts:
             execution_prompt_small = execution_prompt_small.replace(
                 "autonomous build agent", "autonomous task agent"
             )
+        if host_verify_authoritative:
+            execution_prompt = _soften_self_verify_mandate(execution_prompt)
+            execution_prompt_small = _soften_self_verify_mandate(execution_prompt_small)
         # [E5/R6] Tell the planning model about execution tools it gains on approval
         # so it doesn't falsely deny owning browser/shell/slides/etc. The planner hides
         # write tools (read_only=False) from the PLANNING schema for BOTH the build and

@@ -82,6 +82,7 @@ from .finish import (  # noqa: F401 — finish helpers/consts re-exported for ba
     _last_productive_seq,
     _latest_browser_error,
     _static_verify_command,
+    host_verify_authoritative_enabled,
 )
 from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for back-compat
     _FANOUT_INPUT_MAX_CHARS,
@@ -585,6 +586,7 @@ class AgentLoop:
         host_verifier_verdict_hook: (
             Callable[[VerifierVerdictEvent], Awaitable[None]] | None
         ) = None,
+        host_verify_authoritative: bool | None = None,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -701,6 +703,11 @@ class AgentLoop:
         self._host_verifier = host_verifier
         self._host_verify_timeout_s = float(host_verify_timeout_s)
         self._host_verifier_verdict_hook = host_verifier_verdict_hook
+        self._host_verify_authoritative = (
+            host_verify_authoritative_enabled()
+            if host_verify_authoritative is None
+            else bool(host_verify_authoritative)
+        )
         # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
         # loop's max_iterations + the user's kill switch are the ultimate exit,
         # same as the browser-verify and execution-nudge gates).

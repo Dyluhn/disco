@@ -100,22 +100,53 @@ def decide_tool_in_scope(
     return ScopeDecision(allowed=True)
 
 
+ScopeAuditObserver = Callable[[str, Phase, ScopeDecision], None]
+
+
 class ContractScopeGuard:
     """The executor-side guard: holds the compiled scopes + a live phase provider, and
     checks a tool name against the current phase. Constructed by whoever runs a build
     under a contract; when absent, the executor enforces nothing (a plain agent run)."""
 
-    def __init__(self, scopes: ContractToolScopes, phase_provider: Callable[[], Phase]) -> None:
+    def __init__(
+        self,
+        scopes: ContractToolScopes,
+        phase_provider: Callable[[], Phase],
+        *,
+        observe: bool = False,
+        observer: ScopeAuditObserver | None = None,
+    ) -> None:
         self._scopes = scopes
         self._phase = phase_provider
+        self._observe = observe
+        self._observer = observer
 
     @classmethod
     def for_contract(
-        cls, contract: BuildContract, phase_provider: Callable[[], Phase]
+        cls,
+        contract: BuildContract,
+        phase_provider: Callable[[], Phase],
+        *,
+        observe: bool = False,
+        observer: ScopeAuditObserver | None = None,
     ) -> ContractScopeGuard:
-        return cls(compile_tool_scopes(contract), phase_provider)
+        return cls(
+            compile_tool_scopes(contract),
+            phase_provider,
+            observe=observe,
+            observer=observer,
+        )
 
     def check(self, tool_name: str, *, is_mutating: bool | None = None) -> ScopeDecision:
-        return decide_tool_in_scope(
-            self._scopes, self._phase(), tool_name, is_mutating=is_mutating
+        phase = self._phase()
+        decision = decide_tool_in_scope(
+            self._scopes, phase, tool_name, is_mutating=is_mutating
         )
+        if self._observer is not None:
+            self._observer(tool_name, phase, decision)
+        if self._observe:
+            # Audit/observe mode must never alter executor behavior. The observer
+            # receives the real decision above; callers see an allow so dispatch
+            # proceeds exactly as it would without a guard.
+            return ScopeDecision(allowed=True)
+        return decision

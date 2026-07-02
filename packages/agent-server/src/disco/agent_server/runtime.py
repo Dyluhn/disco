@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import posixpath
+import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -59,6 +61,8 @@ from disco.core.contract import (
     BuildPhaseTracker,
     ContractKind,
     ContractScopeGuard,
+    Phase,
+    ScopeDecision,
 )
 from disco.core.env import disco_env
 from disco.core.inspect import inspect_enabled, routing_sink_for
@@ -94,6 +98,7 @@ from disco.core.loop import (
     NeverConfirm,
     ResearchAgent,
     RouterAgent,
+    host_verify_authoritative_enabled,
     signals,
 )
 from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
@@ -150,12 +155,76 @@ from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
 
 _HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
+_TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
 def host_verify_canary_enabled() -> bool:
     """True iff DISCO_HOST_VERIFY_CANARY is truthy (default OFF)."""
     return str(disco_env(_HOST_VERIFY_CANARY_FLAG) or "").strip().lower() in _TRUTHY
+
+
+def toolscope_audit_enabled() -> bool:
+    """True iff DISCO_TOOLSCOPE_AUDIT is truthy (default OFF)."""
+    return str(disco_env(_TOOLSCOPE_AUDIT_FLAG) or "").strip().lower() in _TRUTHY
+
+
+class _ToolScopeAuditRecorder:
+    """Per-conversation REL-3 audit counters and deny-log emission."""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = conversation_id
+        self.total_tools = 0
+        self.would_denies_by_phase: dict[str, int] = {}
+        self._summary_emitted = False
+
+    def record(self, tool: str, phase: Phase, decision: ScopeDecision) -> None:
+        if self._summary_emitted:
+            self.total_tools = 0
+            self.would_denies_by_phase.clear()
+            self._summary_emitted = False
+        self.total_tools += 1
+        if decision.allowed:
+            return
+        phase_value = phase.value
+        self.would_denies_by_phase[phase_value] = (
+            self.would_denies_by_phase.get(phase_value, 0) + 1
+        )
+        logger.info(
+            "toolscope audit would-deny conversation=%s phase=%s tool=%s reason=%s",
+            self.conversation_id,
+            phase_value,
+            tool,
+            decision.reason,
+            extra={
+                "event": "toolscope_audit_would_deny",
+                "conversation": self.conversation_id,
+                "phase": phase_value,
+                "tool": tool,
+                "reason": decision.reason,
+            },
+        )
+
+    def emit_summary(self, status: ConversationStatus) -> None:
+        if self._summary_emitted:
+            return
+        by_phase = dict(sorted(self.would_denies_by_phase.items()))
+        logger.info(
+            "toolscope audit summary conversation=%s status=%s total_tools=%d "
+            "would_denies_by_phase=%s",
+            self.conversation_id,
+            status.value,
+            self.total_tools,
+            by_phase,
+            extra={
+                "event": "toolscope_audit_summary",
+                "conversation": self.conversation_id,
+                "status": status.value,
+                "total_tools": self.total_tools,
+                "would_denies_by_phase": by_phase,
+            },
+        )
+        self._summary_emitted = True
 
 
 # WALK-18 — max seconds resume waits for a cooperatively-cancelled loop task to
@@ -611,6 +680,11 @@ class ConversationRuntime:
         self._build_contract_registry = BuildContractRegistry.default()
         self._build_kind: dict[str, str] = {}
         self._build_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
+        # REL-3 audit mode keeps its observe-only tracker separate from the
+        # authoritative build tracker so turning the flag on cannot change delivery
+        # mode/finalizer/starter-kit behavior in the default build path.
+        self._build_audit_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
+        self._toolscope_audits: dict[str, _ToolScopeAuditRecorder] = {}
         # P3 — global last-selected driver model (single-value sidecar). Persisted
         # so a new conversation seeds from whatever the user picked last; falls back
         # to RouterConfig.default_model when never set. B0 pattern (atomic writes).
@@ -926,7 +1000,10 @@ class ConversationRuntime:
             cfg,
             providers,
             prompt_provider=DriverPrompts(
-                skills_block=skills_block, flavor=flavor, autonomous=autonomous
+                skills_block=skills_block,
+                flavor=flavor,
+                autonomous=autonomous,
+                host_verify_authoritative=host_verify_authoritative_enabled(),
             ),
             sink=sink,
         )
@@ -1198,6 +1275,7 @@ class ConversationRuntime:
         else:
             self._build_kind.pop(conversation_id, None)
         self._build_trackers.pop(conversation_id, None)
+        self._build_audit_trackers.pop(conversation_id, None)
 
     def expected_delivery_mode(self, conversation_id: str) -> str | None:
         """P5: the host-owned delivery SHAPE ("app"|"files") the conversation's build
@@ -1250,7 +1328,7 @@ class ConversationRuntime:
     def _host_verify_canary_hook_for(
         self, conversation_id: str
     ) -> Callable[[VerifierVerdictEvent], Awaitable[None]] | None:
-        if not host_verify_canary_enabled():
+        if not (host_verify_canary_enabled() or host_verify_authoritative_enabled()):
             return None
 
         async def _hook(event: VerifierVerdictEvent) -> None:
@@ -1312,21 +1390,195 @@ class ConversationRuntime:
             )
         )
 
-    def _build_scope_guard(
+    _AUDIT_KIND_TERMS: tuple[tuple[ContractKind, tuple[str, ...]], ...] = (
+        (
+            ContractKind.DECK,
+            (
+                "slide deck",
+                "slides",
+                "presentation",
+                "powerpoint",
+                "pptx",
+                "deck",
+            ),
+        ),
+        (
+            ContractKind.DOCUMENT,
+            (
+                "document",
+                "report",
+                "white paper",
+                "whitepaper",
+                "pdf",
+                "proposal",
+                "briefing memo",
+            ),
+        ),
+        (
+            ContractKind.APPKIT_LEADGEN,
+            (
+                "lead gen",
+                "lead-gen",
+                "lead generation",
+                "lead form",
+                "contact form",
+                "signup form",
+                "sign-up form",
+            ),
+        ),
+        (
+            ContractKind.INTERACTIVE_PROTOTYPE,
+            (
+                "interactive prototype",
+                "prototype",
+                "calculator",
+                "quiz",
+                "game",
+                "simulator",
+            ),
+        ),
+        (
+            ContractKind.STATIC_SITE,
+            (
+                "static site",
+                "landing page",
+                "website",
+                "web site",
+                "homepage",
+                "portfolio",
+                "site",
+            ),
+        ),
+        (
+            ContractKind.WORKFLOW_OUTPUT,
+            (
+                "workflow output",
+                "workflow",
+                "automation output",
+            ),
+        ),
+    )
+
+    def _conversation_user_text_sync(self, conversation_id: str) -> str:
+        """Best-effort sync read of user text for build-kind audit classification.
+
+        Loop composition is synchronous, so use the same SQLite recovery pattern as
+        _surface_of. Non-SQLite test stores simply get the CUSTOM fallback.
+        """
+        conn = getattr(self._store, "_conn", None)
+        if conn is None:
+            return ""
+        chunks: list[str] = []
+        try:
+            rows = conn.execute(
+                "SELECT payload FROM events WHERE conversation_id = ? "
+                "AND kind = 'message' ORDER BY seq ASC LIMIT 8",
+                (conversation_id,),
+            ).fetchall()
+        except Exception:  # noqa: BLE001 — audit classification is best-effort
+            return ""
+        for row in rows:
+            try:
+                payload = json.loads(row["payload"])
+            except Exception:  # noqa: BLE001
+                continue
+            if payload.get("source") != EventSource.USER.value:
+                continue
+            msg = payload.get("message") or {}
+            content = msg.get("content")
+            if isinstance(content, str):
+                chunks.append(content)
+        return "\n".join(chunks)
+
+    def _classify_build_kind_for_audit(self, conversation_id: str) -> str | None:
+        """Conservative REL-3 audit kind classifier.
+
+        Explicit contract IDs win. Otherwise only obvious artifact terms classify;
+        weak/unknown prompts fall back to the existing tightened CUSTOM contract.
+        """
+        text = self._conversation_user_text_sync(conversation_id).lower()
+        if not text:
+            return None
+        for kind in ContractKind:
+            if kind.value in text:
+                return kind.value
+        compact = re.sub(r"[^a-z0-9.+-]+", " ", text)
+        for kind, terms in self._AUDIT_KIND_TERMS:
+            if any(term in compact for term in terms):
+                return kind.value
+        return None
+
+    def _build_contract_for(
+        self, conversation_id: str, *, classify_default: bool = False
+    ) -> BuildContract:
+        kind = self._build_kind.get(conversation_id)
+        if kind is None and classify_default:
+            kind = self._classify_build_kind_for_audit(conversation_id)
+        brief = {"kind": kind} if kind else None
+        return self._build_contract_registry.get_for_brief(brief, strict_kind=False)
+
+    def _toolscope_audit_recorder(self, conversation_id: str) -> _ToolScopeAuditRecorder:
+        recorder = self._toolscope_audits.get(conversation_id)
+        if recorder is None:
+            recorder = _ToolScopeAuditRecorder(conversation_id)
+            self._toolscope_audits[conversation_id] = recorder
+        return recorder
+
+    def _build_scope_audit_guard(
         self, conversation_id: str
+    ) -> tuple[ContractScopeGuard, Callable[[str], None]]:
+        """REL-3 audit guard for default build-like runs.
+
+        It resolves a kind-classified contract when possible, falls back to the
+        tightened CUSTOM contract, and observes would-denies without enforcing.
+        """
+        entry = self._build_audit_trackers.get(conversation_id)
+        if entry is None:
+            contract = self._build_contract_for(conversation_id, classify_default=True)
+            entry = (contract, BuildPhaseTracker(contract))
+            self._build_audit_trackers[conversation_id] = entry
+        contract, tracker = entry
+        recorder = self._toolscope_audit_recorder(conversation_id)
+        return (
+            ContractScopeGuard.for_contract(
+                contract,
+                tracker.current,
+                observe=True,
+                observer=recorder.record,
+            ),
+            tracker.note_tool_success,
+        )
+
+    def _emit_toolscope_audit_summary(
+        self, conversation_id: str, status: ConversationStatus
+    ) -> None:
+        recorder = self._toolscope_audits.get(conversation_id)
+        if recorder is not None:
+            recorder.emit_summary(status)
+
+    def _build_scope_guard(
+        self,
+        conversation_id: str,
+        *,
+        observer: Callable[[str, Phase, ScopeDecision], None] | None = None,
     ) -> tuple[ContractScopeGuard | None, Callable[[str], None] | None]:
         """The (guard, on_tool_success) pair governing tools for an artifact run, or
         (None, None). Resolves+caches the conversation's contract and a fresh phase
         tracker on first use; the guard reads the tracker's LIVE phase per call."""
         entry = self._build_trackers.get(conversation_id)
         if entry is None:
-            kind = self._build_kind.get(conversation_id)
-            brief = {"kind": kind} if kind else None
-            contract = self._build_contract_registry.get_for_brief(brief, strict_kind=False)
+            contract = self._build_contract_for(conversation_id)
             entry = (contract, BuildPhaseTracker(contract))
             self._build_trackers[conversation_id] = entry
         contract, tracker = entry
-        return ContractScopeGuard.for_contract(contract, tracker.current), tracker.note_tool_success
+        return (
+            ContractScopeGuard.for_contract(
+                contract,
+                tracker.current,
+                observer=observer,
+            ),
+            tracker.note_tool_success,
+        )
     # ---- last-selected model (P3) — delegators to RuntimeSettings -----------
 
     def get_last_selected_model(self) -> str | None:
@@ -1664,11 +1916,25 @@ class ConversationRuntime:
             context_window=self._driver_context_window(),
         ).read_char_budget
         # CONTRACT-ACTIVATE: in artifact mode, govern tools by the conversation's build
-        # contract + live phase (no raw rewrite during the edit phase, etc.). Plain
-        # (non-artifact) runs pass (None, None) → unchanged behavior.
-        _scope_guard, _on_tool_success = (
-            self._build_scope_guard(conversation_id) if _art_mode else (None, None)
-        )
+        # contract + live phase (no raw rewrite during the edit phase, etc.).
+        #
+        # REL-3 audit: when DISCO_TOOLSCOPE_AUDIT=1, default build-like runs also
+        # instantiate the same phase tracker + ContractScopeGuard, but in OBSERVE
+        # mode. The executor sees an allow either way; only would-denies are logged.
+        _audit_on = toolscope_audit_enabled()
+        if _art_mode:
+            _audit_observer = (
+                self._toolscope_audit_recorder(conversation_id).record
+                if _audit_on
+                else None
+            )
+            _scope_guard, _on_tool_success = self._build_scope_guard(
+                conversation_id, observer=_audit_observer
+            )
+        elif _audit_on:
+            _scope_guard, _on_tool_success = self._build_scope_audit_guard(conversation_id)
+        else:
+            _scope_guard, _on_tool_success = (None, None)
         executor = DefaultToolExecutor(
             build_default_registry(),
             _scope,
@@ -1780,6 +2046,7 @@ class ConversationRuntime:
                 finish_alias=_finish_alias,  # P6 contract finalizer alias
                 host_verifier=host_verifier,
                 host_verifier_verdict_hook=host_verify_canary_hook,
+                host_verify_authoritative=host_verify_authoritative_enabled(),
             )
         return AgentLoop(
             conversation_id,
@@ -1820,6 +2087,7 @@ class ConversationRuntime:
             finish_alias=_finish_alias,  # P6 contract finalizer alias
             host_verifier=host_verifier,
             host_verifier_verdict_hook=host_verify_canary_hook,
+            host_verify_authoritative=host_verify_authoritative_enabled(),
         )
 
     # ---- deep research surface ---------------------------------------------
@@ -2056,6 +2324,8 @@ class ConversationRuntime:
         if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
             # Healthy ending → reset the per-cid re-kick budget for the next segment.
             self._nonterminal_rekicks.pop(conversation_id, None)
+            if status in self._CONCLUDED_STATUSES or status is ConversationStatus.IDLE:
+                self._emit_toolscope_audit_summary(conversation_id, status)
             # A run that ended between turns (done/errored/stuck/idle) releases the
             # kernel pin so the NEXT run re-resolves the current selection. A
             # gate-park (AWAITING_*) or PAUSED stays pinned — its resume/approve
@@ -2111,6 +2381,7 @@ class ConversationRuntime:
                     detail="loop ended without reaching a terminal state",
                 ),
             )
+            self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.STUCK)
             # STUCK is terminal → release the kernel pin so the NEXT run re-resolves
             # the current selection (finding #3). Unlike the healthy-return branch
             # above (which unpins via `_KERNEL_UNPIN_STATUSES`), this path appends a
@@ -2288,6 +2559,7 @@ class ConversationRuntime:
                 conversation_id,
                 StatusEvent(status=ConversationStatus.ERROR, detail=detail),
             )
+            self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
             # Terminal ending → release the kernel pin (next run re-resolves). #1.
             # Generation-guarded (finding #3): if a newer run reused the pin during the
             # ERROR append above, leave it — that run owns the pin now.
@@ -2670,6 +2942,7 @@ class ConversationRuntime:
                 conversation_id,
                 StatusEvent(status=ConversationStatus.ERROR, detail=reason[:200]),
             )
+            self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
             await self._emit_persistence_reminder(
                 conversation_id,
                 f"{reason} The run did not start — check the model's endpoint and "
@@ -2690,6 +2963,7 @@ class ConversationRuntime:
                     conversation_id,
                     StatusEvent(status=ConversationStatus.ERROR, detail=sandbox_reason[:200]),
                 )
+                self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.ERROR)
                 await self._emit_persistence_reminder(
                     conversation_id,
                     f"{sandbox_reason} The run did not start — check the sandbox "
@@ -2732,6 +3006,7 @@ class ConversationRuntime:
         # for BOTH kernels) for the end-gate.
         ended_state = await self._store.get_state(conversation_id)
         if surface in self._BUILD_LIKE_SURFACES and ended_state.execution_status in _ENDED:
+            self._emit_toolscope_audit_summary(conversation_id, ended_state.execution_status)
             # REL-2a shadow fold must run while the build sandbox is still live. Do
             # this at the authoritative end-state boundary, before snapshot/suspend/
             # finalizer work can race executor release. The helper is seq-guarded so
@@ -3218,6 +3493,7 @@ class ConversationRuntime:
         # Generation-guarded (finding #4): clear only THIS generation's pin via the same
         # `_unpin_if_current_generation` semantics the other terminalizers use, so a
         # newer run that re-pins during teardown keeps its own pin.
+        self._emit_toolscope_audit_summary(conversation_id, ConversationStatus.IDLE)
         self._unpin_if_current_generation(conversation_id, generation)
         return await self._control.kill(conversation_id, generation)
 
@@ -3271,6 +3547,8 @@ class ConversationRuntime:
             # CONTRACT-ACTIVATE: the per-conversation build contract kind + phase tracker.
             self._build_kind,
             self._build_trackers,
+            self._build_audit_trackers,
+            self._toolscope_audits,
             self._shadow_folded_finished_seq,
         ):
             cache.pop(conversation_id, None)
