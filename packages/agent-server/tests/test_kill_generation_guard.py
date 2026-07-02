@@ -20,14 +20,22 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from disco.agent_server import ConversationRuntime
 from disco.core import (
+    ActionEvent,
+    AgentErrorEvent,
     ConversationStatus,
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     SqliteEventStore,
     StatusEvent,
+    ToolCall,
+    ToolResult,
 )
 from disco.tools import ProcessSandboxService
+
+from harness.build_soak.events import normalize_events
+from harness.build_soak.oracles.event_chain import EventChainOracle
 
 CID = "conv-kill-gen"
 
@@ -50,6 +58,28 @@ async def _seed(store: SqliteEventStore) -> None:
 def _killed_detail_present(events: list[object]) -> bool:
     return any(
         isinstance(e, StatusEvent) and e.detail == "killed" for e in events
+    )
+
+
+def _cancelled_errors(events: list[object], action_id: str) -> list[AgentErrorEvent]:
+    return [
+        e
+        for e in events
+        if isinstance(e, AgentErrorEvent)
+        and e.action_id == action_id
+        and e.error == "cancelled"
+    ]
+
+
+def _action(action_id: str = "act-inflight", call_id: str = "call-inflight") -> ActionEvent:
+    return ActionEvent(
+        id=action_id,
+        thought="running a long tool call",
+        tool_call=ToolCall(
+            tool_name="shell",
+            arguments={"command": "sleep 60"},
+            call_id=call_id,
+        ),
     )
 
 
@@ -189,3 +219,82 @@ async def test_kill_with_no_generation_tracked_terminalizes_legacy() -> None:
     executor.kill.assert_awaited_once()
     assert CID not in rt._loops
     assert _killed_detail_present(await store.get_events(CID))
+
+
+@pytest.mark.asyncio
+async def test_kill_closes_dangling_action_with_cancelled_agent_error() -> None:
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    action = await store.append(CID, _action())
+    rt = _runtime(store)
+    rt._run_generation[CID] = 1
+
+    await rt.kill(CID)
+
+    events = await store.get_events(CID)
+    cancelled = _cancelled_errors(events, action.id)
+    assert len(cancelled) == 1
+    assert cancelled[0].detail == "action cancelled by kill switch before completing"
+    assert cancelled[0].tool_call_id == action.tool_call.call_id
+    assert cancelled[0].seq is not None and action.seq is not None
+    assert cancelled[0].seq > action.seq
+
+
+@pytest.mark.asyncio
+async def test_second_kill_does_not_duplicate_cancelled_agent_error() -> None:
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    action = await store.append(CID, _action())
+    rt = _runtime(store)
+    rt._run_generation[CID] = 1
+
+    await rt.kill(CID)
+    await rt.kill(CID)
+
+    events = await store.get_events(CID)
+    assert len(_cancelled_errors(events, action.id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_kill_with_no_dangling_actions_adds_no_cancelled_agent_error() -> None:
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    action = await store.append(CID, _action())
+    await store.append(
+        CID,
+        ObservationEvent(
+            tool_result=ToolResult(
+                call_id=action.tool_call.call_id,
+                tool_name=action.tool_call.tool_name,
+                success=True,
+                content="done",
+            ),
+            action_id=action.id,
+        ),
+    )
+    rt = _runtime(store)
+    rt._run_generation[CID] = 1
+
+    await rt.kill(CID)
+
+    events = await store.get_events(CID)
+    assert _cancelled_errors(events, action.id) == []
+
+
+@pytest.mark.asyncio
+async def test_event_chain_oracle_passes_killed_sequence_after_pair_recovery() -> None:
+    store = SqliteEventStore(":memory:")
+    await _seed(store)
+    await store.append(CID, _action())
+    rt = _runtime(store)
+    rt._run_generation[CID] = 1
+
+    await rt.kill(CID)
+
+    events = [e.model_dump(mode="json") for e in await store.get_events(CID)]
+    scenario = {
+        "id": "kill-recovery",
+        "assertions": {"event_chain": {"require_action_observation_pairs": True}},
+    }
+    results = EventChainOracle().check(normalize_events(events), scenario=scenario)
+    assert all(r.passed for r in results), [r.to_dict() for r in results]

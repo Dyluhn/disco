@@ -210,6 +210,9 @@ class ControlOps:
         # NOT terminalize its log.
         if self._superseded_by_newer_run(conversation_id, generation):
             return
+        await self._rt._close_dangling_actions_for_kill(conversation_id, generation)
+        if self._superseded_by_newer_run(conversation_id, generation):
+            return
         # 2. revoke capabilities + destroy the sandbox (the executor's kill, §6.4),
         #    then DROP the executor + loop + session from the caches. Critical: a killed
         #    executor is permanently `_killed=True` and returns "executor killed; instance

@@ -29,6 +29,7 @@ from typing import Any, cast
 logger = logging.getLogger(__name__)
 
 from disco.core import (
+    Event,
     DEFAULT_OWNER_ID,
     ActionEvent,
     AgentErrorEvent,
@@ -3447,6 +3448,41 @@ class ConversationRuntime:
 
     async def cancel(self, conversation_id: str) -> None:
         return await self._control.cancel(conversation_id)
+
+    async def _close_dangling_actions_for_kill(
+        self, conversation_id: str, generation: int | None = None
+    ) -> list[AgentErrorEvent]:
+        """Close any unpaired ActionEvent with an honest kill-cancellation error.
+
+        A hard task cancellation can land after the ActionEvent was durably appended
+        but before execute_and_observe emits its ObservationEvent/AgentErrorEvent.
+        Provider history requires that assistant tool calls have matching tool
+        results, so kill terminalization repairs the append-only log by pairing each
+        still-dangling action exactly once.
+        """
+        events = await self._store.get_events(conversation_id)
+        if generation is not None and self._run_generation.get(conversation_id) != generation:
+            return []
+        paired = signals._paired_action_ids(events)
+        errors: list[Event] = []
+        for event in events:
+            if not isinstance(event, ActionEvent) or event.id in paired:
+                continue
+            errors.append(
+                AgentErrorEvent(
+                    id=f"evt_kill_cancelled_{event.id}",
+                    error="cancelled",
+                    detail="action cancelled by kill switch before completing",
+                    action_id=event.id,
+                    tool_call_id=event.tool_call.call_id if event.tool_call else None,
+                )
+            )
+        if errors:
+            if generation is not None and self._run_generation.get(conversation_id) != generation:
+                return []
+            stored = await self._store.append_many(conversation_id, errors)
+            return [e for e in stored if isinstance(e, AgentErrorEvent)]
+        return []
 
     async def _drain_finishing_task(self, conversation_id: str) -> None:
         """WALK-18 resume fix. A cooperative Stop (cancel) persists a terminal

@@ -83,6 +83,17 @@ def _successful_action_ids(events: list[Event]) -> set[str]:
     return {action_id for action_id, ok in succeeded.items() if ok}
 
 
+def _paired_action_ids(events: list[Event]) -> set[str]:
+    """Action ids with any paired ObservationEvent or AgentErrorEvent."""
+    paired: set[str] = set()
+    for e in events:
+        if isinstance(e, ObservationEvent):
+            paired.add(e.action_id)
+        elif isinstance(e, AgentErrorEvent) and e.action_id is not None:
+            paired.add(e.action_id)
+    return paired
+
+
 def productive_action_since_approval(events: list[Event]) -> bool:
     """Has the agent done any state-changing or information-gathering work since the
     most recent plan approval? Used to gate the execution-mode FINISHED transition:
