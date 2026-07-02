@@ -5560,3 +5560,22 @@ parallelism).
 Next per the standing roadmap: REL-1 → REL-3 → REL-6 gate (P11 unblocks at REL-6 100%), and the
 playbook gap plan (docs/claude-design-playbook.md §12) drives P8+. The 3-lane ×10 recipe is the
 standing verification cadence.
+
+## ===== PHASE: REL-1/2/3 → REL-6 EXECUTION (2026-07-02, post-bar) =====
+Dylan greenlit ("let's do it"). Under standing governance (Fable drives, Codex advisory) the
+ratification-pending plans are RATIFIED as written: the REL sequencing (§ BUILD-RELIABILITY-GATE
+PLAN), the REL-1a..e 5-PR decomposition, and the resolved open decisions. Execution tracks:
+- T1: REL-2a shadow evidence — DISCO_ARTIFACT_MANIFEST_SHADOW=1 on dev servers + scaled mixed soak;
+  promote (fold readers) when divergence log is clean.
+- T2: REL-1a (pure helper extraction, no deps) — Codex worker now; 1b..e follow the ladder.
+- T3: REL-6 scenario-matrix inventory — verify all 5 classes exist in scenarios.yaml + scale plan
+  (3-lane recipe). Bar re-runs after each enforcement PR (scaled), full matrix at the end.
+
+### REL-2a shadow-fold DEAD HOOK — 2026-07-02
+
+Shadow soak 5/5 PASS but ZERO fold executions (no divergence logs, no failure logs, no
+artifact_manifest in any workspace — positive-evidence check caught it). Two holes:
+(1) the fold call site (runtime.py:1981 status-observe) is bypassed by the completed_via_notify
+finish path all 5 runs took; (2) sbx-None no-ops SILENTLY (fail-soft with no log — unobservable).
+Fix: fold must fire on EVERY terminal-FINISHED path (notify + normal), before sandbox release can
+race it, and every skip must log its reason. Then re-run shadow evidence.

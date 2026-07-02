@@ -36,6 +36,7 @@ import httpx
 from disco.core.evidence.schema import redact
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
 
+from .probe import app_body_problem, validate_app_deliverables
 from .schema import Scenario, VerifyResult
 
 log = logging.getLogger(__name__)
@@ -607,44 +608,11 @@ def _validate_report_export(
 async def _validate_app_deliverables(
     deliverables: list[dict[str, Any]], *, client: AbstractVerifyClient, cid: str
 ) -> list[str]:
-    """A live-app handoff ("build me a website") must produce REAL, reachable output — not just
-    be declared. If it has a deployment/preview URL, that URL must be 2xx + non-empty (codex
-    round-5). If it has NO URL (a static site served via the client-assembled preview), probe
-    the built ENTRY FILE (index.html) through the artifacts endpoint so the real output is
-    still checked — declared-but-empty is a fail (codex round-6)."""
-    problems: list[str] = []
-    for d in (d for d in deliverables if d.get("kind") == "app"):
-        url = str(d.get("deployment_url", ""))
-        root = str(d.get("path", "")).strip("/")
-        if url:
-            problem = _app_body_problem(await client.fetch_app(url), label=url)
-        else:
-            # URL-less app: probe the LIVE PREVIEW the user actually sees (the /preview-app/
-            # proxy) — the REAL production output, NOT the declared-artifact jail (codex r7).
-            problem = _app_body_problem(await client.fetch_preview(cid), label=root or "preview")
-        if problem:
-            problems.append(problem)
-    return problems
+    return await validate_app_deliverables(deliverables, client=client, cid=cid)
 
 
 def _app_body_problem(result: tuple[int, bytes] | None, *, label: str) -> str | None:
-    """Judge a fetched app/preview response: must be reachable, 2xx, non-empty, and NOT a bare
-    directory listing. The preview server falls back to `python3 -m http.server` on the
-    workspace root when there's no real app entry file, which returns a 200 non-empty Python
-    directory-listing page — that is NOT a real app and must fail (codex round-8)."""
-    if result is None:
-        return f"app deliverable not reachable: {label}"
-    status, body = result
-    if status == 503:
-        return f"app deliverable preview not available (503): {label}"
-    if not (200 <= status < 300):  # codex r9: 2xx ONLY — a 3xx (300/304) body is not a served app
-        return f"app deliverable returned HTTP {status}: {label}"
-    if not body:
-        return f"app deliverable is empty: {label}"
-    head = body[:4096].lower()
-    if b"directory listing for" in head:
-        return f"app deliverable is a bare directory listing, not a real app: {label}"
-    return None
+    return app_body_problem(result, label=label)
 
 
 async def _run_validators(
