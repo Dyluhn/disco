@@ -12,11 +12,14 @@ from __future__ import annotations
 from disco.core import (
     ConversationStatus,
     ErrorEvent,
+    LLMMessage,
     ToolCall,
+    View,
 )
 from disco.core.llm import LLMAuthError, LLMError
 from disco.core.llm.errors import LLMProviderUnavailable
 from disco.core.loop.boundaries import AgentStep
+from disco.core.loop.control import Disp
 from loop_fakes import build_loop
 
 CID = "conv"
@@ -120,8 +123,19 @@ async def test_plain_llm_error_still_uses_json_hint_requery():
             self.calls = 0
             self.seen_messages: list = []
 
-        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
-                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+        async def step(
+            self,
+            view,
+            tools,
+            *,
+            mode,
+            overflow_signal,
+            on_stream=None,
+            temperature=None,
+            assist=False,
+            attempt=1,
+            provider_prefs=None,
+        ):
             self.calls += 1
             self.seen_messages.append(list(view.messages))
             if self.calls == 1:
@@ -155,8 +169,19 @@ async def test_provider_unavailable_cap_leads_to_pause():
         def __init__(self):
             self.calls = 0
 
-        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
-                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+        async def step(
+            self,
+            view,
+            tools,
+            *,
+            mode,
+            overflow_signal,
+            on_stream=None,
+            temperature=None,
+            assist=False,
+            attempt=1,
+            provider_prefs=None,
+        ):
             self.calls += 1
             raise LLMProviderUnavailable("No allowed providers", provider="openrouter")
 
@@ -204,3 +229,83 @@ async def test_terminal_auth_error_skips_requery_and_emits_auth_error():
     assert errs, "expected an ErrorEvent for the terminal auth failure"
     assert errs[-1].code == "auth_error", f"expected auth_error, got {errs[-1].code!r}"
     assert "Key limit exceeded" in (errs[-1].detail or "")
+
+
+def _broken_tool_pair_view() -> View:
+    return View(
+        messages=[
+            LLMMessage(role="user", content="go"),
+            LLMMessage(
+                role="assistant",
+                content="I'll inspect it",
+                tool_calls=[{"id": "call_bad", "name": "file_read", "arguments": {}}],
+            ),
+            LLMMessage(
+                role="user",
+                content="<system-reminder>keep working</system-reminder>",
+            ),
+            LLMMessage(role="tool", content="file content", tool_call_id="call_bad"),
+        ],
+        visible_seqs=[],
+        total_events=0,
+        forgotten_count=0,
+    )
+
+
+async def test_tool_result_adjacency_protocol_error_retries_with_repaired_history():
+    class _ProtocolErrorOnceAgent:
+        def __init__(self):
+            self.calls = 0
+            self.seen_messages: list[list[LLMMessage]] = []
+
+        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
+                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+            self.calls += 1
+            self.seen_messages.append(list(view.messages))
+            if self.calls == 1:
+                raise LLMError(
+                    "invalid params, tool call result does not follow tool call (2013)",
+                    provider="minimax",
+                )
+            return _finish_agent_step()
+
+    agent = _ProtocolErrorOnceAgent()
+    loop, _ = build_loop(agent)
+
+    step, disp = await loop._driver.drive_step(_broken_tool_pair_view(), [])
+
+    assert disp is Disp.FALLTHROUGH
+    assert step is not None
+    assert step.tool_call is not None
+    assert step.tool_call.tool_name == "finish"
+    assert agent.calls == 2
+    retry_messages = agent.seen_messages[1]
+    assert any("system-reminder" in m.content for m in retry_messages)
+    assert all(not (m.role == "assistant" and m.tool_calls) for m in retry_messages)
+    assert all(m.tool_call_id != "call_bad" for m in retry_messages)
+
+
+async def test_tool_result_adjacency_protocol_error_repair_is_bounded():
+    class _AlwaysProtocolErrorAgent:
+        def __init__(self):
+            self.calls = 0
+
+        async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
+                       temperature=None, assist=False, attempt=1, provider_prefs=None):
+            self.calls += 1
+            raise LLMError(
+                "invalid params, tool call result does not follow tool call (2013)",
+                provider="minimax",
+            )
+
+    agent = _AlwaysProtocolErrorAgent()
+    loop, store = build_loop(agent)
+
+    step, disp = await loop._driver.drive_step(_broken_tool_pair_view(), [])
+
+    assert step is None
+    assert disp is Disp.HALT
+    assert agent.calls == 2
+    events = await store.get_events(CID)
+    errs = [e for e in events if isinstance(e, ErrorEvent)]
+    assert errs and errs[-1].code == "model_error"

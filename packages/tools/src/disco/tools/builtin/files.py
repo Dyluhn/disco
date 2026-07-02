@@ -143,13 +143,23 @@ def _conv_state(conv_id: str) -> dict[str, Any]:
             "read_since_write": set(),
             "edit_grounded": set(),
             "targeted_read_grounded": set(),
+            "no_op_edit_counts": {},
             "reads": {},
         }
         _read_state[conv_id] = s
     s.setdefault("reads", {})  # back-compat for buckets created before CD-TOOLS-1
     s.setdefault("edit_grounded", set())  # back-compat for buckets created before REL-RC-D
     s.setdefault("targeted_read_grounded", set())  # back-compat for buckets created before REL-RC-G
+    s.setdefault("no_op_edit_counts", {})  # back-compat for buckets created before REL-RC-L
     return s
+
+
+def _increment_no_op_edit_count(conv_id: str, path: str) -> int:
+    counts = _conv_state(conv_id)["no_op_edit_counts"]
+    canon = _canonical(path)
+    count = int(counts.get(canon, 0)) + 1
+    counts[canon] = count
+    return count
 
 
 def _clear_grounding(conv_id: str, path: str) -> None:
@@ -163,6 +173,7 @@ def _clear_grounding(conv_id: str, path: str) -> None:
     st["read_since_write"].discard(canon)
     st["edit_grounded"].discard(canon)
     st["targeted_read_grounded"].discard(canon)
+    st["no_op_edit_counts"].pop(canon, None)
 
 
 # CD-TOOLS-1 — the internal elision-marker family, re-expressed locally so the tools
@@ -329,6 +340,75 @@ def _with_line_refusal_read(
         success=False,
         error=outcome.error,
         content=(outcome.content or "") + fresh_content,
+        structured=structured,
+    )
+
+
+def _matched_old_lines(text: str, old: str) -> tuple[int, int] | None:
+    """Best-effort line span for the file_edit old text under the same forgiving match family."""
+    candidates: list[str] = []
+    for candidate in (old, _strip_line_numbers(old)):
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    for candidate in candidates:
+        idx = text.find(candidate)
+        if idx >= 0:
+            line = text.count("\n", 0, idx) + 1
+            return (line, line + candidate.count("\n"))
+
+    target = _norm_ws(_strip_line_numbers(old))
+    if not target:
+        return None
+    doc = text.splitlines(keepends=True)
+    norm = [x.strip() for x in doc]
+    tgt = target.split("\n")
+    for i in range(0, len(norm) - len(tgt) + 1):
+        if norm[i : i + len(tgt)] == tgt:
+            return (i + 1, i + len(tgt))
+    return None
+
+
+def _no_op_edit_refusal(
+    conv_id: str,
+    path: str,
+    *,
+    base_content: str,
+    current_bytes: bytes | None,
+    attempted_lines: tuple[int, int] | None,
+) -> ToolOutcome:
+    """REL-RC-L: no-op refusals carry current content and escalate repeated attempts."""
+    import hashlib
+
+    count = _increment_no_op_edit_count(conv_id, path)
+    content = base_content
+    structured: dict[str, Any] = {
+        "kind": "no_op_edit",
+        "path": path,
+        "no_op_edit_count": count,
+    }
+    if current_bytes is not None and (
+        attempted_lines is not None or len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES
+    ):
+        sha = hashlib.sha256(current_bytes).hexdigest()
+        fresh_content, delivered = _line_refusal_read(
+            conv_id,
+            path,
+            current_bytes=current_bytes,
+            sha=sha,
+            attempted_lines=attempted_lines,
+        )
+        content += fresh_content
+        structured["delivered_read"] = delivered
+    if count >= 2:
+        content += (
+            "\n\nRepeated no-op edit: this change may ALREADY be applied — do not "
+            "re-send this edit; verify the region above, then update plan progress "
+            "or move to the next step."
+        )
+    return ToolOutcome(
+        success=False,
+        error="no_op_edit",
+        content=content,
         structured=structured,
     )
 
@@ -527,6 +607,7 @@ def reground_after_anchored_edit(
     prior = (st.get("reads") or {}).get(canon)
     # The read bit is always cleared on mutation (a blind full rewrite still needs a fresh read).
     st["read_since_write"].discard(canon)
+    st["no_op_edit_counts"].pop(canon, None)
     if prior is not None and prior.get("full"):
         # Whole-file grounding stays whole-file, advanced to the post-edit bytes the engine wrote,
         # and re-grants EDIT grounding so the model's own next anchored edit isn't false-STALE.
@@ -1043,14 +1124,26 @@ class FileEditTool:
         # the file's own whitespace happens to differ. The ground-truth guard below
         # still catches the "applied result is unchanged" case.
         if _strip_line_numbers(args.old) == _strip_line_numbers(args.new):
-            return ToolOutcome(
-                success=False,
-                content=(
+            current_bytes: bytes | None = None
+            attempted_lines: tuple[int, int] | None = None
+            try:
+                current_bytes = await ctx.sandbox.read_file(args.path)
+                if current_bytes is not None:
+                    attempted_lines = _matched_old_lines(
+                        current_bytes.decode("utf-8", errors="replace"), args.old
+                    )
+            except Exception:  # noqa: BLE001 — keep the original no-op refusal if unreadable
+                current_bytes = None
+            return _no_op_edit_refusal(
+                ctx.conversation_id,
+                args.path,
+                base_content=(
                     f"file_edit refused: `old` and `new` are identical — this asks for "
                     f"no change to {args.path}. If you already applied this edit, move "
                     "on; otherwise give the NEW content you want."
                 ),
-                error="no_op_edit",
+                current_bytes=current_bytes,
+                attempted_lines=attempted_lines,
             )
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
@@ -1091,14 +1184,16 @@ class FileEditTool:
         # `new` verbatim, so `updated != text` and it applies — while still catching
         # the real no-op: an already-applied edit (or old≈new) that changes nothing.
         if updated == text:
-            return ToolOutcome(
-                success=False,
-                content=(
+            return _no_op_edit_refusal(
+                ctx.conversation_id,
+                args.path,
+                base_content=(
                     f"file_edit refused: this edit leaves {args.path} unchanged — the "
                     "new content already matches what's on disk (it may have been "
                     "applied on an earlier turn). No further action is needed; move on."
                 ),
-                error="no_op_edit",
+                current_bytes=_raw,
+                attempted_lines=_matched_old_lines(text, args.old),
             )
         # W3 — syntax gate: write updated; auto-revert to text if errors introduced.
         gated = await _gated_write(ctx, args.path, updated.encode("utf-8"), text)

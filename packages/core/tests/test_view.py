@@ -14,9 +14,12 @@ from disco.core import (
     ActionEvent,
     CondensationEvent,
     ConversationStatus,
+    EventSource,
+    LLMMessage,
     MessageEvent,
     NoOpCondenser,
     ObservationEvent,
+    ToolResult,
     View,
 )
 from disco.core.view import microcompact, recover_span
@@ -156,6 +159,91 @@ def test_back_half_is_preserved_byte_identical_after_condensation():
     back_half_after = [m.content for m in after.messages if m.content in ("m2", "m3")]
 
     assert back_half_before == back_half_after == ["m2", "m3"]
+
+
+def _obs_for(action_event: ActionEvent, content: str = "ok") -> ObservationEvent:
+    return ObservationEvent(
+        tool_result=ToolResult(
+            call_id=action_event.tool_call.call_id,
+            tool_name=action_event.tool_call.tool_name,
+            success=True,
+            content=content,
+        ),
+        action_id=action_event.id,
+    )
+
+
+def _assert_tool_pairs_adjacent(messages: list[LLMMessage]) -> None:
+    for i, msg in enumerate(messages):
+        if msg.role == "assistant" and msg.tool_calls:
+            ids = [tc["id"] for tc in msg.tool_calls]
+            following = messages[i + 1 : i + 1 + len(ids)]
+            assert [(m.role, m.tool_call_id) for m in following] == [
+                ("tool", cid) for cid in ids
+            ]
+
+
+def test_condensation_starting_at_observation_omits_the_action_too():
+    """Regression for REL-RC-K: a tombstone beginning at the tool result must
+    not leave the assistant tool_call visible before the condensation summary."""
+    a = action(tool="file_read", args={"path": "index.html"})
+    o = _obs_for(a, "file body")
+    events = with_seqs(
+        [
+            user_msg("inspect"),
+            a,  # seq 2: paired action
+            o,  # seq 3: forgotten result
+            agent_msg("later"),
+            tombstone(3, 4, "[tool turn condensed]"),
+        ]
+    )
+
+    view = View.of(events)
+    assert "[tool turn condensed]" in [m.content for m in view.messages]
+    assert all(
+        not (
+            m.role == "assistant"
+            and m.tool_calls
+            and m.tool_calls[0]["id"] == a.tool_call.call_id
+        )
+        for m in view.messages
+    )
+    _assert_tool_pairs_adjacent(view.messages)
+
+
+def test_condensation_starting_at_action_omits_the_observation_too():
+    a = action(tool="shell", args={"command": "pwd"})
+    o = _obs_for(a, "workspace")
+    events = with_seqs([user_msg("run"), a, o, tombstone(2, 2, "[action condensed]")])
+
+    view = View.of(events)
+    assert "[action condensed]" in [m.content for m in view.messages]
+    assert all(m.tool_call_id != a.tool_call.call_id for m in view.messages)
+    _assert_tool_pairs_adjacent(view.messages)
+
+
+def test_condensed_injected_reminder_cannot_split_tool_pair():
+    a = action(tool="shell", args={"command": "npm test"})
+    reminder = MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(
+            role="user",
+            content="<system-reminder>continue with the plan</system-reminder>",
+        ),
+    )
+    o = _obs_for(a, "tests passed")
+    events = with_seqs(
+        [user_msg("test"), a, reminder, o, tombstone(3, 3, "[reminder condensed]")]
+    )
+
+    view = View.of(events)
+    pair_idx = next(
+        i for i, m in enumerate(view.messages) if m.role == "assistant" and m.tool_calls
+    )
+    assert view.messages[pair_idx + 1].role == "tool"
+    assert view.messages[pair_idx + 1].tool_call_id == a.tool_call.call_id
+    assert view.messages[pair_idx + 2].content == "[reminder condensed]"
+    _assert_tool_pairs_adjacent(view.messages)
 
 
 # ---- the no-op condenser (real one deferred to Phase 1) ---------------------

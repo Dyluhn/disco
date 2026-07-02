@@ -88,6 +88,38 @@ async def test_file_edit_refuses_noop():
     )
     assert out.success is False
     assert out.error == "no_op_edit"
+    assert "Fresh full current file for config.py" in out.content
+    assert "\tx = 1" in out.content
+    assert "this change may ALREADY be applied" not in out.content
+    assert (out.structured or {})["no_op_edit_count"] == 1
+    assert (out.structured or {})["delivered_read"]["full"] is True
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_edit_consecutive_noop_escalates_and_carries_content():
+    sbx = _FakeSandbox("x = 1\n")
+    ctx = _Ctx(sbx)
+
+    first = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="x = 1", new="x = 1"),
+        ctx,
+    )
+    second = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="x = 1", new="x = 1"),
+        ctx,
+    )
+
+    assert first.error == "no_op_edit"
+    assert second.error == "no_op_edit"
+    assert "Fresh full current file for config.py" in second.content
+    assert "\tx = 1" in second.content
+    assert "this change may ALREADY be applied" in second.content
+    assert second.content.index("Fresh full current file") < second.content.index(
+        "this change may ALREADY be applied"
+    )
+    assert (second.structured or {})["no_op_edit_count"] == 2
+    assert (second.structured or {})["delivered_read"]["full"] is True
     assert sbx.writes == []
 
 
@@ -100,6 +132,32 @@ async def test_file_edit_real_change_applies():
     )
     assert out.success is True
     assert sbx.writes and b"x = 2" in sbx.writes[-1]
+
+
+@pytest.mark.asyncio
+async def test_file_edit_real_change_after_noop_succeeds_and_resets_noop_counter():
+    sbx = _FakeSandbox("x = 1\n")
+    ctx = _Ctx(sbx)
+
+    refused = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="x = 1", new="x = 1"),
+        ctx,
+    )
+    changed = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="x = 1", new="x = 2"),
+        ctx,
+    )
+    refused_after_success = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="x = 2", new="x = 2"),
+        ctx,
+    )
+
+    assert refused.error == "no_op_edit"
+    assert changed.success is True, changed.content
+    assert sbx.writes and b"x = 2" in sbx.writes[-1]
+    assert refused_after_success.error == "no_op_edit"
+    assert "this change may ALREADY be applied" not in refused_after_success.content
+    assert (refused_after_success.structured or {})["no_op_edit_count"] == 1
 
 
 @pytest.mark.asyncio

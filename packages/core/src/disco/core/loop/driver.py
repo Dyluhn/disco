@@ -36,7 +36,7 @@ from ..llm import (
     LLMTransientError,
     OperatingMode,
 )
-from ..view import View
+from ..view import View, repair_tool_call_adjacency
 from . import signals, view_render
 from .boundaries import AgentStep
 from .control import Disp
@@ -95,6 +95,24 @@ _PLANNING_TOOL_REFUSAL_NEEDLE = "is not available in PLANNING mode"
 _PLANNING_TOOL_REFUSAL_ESCALATE_AT = 2
 _PLANNING_TOOL_REFUSAL_NARROW_AT = 3
 _PLANNING_TOOL_REFUSAL_READ_TOOLS = frozenset({"file_read"})
+
+
+def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
+    """Provider-side protocol rejection for broken tool_call/tool-result order."""
+    text = " ".join(
+        str(part)
+        for part in (
+            err,
+            getattr(err, "provider", ""),
+            getattr(err, "model", ""),
+            getattr(err, "code", ""),
+            getattr(err, "error_code", ""),
+        )
+        if part
+    ).lower()
+    if "tool call result does not follow" in text:
+        return True
+    return "2013" in text and "invalid" in text and "param" in text
 
 
 def _is_planning_tool_refusal(event: Event) -> bool:
@@ -532,16 +550,20 @@ class Driver:
             attempts = 0
             requery_count = 0
             provider_retry_count = 0  # P2: tracks LLMProviderUnavailable occurrences
+            protocol_repair_count = 0
             transient_messages: list[LLMMessage] = []
+            repaired_view: View | None = None
             while True:
+                current_view = repaired_view or view
                 try:
                     # Apply transient messages (requery-outside-log, Rung 6)
                     # to the View if we're in a retry loop.
-                    current_view = view
                     if transient_messages:
-                        current_view = view.model_copy(update={
-                            "messages": view.messages + transient_messages
-                        })
+                        current_view = current_view.model_copy(
+                            update={
+                                "messages": current_view.messages + transient_messages
+                            }
+                        )
 
                     step = await self._loop.agent.step(
                         current_view,
@@ -674,6 +696,25 @@ class Driver:
                     else:
                         return await self._pause_driver_unavailable()
                 except LLMError as e:
+                    if _is_tool_result_adjacency_protocol_error(e):
+                        if protocol_repair_count < 1:
+                            protocol_repair_count += 1
+                            repaired_messages = repair_tool_call_adjacency(
+                                current_view.messages
+                            )
+                            repaired_view = current_view.model_copy(
+                                update={"messages": repaired_messages}
+                            )
+                            transient_messages = []
+                            _LOG.error(
+                                "Provider rejected tool-call history ordering (%s); "
+                                "retrying once with repaired history (%d -> %d messages)",
+                                e,
+                                len(current_view.messages),
+                                len(repaired_messages),
+                            )
+                            continue
+                        raise
                     # DEFECT-6: Provider 4xx "rejected request" must not be
                     # terminal; enter requery path with a hint.
                     # R2: but a TERMINAL provider error (bad/exhausted key, hit

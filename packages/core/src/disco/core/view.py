@@ -56,6 +56,49 @@ _MASK_MIN_CHARS = 600  # smaller bodies are never masked (cheap, often load-bear
 _DURABLE_TOOLS = frozenset({"file_write", "file_append", "file_edit", "plan_step"})
 
 
+def repair_tool_call_adjacency(messages: list[LLMMessage]) -> list[LLMMessage]:
+    """Return a provider-safe message list with dangling tool-call pairs dropped.
+
+    OpenAI-compatible providers require an assistant message with ``tool_calls``
+    to be followed immediately by one tool message per call id. A broken history
+    cannot be repaired by a model rephrase because the provider rejects the
+    request before the model sees it, so the only safe retry payload is one that
+    removes incomplete assistant/tool fragments.
+    """
+    out: list[LLMMessage] = []
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        if msg.role == "assistant" and msg.tool_calls:
+            ids: list[str] = []
+            for tc in msg.tool_calls:
+                cid = tc.get("id") if isinstance(tc, dict) else None
+                if isinstance(cid, str) and cid:
+                    ids.append(cid)
+            if len(ids) == len(msg.tool_calls):
+                following = messages[i + 1 : i + 1 + len(ids)]
+                if len(following) == len(ids) and all(
+                    f.role == "tool" and f.tool_call_id == cid
+                    for f, cid in zip(following, ids, strict=True)
+                ):
+                    out.append(msg)
+                    out.extend(following)
+                    i += 1 + len(ids)
+                    continue
+            # Broken assistant tool call: drop it. Any separated tool result
+            # becomes an orphan and is dropped by the role=="tool" arm below.
+            i += 1
+            continue
+        if msg.role == "tool":
+            # Orphan tool result, or a tool result split away from a dropped
+            # assistant call. Keeping it would trigger the same provider error.
+            i += 1
+            continue
+        out.append(msg)
+        i += 1
+    return out
+
+
 def microcompact(events: list[Event]) -> list[CondensationEvent]:
     """S3 Microcompact (GAP A) — a NO-MODEL, deterministic pass that tombstones
     NO-OP turns: a tool call that FAILED and was later SUPERSEDED by an IDENTICAL
@@ -368,6 +411,66 @@ class View(BaseModel):
                 return False
             return seq is not None and any(a <= seq <= b for a, b in forgotten)
 
+        action_by_id: dict[str, ActionEvent] = {}
+        action_by_call_id: dict[str, ActionEvent] = {}
+        result_by_action_id: dict[str, ObservationEvent | AgentErrorEvent] = {}
+        result_by_call_id: dict[str, ObservationEvent | AgentErrorEvent] = {}
+        for e in events:
+            if isinstance(e, ActionEvent):
+                action_by_id[e.id] = e
+                action_by_call_id[e.tool_call.call_id] = e
+            elif isinstance(e, ObservationEvent):
+                if isinstance(e.action_id, str) and e.action_id:
+                    result_by_action_id.setdefault(e.action_id, e)
+                result_by_call_id.setdefault(e.tool_result.call_id, e)
+            elif isinstance(e, AgentErrorEvent):
+                if isinstance(e.action_id, str) and e.action_id:
+                    result_by_action_id.setdefault(e.action_id, e)
+                if isinstance(e.tool_call_id, str) and e.tool_call_id:
+                    result_by_call_id.setdefault(e.tool_call_id, e)
+
+        def result_for_action(
+            e: ActionEvent,
+        ) -> ObservationEvent | AgentErrorEvent | None:
+            return result_by_action_id.get(e.id) or result_by_call_id.get(
+                e.tool_call.call_id
+            )
+
+        def action_for_result(
+            e: ObservationEvent | AgentErrorEvent,
+        ) -> ActionEvent | None:
+            if isinstance(e, ObservationEvent):
+                action = (
+                    action_by_id.get(e.action_id)
+                    if isinstance(e.action_id, str)
+                    else None
+                )
+                return action or action_by_call_id.get(e.tool_result.call_id)
+            action = (
+                action_by_id.get(e.action_id)
+                if isinstance(e.action_id, str)
+                else None
+            )
+            if action is not None:
+                return action
+            return (
+                action_by_call_id.get(e.tool_call_id)
+                if isinstance(e.tool_call_id, str)
+                else None
+            )
+
+        def pair_omitted(e: Event) -> bool:
+            if isinstance(e, ActionEvent):
+                result = result_for_action(e)
+                return result is not None and is_forgotten(result.seq)
+            if isinstance(e, ObservationEvent | AgentErrorEvent):
+                action = action_for_result(e)
+                return action is not None and is_forgotten(action.seq)
+            return False
+
+        def is_visible(e: Event) -> bool:
+            return not is_forgotten(e.seq) and not pair_omitted(e)
+
         # BP-00: when the driver has VISION, only the LATEST browser screenshot
         # renders as an image; older ones render as text only to save context.
         # Computed on the post-condensation sequence.
@@ -378,7 +481,7 @@ class View(BaseModel):
                 if (
                     isinstance(e, ObservationEvent)
                     and e.seq is not None
-                    and not is_forgotten(e.seq)
+                    and is_visible(e)
                     and e.tool_result.tool_name == "browser"
                     and (e.tool_result.structured or {}).get("screenshot_b64")
                 ):
@@ -394,7 +497,7 @@ class View(BaseModel):
             for e in events
             if isinstance(e, ObservationEvent)
             and e.seq is not None
-            and not is_forgotten(e.seq)
+            and is_visible(e)
         ]
         recent_obs_seqs = set(visible_obs[-_MASK_KEEP_RECENT:])
 
@@ -404,22 +507,9 @@ class View(BaseModel):
         msgs: list[LLMMessage] = []
         visible: list[int] = []
         emitted_summary_for: set[int] = set()
-        for e in events:
-            # Emit a span's summary at the chronological position it replaces.
-            if e.seq is not None and e.seq in summary_at_start:
-                key = e.seq
-                if key not in emitted_summary_for:
-                    tomb = summary_at_start[key]
-                    msgs.append(LLMMessage(role=tomb.summary_role, content=tomb.summary))
-                    emitted_summary_for.add(key)
+        paired_results_rendered: set[int] = set()
 
-            if isinstance(e, CondensationEvent):
-                continue  # bookkeeping; its summary is emitted in-place above
-            if not isinstance(e, LLMConvertible):
-                continue  # status/error: never shown to the LLM
-            if is_forgotten(e.seq):
-                continue  # forgotten by a tombstone
-
+        def append_event_message(e: LLMConvertible) -> None:
             if (
                 isinstance(e, ObservationEvent)  # exact class — AgentErrorEvent is NOT masked (B4)
                 and e.seq is not None
@@ -441,46 +531,83 @@ class View(BaseModel):
                     )
                 )
                 visible.append(e.seq)
-            else:
-                msg = e.to_llm_message()
-                # BP-00: attach image ONLY to the latest browser screenshot.
-                if (
-                    isinstance(e, ObservationEvent)
-                    and e.seq == latest_screenshot_seq
-                    and latest_screenshot_seq is not None
-                ):
-                    # latest_screenshot_seq is only set (above) for an observation
-                    # whose structured payload carried a screenshot_b64, so the
-                    # seq-matched event here provably has a non-None `structured`.
-                    assert e.tool_result.structured is not None
-                    b64 = e.tool_result.structured.get("screenshot_b64")
-                    msg = msg.model_copy(update={"images": [f"data:image/png;base64,{b64}"]})
+                return
 
-                msgs.append(msg)
-                if e.seq is not None:
-                    # B3: Deterministic-by-seq tail variation (arXiv 2407.10912).
-                    # Rotate the surface form of AGENT thoughts and TOOL results
-                    # to prevent the model from over-fitting to a single fixed
-                    # template, while maintaining KV-cache stability (B5) by
-                    # pinning the form to the seq.
-                    if isinstance(e, ActionEvent):
-                        variants = [
-                            lambda t: t,
-                            lambda t: f"Reasoning: {t}",
-                            lambda t: f"Thought: {t}",
-                        ]
-                        f = variants[e.seq % len(variants)]
-                        msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
-                    elif isinstance(e, ObservationEvent):
-                        variants = [
-                            lambda c: c,
-                            lambda c: f"Observation: {c}",
-                            lambda c: f"Output: {c}",
-                        ]
-                        f = variants[e.seq % len(variants)]
-                        msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
+            msg = e.to_llm_message()
+            # BP-00: attach image ONLY to the latest browser screenshot.
+            if (
+                isinstance(e, ObservationEvent)
+                and e.seq == latest_screenshot_seq
+                and latest_screenshot_seq is not None
+            ):
+                # latest_screenshot_seq is only set (above) for an observation
+                # whose structured payload carried a screenshot_b64, so the
+                # seq-matched event here provably has a non-None `structured`.
+                assert e.tool_result.structured is not None
+                b64 = e.tool_result.structured.get("screenshot_b64")
+                msg = msg.model_copy(update={"images": [f"data:image/png;base64,{b64}"]})
 
-                    visible.append(e.seq)
+            msgs.append(msg)
+            seq = getattr(e, "seq", None)
+            if seq is not None:
+                # B3: Deterministic-by-seq tail variation (arXiv 2407.10912).
+                # Rotate the surface form of AGENT thoughts and TOOL results
+                # to prevent the model from over-fitting to a single fixed
+                # template, while maintaining KV-cache stability (B5) by
+                # pinning the form to the seq.
+                if isinstance(e, ActionEvent):
+                    variants = [
+                        lambda t: t,
+                        lambda t: f"Reasoning: {t}",
+                        lambda t: f"Thought: {t}",
+                    ]
+                    f = variants[seq % len(variants)]
+                    msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
+                elif isinstance(e, ObservationEvent):
+                    variants = [
+                        lambda c: c,
+                        lambda c: f"Observation: {c}",
+                        lambda c: f"Output: {c}",
+                    ]
+                    f = variants[seq % len(variants)]
+                    msgs[-1] = msgs[-1].model_copy(update={"content": f(msgs[-1].content)})
+
+                visible.append(seq)
+
+        for e in events:
+            # Emit a span's summary at the chronological position it replaces.
+            if e.seq is not None and e.seq in summary_at_start:
+                key = e.seq
+                if key not in emitted_summary_for:
+                    tomb = summary_at_start[key]
+                    msgs.append(LLMMessage(role=tomb.summary_role, content=tomb.summary))
+                    emitted_summary_for.add(key)
+
+            if isinstance(e, CondensationEvent):
+                continue  # bookkeeping; its summary is emitted in-place above
+            if not isinstance(e, LLMConvertible):
+                continue  # status/error: never shown to the LLM
+            if not is_visible(e):
+                continue  # forgotten by a tombstone
+
+            if isinstance(e, ActionEvent):
+                result = result_for_action(e)
+                if result is not None and is_visible(result):
+                    append_event_message(e)
+                    append_event_message(result)
+                    if result.seq is not None:
+                        paired_results_rendered.add(result.seq)
+                    continue
+            elif isinstance(e, ObservationEvent | AgentErrorEvent):
+                action = action_for_result(e)
+                if action is not None and is_visible(action):
+                    if e.seq is not None and e.seq in paired_results_rendered:
+                        continue
+                    # Paired results are rendered with their action so no
+                    # injected/condensation message can split the provider pair.
+                    continue
+
+            append_event_message(e)
 
         # GAP D recency recitation: append the ephemeral objective+checklist at
         # the TAIL so the goal sits in the high-attention recent window.

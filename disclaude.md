@@ -5423,3 +5423,31 @@ don't count. (Execution-nudge cap-3 release stays — but now the nudge actually
 
 Iterations 2-5 of soak-ghi continue under the unfixed stack for extra signal; the run cannot meet
 the bar (iter 1 FAIL) — next gating run happens after J+G2 deploy.
+
+### soak-full results + REL-RC-K/L — 2026-07-02
+
+**soak-full (full fix stack ×5): 3 PASS / 2 FAIL / 0 INVALID.** G/G2/H/I/J all held (zero stale-edit
+spirals, zero pickup-gate violations, zero finish-without-work, zero planning-refusal stalls). Both
+failures are the FINAL (footer) phase, new categories:
+
+**REL-RC-K — provider protocol kill (iter 003, conv_7493cc41, seq 322).** After 321 healthy events,
+the next completion request died: LLMError [minimax] "tool call result does not follow tool call
+(2013)" → loop terminal-errored to IDLE, no retry → INACTIVE_TIMEOUT. At 322 events condensation
+pressure is maximal — prime suspect: the rendered provider history breaks tool_call/tool_result
+ADJACENCY (an omission/condensation/injected message splitting an action from its observation).
+Fix has two halves: (a) render-time invariant — an assistant tool_call message and its tool result
+must stay adjacent under ALL omission/injection paths (test across condensation); (b) resilience —
+model_error protocol failures get a bounded retry with a REPAIRED history (e.g. drop the offending
+dangling pair), never a silent IDLE death.
+
+**REL-RC-L — no_op_edit spiral (iter 004, conv_9304beee, seq 154-167).** Model repeatedly proposed
+old==new file_edit (footer already present in its app/index.html), got correct no_op_edit refusals,
+never adapted → prose turns → STUCK. Same category as REL-RC-I: correct refusal without graduated
+escalation. Fix: consecutive no_op_edit streak (event-derived, same pattern as
+planning_tool_refusal_streak) → 2nd refusal escalates detail ("the change may ALREADY be applied —
+verify by reading the region, then update plan progress / move to the next step"); include the
+CURRENT content region in the refusal (the G refusal-read machinery — a no-op edit proves the model
+holds stale beliefs about the file); 3rd+ → steer to finish-path progress rather than more edits.
+Secondary note: deliverable landed at app/index.html not root index.html (watch for recurrence).
+
+Bar unchanged. After K+L: parallel-lane ×10 collapsed bar (3 lanes, ~35 min) replaces serial 5+5.
