@@ -925,6 +925,47 @@ class AgentLoop:
         and the planning-mode gate."""
         return await self._valve.post_noop_valve()
 
+    async def _route_plan_approval_gate(self, plan: PlanEvent) -> Disp:
+        """Route a newly-emitted PlanEvent through the normal approval gate."""
+        if self._autonomous:
+            # No human to approve → auto-approve INLINE, emitting the
+            # exact same events approve_plan() would, so the event log
+            # is identical whether a human or the harness approved.
+            self.mode = self._execution_mode
+            await self._emit(
+                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+            )
+            await self._arm_dod_from_plan()
+            await self._seed_context_from_plan()  # CXT-6: same as interactive approve_plan
+            return Disp.CONTINUE
+        await self._emit(
+            StatusEvent(
+                status=ConversationStatus.AWAITING_PLAN_APPROVAL,
+                detail=plan.id,
+            )
+        )
+        return Disp.HALT
+
+    def _harvest_prose_plan(self, events: list[Event]) -> PlanEvent | None:
+        steps = signals.harvest_prose_plan_steps(events)
+        if not steps:
+            return None
+        instruction = signals.current_revision_instruction(events) or ""
+        summary = (
+            signals.latest_prose_plan_summary(events)
+            or instruction[:120]
+            or "Proposed plan"
+        )
+        return PlanEvent(
+            summary=summary,
+            steps=steps,
+            revision=signals.next_plan_revision(events),
+            context=(
+                "Synthesized by REL-RC-N from the assistant's latest prose plan "
+                "after the force-submit ladder was exhausted."
+            ),
+        )
+
     async def _gate_planning_mode(self, step: AgentStep, events: list[Event]) -> Disp:
         # (e.5) PLAN GATE — in PLANNING mode the planner has THREE valid moves:
         #   1. `submit_plan` → intercepted into a PlanEvent, loop halts for approval.
@@ -1003,26 +1044,7 @@ class AgentLoop:
                             )
                         )
                         return Disp.HALT
-                if self._autonomous:
-                    # No human to approve → auto-approve INLINE, emitting the
-                    # exact same events approve_plan() would, so the event log
-                    # is identical whether a human or the harness approved.
-                    self.mode = self._execution_mode
-                    await self._emit(
-                        StatusEvent(
-                            status=ConversationStatus.RUNNING, detail="plan_approved"
-                        )
-                    )
-                    await self._arm_dod_from_plan()
-                    await self._seed_context_from_plan()  # CXT-6: same as interactive approve_plan
-                    return Disp.CONTINUE
-                await self._emit(
-                    StatusEvent(
-                        status=ConversationStatus.AWAITING_PLAN_APPROVAL,
-                        detail=plan.id,
-                    )
-                )
-                return Disp.HALT
+                return await self._route_plan_approval_gate(plan)
             if tc is None:
                 # The planner spoke without calling a tool. PRESERVE the
                 # prose first — this is how the agent acknowledges the
@@ -1044,22 +1066,62 @@ class AgentLoop:
                             ),
                         )
                     )
-                # FORCED-SUBMIT RECOVERY (revision re-plan). When a REVISION re-plan
+                    events = await self._events()
+                if (
+                    self._revision_force_submit_enabled
+                    and signals.prose_plan_force_submit(events)
+                    and not signals.prose_plan_harvested(events)
+                    and not signals.plan_submitted_since_current_planning(events)
+                ):
+                    synth = self._harvest_prose_plan(events)
+                    if synth is not None:
+                        await self._emit(
+                            MessageEvent(
+                                source=EventSource.ENVIRONMENT,
+                                message=LLMMessage(
+                                    role="user",
+                                    content=(
+                                        "<system-reminder>\n"
+                                        "REL-RC-N HARVEST: the planner stayed in"
+                                        " PLANNING after the force-submit ladder"
+                                        " and still did not call `submit_plan`."
+                                        f" Synthesizing fresh PlanEvent revision"
+                                        f" {synth.revision} from the latest"
+                                        f" assistant prose plan with"
+                                        f" {len(synth.steps)} step(s), then"
+                                        " routing it through the normal plan"
+                                        " approval gate.\n"
+                                        "</system-reminder>"
+                                    ),
+                                ),
+                            )
+                        )
+                        await self._emit(
+                            StatusEvent(
+                                status=ConversationStatus.RUNNING,
+                                detail="prose_plan_harvested",
+                            )
+                        )
+                        await self._emit(synth)
+                        self._plan_explore_reads = 0
+                        self._plan_nudges = 0
+                        return await self._route_plan_approval_gate(synth)
+                # FORCED-SUBMIT RECOVERY (prose planning). When a planning segment
                 # has been narrated >= K times without calling submit_plan, the soft
                 # _PLAN_NUDGE is being ignored and the actionless valve would pause →
                 # STUCK, with resume re-entering the same prose loop. Escalate ONCE to a
                 # DURABLE marker (StatusEvent detail="force_submit_plan") + a hard
                 # directive: the marker lives in the event log, so driver.tools_for_step
                 # narrows the NEXT step's tools to submit_plan ONLY and a RESUMED build
-                # replays the marker and stays forced (no soft-nudge loop). This is the
-                # ENGINE recovery for the misclassified-as-actionless revision plan — not
-                # a model fix. Gated default-ON; revision-only (in_planning_for_revision)
-                # so the initial-plan / non-revision stall path is untouched.
+                # replays the marker and stays forced (no soft-nudge loop). REL-RC-N
+                # generalizes the marker to initial planning too; once the marker is
+                # active, another prose-only turn is harvested into a fresh PlanEvent.
                 if (
                     self._revision_force_submit_enabled
-                    and signals.in_planning_for_revision(events)
-                    and self._plan_nudges >= _REVISION_FORCE_SUBMIT_K
-                    and not signals.revision_force_submit(events)  # escalate once
+                    and signals.plan_nudges_since_current_planning(events)
+                    >= _REVISION_FORCE_SUBMIT_K
+                    and not signals.prose_plan_force_submit(events)  # escalate once
+                    and not signals.plan_submitted_since_current_planning(events)
                 ):
                     await self._emit(
                         StatusEvent(

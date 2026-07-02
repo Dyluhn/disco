@@ -21,6 +21,7 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
+    PlanStep,
     StatusEvent,
 )
 from ..llm import OperatingMode
@@ -514,6 +515,212 @@ def current_revision_instruction(events: list[Event]) -> str | None:
     if best is None:
         return None
     return (best.message.content or "").strip() or None
+
+
+def current_planning_segment_start_seq(events: list[Event]) -> int | None:
+    """Seq that bounds the currently-pending planning segment.
+
+    Prefer the durable ``planning`` marker emitted by request_plan/enter_planning.
+    Initial plan mode historically may not have such a marker, so fall back to the
+    latest USER message. The caller is still responsible for only using this while
+    the loop is actually in PLANNING mode.
+    """
+    for e in reversed(events):
+        if isinstance(e, StatusEvent) and e.detail == "planning":
+            return e.seq or 0
+    for e in reversed(events):
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            return e.seq or 0
+    return None
+
+
+def plan_submitted_since_current_planning(events: list[Event]) -> bool:
+    """True iff the current planning segment already produced a real plan.
+
+    Normal ``submit_plan`` is intercepted into a ``PlanEvent`` rather than recorded
+    as an ``ActionEvent``, but tests and older logs may still carry an action. Treat
+    either as satisfying the planning gate so prose harvesting never runs after a
+    real submission for this follow-up.
+    """
+    start_seq = current_planning_segment_start_seq(events)
+    if start_seq is None:
+        return False
+    for e in events:
+        if (e.seq or 0) <= start_seq:
+            continue
+        if isinstance(e, PlanEvent):
+            return True
+        if isinstance(e, ActionEvent):
+            tool = e.tool_call.tool_name if e.tool_call is not None else None
+            if tool == "submit_plan":
+                return True
+    return False
+
+
+def next_plan_revision(events: list[Event]) -> int:
+    """The revision number Planner.plan_from_args would assign next."""
+    return 1 + sum(1 for e in events if isinstance(e, PlanEvent))
+
+
+def plan_nudges_since_current_planning(events: list[Event]) -> int:
+    """Count soft prose-planning nudges in the current pending planning segment.
+
+    Event-derived counterpart to the old in-memory ``_plan_nudges`` runway. It is
+    bounded by the latest planning marker (or latest USER message for initial-plan
+    mode) and releases to 0 as soon as a PlanEvent/submit_plan lands.
+    """
+    from .engine import _PLAN_NUDGE
+
+    start_seq = current_planning_segment_start_seq(events)
+    if start_seq is None:
+        return 0
+    count = 0
+    for e in events:
+        if (e.seq or 0) <= start_seq:
+            continue
+        if isinstance(e, PlanEvent):
+            return 0
+        if isinstance(e, ActionEvent):
+            tool = e.tool_call.tool_name if e.tool_call is not None else None
+            if tool == "submit_plan":
+                return 0
+        if isinstance(e, StatusEvent) and e.detail == "plan_approved":
+            return 0
+        if (
+            isinstance(e, MessageEvent)
+            and e.source == EventSource.ENVIRONMENT
+            and e.message is not None
+            and e.message.content == _PLAN_NUDGE
+        ):
+            count += 1
+    return count
+
+
+def prose_plan_force_submit(events: list[Event]) -> bool:
+    """True iff the current planning segment has an unsatisfied force-submit marker.
+
+    Unlike ``revision_force_submit``, this is deliberately planning-segment scoped
+    rather than revision-only so initial-plan prose loops can use the same marker
+    and driver narrowing. It releases on PlanEvent/submit_plan/approval.
+    """
+    start_seq = current_planning_segment_start_seq(events)
+    if start_seq is None:
+        return False
+    for e in reversed(events):
+        if (e.seq or 0) <= start_seq:
+            return False
+        if isinstance(e, PlanEvent):
+            return False
+        if isinstance(e, ActionEvent):
+            tool = e.tool_call.tool_name if e.tool_call is not None else None
+            if tool == "submit_plan":
+                return False
+        if isinstance(e, StatusEvent):
+            if e.detail == "plan_approved":
+                return False
+            if e.detail == "force_submit_plan":
+                return True
+    return False
+
+
+def prose_plan_harvested(events: list[Event]) -> bool:
+    """Has REL-RC-N already harvested a prose plan in this planning segment?"""
+    start_seq = current_planning_segment_start_seq(events)
+    if start_seq is None:
+        return False
+    for e in reversed(events):
+        if (e.seq or 0) <= start_seq:
+            return False
+        if isinstance(e, StatusEvent) and e.detail == "prose_plan_harvested":
+            return True
+    return False
+
+
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
+_PROSE_PLAN_STEP_RE = re.compile(
+    r"^\s*(?:[-*+]\s+|(?:\d{1,2}|[A-Za-z])[\.)]\s+)(.+?)\s*$"
+)
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MD_EMPH_RE = re.compile(r"(\*\*|__|\*|_)([^*_].*?)\1")
+
+
+def _strip_think_blocks(text: str) -> str:
+    return _THINK_BLOCK_RE.sub("", text)
+
+
+def _strip_prose_step_markdown(text: str) -> str:
+    text = _MD_LINK_RE.sub(r"\1", text)
+    text = re.sub(r"^\[[ xX]\]\s+", "", text.strip())
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    # A small fixed-point loop handles nested/simple emphasis without trying to
+    # parse markdown; this is a recovery heuristic, not a renderer.
+    for _ in range(3):
+        new = _MD_EMPH_RE.sub(r"\2", text)
+        if new == text:
+            break
+        text = new
+    return text.strip(" \t`*_")
+
+
+def prose_plan_steps_from_text(text: str, *, limit: int = 8) -> list[str]:
+    """Parse numbered/bulleted prose-plan lines into clean step titles."""
+    out: list[str] = []
+    clean = _strip_think_blocks(text)
+    for line in clean.splitlines():
+        mt = _PROSE_PLAN_STEP_RE.match(line)
+        if mt is None:
+            continue
+        step = _strip_prose_step_markdown(mt.group(1))
+        if not step:
+            continue
+        out.append(step[:200])
+        if len(out) >= limit:
+            break
+    return out
+
+
+def latest_prose_plan_message(events: list[Event]) -> str | None:
+    """Latest assistant prose emitted in the current planning segment."""
+    start_seq = current_planning_segment_start_seq(events)
+    if start_seq is None:
+        return None
+    for e in reversed(events):
+        if (e.seq or 0) <= start_seq:
+            return None
+        if isinstance(e, MessageEvent) and e.source == EventSource.AGENT:
+            content = (e.message.content or "").strip()
+            if content:
+                return content
+    return None
+
+
+def latest_prose_plan_summary(events: list[Event]) -> str | None:
+    """Best short summary from the latest assistant prose plan message."""
+    content = latest_prose_plan_message(events)
+    if not content:
+        return None
+    clean = _strip_think_blocks(content)
+    lines = [line.strip() for line in clean.splitlines() if line.strip()]
+    plan_lines = [line for line in lines if line.lower().startswith("plan")]
+    raw = plan_lines[-1] if plan_lines else (lines[0] if lines else "")
+    summary = _strip_prose_step_markdown(raw)
+    return summary[:200] if summary else None
+
+
+def harvest_prose_plan_steps(events: list[Event]) -> list[PlanStep]:
+    """REL-RC-N: recover PlanSteps from the latest prose plan, or one user step.
+
+    The fallback is intentionally the literal pending user instruction. That mirrors
+    REL-RC-F's adjudicable one-step fallback while avoiding a stranded execution
+    with no tracker.
+    """
+    content = latest_prose_plan_message(events) or ""
+    titles = prose_plan_steps_from_text(content, limit=8)
+    if not titles:
+        instruction = current_revision_instruction(events)
+        if instruction:
+            titles = [instruction[:200]]
+    return [PlanStep(title=title) for title in titles[:8] if title]
 
 
 def planning_turns_since_replan(events: list[Event]) -> int:

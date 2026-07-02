@@ -325,8 +325,8 @@ class Driver:
 
         tools = self._loop.executor.available_tools()
         if self._loop.mode == OperatingMode.PLANNING:
-            # FORCED-SUBMIT RECOVERY (revision re-plan). When the engine has escalated a
-            # stuck revision re-plan (signals.revision_force_submit), narrow the offered
+            # FORCED-SUBMIT RECOVERY (prose planning). When the engine has escalated a
+            # stuck prose-planning segment, narrow the offered
             # tools to submit_plan + READ tools (file_read/file_list) — NOT submit-only.
             # ROOT (proven live, ~30% reproduction): a model re-planning a revision often
             # wants to file_read the current files to ground the diff BEFORE submitting
@@ -534,14 +534,14 @@ class Driver:
             and signals.actions_since_last_resume(events) == 0
         )
         # Forced-submit recovery narrows the offered tools to submit_plan plus a bounded
-        # read set. Revision re-plans key off a replayed event marker; repeated planning
+        # read set. Prose-plan loops key off a replayed event marker; repeated planning
         # refusals key off the tail refusal streak in the same event log.
         planning_refusal_force = (
             self._loop.mode == OperatingMode.PLANNING
             and planning_tool_refusal_streak(events) >= _PLANNING_TOOL_REFUSAL_NARROW_AT
         )
         force_submit_only = self._loop.mode == OperatingMode.PLANNING and (
-            signals.revision_force_submit(events) or planning_refusal_force
+            signals.prose_plan_force_submit(events) or planning_refusal_force
         )
         force_read_tools = (
             _PLANNING_TOOL_REFUSAL_READ_TOOLS if planning_refusal_force else None

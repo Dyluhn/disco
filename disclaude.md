@@ -5503,3 +5503,37 @@ verify the region / update plan progress / move to the next step", reuse REL-RC-
 counter + escalation + (small files) refusal-read delivery. Counter resets on a genuinely-different
 write. This closes the loop-category trifecta: refused-edit loops (G), no-op-edit loops (L), and
 no-op-WRITE loops (M).
+
+### Bar attempt 6 → REL-RC-N (prose-planning loop) — 2026-07-02
+
+Attempt 6 lane a6 iter 1: FAIL/NO_REPLAN_AFTER_REVISION (conv at soak-bar-a6 run 000, followup seq
+161): model emitted 'Plan (revision N): ...' as assistant PROSE repeatedly instead of calling
+submit_plan; 'Still in PLANNING mode' reminders ignored; no tool calls → no refusal events → the
+REL-RC-I streak had nothing to count; actionless valve PAUSED; 3 resumes re-looped; RevisionOracle
+correctly failed it (revision_after_followup=0, zero writes — fail-safes held).
+
+**REL-RC-N — prose-plan harvesting (REL-RC-F precedent extended):** when the model provides plan
+CONTENT in the wrong channel, the host adapts the channel instead of demanding ritual compliance.
+After the existing prose-planning nudge/force-submit ladder is exhausted (last resort, loud):
+parse the model's own prose plan (the 'Plan (revision N):' message it just wrote — steps from its
+numbered/bulleted lines; fallback = the user instruction as one step, exactly REL-RC-F), synthesize
+a FRESH PlanEvent (new id — the REL-RC-F event-sourcing lesson), and route it through the SAME
+autonomous approval gate as a real submit_plan. Never silent: emit a system message recording the
+harvest. Investigate first WHY the force-submit narrowing didn't convert this model (did the marker
+fire? does narrowing handle zero-tool-call prose turns at all?) — fix that hole too if found.
+
+### REL-RC-O (queued) — dictated-content finish conditions — 2026-07-02
+
+Attempt 6 lane c6 iter 2: FAIL/ARTIFACT_TRUTH_MISMATCH — 'Get Started' (VERBATIM dictated by
+follow-up 2, in quotes) absent from the final deliverable while tiers + footer present. Either
+phase 3 never applied it or phase 4 reverted it — the dictated-content carry-forward problem.
+Distinct from the resolved Hobby≠Starter fork: quoted user text is a hard requirement, not a
+creative label.
+
+**Fix (playbook §6 — machine-checked content floors at finish):** parse QUOTED literals from build/
+follow-up instructions into DoD content conditions (the existing C18 done-condition machinery);
+the finish gate refuses FINISHED while the current deliverable lacks a dictated literal (host
+checks bytes, loud reminder names the missing text). Carry conditions across revisions (a later
+follow-up must not silently drop an earlier phase's dictated content) — that closes BOTH failure
+arms (never-applied AND reverted). Queued behind REL-RC-N (same engine area; serialize workers).
+Also consider: per-phase workspace snapshots in the runner evidence for precise attribution.

@@ -18,6 +18,7 @@ plan_approved.seq > planning.seq again).
 
 from disco.core import (
     ConversationStatus,
+    PlanEvent,
     StatusEvent,
 )
 from disco.core.llm import OperatingMode
@@ -254,7 +255,7 @@ def _planning_seq(events):
     return seq
 
 
-async def test_pending_revision_blank_planning_turns_halt_at_bound():
+async def test_pending_revision_blank_planning_turns_harvest_fallback_plan():
     blank = AgentStep(thought="", tool_call=None, finished=False)
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
@@ -277,22 +278,29 @@ async def test_pending_revision_blank_planning_turns_halt_at_bound():
     # No tool-less planning turn has happened yet → the bound is still 0.
     assert signals.planning_turns_since_replan(pre) == 0
 
-    # The spin: BLANK tool-less planning turns. Without the bound this run never
-    # returns (the noop ceiling can't trip on flat counters) — so reaching this
-    # line at all is the no-hang proof.
+    # The spin: BLANK tool-less planning turns. REL-RC-N now recovers after the
+    # force-submit ladder by synthesizing a one-step plan from the pending user
+    # instruction, rather than pausing at the old planning-turn bound.
     state = await loop.run()
     events = await store.get_events(CID)
 
-    # Halted via PAUSED(actionless), NOT a FINISH off the stale rev-1 plan.
-    assert state.execution_status == ConversationStatus.PAUSED
-    assert _last_status_detail(events) == "actionless"
+    # Routed through the normal interactive plan-approval gate, NOT a FINISH off
+    # the stale rev-1 plan and NOT a PAUSED(actionless) loop.
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    harvested = [e for e in events if isinstance(e, PlanEvent)][-1]
+    assert harvested.revision == 2
+    assert [s.title for s in harvested.steps] == ["please add a dark-mode toggle"]
+    assert _last_status_detail(events) == harvested.id
 
-    # PROOF the BOUND (not the noop ladder) did it: the noop counter reads 0 at
-    # the halt (the trailing PAUSED is a resume boundary) — the ceiling never
-    # could have fired — while the turns-since-replan bound reached the ceiling.
+    # PROOF this stayed event-derived: blank turns still do not move the noop
+    # counter, but the durable force marker + harvest marker landed.
     assert signals.consecutive_noops(events) == 0
-    assert (
-        signals.planning_turns_since_replan(events) >= loop._max_consecutive_noops
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "force_submit_plan" for e in events
+    )
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "prose_plan_harvested"
+        for e in events
     )
 
     # No NEW terminal FINISH was emitted after the re-plan re-entered planning
