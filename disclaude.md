@@ -5486,3 +5486,20 @@ containers to the conversation (sandbox containers carry owner/conv identity in 
 REL-4/noVNC owner-cid teardown machinery) and count only THIS conversation's containers alive after
 release; keep the global delta as fallback when attribution is unavailable (serial compat,
 fail-closed). Bar attempts 2-4 void (relay perms / serial timeouts / this); bar re-runs after.
+
+### Bar attempt 5 → REL-RC-M — 2026-07-02
+
+Attempt 5 (all parallel fixes): 7 PASS then lane-a5 iter 4 FAIL/BUILD_DID_NOT_FINISH
+(conv_d4881c06, seq 165-178). NEW signature: repeated SUCCESSFUL file_write of (evidently)
+identical content — no errors, so no refusal escalation could fire; stuck_escape didn't break the
+conviction; breaker terminated repeated_action_observation → STUCK. The parallel adjudication stack
+is proven (7 clean parallel PASSes incl. scoped cleanup); this is a genuine product defect: the
+success-shaped no-op loop.
+
+**REL-RC-M:** file_write (and file_append with empty effect) whose bytes are IDENTICAL to current
+on-disk content is a no-op in disguise — the host knows (sha compare before write). Treat it as
+no_op_edit: refuse with "the file already contains exactly this content — no change was needed;
+verify the region / update plan progress / move to the next step", reuse REL-RC-L's per-path
+counter + escalation + (small files) refusal-read delivery. Counter resets on a genuinely-different
+write. This closes the loop-category trifecta: refused-edit loops (G), no-op-edit loops (L), and
+no-op-WRITE loops (M).

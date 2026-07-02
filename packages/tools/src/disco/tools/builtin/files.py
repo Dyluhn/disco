@@ -413,6 +413,52 @@ def _no_op_edit_refusal(
     )
 
 
+def _no_op_write_refusal(
+    conv_id: str,
+    path: str,
+    *,
+    tool_name: str,
+    current_bytes: bytes,
+) -> ToolOutcome:
+    """REL-RC-M: byte-identical whole-file writes are refused, not "successful" no-ops."""
+    import hashlib
+
+    count = _increment_no_op_edit_count(conv_id, path)
+    content = (
+        f"{tool_name} refused: {path} already contains exactly this content — no change "
+        "was needed. If you were verifying, the content is confirmed below; update plan "
+        "progress or move to the next step."
+    )
+    structured: dict[str, Any] = {
+        "kind": "no_op_write",
+        "path": path,
+        "no_op_write_count": count,
+    }
+    if len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES:
+        sha = hashlib.sha256(current_bytes).hexdigest()
+        fresh_content, delivered = _line_refusal_read(
+            conv_id,
+            path,
+            current_bytes=current_bytes,
+            sha=sha,
+            attempted_lines=None,
+        )
+        content += fresh_content
+        structured["delivered_read"] = delivered
+    if count >= 2:
+        content += (
+            "\n\nRepeated no-op write: this file may ALREADY contain the intended "
+            "change — do not re-send this write; verify the content above, then "
+            "update plan progress or move to the next step."
+        )
+    return ToolOutcome(
+        success=False,
+        error="no_op_write",
+        content=content,
+        structured=structured,
+    )
+
+
 def _line_success_content(
     path: str,
     text: str,
@@ -920,10 +966,14 @@ class FileWriteTool:
         if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
             return g
         # Read existing content once — used by both the F1 guard and the W3 syntax gate.
+        old_bytes: bytes | None = None
         old_text: str | None = None
         try:
-            old_text = (await ctx.sandbox.read_file(args.path)).decode("utf-8", errors="replace")
+            old_bytes = await ctx.sandbox.read_file(args.path)
+            if old_bytes is not None:
+                old_text = old_bytes.decode("utf-8", errors="replace")
         except Exception:  # noqa: BLE001 — absent file is fine, that just means "new"
+            old_bytes = None
             old_text = None
         # F1 — read-before-rewrite guard (ALL tiers, no assist gate). Refuse a
         # file_write to an EXISTING file if there has been no successful
@@ -968,6 +1018,13 @@ class FileWriteTool:
                 )
         # W3 — syntax gate: write new bytes; auto-revert if new content introduces errors.
         raw = args.content.encode("utf-8")
+        if old_bytes is not None and raw == old_bytes:
+            return _no_op_write_refusal(
+                ctx.conversation_id,
+                args.path,
+                tool_name="file_write",
+                current_bytes=old_bytes,
+            )
         gated = await _gated_write(ctx, args.path, raw, old_text)
         if gated is not None:
             return gated
@@ -1013,7 +1070,15 @@ class FileAppendTool:
         except Exception:  # noqa: BLE001 — absent file → start empty
             existing = b""
             old_text = None
-        combined = existing + args.content.encode("utf-8")
+        append_bytes = args.content.encode("utf-8")
+        combined = existing + append_bytes
+        if old_text is not None and combined == existing:
+            return _no_op_write_refusal(
+                ctx.conversation_id,
+                args.path,
+                tool_name="file_append",
+                current_bytes=existing,
+            )
         # W3 — syntax gate: write combined; auto-revert to old if errors introduced.
         gated = await _gated_write(ctx, args.path, combined, old_text)
         if gated is not None:
@@ -1022,7 +1087,7 @@ class FileAppendTool:
         _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True,
-            content=f"appended {len(args.content.encode('utf-8'))} bytes to {args.path}",
+            content=f"appended {len(append_bytes)} bytes to {args.path}",
             artifacts=[args.path],
         )
 

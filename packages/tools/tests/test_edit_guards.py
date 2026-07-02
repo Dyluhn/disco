@@ -11,10 +11,16 @@ from __future__ import annotations
 import pytest
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
+    FileAppendArgs,
+    FileAppendTool,
     FileEditArgs,
     FileEditTool,
+    FileReadArgs,
+    FileReadTool,
     FileReplaceLinesArgs,
     FileReplaceLinesTool,
+    FileWriteArgs,
+    FileWriteTool,
     reset_read_tracker,
 )
 
@@ -189,4 +195,100 @@ async def test_file_edit_noop_caught_on_ground_truth():
     )
     assert out.success is False
     assert out.error == "no_op_edit"
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_write_identical_bytes_refused_with_content_and_escalates():
+    sbx = _FakeSandbox("x = 1\n")
+    ctx = _Ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="config.py"), ctx)
+
+    first = await FileWriteTool().run(
+        FileWriteArgs(path="config.py", content="x = 1\n"),
+        ctx,
+    )
+    second = await FileWriteTool().run(
+        FileWriteArgs(path="config.py", content="x = 1\n"),
+        ctx,
+    )
+
+    assert first.success is False
+    assert first.error == "no_op_write"
+    assert (
+        "file_write refused: config.py already contains exactly this content"
+        in first.content
+    )
+    assert "Fresh full current file for config.py" in first.content
+    assert "\tx = 1" in first.content
+    assert "Repeated no-op write" not in first.content
+    assert (first.structured or {})["kind"] == "no_op_write"
+    assert (first.structured or {})["no_op_write_count"] == 1
+    assert (first.structured or {})["delivered_read"]["full"] is True
+
+    assert second.success is False
+    assert second.error == "no_op_write"
+    assert "Repeated no-op write" in second.content
+    assert "ALREADY contain the intended change" in second.content
+    assert "\tx = 1" in second.content
+    assert (second.structured or {})["no_op_write_count"] == 2
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_write_different_after_noop_succeeds_and_resets_noop_counter():
+    sbx = _FakeSandbox("x = 1\n")
+    ctx = _Ctx(sbx)
+    await FileReadTool().run(FileReadArgs(path="config.py"), ctx)
+
+    refused = await FileWriteTool().run(
+        FileWriteArgs(path="config.py", content="x = 1\n"),
+        ctx,
+    )
+    changed = await FileWriteTool().run(
+        FileWriteArgs(path="config.py", content="x = 2\n"),
+        ctx,
+    )
+    await FileReadTool().run(FileReadArgs(path="config.py"), ctx)
+    refused_after_success = await FileWriteTool().run(
+        FileWriteArgs(path="config.py", content="x = 2\n"),
+        ctx,
+    )
+
+    assert refused.error == "no_op_write"
+    assert changed.success is True, changed.content
+    assert sbx.writes and sbx.writes[-1] == b"x = 2\n"
+    assert refused_after_success.error == "no_op_write"
+    assert "Repeated no-op write" not in refused_after_success.content
+    assert (refused_after_success.structured or {})["no_op_write_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_file_append_empty_effect_refused_as_no_op_write():
+    sbx = _FakeSandbox("line\n")
+    out = await FileAppendTool().run(
+        FileAppendArgs(path="log.txt", content=""),
+        _Ctx(sbx),
+    )
+
+    assert out.success is False
+    assert out.error == "no_op_write"
+    assert "file_append refused: log.txt already contains exactly this content" in out.content
+    assert "Fresh full current file for log.txt" in out.content
+    assert "\tline" in out.content
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_write_identical_unread_existing_file_hits_read_before_write_first():
+    sbx = _FakeSandbox("x = 1\n")
+    out = await FileWriteTool().run(
+        FileWriteArgs(path="config.py", content="x = 1\n"),
+        _Ctx(sbx),
+    )
+
+    assert out.success is False
+    assert out.error == "read_before_write"
+    assert "file_read" in out.content
+    assert "already contains exactly this content" not in out.content
     assert sbx.writes == []
