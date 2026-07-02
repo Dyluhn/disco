@@ -179,6 +179,56 @@ export interface DeliverableEvent extends EventBase {
   deployment_url?: string;
 }
 
+/** REL-1b host verifier audit marker. Suppressed in the UI event log. */
+export interface VerifierStartedEvent extends EventBase {
+  kind: "verifier_started";
+  artifact_path: string;
+  artifact_kind: string;
+  verifier: string;
+  requested_by_event_id?: string | null;
+}
+
+/** REL-1b host verifier verdict marker. Suppressed in the UI event log. */
+export interface VerifierVerdictEvent extends EventBase {
+  kind: "verifier_verdict";
+  artifact_path: string;
+  artifact_kind: string;
+  verified: boolean;
+  verdict?: string | null;
+  detail?: string | null;
+  failures?: Array<Record<string, unknown>>;
+}
+
+/** REL-1b shadow comparison between inline and host verifier results. */
+export interface VerifierShadowEvent extends EventBase {
+  kind: "verifier_shadow";
+  artifact_path: string;
+  artifact_kind: string;
+  inline_verdict?: string | null;
+  host_verdict?: string | null;
+  agreement?: boolean | null;
+  detail?: string | null;
+}
+
+/** CXT-3 deferred compaction marker. Suppressed in the UI event log. */
+export interface ContextResolvedEvent extends EventBase {
+  kind: "context_resolved";
+  range_id: string;
+  forgotten_start_seq: number;
+  forgotten_end_seq: number;
+  reason: string;
+  summary_ref_path?: string | null;
+}
+
+/** CXT-3 durable summary marker. Suppressed in the UI event log. */
+export interface ContextSummaryEvent extends EventBase {
+  kind: "context_summary";
+  range_id: string;
+  rel_path: string;
+  summary: string;
+  artifact_kind: string;
+}
+
 export interface ClarifyQuestionItem {
   id: string;
   question: string;
@@ -234,6 +284,11 @@ export type AgentEvent =
   | ScheduleEvent
   | ScheduleRunEvent
   | DeliverableEvent
+  | VerifierStartedEvent
+  | VerifierVerdictEvent
+  | VerifierShadowEvent
+  | ContextResolvedEvent
+  | ContextSummaryEvent
   | ErrorEvent;
 
 export interface ConversationState {
@@ -288,10 +343,11 @@ export interface FileStreamFrame {
   delta: string;
 }
 
+// R3: optional `context` carries large hidden context (e.g. a full DR report)
+// that the model receives as an ENVIRONMENT message but the user doesn't see;
+// the visible `content` stays a short one-liner.
+// D3: inject_source adds plaintext to an active Deep Research run's corpus.
 export type WSClientFrame =
-  // R3: optional `context` carries large hidden context (e.g. a full DR report)
-  // that the model receives as an ENVIRONMENT message but the user doesn't see;
-  // the visible `content` stays a short one-liner.
   | { type: "send_message"; content: string; context?: string }
   | { type: "steer"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context)
   | { type: "confirm"; action_id?: string }
@@ -302,8 +358,6 @@ export type WSClientFrame =
   | { type: "cancel" }
   | { type: "resume" } // continue a stopped/incomplete run (explicit, never on open)
   | { type: "ping" }
-  // D3: inject a plaintext snippet into the DR run's corpus mid-run.
-  // Only active while a DR run is in flight (the server routes by cid presence).
   | { type: "inject_source"; inject_source_text: string };
 
 /** Which isolation tier backs the sandbox — surfaced so the lower-isolation tier is

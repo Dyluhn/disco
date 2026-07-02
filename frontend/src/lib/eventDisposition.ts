@@ -41,6 +41,9 @@ export const KNOWN_EVENT_KINDS = [
   "knowledge",
   "datasource",
   "deliverable",
+  "verifier_started",
+  "verifier_verdict",
+  "verifier_shadow",
   "schedule",
   "schedule_run",
   "clarify",
@@ -87,6 +90,18 @@ export const EVENT_DISPOSITION: Record<
   datasource: {
     disposition: "suppressed",
     where: "Internal durable API/schema docs, condensation-immune (Cluster 7). Model-context only, not a user card.",
+  },
+  verifier_started: {
+    disposition: "suppressed",
+    where: "REL-1 host verifier audit marker. Not a user card and never model-facing.",
+  },
+  verifier_verdict: {
+    disposition: "suppressed",
+    where: "REL-1 host verifier verdict marker. Later projections may update artifact state; the event itself is internal.",
+  },
+  verifier_shadow: {
+    disposition: "suppressed",
+    where: "REL-1 shadow-mode inline-vs-host verifier comparison. Internal rollout evidence only.",
   },
   context_resolved: {
     disposition: "suppressed",

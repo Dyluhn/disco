@@ -52,6 +52,9 @@ class EventKind(str, Enum):
     KNOWLEDGE = "knowledge"  # a scoped best-practice snippet (Cluster 7)
     DATASOURCE = "datasource"  # durable API/schema docs, condensation-immune (Cluster 7)
     DELIVERABLE = "deliverable"  # the agent's finished-artifact handoff signal
+    VERIFIER_STARTED = "verifier_started"  # REL-1b: host verifier audit marker
+    VERIFIER_VERDICT = "verifier_verdict"  # REL-1b: host verifier result marker
+    VERIFIER_SHADOW = "verifier_shadow"  # REL-1b: inline-vs-host verifier comparison
     SCHEDULE = "schedule"  # a schedule was created or deleted (RP-08)
     SCHEDULE_RUN = "schedule_run"  # a scheduled run fired (RP-08)
     CLARIFY = "clarify"  # pre-plan typed clarification questions (RP-13)
@@ -790,6 +793,55 @@ class DeliverableEvent(BaseEvent, LLMConvertible):
         )
 
 
+class VerifierStartedEvent(BaseEvent):
+    """REL-1b — the host verifier started inspecting an artifact.
+
+    NOT LLMConvertible — this is audit/UI bookkeeping for the host-owned
+    verifier path, never model context.
+    """
+
+    kind: Literal[EventKind.VERIFIER_STARTED] = EventKind.VERIFIER_STARTED
+    source: EventSource = EventSource.SYSTEM
+    artifact_path: str = ""
+    artifact_kind: str = "files"
+    verifier: str = "host"
+    requested_by_event_id: str | None = None
+
+
+class VerifierVerdictEvent(BaseEvent):
+    """REL-1b — the host verifier's verdict for an artifact.
+
+    NOT LLMConvertible — later REL-1 steps may project this into phase/manifest
+    state, but it is never rendered into the model's message view.
+    """
+
+    kind: Literal[EventKind.VERIFIER_VERDICT] = EventKind.VERIFIER_VERDICT
+    source: EventSource = EventSource.SYSTEM
+    artifact_path: str = ""
+    artifact_kind: str = "files"
+    verified: bool = False
+    verdict: str | None = None
+    detail: str | None = None
+    failures: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class VerifierShadowEvent(BaseEvent):
+    """REL-1b — shadow-mode comparison between inline and host verifier results.
+
+    NOT LLMConvertible — this records agreement evidence during shadow/canary
+    rollout without changing the agent's model context.
+    """
+
+    kind: Literal[EventKind.VERIFIER_SHADOW] = EventKind.VERIFIER_SHADOW
+    source: EventSource = EventSource.SYSTEM
+    artifact_path: str = ""
+    artifact_kind: str = "files"
+    inline_verdict: str | None = None
+    host_verdict: str | None = None
+    agreement: bool | None = None
+    detail: str | None = None
+
+
 class ErrorEvent(BaseEvent):
     """A conversation-level (fatal-ish) error, e.g. MaxIterationsReached.
     NOT LLMConvertible."""
@@ -910,6 +962,9 @@ Event = Annotated[
     | KnowledgeEvent
     | DatasourceEvent
     | DeliverableEvent
+    | VerifierStartedEvent
+    | VerifierVerdictEvent
+    | VerifierShadowEvent
     | ErrorEvent
     | ScheduleEvent
     | ScheduleRunEvent

@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ._util import _mk_id, _now
 from .artifact_memory import ArtifactMemoryRef
@@ -88,8 +88,7 @@ class ResourceRef(BaseModel):
 class ArtifactRecord(BaseModel):
     """[REL-2a] One record in the shared per-artifact runtime manifest — the single folded truth
     for an OUTPUT artifact. Frozen: an upsert reads the whole list, replaces the matching record,
-    and writes it back (no in-place mutation), so each record stays immutable. `verified` is a
-    tri-state string so absence (unverified) is distinct from a real fail."""
+    and writes it back (no in-place mutation), so each record stays immutable."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -98,10 +97,26 @@ class ArtifactRecord(BaseModel):
     sha256: str | None = None
     size_bytes: int | None = None
     shown: bool = False
-    verified: Literal["unverified", "passed", "failed"] = "unverified"
+    verified: bool = False
+    verify_verdict: str | None = None
     export: dict[str, str] = Field(default_factory=dict)  # {fmt: iso_ts} — when each export landed
     preview_status: str | None = None
     updated_at: datetime | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_verified(cls, data: Any) -> Any:
+        """Accept the REL-2a shadow-era tri-state string if an old manifest has it."""
+        if not isinstance(data, dict):
+            return data
+        raw = data.get("verified")
+        if not isinstance(raw, str):
+            return data
+        out = dict(data)
+        normalized = raw.strip().lower()
+        out["verified"] = normalized == "passed"
+        out.setdefault("verify_verdict", None if normalized in ("", "unverified") else raw)
+        return out
 
 
 class HandoffRef(BaseModel):

@@ -195,15 +195,39 @@ async def test_artifact_manifest_roundtrip_and_lazy_default() -> None:
 
     recs = (
         ArtifactRecord(path="index.html", kind="app", sha256="abc", shown=True),
-        ArtifactRecord(path="report.pdf", kind="pdf", verified="passed",
-                       export={"pdf": "2026-06-30T00:00:00Z"}),
+        ArtifactRecord(
+            path="report.pdf",
+            kind="pdf",
+            verified=True,
+            verify_verdict="passed",
+            export={"pdf": "2026-06-30T00:00:00Z"},
+        ),
     )
     await store.record_artifacts(recs)
     assert ".disco/context/artifact_manifest.json" in fs.files
     back = await store.read_artifacts()
     assert back == recs  # frozen models round-trip identically
-    assert back[0].shown is True and back[0].verified == "unverified"
-    assert back[1].verified == "passed" and back[1].export == {"pdf": "2026-06-30T00:00:00Z"}
+    assert (
+        back[0].shown is True
+        and back[0].verified is False
+        and back[0].verify_verdict is None
+    )
+    assert back[1].verified is True and back[1].verify_verdict == "passed"
+    assert back[1].export == {"pdf": "2026-06-30T00:00:00Z"}
+
+
+@pytest.mark.asyncio
+async def test_artifact_manifest_old_json_without_verification_fields_loads() -> None:
+    store, fs = _store()
+    fs.files[store.path_for(ArtifactMemoryKind.ARTIFACT_MANIFEST)] = (
+        b'[{"path": "legacy/index.html", "kind": "app", "sha256": "abc", "shown": true}]'
+    )
+
+    back = await store.read_artifacts()
+    assert len(back) == 1
+    assert back[0].path == "legacy/index.html"
+    assert back[0].verified is False
+    assert back[0].verify_verdict is None
 
 
 @pytest.mark.asyncio
@@ -214,10 +238,13 @@ async def test_artifact_manifest_upsert_replaces_whole_list() -> None:
     await store.record_artifacts((ArtifactRecord(path="a.html", shown=False),))
     # a read-modify-write upsert (what the per-cid-locked caller does): flip shown=True
     cur = list(await store.read_artifacts())
-    cur[0] = cur[0].model_copy(update={"shown": True, "verified": "passed"})
+    cur[0] = cur[0].model_copy(
+        update={"shown": True, "verified": True, "verify_verdict": "passed"}
+    )
     await store.record_artifacts(tuple(cur))
     back = await store.read_artifacts()
-    assert len(back) == 1 and back[0].shown is True and back[0].verified == "passed"
+    assert len(back) == 1 and back[0].shown is True and back[0].verified is True
+    assert back[0].verify_verdict == "passed"
 
 
 # --- [REL-2a] upsert_artifact: per-cid-locked RMW, insert-or-replace, no lost update ----------
@@ -229,11 +256,19 @@ async def test_upsert_artifact_insert_then_replace() -> None:
     await store.upsert_artifact(ArtifactRecord(path="index.html", kind="app", shown=False))
     await store.upsert_artifact(ArtifactRecord(path="styles.css", kind="files"))
     # replace index.html (same path) — must NOT duplicate
-    await store.upsert_artifact(ArtifactRecord(path="index.html", kind="app", shown=True, verified="passed"))
+    await store.upsert_artifact(
+        ArtifactRecord(
+            path="index.html",
+            kind="app",
+            shown=True,
+            verified=True,
+            verify_verdict="passed",
+        )
+    )
     recs = await store.read_artifacts()
     assert sorted(r.path for r in recs) == ["index.html", "styles.css"]
     idx = next(r for r in recs if r.path == "index.html")
-    assert idx.shown is True and idx.verified == "passed"
+    assert idx.shown is True and idx.verified is True and idx.verify_verdict == "passed"
 
 
 @pytest.mark.asyncio

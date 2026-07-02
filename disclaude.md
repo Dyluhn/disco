@@ -5590,3 +5590,11 @@ citation described the seam's intended home, not existing behavior. Step3: (a) f
 family outcomes emit structured {path, sha256-of-written-bytes} (persisted like generator
 structured); (b) projection consumes that family; (c) shadow-only, re-soak expects projected>=1
 with 0 divergence.
+
+### REL-2a shadow evidence COMPLETE + REL-1b dispatch — 2026-07-02
+
+Shadow round 3 (post-step3): 4/4 PASS; every fold observable; per-conv lifecycle correct (first
+fold catch-up upsert, all subsequent folds agree projected=1/manifest=1/missing=0); 0 extra, 0
+re-missing, 0 silent skips across ~15 folds / 3 rounds / 14 iterations. Manifest proven to track
+reality live. Reader promote (with projection fallback for pre-fold convs) now justified; REL-1b
+unblocked and dispatched.
