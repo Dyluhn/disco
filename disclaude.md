@@ -5451,3 +5451,16 @@ holds stale beliefs about the file); 3rd+ → steer to finish-path progress rath
 Secondary note: deliverable landed at app/index.html not root index.html (watch for recurrence).
 
 Bar unchanged. After K+L: parallel-lane ×10 collapsed bar (3 lanes, ~35 min) replaces serial 5+5.
+
+### PARALLEL-1 — conversation-scoped relay provenance — 2026-07-02
+
+First 3-lane parallel soak surfaced a MEASUREMENT artifact: SIDECAR_NOT_STOPPED with
+stopped_at_terminal=true + provider_calls_after_terminal=3 (conv_55c9ac33, lane c iter 1). The
+shared relay ledger has NO conversation identity, so the after-terminal provider check attributes
+OTHER lanes' concurrent calls to this run. Serial-only assumption; parallel lanes cross-contaminate.
+
+Fix (also the P17 zero-OpenRouter proof made conversation-precise): (1) the LLM router attaches an
+X-Disco-Conversation header to provider requests when conversation identity is known; (2) the
+minimax relay logs that field per record; (3) ProviderLedgerOracle + the after-terminal check filter
+ledger records by conversation id when present (records WITHOUT the field stay attributed to all —
+fail-closed for old ledgers/serial runs). Bar runs stay 3-lane after this lands.

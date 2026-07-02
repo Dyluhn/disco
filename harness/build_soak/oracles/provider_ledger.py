@@ -26,6 +26,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import failure_codes as fc
+from ..provider_ledger import records_for_conversation
 from .schema import OracleResult, failing, passing, skipping
 
 _ORACLE = "provider_ledger"
@@ -39,6 +40,7 @@ class ProviderLedgerOracle:
         *,
         scenario: dict[str, Any] | None = None,
         provider_ledger: list[dict[str, Any]] | None = None,
+        conversation_id: str | None = None,
     ) -> list[OracleResult]:
         prov = (scenario or {}).get("assertions", {}).get("provider")
         if not prov:
@@ -62,6 +64,8 @@ class ProviderLedgerOracle:
                     )
                 ]
             return [skipping(_ORACLE, reason="no provider-call ledger captured (require_ledger=false)")]
+
+        provider_ledger = records_for_conversation(provider_ledger, conversation_id)
 
         if len(provider_ledger) == 0:
             if require_ledger:
@@ -104,7 +108,12 @@ class ProviderLedgerOracle:
                         _ORACLE,
                         fc.PROVIDER_CALL_AFTER_TERMINAL,
                         first_broken_link="terminal -> no_provider_calls",
-                        facts={"host": host, "model": rec.get("model"), "ts": rec.get("ts")},
+                        facts={
+                            "host": host,
+                            "model": rec.get("model"),
+                            "ts": rec.get("ts"),
+                            "conversation_id": rec.get("conversation_id"),
+                        },
                     )
                 ]
             for bad in forbid:

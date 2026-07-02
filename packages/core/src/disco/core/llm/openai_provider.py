@@ -58,6 +58,7 @@ _FINISH: dict[str, FinishReason] = {
 }
 
 _LOG = logging.getLogger("disco.llm.openai")
+_DISCO_CONVERSATION_HEADER = "X-Disco-Conversation"
 
 
 def _map_finish(raw: str | None) -> FinishReason:
@@ -202,10 +203,14 @@ class OpenAIProvider:
 
     # -- request shaping ------------------------------------------------------
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, req: CompletionRequest | None = None) -> dict[str, str]:
         h = {"content-type": "application/json"}
         if self._key:
             h["Authorization"] = f"Bearer {self._key}"
+        raw_cid = (req.metadata or {}).get("conversation_id") if req is not None else None
+        cid = str(raw_cid).strip() if raw_cid is not None else ""
+        if cid:
+            h[_DISCO_CONVERSATION_HEADER] = cid
         return h
 
     @staticmethod
@@ -641,7 +646,7 @@ class OpenAIProvider:
                 resp = await client.post(
                     f"{self._base}/chat/completions",
                     json=self._payload(req, model, stream=False),
-                    headers=self._headers(),
+                    headers=self._headers(req),
                 )
         except httpx.TimeoutException as exc:
             raise LLMTransientError(f"request timed out: {exc}", provider=self.name) from exc
@@ -677,7 +682,7 @@ class OpenAIProvider:
                     "POST",
                     f"{self._base}/chat/completions",
                     json=self._payload(req, model, stream=True),
-                    headers=self._headers(),
+                    headers=self._headers(req),
                 ) as resp:
                     if resp.status_code >= 400:
                         body = await resp.aread()

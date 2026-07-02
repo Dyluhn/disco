@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 UPSTREAM = os.environ.get("MINIMAX_UPSTREAM", "https://api.minimaxi.chat/v1")
 DEFAULT_MODEL = os.environ.get("MINIMAX_MODEL", "MiniMax-M3")  # P17: M3 (source relay defaulted M2)
 MAX_TOKENS_CAP = 131072  # MiniMax-M3 400s on an oversized max_tokens; the gateway can emit ~4M
+DISCO_CONVERSATION_HEADER = "X-Disco-Conversation"
 MODEL_MAP = {
     "minimax/minimax-m3": "MiniMax-M3",
     "minimax-m3": "MiniMax-M3",
@@ -61,7 +62,18 @@ def upstream_host(url: str) -> str:
     return urlparse(url).hostname or ""
 
 
-def relay_log_record(url: str, model: Any, *, has_tools: bool = False) -> dict[str, Any]:
+def conversation_id_from_headers(headers: Any) -> str | None:
+    for key in (DISCO_CONVERSATION_HEADER, DISCO_CONVERSATION_HEADER.lower()):
+        value = headers.get(key) if hasattr(headers, "get") else None
+        if value is not None:
+            text = str(value).strip()
+            return text or None
+    return None
+
+
+def relay_log_record(
+    url: str, model: Any, *, has_tools: bool = False, conversation_id: str | None = None
+) -> dict[str, Any]:
     # [REL-5b] `has_tools` distinguishes a BUILD-driver request (always carries the tool catalog)
     # from a tool-less SUMMARIZER request (the async auto-title fires off kick() with NO tools).
     # The provider-after-terminal oracle counts only build-driver (tool-bearing) calls, so a benign
@@ -73,6 +85,7 @@ def relay_log_record(url: str, model: Any, *, has_tools: bool = False) -> dict[s
         "model": model,
         "ts": time.time(),
         "has_tools": bool(has_tools),
+        "conversation_id": conversation_id,
     }
 
 
@@ -107,11 +120,13 @@ def create_app() -> Any:
     async def proxy(path: str, request: Request) -> Any:
         body = transform_request(await request.json())
         url = f"{UPSTREAM}/{path}"
+        conversation_id = conversation_id_from_headers(request.headers)
         _log(
             relay_log_record(
                 url,
                 body.get("model") if isinstance(body, dict) else None,
                 has_tools=bool(isinstance(body, dict) and body.get("tools")),
+                conversation_id=conversation_id,
             )
         )
         if isinstance(body, dict) and body.get("stream"):

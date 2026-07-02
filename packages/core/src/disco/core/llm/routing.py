@@ -320,6 +320,13 @@ class DefaultLLMRouter:
         new_messages = [LLMMessage(role="system", content=system), *req.messages]
         return req.model_copy(update={"messages": new_messages})
 
+    @staticmethod
+    def _attach_context_metadata(req: CompletionRequest, ctx: CallContext) -> CompletionRequest:
+        if not ctx.conversation_id:
+            return req
+        metadata = {**(req.metadata or {}), "conversation_id": ctx.conversation_id}
+        return req.model_copy(update={"metadata": metadata})
+
     # -- passive cost backstop (§5.2) -----------------------------------------
 
     def _enforce_hard_budget(
@@ -347,7 +354,7 @@ class DefaultLLMRouter:
         ctx = context or CallContext()
         entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
-        exec_req = self._inject_prompt(req, entry)
+        exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
         provider = self._providers[entry.provider]
 
         attempt = 1
@@ -388,7 +395,7 @@ class DefaultLLMRouter:
         entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         provider = self._providers[entry.provider]
-        exec_req = self._inject_prompt(req, entry)
+        exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
 
         # Same-model transient retry as `complete` — but GUARDED: a stream can only
         # be restarted while NOTHING has reached the consumer yet. Once a chunk is

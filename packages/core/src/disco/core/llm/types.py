@@ -128,6 +128,10 @@ class CompletionRequest(BaseModel):
     # The OpenAI adapter always applies {require_parameters, allow_fallbacks}
     # as a floor; this field extends/overrides that floor per-call.
     provider_prefs: dict[str, Any] | None = None
+    # Opaque per-request metadata threaded from the router context to provider
+    # adapters. Not serialized into provider bodies; adapters may map known keys
+    # onto transport-level headers.
+    metadata: dict[str, Any] | None = None
     # Opaque per-call correlation id, surfaced back on the response and carried
     # into ActionEvent.llm_response_id (event contract). VOLATILE.
     request_id: str | None = None

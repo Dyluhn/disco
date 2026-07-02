@@ -9,7 +9,11 @@ from _eventlog import clean_smoke_log
 
 from harness.build_soak.classify import classify
 from harness.build_soak.oracles.provider_ledger import ProviderLedgerOracle
-from harness.build_soak.provider_ledger import parse_relay_log, parse_relay_log_lines
+from harness.build_soak.provider_ledger import (
+    parse_relay_log,
+    parse_relay_log_lines,
+    record_applies_to_conversation,
+)
 
 _PROV = {
     "id": "minimax_soak",
@@ -21,6 +25,12 @@ _PROV = {
 
 def _run(ledger, scenario=_PROV):
     return ProviderLedgerOracle().check([], scenario=scenario, provider_ledger=ledger)
+
+
+def _run_for(ledger, conversation_id: str, scenario=_PROV):
+    return ProviderLedgerOracle().check(
+        [], scenario=scenario, provider_ledger=ledger, conversation_id=conversation_id
+    )
 
 
 # --- opt-in / skip ------------------------------------------------------------
@@ -102,6 +112,58 @@ def test_call_after_terminal_fails():
     assert r[0].code == "PROVIDER_CALL_AFTER_TERMINAL"
 
 
+def test_conversation_scoped_after_terminal_ignores_other_conversation():
+    ledger = [
+        {
+            "host": "api.minimaxi.com",
+            "model": "MiniMax-M3",
+            "after_terminal": False,
+            "conversation_id": "conv_terminal",
+        },
+        {
+            "host": "api.minimaxi.com",
+            "model": "MiniMax-M3",
+            "after_terminal": True,
+            "conversation_id": "conv_overlap",
+        },
+    ]
+    r = _run_for(ledger, "conv_terminal")
+    assert r[0].passed, r[0].to_dict()
+    assert r[0].facts["calls"] == 1
+
+
+def test_conversation_scoped_after_terminal_same_conversation_still_fails():
+    ledger = [
+        {
+            "host": "api.minimaxi.com",
+            "model": "MiniMax-M3",
+            "after_terminal": False,
+            "conversation_id": "conv_terminal",
+        },
+        {
+            "host": "api.minimaxi.com",
+            "model": "MiniMax-M3",
+            "after_terminal": True,
+            "conversation_id": "conv_terminal",
+        },
+    ]
+    r = _run_for(ledger, "conv_terminal")
+    assert r[0].code == "PROVIDER_CALL_AFTER_TERMINAL"
+
+
+def test_unscoped_after_terminal_legacy_record_still_fails_closed():
+    ledger = [
+        {
+            "host": "api.minimaxi.com",
+            "model": "MiniMax-M3",
+            "after_terminal": True,
+            "conversation_id": None,
+        }
+    ]
+    r = _run_for(ledger, "conv_terminal")
+    assert r[0].code == "PROVIDER_CALL_AFTER_TERMINAL"
+
+
 def test_default_forbid_is_openrouter_even_without_require_host():
     scenario = {"id": "x", "assertions": {"provider": {"model": "MiniMax-M3"}}}
     r = _run([{"host": "openrouter.ai", "model": "MiniMax-M3"}], scenario=scenario)
@@ -111,12 +173,13 @@ def test_default_forbid_is_openrouter_even_without_require_host():
 # --- relay-log parser ---------------------------------------------------------
 def test_parser_jsonl_records():
     text = '\n'.join([
-        '{"ts": "t1", "host": "api.minimaxi.com", "model": "MiniMax-M3"}',
+        '{"ts": "t1", "host": "api.minimaxi.com", "model": "MiniMax-M3", "conversation_id": "conv_parse"}',
         '{"url": "https://openrouter.ai/api/v1/chat", "model": "x"}',
     ])
     recs = parse_relay_log(text)
     assert len(recs) == 2
     assert recs[0]["host"] == "api.minimaxi.com"
+    assert recs[0]["conversation_id"] == "conv_parse"
     assert recs[1]["host"] == "openrouter.ai"  # host derived from url
 
 
@@ -284,3 +347,10 @@ def test_rel5b_after_terminal_counts_only_build_driver_calls() -> None:
     ]
     ts_recs = [(float(r["ts"]), bool(r.get("has_tools", True))) for r in recs]
     assert sum(1 for t, ht in ts_recs if t > term and ht) == 1
+
+
+def test_provider_ledger_conversation_filter_mixed_records() -> None:
+    assert record_applies_to_conversation({"conversation_id": "conv_a"}, "conv_a")
+    assert not record_applies_to_conversation({"conversation_id": "conv_b"}, "conv_a")
+    assert record_applies_to_conversation({"conversation_id": None}, "conv_a")
+    assert record_applies_to_conversation({}, "conv_a")

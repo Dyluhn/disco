@@ -51,7 +51,7 @@ from .adapters.disco_api import (
 from .classify import CLASSIFICATION_NAME, classify
 from .evidence import EvidenceManifest, compute_evidence_hashes, write_manifest
 from .product_evidence import PRODUCT_EVIDENCE_NAME, write_product_evidence
-from .provider_ledger import parse_relay_log
+from .provider_ledger import parse_relay_log, record_applies_to_conversation
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 _DEFAULT_OUT = "test-record/build-soak"
@@ -946,7 +946,7 @@ async def _collect_terminal_cleanup_evidence(
             _ts_recs = [
                 (float(r["ts"]), bool(r.get("has_tools", True)))
                 for r in recs
-                if isinstance(r.get("ts"), (int, float))
+                if isinstance(r.get("ts"), (int, float)) and record_applies_to_conversation(r, cid)
             ]
             calls_during_run = sum(1 for t, _ in _ts_recs if run_start_epoch <= t <= terminal_epoch)
             if calls_during_run > 0:  # relay PROVEN live for this run → trust the after-count

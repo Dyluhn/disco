@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ from harness.build_soak.adapters.disco_api import (
     SnapshotNotReadyError,
 )
 from harness.build_soak.evidence import load_manifest, verify_evidence_unchanged
+from harness.build_soak.oracles.browser_evidence import SidecarStopOracle
 from harness.build_soak.run import (
     assemble_dossier,
     classify_dossier,
@@ -2393,6 +2395,78 @@ async def test_cleanly_terminal_run_is_released(tmp_path):
     )
     assert record["status"] == "PASS", record
     assert any(p[0].endswith("/kill") for p in transport.posts)  # terminal → released (orphan teardown)
+
+
+@pytest.mark.asyncio
+async def test_provider_calls_after_terminal_are_conversation_scoped(tmp_path, monkeypatch):
+    class _KillClient:
+        def __init__(self) -> None:
+            self.killed: list[str] = []
+
+        async def kill(self, cid: str) -> dict[str, int]:
+            self.killed.append(cid)
+            return {"http_status": 200}
+
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(_run_mod, "_live_disco_container_count", lambda: 0)
+
+    start = datetime(2026, 1, 1, 0, 0, tzinfo=UTC).timestamp()
+    terminal = start + 10
+    events = [
+        {"kind": "message", "timestamp": datetime.fromtimestamp(start, UTC).isoformat()},
+        {
+            "kind": "status",
+            "status": "FINISHED",
+            "timestamp": datetime.fromtimestamp(terminal, UTC).isoformat(),
+        },
+    ]
+
+    async def collect(records: list[dict]) -> dict:
+        relay = tmp_path / "relay.jsonl"
+        relay.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+        run = type("Run", (), {})()
+        run.events = events
+        run.state_final = {"status": "FINISHED"}
+        run.timeline = ["RUNNING", "FINISHED"]
+        run.product_evidence = {}
+        return await _run_mod._collect_terminal_cleanup_evidence(
+            _KillClient(),
+            "conv_terminal",
+            run,
+            baseline_containers=0,
+            relay_log=str(relay),
+            timeline=[],
+            grace_s=0.0,
+        )
+
+    overlap = [
+        {
+            "ts": start + 2,
+            "host": "api.minimaxi.chat",
+            "model": "MiniMax-M3",
+            "has_tools": True,
+            "conversation_id": "conv_terminal",
+        },
+        {
+            "ts": terminal + 1,
+            "host": "api.minimaxi.chat",
+            "model": "MiniMax-M3",
+            "has_tools": True,
+            "conversation_id": "conv_other_lane",
+        },
+    ]
+    ev = await collect(overlap)
+    assert ev["sidecar"]["provider_calls_after_terminal"] == 0
+    assert SidecarStopOracle().check(product_evidence=ev)[0].passed
+
+    same_conversation = [*overlap, {**overlap[-1], "conversation_id": "conv_terminal"}]
+    ev = await collect(same_conversation)
+    assert ev["sidecar"]["provider_calls_after_terminal"] == 1
+    r = SidecarStopOracle().check(product_evidence=ev)[0]
+    assert r.failed and r.code == "SIDECAR_NOT_STOPPED"
 
 
 @pytest.mark.asyncio

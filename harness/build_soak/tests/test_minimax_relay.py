@@ -12,6 +12,7 @@ import pytest
 
 from harness.product_build.minimax_relay import (
     MAX_TOKENS_CAP,
+    conversation_id_from_headers,
     map_model,
     relay_log_record,
     transform_request,
@@ -56,6 +57,18 @@ def test_upstream_host_for_provider_ledger() -> None:
     assert upstream_host("https://api.minimaxi.chat/v1/chat/completions") == "api.minimaxi.chat"
     rec = relay_log_record("https://api.minimaxi.chat/v1/chat/completions", "MiniMax-M3")
     assert rec["host"] == "api.minimaxi.chat" and rec["model"] == "MiniMax-M3" and "minimax" in rec["host"]
+    assert rec["conversation_id"] is None
+
+
+def test_relay_log_record_maps_conversation_header_field() -> None:
+    conversation_id = conversation_id_from_headers({"X-Disco-Conversation": "conv_relay"})
+    rec = relay_log_record(
+        "https://api.minimaxi.chat/v1/chat/completions",
+        "MiniMax-M3",
+        conversation_id=conversation_id,
+    )
+    assert rec["conversation_id"] == "conv_relay"
+    assert conversation_id_from_headers({}) is None
 
 
 def test_create_app_fails_fast_without_key(monkeypatch) -> None:

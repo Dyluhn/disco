@@ -146,7 +146,10 @@ def classify(
     if first_fail is None:
         # 7. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
         results += ProviderLedgerOracle().check(
-            events, scenario=scenario, provider_ledger=provider_ledger
+            events,
+            scenario=scenario,
+            provider_ledger=provider_ledger,
+            conversation_id=conversation_id,
         )
         first_fail = _first_fail(results)
     if first_fail is None:
@@ -238,6 +241,9 @@ def classify_run_folder(
             break
     if events_path.is_file():
         events_raw = _read_jsonl(events_path)
+    folder_conversation_id = ""
+    if events_path.name == "events.jsonl" and events_path.parent.parent.name == "conversations":
+        folder_conversation_id = events_path.parent.name
 
     # HARN-1a: the provider-call ledger (MiniMax-only / no-OpenRouter enforcement).
     # Read it if present anywhere in the run folder; absent → the oracle SKIPs (or
@@ -268,6 +274,7 @@ def classify_run_folder(
         events_raw,
         scenario=scenario,
         run_id=manifest.run_id if manifest else base.name,
+        conversation_id=folder_conversation_id,
         commit=manifest.repo_commit if manifest else "",
         seed=manifest.seed if manifest else None,
         evidence_intact=evidence_intact,

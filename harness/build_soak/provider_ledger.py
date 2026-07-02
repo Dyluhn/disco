@@ -10,9 +10,11 @@ disco and the provider and logs each upstream request). This module normalizes r
 lines into ledger records. Records may also be supplied directly as JSONL.
 
 A ledger record (dict):
-    {"ts": str|None, "host": str, "model": str, "after_terminal": bool}
-Only ``host`` is strictly required for enforcement; ``model``/``ts``/``after_terminal``
-default to "" / "" / False when the source line does not carry them.
+    {"ts": str|None, "host": str, "model": str, "after_terminal": bool,
+     "conversation_id": str|None}
+Only ``host`` is strictly required for enforcement; ``model``/``ts``/``after_terminal``/
+``conversation_id`` default to "" / "" / False / None when the source line does
+not carry them.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ def _record(
     ts: str | None = None,
     after_terminal: bool = False,
     has_tools: bool = True,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     # [REL-5b] has_tools defaults True (fail-closed): an UNMARKED record (older relay, or a loose
     # log line) is treated as a build-driver call so the after-terminal runaway check never silently
@@ -45,7 +48,35 @@ def _record(
         "model": model,
         "after_terminal": bool(after_terminal),
         "has_tools": bool(has_tools),
+        "conversation_id": _normalize_conversation_id(conversation_id),
     }
+
+
+def _normalize_conversation_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def record_applies_to_conversation(rec: Any, conversation_id: str | None) -> bool:
+    """Whether ``rec`` should be adjudicated for ``conversation_id``.
+
+    A record with a non-empty conversation_id is scoped to that conversation only.
+    Missing/empty/None conversation ids are legacy records and remain attributed to
+    every conversation (fail-closed for old relay logs and serial runs).
+    """
+    if not isinstance(rec, dict):
+        return True
+    target = _normalize_conversation_id(conversation_id)
+    record_cid = _normalize_conversation_id(rec.get("conversation_id"))
+    return target is None or record_cid is None or record_cid == target
+
+
+def records_for_conversation(
+    records: list[dict[str, Any]], conversation_id: str | None
+) -> list[dict[str, Any]]:
+    return [r for r in records if record_applies_to_conversation(r, conversation_id)]
 
 
 def parse_relay_log_lines(lines: list[str]) -> list[dict[str, Any]]:
@@ -79,6 +110,7 @@ def parse_relay_log_lines(lines: list[str]) -> list[dict[str, Any]]:
                         ts=obj.get("ts") or obj.get("timestamp"),
                         after_terminal=bool(obj.get("after_terminal", False)),
                         has_tools=bool(obj.get("has_tools", True)),  # [REL-5b] default True=fail-closed
+                        conversation_id=obj.get("conversation_id"),
                     )
                 )
             continue
