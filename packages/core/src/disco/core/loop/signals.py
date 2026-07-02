@@ -71,6 +71,17 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
 )
 
 
+def _successful_action_ids(events: list[Event]) -> set[str]:
+    """Action ids whose paired result is a successful ObservationEvent."""
+    succeeded: dict[str, bool] = {}
+    for e in events:
+        if isinstance(e, ObservationEvent):
+            succeeded.setdefault(e.action_id, bool(e.tool_result.success))
+        elif isinstance(e, AgentErrorEvent) and e.action_id is not None:
+            succeeded.setdefault(e.action_id, False)
+    return {action_id for action_id, ok in succeeded.items() if ok}
+
+
 def productive_action_since_approval(events: list[Event]) -> bool:
     """Has the agent done any state-changing or information-gathering work since the
     most recent plan approval? Used to gate the execution-mode FINISHED transition:
@@ -86,12 +97,13 @@ def productive_action_since_approval(events: list[Event]) -> bool:
             break
     if approval_seq is None:
         return True  # no plan-first lifecycle here; don't gate the finish
-    # any ActionEvent after that point whose tool is NOT a meta tool counts
+    successful_actions = _successful_action_ids(events)
+    # any successful ActionEvent after that point whose tool is NOT a meta tool counts
     for e in events:
         if (e.seq or 0) <= approval_seq:
             continue
         if isinstance(e, ActionEvent) and e.tool_call is not None:
-            if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
+            if e.id in successful_actions and e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
                 return True
     return False
 
@@ -637,6 +649,7 @@ def productive_actions_since_approval(events: list[Event]) -> int:
     for e in events:
         if isinstance(e, StatusEvent) and e.detail == "plan_approved":
             approval_seq = e.seq
+    successful_actions = _successful_action_ids(events)
     count = 0
     for e in events:
         if not isinstance(e, ActionEvent) or e.tool_call is None:
@@ -645,7 +658,7 @@ def productive_actions_since_approval(events: list[Event]) -> int:
             continue
         if e.meta.get("verify_probe"):
             continue  # the finish gate's own probe is not agent work (#6 leak)
-        if e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
+        if e.id in successful_actions and e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
             count += 1
     return count
 

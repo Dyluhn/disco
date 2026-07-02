@@ -845,9 +845,11 @@ async def test_finished_with_unmarked_plan_lands_finished_cleanly():
         ConversationStatus,
         EventSource,
         LLMMessage,
+        ObservationEvent,
         PlanEvent,
         StatusEvent,
         ToolCall,
+        ToolResult,
     )
     from disco.core import MessageEvent as ME
     from disco.core import SqliteEventStore as Store
@@ -866,13 +868,21 @@ async def test_finished_with_unmarked_plan_lands_finished_cleanly():
     )
     # A productive action so the execution-nudge gate is satisfied (the model
     # DID do something — it's just not marking the second step done).
+    shell_action = ActionEvent(
+        thought="wrote file",
+        tool_call=ToolCall(tool_name="shell", arguments={"command": "echo a > /tmp/a"}),
+    )
+    await store.append(CID, shell_action)
     await store.append(
         CID,
-        ActionEvent(
-            thought="wrote file",
-            tool_call=ToolCall(
-                tool_name="shell", arguments={"command": "echo a > /tmp/a"}
+        ObservationEvent(
+            tool_result=ToolResult(
+                call_id=shell_action.tool_call.call_id,
+                tool_name="shell",
+                success=True,
+                content="ok",
             ),
+            action_id=shell_action.id,
         ),
     )
     await store.append(
@@ -1156,7 +1166,7 @@ def test_productive_gate_rejects_read_only_then_finish():
     """The build-finish gate must require a STATE-CHANGING action since plan
     approval — reading the files and declaring done delivers nothing (caught live:
     a build iteration 'finished' after only file_reads with zero edits)."""
-    from disco.core import ActionEvent, StatusEvent, ToolCall
+    from disco.core import ActionEvent, ObservationEvent, StatusEvent, ToolCall, ToolResult
     from disco.core.events import ConversationStatus
 
     def _seqd(evs):
@@ -1169,6 +1179,15 @@ def test_productive_gate_rejects_read_only_then_finish():
     wr = ActionEvent(
         thought="edit it",
         tool_call=ToolCall(tool_name="file_write", arguments={"path": "i.html", "content": "x"}),
+    )
+    wr_obs = ObservationEvent(
+        tool_result=ToolResult(
+            call_id=wr.tool_call.call_id,
+            tool_name="file_write",
+            success=True,
+            content="ok",
+        ),
+        action_id=wr.id,
     )
 
     # runthru-v2 (#3): the declarative progress tool is pure bookkeeping — calling
@@ -1187,9 +1206,9 @@ def test_productive_gate_rejects_read_only_then_finish():
     # progress-snapshot-only after approval → NOT productive (the #3 regression)
     assert signals.productive_action_since_approval(_seqd([approved, upp, upp])) is False
     # a write after approval → productive (finish allowed)
-    assert signals.productive_action_since_approval(_seqd([approved, rd, wr])) is True
+    assert signals.productive_action_since_approval(_seqd([approved, rd, wr, wr_obs])) is True
     # a write still counts even if a progress snapshot follows it
-    assert signals.productive_action_since_approval(_seqd([approved, wr, upp])) is True
+    assert signals.productive_action_since_approval(_seqd([approved, wr, wr_obs, upp])) is True
     # no plan-approval marker → gate inert (don't block)
     assert signals.productive_action_since_approval(_seqd([rd])) is True
 

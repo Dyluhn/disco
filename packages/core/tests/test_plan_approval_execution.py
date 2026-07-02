@@ -11,8 +11,17 @@ docs/build-soak-surfaced-bugs.md.
 
 from __future__ import annotations
 
-from _buildsoak_fakes import build_plan_loop
-from disco.core import ActionEvent, ConversationStatus, EventSource, MessageEvent, StatusEvent
+from _buildsoak_fakes import BuildExecutor, build_plan_loop
+from disco.core import (
+    ActionEvent,
+    AgentErrorEvent,
+    ConversationStatus,
+    EventSource,
+    MessageEvent,
+    ObservationEvent,
+    StatusEvent,
+    ToolResult,
+)
 from disco.core.llm import OperatingMode
 from loop_fakes import ScriptedAgent, action_step, finish_step
 
@@ -151,3 +160,78 @@ async def test_approval_then_real_action_still_finishes():
         and e.detail == "approve_plan_no_execution"
         for e in events
     )
+
+
+class _FailInsertThenSucceedExecutor(BuildExecutor):
+    def __init__(self) -> None:
+        super().__init__(
+            tool_names=[
+                "submit_plan",
+                "file_insert_lines",
+            ]
+        )
+        self.insert_calls = 0
+
+    async def execute(self, call) -> ToolResult:
+        self.calls.append(call)
+        if call.tool_name != "file_insert_lines":
+            return ToolResult(
+                call_id=call.call_id, tool_name=call.tool_name, success=True, content="ok"
+            )
+        self.insert_calls += 1
+        if self.insert_calls <= 3:
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=call.tool_name,
+                success=False,
+                error="FRESH_READ_REQUIRED",
+                content="read current content first",
+            )
+        return ToolResult(
+            call_id=call.call_id, tool_name=call.tool_name, success=True, content="inserted"
+        )
+
+
+async def test_failed_productive_actions_do_not_satisfy_execution_gate():
+    """Plan approval followed only by failed productive-tool attempts must still
+    hit the execution nudge; a later successful action then permits finish."""
+    executor = _FailInsertThenSucceedExecutor()
+    agent = ScriptedAgent([_submit_plan_step()])
+    loop, store = build_plan_loop(agent, conversation_id="appr-failed-actions", executor=executor)
+    await loop.send_message("build the thing")
+    await loop.run()
+    await loop.approve_plan()
+
+    def insert_args(i: int) -> dict[str, object]:
+        return {"path": f"notes-{i}.txt", "after_line": 1, "text": f"Enterprise {i}"}
+
+    loop.agent = ScriptedAgent(
+        [
+            action_step("file_insert_lines", insert_args(1)),
+            action_step("file_insert_lines", insert_args(2)),
+            action_step("file_insert_lines", insert_args(3)),
+            finish_step(),
+            action_step("file_insert_lines", insert_args(4)),
+            finish_step(),
+        ]
+    )
+    await loop.run()
+
+    events = await store.get_events("appr-failed-actions")
+    errors = [e for e in events if isinstance(e, AgentErrorEvent)]
+    assert len(errors) == 3
+    nudges = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "The approved plan has not been executed yet" in e.message.content
+    ]
+    assert len(nudges) == 1
+    successful_insert = next(
+        e
+        for e in events
+        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "file_insert_lines"
+    )
+    assert (nudges[0].seq or 0) < (successful_insert.seq or 0)
+    assert (await store.get_state("appr-failed-actions")).execution_status == ConversationStatus.FINISHED

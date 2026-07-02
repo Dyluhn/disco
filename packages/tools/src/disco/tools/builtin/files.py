@@ -181,7 +181,7 @@ _EDIT_ELISION_RE = re.compile(
 # only break legitimate small-file edits (Mode B is a LARGE-file phenomenon). The elision-MARKER
 # rejection is unconditional (a marker is never valid source, at any size).
 _GUARD_FRESH_READ_MIN_BYTES = 1_500
-_REFUSAL_READ_FULL_MAX_BYTES = 16 * 1024
+_REFUSAL_READ_FULL_MAX_BYTES = 64 * 1024
 _LINE_REFUSAL_WINDOW_RADIUS = 40
 _LINE_SUCCESS_WINDOW_RADIUS = 40
 
@@ -313,9 +313,12 @@ def _with_line_refusal_read(
     current_bytes: bytes,
     sha: str,
     attempted_lines: tuple[int, int] | None,
+    anchored: bool = False,
     line_refusal_read: bool,
 ) -> ToolOutcome:
     if not line_refusal_read or outcome.error not in {"STALE_FILE_CONTEXT", "FRESH_READ_REQUIRED"}:
+        return outcome
+    if anchored and len(current_bytes) > _REFUSAL_READ_FULL_MAX_BYTES:
         return outcome
     fresh_content, delivered = _line_refusal_read(
         conv_id, path, current_bytes=current_bytes, sha=sha, attempted_lines=attempted_lines
@@ -430,6 +433,7 @@ def guard_fresh_edit(
             current_bytes=current_bytes,
             sha=sha,
             attempted_lines=attempted_lines or edit_lines,
+            anchored=anchored,
             line_refusal_read=line_refusal_read,
         )
     if not grounded:
@@ -443,6 +447,7 @@ def guard_fresh_edit(
             current_bytes=current_bytes,
             sha=sha,
             attempted_lines=attempted_lines or edit_lines,
+            anchored=anchored,
             line_refusal_read=line_refusal_read,
         )
     # grounded, current sha: if the only sha-aware grounding is a PARTIAL read (not the whole
@@ -465,6 +470,7 @@ def guard_fresh_edit(
                 current_bytes=current_bytes,
                 sha=sha,
                 attempted_lines=attempted_lines or edit_lines,
+                anchored=anchored,
                 line_refusal_read=line_refusal_read,
             )
         if not _covers(rec.get("ranges", []), edit_lines[0], edit_lines[1]):
@@ -478,6 +484,7 @@ def guard_fresh_edit(
                 current_bytes=current_bytes,
                 sha=sha,
                 attempted_lines=attempted_lines or edit_lines,
+                anchored=anchored,
                 line_refusal_read=line_refusal_read,
             )
     return None
@@ -1062,6 +1069,7 @@ class FileEditTool:
             old=args.old,
             new=args.new,
             edit_lines=_elines,
+            line_refusal_read=True,
         )
         if _blocked is not None:
             return _blocked
@@ -1241,18 +1249,22 @@ class FileInsertLinesTool:
             return g
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        n = len(lines)
         # CD-TOOLS-1 guard: the insert point relies on current line numbers — require fresh
         # grounding + reject an elision marker in the inserted text (no region coverage needed).
         _blocked = guard_fresh_edit(
-            ctx.conversation_id, args.path, current_bytes=_raw, new=args.text, edit_lines=None,
+            ctx.conversation_id, args.path, current_bytes=_raw, new=args.text,
+            edit_lines=(
+                max(args.after_line, 1),
+                max(1, min(args.after_line + 1, n)),
+            ),
             anchored=False,  # [REL-RC-D] line-based: a prior edit's line-shift can stale this insert point
             attempted_lines=(max(args.after_line, 1), max(args.after_line, 1)),
             line_refusal_read=True,
         )
         if _blocked is not None:
             return _blocked
-        lines = text.splitlines()
-        n = len(lines)
         if args.after_line < 0 or args.after_line > n:
             return ToolOutcome(
                 success=False,
@@ -1352,6 +1364,7 @@ class FileStrReplaceTool:
         _blocked = guard_fresh_edit(
             ctx.conversation_id, args.path, current_bytes=_raw,
             old=args.old_str, new=args.new_str, edit_lines=_elines,
+            line_refusal_read=True,
         )
         if _blocked is not None:
             return _blocked
@@ -1657,7 +1670,8 @@ class ExactReplaceTool:
             lo_line = text.count("\n", 0, s) + 1
             hi_line = text.count("\n", 0, end) + 1
             blocked = guard_fresh_edit(
-                ctx.conversation_id, args.path, current_bytes=raw, edit_lines=(lo_line, hi_line)
+                ctx.conversation_id, args.path, current_bytes=raw, edit_lines=(lo_line, hi_line),
+                line_refusal_read=True,
             )
             if blocked is not None:
                 return blocked

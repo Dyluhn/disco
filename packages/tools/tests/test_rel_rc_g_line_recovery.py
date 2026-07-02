@@ -9,6 +9,8 @@ from __future__ import annotations
 import pytest
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
+    FileEditArgs,
+    FileEditTool,
     FileInsertLinesArgs,
     FileInsertLinesTool,
     FileReadArgs,
@@ -74,10 +76,16 @@ BIG_BYTES = BIG.encode("utf-8")
 assert len(BIG_BYTES) > 1500
 assert len(BIG_BYTES) <= 16 * 1024
 
-_LARGE_LINES = [f"line {i} {'x' * 100}" for i in range(1, 221)]
+_MID_LINES = [f"<p>pricing row {i}: {'x' * 100}</p>" for i in range(1, 191)]
+MID = "<html><body>\n<h1>Acme Cloud</h1>\n" + "\n".join(_MID_LINES) + "\n</body></html>\n"
+MID_BYTES = MID.encode("utf-8")
+assert len(MID_BYTES) > 16 * 1024
+assert len(MID_BYTES) <= 64 * 1024
+
+_LARGE_LINES = [f"line {i} {'x' * 100}" for i in range(1, 701)]
 LARGE = "\n".join(_LARGE_LINES) + "\n"
 LARGE_BYTES = LARGE.encode("utf-8")
-assert len(LARGE_BYTES) > 16 * 1024
+assert len(LARGE_BYTES) > 64 * 1024
 
 
 @pytest.mark.asyncio
@@ -199,7 +207,7 @@ async def test_large_line_refusal_delivers_bounded_window():
     )
     assert refused.success is False
     assert refused.error == "FRESH_READ_REQUIRED"
-    assert "Fresh current window for large.txt [lines 80-160 of 220; total lines: 220]" in refused.content
+    assert "Fresh current window for large.txt [lines 80-160 of 700; total lines: 700]" in refused.content
     delivered = (refused.structured or {})["delivered_read"]
     assert delivered["full"] is False
     assert delivered["ranges"] == [(80, 160)]
@@ -211,6 +219,76 @@ async def test_large_line_refusal_delivers_bounded_window():
     )
     assert retry.success, retry.content
     assert b"line 120 edited" in sbx._fs["large.txt"]
+
+
+@pytest.mark.asyncio
+async def test_mid_file_insert_refusal_delivers_full_content_and_retry_succeeds():
+    sbx = _FakeSandbox({"index.html": MID_BYTES})
+    ctx = _ctx(sbx)
+
+    refused = await FileInsertLinesTool().run(
+        FileInsertLinesArgs(path="index.html", after_line=2, text="<section>Enterprise</section>"),
+        ctx,
+    )
+    assert refused.success is False
+    assert refused.error == "FRESH_READ_REQUIRED"
+    assert "Fresh full current file for index.html" in refused.content
+    assert "\t<h1>Acme Cloud</h1>" in refused.content
+    assert (refused.structured or {})["delivered_read"]["full"] is True
+
+    retry = await FileInsertLinesTool().run(
+        FileInsertLinesArgs(path="index.html", after_line=2, text="<section>Enterprise</section>"),
+        ctx,
+    )
+    assert retry.success, retry.content
+    assert b"<section>Enterprise</section>" in sbx._fs["index.html"]
+
+
+@pytest.mark.asyncio
+async def test_mid_file_edit_refusal_delivers_full_content_retry_succeeds_and_write_stays_blocked():
+    sbx = _FakeSandbox({"index.html": MID_BYTES})
+    ctx = _ctx(sbx)
+
+    refused = await FileEditTool().run(
+        FileEditArgs(path="index.html", old="<h1>Wrong</h1>", new="<h1>Enterprise</h1>"),
+        ctx,
+    )
+    assert refused.success is False
+    assert refused.error == "FRESH_READ_REQUIRED"
+    assert "Fresh full current file for index.html" in refused.content
+    assert "\t<h1>Acme Cloud</h1>" in refused.content
+    assert (refused.structured or {})["delivered_read"]["full"] is True
+
+    write = await FileWriteTool().run(
+        FileWriteArgs(path="index.html", content=MID.replace("Acme Cloud", "Blind Rewrite")),
+        ctx,
+    )
+    assert write.success is False
+    assert write.error == "read_before_write"
+
+    retry = await FileEditTool().run(
+        FileEditArgs(path="index.html", old="<h1>Acme Cloud</h1>", new="<h1>Enterprise</h1>"),
+        ctx,
+    )
+    assert retry.success, retry.content
+    assert b"<h1>Enterprise</h1>" in sbx._fs["index.html"]
+
+
+@pytest.mark.asyncio
+async def test_large_anchored_file_edit_refusal_delivers_no_content():
+    sbx = _FakeSandbox({"large.html": LARGE_BYTES})
+    ctx = _ctx(sbx)
+
+    refused = await FileEditTool().run(
+        FileEditArgs(path="large.html", old="line 120", new="line 120 edited"),
+        ctx,
+    )
+    assert refused.success is False
+    assert refused.error == "FRESH_READ_REQUIRED"
+    assert "Fresh full current file" not in refused.content
+    assert "Fresh current window" not in refused.content
+    assert "line 120" not in refused.content
+    assert "delivered_read" not in (refused.structured or {})
 
 
 @pytest.mark.asyncio

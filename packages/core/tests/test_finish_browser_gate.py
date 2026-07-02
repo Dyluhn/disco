@@ -24,7 +24,7 @@ from disco.core.loop.signals import (
     actions_since_last_resume,
     productive_actions_since_approval,
 )
-from event_fakes import action, with_seqs
+from event_fakes import action, agent_error, observation, with_seqs
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -48,15 +48,20 @@ def browser_obs(url: str, console: list, success: bool = True, seq: int = 10) ->
 
 def test_last_productive_seq():
     # Only actions not in _NON_PRODUCTIVE_TOOLS count
+    failed = action(tool="file_edit", args={"path": "x"})
+    write = action(tool="file_write", args={"path": "x"})
     events = with_seqs(
         [
             action(tool="file_read"),  # non-productive
-            action(tool="file_write", args={"path": "x"}),  # seq 2 - productive
+            failed,  # productive-looking, but failed
+            agent_error("FRESH_READ_REQUIRED", action_id=failed.id),
+            write,  # seq 4 - productive and successful
+            observation(action_id=write.id, tool="file_write"),
             action(tool="browser"),  # non-productive
             action(tool="server_status"),  # non-productive
         ]
     )
-    assert _last_productive_seq(events) == 2
+    assert _last_productive_seq(events) == 4
 
 
 def test_is_web_deliverable_index_html():

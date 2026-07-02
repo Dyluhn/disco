@@ -151,11 +151,20 @@ def _app_verify_command(url: str) -> str:
 
 
 def _last_productive_seq(events: list[Event]) -> int:
-    """Seq of the last state-changing action (not in _NON_PRODUCTIVE_TOOLS).
-    If no productive action found, returns 0."""
+    """Seq of the last successful state-changing action (not in _NON_PRODUCTIVE_TOOLS).
+    If no successful productive action found, returns 0."""
+    action_succeeded: dict[str, bool] = {}
+    for ev in events:
+        if isinstance(ev, ObservationEvent):
+            action_succeeded.setdefault(ev.action_id, bool(ev.tool_result.success))
+        elif isinstance(ev, AgentErrorEvent) and ev.action_id is not None:
+            action_succeeded.setdefault(ev.action_id, False)
     for ev in reversed(events):
         if isinstance(ev, ActionEvent):
-            if ev.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
+            if (
+                ev.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS
+                and action_succeeded.get(ev.id) is True
+            ):
                 return ev.seq or 0
     return 0
 

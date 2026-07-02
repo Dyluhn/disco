@@ -169,6 +169,13 @@ _RISKY = [
 _PUBLISH = [
     ("here's the plan", [_plan(["deploy the site"])]),
     ("deploying", [ProposedToolCall(tool_name="deploy_site", arguments={})]),
+    # [REL-RC-J] a genuinely SUCCESSFUL productive action: the finish gate now counts
+    # outcomes (successful observations), not attempts — without this, a script whose
+    # deploy is rejected/failed has done no real work and FINISHED is correctly refused.
+    ("noting outcome", [ProposedToolCall(
+        tool_name="file_write",
+        arguments={"path": "publish-note.txt", "content": "deploy attempted"},
+    )]),
     ("step 1 complete", [_plan_step_done(1)]),
     ("done", [_finish()]),
 ]
@@ -426,8 +433,13 @@ async def test_execution_gate_refuses_finish_without_productive_action():
     productive ActionEvent has occurred since plan_approved — instead, an implicit
     system-reminder is appended and the loop re-enters. The reminder fires every
     time, with no cap (no ErrorEvent, no FINISHED-without-work)."""
+    # [REL-RC-J] unique path: "f.txt" had accumulated in the DURABLE per-CID ProjectStore
+    # (~/.local/share/disco/projects/c1/) across historical runs, so this write was silently
+    # REFUSED (read_before_write) and only attempt-counting let the old test pass. The
+    # conftest _isolated_projects_root fixture now isolates the store per test; the unique
+    # name is belt-and-braces.
     safe = ProposedToolCall(
-        tool_name="file_write", arguments={"path": "f.txt", "content": "ok"}
+        tool_name="file_write", arguments={"path": "gate-productive-out.txt", "content": "ok"}
     )
     # Steps: plan #1 → approve → FIRST execution turn tries to finish immediately
     # → gate intercepts, appends system-reminder, retries → model now writes a file
@@ -481,7 +493,7 @@ async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision()
 
     # A scripted lifecycle: plan #1 → approve → safe write → finish → request_plan(...) → plan #2.
     safe = ProposedToolCall(
-        tool_name="file_write", arguments={"path": "f.txt", "content": "ok"}
+        tool_name="file_write", arguments={"path": "reopen-plan-out.txt", "content": "ok"}
     )
     steps = [
         ("plan one", [_plan(["do the thing"])]),

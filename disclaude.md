@@ -5395,3 +5395,31 @@ REL-RC-I spec: consecutive planning-mode tool refusals must escalate steering (r
 nudge/valve machinery), never idle to STUCK.
 
 Parallel implementation: G=tools layer, H=agent-server runtime, I=core loop — disjoint, Codex ×3.
+
+### soak-ghi iter-1 root causes — REL-RC-J + REL-RC-G2 — 2026-07-01
+
+soak-ghi iter 000 (conv_720b3671): FAIL/ARTIFACT_TRUTH_MISMATCH — 'Enterprise' absent because the
+ENTIRE pricing phase produced zero successful writes, yet went FINISHED. Discipline fixes (H) held
+(all follow-ups replanned); two new defects:
+
+**REL-RC-J — finish gate counts attempts, not outcomes.** finish.py _last_productive_seq returns
+the seq of the last ActionEvent with a productive tool name — FAILED actions count. Phase 2's three
+failed file_insert_lines satisfied the execution gate → FINISHED with no work. FIX: a productive
+action must have a SUCCESSFUL paired observation (ObservationEvent, not AgentErrorEvent); failures
+don't count. (Execution-nudge cap-3 release stays — but now the nudge actually fires first.)
+
+**REL-RC-G2 — two guard holes left by G.**
+  (a) file_insert_lines passes edit_lines=None → on files > the 16KB full-delivery cap, the
+      refusal-read window can NEVER satisfy the partial-coverage check (None → fail-closed) →
+      structurally un-groundable inserts (iter-1 phase 2, 19.9KB file). FIX: pass
+      edit_lines=(after_line, min(after_line+1, total)) so window coverage resolves.
+  (b) anchored callers (file_edit / file_str_replace / exact_replace) get NO refusal-read at all →
+      FRESH_READ_REQUIRED churn (seq 99-130, 180-183). FIX: extend refusal-reads to anchored
+      callers with FULL content delivery (anchored edits can't use a window — old-text may be
+      anywhere), raising the full-delivery cap to 64KB for all callers (a 20KB landing page is the
+      TYPICAL artifact; 16KB was under it). Beyond 64KB anchored refusals keep current behavior.
+      Recorded as full read (grounds retry); read_since_write still NOT set (Mode-B intact);
+      anchored edits stay host-validated against live bytes so correctness is unaffected.
+
+Iterations 2-5 of soak-ghi continue under the unfixed stack for extra signal; the run cannot meet
+the bar (iter 1 FAIL) — next gating run happens after J+G2 deploy.
