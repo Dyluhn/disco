@@ -5579,3 +5579,14 @@ artifact_manifest in any workspace — positive-evidence check caught it). Two h
 finish path all 5 runs took; (2) sbx-None no-ops SILENTLY (fail-soft with no log — unobservable).
 Fix: fold must fire on EVERY terminal-FINISHED path (notify + normal), before sandbox release can
 race it, and every skip must log its reason. Then re-run shadow evidence.
+
+### REL-2a step3 — write-tool artifact emission (the real CD-TOOLS-4b seam) — 2026-07-02
+
+Shadow round 2 proved the fold hook LIVE (positive logs) but projected=0 on real builds. Ground
+truth: artifact_paths_from_events only reads generator-tool structured + DeliverableEvents; plain
+file_write returns artifacts=[path] with NO structured, and the artifacts field is dropped at
+persistence — the durable log carries NOTHING for build outputs. The plan's files.py:1419
+citation described the seam's intended home, not existing behavior. Step3: (a) file-mutation
+family outcomes emit structured {path, sha256-of-written-bytes} (persisted like generator
+structured); (b) projection consumes that family; (c) shadow-only, re-soak expects projected>=1
+with 0 divergence.

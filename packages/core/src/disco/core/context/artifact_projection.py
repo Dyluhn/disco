@@ -9,6 +9,7 @@ Sources collected per tool (unchanged from the original route logic):
   sheet_generate / slides_generate — structured["filename"] + structured["editable_source"]
   image_generate                   — structured["path"]
   audio_overview                   — structured["mp3_path"] + structured["transcript_path"]
+  file mutation family             — structured["path"]
   DeliverableEvent artifact_kind="files" — e.path
 """
 
@@ -23,6 +24,19 @@ from ..events import DeliverableEvent, Event, ObservationEvent
 # compares the maintained manifest against this projection, logging divergence (RETURNS legacy; no
 # reader switched). Default OFF → byte-identical to today. Promote only after live 0-divergence.
 _SHADOW_FLAG = "ARTIFACT_MANIFEST_SHADOW"
+
+_WRITE_ARTIFACT_TOOLS = frozenset(
+    {
+        "file_write",
+        "file_append",
+        "file_edit",
+        "file_str_replace",
+        "exact_replace",
+        "file_replace_lines",
+        "file_insert_lines",
+        "safe_write_file",
+    }
+)
 
 
 def manifest_shadow_enabled() -> bool:
@@ -66,6 +80,10 @@ def artifact_paths_from_events(events: list[Event]) -> set[str]:
                     p = s.get(key)
                     if isinstance(p, str) and p:
                         out.add(posixpath.normpath(p))
+            elif tn in _WRITE_ARTIFACT_TOOLS:
+                p = s.get("path")
+                if isinstance(p, str) and p:
+                    out.add(posixpath.normpath(p))
         elif isinstance(e, DeliverableEvent) and e.artifact_kind == "files":
             out.add(posixpath.normpath(e.path))
     return out

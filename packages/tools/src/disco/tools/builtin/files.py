@@ -688,6 +688,20 @@ def _canonical(path: str) -> str:
     return posixpath.normpath(strip_redundant_workspace_prefix(path))
 
 
+def _write_artifact_structured(
+    path: str,
+    post_write_bytes: bytes,
+    structured: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """REL-2a step3: durable artifact evidence for generic file mutators."""
+    import hashlib
+
+    out = dict(structured or {})
+    out["path"] = _canonical(path)
+    out["sha256"] = hashlib.sha256(post_write_bytes).hexdigest()
+    return out
+
+
 def _number_lines(text: str, start: int = 1) -> str:
     """Render text with right-aligned 1-based line numbers + a tab, so the model
     can target precise ranges with file_replace_lines / file_insert_lines — the
@@ -1032,7 +1046,10 @@ class FileWriteTool:
         # next file_write must be preceded by another file_read.
         _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
-            success=True, content=f"wrote {len(raw)} bytes to {args.path}", artifacts=[args.path]
+            success=True,
+            content=f"wrote {len(raw)} bytes to {args.path}",
+            artifacts=[args.path],
+            structured=_write_artifact_structured(args.path, raw),
         )
 
 
@@ -1089,6 +1106,7 @@ class FileAppendTool:
             success=True,
             content=f"appended {len(append_bytes)} bytes to {args.path}",
             artifacts=[args.path],
+            structured=_write_artifact_structured(args.path, combined),
         )
 
 
@@ -1268,7 +1286,10 @@ class FileEditTool:
         # post-edit bytes (don't discard) so the model's own next same-file edit isn't false-STALE.
         reground_after_anchored_edit(ctx.conversation_id, args.path, updated.encode("utf-8"))
         return ToolOutcome(
-            success=True, content=f"edited {args.path} ({how})", artifacts=[args.path]
+            success=True,
+            content=f"edited {args.path} ({how})",
+            artifacts=[args.path],
+            structured=_write_artifact_structured(args.path, updated.encode("utf-8")),
         )
 
 
@@ -1376,6 +1397,7 @@ class FileReplaceLinesTool:
                 ),
             ),
             artifacts=[args.path],
+            structured=_write_artifact_structured(args.path, out.encode("utf-8")),
         )
 
 
@@ -1453,6 +1475,7 @@ class FileInsertLinesTool:
                 prefix=f"inserted {len(ins)} lines after line {args.after_line} of {args.path}",
             ),
             artifacts=[args.path],
+            structured=_write_artifact_structured(args.path, out.encode("utf-8")),
         )
 
 
@@ -1559,6 +1582,9 @@ class FileStrReplaceTool:
                         success=True,
                         content=f"replaced in {args.path} (whitespace-stripped match)",
                         artifacts=[args.path],
+                        structured=_write_artifact_structured(
+                            args.path, new_text.encode("utf-8")
+                        ),
                     )
             return ToolOutcome(
                 success=False,
@@ -1577,6 +1603,7 @@ class FileStrReplaceTool:
             success=True,
             content=f"replaced in {args.path}",
             artifacts=[args.path],
+            structured=_write_artifact_structured(args.path, new_text.encode("utf-8")),
         )
 
 
@@ -1865,12 +1892,11 @@ class ExactReplaceTool:
             success=True,
             content=f"exact_replace applied {len(spans)} replacement(s) to {args.path}.",
             artifacts=[args.path],
-            structured={
-                "path": args.path,
-                "bytes": len(new_bytes),
-                "sha256": hashlib.sha256(new_bytes).hexdigest(),
-                "applied": applied,
-            },
+            structured=_write_artifact_structured(
+                args.path,
+                new_bytes,
+                {"bytes": len(new_bytes), "applied": applied},
+            ),
         )
 
 
@@ -2014,9 +2040,9 @@ class SafeWriteFileTool:
             success=True,
             content=f"safe_write_file wrote {len(new_bytes)} bytes to {args.path}.",
             artifacts=[args.path],
-            structured={
-                "path": args.path,
-                "bytes": len(new_bytes),
-                "sha256": hashlib.sha256(new_bytes).hexdigest(),
-            },
+            structured=_write_artifact_structured(
+                args.path,
+                new_bytes,
+                {"bytes": len(new_bytes)},
+            ),
         )
