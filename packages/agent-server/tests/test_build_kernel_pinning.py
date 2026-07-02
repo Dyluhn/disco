@@ -371,6 +371,7 @@ def _finalize_fake(store: SqliteEventStore):
     fake._post_terminal_rekick_seq = {}  # engine-rekick fix: post-terminal re-kick guard
     fake.kick = MagicMock()
     fake._emit_persistence_reminder = AsyncMock()
+    fake._maybe_shadow_fold_finished_manifest = AsyncMock()  # REL-2a backstop hook
     for attr in (
         "_CONCLUDED_STATUSES",
         "_RUN_PARKED_STATUSES",

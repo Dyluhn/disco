@@ -815,6 +815,10 @@ class ConversationRuntime:
         # finish never re-kicks. SEPARATE from `_nonterminal_rekicks` (the W11
         # RUNNING-stall budget) — this guards the terminal-conclusion path only.
         self._post_terminal_rekick_seq: dict[str, int] = {}
+        # REL-2a: shadow artifact-manifest fold guard. Keyed by the latest FINISHED
+        # StatusEvent seq so duplicate terminal observers fold once, while a later
+        # resumed segment that emits a new FINISHED folds once for that finish too.
+        self._shadow_folded_finished_seq: dict[str, int] = {}
 
     # The generative (text-producing) roles a model PICK drives. NLI_VERIFIER is a
     # cross-encoder (entailment scorer), NOT a chat model — pointing it at a picked
@@ -1973,13 +1977,12 @@ class ConversationRuntime:
             # it out from under that newer run.
             if status in self._KERNEL_UNPIN_STATUSES:
                 self._unpin_if_current_generation(conversation_id, generation)
-                # [REL-2a step2b-2b] On genuine finish-SUCCESS only (FINISHED, not the
-                # ERROR/STUCK/IDLE failure/idle terminals that also live in this set), and only
-                # when the shadow flag is ON (default OFF → zero behavior change), fold the emitted
-                # artifacts into the runtime manifest and log any divergence vs the single-source
-                # projection. Reader stays legacy; this is dual-write + divergence telemetry only.
-                if status is ConversationStatus.FINISHED and manifest_shadow_enabled():
-                    await self._shadow_fold_manifest(conversation_id)
+                # REL-2a: the main fold now happens in `_run_with_persistence`, before
+                # snapshot/teardown-sensitive work can race the sandbox away. Keep this
+                # terminal observer as a guarded backstop for any FINISHED path that
+                # reaches the finalizer without passing through that wrapper.
+                if status is ConversationStatus.FINISHED:
+                    await self._maybe_shadow_fold_finished_manifest(conversation_id)
                 # Engine-rekick fix: only a genuinely TERMINAL conclusion
                 # (FINISHED/ERROR/STUCK/IDLE — the unpin set) can strand a follow-up
                 # that landed during finalization. A deliberate PARK (PAUSED /
@@ -2040,7 +2043,54 @@ class ConversationRuntime:
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
             logger.exception("stall terminalization failed for %s", conversation_id)
 
-    async def _shadow_fold_manifest(self, conversation_id: str) -> None:
+    async def _maybe_shadow_fold_finished_manifest(
+        self, conversation_id: str, *, events: list[Any] | None = None
+    ) -> None:
+        """Run the REL-2a shadow fold once for the latest FINISHED StatusEvent.
+
+        Multiple observers can see the same terminal finish (`_run_with_persistence`,
+        the clean-return finalizer, Pi's direct conclusion path). The event seq is the
+        durable finish identity: fold exactly once for that seq, but allow a later
+        resumed segment with a new FINISHED marker to fold again.
+        """
+        if not manifest_shadow_enabled():
+            return
+        try:
+            if events is None:
+                events = await self._store.get_events(conversation_id)
+            finished_seq = max(
+                (
+                    e.seq or 0
+                    for e in events
+                    if isinstance(e, StatusEvent)
+                    and e.status is ConversationStatus.FINISHED
+                ),
+                default=0,
+            )
+            if finished_seq <= 0:
+                logger.info(
+                    "shadow fold skipped for %s: no FINISHED status event",
+                    conversation_id,
+                )
+                return
+            if self._shadow_folded_finished_seq.get(conversation_id) == finished_seq:
+                logger.debug(
+                    "shadow fold skipped for %s: FINISHED seq %d already folded",
+                    conversation_id,
+                    finished_seq,
+                )
+                return
+            self._shadow_folded_finished_seq[conversation_id] = finished_seq
+            await self._shadow_fold_manifest(conversation_id, events=events)
+        except Exception:  # noqa: BLE001 — shadow is telemetry; never perturb a finish
+            logger.exception(
+                "artifact-manifest shadow fold scheduling failed for %s",
+                conversation_id,
+            )
+
+    async def _shadow_fold_manifest(
+        self, conversation_id: str, *, events: list[Any] | None = None
+    ) -> None:
         """[REL-2a step2b-2b] SHADOW dual-write of the artifact manifest at finish-success.
 
         Gated by the caller on ``manifest_shadow_enabled()`` (default OFF). Projects the emitted
@@ -2054,8 +2104,13 @@ class ConversationRuntime:
         try:
             sbx = getattr(self._executors.get(conversation_id), "sandbox", None)
             if sbx is None:
+                logger.info(
+                    "shadow fold skipped for %s: sandbox already released",
+                    conversation_id,
+                )
                 return  # sandbox already torn down → nothing durable to fold into; fail-soft
-            events = await self._store.get_events(conversation_id)
+            if events is None:
+                events = await self._store.get_events(conversation_id)
             projected = artifact_paths_from_events(events)
             store = ArtifactMemoryStore(sbx)
             manifest = await store.read_artifacts()
@@ -2072,6 +2127,13 @@ class ConversationRuntime:
             # concurrent folds can't lose an entry). Only paths the manifest lacks need writing.
             for path in sorted(missing):
                 await store.upsert_artifact(ArtifactRecord(path=path))
+            logger.info(
+                "shadow fold ran for %s: projected=%d manifest=%d missing=%d",
+                conversation_id,
+                len(projected),
+                len(manifest_paths),
+                len(missing),
+            )
         except Exception:  # noqa: BLE001 — shadow is telemetry; never perturb a finished run
             logger.exception("artifact-manifest shadow fold failed for %s", conversation_id)
 
@@ -2582,6 +2644,12 @@ class ConversationRuntime:
         # for BOTH kernels) for the end-gate.
         ended_state = await self._store.get_state(conversation_id)
         if surface in self._BUILD_LIKE_SURFACES and ended_state.execution_status in _ENDED:
+            # REL-2a shadow fold must run while the build sandbox is still live. Do
+            # this at the authoritative end-state boundary, before snapshot/suspend/
+            # finalizer work can race executor release. The helper is seq-guarded so
+            # the later clean-return finalizer backstop cannot double-fold.
+            if ended_state.execution_status is ConversationStatus.FINISHED:
+                await self._maybe_shadow_fold_finished_manifest(conversation_id)
             await self._maybe_snapshot(conversation_id)
             # FINISHED now rides the idle sweep like STUCK/ERROR/PAUSED;
             # suspend = sweep_idle_once -> _suspend
@@ -3115,6 +3183,7 @@ class ConversationRuntime:
             # CONTRACT-ACTIVATE: the per-conversation build contract kind + phase tracker.
             self._build_kind,
             self._build_trackers,
+            self._shadow_folded_finished_seq,
         ):
             cache.pop(conversation_id, None)
 

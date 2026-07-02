@@ -411,6 +411,7 @@ class PiKernel:
                 conversation_id,
                 StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED),
             )
+        await self._rt._maybe_shadow_fold_finished_manifest(conversation_id)
         self._rt._revoke_pi_tokens(conversation_id)
         self._resolve_pending(conversation_id, "run finished")
         proc = session.proc
@@ -625,6 +626,7 @@ class PiKernel:
                     conversation_id,
                     StatusEvent(source=EventSource.SYSTEM, status=ConversationStatus.FINISHED),
                 )
+            await self._rt._maybe_shadow_fold_finished_manifest(conversation_id)
             self._rt._revoke_pi_tokens(conversation_id)
         return ToolResult(
             call_id=tool_call.call_id,
