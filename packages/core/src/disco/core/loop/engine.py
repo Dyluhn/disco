@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -42,6 +42,7 @@ from ..events import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    VerifierVerdictEvent,
 )
 from ..llm import (
     LLMRouter,
@@ -581,6 +582,9 @@ class AgentLoop:
         # is available and the existing finish flow is byte-identical.
         host_verifier: HostVerifier | None = None,
         host_verify_timeout_s: float = 30.0,
+        host_verifier_verdict_hook: (
+            Callable[[VerifierVerdictEvent], Awaitable[None]] | None
+        ) = None,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -696,6 +700,7 @@ class AgentLoop:
         ) = dod_evaluator_factory
         self._host_verifier = host_verifier
         self._host_verify_timeout_s = float(host_verify_timeout_s)
+        self._host_verifier_verdict_hook = host_verifier_verdict_hook
         # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
         # loop's max_iterations + the user's kill switch are the ultimate exit,
         # same as the browser-verify and execution-nudge gates).

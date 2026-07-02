@@ -56,6 +56,7 @@ class _VerifyExecutor(FakeExecutor):
         super().__init__(
             tools=[
                 ToolSpec(name="file_write", description="write", parameters_schema={}),
+                ToolSpec(name="serve", description="serve", parameters_schema={}),
                 ToolSpec(name="submit_plan", description="plan", parameters_schema={}),
                 ToolSpec(name="verify_web_app", description="verify", parameters_schema={}),
             ]
@@ -90,12 +91,52 @@ class _HostVerifier:
         return self._verdict
 
 
+class _PathSandbox:
+    def __init__(self, existing: set[str]) -> None:
+        self._existing = set(existing)
+
+    async def file_exists(self, path: str) -> bool:
+        return path in self._existing
+
+
 def _web_agent() -> ScriptedAgent:
     return ScriptedAgent(
         [
             action_step(
                 tool="file_write",
                 args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+        ]
+    )
+
+
+def _root_deliverable_agent() -> ScriptedAgent:
+    return ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            action_step(
+                tool="serve",
+                args={"title": "App", "path": ".", "kind": "app"},
+            ),
+            finish_step(),
+        ]
+    )
+
+
+def _directory_deliverable_agent() -> ScriptedAgent:
+    return ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "main.py", "content": "print(1)"},
+            ),
+            action_step(
+                tool="serve",
+                args={"title": "App", "path": "dist", "kind": "app"},
             ),
             finish_step(),
         ]
@@ -114,7 +155,14 @@ def _non_web_agent() -> ScriptedAgent:
     )
 
 
-def _loop(agent, executor, *, host_verifier=None, host_verify_timeout_s: float = 30.0):
+def _loop(
+    agent,
+    executor,
+    *,
+    host_verifier=None,
+    host_verify_timeout_s: float = 30.0,
+    host_verifier_verdict_hook=None,
+):
     store = SqliteEventStore(":memory:")
     loop = AgentLoop(
         "conv",
@@ -130,6 +178,7 @@ def _loop(agent, executor, *, host_verifier=None, host_verify_timeout_s: float =
         planning_tools=frozenset({"submit_plan"}),
         host_verifier=host_verifier,
         host_verify_timeout_s=host_verify_timeout_s,
+        host_verifier_verdict_hook=host_verifier_verdict_hook,
     )
     return loop, store
 
@@ -173,6 +222,71 @@ async def test_shadow_gate_emits_verifier_events_in_order() -> None:
     assert isinstance(verdict, VerifierVerdictEvent)
     assert verdict.verified is True
     assert verdict.verdict == "pass"
+
+
+@pytest.mark.asyncio
+async def test_shadow_gate_calls_verdict_hook_once() -> None:
+    calls: list[VerifierVerdictEvent] = []
+
+    async def hook(event: VerifierVerdictEvent) -> None:
+        calls.append(event)
+
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    loop, _store = _loop(
+        _web_agent(),
+        execu,
+        host_verifier=host,
+        host_verifier_verdict_hook=hook,
+    )
+
+    await loop.send_message("build a page")
+    await loop.run()
+
+    assert len(calls) == 1
+    assert calls[0].artifact_path == "index.html"
+    assert calls[0].verdict == "pass"
+
+
+@pytest.mark.asyncio
+async def test_root_deliverable_resolves_to_primary_artifact_for_host_verify() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    execu.sandbox = _PathSandbox({".", "index.html"})  # type: ignore[attr-defined]
+    loop, store = _loop(_root_deliverable_agent(), execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(host.calls) == 1
+    assert host.calls[0].artifact_path == "index.html"
+    events = await store.get_events("conv")
+    verifier_paths = [
+        e.artifact_path
+        for e in events
+        if isinstance(e, (VerifierStartedEvent, VerifierShadowEvent, VerifierVerdictEvent))
+    ]
+    assert verifier_paths == ["index.html", "index.html", "index.html"]
+
+
+@pytest.mark.asyncio
+async def test_directory_deliverable_without_primary_artifact_skips_host_verify() -> None:
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    execu.sandbox = _PathSandbox({"dist"})  # type: ignore[attr-defined]
+    loop, store = _loop(_directory_deliverable_agent(), execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert host.calls == []
+    events = await store.get_events("conv")
+    assert not any(
+        isinstance(e, (VerifierStartedEvent, VerifierShadowEvent, VerifierVerdictEvent))
+        for e in events
+    )
 
 
 @pytest.mark.asyncio

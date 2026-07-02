@@ -236,6 +236,7 @@ def build_loop(
     dod_evaluator_factory=None,
     host_verifier=None,
     host_verify_timeout_s: float = 30.0,
+    host_verifier_verdict_hook=None,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed.
@@ -267,6 +268,7 @@ def build_loop(
         dod_evaluator_factory=dod_evaluator_factory,
         host_verifier=host_verifier,
         host_verify_timeout_s=host_verify_timeout_s,
+        host_verifier_verdict_hook=host_verifier_verdict_hook,
     )
     return loop, store
 

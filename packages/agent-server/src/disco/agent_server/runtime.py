@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import posixpath
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -42,6 +43,7 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    VerifierVerdictEvent,
     render_skills_for_prompt,
 )
 from disco.core.context.artifact_projection import (
@@ -146,6 +148,15 @@ from .sessions_service import SessionsService
 from .share_service import ShareService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
+
+_HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def host_verify_canary_enabled() -> bool:
+    """True iff DISCO_HOST_VERIFY_CANARY is truthy (default OFF)."""
+    return str(disco_env(_HOST_VERIFY_CANARY_FLAG) or "").strip().lower() in _TRUTHY
+
 
 # WALK-18 — max seconds resume waits for a cooperatively-cancelled loop task to
 # wind down before hard-cancelling it (a cooperative Stop already persisted the
@@ -1236,6 +1247,71 @@ class ConversationRuntime:
         if entry is not None:
             entry[1].note_verifier_result(passed=passed)
 
+    def _host_verify_canary_hook_for(
+        self, conversation_id: str
+    ) -> Callable[[VerifierVerdictEvent], Awaitable[None]] | None:
+        if not host_verify_canary_enabled():
+            return None
+
+        async def _hook(event: VerifierVerdictEvent) -> None:
+            await self._record_host_verify_canary(conversation_id, event)
+
+        return _hook
+
+    async def _record_host_verify_canary(
+        self, conversation_id: str, event: VerifierVerdictEvent
+    ) -> None:
+        """REL-1d canary bookkeeping for a persisted host verifier verdict.
+
+        This is deliberately non-authoritative: it advances phase telemetry and
+        stamps the REL-2a manifest, but the finish outcome remains owned by the
+        existing gate path.
+        """
+        # Default/CUSTOM build runs have no finalizer alias, so they may not have
+        # touched the contract resolver yet. Ensure the tracker exists before the
+        # previously-dead verifier-result edge is called.
+        if self._surface_of(conversation_id) in self._BUILD_LIKE_SURFACES:
+            self._build_scope_guard(conversation_id)
+        passed = event.verdict == "pass"
+        self.note_build_verify_result(conversation_id, passed=passed)
+
+        path = posixpath.normpath(str(event.artifact_path or "").strip())
+        if (
+            path in ("", ".")
+            or path.startswith("/")
+            or path == ".."
+            or path.startswith("../")
+        ):
+            logger.info(
+                "host verify canary skipped manifest stamp for %s: invalid artifact path %r",
+                conversation_id,
+                event.artifact_path,
+            )
+            return
+
+        sbx = getattr(self._executors.get(conversation_id), "sandbox", None)
+        if sbx is None:
+            logger.info(
+                "host verify canary skipped manifest stamp for %s: sandbox unavailable",
+                conversation_id,
+            )
+            return
+
+        store = ArtifactMemoryStore(sbx)
+        existing = next((r for r in await store.read_artifacts() if r.path == path), None)
+        base = existing or ArtifactRecord(path=path, kind=event.artifact_kind or "files")
+        kind = event.artifact_kind or base.kind
+        await store.upsert_artifact(
+            base.model_copy(
+                update={
+                    "path": path,
+                    "kind": kind,
+                    "verified": passed,
+                    "verify_verdict": event.verdict,
+                }
+            )
+        )
+
     def _build_scope_guard(
         self, conversation_id: str
     ) -> tuple[ContractScopeGuard | None, Callable[[str], None] | None]:
@@ -1672,6 +1748,7 @@ class ConversationRuntime:
         # finalizer alias would starve the shadow exactly like the REL-2a dead
         # hook). The alias still separately drives requested_verification.
         host_verifier = HostWebAppVerifier(executor)
+        host_verify_canary_hook = self._host_verify_canary_hook_for(conversation_id)
         _set_alias = getattr(agent, "set_finish_alias", None)
         if callable(_set_alias):
             _set_alias(_finish_alias)
@@ -1702,6 +1779,7 @@ class ConversationRuntime:
                 model_policy=model_policy,
                 finish_alias=_finish_alias,  # P6 contract finalizer alias
                 host_verifier=host_verifier,
+                host_verifier_verdict_hook=host_verify_canary_hook,
             )
         return AgentLoop(
             conversation_id,
@@ -1741,6 +1819,7 @@ class ConversationRuntime:
             model_policy=model_policy,
             finish_alias=_finish_alias,  # P6 contract finalizer alias
             host_verifier=host_verifier,
+            host_verifier_verdict_hook=host_verify_canary_hook,
         )
 
     # ---- deep research surface ---------------------------------------------

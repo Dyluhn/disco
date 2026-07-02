@@ -16,7 +16,7 @@ import asyncio
 import logging
 import posixpath
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from ..dod import FileExistsPredicate
 from ..dod_evaluator import DoDEvaluator, HttpProbeResult
@@ -1006,25 +1006,55 @@ class FinishGate:
             return False
         return "verify_web_app" in tool_names
 
-    def _host_verify_deliverable(
+    async def _host_artifact_file_exists(self, path: str) -> bool | None:
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        file_exists: Any = getattr(sbx, "file_exists", None)
+        if file_exists is None:
+            return None
+        try:
+            return bool(await file_exists(path))
+        except Exception:  # noqa: BLE001 — path resolution is advisory; skip only on known absence
+            return None
+
+    async def _host_verify_artifact_path(self, raw_path: str) -> str | None:
+        path = _safe_deliverable_file_path(raw_path, app_root=True)
+        if path is None:
+            return None
+        raw = (raw_path or "").strip()
+        norm = posixpath.normpath(raw) if raw else "."
+        directory_like = (
+            norm in ("", ".")
+            or posixpath.basename(norm.rstrip("/")) != "index.html"
+        )
+        if directory_like and await self._host_artifact_file_exists(path) is False:
+            return None
+        return path
+
+    async def _host_verify_deliverable(
         self, step: AgentStep, events: list[Event]
     ) -> HostVerificationDeliverable | None:
         """REL-1c — reconstruct the web-like deliverable for host shadow verify.
 
         The host verifier is advisory in this PR, so missing/ambiguous delivery
         evidence simply skips the shadow path. A first-class app handoff wins;
-        otherwise the existing web-finish convention (index.html/server_status)
-        is treated as an app rooted at index.html.
+        otherwise the existing web-finish convention (index.html/server_status) is
+        treated as index.html. App-root handoffs such as "." or "dist" are
+        resolved to their primary index.html-style file, never verified as the
+        directory path itself.
         """
 
         app_event = _latest_app_deliverable_event(events)
         if app_event is None and not _is_web_deliverable(events):
             return None
-        path = app_event.path if app_event is not None else "index.html"
+        path = await self._host_verify_artifact_path(
+            app_event.path if app_event is not None else "index.html"
+        )
+        if path is None:
+            return None
         deployment_url = app_event.deployment_url if app_event is not None else ""
         return HostVerificationDeliverable(
             conversation_id=self._loop.conversation_id,
-            artifact_path=path or "index.html",
+            artifact_path=path,
             artifact_kind="app",
             deployment_url=deployment_url or "",
             requested_verification=step.requested_verification,
@@ -1084,7 +1114,7 @@ class FinishGate:
         if host_verifier is None:
             return Disp.FALLTHROUGH
 
-        deliverable = self._host_verify_deliverable(step, events)
+        deliverable = await self._host_verify_deliverable(step, events)
         if deliverable is None:
             return Disp.FALLTHROUGH
 
@@ -1152,7 +1182,7 @@ class FinishGate:
                 meta={"requested_verification": deliverable.requested_verification},
             )
         )
-        await self._loop._emit(
+        verdict_event = await self._loop._emit(
             VerifierVerdictEvent(
                 artifact_path=deliverable.artifact_path,
                 artifact_kind=deliverable.artifact_kind,
@@ -1163,6 +1193,17 @@ class FinishGate:
                 meta={"requested_verification": deliverable.requested_verification},
             )
         )
+        hook = getattr(self._loop, "_host_verifier_verdict_hook", None)
+        if hook is not None:
+            try:
+                await hook(cast(VerifierVerdictEvent, verdict_event))
+            except Exception:  # noqa: BLE001 — REL-1d canary bookkeeping is non-authoritative
+                _LOG.warning(
+                    "REL-1d host verifier canary hook failed for %s:%s",
+                    self._loop.conversation_id,
+                    deliverable.artifact_path,
+                    exc_info=True,
+                )
         return Disp.FALLTHROUGH
 
     def _contract_required_deliverable_paths(self) -> list[str]:
