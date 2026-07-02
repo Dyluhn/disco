@@ -1,0 +1,5 @@
+0 errors, 0 warnings, 0 notes
+PYRIGHT_EXIT=0
+FAILED packages/agent-server/tests/test_build_surface.py::test_reject_denies_without_executing
+FAILED packages/agent-server/tests/test_build_surface.py::test_execution_gate_refuses_finish_without_productive_action
+PYTEST_EXIT=1

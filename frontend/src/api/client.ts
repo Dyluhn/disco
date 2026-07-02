@@ -91,7 +91,7 @@ export function agentGet<T>(path: string): Promise<T> {
 /** A REST call against the AGENT-server (loops/kill) — distinct from apiSend, which
  * targets the app-server (settings/library). */
 export function agentSend<T>(
-  method: "POST" | "PUT" | "DELETE",
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<T> {

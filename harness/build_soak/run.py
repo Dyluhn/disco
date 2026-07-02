@@ -801,17 +801,11 @@ async def _release_conversation(
             )
 
 
-def _live_disco_container_count() -> int | None:
-    """[REL-5 / Lane A A-B5/M3] Count RUNNING disco sandbox + egress-sidecar containers via the
-    podman CLI — the host-side orphan signal for the CleanupOracle on the LOCAL PODMAN iteration
-    backend. Uses `podman ps` (RUNNING only) NOT `podman ps -a`: `-a` includes exited-but-not-yet-
-    pruned containers, so a correctly-torn-down box still matched the prefix and inflated the count
-    on either side of the baseline→after delta (a real leak could net to 0, or a prune could push
-    after<baseline). Counting only RUNNING containers measures actual liveness. Returns None if
-    podman is unavailable (count UNKNOWN, never faked 0). The gVisor FINAL REL-6 run needs the
-    gVisor-equivalent probe (tracked)."""
-    import subprocess
+_DISCO_CONTAINER_PREFIXES = ("disco-sbx-", "disco-egr-")
 
+
+def _live_disco_container_names() -> list[str] | None:
+    """RUNNING disco sandbox + egress-sidecar container names, or None if unmeasurable."""
     try:
         out = subprocess.run(
             ["podman", "ps", "--format", "{{.Names}}"],  # RUNNING only (no -a)
@@ -821,10 +815,66 @@ def _live_disco_container_count() -> int | None:
         return None
     if out.returncode != 0:
         return None
-    return sum(
-        1 for ln in out.stdout.splitlines()
-        if ln.startswith("disco-sbx-") or ln.startswith("disco-egr-")
-    )
+    names: list[str] = []
+    for line in out.stdout.splitlines():
+        for name in line.split(","):
+            clean = name.strip()
+            if clean.startswith(_DISCO_CONTAINER_PREFIXES):
+                names.append(clean)
+    return names
+
+
+def _live_disco_container_count() -> int | None:
+    """[REL-5 / Lane A A-B5/M3] Count RUNNING disco sandbox + egress-sidecar containers via the
+    podman CLI — the host-side orphan signal for the CleanupOracle on the LOCAL PODMAN iteration
+    backend. Uses `podman ps` (RUNNING only) NOT `podman ps -a`: `-a` includes exited-but-not-yet-
+    pruned containers, so a correctly-torn-down box still matched the prefix and inflated the count
+    on either side of the baseline→after delta (a real leak could net to 0, or a prune could push
+    after<baseline). Counting only RUNNING containers measures actual liveness. Returns None if
+    podman is unavailable (count UNKNOWN, never faked 0). The gVisor FINAL REL-6 run needs the
+    gVisor-equivalent probe (tracked)."""
+    names = _live_disco_container_names()
+    return None if names is None else len(names)
+
+
+def _scoped_disco_container_count(
+    names: list[str], sandbox_instance_ids: list[str]
+) -> int:
+    """Count live disco containers whose name embeds one of this conversation's sandbox ids."""
+    ids = [sid for sid in sandbox_instance_ids if sid]
+    return sum(1 for name in names if any(sid in name for sid in ids))
+
+
+def _extract_sandbox_instance_ids(*payloads: Any) -> list[str]:
+    """Harvest sandbox ids from state/kill response shapes without depending on one version."""
+    ids: list[str] = []
+
+    def add(raw: Any) -> None:
+        if isinstance(raw, str):
+            sid = raw.strip()
+            if sid and not sid.startswith("session-") and sid not in ids:
+                ids.append(sid)
+            return
+        if isinstance(raw, (list, tuple, set)):
+            for item in raw:
+                add(item)
+
+    def scan(value: Any, *, sandbox_context: bool = False) -> None:
+        if not isinstance(value, dict):
+            return
+        add(value.get("sandbox_instance_id"))
+        add(value.get("sandbox_instance_ids"))
+        if sandbox_context:
+            add(value.get("instance_id"))
+            add(value.get("instance_ids"))
+            add(value.get("id"))
+        scan(value.get("state"))
+        scan(value.get("extras"))
+        scan(value.get("sandbox"), sandbox_context=True)
+
+    for payload in payloads:
+        scan(payload)
+    return ids
 
 
 def _relay_log_path() -> str | None:
@@ -966,24 +1016,42 @@ async def _collect_terminal_cleanup_evidence(
 
     # release — destroy the sandbox + sidecar containers (REL-4 path), then measure orphans.
     released_ok = False
+    release_resp: dict[str, Any] = {}
     with contextlib.suppress(Exception):
-        resp = await client.kill(cid)
+        release_resp = await client.kill(cid)
         released_ok = True
-        timeline.append(f"REL-5 released {cid} for cleanup adjudication (http {resp.get('http_status')})")
+        timeline.append(
+            f"REL-5 released {cid} for cleanup adjudication "
+            f"(http {release_resp.get('http_status')})"
+        )
     await asyncio.sleep(4.0)
-    after_containers = _live_disco_container_count()
+    after_container_names = _live_disco_container_names()
 
     # sidecar — stopped_at_terminal iff the release tore the containers down; provider calls only if
     # we could actually measure them (else the slice is omitted → oracle skips, honest).
     if calls_after is not None:
         ev["sidecar"] = {"stopped_at_terminal": released_ok, "provider_calls_after_terminal": calls_after}
 
-    # cleanup — orphans = containers attributable to THIS run still alive after release (the count
-    # rose during the run and must return to the pre-run baseline). Only populated when BOTH the
-    # baseline and the post-release count are known (else omitted → oracle skips, never faked 0).
-    if baseline_containers is not None and after_containers is not None:
+    # cleanup — preferred path: count only containers whose names embed THIS conversation's sandbox
+    # instance id(s). Parallel lanes may have live sandboxes after our release; those are not this
+    # run's orphans. If the server version cannot expose ids, keep the old global baseline delta as
+    # the serial/fail-closed fallback.
+    sandbox_ids = _extract_sandbox_instance_ids(getattr(run, "state_final", {}) or {}, release_resp)
+    if sandbox_ids and after_container_names is not None:
+        orphans = _scoped_disco_container_count(after_container_names, sandbox_ids)
+        ev["cleanup"] = {
+            "orphans": orphans,
+            "workspace_released": released_ok and orphans == 0,
+            "scope": "conversation",
+        }
+    elif baseline_containers is not None and after_container_names is not None:
+        after_containers = len(after_container_names)
         orphans = max(0, after_containers - baseline_containers)
-        ev["cleanup"] = {"orphans": orphans, "workspace_released": released_ok and orphans == 0}
+        ev["cleanup"] = {
+            "orphans": orphans,
+            "workspace_released": released_ok and orphans == 0,
+            "scope": "global",
+        }
 
     with contextlib.suppress(Exception):
         run.product_evidence = ev  # CollectedRun is a plain dataclass — attach the populated slices
@@ -1017,8 +1085,8 @@ async def run_once(
     # only ever kills the conversation THIS run created (the client is reused across a
     # batch of iterations).
     client.last_conversation_id = None
-    # [REL-5] pre-run orphan baseline (host-side container count) so the CleanupOracle can tell
-    # THIS run's leftovers from pre-existing ones. Measured once, before any conversation exists.
+    # [REL-5] pre-run orphan baseline. The scoped sandbox-id path does not need this, but older
+    # servers that cannot expose ids still fall back to the serial-era global delta.
     baseline_containers = _live_disco_container_count()
     try:
         # A mid-run transport loss (the shared server crashed / network dropped AFTER

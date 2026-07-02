@@ -5,7 +5,7 @@
  * tested means the components stay thin and the "not a debug log" framing is structural.
  */
 
-import type { AgentEvent, ConversationStatus, PlanStep, SecurityRisk } from "@/types/agent";
+import type { ActionEvent, AgentEvent, ConversationStatus, PlanStep, SecurityRisk } from "@/types/agent";
 
 // Plan-mode meta tools are control signals, not workspace work — they never appear
 // as Activity items or Terminal entries; their effect shows in the capstone tracker.
@@ -710,7 +710,9 @@ export function deriveBuildProgress(
     }
   });
   // Declarative: the LAST update_plan_progress action wins — it's the full picture.
-  let latest: AgentEvent | null = null;
+  // ActionEvent-typed (the forEach guard only assigns action events); the cast at the
+  // use site defeats TS's callback-assignment blindness (it narrows `latest` to null).
+  let latest: ActionEvent | null = null;
   events.forEach((e, i) => {
     if (i < latestPlanIdx) return;
     if (e.kind === "action" && e.tool_call?.tool_name === "update_plan_progress") latest = e;
@@ -720,7 +722,7 @@ export function deriveBuildProgress(
   // update_plan_progress, so `latest` stays null; a `return` here skipped the FINISHED
   // reconciliation below and left every step unchecked on a build that actually finished
   // (the live #3 bug on Qwen). Fall through so terminal reconciliation runs regardless.
-  const steps = ((latest as AgentEvent | null)?.tool_call?.arguments?.steps ?? []) as Array<{
+  const steps = ((latest as ActionEvent | null)?.tool_call?.arguments?.steps ?? []) as Array<{
     index: number;
     state: string;
   }>;

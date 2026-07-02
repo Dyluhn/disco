@@ -1,0 +1,11 @@
+ERROR harness/build_soak/tests/test_product_evidence_writer.py
+ERROR harness/build_soak/tests/test_provider_ledger_oracle.py
+ERROR harness/build_soak/tests/test_revision_oracle.py
+ERROR harness/build_soak/tests/test_targeted_edit_oracles.py
+!!!!!!!!!!!!!!!!!!! Interrupted: 15 errors during collection !!!!!!!!!!!!!!!!!!!
+PYTEST_EXIT=2
+  /var/home/dylan/projects/disclaude/packages/tools/src/disco/tools/sandbox/shell_sessions.py:231:14 - error: Import "disco.core.loop.preview_target" could not be resolved (reportMissingImports)
+/var/home/dylan/projects/disclaude/packages/tools/src/disco/tools/verify/artifact_validators.py
+  /var/home/dylan/projects/disclaude/packages/tools/src/disco/tools/verify/artifact_validators.py:69:12 - warning: Import "openpyxl" could not be resolved from source (reportMissingModuleSource)
+526 errors, 10 warnings, 0 notes
+PYRIGHT_EXIT=0

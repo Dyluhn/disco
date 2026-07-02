@@ -362,6 +362,26 @@ class LifecycleManager:
             return None
         return "suspended" if record is not None else None
 
+    def sandbox_instance_ids(self, conversation_id: str) -> list[str]:
+        """Live sandbox instance ids for a conversation, without creating or waking one."""
+        ids: list[str] = []
+
+        def add(raw: Any) -> None:
+            if not isinstance(raw, str):
+                return
+            sid = raw.strip()
+            if not sid or sid.startswith("session-") or sid in ids:
+                return
+            ids.append(sid)
+
+        executor = self._rt._executors.get(conversation_id)
+        if executor is not None:
+            add(getattr(getattr(executor, "sandbox", None), "id", None))
+        pending = self._rt._pending_sessions.get(conversation_id)
+        if pending is not None:
+            add(getattr(pending, "id", None))
+        return ids
+
     async def sweep_idle_once(self) -> int:
         """Single idle-TTL sweep pass: suspend all tracked sandboxes that are not
         RUNNING, have no live UI connections, and whose last event is older than

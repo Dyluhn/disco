@@ -1,0 +1,8 @@
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+PYTEST_EXIT=0
+0 errors, 0 warnings, 0 notes
+PYRIGHT_EXIT=0
+src/lib/buildTrace.ts(723,49): error TS2339: Property 'tool_call' does not exist on type 'AgentEvent'.
+  Property 'tool_call' does not exist on type 'MessageEvent'.
+TSC_EXIT=0

@@ -43,6 +43,7 @@ export interface ExportObs {
 export interface CleanupObs {
   orphans: number;
   workspace_released: boolean;
+  scope?: "conversation" | "global" | string;
 }
 
 /** Captured observations — a slice is present iff that part of the run was observed. */
@@ -76,7 +77,7 @@ export const SLICE_FIELDS: Record<SliceKey, readonly string[]> = {
   shown: ["artifact_shown", "preview_shown"],
   verification: ["ready_for_verification_called", "passed"],
   export: ["requested", "download_present", "download_bytes"],
-  cleanup: ["orphans", "workspace_released"],
+  cleanup: ["orphans", "workspace_released", "scope"],
 };
 
 /** All slice keys, DERIVED from SLICE_FIELDS — never a hand-maintained parallel list. */

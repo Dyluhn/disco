@@ -1,0 +1,6 @@
+0 errors, 0 warnings, 0 notes
+PYRIGHT_EXIT=0
+    _embedding_model = TextEmbedding(model_name=model_name, **_arena_session_kwargs())
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+PYTEST_EXIT=0

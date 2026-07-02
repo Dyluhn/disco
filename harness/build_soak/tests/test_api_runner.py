@@ -2469,6 +2469,142 @@ async def test_provider_calls_after_terminal_are_conversation_scoped(tmp_path, m
     assert r.failed and r.code == "SIDECAR_NOT_STOPPED"
 
 
+class _CleanupKillClient:
+    def __init__(self, response=None) -> None:
+        self.response = response or {"http_status": 200}
+        self.killed: list[str] = []
+
+    async def kill(self, cid: str) -> dict:
+        self.killed.append(cid)
+        return dict(self.response)
+
+
+def _cleanup_run(state_final=None):
+    run = type("Run", (), {})()
+    run.events = []
+    run.state_final = state_final or {"status": "FINISHED"}
+    run.timeline = ["RUNNING", "FINISHED"]
+    run.product_evidence = {}
+    return run
+
+
+def _fake_podman_ps(monkeypatch, stdout: str) -> None:
+    class _Result:
+        returncode = 0
+
+        def __init__(self, text: str) -> None:
+            self.stdout = text
+
+    def fake_run(*args, **kwargs):
+        assert args[0] == ["podman", "ps", "--format", "{{.Names}}"]
+        return _Result(stdout)
+
+    monkeypatch.setattr(_run_mod.subprocess, "run", fake_run)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_orphans_are_scoped_to_this_conversation_sandbox_ids(monkeypatch):
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman_ps(
+        monkeypatch,
+        "\n".join(
+            [
+                "disco-sbx-sbx_this_conv",
+                "disco-sbx-sbx_other_conv",
+                "disco-egr-sbx_other_conv",
+                "unrelated-container",
+            ]
+        ),
+    )
+    run = _cleanup_run(
+        {"status": "FINISHED", "extras": {"sandbox_instance_ids": ["sbx_this_conv"]}}
+    )
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        _CleanupKillClient(),
+        "conv_terminal",
+        run,
+        baseline_containers=0,
+        relay_log=None,
+        timeline=[],
+        grace_s=0.0,
+    )
+
+    assert ev["cleanup"] == {
+        "orphans": 1,
+        "workspace_released": False,
+        "scope": "conversation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(monkeypatch):
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman_ps(
+        monkeypatch,
+        "\n".join(["disco-sbx-sbx_other_conv", "disco-egr-sbx_other_conv"]),
+    )
+    run = _cleanup_run()
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        _CleanupKillClient({"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]}),
+        "conv_terminal",
+        run,
+        baseline_containers=0,
+        relay_log=None,
+        timeline=[],
+        grace_s=0.0,
+    )
+
+    assert ev["cleanup"] == {
+        "orphans": 0,
+        "workspace_released": True,
+        "scope": "conversation",
+    }
+
+
+@pytest.mark.asyncio
+async def test_cleanup_orphan_count_falls_back_to_global_delta_without_sandbox_ids(monkeypatch):
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(_run_mod.asyncio, "sleep", _no_sleep)
+    _fake_podman_ps(
+        monkeypatch,
+        "\n".join(
+            [
+                "disco-sbx-sbx_before_a",
+                "disco-egr-sbx_before_a",
+                "disco-sbx-sbx_after_b",
+                "disco-egr-sbx_after_b",
+            ]
+        ),
+    )
+    run = _cleanup_run({"status": "FINISHED", "extras": {}})
+
+    ev = await _run_mod._collect_terminal_cleanup_evidence(
+        _CleanupKillClient(),
+        "conv_terminal",
+        run,
+        baseline_containers=2,
+        relay_log=None,
+        timeline=[],
+        grace_s=0.0,
+    )
+
+    assert ev["cleanup"] == {
+        "orphans": 2,
+        "workspace_released": False,
+        "scope": "global",
+    }
+
+
 @pytest.mark.asyncio
 async def test_kill_is_idempotent_on_already_terminal_conv(tmp_path):
     # The kill adapter method is harmless/idempotent on an already-terminal conversation

@@ -16,7 +16,7 @@ product_evidence (the HARN-1b dossier, all keys optional):
       "shown":        {"artifact_shown": bool, "preview_shown": bool},
       "verification": {"ready_for_verification_called": bool, "passed": bool},
       "export":       {"requested": bool, "download_present": bool, "download_bytes": int},
-      "cleanup":      {"orphans": int, "workspace_released": bool},
+      "cleanup":      {"orphans": int, "workspace_released": bool, "scope"?: str},
     }
 """
 
@@ -236,10 +236,14 @@ class CleanupOracle:
                     self._NAME,
                     fc.WORKSPACE_NOT_CLEANED,
                     first_broken_link="terminal -> resources_released",
-                    facts={"orphans": cu.get("orphans"), "workspace_released": cu.get("workspace_released")},
+                    facts={
+                        "orphans": cu.get("orphans"),
+                        "workspace_released": cu.get("workspace_released"),
+                        "scope": cu.get("scope"),
+                    },
                 )
             ]
-        return [passing(self._NAME, facts={"orphans": 0})]
+        return [passing(self._NAME, facts={"orphans": 0, "scope": cu.get("scope")})]
 
 
 # The ordered family the classifier runs (each SKIPs without its evidence slice).

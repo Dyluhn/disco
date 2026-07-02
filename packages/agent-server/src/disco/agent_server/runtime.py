@@ -2620,6 +2620,9 @@ class ConversationRuntime:
     def sandbox_state(self, conversation_id: str) -> str | None:
         return self._lifecycle.sandbox_state(conversation_id)
 
+    def sandbox_instance_ids(self, conversation_id: str) -> list[str]:
+        return self._lifecycle.sandbox_instance_ids(conversation_id)
+
     async def sweep_idle_once(self) -> int:
         return await self._lifecycle.sweep_idle_once()
 

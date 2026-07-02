@@ -145,6 +145,9 @@ def make_ws_router(
             sstate = runtime.sandbox_state(conversation_id)
             if sstate is not None:
                 state.extras["sandbox"] = sstate
+            sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
+            if sandbox_ids:
+                state.extras["sandbox_instance_ids"] = sandbox_ids
             if runtime.is_autonomous(conversation_id):
                 state.extras["autonomous"] = True
             # ALWAYS emit assist (True or False) so the badge reflects the CURRENT

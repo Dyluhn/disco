@@ -1,0 +1,1061 @@
+Reading additional input from stdin...
+OpenAI Codex v0.142.2
+--------
+workdir: /var/home/dylan/projects/disclaude
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f1f3b-0005-7a41-aee1-efd12cf5b7de
+--------
+user
+You are the review gate for the disclaude campaign. Review ONLY the plan titled 'PLAN — HARNESS-FIX-4 + SCENARIO-SOFTEN (fork resolution) — 2026-07-01' at the end of disclaude.md against the actual code in harness/build_soak/oracles/output_truth.py and harness/build_soak/scenarios.yaml. Verdict must be exactly one of APPROVE or REVISE with numbered reasons. Check: (1) does the fix-4 change correctly separate sha-identity checks from content checks, (2) any callers/classifier paths that would still emit WORKSPACE_SNAPSHOT_UNVERIFIED for content specs, (3) test coverage gaps, (4) scenario edit correctness at both line ranges.
+codex
+I’ll inspect the named plan and the two harness files only, then compare the proposed claims against the actual classifier and scenario definitions.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba harness/build_soak/scenarios.yaml | sed -n '1,260p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	# Build Soak — bare-Build scenario matrix (guidelines §14, §15).
+     2	#
+     3	# Machine-readable §14 specs. Each scenario carries:
+     4	#   * runner directives  — how the runner drives the live API (prompt, model,
+     5	#     autonomous, followups + their trigger points).
+     6	#   * assertions         — the predicates the deterministic oracle consumes
+     7	#     (event_chain / planning / revisions / workspace / preview / terminal).
+     8	#
+     9	# The runner ACTS AS THE USER: it approves the plan for interactive scenarios and
+    10	# sends each follow-up at its trigger point; an autonomous scenario sets
+    11	# autonomous: true and never approves.
+    12	#
+    13	# Optional `clarification_answer` (string, Bug 17): if a build asks a clarifying
+    14	# question mid-build (status AWAITING_USER_QUESTION), the runner ANSWERS it as the user
+    15	# so the build proceeds instead of false-stalling into NO_PLAN. A scenario MAY supply
+    16	# this exact answer; when omitted the runner sends a generic safe default that instructs
+    17	# the model to use sensible defaults and not ask further questions. Bounded by
+    18	# _MAX_CLARIFY so an endlessly-asking model is eventually let go to a real terminal.
+    19	#
+    20	# NOTE on §11.7 (WRITE_TOOL_ALLOWED_IN_PLANNING — a disallowed tool that stays
+    21	# *callable* even when hidden): proving it needs the per-turn offered/allowed tool
+    22	# scope, which the durable event log does NOT carry. Capturing it is a future
+    23	# loop-instrumentation slice, so these scenarios do NOT assert `tool_scope`
+    24	# (which would fail-closed to INVALID_RUN without that evidence). The
+    25	# event-adjudicable plan-discipline invariant — WRITE_TOOL_ATTEMPTED_IN_PLANNING
+    26	# (a mutating action before approval) — is still enforced from the event log.
+    27	
+    28	scenarios:
+    29	  # ---- §15.1 Smoke ---------------------------------------------------------
+    30	  - id: static_html_minimal
+    31	    mode: api
+    32	    prompt: "Create an index.html with the heading 'Build Smoke OK', serve it, and finish."
+    33	    assertions:
+    34	      event_chain:
+    35	        require_user_event: true
+    36	        require_plan_before_execution: true
+    37	        require_action_observation_pairs: true
+    38	      workspace:
+    39	        files:
+    40	          - path: "index.html"
+    41	            must_contain: ["Build Smoke OK"]
+    42	      preview:
+    43	        required: true
+    44	        must_contain: ["Build Smoke OK"]
+    45	      terminal_status_in: ["FINISHED", "VERIFIED"]
+    46	
+    47	  # ---- §15.2 Plan discipline ----------------------------------------------
+    48	  - id: must_plan_before_tool
+    49	    mode: api
+    50	    prompt: "Create a simple landing page for a local bakery."
+    51	    assertions:
+    52	      event_chain:
+    53	        require_user_event: true
+    54	        require_plan_before_execution: true
+    55	        require_action_observation_pairs: true
+    56	      # Documentary (no oracle gates on it): the first meaningful agent tool must be
+    57	      # a planning-safe one and no write may precede plan approval. The latter is
+    58	      # enforced from events by ToolScopeOracle (WRITE_TOOL_ATTEMPTED_IN_PLANNING).
+    59	      planning:
+    60	        first_agent_tool_in:
+    61	          ["submit_plan", "ask_user", "clarify", "think", "file_read", "file_list", "search", "extract"]
+    62	        forbid_write_before_plan_approval: true
+    63	      workspace:
+    64	        files:
+    65	          - path: "index.html"
+    66	            must_contain: ["bakery"]
+    67	      terminal_status_in: ["FINISHED", "VERIFIED"]
+    68	
+    69	  # ---- §15.3 Revision (2 follow-ups, each requires a new plan revision) -----
+    70	  - id: revise_after_finish
+    71	    mode: api
+    72	    prompt: "Create an index.html with a blue hero and the heading 'Launch Day'."
+    73	    followups:
+    74	      - text: "Revise the hero heading to 'Grand Opening' and add a pricing section."
+    75	        requires_plan_revision: true
+    76	        trigger: after_terminal
+    77	      - text: "Now change the pricing section to three tiers and update the CTA to 'Book a Visit'."
+    78	        requires_plan_revision: true
+    79	        trigger: after_terminal
+    80	    assertions:
+    81	      event_chain:
+    82	        require_user_event: true
+    83	        require_plan_before_execution: true
+    84	        require_action_observation_pairs: true
+    85	      revisions:
+    86	        initial_plan_revision: 1
+    87	        expected_final_plan_revision: 3
+    88	        forbid_write_before_revision_approval: true
+    89	      workspace:
+    90	        files:
+    91	          - path: "index.html"
+    92	            must_contain: ["Grand Opening", "Book a Visit"]
+    93	      terminal_status_in: ["FINISHED", "VERIFIED"]
+    94	
+    95	  # ---- §15.4 Mid-run steering (follow-up injected after the first file write) -
+    96	  - id: steer_while_running_requires_plan_update_or_clear_execution_note
+    97	    mode: api
+    98	    prompt: "Create a two-page static site with Home and About pages."
+    99	    followups:
+   100	      - text: "Also add a Contact page and update nav links."
+   101	        requires_plan_revision: true
+   102	        trigger: after_first_file_write
+   103	    assertions:
+   104	      event_chain:
+   105	        require_user_event: true
+   106	        require_plan_before_execution: true
+   107	        require_action_observation_pairs: true
+   108	      revisions:
+   109	        initial_plan_revision: 1
+   110	        expected_final_plan_revision: 2
+   111	        require_acknowledged_followup: true
+   112	        forbid_write_before_revision_approval: true
+   113	      workspace:
+   114	        files:
+   115	          - path: "index.html"
+   116	            must_contain: ["Contact"]
+   117	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   118	
+   119	  # ---- §3/§28 diversity: multi-file static delivery ------------------------
+   120	  # Exercises multi-file delivery: three files that must ALL be present with their own
+   121	  # unique marker plus a SHARED css class linking them — a richer output-truth check than
+   122	  # the single-file smoke. Every marker is dictated verbatim by the prompt so a competent
+   123	  # model satisfies it and the deterministic OutputTruthOracle can verify it.
+   124	  - id: multifile_static_site
+   125	    mode: api
+   126	    prompt: >-
+   127	      Create a small multi-page static website with three files: index.html (the Home
+   128	      page), about.html (the About page), and a shared style.css. Give index.html an
+   129	      <h1> heading exactly 'Welcome Home' and about.html an <h1> heading exactly
+   130	      'About Us'. Both pages must include a navigation bar using the CSS class
+   131	      'site-nav' (defined in style.css) with links between the pages — the Home page
+   132	      links to about.html and the About page links back to index.html. Serve the site
+   133	      and finish.
+   134	    assertions:
+   135	      event_chain:
+   136	        require_user_event: true
+   137	        require_plan_before_execution: true
+   138	        require_action_observation_pairs: true
+   139	      workspace:
+   140	        files:
+   141	          - path: "index.html"
+   142	            must_contain: ["Welcome Home", "site-nav", "about.html"]
+   143	          - path: "about.html"
+   144	            must_contain: ["About Us", "site-nav", "index.html"]
+   145	          - path: "style.css"
+   146	            must_contain: [".site-nav"]
+   147	      preview:
+   148	        required: true
+   149	        must_contain: ["Welcome Home"]
+   150	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   151	
+   152	  # ---- §3 complex revisions (2 sequential change follow-ups) ----------------
+   153	  # A stepping stone toward §3's "complex revisions >= 3 follow-ups": this is TWO
+   154	  # sequential change follow-ups, each requiring a FRESH revised plan (rev increments
+   155	  # 1 -> 2 -> 3) before any write (the §11.4 chain, enforced by RevisionOracle). The
+   156	  # final workspace must carry the CUMULATIVE result of both revisions. A 3-followup
+   157	  # variant can extend this later.
+   158	  - id: revise_twice_complex
+   159	    mode: api
+   160	    prompt: "Create an index.html landing page for a SaaS product with a hero section and the heading 'Acme Cloud'."
+   161	    followups:
+   162	      - text: "Add a pricing section with three tiers labeled 'Starter', 'Pro', and 'Enterprise'."
+   163	        requires_plan_revision: true
+   164	        trigger: after_terminal
+   165	      - text: "Now change every call-to-action button to say 'Get Started'."
+   166	        requires_plan_revision: true
+   167	        trigger: after_terminal
+   168	    assertions:
+   169	      event_chain:
+   170	        require_user_event: true
+   171	        require_plan_before_execution: true
+   172	        require_action_observation_pairs: true
+   173	      revisions:
+   174	        initial_plan_revision: 1
+   175	        expected_final_plan_revision: 3
+   176	        forbid_write_before_revision_approval: true
+   177	      workspace:
+   178	        files:
+   179	          - path: "index.html"
+   180	            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started"]
+   181	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   182	
+   183	  # ---- §28 richer build->verify->finish (achievable, single-pass) -----------
+   184	  # Exercises the build -> serve -> verify -> finish loop on a RICHER deliverable (a form
+   185	  # with multiple required elements) than the smoke. Kept ACHIEVABLE on purpose: a clean
+   186	  # single pass with deterministic markers, NOT a forced failure. Markers are quote-style
+   187	  # agnostic (substrings the model will emit regardless of single/double quotes) so it is
+   188	  # not flaky.
+   189	  #
+   190	  # NOTE: a TRUE broken-then-fixed fault-injection scenario (force a verify failure, then
+   191	  # assert the loop repairs + re-verifies before finishing) needs RUNNER SUPPORT to inject
+   192	  # a verify failure into the live build — there is no such hook yet. That variant is
+   193	  # DEFERRED; this scenario proves the honest verify->finish path on a non-trivial page.
+   194	  - id: verify_catches_broken_then_fixed
+   195	    mode: api
+   196	    prompt: >-
+   197	      Create an index.html contact page with an <h1> heading exactly 'Contact Us' and an
+   198	      HTML <form> containing a text input for the visitor's name, an email input, and a
+   199	      submit button labeled 'Send'. Serve the page and verify it loads in a browser before
+   200	      finishing.
+   201	    assertions:
+   202	      event_chain:
+   203	        require_user_event: true
+   204	        require_plan_before_execution: true
+   205	        require_action_observation_pairs: true
+   206	      workspace:
+   207	        files:
+   208	          - path: "index.html"
+   209	            must_contain: ["Contact Us", "<form", "name", "email", "Send"]
+   210	      preview:
+   211	        required: true
+   212	        must_contain: ["Contact Us"]
+   213	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   214	
+   215	  # ---- DIAGNOSTIC: predict-before-acting tool-clarity probe -----------------
+   216	  # Antipattern-mining scenario. The agent narrates a PREDICT line before every tool
+   217	  # call and an OBSERVED match/mismatch line after — surfacing exactly where OUR tool
+   218	  # surface violates a competent agent's expectations (the "what are we doing wrong /
+   219	  # what's hard for agents" signal). The build task itself is the trivial smoke so the
+   220	  # tool surface (file_write / preview_start / verify / shell) is exercised cleanly; the
+   221	  # VALUE is the captured PREDICT/OBSERVED trace, judged offline by a frontier model.
+   222	  - id: diag_predict_reflect_smoke
+   223	    mode: api
+   224	    prompt: >-
+   225	      DIAGNOSTIC PROTOCOL — you MUST follow this for EVERY tool call, in addition to doing
+   226	      the task. For each tool call:
+   227	      (1) BEFORE calling the tool, output ONE short line starting with "PREDICT:" stating
+   228	      the concrete result you expect that specific tool call to return or do.
+   229	      (2) AFTER you see the tool's result, output ONE short line starting with "OBSERVED:"
+   230	      — write "OBSERVED: match" if the result matched your prediction, or
+   231	      "OBSERVED: mismatch — <one phrase on what about THE TOOL'S behavior was different from
+   232	      what you expected>". Focus on the tool's behavior (ports, URLs, output shape, errors,
+   233	      state), NOT on your own mistakes. Keep each line to one sentence. Do this start to finish.
+   234	
+   235	      TASK: Create an index.html whose <h1> heading is exactly 'Build Smoke OK', serve it so
+   236	      it is viewable in a live preview, then finish.
+   237	    assertions:
+   238	      event_chain:
+   239	        require_user_event: true
+   240	        require_plan_before_execution: true
+   241	        require_action_observation_pairs: true
+   242	      workspace:
+   243	        files:
+   244	          - path: "index.html"
+   245	            must_contain: ["Build Smoke OK"]
+   246	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   247	
+   248	  # ---- DIAGNOSTIC BATCH (exhaustive antipattern mining) ---------------------
+   249	  # Diverse tasks, each stressing a DIFFERENT part of the tool surface, all carrying the
+   250	  # predict-before-acting protocol. Distinct task text => distinct transcript files even
+   251	  # when run concurrently. The frontier judge mines all transcripts for tool antipatterns.
+   252	  #
+   253	  # diag B: multi-file site — file_write x3 + shared asset + preview.
+   254	  - id: diag_multifile
+   255	    mode: api
+   256	    prompt: >-
+   257	      DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "PREDICT: <what you
+   258	      expect this tool call to return/do>", and AFTER the result one line "OBSERVED: match"
+   259	      or "OBSERVED: mismatch — <what about THE TOOL'S behavior surprised you>" (focus on the
+   260	      tool: ports, URLs, output shape, errors, state — not your own mistakes). One sentence each.
+
+exec
+/bin/bash -lc "nl -ba harness/build_soak/oracles/output_truth.py | sed -n '1,260p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+     1	"""OutputTruthOracle (guidelines §11.5, §16).
+     2	
+     3	If the run says it FINISHED, the claimed output must actually exist (§7 truth
+     4	hierarchy: a model/agent saying "the build worked" never overrides workspace /
+     5	preview truth).
+     6	
+     7	Checks (only when the run reached a finished/verified terminal state AND the
+     8	scenario asserts output):
+     9	  * required workspace files exist             -> FALSE_FINISH_NO_OUTPUT
+    10	  * required file contents present (must_contain) -> ARTIFACT_TRUTH_MISMATCH
+    11	  * preview health passes (when required)      -> FALSE_FINISH_PREVIEW_BROKEN
+    12	  * preview content present (must_contain)     -> PREVIEW_TRUTH_MISMATCH
+    13	
+    14	Evidence shapes (captured by the runner; supplied as plain dicts):
+    15	  workspace_manifest: {"<relpath>": "<file content>", ...}
+    16	                  or  {"<relpath>": {"content": "..."}, ...}
+    17	                  or  {"files": {"<relpath>": "...", ...}}
+    18	  preview: {"health": {"status": 200|404|...}, "content": "<served html>"}
+    19	"""
+    20	
+    21	from __future__ import annotations
+    22	
+    23	from typing import Any
+    24	
+    25	from disco.core.observations import scan_for_destructive_elision
+    26	
+    27	from .. import failure_codes as fc
+    28	from ..events import terminal_status
+    29	from .schema import OracleResult, failing, passing, skipping
+    30	
+    31	_ORACLE = "OutputTruthOracle"
+    32	
+    33	_FINISHED_STATES = frozenset({"FINISHED", "VERIFIED"})
+    34	
+    35	# A content mismatch on a file captured on one of these NON-AUTHORITATIVE bases (the snapshot
+    36	# readiness gate accepted it via extended content-stability, with NO file_write raw-sha and no
+    37	# qualifying full readback) is UNRELIABLE — the capture may be a stale pre-flush copy. Any
+    38	# OTHER proof level (raw_sha / rendered_readback / absent) OR an UNANNOTATED entry (a legacy /
+    39	# proxy capture with no `proof` key — treated as authoritative so we never silently downgrade)
+    40	# is PROVEN and a mismatch on it stays a hard ARTIFACT_TRUTH_MISMATCH.
+    41	_NON_AUTHORITATIVE_PROOF = frozenset({"unproven_extended_stability", "unknown"})
+    42	
+    43	
+    44	def _nested_files(manifest: dict[str, Any] | None) -> dict[str, Any]:
+    45	    if not manifest:
+    46	        return {}
+    47	    nested = manifest.get("files")
+    48	    return nested if isinstance(nested, dict) else manifest
+    49	
+    50	
+    51	def _normalize_workspace(manifest: dict[str, Any] | None) -> dict[str, str]:
+    52	    out: dict[str, str] = {}
+    53	    for path, val in _nested_files(manifest).items():
+    54	        if isinstance(val, dict):
+    55	            out[str(path)] = str(val.get("content", ""))
+    56	        else:
+    57	            out[str(path)] = str(val)
+    58	    return out
+    59	
+    60	
+    61	def _proof_for(manifest: dict[str, Any] | None, path: str) -> str | None:
+    62	    """The recorded acceptance proof level for a declared path, or None when the entry is a
+    63	    plain string / carries no `proof` (legacy / proxy capture → treated as authoritative)."""
+    64	    files = _nested_files(manifest)
+    65	    entry = files.get(path)
+    66	    if entry is None:
+    67	        entry = files.get(path.lstrip("/"))
+    68	    if isinstance(entry, dict):
+    69	        proof = entry.get("proof")
+    70	        return str(proof) if proof is not None else None
+    71	    return None
+    72	
+    73	
+    74	def _fold_content_mismatches(mismatches: list[dict[str, Any]]):
+    75	    """DETERMINISTIC PRECEDENCE fold over ALL workspace-content mismatches in the run
+    76	    (Part A). A mismatch is AUTHORITATIVE unless its file's proof is non-authoritative
+    77	    (`unproven_extended_stability` / `unknown`). If ANY mismatch is authoritative → a hard
+    78	    ``ARTIFACT_TRUTH_MISMATCH`` (the proven regression WINS; never masked). ONLY if EVERY
+    79	    mismatch is non-authoritative → INVALID_RUN ``WORKSPACE_SNAPSHOT_UNVERIFIED`` (the capture
+    80	    is too uncertain to call a product failure). The full per-file evidence (proof + path +
+    81	    check class) rides in `facts["mismatches"]` either way."""
+    82	    proven = [m for m in mismatches if m.get("proof") not in _NON_AUTHORITATIVE_PROOF]
+    83	    first = mismatches[0]
+    84	    facts: dict[str, Any] = {
+    85	        "mismatches": mismatches,
+    86	        "proven_mismatch_count": len(proven),
+    87	        "unverified_mismatch_count": len(mismatches) - len(proven),
+    88	        # Back-compat top-level keys (the first mismatch) for existing triage/tests.
+    89	        "path": first.get("path"),
+    90	    }
+    91	    if "missing_substring" in first:
+    92	        facts["missing_substring"] = first["missing_substring"]
+    93	    if proven:
+    94	        return failing(
+    95	            _ORACLE,
+    96	            fc.ARTIFACT_TRUTH_MISMATCH,
+    97	            first_broken_link="finish -> required_content_present",
+    98	            facts=facts,
+    99	        )
+   100	    return failing(
+   101	        _ORACLE,
+   102	        fc.WORKSPACE_SNAPSHOT_UNVERIFIED,
+   103	        first_broken_link="finish -> snapshot_content_verifiable",
+   104	        facts=facts,
+   105	    )
+   106	
+   107	
+   108	class OutputTruthOracle:
+   109	    def check(
+   110	        self,
+   111	        events: list[dict[str, Any]],
+   112	        *,
+   113	        scenario: dict[str, Any] | None = None,
+   114	        workspace_manifest: dict[str, Any] | None = None,
+   115	        preview: dict[str, Any] | None = None,
+   116	    ) -> list[OracleResult]:
+   117	        assertions = (scenario or {}).get("assertions") or {}
+   118	        workspace_assert = assertions.get("workspace") or {}
+   119	        preview_assert = assertions.get("preview") or {}
+   120	        wants_output = bool(workspace_assert.get("files")) or bool(preview_assert.get("required"))
+   121	
+   122	        if not wants_output:
+   123	            return [skipping(_ORACLE, reason="scenario asserts no output truth")]
+   124	
+   125	        term = terminal_status(events)
+   126	        terminal_expected = (scenario or {}).get("assertions", {}).get("terminal_status_in")
+   127	        finished = term in _FINISHED_STATES or (
+   128	            bool(terminal_expected) and term in set(terminal_expected)
+   129	        )
+   130	        if not finished:
+   131	            # FAIL-CLOSED (migration 2026_06_24_paused_incomplete_not_pass): we only reach
+   132	            # here when the scenario REQUIRES output (wants_output) and/or a finished
+   133	            # terminal, but the run never reached one — e.g. the no-progress / actionless
+   134	            # valve PAUSED it, it timed out, or it ended at an unhandled gate. This is NOT a
+   135	            # "false finish" (nothing claimed finished) and it is NOT a PASS: a build that
+   136	            # does not complete is a failure even if some files happen to exist on disk.
+   137	            # Previously this SKIPPED, which let a paused-incomplete run score PASS — the
+   138	            # live-surfaced adjudicator gap (surfaced-bugs Bug 8 / conv_c0ff8684...).
+   139	            return [
+   140	                failing(
+   141	                    _ORACLE,
+   142	                    fc.BUILD_DID_NOT_FINISH,
+   143	                    first_broken_link="required_finish -> terminal_status",
+   144	                    facts={
+   145	                        "terminal_status": term,
+   146	                        "terminal_status_in": terminal_expected,
+   147	                        "reason": "run required to finish + deliver output but never reached "
+   148	                        "a finished/required terminal",
+   149	                    },
+   150	                )
+   151	            ]
+   152	
+   153	        files = _normalize_workspace(workspace_manifest)
+   154	
+   155	        # --- workspace file existence + content truth ---
+   156	        # Existence is judged FIRST and hard (a missing required deliverable is FALSE_FINISH,
+   157	        # never softened). Content checks (must_contain / must_not_contain / exact) across ALL
+   158	        # asserted files are COLLECTED with each file's capture proof level, then folded by
+   159	        # deterministic precedence (Part A): one PROVEN mismatch makes the whole run a hard
+   160	        # ARTIFACT_TRUTH_MISMATCH; all-non-authoritative → INVALID_RUN snapshot-unverified.
+   161	        content_mismatches: list[dict[str, Any]] = []
+   162	        for spec in workspace_assert.get("files") or []:
+   163	            path = spec.get("path")
+   164	            if path is None:
+   165	                continue
+   166	            if path not in files:
+   167	                return [
+   168	                    failing(
+   169	                        _ORACLE,
+   170	                        fc.FALSE_FINISH_NO_OUTPUT,
+   171	                        first_broken_link="finish -> required_file_exists",
+   172	                        facts={"required_path": path, "present_paths": sorted(files)},
+   173	                    )
+   174	                ]
+   175	            content = files[path]
+   176	            proof = _proof_for(workspace_manifest, path)
+   177	            for needle in spec.get("must_contain") or []:
+   178	                if needle not in content:
+   179	                    content_mismatches.append({
+   180	                        "path": path, "check": "must_contain",
+   181	                        "missing_substring": needle, "proof": proof,
+   182	                    })
+   183	            for needle in spec.get("must_not_contain") or []:
+   184	                if needle in content:
+   185	                    content_mismatches.append({
+   186	                        "path": path, "check": "must_not_contain",
+   187	                        "forbidden_substring": needle, "proof": proof,
+   188	                    })
+   189	            exact = spec.get("equals")
+   190	            if exact is not None and content != str(exact):
+   191	                content_mismatches.append({
+   192	                    "path": path, "check": "equals", "proof": proof,
+   193	                })
+   194	        if content_mismatches:
+   195	            return [_fold_content_mismatches(content_mismatches)]
+   196	
+   197	        # --- CXT-5: destructive-elision scan over final deliverables (rule set v1) ---
+   198	        # A finished deliverable must not contain unrecoverable elision placeholder text
+   199	        # ("(elided)" / "[trimmed]" / "content omitted" / "truncated for brevity" with no
+   200	        # recover cue). Scoped to the asserted deliverables; waivable per scenario.
+   201	        if not workspace_assert.get("allow_elision"):
+   202	            for spec in workspace_assert.get("files") or []:
+   203	                path = spec.get("path")
+   204	                if path is None or path not in files:
+   205	                    continue
+   206	                hits = scan_for_destructive_elision(files[path])
+   207	                if hits:
+   208	                    return [
+   209	                        failing(
+   210	                            _ORACLE,
+   211	                            fc.DESTRUCTIVE_ELISION,
+   212	                            first_broken_link="finish -> deliverable_recoverable",
+   213	                            facts={"path": path, "offending_lines": hits[:5]},
+   214	                        )
+   215	                    ]
+   216	
+   217	        # --- preview truth ---
+   218	        if preview_assert.get("required"):
+   219	            if not preview:
+   220	                return [
+   221	                    failing(
+   222	                        _ORACLE,
+   223	                        fc.FALSE_FINISH_PREVIEW_BROKEN,
+   224	                        first_broken_link="finish -> preview_health",
+   225	                        facts={"reason": "preview required but no preview evidence captured"},
+   226	                    )
+   227	                ]
+   228	            health = preview.get("health") or {}
+   229	            status = health.get("status")
+   230	            if status is not None and int(status) >= 400:
+   231	                return [
+   232	                    failing(
+   233	                        _ORACLE,
+   234	                        fc.FALSE_FINISH_PREVIEW_BROKEN,
+   235	                        first_broken_link="finish -> preview_health",
+   236	                        facts={"preview_health_status": status},
+   237	                    )
+   238	                ]
+   239	            preview_content = str(preview.get("content", ""))
+   240	            for needle in preview_assert.get("must_contain") or []:
+   241	                if needle not in preview_content:
+   242	                    return [
+   243	                        failing(
+   244	                            _ORACLE,
+   245	                            fc.PREVIEW_TRUTH_MISMATCH,
+   246	                            first_broken_link="finish -> preview_content",
+   247	                            facts={"missing_substring": needle},
+   248	                        )
+   249	                    ]
+   250	
+   251	        return [passing(_ORACLE, facts={"terminal_status": term, "file_count": len(files)})]
+
+exec
+/bin/bash -lc "rg -n \"PLAN — HARNESS-FIX-4 \\+ SCENARIO-SOFTEN|HARNESS-FIX-4|SCENARIO-SOFTEN|WORKSPACE_SNAPSHOT_UNVERIFIED|sha|content\" disclaude.md harness/build_soak/oracles/output_truth.py harness/build_soak/scenarios.yaml" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/scenarios.yaml:128:      page), about.html (the About page), and a shared style.css. Give index.html an
+harness/build_soak/scenarios.yaml:232:      what you expected>". Focus on the tool's behavior (ports, URLs, output shape, errors,
+harness/build_soak/scenarios.yaml:253:  # diag B: multi-file site — file_write x3 + shared asset + preview.
+harness/build_soak/scenarios.yaml:260:      tool: ports, URLs, output shape, errors, state — not your own mistakes). One sentence each.
+harness/build_soak/scenarios.yaml:263:      (h1 'Our Services'), contact.html (h1 'Reach Us') — sharing a style.css with a
+harness/build_soak/oracles/output_truth.py:10:  * required file contents present (must_contain) -> ARTIFACT_TRUTH_MISMATCH
+harness/build_soak/oracles/output_truth.py:12:  * preview content present (must_contain)     -> PREVIEW_TRUTH_MISMATCH
+harness/build_soak/oracles/output_truth.py:14:Evidence shapes (captured by the runner; supplied as plain dicts):
+harness/build_soak/oracles/output_truth.py:15:  workspace_manifest: {"<relpath>": "<file content>", ...}
+harness/build_soak/oracles/output_truth.py:16:                  or  {"<relpath>": {"content": "..."}, ...}
+harness/build_soak/oracles/output_truth.py:18:  preview: {"health": {"status": 200|404|...}, "content": "<served html>"}
+harness/build_soak/oracles/output_truth.py:35:# A content mismatch on a file captured on one of these NON-AUTHORITATIVE bases (the snapshot
+harness/build_soak/oracles/output_truth.py:36:# readiness gate accepted it via extended content-stability, with NO file_write raw-sha and no
+harness/build_soak/oracles/output_truth.py:38:# OTHER proof level (raw_sha / rendered_readback / absent) OR an UNANNOTATED entry (a legacy /
+harness/build_soak/oracles/output_truth.py:55:            out[str(path)] = str(val.get("content", ""))
+harness/build_soak/oracles/output_truth.py:74:def _fold_content_mismatches(mismatches: list[dict[str, Any]]):
+harness/build_soak/oracles/output_truth.py:75:    """DETERMINISTIC PRECEDENCE fold over ALL workspace-content mismatches in the run
+harness/build_soak/oracles/output_truth.py:79:    mismatch is non-authoritative → INVALID_RUN ``WORKSPACE_SNAPSHOT_UNVERIFIED`` (the capture
+harness/build_soak/oracles/output_truth.py:97:            first_broken_link="finish -> required_content_present",
+harness/build_soak/oracles/output_truth.py:102:        fc.WORKSPACE_SNAPSHOT_UNVERIFIED,
+harness/build_soak/oracles/output_truth.py:103:        first_broken_link="finish -> snapshot_content_verifiable",
+harness/build_soak/oracles/output_truth.py:155:        # --- workspace file existence + content truth ---
+harness/build_soak/oracles/output_truth.py:161:        content_mismatches: list[dict[str, Any]] = []
+harness/build_soak/oracles/output_truth.py:175:            content = files[path]
+harness/build_soak/oracles/output_truth.py:178:                if needle not in content:
+harness/build_soak/oracles/output_truth.py:179:                    content_mismatches.append({
+harness/build_soak/oracles/output_truth.py:184:                if needle in content:
+harness/build_soak/oracles/output_truth.py:185:                    content_mismatches.append({
+harness/build_soak/oracles/output_truth.py:190:            if exact is not None and content != str(exact):
+harness/build_soak/oracles/output_truth.py:191:                content_mismatches.append({
+harness/build_soak/oracles/output_truth.py:194:        if content_mismatches:
+harness/build_soak/oracles/output_truth.py:195:            return [_fold_content_mismatches(content_mismatches)]
+harness/build_soak/oracles/output_truth.py:199:        # ("(elided)" / "[trimmed]" / "content omitted" / "truncated for brevity" with no
+harness/build_soak/oracles/output_truth.py:239:            preview_content = str(preview.get("content", ""))
+harness/build_soak/oracles/output_truth.py:241:                if needle not in preview_content:
+harness/build_soak/oracles/output_truth.py:246:                            first_broken_link="finish -> preview_content",
+disclaude.md:95:- `context/artifact_memory.py` — `ArtifactMemoryRef` (kind, rel_path, sha256: str|None, updated_at).
+disclaude.md:101:  - `ResourceRef` (rel_path, source, sha256: str|None, license: str|None, copied_at: datetime|None)
+disclaude.md:254:- `ContextMemoryArgs(action: Literal["read","write","list"], kind: str, content: str|None=None)`.
+disclaude.md:257:  success=False, error="invalid_kind"); read missing → success=True empty content; write narrative kinds
+disclaude.md:464:      durability proof: the non-empty summary is the very content inlined into the tombstone, so the
+disclaude.md:465:      forgotten span is provably replaced by real content (strongest pure precondition, no FS needed);
+disclaude.md:597:  excerpts with path/range/sha256 + a harness scan for forbidden elision strings).
+disclaude.md:609:- events.py snip_content (obs truncation): "… [snipped N chars — re-run the tool or use file_read …] …"
+disclaude.md:615:  event log (history placeholder, not final-file content). Leave as-is (already mitigated).
+disclaude.md:619:  "... (stack truncated to 6 lines)", "... (N more network failures)" — content lost; re-run is expensive.
+disclaude.md:623:   `recoverable_excerpt(content, *, path, shown_start, shown_end, recover_tool, recover_args) -> dict`
+disclaude.md:625:   omitted_ranges, sha256, recover:{tool,args}} + `DESTRUCTIVE_ELISION_MARKERS` (the forbidden strings)
+disclaude.md:640:- Do NOT rewrite the already-recoverable sites (snip_content/snapshot/file_read/shell-spill) — they
+disclaude.md:649:- recoverable_excerpt: roundtrips, sha256 stable, complete=False when omitted, recover ref present;
+disclaude.md:651:- scan_for_destructive_elision: flags "...(elided)...", "[trimmed]", "content omitted",
+disclaude.md:666:     "content omitted", "truncated for brevity", "[content omitted]".
+disclaude.md:676:4. scan tests: explicit POS (flags the 4 forbidden phrases w/o cue) + NEG (does NOT flag snip_content's
+disclaude.md:767:   - fresh build (live approval) → current_goal.md + todo.md written with plan content.
+disclaude.md:878:On scoping P1's first PR, two issues surfaced that reshape it:
+disclaude.md:1086:  (with_content/section add·remove·reorder/design/tweak) + render_html (deterministic, inline CSS,
+disclaude.md:1088:- NEW tools/builtin/appkit.py: AppSpecStore + 8 tools (app_create / app_update_content / app_add_section /
+disclaude.md:1090:  Structured errors: no_app / invalid_app_edit / corrupt_appspec; snapshot is content-addressed (sha256).
+disclaude.md:1149:## PR P5-DELIVERY — Preview/Show/Delivery (audit + contract delivery shape) — PLAN
+disclaude.md:1159:2. deliverable_kind_matches_contract(contract, artifact_kind) — pure "no wrong-shape handoff" validator (a
+disclaude.md:1164:TRACKED FOLLOW-UP: wire deliverable_kind_matches_contract into handle_serve (loop) to REJECT a wrong-shape
+disclaude.md:1166:Global gates honored: no manual preview ownership (already), no false affordance (validator enforces shape).
+disclaude.md:1193:   for app-shaped contracts; a DoD/required-files + render check for files-shaped contracts).
+disclaude.md:1213:   the validator MAKES shape enforceable; runtime enforcement (reject a wrong-shape handoff) follows in the
+disclaude.md:1222:   bolted onto this delivery-shape PR.
+disclaude.md:1232:## PR P5-DELIVERY — Preview/Show/Delivery: contract delivery shape — COMPLETE
+disclaude.md:1239:  (no wrong-shape handoff — a deck can't deliver as a runnable app).
+disclaude.md:1334:   - deck_stage → {"deck.json": a starter deck (title + 2 content slides)}
+disclaude.md:1409:  + fixing the GPU/VRAM crisis (root cause: a 27B LLM sharing the display card overcommitted VRAM under
+disclaude.md:1464:   compute hang on the shared display+compute card → 15.4 GB pinned host RAM → OOM/freeze → desktop down for
+disclaude.md:1575:   target shapes possible.
+disclaude.md:1596:  sharing an id); (4) raw-negative vs normalized-zero parsing + IndexedLocator index ge=0; (5) tests for all.
+disclaude.md:1637:   emitted DOM attrs and/or a generated shared-constants artifact. P8B documents the 8+3 attr VALUES as the
+disclaude.md:1670:app_update_content-style steer.
+disclaude.md:1734:   - ManualEditPreservationOracle ev["manual_edit"]={"overrides":{path:snippet},"final_files":{path:content}}.
+disclaude.md:1738:   / wrong type → FAIL with shared code EDIT_ORACLE_EVIDENCE_MALFORMED (P1, a harness-validity-class failure) —
+disclaude.md:1799:   app_update_content/app_set_design, not a tweak). affects = LEXICAL dotted paths only; NOT validated against a
+disclaude.md:1874:False, error="no_tweakspec", content="this app defines no tweaks (.disco/tweaks.json missing)"). corrupt tweaks
+disclaude.md:1876:(content lists available keys). (3) coerced=spec.validate_value(key, args.value); on ValueError → error=
+disclaude.md:1877:"invalid_tweak_value" (content = the validator message + the editor/constraints). (4) _apply(ctx, lambda s:
+disclaude.md:1952:   test asserts NO textarea/contenteditable/freeform fallback anywhere.
+disclaude.md:1961:   boolean/enum/palette/color/unknown row there is NO extra input[type=text]/textarea/[contenteditable].
+disclaude.md:1990:GOAL: a TYPED ProductEvidence schema that serializes to EXACTLY the dict shape the P1A oracles read, so the harness
+disclaude.md:2012:that turns captured browser observations into the EXACT product_evidence dict shape the existing Python schema/
+disclaude.md:2061:shape), writes product-evidence.json via the EXISTING write_product_evidence(strict=True) (raises on malformed →
+disclaude.md:2116:minimax-coding-plan token at ~/.local/share/opencode/auth.json, type api, sk-cp-…). NOT OpenRouter, NOT Pi.
+disclaude.md:2340:  summary; steps.0.done_condition wrong shape) + update_plan_progress ×6 → gate_bookkeeping_streak halted it
+disclaude.md:2359:  prompt fixes; (2) preview-shown capture timing/content — the live preview isn't reliably renderable at capture
+disclaude.md:2360:  time for THIS finished build (cb9be8's was, via idle TTL; this one's wasn't), and/or the content regex
+disclaude.md:2364:  "iframe rendered NON-TRIVIAL content" (body innerText length threshold, not keyword match — more honest:
+disclaude.md:2427:- G4 per-run provider isolation: the relay log is shared; each run must attribute its ledger via
+disclaude.md:2484:  shown / orphan / not-released / verification-false → FAIL with the right code. Codex APPROVE after 3 sharp
+disclaude.md:2518:  content) in the model's context; MiniMax then file_edits that file and either ECHOES the elision marker
+disclaude.md:2558:  {sha256 of shown bytes, complete:bool (the shown view was NOT elided/truncated), shown_ranges,
+disclaude.md:2562:  region — current-disk sha == last-shown sha AND complete==true AND (for file_edit) the `old`
+disclaude.md:2569:  (wire the existing executor.py:425 guard to this structured shape + code).
+disclaude.md:2583:- FIX the read-state shape: record at SHOW time per (conv,path): {full_file_disk_sha256 (the WHOLE file's sha at
+disclaude.md:2584:  read time — NOT sha of the shown slice), shown_ranges:list[(start,end)] actually shown to the model (line- or
+disclaude.md:2587:  (1) STALE: current disk full-file sha == recorded full_file_disk_sha256 → else STALE_FILE_CONTEXT (re-read; the
+disclaude.md:2594:- This removes the sha(shown)≠sha(disk) inconsistency: disk-sha is full-file (stale check); coverage is by raw
+disclaude.md:2603:- CD-TOOLS-1 (fresh edit guard) PLAN = Codex APPROVE (after 1 REVISE: freshness proof = full-file disk sha +
+disclaude.md:2604:  raw shown ranges + per-range completeness, NOT sha-of-shown-slice — so ranged reads don't false-block).
+disclaude.md:2606:  Enrich to also hold {conv: {reads: {canonical_path: {disk_sha, ranges:[(start,end,complete)], event_seq,
+disclaude.md:2607:  reader_tool}}}}. FileReadTool.run populates it (full-file sha + shown line-range + complete flag). Pre-edit guard
+disclaude.md:2608:  in FileEditTool.run (+ file_replace_lines/file_insert_lines/file_str_replace): STALE (disk sha != recorded) →
+disclaude.md:2616:- guard_fresh_edit in builtin/files.py: sha-aware read records (FileReadTool populates) + the guard wired into all
+disclaude.md:2623:  expected_sha256 + multi + atomic batch, reusing guard_fresh_edit). Then 3..10.
+disclaude.md:2634:expected_sha256:str|None=None, multi:bool=False}.
+disclaude.md:2638:- stale: expected_sha256 given AND sha256(current disk bytes) != it → STALE_FILE_CONTEXT, no write.
+disclaude.md:2648:- returns structured {applied:[{old_string(trunc), occurrences, replaced}], path, bytes, sha256}.
+disclaude.md:2656:REPLACE_BATCH_FAILED; overlapping edits→no change; stale expected_sha256→no change+STALE_FILE_CONTEXT; elision
+disclaude.md:2660:CODEX FOCUS (§9): no edit bypasses fresh-read; partial writes impossible (all-or-nothing); stale sha handled;
+disclaude.md:2666:  write — (a) elision in old/new, (b) expected_sha256 stale, (c) fresh-read/coverage, (d) per-edit match counts
+disclaude.md:2685:- ExactReplaceTool in builtin/files.py: validate-all-in-memory (elision/stale-sha/match-counts/overlap/mandatory-
+disclaude.md:2687:  expected_sha256. Registered in __init__/AGENT_TOOLS/exec_policy.withheld_tools (anchored-edit tier). Codex APPROVE
+disclaude.md:2702:governed/large artifacts. args {path:str, content:str, allow_shrink:bool=False, expected_sha256:str|None=None}.
+disclaude.md:2704:- (1) elision marker in content (_has_elision_marker) → ELISION_MARKER_REJECTED.
+disclaude.md:2708:   - expected_sha256 given + sha256(old bytes) != it → STALE_FILE_CONTEXT.
+disclaude.md:2710:   - read-before-rewrite (F1): path not in read_since_write AND no matching expected_sha256 → FRESH_READ_REQUIRED
+disclaude.md:2711:     (parity with file_write; a matching expected_sha256 counts as grounding).
+disclaude.md:2712:   - SHRINK guard: len(content) < 0.5*len(old_text) AND not allow_shrink AND not matching-expected_sha256 →
+disclaude.md:2714:- (4) syntax pre-check: introduced = _syntax_errors(content) - _syntax_errors(old_text or "") → if any, refuse
+disclaude.md:2727:UNCHANGED; allow_shrink=True → applies; matching expected_sha256 bypasses shrink+F1; .disco/ path → SAFE_WRITE_
+disclaude.md:2731:CODEX FOCUS (§9): shrink guard not trivially bypassable (allow_shrink is explicit + intentional, expected_sha256 is
+disclaude.md:2752:- SafeWriteFileTool: validate-all-in-memory (elision/governed-.disco-real-path/stale-sha/binary/read-before-rewrite/
+disclaude.md:2785:  no generic editor — do not edit this file directly" when unmapped) in content + structured.
+disclaude.md:2788:- a truthful structured "artifact_write" field already implied by {path,sha256,bytes} stays as-is; CD-TOOLS-4b will
+disclaude.md:2894:  (distinguishable from edit-artifacts), (c) surfaces the artifact via artifacts=[path] (real UI effect). The harness
+disclaude.md:3024:  - {op:"read", path} → load current content into the result (inspection, no mutation)
+disclaude.md:3027:    CURRENT content (buffer-or-disk); old absent → SCRIPT_NO_MATCH (abort, no writes). '$','${}','\1' literal.
+disclaude.md:3028:  - {op:"save", path, content, allow_shrink:bool=false} → whole-file write to the BUFFER; shrink>50% guard +
+disclaude.md:3032:  2. per op IN ORDER: elision marker in old/new/content → ELISION_MARKER_REJECTED; governed .disco path (real
+disclaude.md:3040:  5. structured {ok, applied:[paths], operations_run, reads:{path->content(capped)}}.
+disclaude.md:3041:CAPS/CONSTRAINTS: max ops (e.g. 200) + max total content bytes (e.g. 2MB) → SCRIPT_TOO_LARGE; no network (declarative
+disclaude.md:3061:- The shrink guard only catches >50% truncation — a blind save of same-size/modestly-different WRONG content over a
+disclaude.md:3065:  loaded + literally matched the file's REAL current content → the model is transforming KNOWN content); (iii) the
+disclaude.md:3066:  path is in read_since_write (a file_read before the batch, CD-TOOLS-1); OR the save op carries expected_sha256 ==
+disclaude.md:3067:  sha256(current disk) (proves the model has the current version). A save to an EXISTING path NOT grounded by any of
+disclaude.md:3070:- save op gains optional expected_sha256:str (output-truth grounding, like safe_write_file). NOT size-gated (a batch
+disclaude.md:3078:  OK; save after replace_text same path → OK; save with matching expected_sha256 → OK; save of a NEW file → OK.
+disclaude.md:3083:  read_since_write/expected_sha256); new files exempt. Keyed by REAL resolve_relpath path so no symlink/.. alias can
+disclaude.md:3175:   the file_write content / large reads get elided as context grows.)
+disclaude.md:3210:  ONLY if root cause clear, do NOT fake. If the event-shape parsing is off, inspect the raw dossier + fix the
+disclaude.md:3338:  shown status, verification status, export status, sha, latest preview status}. Output-truth, export, finalizer,
+disclaude.md:3339:  product-evidence ALL READ this shared manifest. NO duplicate truth sources.
+disclaude.md:3363:DORMANT in the default product path.** Sequencing is dictated by interlock: REL-2 (shared truth) → REL-1
+disclaude.md:3379:- **REL-2 NO shared manifest:** /api/projects/{cid}/manifest (projects.py:109-153) = files+bytes+last
+disclaude.md:3381:  verify/runner._locate_deliverables:378, manifest walk); sha in 4+ places (files.py:136/1419, file_state.py:39,
+disclaude.md:3384:  emit {path,sha256,bytes} (files.py:1419) — no runtime consumer folds it (CD-TOOLS-4b never built).
+disclaude.md:3400:- **REL-2 (FOUNDATION):** new shared per-conversation `ArtifactManifest` (persisted): one record per artifact
+disclaude.md:3401:  {id, path, kind, sha, shown, verification, export, latest_preview_status}. ONE existence-derivation (fold the
+disclaude.md:3402:  3 copies → one); write tools' {path,sha256} fold in at the runtime consumer (the missing CD-TOOLS-4b seam).
+disclaude.md:3441:### BUILD-RELIABILITY-GATE plan — r1 revision (Codex REVISE: fix-observed-first + shadow/canary)
+disclaude.md:3458:4. **REL-2** — shared ArtifactManifest, but PASSIVE first: dual-write + read-COMPARE against the existing scattered
+disclaude.md:3461:   log agreement; PROMOTE to sole 'verified' authority only once shadow agrees. Then downgrade/remove the main-
+disclaude.md:3475:any regression rolls back that PR's enforcement (shadow stays). Start P11 only after the FULL REL-6 passes 100%.
+disclaude.md:3498:  `is_production_valid=False` (process.py:389): shared host PID/net namespace, dev-only; its destroy_by_
+disclaude.md:3515:- Iterate REL-4/5 + baseline soak + shadow/canary REL-2/1/3 on LOCAL PODMAN (production-valid, fast).
+disclaude.md:3562:  oracles live) → shadow/canary REL-2/1/3 → final REL-6 on gVisor VM 201.
+disclaude.md:4140:content lint fixtures
+disclaude.md:4302:5. P12 content/design discipline.
+disclaude.md:4325:- **opencode** — NOT INSTALLED as a runnable CLI (only the data dir ~/.local/share/opencode/ {auth.json, opencode.db}). So the MiniMax-M3-via-opencode + DeepSeek-via-opencode IMPLEMENTATION/breaker lanes are UNAVAILABLE. MiniMax-M3 SOAK work goes through the RELAY (harness/product_build/minimax_relay.py → api.minimaxi.chat, model MiniMax-M3, ledger relay.jsonl) — the official-validation path is unaffected (relay = direct MiniMax). DeepSeek lane: unavailable until opencode is installed; substitute Sonnet/Gemini/Qwen scouts.
+disclaude.md:4383:  shadow-canary + REL-6. Parallel lanes (policy §2) on each.
+disclaude.md:4411:  → A-B1 (preflight hard-require relay env) → REL-5 Codex code-gate → REL-1/2/3 shadow-canary → REL-6.
+disclaude.md:4427:  clean rate across scenario classes, before REL-2/1/3 shadow-canary + REL-6.
+disclaude.md:4443:## PR REL-2a — passive shared artifact manifest (PLAN, ratification-pending) — grounded in Lane-G scout
+disclaude.md:4445:ONE shared per-artifact runtime manifest folding the scattered truth (existence re-derived 3×, sha in 4 places,
+disclaude.md:4447:+ read-COMPARE, log divergences, change NO return value (shadow before REL-2b folds readers).
+disclaude.md:4449:no oracle weakening; no false PASS; /api/projects/{cid}/manifest JSON shape BYTE-IDENTICAL (add fields, never
+disclaude.md:4455:  sha256,bytes,shown,verified∈unverified|passed|failed,export{fmt:at},preview{status,url,at},updated_at} (mirror
+disclaude.md:4460:  here ONCE under the loop _lock (engine.py:665); inspect result.structured for path/sha256/bytes (+ generator
+disclaude.md:4469:  (projects.py:122) compute BOTH legacy + read_artifacts(), RETURN legacy, log divergences (path normpath/sha/
+disclaude.md:4472:- Lane A (oracle): codex at gate — ensure the shadow can't change a verdict; the manifest must not become a 2nd
+disclaude.md:4478:per-cid lock → read-COMPARE shadow + divergence log → docs. NO reader switched (that's REL-2b).
+disclaude.md:4484:manifest persisted+reconstructs; /manifest shape unchanged; shadow logs 0 divergences across build_soak baseline;
+disclaude.md:4506:  scout DONE (5-PR decomp REL-1a..e: extract helpers→events+manifest field→shadow gate→canary wire-dead-edge→
+disclaude.md:4522:  run001 PASS shape (real multi-step plan).
+disclaude.md:4619:- REL-1a: extract shared verifier helpers (verify/runner._validate_app_deliverables/_app_body_problem + the verify_
+disclaude.md:4628:  _verifier_unavailable_disposition:1852. OUTCOME UNCHANGED (shadow: run alongside inline self-verify, log agreement).
+disclaude.md:4631:- REL-1e (promote, gated on REL-6 shadow-agreement): gate_host_verify authoritative; gate_browser_verify delegates;
+disclaude.md:4636:finish.py is core (regression lowers soak clean-rate) → shadow FALLTHROUGH-only + flag; reuse existing refusal/STUCK/
+disclaude.md:4645:- **REL-1 plan WRITTEN** (5-PR shadow→canary→promote). REL-2a re-APPROVE holds.
+disclaude.md:4651:- **Next:** continue REL-2a step2 (observe.py:517 fold + 4 edge dual-writes under per-cid lock + shadow read-compare,
+disclaude.md:4668:  parsing of MiniMax's step shape. Must Codex-gate the choice. A2 (toolcall-pairing) addresses ERROR not these STUCKs.
+disclaude.md:4687:`arguments["steps"]` as a list of dict/str → drops every mis-routed shape → 0 steps → A1 controlled STUCK.
+disclaude.md:4690:loop body (dict→title/detail/done_condition; str→title) so BOTH paths share it. Then: `if not steps:` attempt harvest
+disclaude.md:4701:≥1 step. Does NOT fix run001 (model already emits the shape, mis-routes it — B's job).
+disclaude.md:4741:the running counter unsound. FINAL safety model (mathematically sound, string-content-independent): the parse-safety
+disclaude.md:4769:layer serialization → REL-6 capability caveat, never faked) unchanged. _coerce_step helper still extracted + shared
+disclaude.md:4822:  UNDER self._lock. CLEANEST + respects layering — BUT only mutually-excludes if the SAME store instance is shared by
+disclaude.md:4827:- VERDICT: (X) shared-per-cid store + lock-in-store is the right design; REL-2a step2 must FIRST confirm/establish a
+disclaude.md:4828:  single shared ArtifactMemoryStore per cid in the runtime, then put the RMW lock there. This is a plan refinement —
+disclaude.md:4853:  `operations` in PROSE with NO concrete worked example of the nested {op,path,old,new} array shape → nothing exact
+disclaude.md:4871:- DONE: run_project_script — added operations=[{op,path,old,new/content}] worked example (the proven run002 failure).
+disclaude.md:4929:soak holds the relay (contention → noisy results). Run the full 6-tool confirmation AFTER the soak completes.
+disclaude.md:4973:context_memory.py:86) — NO shared per-cid instance, so a per-instance lock gives no mutual exclusion. The store takes
+disclaude.md:4981:+ shadow compare.
+disclaude.md:4986:(turn_control/lifecycle/finish/report export/preview) dual-write via upsert_artifact when ON; shadow read-COMPARE at
+disclaude.md:4988:update; shadow 0-divergence). Then live build_soak with the flag ON → assert 0 divergence → Codex code-gate.
+disclaude.md:4995:1. Extract the projection into ONE shared helper `artifact_paths_from_events(events)->set[str]` in CORE (core/context),
+disclaude.md:5004:4. Tests: helper == old _declared_artifacts on fixtures; shadow on → manifest paths == projected (0 divergence);
+disclaude.md:5005:   shadow off → no manifest I/O. Live build_soak flag-ON → 0 divergence in logs → Codex code-gate → step2c promote.
+disclaude.md:5049:no sha) → lets the model edit an unseen region of a truncated file → clobber; + fires too late (threshold 4).
+disclaude.md:5056:records the sha (files.py:472,168) AND puts the current bytes before the model → next edit is grounded for real +
+disclaude.md:5076:the streak counter. When the gate injects the auto-read, it stamps a distinguishable marker in the event log (e.g. the
+disclaude.md:5098:- The injected read must be a REAL file_read via the executor (real bytes + sha → sets read_since_write + records sha +
+disclaude.md:5099:  shows current content), NOT the F9 synthetic-obs bit-flip (observe.py:334-347 = the rejected (B) bit-flip). Find the
+disclaude.md:5104:  reset:147 scan shape) + a scan for an existing StatusEvent(detail==f"auto_ground_read:{canon}") since last user msg.
+disclaude.md:5180:**Root cause (OUR bug, files.py):** the read-before-write guard keeps two grounding signals — coarse `read_since_write` bit + fine `reads[path].sha`. On a successful mutation (files.py:642 file_write / 688 file_append / 854 file_edit) it discards ONLY the coarse bit and **never refreshes `reads[path].sha`**. So after the model's own edit: disk sha=v2, recorded rec.sha=v1 (stale) → next edit hits `rec.sha(v1) != sha(v2)` at files.py:261 → **STALE_FILE_CONTEXT** — the guard misreports the model's own tracked, deterministic, successful edit as an EXTERNAL mutation. Back-to-back same-file edits therefore wedge; REL-RC-B auto-ground fires once/path (durable marker) then can't help → escalating errors → STUCK.
+disclaude.md:5182:**Proposed fix (design-gating with Codex before implementing):** on a successful mutation, re-ground `reads[path]` to the newly-written bytes (sha=sha256(new), preserve/repair full+ranges) and re-add the coarse bit — the engine has authoritative post-write content (file_edit already re-reads live disk to anchor-match `old`, files.py:802/806). Safety question under review: does re-grounding-full after a surgical edit reopen Mode-B (large-elided-file rewrite-from-memory) or a line-shift hole for a subsequent line-number-based file_replace_lines? Fix will distinguish anchor-based edits (safe to re-ground) from line-based/full-rewrite paths.
+disclaude.md:5184:REL-2a step2b-2b (shadow-fold, flag default-OFF) COMMITTED+pushed in parallel (4 unit tests, gates clean) while root-causing this.
+disclaude.md:5190:- ANCHORED host-validated edits (file_edit / file_str_replace / exact_replace) advance reads[path].sha to the just-written bytes + grant edit_grounded (preserving prior shape — never promote partial→full); read_since_write stays cleared so a blind file_write is still refused (Mode-B intact).
+disclaude.md:5200:- **iter 001 = harness INVALID (WORKSPACE_SNAPSHOT_NOT_READY)**: on-disk index.html sha didn't reach the agent's final sha within the 15s snapshot-wait (cold-start flush lag). FIX: `--snapshot-wait` default 15s→45s. Committed.
+disclaude.md:5210:1. **Discarded recovery guidance**: files.py bad_range builds a helpful message ("[s,e] for path (N lines); start_line 1..N+1") in ToolOutcome.content, but observe.py:538-544 stores only result.error ("bad_range") into AgentErrorEvent → result.content DROPPED → model retries BLIND (never sees the valid range / line count). Affects EVERY domain error.
+disclaude.md:5214:- Part B (minimal, broad): carry result.content into the AgentErrorEvent so the model SEES the recovery guidance, not a bare "ERROR: bad_range" (observe.py:538-544).
+disclaude.md:5227:NEXT (do NOT restart mid-soak): when soak-rcd3 finishes → restart stack (deploy REL-RC-E) → REL-RC-E verification soak revise_thrice ×5, then a 2nd ×5. ALSO investigate: WORKSPACE_SNAPSHOT_NOT_READY recurring even at 45s snapshot-wait (agent final-bytes sha != flushed disk sha within 45s) — harness-measurement INVALID, root-cause whether snapshot flush is genuinely slow or the oracle's sha expectation races the agent's last write.
+disclaude.md:5231:Explore-mapped (definitive): NOT a product snapshot-flush race (the product snapshot faithfully holds the agent's true final bytes; raising 15→45s had no effect because on-disk is already stable-and-correct). It's a HARNESS expected-sha derivation bug: build_soak _agent_declared_expected (disco_api.py:1559-1643) reconstructs each declared file's FINAL sha from the event log using an INCOMPLETE tool model — _FILE_WRITE_FULL_TOOLS={file_write} and _FILE_WRITE_PARTIAL_TOOLS omitted exact_replace + safe_write_file. In revise_thrice the model is steered to exact_replace for targeted follow-up edits (files.py:1345); when a revision's FINAL touch is exact_replace/safe_write_file, that op is invisible → 'expected' pins to an EARLIER file_write sha → permanent mismatch vs the correct latest snapshot bytes → false WORKSPACE_SNAPSHOT_NOT_READY (fatal 'sha' class, disco_api.py:1067). FIX (committed): safe_write_file→FULL (writes args.content verbatim → sha-precise), exact_replace→PARTIAL (→present_unproven, accepted best-effort). Verified end-to-end by the re-soak (no unit-test scaffold exists for this internal fn; the soak is the honest proof).
+disclaude.md:5233:Three harness robustness fixes now: HttpTransport 30→120s (cold-start ReadTimeout), snapshot-wait 15→45s (flush headroom), expected-sha tool model (this). soak-rcd3 (pre-REL-RC-E) = 3 PASS + 1 false-INVALID(this bug) + 1 running; REL-RC-D holds (0 bad_range, 0 executor-killed; 11 STALE_FILE_CONTEXT all inside PASSING runs = recoverable line-edit re-reads).
+disclaude.md:5248:- (A) rewrite _FORCE_SUBMIT_DIRECTIVE (engine.py:207-214): stop assuming narration-only; demand a NON-EMPTY steps array w/ shape example submit_plan(summary=...,steps=[...]) mirroring _REPLAN_FRAMING; explicitly permit ONE step.
+disclaude.md:5254:ALSO committed: snapshot widening #2 — shell(non-rm write-op referencing declared path) + run_project_script save/replace_text → present_unproven (soak-rce iter 002 false-INVALID = unmodeled shell/script edit AFTER last modeled write left a stale sha; over-match is safe = never false-INVALID). soak-rce (pre-these-fixes): iter000 PASS, iter001 STUCK(REL-RC-F), iter002 false-INVALID(snapshot, now fixed). REL-RC-D/E + bad_range recovery all holding.
+disclaude.md:5259:- (A) _FORCE_SUBMIT_DIRECTIVE rewritten: names the real failure (empty steps, not narration), shape example, permits ONE step.
+disclaude.md:5263:Deployed (restart verified: signal + synth + snapshot-widening#2 all loaded). soak-rcf ×5 in flight. This run tests the FULL stack: REL-RC-C (pause/resume) + D (anchored reground) + E (bad_range recovery) + F (revision synth-step) + 3 harness fixes (120s transport, 45s snapshot-wait, expected-sha tool model + shell/script downgrade). Target: 5/5 PASS, 0 STUCK, 0 INVALID. If clean → 2nd confirming ×5 → REL-RC-*+harness DONE → REL-1/REL-3/REL-6.
+disclaude.md:5267:soak-rcf iter 000 STILL false-INVALID(SNAPSHOT_NOT_READY). DB ground-truth (queried disco.db for the cid): build used file_write(1) + run_project_script(2) + shell(3) + **shell_exec(13)** + NO partial file-edit tools. My widening #2 handled name=="shell" but the workhorse is **shell_exec** (unmodeled) → it mutated index.html after the last file_write → stale sha. Enumerating shell forms lost 3×. FIX #3 (committed): fail-safe — ANY non-rm op in _SHELL_TOOLS={shell,shell_exec} downgrades EVERY declared path to present_unproven (opaque, unreconstructable); seq-ordered so a later real file_write still gives a precise sha. Only relaxes sha→present (accepted), never a false INVALID. Retired the narrow _shell_writes_path/write-hints heuristic. LESSON: enumerating the product's mutation tools in the harness is a losing game — invert to fail-safe-on-opaque.
+disclaude.md:5269:soak-rcf2 relaunched (fixed harness; server unchanged since REL-RC-F already deployed). Full stack under test: REL-RC-C/D/E/F + timeouts + snapshot expected-sha (tool model + opaque downgrade). Target 5/5 PASS. NOTE iter004 of soak-rce earlier was SNAPSHOT_UNVERIFIED (sibling code) — watch it's also gone.
+disclaude.md:5277:2. My snapshot fix #3 (downgrade-any-opaque-shell to present_unproven) OVER-CORRECTED: it turns a GENUINE content mismatch into UNVERIFIED (masks it) instead of a hard ARTIFACT_TRUTH_MISMATCH. A present+STABLE file's content SHOULD be authoritatively must_contain-checkable (that's fix #4). output_truth.py:41 _NON_AUTHORITATIVE_PROOF gates it.
+disclaude.md:5279:DECISION FORK (surfaced to Dylan, loop paused): (a) is "Hobby"≠"Starter" a real build FAILURE to pursue via prompt/engine instruction-following work, or is a functionally-correct pricing section acceptable / the strict must_contain too strict for a creative build gate? (b) narrow fix #3 so present+stable content is authoritative (honest FAIL not masked UNVERIFIED)? MECHANICAL CAMPAIGN (REL-RC-C/D/E/F + timeouts) = DONE+verified regardless.
+disclaude.md:5281:### PLAN — HARNESS-FIX-4 + SCENARIO-SOFTEN (fork resolution) — 2026-07-01
+disclaude.md:5289:content assertions (must_contain) on a present + stability-polled file get reported as
+disclaude.md:5290:INVALID_RUN/WORKSPACE_SNAPSHOT_UNVERIFIED instead of being checked. A stable on-disk file's bytes
+disclaude.md:5296:exact content checks AUTHORITATIVELY against the stable on-disk bytes: needle absent → hard
+disclaude.md:5298:WORKSPACE_SNAPSHOT_UNVERIFIED remains only for checks that genuinely require the agent-declared
+disclaude.md:5299:sha identity, and for files that are absent or failed the stability poll. No enumeration of tools —
+disclaude.md:5300:the fail-safe sha downgrade from fix #3 stays; only the downstream content-check masking is removed.
+disclaude.md:5309:→ UNVERIFIED preserved; (d) regression: fix #3 sha-downgrade path unchanged.
+
+codex
+The oracle still has a proof-based fold that can downgrade workspace content mismatches to `WORKSPACE_SNAPSHOT_UNVERIFIED`. I’m reading the plan text and the lower scenario block now to check whether that conflicts with the intended fork resolution and both scenario edits.
+hook: PreToolUse
+hook: PreToolUse
+hook: PreToolUse Failed
+hook: PreToolUse Failed
+hook: PreToolUse
+exec
+/bin/bash -lc "nl -ba disclaude.md | sed -n '5270,5325p'" in /var/home/dylan/projects/disclaude
+exec
+/bin/bash -lc "nl -ba harness/build_soak/scenarios.yaml | sed -n '248,340p'" in /var/home/dylan/projects/disclaude
+hook: PreToolUse Failed
+ succeeded in 0ms:
+  5270	
+  5271	## §11 HEARTBEAT — soak-rcf2 4/5 (3 PASS,1 UNVERIFIED); root cause = MODEL LABEL FIDELITY + fix#3 over-correction
+  5272	
+  5273	DB+snapshot ground truth for iter003 (conv_52e9454e): index.html is 25KB, present+STABLE, contains Pro/Enterprise/Get Started/Copyright — but the first pricing tier is <h3>Hobby</h3>, NOT "Starter". The build produced a valid 3-tier pricing section but SUBSTITUTED "Hobby" for the instructed label "Starter" (2/3 labels exact). The 3 PASS iterations DID contain "Starter" → STOCHASTIC label fidelity (~4/5). must_contain:"Starter" correctly flagged it.
+  5274	
+  5275	TWO findings:
+  5276	1. This is a MODEL OUTPUT-FIDELITY issue (exact-label adherence), NOT a mechanical engine bug. REL-RC-C/D/E/F are all VERIFIED WORKING (0 STUCK / bad_range / executor-killed / STALE-storm / revision_no_concrete_steps across the deployed fixes; the ONLY non-PASS causes now are this label-fidelity + harness snapshot codes).
+  5277	2. My snapshot fix #3 (downgrade-any-opaque-shell to present_unproven) OVER-CORRECTED: it turns a GENUINE content mismatch into UNVERIFIED (masks it) instead of a hard ARTIFACT_TRUTH_MISMATCH. A present+STABLE file's content SHOULD be authoritatively must_contain-checkable (that's fix #4). output_truth.py:41 _NON_AUTHORITATIVE_PROOF gates it.
+  5278	
+  5279	DECISION FORK (surfaced to Dylan, loop paused): (a) is "Hobby"≠"Starter" a real build FAILURE to pursue via prompt/engine instruction-following work, or is a functionally-correct pricing section acceptable / the strict must_contain too strict for a creative build gate? (b) narrow fix #3 so present+stable content is authoritative (honest FAIL not masked UNVERIFIED)? MECHANICAL CAMPAIGN (REL-RC-C/D/E/F + timeouts) = DONE+verified regardless.
+  5280	
+  5281	### PLAN — HARNESS-FIX-4 + SCENARIO-SOFTEN (fork resolution) — 2026-07-01
+  5282	
+  5283	**Decision input (Dylan, direct):** Hobby≠Starter label fidelity is NOT a reliability failure;
+  5284	functional correctness passes. Dislikes to optimize for: random pauses, loop-stuck, false
+  5285	affordances. Worker policy change: Codex writes code (preferred over Gemini); MiniMax stays;
+  5286	NO Opus/Sonnet subagents. Playbook distilled at docs/claude-design-playbook.md.
+  5287	
+  5288	**Problem:** snapshot fix #3 (fail-safe opaque-mutation downgrade → present_unproven) over-corrects:
+  5289	content assertions (must_contain) on a present + stability-polled file get reported as
+  5290	INVALID_RUN/WORKSPACE_SNAPSHOT_UNVERIFIED instead of being checked. A stable on-disk file's bytes
+  5291	ARE ground truth — reporting "unverifiable" when we hold the bytes is a false affordance in our own
+  5292	oracle (soak-rcf2 iter 003: 'Starter' genuinely absent, masked as UNVERIFIED instead of MISMATCH).
+  5293	
+  5294	**Change 1 — output_truth.py (fix #4):** when the deliverable is present and passed the stability
+  5295	poll (present_unproven / unproven_extended_stability), evaluate must_contain / must_not_contain /
+  5296	exact content checks AUTHORITATIVELY against the stable on-disk bytes: needle absent → hard
+  5297	ARTIFACT_TRUTH_MISMATCH (or PREVIEW_TRUTH_MISMATCH for preview specs); present → check passes.
+  5298	WORKSPACE_SNAPSHOT_UNVERIFIED remains only for checks that genuinely require the agent-declared
+  5299	sha identity, and for files that are absent or failed the stability poll. No enumeration of tools —
+  5300	the fail-safe sha downgrade from fix #3 stays; only the downstream content-check masking is removed.
+  5301	
+  5302	**Change 2 — scenarios.yaml (lines ~180 and ~379):** drop the verbatim creative label 'Starter'
+  5303	from both must_contain lists (keep 'Pro', 'Enterprise', 'Acme Cloud', 'Get Started', copyright).
+  5304	Structural intent (3 pricing tiers) may be asserted via a non-creative marker if cheap (e.g. three
+  5305	'/month' occurrences); do not require any verbatim synonym-class label.
+  5306	
+  5307	**Tests:** test_output_truth_oracle.py — (a) stable-file + needle present → PASS not UNVERIFIED;
+  5308	(b) stable-file + needle absent → ARTIFACT_TRUTH_MISMATCH not UNVERIFIED; (c) unstable/absent file
+  5309	→ UNVERIFIED preserved; (d) regression: fix #3 sha-downgrade path unchanged.
+  5310	
+  5311	**After merge:** re-run soak ×5 (bar: 5/5 PASS, 0 STUCK, 0 INVALID), then confirming ×5, then
+  5312	REL-1 → REL-3 → REL-6 gate. P11 stays blocked until REL-6 is 100%.
+  5313	
+  5314	**Implementation worker:** Codex (per new policy). Reviewer: Codex read-only, APPROVE required.
+
+ succeeded in 0ms:
+   248	  # ---- DIAGNOSTIC BATCH (exhaustive antipattern mining) ---------------------
+   249	  # Diverse tasks, each stressing a DIFFERENT part of the tool surface, all carrying the
+   250	  # predict-before-acting protocol. Distinct task text => distinct transcript files even
+   251	  # when run concurrently. The frontier judge mines all transcripts for tool antipatterns.
+   252	  #
+   253	  # diag B: multi-file site — file_write x3 + shared asset + preview.
+   254	  - id: diag_multifile
+   255	    mode: api
+   256	    prompt: >-
+   257	      DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "PREDICT: <what you
+   258	      expect this tool call to return/do>", and AFTER the result one line "OBSERVED: match"
+   259	      or "OBSERVED: mismatch — <what about THE TOOL'S behavior surprised you>" (focus on the
+   260	      tool: ports, URLs, output shape, errors, state — not your own mistakes). One sentence each.
+   261	
+   262	      TASK: Build a 3-page static site — index.html (h1 'Atlas Home'), services.html
+   263	      (h1 'Our Services'), contact.html (h1 'Reach Us') — sharing a style.css with a
+   264	      '.topnav' navbar that links all three pages together. Serve it in the live preview, finish.
+   265	    assertions:
+   266	      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+   267	      workspace:
+   268	        files:
+   269	          - {path: "index.html", must_contain: ["Atlas Home", "topnav"]}
+   270	          - {path: "contact.html", must_contain: ["Reach Us"]}
+   271	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   272	
+   273	  # diag C: form page that must be browser-VERIFIED — exercises verify_web_app / browser.
+   274	  - id: diag_form_verify
+   275	    mode: api
+   276	    prompt: >-
+   277	      DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "PREDICT: <expected
+   278	      result>", and AFTER one line "OBSERVED: match" or "OBSERVED: mismatch — <what about THE
+   279	      TOOL'S behavior surprised you>" (focus on the tool, not your mistakes). One sentence each.
+   280	
+   281	      TASK: Create an index.html signup page: h1 exactly 'Join the Waitlist', an HTML <form>
+   282	      with a name text input, an email input, and a submit button labeled 'Sign Up'. Serve it,
+   283	      then VERIFY in a browser that the page actually loads and shows the heading before finishing.
+   284	    assertions:
+   285	      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+   286	      workspace:
+   287	        files:
+   288	          - {path: "index.html", must_contain: ["Join the Waitlist", "<form", "email", "Sign Up"]}
+   289	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   290	
+   291	  # diag D: a runnable script — exercises shell / code_exec rather than just file+preview.
+   292	  - id: diag_script_run
+   293	    mode: api
+   294	    prompt: >-
+   295	      DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "PREDICT: <expected
+   296	      result>", and AFTER one line "OBSERVED: match" or "OBSERVED: mismatch — <what about THE
+   297	      TOOL'S behavior surprised you>" (focus on the tool, not your mistakes). One sentence each.
+   298	
+   299	      TASK: Write a Python script primes.py that computes and prints the first 20 prime numbers,
+   300	      then RUN it and confirm from its output that it printed 20 primes ending in 71. Finish once
+   301	      you have verified the actual program output.
+   302	    assertions:
+   303	      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+   304	      workspace:
+   305	        files:
+   306	          - {path: "primes.py", must_contain: ["def ", "print"]}
+   307	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   308	
+   309	  # diag E: a real dev server on a port — the HARDER preview path (running process, not static).
+   310	  - id: diag_devserver
+   311	    mode: api
+   312	    prompt: >-
+   313	      DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "PREDICT: <expected
+   314	      result>", and AFTER one line "OBSERVED: match" or "OBSERVED: mismatch — <what about THE
+   315	      TOOL'S behavior surprised you>" (focus on the tool, not your mistakes). One sentence each.
+   316	
+   317	      TASK: Create a minimal Python HTTP server (server.py using only the standard library) that
+   318	      serves a page with the h1 'Live Server Up' on port 8000. Start it as a running dev server,
+   319	      make sure it is reachable in the live preview, then finish.
+   320	    assertions:
+   321	      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+   322	      workspace:
+   323	        files:
+   324	          - {path: "server.py", must_contain: ["8000"]}
+   325	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   326	
+   327	  # diag F: build-then-revise — exercises the re-plan / revision tool path after a finish.
+   328	  - id: diag_revise
+   329	    mode: api
+   330	    prompt: >-
+   331	      DIAGNOSTIC PROTOCOL — for EVERY tool call, FIRST output one line "PREDICT: <expected
+   332	      result>", and AFTER one line "OBSERVED: match" or "OBSERVED: mismatch — <what about THE
+   333	      TOOL'S behavior surprised you>" (focus on the tool, not your mistakes). One sentence each.
+   334	
+   335	      TASK: Create an index.html landing page for a coffee shop with an h1 'Bean Scene' and a
+   336	      hero section. Serve it and finish.
+   337	    followups:
+   338	      - text: "Now add a menu section listing three drinks (Latte, Mocha, Cold Brew) and update the page; re-serve."
+   339	        requires_plan_revision: true
+   340	        trigger: after_terminal
+
+exec
+/bin/bash -lc 'rg -n "WORKSPACE_SNAPSHOT_UNVERIFIED|unproven_extended_stability|unknown|proof|snapshot_content_verifiable|ARTIFACT_TRUTH_MISMATCH|must_contain|must_not_contain|equals" harness/build_soak/oracles/output_truth.py harness/build_soak/scenarios.yaml' in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+harness/build_soak/scenarios.yaml:41:            must_contain: ["Build Smoke OK"]
+harness/build_soak/scenarios.yaml:44:        must_contain: ["Build Smoke OK"]
+harness/build_soak/scenarios.yaml:66:            must_contain: ["bakery"]
+harness/build_soak/scenarios.yaml:92:            must_contain: ["Grand Opening", "Book a Visit"]
+harness/build_soak/scenarios.yaml:116:            must_contain: ["Contact"]
+harness/build_soak/scenarios.yaml:142:            must_contain: ["Welcome Home", "site-nav", "about.html"]
+harness/build_soak/scenarios.yaml:144:            must_contain: ["About Us", "site-nav", "index.html"]
+harness/build_soak/scenarios.yaml:146:            must_contain: [".site-nav"]
+harness/build_soak/scenarios.yaml:149:        must_contain: ["Welcome Home"]
+harness/build_soak/scenarios.yaml:180:            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started"]
+harness/build_soak/scenarios.yaml:209:            must_contain: ["Contact Us", "<form", "name", "email", "Send"]
+harness/build_soak/scenarios.yaml:212:        must_contain: ["Contact Us"]
+harness/build_soak/scenarios.yaml:245:            must_contain: ["Build Smoke OK"]
+harness/build_soak/scenarios.yaml:269:          - {path: "index.html", must_contain: ["Atlas Home", "topnav"]}
+harness/build_soak/scenarios.yaml:270:          - {path: "contact.html", must_contain: ["Reach Us"]}
+harness/build_soak/scenarios.yaml:288:          - {path: "index.html", must_contain: ["Join the Waitlist", "<form", "email", "Sign Up"]}
+harness/build_soak/scenarios.yaml:306:          - {path: "primes.py", must_contain: ["def ", "print"]}
+harness/build_soak/scenarios.yaml:324:          - {path: "server.py", must_contain: ["8000"]}
+harness/build_soak/scenarios.yaml:349:          - {path: "index.html", must_contain: ["Bean Scene", "Latte", "Cold Brew"]}
+harness/build_soak/scenarios.yaml:379:            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started", "Copyright Acme Cloud 2026"]
+harness/build_soak/oracles/output_truth.py:10:  * required file contents present (must_contain) -> ARTIFACT_TRUTH_MISMATCH
+harness/build_soak/oracles/output_truth.py:12:  * preview content present (must_contain)     -> PREVIEW_TRUTH_MISMATCH
+harness/build_soak/oracles/output_truth.py:38:# OTHER proof level (raw_sha / rendered_readback / absent) OR an UNANNOTATED entry (a legacy /
+harness/build_soak/oracles/output_truth.py:39:# proxy capture with no `proof` key — treated as authoritative so we never silently downgrade)
+harness/build_soak/oracles/output_truth.py:40:# is PROVEN and a mismatch on it stays a hard ARTIFACT_TRUTH_MISMATCH.
+harness/build_soak/oracles/output_truth.py:41:_NON_AUTHORITATIVE_PROOF = frozenset({"unproven_extended_stability", "unknown"})
+harness/build_soak/oracles/output_truth.py:61:def _proof_for(manifest: dict[str, Any] | None, path: str) -> str | None:
+harness/build_soak/oracles/output_truth.py:62:    """The recorded acceptance proof level for a declared path, or None when the entry is a
+harness/build_soak/oracles/output_truth.py:63:    plain string / carries no `proof` (legacy / proxy capture → treated as authoritative)."""
+harness/build_soak/oracles/output_truth.py:69:        proof = entry.get("proof")
+harness/build_soak/oracles/output_truth.py:70:        return str(proof) if proof is not None else None
+harness/build_soak/oracles/output_truth.py:76:    (Part A). A mismatch is AUTHORITATIVE unless its file's proof is non-authoritative
+harness/build_soak/oracles/output_truth.py:77:    (`unproven_extended_stability` / `unknown`). If ANY mismatch is authoritative → a hard
+harness/build_soak/oracles/output_truth.py:78:    ``ARTIFACT_TRUTH_MISMATCH`` (the proven regression WINS; never masked). ONLY if EVERY
+harness/build_soak/oracles/output_truth.py:79:    mismatch is non-authoritative → INVALID_RUN ``WORKSPACE_SNAPSHOT_UNVERIFIED`` (the capture
+harness/build_soak/oracles/output_truth.py:80:    is too uncertain to call a product failure). The full per-file evidence (proof + path +
+harness/build_soak/oracles/output_truth.py:82:    proven = [m for m in mismatches if m.get("proof") not in _NON_AUTHORITATIVE_PROOF]
+harness/build_soak/oracles/output_truth.py:96:            fc.ARTIFACT_TRUTH_MISMATCH,
+harness/build_soak/oracles/output_truth.py:102:        fc.WORKSPACE_SNAPSHOT_UNVERIFIED,
+harness/build_soak/oracles/output_truth.py:103:        first_broken_link="finish -> snapshot_content_verifiable",
+harness/build_soak/oracles/output_truth.py:157:        # never softened). Content checks (must_contain / must_not_contain / exact) across ALL
+harness/build_soak/oracles/output_truth.py:158:        # asserted files are COLLECTED with each file's capture proof level, then folded by
+harness/build_soak/oracles/output_truth.py:160:        # ARTIFACT_TRUTH_MISMATCH; all-non-authoritative → INVALID_RUN snapshot-unverified.
+harness/build_soak/oracles/output_truth.py:176:            proof = _proof_for(workspace_manifest, path)
+harness/build_soak/oracles/output_truth.py:177:            for needle in spec.get("must_contain") or []:
+harness/build_soak/oracles/output_truth.py:180:                        "path": path, "check": "must_contain",
+harness/build_soak/oracles/output_truth.py:181:                        "missing_substring": needle, "proof": proof,
+harness/build_soak/oracles/output_truth.py:183:            for needle in spec.get("must_not_contain") or []:
+harness/build_soak/oracles/output_truth.py:186:                        "path": path, "check": "must_not_contain",
+harness/build_soak/oracles/output_truth.py:187:                        "forbidden_substring": needle, "proof": proof,
+harness/build_soak/oracles/output_truth.py:189:            exact = spec.get("equals")
+harness/build_soak/oracles/output_truth.py:192:                    "path": path, "check": "equals", "proof": proof,
+harness/build_soak/oracles/output_truth.py:240:            for needle in preview_assert.get("must_contain") or []:
+
+codex
+The plan names two scenario locations for removing `Starter`. The first still includes it at line 180, so I’m checking the second referenced block before forming the gate verdict.
+hook: PreToolUse
+hook: PreToolUse Failed
+exec
+/bin/bash -lc "nl -ba harness/build_soak/scenarios.yaml | sed -n '340,395p'" in /var/home/dylan/projects/disclaude
+ succeeded in 0ms:
+   340	        trigger: after_terminal
+   341	    assertions:
+   342	      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+   343	      revisions:
+   344	        initial_plan_revision: 1
+   345	        expected_final_plan_revision: 2
+   346	        forbid_write_before_revision_approval: true
+   347	      workspace:
+   348	        files:
+   349	          - {path: "index.html", must_contain: ["Bean Scene", "Latte", "Cold Brew"]}
+   350	      terminal_status_in: ["FINISHED", "VERIFIED"]
+   351	
+   352	  # ---- ramp: THREE sequential change follow-ups (rev 1->2->3->4) -------------
+   353	  # The hardest stress on the multi-revision path: 3 after_terminal follow-ups, each requiring a
+   354	  # FRESH revised plan before any write (the §11.4 chain across THREE revisions); the final workspace
+   355	  # must carry the CUMULATIVE result of all three. Exercises follow-up serialization + revision-oracle
+   356	  # anchoring + snapshot readiness under the most revisions. Every marker is dictated verbatim.
+   357	  - id: revise_thrice_complex
+   358	    mode: api
+   359	    prompt: "Create an index.html landing page for a SaaS product with a hero section and the heading 'Acme Cloud'."
+   360	    followups:
+   361	      - text: "Add a pricing section with three tiers labeled 'Starter', 'Pro', and 'Enterprise'."
+   362	        requires_plan_revision: true
+   363	        trigger: after_terminal
+   364	      - text: "Now change every call-to-action button to say 'Get Started'."
+   365	        requires_plan_revision: true
+   366	        trigger: after_terminal
+   367	      - text: "Add a footer with the exact text 'Copyright Acme Cloud 2026'."
+   368	        requires_plan_revision: true
+   369	        trigger: after_terminal
+   370	    assertions:
+   371	      event_chain: {require_user_event: true, require_plan_before_execution: true, require_action_observation_pairs: true}
+   372	      revisions:
+   373	        initial_plan_revision: 1
+   374	        expected_final_plan_revision: 4
+   375	        forbid_write_before_revision_approval: true
+   376	      workspace:
+   377	        files:
+   378	          - path: "index.html"
+   379	            must_contain: ["Acme Cloud", "Starter", "Pro", "Enterprise", "Get Started", "Copyright Acme Cloud 2026"]
+   380	      terminal_status_in: ["FINISHED", "VERIFIED"]
+
+codex
+REVISE
+
+1. [output_truth.py](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/output_truth.py:74) still classifies content mismatches by snapshot proof. A `must_contain` / `must_not_contain` / `equals` mismatch with proof `unproven_extended_stability` or `unknown` still returns `WORKSPACE_SNAPSHOT_UNVERIFIED`, so sha-identity uncertainty is not separated from content truth.
+
+2. The remaining content-spec path is direct: lines [177-195](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/output_truth.py:177) attach `proof` to content mismatches and call `_fold_content_mismatches`. That is still a classifier path emitting `WORKSPACE_SNAPSHOT_UNVERIFIED` for content specs.
+
+3. Test plan needs revision. It should cover `must_not_contain` and `equals`, all-non-authoritative content mismatches, mixed multi-file mismatches, and confirm missing required files remain `FALSE_FINISH_NO_OUTPUT` in this oracle. The plan’s “unstable/absent file → UNVERIFIED preserved” conflicts with the actual missing-file branch at [line 166](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/output_truth.py:166).
+
+4. Scenario softening is not reflected in the actual scenario assertions: `Starter` remains at [line 180](/var/home/dylan/projects/disclaude/harness/build_soak/scenarios.yaml:180) and [line 379](/var/home/dylan/projects/disclaude/harness/build_soak/scenarios.yaml:379). Also make the expected post-edit lists explicit: line 180 should not gain copyright; line 379 should keep `Copyright Acme Cloud 2026`.
+tokens used
+56,145
+REVISE
+
+1. [output_truth.py](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/output_truth.py:74) still classifies content mismatches by snapshot proof. A `must_contain` / `must_not_contain` / `equals` mismatch with proof `unproven_extended_stability` or `unknown` still returns `WORKSPACE_SNAPSHOT_UNVERIFIED`, so sha-identity uncertainty is not separated from content truth.
+
+2. The remaining content-spec path is direct: lines [177-195](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/output_truth.py:177) attach `proof` to content mismatches and call `_fold_content_mismatches`. That is still a classifier path emitting `WORKSPACE_SNAPSHOT_UNVERIFIED` for content specs.
+
+3. Test plan needs revision. It should cover `must_not_contain` and `equals`, all-non-authoritative content mismatches, mixed multi-file mismatches, and confirm missing required files remain `FALSE_FINISH_NO_OUTPUT` in this oracle. The plan’s “unstable/absent file → UNVERIFIED preserved” conflicts with the actual missing-file branch at [line 166](/var/home/dylan/projects/disclaude/harness/build_soak/oracles/output_truth.py:166).
+
+4. Scenario softening is not reflected in the actual scenario assertions: `Starter` remains at [line 180](/var/home/dylan/projects/disclaude/harness/build_soak/scenarios.yaml:180) and [line 379](/var/home/dylan/projects/disclaude/harness/build_soak/scenarios.yaml:379). Also make the expected post-edit lists explicit: line 180 should not gain copyright; line 379 should keep `Copyright Acme Cloud 2026`.
+exit=0

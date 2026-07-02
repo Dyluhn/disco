@@ -1,0 +1,4 @@
+=========================== short test summary info ============================
+ERROR harness/build_soak/tests/test_provider_ledger_oracle.py
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+PYTEST_EXIT=2

@@ -207,6 +207,9 @@ def make_conversations_router(
             sstate = runtime.sandbox_state(conversation_id)
             if sstate is not None:
                 state.extras["sandbox"] = sstate
+            sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
+            if sandbox_ids:
+                state.extras["sandbox_instance_ids"] = sandbox_ids
             # Surface the autonomous flag so the UI can badge the conversation.
             if runtime.is_autonomous(conversation_id):
                 state.extras["autonomous"] = True
@@ -281,10 +284,11 @@ def make_conversations_router(
     async def kill_conversation(conversation_id: str) -> dict:
         """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
         revoke its capabilities. Always-available; the UI (Prompt 4) wires a button."""
+        sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
         if runtime is not None:
             await runtime.kill(conversation_id)
         state = await store.get_state(conversation_id)
-        return {"killed": True, "state": state.model_dump(mode="json")}
+        return {"killed": True, "state": state.model_dump(mode="json"), "sandbox_instance_ids": sandbox_ids}
 
     @router.post("/conversations/{conversation_id}/resume")
     async def post_resume_conversation(conversation_id: str) -> dict:

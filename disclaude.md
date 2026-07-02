@@ -5464,3 +5464,25 @@ X-Disco-Conversation header to provider requests when conversation identity is k
 minimax relay logs that field per record; (3) ProviderLedgerOracle + the after-terminal check filter
 ledger records by conversation id when present (records WITHOUT the field stay attributed to all —
 fail-closed for old ledgers/serial runs). Bar runs stay 3-lane after this lands.
+
+### PARALLEL-2 — parallel-lane runner tuning — 2026-07-02
+
+Two harness-side lessons from standing up 3-lane bars (product was healthy in both):
+1. Relay ledger dir must be mode 700+ (a umask-177 mkdir made it unwritable → every relay call
+   500'd → RUN_INTERRUPTED×lanes). Relay now disco-relay.service in disco-dev.slice, ledger at
+   ~/.local/share/disco/relay/relay.jsonl, key via 0600 EnvironmentFile.
+2. Runner timeouts are tuned for SERIAL latency (inactivity 180s / hard-cap 1200s). Three lanes
+   saturate the MiniMax 3-concurrent cap (+ the auto-titler queues behind), per-turn latency
+   ~2-3×; lane a3 iter 1 was killed at INACTIVE_TIMEOUT four events before its REAL FINISHED
+   (conv_8cf072e1, FINISHED at seq 123, collected to 119). PARALLEL RECIPE: --timeout 480
+   --hard-cap 2400 for 3 lanes. Consider runner auto-scaling by lane count later.
+
+### PARALLEL-3 — conversation-scoped orphan counting — 2026-07-02
+
+Third (final?) parallel measurement artifact: WORKSPACE_NOT_CLEANED with orphans=4 on a FINISHED
+run (conv_4917ad1e, lane c4) — run.py:985 computes orphans as a GLOBAL container-count delta
+(after - baseline), so concurrent lanes' live sandboxes count as this run's orphans. Fix: attribute
+containers to the conversation (sandbox containers carry owner/conv identity in name/label — the
+REL-4/noVNC owner-cid teardown machinery) and count only THIS conversation's containers alive after
+release; keep the global delta as fallback when attribution is unavailable (serial compat,
+fail-closed). Bar attempts 2-4 void (relay perms / serial timeouts / this); bar re-runs after.
