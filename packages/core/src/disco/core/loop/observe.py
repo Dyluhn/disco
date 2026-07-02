@@ -42,14 +42,23 @@ if TYPE_CHECKING:
 _LOG = logging.getLogger("disco.loop")
 
 _ERROR_DETAIL_CAP = 600
+# Refusals that CARRY delivered content (the G/L/M/otnf self-recovering family marks them with
+# structured["delivered_read"]) must not be capped: the content IS the recovery. Bounded by the
+# tools-side _REFUSAL_READ_FULL_MAX_BYTES (64KB) + message overhead.
+_DELIVERED_DETAIL_CAP = 80_000
 
 
-def _error_detail(err: str, content: str | None) -> str | None:
+def _error_detail(
+    err: str, content: str | None, *, carries_delivery: bool = False
+) -> str | None:
     """[REL-RC-E] The tool's human-readable recovery guidance (ToolOutcome.content), capped, iff it
     adds information beyond the bare error CODE. Carried on AgentErrorEvent.detail so a domain error
-    like bad_range shows the model the valid range/line-count instead of just 'ERROR: bad_range'."""
+    like bad_range shows the model the valid range/line-count instead of just 'ERROR: bad_range'.
+    [REL-6 cap fix] A 600-char cap written for short hints was silently gutting the self-recovering
+    refusals that deliver full file content — those use the wide cap."""
     c = (content or "").strip()
-    return c[:_ERROR_DETAIL_CAP] if c and c != err else None
+    cap = _DELIVERED_DETAIL_CAP if carries_delivery else _ERROR_DETAIL_CAP
+    return c[:cap] if c and c != err else None
 
 
 def _ground_read(loop: AgentLoop, path: str) -> None:
@@ -549,7 +558,13 @@ class Observer:
             await self._loop._emit(
                 AgentErrorEvent(
                     error=_err,
-                    detail=_error_detail(_err, result.content),  # [REL-RC-E] recovery guidance
+                    detail=_error_detail(
+                        _err,
+                        result.content,
+                        # [REL-6 cap fix] delivered-content refusals are the recovery — never
+                        # truncate them down to a 600-char hint.
+                        carries_delivery=bool((result.structured or {}).get("delivered_read")),
+                    ),
                     action_id=action.id,
                     tool_call_id=action.tool_call.call_id if action.tool_call else None,
                 )

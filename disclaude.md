@@ -5608,3 +5608,13 @@ refusals content delivery; the apply-time miss hands back nothing. FIX: old_text
 its whitespace-tolerant miss variant) carries the current content via the G refusal-read machinery
 (full ≤64KB, recorded as delivered read) + the L escalation counter ("your old text does not appear
 — exact current content below; copy precisely"). Class restarts from 0/30 after fix per acceptance.
+
+### REL-6 matrix — operator error + restart plan — 2026-07-02
+
+OPERATOR ERROR (Fable): the f3695250 commit script restarted the dev servers while matrix lanes
+A/C were mid-class → RUN_INTERRUPTED/agent_server_unreachable cascade voided lane A's revision
+segment (1 clean PASS then interrupted) and lane C's export tail (17/20 clean) + disconnect class.
+NOT product signal. RULE (handoff doc): never run disco-dev-up.sh while build_soak lanes are live —
+check pgrep first; commits during a matrix defer their restart to the next lane boundary.
+Scoreboard: STATIC_SMOKE 30/30 ✓ (complete, pre-restart). Relaunching on f3695250:
+A=targeted ×30, B=export ×20 + disconnect ×5, C=revision ×10.
