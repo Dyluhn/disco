@@ -5598,3 +5598,13 @@ fold catch-up upsert, all subsequent folds agree projected=1/manifest=1/missing=
 re-missing, 0 silent skips across ~15 folds / 3 rounds / 14 iterations. Manifest proven to track
 reality live. Reader promote (with projection fallback for pre-fold convs) now justified; REL-1b
 unblocked and dispatched.
+
+### REL-6 matrix finding #2 — old_text_not_found spiral (lane B iter 10) — 2026-07-02
+
+TARGETED_EDIT class, 9 clean then conv at rel6-B run 009: file_edit old-text guessed from stale
+memory, apply-time old_text_not_found refusal ×4 (through stuck_escape) → repeated_action_error
+STUCK. The refusal is the LAST dead-end in the edit-refusal family: G2 gave STALE/FRESH_READ
+refusals content delivery; the apply-time miss hands back nothing. FIX: old_text_not_found (and
+its whitespace-tolerant miss variant) carries the current content via the G refusal-read machinery
+(full ≤64KB, recorded as delivered read) + the L escalation counter ("your old text does not appear
+— exact current content below; copy precisely"). Class restarts from 0/30 after fix per acceptance.

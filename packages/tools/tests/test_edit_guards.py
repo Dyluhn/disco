@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.files import (
+    ExactReplaceTool,
     FileAppendArgs,
     FileAppendTool,
     FileEditArgs,
@@ -19,6 +20,8 @@ from disco.tools.builtin.files import (
     FileReadTool,
     FileReplaceLinesArgs,
     FileReplaceLinesTool,
+    FileStrReplaceArgs,
+    FileStrReplaceTool,
     FileWriteArgs,
     FileWriteTool,
     reset_read_tracker,
@@ -38,14 +41,20 @@ class _FakeSandbox:
         self.writes.append(data)
 
 
-def _Ctx(sandbox) -> ToolContext:  # noqa: N802 — keeps old call sites unchanged
+def _Ctx(  # noqa: N802 — keeps old call sites unchanged
+    sandbox,
+    *,
+    conv_id: str = "conv-edit-guards",
+    read_char_budget: int | None = None,
+) -> ToolContext:
     return ToolContext(
         sandbox=sandbox,
         workspace_path=".",
         timeout_s=10,
         capabilities={Capability.FILESYSTEM},
         owner_id="local",
-        conversation_id="conv-edit-guards",
+        conversation_id=conv_id,
+        read_char_budget=read_char_budget,
     )
 
 
@@ -195,6 +204,147 @@ async def test_file_edit_noop_caught_on_ground_truth():
     )
     assert out.success is False
     assert out.error == "no_op_edit"
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_edit_old_text_not_found_carries_content_and_delivered_read_for_small_file():
+    sbx = _FakeSandbox("alpha = 1\nbeta = 2\n")
+
+    out = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="gamma = 3", new="gamma = 4"),
+        _Ctx(sbx),
+    )
+
+    assert out.success is False
+    assert out.error == "old_text_not_found"
+    assert "`old` not found in config.py" in out.content
+    assert "Fresh full current file for config.py" in out.content
+    assert "\talpha = 1" in out.content
+    assert "\tbeta = 2" in out.content
+    assert (out.structured or {})["kind"] == "old_text_not_found"
+    assert (out.structured or {})["old_text_not_found_count"] == 1
+    assert (out.structured or {})["delivered_read"]["full"] is True
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_edit_large_old_text_not_found_skips_content_but_counts_and_escalates():
+    large_text = "\n".join(f"line {i} {'x' * 100}" for i in range(1, 701)) + "\n"
+    assert len(large_text.encode("utf-8")) > 64 * 1024
+    sbx = _FakeSandbox(large_text)
+    ctx = _Ctx(
+        sbx,
+        conv_id="conv-edit-guards-large-miss",
+        read_char_budget=len(large_text) + 1024,
+    )
+    assert (await FileReadTool().run(FileReadArgs(path="large.txt"), ctx)).success
+
+    first = await FileEditTool().run(
+        FileEditArgs(path="large.txt", old="definitely missing old text", new="replacement"),
+        ctx,
+    )
+    second = await FileEditTool().run(
+        FileEditArgs(path="large.txt", old="still definitely missing", new="replacement"),
+        ctx,
+    )
+
+    assert first.success is False
+    assert first.error == "old_text_not_found"
+    assert "Fresh full current file" not in first.content
+    assert "Fresh current window" not in first.content
+    assert "line 120" not in first.content
+    assert "delivered_read" not in (first.structured or {})
+    assert (first.structured or {})["old_text_not_found_count"] == 1
+
+    assert second.success is False
+    assert second.error == "old_text_not_found"
+    assert "Fresh full current file" not in second.content
+    assert "Fresh current window" not in second.content
+    assert "do NOT re-send it" in second.content
+    assert "too large to include without a match anchor" in second.content
+    assert "delivered_read" not in (second.structured or {})
+    assert (second.structured or {})["old_text_not_found_count"] == 2
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_edit_old_text_not_found_successful_edit_resets_counter():
+    sbx = _FakeSandbox("alpha = 1\nbeta = 2\n")
+    ctx = _Ctx(sbx, conv_id="conv-edit-guards-miss-reset")
+
+    first = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="missing one", new="replacement"),
+        ctx,
+    )
+    second = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="missing two", new="replacement"),
+        ctx,
+    )
+    changed = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="alpha = 1", new="alpha = 10"),
+        ctx,
+    )
+    after_success = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="missing three", new="replacement"),
+        ctx,
+    )
+
+    assert first.error == "old_text_not_found"
+    assert second.error == "old_text_not_found"
+    assert "exact current content is above" in second.content
+    assert changed.success is True, changed.content
+    assert after_success.error == "old_text_not_found"
+    assert "do NOT re-send it" not in after_success.content
+    assert (after_success.structured or {})["old_text_not_found_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_file_edit_corrected_retry_after_old_text_not_found_delivered_content_succeeds():
+    sbx = _FakeSandbox("alpha = 1\nbeta = 2\n")
+    ctx = _Ctx(sbx, conv_id="conv-edit-guards-miss-retry")
+
+    refused = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="beta = 3", new="beta = 20"),
+        ctx,
+    )
+    retry = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="beta = 2", new="beta = 20"),
+        ctx,
+    )
+
+    assert refused.error == "old_text_not_found"
+    assert "Fresh full current file for config.py" in refused.content
+    assert (refused.structured or {})["delivered_read"]["full"] is True
+    assert retry.success is True, retry.content
+    assert sbx.writes and b"beta = 20" in sbx.writes[-1]
+
+
+@pytest.mark.asyncio
+async def test_file_str_replace_and_exact_replace_old_text_misses_use_recovery_refusal():
+    sbx = _FakeSandbox("alpha = 1\nbeta = 2\n")
+
+    str_miss = await FileStrReplaceTool().run(
+        FileStrReplaceArgs(path="config.py", old_str="gamma = 3", new_str="gamma = 4"),
+        _Ctx(sbx, conv_id="conv-edit-guards-str-miss"),
+    )
+    exact_miss = await ExactReplaceTool().run(
+        ExactReplaceTool.definition.args_model(
+            path="config.py",
+            edits=[{"old_string": "gamma = 3", "new_string": "gamma = 4"}],
+        ),
+        _Ctx(sbx, conv_id="conv-edit-guards-exact-miss"),
+    )
+
+    assert str_miss.success is False
+    assert str_miss.error == "old_str_not_found"
+    assert "Fresh full current file for config.py" in str_miss.content
+    assert (str_miss.structured or {})["delivered_read"]["full"] is True
+
+    assert exact_miss.success is False
+    assert exact_miss.error == "EXACT_REPLACE_NO_MATCH"
+    assert "Fresh full current file for config.py" in exact_miss.content
+    assert (exact_miss.structured or {})["delivered_read"]["full"] is True
     assert sbx.writes == []
 
 

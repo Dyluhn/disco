@@ -144,6 +144,7 @@ def _conv_state(conv_id: str) -> dict[str, Any]:
             "edit_grounded": set(),
             "targeted_read_grounded": set(),
             "no_op_edit_counts": {},
+            "old_text_not_found_counts": {},
             "reads": {},
         }
         _read_state[conv_id] = s
@@ -151,11 +152,20 @@ def _conv_state(conv_id: str) -> dict[str, Any]:
     s.setdefault("edit_grounded", set())  # back-compat for buckets created before REL-RC-D
     s.setdefault("targeted_read_grounded", set())  # back-compat for buckets created before REL-RC-G
     s.setdefault("no_op_edit_counts", {})  # back-compat for buckets created before REL-RC-L
+    s.setdefault("old_text_not_found_counts", {})  # back-compat for buckets created before REL-6
     return s
 
 
 def _increment_no_op_edit_count(conv_id: str, path: str) -> int:
     counts = _conv_state(conv_id)["no_op_edit_counts"]
+    canon = _canonical(path)
+    count = int(counts.get(canon, 0)) + 1
+    counts[canon] = count
+    return count
+
+
+def _increment_old_text_not_found_count(conv_id: str, path: str) -> int:
+    counts = _conv_state(conv_id)["old_text_not_found_counts"]
     canon = _canonical(path)
     count = int(counts.get(canon, 0)) + 1
     counts[canon] = count
@@ -174,6 +184,7 @@ def _clear_grounding(conv_id: str, path: str) -> None:
     st["edit_grounded"].discard(canon)
     st["targeted_read_grounded"].discard(canon)
     st["no_op_edit_counts"].pop(canon, None)
+    st["old_text_not_found_counts"].pop(canon, None)
 
 
 # CD-TOOLS-1 — the internal elision-marker family, re-expressed locally so the tools
@@ -459,6 +470,57 @@ def _no_op_write_refusal(
     )
 
 
+def _old_text_not_found_refusal(
+    conv_id: str,
+    path: str,
+    *,
+    current_bytes: bytes,
+    base_content: str,
+    error: str,
+) -> ToolOutcome:
+    """REL-6: anchored old-text misses are self-recovering refusal reads."""
+    import hashlib
+
+    count = _increment_old_text_not_found_count(conv_id, path)
+    content = base_content
+    structured: dict[str, Any] = {
+        "kind": "old_text_not_found",
+        "path": path,
+        "old_text_not_found_count": count,
+    }
+    delivered_content = len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES
+    if delivered_content:
+        sha = hashlib.sha256(current_bytes).hexdigest()
+        fresh_content, delivered = _line_refusal_read(
+            conv_id,
+            path,
+            current_bytes=current_bytes,
+            sha=sha,
+            attempted_lines=None,
+        )
+        content += fresh_content
+        structured["delivered_read"] = delivered
+    if count >= 2:
+        if delivered_content:
+            content += (
+                "\n\nRepeated old-text miss: your `old` text does not appear in the file "
+                "— do NOT re-send it; the exact current content is above, copy the region "
+                "you want to change precisely."
+            )
+        else:
+            content += (
+                "\n\nRepeated old-text miss: your `old` text does not appear in the file "
+                "— do NOT re-send it; this file is too large to include without a match "
+                "anchor, so read the exact region you want to change and copy it precisely."
+            )
+    return ToolOutcome(
+        success=False,
+        error=error,
+        content=content,
+        structured=structured,
+    )
+
+
 def _line_success_content(
     path: str,
     text: str,
@@ -654,6 +716,7 @@ def reground_after_anchored_edit(
     # The read bit is always cleared on mutation (a blind full rewrite still needs a fresh read).
     st["read_since_write"].discard(canon)
     st["no_op_edit_counts"].pop(canon, None)
+    st["old_text_not_found_counts"].pop(canon, None)
     if prior is not None and prior.get("full"):
         # Whole-file grounding stays whole-file, advanced to the post-edit bytes the engine wrote,
         # and re-grants EDIT grounding so the model's own next anchored edit isn't false-STALE.
@@ -1251,14 +1314,17 @@ class FileEditTool:
             return _blocked
         updated, how = _forgiving_replace(text, args.old, _strip_line_numbers(args.new))
         if updated is None:
-            return ToolOutcome(
-                success=False,
-                content=(
+            return _old_text_not_found_refusal(
+                ctx.conversation_id,
+                args.path,
+                current_bytes=_raw,
+                error="old_text_not_found",
+                base_content=(
                     f"`old` not found in {args.path} (tried exact + whitespace-tolerant)."
                     + _nearest_anchor(text, args.old)
-                    + " Tip: read the file for line numbers, then use file_replace_lines."
+                    + " Tip: copy the exact current region you want to replace, or use "
+                    "file_replace_lines with the current line numbers."
                 ),
-                error="old_text_not_found",
             )
         # No-op guard, on GROUND TRUTH: refuse only when the replacement leaves the
         # file byte-identical. Checking the *applied* result (not an abstract
@@ -1586,10 +1652,15 @@ class FileStrReplaceTool:
                             args.path, new_text.encode("utf-8")
                         ),
                     )
-            return ToolOutcome(
-                success=False,
+            return _old_text_not_found_refusal(
+                ctx.conversation_id,
+                args.path,
+                current_bytes=_raw,
                 error="old_str_not_found",
-                content=f"`old_str` did not appear verbatim in {args.path}.",
+                base_content=(
+                    f"`old_str` did not appear verbatim in {args.path}. Copy the exact "
+                    "current region you want to replace."
+                ),
             )
 
         # Exactly one occurrence — apply and pass through W3 gate.
@@ -1817,10 +1888,15 @@ class ExactReplaceTool:
         for e in args.edits:
             occ = _all_occurrences(text, e.old_string)
             if len(occ) == 0:
-                return ToolOutcome(
-                    success=False,
+                return _old_text_not_found_refusal(
+                    ctx.conversation_id,
+                    args.path,
+                    current_bytes=raw,
                     error="EXACT_REPLACE_NO_MATCH",
-                    content=f"exact_replace: old_string not found in {args.path}: {e.old_string[:60]!r}.",
+                    base_content=(
+                        f"exact_replace: old_string not found in {args.path}: "
+                        f"{e.old_string[:60]!r}."
+                    ),
                 )
             if len(occ) > 1 and not args.multi:
                 return ToolOutcome(

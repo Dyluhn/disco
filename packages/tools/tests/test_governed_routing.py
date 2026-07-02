@@ -19,7 +19,7 @@ from disco.tools.builtin import (
 )
 from disco.tools.builtin.files import _route_for_governed, reset_read_tracker
 from disco.tools.sandbox.base import SandboxSpec
-from disco.tools.sandbox.process import ProcessSandboxService
+from tool_fakes import FakeSandboxInstance
 
 pytestmark = pytest.mark.asyncio
 
@@ -32,8 +32,7 @@ def _clean():
 
 
 async def _ctx():
-    svc = ProcessSandboxService()
-    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    inst = FakeSandboxInstance(owner_id="local", conversation_id="c")
     ctx = ToolContext(
         sandbox=inst, workspace_path=".", timeout_s=30,
         capabilities={Capability.FILESYSTEM}, owner_id="local", conversation_id="c",
@@ -103,18 +102,66 @@ async def test_governed_guard_works_through_sandbox_session():
     # the RUNTIME passes a SandboxSession wrapper as ctx.sandbox (not a raw instance). Prove the
     # session DELEGATES resolve_relpath (governed symlink-proof) + atomic_write — without the
     # delegation these silently fell back to lexical / non-atomic write (Codex CD-TOOLS-4 round-2).
+    from disco.tools.sandbox.base import ExecResult
     from disco.tools.sandbox.session import SandboxSession
 
-    session = SandboxSession(ProcessSandboxService(), owner_id="o", conversation_id="c")
+    class _DelegatingInstance:
+        id = "fake-delegating"
+        owner_id = "o"
+        conversation_id = "c"
+        spec = SandboxSpec()
+
+        def __init__(self) -> None:
+            self._fs: dict[str, bytes] = {}
+            self.atomic_paths: list[str] = []
+
+        async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:
+            return ExecResult(exit_code=0, stdout="", stderr="")
+
+        async def read_file(self, path: str) -> bytes:
+            return self._fs[path]
+
+        async def write_file(self, path: str, data: bytes) -> None:
+            self._fs[path] = data
+
+        async def list_dir(self, path: str) -> list[str]:
+            prefix = "" if path in ("", ".") else path.rstrip("/") + "/"
+            return sorted(
+                key[len(prefix):]
+                for key in self._fs
+                if key.startswith(prefix) and "/" not in key[len(prefix):]
+            )
+
+        async def atomic_write(self, path: str, data: bytes) -> None:
+            self.atomic_paths.append(path)
+            self._fs[path] = data
+
+        async def resolve_relpath(self, path: str) -> str:
+            return ".disco/appspec.json" if path == "link.json" else path
+
+        def display_url(self) -> str | None:
+            return None
+
+        def expose_port(self, port: int) -> str | None:
+            return None
+
+        async def destroy(self) -> None:
+            pass
+
+    class _DelegatingService:
+        name = "fake"
+
+        async def create(self, spec, *, owner_id: str, conversation_id: str):
+            return _DelegatingInstance()
+
+    session = SandboxSession(_DelegatingService(), owner_id="o", conversation_id="c")
     ctx = ToolContext(
         sandbox=session, workspace_path=".", timeout_s=30,
         capabilities={Capability.FILESYSTEM}, owner_id="o", conversation_id="c",
     )
     await session.write_file(".disco/appspec.json", b'{"real":1}')
-    # a symlink reaching INTO .disco must be caught via the session's delegated resolve_relpath.
-    import os
-    ws = (await session._ensure())._workspace  # type: ignore[attr-defined]
-    os.symlink(".disco/appspec.json", ws / "link.json")
+    inst = await session._ensure()  # type: ignore[attr-defined]
+    # A path resolving INTO .disco must be caught via the session's delegated resolve_relpath.
     res = await SafeWriteFileTool().run(
         SafeWriteFileTool.definition.args_model(path="link.json", content="x"), ctx
     )
@@ -125,6 +172,7 @@ async def test_governed_guard_works_through_sandbox_session():
         SafeWriteFileTool.definition.args_model(path="out/page.txt", content="hi\n"), ctx
     )
     assert ok.success, ok.content
+    assert inst.atomic_paths == ["out/page.txt"]
     assert not any(n.startswith(".disco-tmp") for n in await session.list_dir("out"))
     await session.destroy()
 

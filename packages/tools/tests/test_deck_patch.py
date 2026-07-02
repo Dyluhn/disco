@@ -692,7 +692,7 @@ class TestDeckSchema:
 
 
 @pytest.mark.asyncio
-async def test_deck_patch_preserves_generated_images_on_edit(tmp_path):
+async def test_deck_patch_preserves_generated_images_on_edit():
     """Editing an image deck must NOT drop its images to placeholders: deck_patch
     reloads {stem}_img_{i}.png from the sandbox and re-embeds (C7)."""
     import io as _io
@@ -701,9 +701,8 @@ async def test_deck_patch_preserves_generated_images_on_edit(tmp_path):
     from disco.tools.anatomy import ToolContext
     from disco.tools.builtin._deck_patch import DeckPatchTool
     from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide
-    from disco.tools.sandbox import SandboxSession
-    from disco.tools.sandbox.process import ProcessSandboxService
     from PIL import Image
+    from tool_fakes import FakeSandboxInstance
 
     # a deck with one image slide + its on-disk generated image
     authored = AuthoredDeck(title="T", theme="disco-light", slides=[
@@ -713,12 +712,11 @@ async def test_deck_patch_preserves_generated_images_on_edit(tmp_path):
     Image.new("RGB", (64, 36), (10, 160, 60)).save(buf, format="PNG")
     png = buf.getvalue()
 
-    svc = ProcessSandboxService(root=str(tmp_path))
-    session = SandboxSession(svc, owner_id="o", conversation_id="c")
-    await session.write_file("deck.authored.json", authored.model_dump_json().encode())
-    await session.write_file("deck_img_0.png", png)  # the generated asset, by convention
+    sandbox = FakeSandboxInstance(owner_id="o", conversation_id="c")
+    await sandbox.write_file("deck.authored.json", authored.model_dump_json().encode())
+    await sandbox.write_file("deck_img_0.png", png)  # the generated asset, by convention
 
-    ctx = ToolContext(sandbox=session, workspace_path=".", timeout_s=60,
+    ctx = ToolContext(sandbox=sandbox, workspace_path=".", timeout_s=60,
                       capabilities=None, owner_id="o", conversation_id="c")
     tool = DeckPatchTool()
     # a no-op-ish patch (change the title) to trigger a re-render
@@ -728,7 +726,7 @@ async def test_deck_patch_preserves_generated_images_on_edit(tmp_path):
     out = await tool.run(args, ctx)
     assert out.success, out.error
 
-    pptx = await session.read_file("deck.pptx")
+    pptx = await sandbox.read_file("deck.pptx")
     with zipfile.ZipFile(_io.BytesIO(pptx)) as z:
         media = [n for n in z.namelist() if n.startswith("ppt/media/")]
     assert media, "edit dropped the image — re-render did not re-embed the generated asset"

@@ -10,8 +10,7 @@ import pytest
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin import ExactReplaceTool, FileReadTool
 from disco.tools.builtin.files import reset_read_tracker
-from disco.tools.sandbox.base import SandboxSpec
-from disco.tools.sandbox.process import ProcessSandboxService
+from tool_fakes import FakeSandboxInstance
 
 pytestmark = pytest.mark.asyncio
 
@@ -24,8 +23,7 @@ def _clean_tracker():
 
 
 async def _ctx():
-    svc = ProcessSandboxService()
-    inst = await svc.create(SandboxSpec(), owner_id="local", conversation_id="c")
+    inst = FakeSandboxInstance(owner_id="local", conversation_id="c")
     ctx = ToolContext(
         sandbox=inst,
         workspace_path=".",
