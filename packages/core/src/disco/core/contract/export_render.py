@@ -103,14 +103,21 @@ _CHROME_CLASS_RE = re.compile(
 )
 # Visual content that is NOT text — an image/figure-only slide is a real deck, not
 # blank (mirrors the pptx embedded-media rule). Its presence makes a slide non-blank.
+# LINEAR by construction — every branch is a single tag with bounded [^>]* / quoted
+# attrs, no unbounded backtracking. The svg/canvas branch matches an opening tag
+# followed (after optional whitespace) by a CHILD element start `<` that is not the
+# closing tag or a comment — i.e. inline svg/canvas WITH content — instead of the
+# old `.*?\S.*?</\1>`, which was O(n^2) on a truncated/unclosed large inline SVG and
+# stalled the checker on exactly the broken chart decks the gate must refuse. An
+# svg/canvas holding only TEXT is still caught via the visible-text floor.
 _HTML_MEDIA_RE = re.compile(
     r"""
     <img\b[^>]*\bsrc\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
     |<(?:video|iframe|embed)\b[^>]*\bsrc\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
     |<object\b[^>]*\bdata\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
-    |<(svg|canvas)\b[^>]*>.*?\S.*?</\1>
+    |<(?:svg|canvas)\b[^>]*>\s*<(?![/!])
     """,
-    re.IGNORECASE | re.DOTALL | re.VERBOSE,
+    re.IGNORECASE | re.VERBOSE,
 )
 _PPTX_TEXT_RE = re.compile(rb"<a:t>(.*?)</a:t>", re.IGNORECASE | re.DOTALL)
 _SLIDE_XML_RE = re.compile(r"^ppt/slides/slide\d+\.xml$")

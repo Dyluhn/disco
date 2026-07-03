@@ -240,6 +240,33 @@ def test_object_data_media_counts_as_content() -> None:
     assert f.non_blank is True and f.ok is True
 
 
+def test_media_regex_is_linear_on_truncated_svg() -> None:
+    """A truncated/unclosed large inline SVG (a broken chart deck — exactly what the
+    gate must refuse) must NOT stall the checker via catastrophic backtracking. Guard
+    with a hard timeout so a reintroduced O(n^2) pattern fails loudly, not hangs CI."""
+    import signal
+
+    if not hasattr(signal, "SIGALRM"):  # pragma: no cover - non-Unix
+        import pytest
+
+        pytest.skip("SIGALRM unavailable")
+    truncated = (
+        '<html><body><section data-slide-id="s"><svg viewBox="0 0 9 9"><path d="M0 0"/>'
+        + ("x" * 2_000_000)  # no closing </svg>
+    )
+
+    def _boom(*_):
+        raise TimeoutError("media regex stalled — catastrophic backtracking regressed")
+
+    signal.signal(signal.SIGALRM, _boom)
+    signal.setitimer(signal.ITIMER_REAL, 5.0)
+    try:
+        f = check_export_render("html", text=truncated, declared_units=1)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    assert f.unit_count == 1  # completed without stalling
+
+
 def test_count_refusals_only_environment_source() -> None:
     # P10-2: a USER/AGENT message quoting the token must not advance the cap.
     def m(src: EventSource) -> MessageEvent:
