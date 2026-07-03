@@ -267,6 +267,65 @@ def test_media_regex_is_linear_on_truncated_svg() -> None:
     assert f.unit_count == 1  # completed without stalling
 
 
+def test_chrome_strip_is_bounded_on_many_unclosed_opens() -> None:
+    """A truncated multi-slide BRANDED deck has many unclosed chrome opens; the
+    chrome-strip's inner scan is bounded so it can't go O(opens*n) and stall."""
+    import signal
+
+    if not hasattr(signal, "SIGALRM"):  # pragma: no cover - non-Unix
+        import pytest
+
+        pytest.skip("SIGALRM unavailable")
+    html = "<html><body>" + "".join(
+        f'<div class="bc-x">{"a" * 5000}' for _ in range(400)  # 400 UNCLOSED chrome opens
+    )
+
+    def _boom(*_):
+        raise TimeoutError("chrome strip stalled — superlinear scan regressed")
+
+    signal.signal(signal.SIGALRM, _boom)
+    signal.setitimer(signal.ITIMER_REAL, 5.0)
+    try:
+        check_export_render("html", text=html, declared_units=1)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
+
+def test_multi_mb_inline_script_is_fully_stripped() -> None:
+    """A real deck ships a ~2.5MB inline bundle in ONE <script>; it MUST be stripped
+    from the visible-text measure (else its body reads as content and a blank deck
+    passes). This is the correctness cliff a small inner-scan cap would fall off, so
+    the strip is a linear str.find walk with NO body-size cap."""
+    big_body = "var x=1;const y=2;" * 160_000  # ~2.9 MB of non-prose JS
+    html = f"<html><body><h1>Real Slide</h1><script>{big_body}</script></body></html>"
+    f = check_export_render("html", text=html, declared_units=1)
+    # only "Real Slide" survives as visible text — the 2.9MB body is gone
+    assert f.visible_text_len < 50, f.visible_text_len
+    assert f.non_blank is False  # a one-heading branded-less deck under the floor
+
+
+def test_script_style_strip_is_linear_on_many_unclosed() -> None:
+    """Many unclosed <style> opens must not stall — the strip is O(n), not the
+    O(n^2) a `re.sub(r'<style>.*?</style>')` gives (measured 206x for 16x input)."""
+    import signal
+
+    if not hasattr(signal, "SIGALRM"):  # pragma: no cover - non-Unix
+        import pytest
+
+        pytest.skip("SIGALRM unavailable")
+    html = "<html><body>" + ("<style>" + "x" * 40) * 20_000  # 20k unclosed styles
+
+    def _boom(*_):
+        raise TimeoutError("script/style strip stalled — O(n^2) regressed")
+
+    signal.signal(signal.SIGALRM, _boom)
+    signal.setitimer(signal.ITIMER_REAL, 5.0)
+    try:
+        check_export_render("html", text=html, declared_units=1)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+
+
 def test_count_refusals_only_environment_source() -> None:
     # P10-2: a USER/AGENT message quoting the token must not advance the cap.
     def m(src: EventSource) -> MessageEvent:

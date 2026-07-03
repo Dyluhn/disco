@@ -90,15 +90,50 @@ _SLIDE_ID_RE = re.compile(r'data-slide-id\s*=\s*"([^"]*)"')
 _SECTION_RE = re.compile(r"<section\b", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
 # Strip <script>/<style> BODIES before measuring visible text — their contents are
-# not rendered prose (a 2MB inlined stylesheet must not read as slide content).
-_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+# not rendered prose (a real deck ships a 2.48 MB inline three.js bundle in ONE
+# <script>, so a blank deck must not read as non-blank off that).
+#
+# Done as a LINEAR single-pass str.find walk, NOT one `re.sub(r"...*?</\1>")`: the
+# lazy regex re-scans to EOF from each start position on failure, so many unclosed
+# opens are O(n^2) (measured 206x for 16x input). We CANNOT bound the inner scan
+# with a small cap the way _CHROME_CLASS_RE does, because a legit body is multi-MB
+# (the three.js bundle) and a small cap would fail to strip it — re-opening the very
+# "inline blob counted as content" bug this strip exists to prevent. Only the OPEN
+# TAG is bounded (attrs are always tiny, <4KB); the BODY is found with str.find,
+# which is linear at any size. A truncated/unclosed final tag drops to EOF.
+_SCRIPT_STYLE_OPEN_RE = re.compile(r"<(script|style)\b[^>]{0,4000}?>", re.IGNORECASE)
+
+
+def _strip_script_style(html: str) -> str:
+    """Remove <script>/<style>...</tag> bodies of ANY size in a single linear pass."""
+    lower = html.lower()
+    out: list[str] = []
+    i = 0
+    n = len(html)
+    while i < n:
+        m = _SCRIPT_STYLE_OPEN_RE.search(html, i)
+        if m is None:
+            out.append(html[i:])
+            break
+        out.append(html[i : m.start()])
+        close = f"</{m.group(1).lower()}>"
+        j = lower.find(close, m.end())
+        if j == -1:  # unclosed (truncated) — nothing after the open is visible prose
+            break
+        i = j + len(close)
+    return "".join(out)
 # Strip default-template CHROME by CLASS (the "Disco." wordmark + Latin colophon +
 # their bc-* pieces) BEFORE measuring content — token-matching the rendered strings
 # is fragile (tag-stripping inserts spaces: `Disco<span>.` → "Disco ."), so a blank
 # BRANDED deck slipped past as non-blank. Looped to unwind one nesting level at a
 # time (the colophon nests bc-* divs). Structural, so it survives chrome text edits.
+# The inner scan is BOUNDED (`.{0,4000}?`, not `.*?`): real chrome elements are tiny
+# (<1KB), so capping the look-ahead for the close tag makes a TRUNCATED unclosed
+# chrome open (of which a truncated multi-slide branded deck has many) fail fast
+# instead of scanning to EOF at each one — the O(opens x n) stall a plain `.*?</\1>`
+# caused on such input.
 _CHROME_CLASS_RE = re.compile(
-    r"""<(\w+)[^>]*\bclass=(["'])(?:[^"']*\s)?(?:brand-wordmark|brand-colophon|wordmark|colophon|watermark|bc-[\w-]+)(?:\s[^"']*)?\2[^>]*>.*?</\1>""",
+    r"""<(\w+)[^>]*\bclass=(["'])(?:[^"']*\s)?(?:brand-wordmark|brand-colophon|wordmark|colophon|watermark|bc-[\w-]+)(?:\s[^"']*)?\2[^>]*>.{0,4000}?</\1>""",
     re.IGNORECASE | re.DOTALL,
 )
 # Visual content that is NOT text — an image/figure-only slide is a real deck, not
@@ -119,7 +154,11 @@ _HTML_MEDIA_RE = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
-_PPTX_TEXT_RE = re.compile(rb"<a:t>(.*?)</a:t>", re.IGNORECASE | re.DOTALL)
+# a:t is a single text RUN — always tiny (a word/line). The 8KB inner-scan cap is
+# far above any real run yet makes many unclosed <a:t> (adversarial) linear-in-n
+# instead of the O(n^2) a plain `.*?` would give; a real run is never truncated
+# past 8KB, so correctness is unaffected.
+_PPTX_TEXT_RE = re.compile(rb"<a:t>(.{0,8000}?)</a:t>", re.IGNORECASE | re.DOTALL)
 _SLIDE_XML_RE = re.compile(r"^ppt/slides/slide\d+\.xml$")
 
 
@@ -159,7 +198,7 @@ def _html_facts(html: str) -> tuple[int, int, bool, bool]:
         slides = len(_SECTION_RE.findall(html))
     # Remove <script>/<style> bodies, then unwind template CHROME by class (looped so
     # nested colophon pieces go too), then strip tags + any residual chrome tokens.
-    body = _SCRIPT_STYLE_RE.sub(" ", html)
+    body = _strip_script_style(html)
     prev = ""
     while prev != body:
         prev = body
