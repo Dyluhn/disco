@@ -807,10 +807,64 @@ def _emit_schema_sql(lead: Entity) -> str:
     cols.append('  "created_at" TEXT NOT NULL DEFAULT (datetime(\'now\'))')
     body = ",\n".join(cols)
     return (
-        "-- Auto-generated D1 schema (Epic E). The ONE lead entity → one table.\n"
+        "-- Auto-generated D1 schema (Epic E). The ONE lead entity -> one table.\n"
+        "-- Keep this migration in sync with src/db/schema.ts. Both files are generated\n"
+        "-- from the same resolved lead entity, so they cannot drift by construction.\n"
         f'CREATE TABLE IF NOT EXISTS "{table}" (\n'
         f"{body}\n"
         ");\n"
+    )
+
+
+def _drizzle_factory(field_type: str) -> str:
+    """The drizzle-orm/sqlite-core column factory matching `_sql_type`.
+
+    This intentionally lowers through the SAME SQL type map as `schema.sql` so the
+    typed Drizzle table and the D1 migration are two renderings of one entity model.
+    """
+    sql_type = _sql_type(field_type)
+    if sql_type == "INTEGER":
+        return "integer"
+    if sql_type == "REAL":
+        return "real"
+    return "text"
+
+
+def _emit_drizzle_schema_ts(lead: Entity) -> str:
+    """`src/db/schema.ts` - the typed Drizzle source of truth for the lead table."""
+    table = _table_name(lead)
+    cols = ['  id: integer("id").primaryKey({ autoIncrement: true }),']
+    for field in lead.fields:
+        chain = ".notNull()" if field.required else ""
+        cols.append(
+            f"  {field.name}: {_drizzle_factory(field.type)}"
+            f"({_ts(field.name)}){chain},"
+        )
+    cols.append(
+        "  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),"
+    )
+    return (
+        "/* Auto-generated Drizzle schema - regenerated from .disco/appspec.json.\n"
+        "   This typed table and schema.sql are lowered from the same resolved lead\n"
+        "   entity, so the D1 migration and Drizzle layer cannot drift. */\n"
+        'import { sql } from "drizzle-orm";\n'
+        'import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";\n'
+        "\n"
+        f"export const leads = sqliteTable({_ts(table)}, {{\n"
+        + "\n".join(cols) + "\n"
+        "});\n"
+    )
+
+
+def _emit_drizzle_config_ts() -> str:
+    return (
+        'import { defineConfig } from "drizzle-kit";\n'
+        "\n"
+        "export default defineConfig({\n"
+        '  dialect: "sqlite",\n'
+        '  schema: "./src/db/schema.ts",\n'
+        '  out: "./drizzle",\n'
+        "});\n"
     )
 
 
@@ -870,9 +924,6 @@ def _emit_wrangler_toml(app: AppSpec, lead: Entity) -> str:
 
 
 def _emit_worker_ts(lead: Entity) -> str:
-    # Field names are spec-validated SAFE identifiers (EntityField), so we can trust
-    # them; we STILL double-quote them as SQL identifiers (belt-and-suspenders).
-    table = _table_name(lead)
     cols = [f.name for f in lead.fields]
     required = [f.name for f in lead.fields if f.required]
     email_fields = [
@@ -880,12 +931,10 @@ def _emit_worker_ts(lead: Entity) -> str:
         for f in lead.fields
         if f.name.lower() == "email" or f.type.strip().lower() == "email"
     ]
-    quoted_cols = ", ".join(f'\\"{c}\\"' for c in cols)
-    placeholders = ", ".join("?" for _ in cols)
-    bind_args = ", ".join(f"rec[{_ts(c)}] ?? null" for c in cols)
     required_lit = _ts(required)
     cols_lit = _ts(cols)
     email_lit = _ts(email_fields)
+    lead_values = "\n".join(f"    {_ts(c)}: rec[{_ts(c)}] ?? null," for c in cols)
     return (
         "/* Auto-generated Cloudflare Worker (Epic E): public lead capture + "
         "AUTH-GATED admin read-back.\n"
@@ -893,6 +942,10 @@ def _emit_worker_ts(lead: Entity) -> str:
         "<env.ADMIN_TOKEN>`;\n"
         "   a missing ADMIN_TOKEN FAILS CLOSED (reads denied). POST /api/leads "
         "(submission) stays public. */\n"
+        'import { desc } from "drizzle-orm";\n'
+        'import { drizzle } from "drizzle-orm/d1";\n'
+        'import { leads } from "../src/db/schema";\n'
+        "\n"
         "export interface Env {\n"
         "  DB: D1Database;\n"
         "  ASSETS: { fetch: (req: Request) => Promise<Response> };\n"
@@ -906,6 +959,7 @@ def _emit_worker_ts(lead: Entity) -> str:
         f"const EMAIL_FIELDS: string[] = {email_lit};\n"
         "const MAX_FIELD_LEN = 2000;\n"
         "const EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\n"
+        "type LeadInsert = typeof leads.$inferInsert;\n\n"
         "function json(data: unknown, status = 200): Response {\n"
         "  return new Response(JSON.stringify(data), {\n"
         "    status,\n"
@@ -969,6 +1023,11 @@ def _emit_worker_ts(lead: Entity) -> str:
         "  }\n"
         "  return { ok: true, rec };\n"
         "}\n\n"
+        "function leadValues(rec: Record<string, unknown>): LeadInsert {\n"
+        "  return {\n"
+        f"{lead_values}\n"
+        "  } as LeadInsert;\n"
+        "}\n\n"
         "async function insertLead(env: Env, body: unknown): Promise<Response> {\n"
         "  const check = validateLead(body);\n"
         "  if (!check.ok) {\n"
@@ -976,17 +1035,17 @@ def _emit_worker_ts(lead: Entity) -> str:
         "  }\n"
         "  const rec = check.rec;\n"
         "  try {\n"
-        "    await env.DB.prepare(\n"
-        f'      "INSERT INTO \\"{table}\\" ({quoted_cols}) VALUES ({placeholders})"\n'
-        f"    ).bind({bind_args}).run();\n"
+        "    const db = drizzle(env.DB);\n"
+        "    await db.insert(leads).values(leadValues(rec)).run();\n"
         "  } catch {\n"
         '    return json({ error: "could not save lead" }, 500);\n'
         "  }\n"
         "  return json({ ok: true }, 201);\n"
         "}\n\n"
-        "async function listLeads(env: Env): Promise<D1Result<Record<string, unknown>>> {\n"
-        f'  return await env.DB.prepare('
-        f'"SELECT * FROM \\"{table}\\" ORDER BY id DESC LIMIT 200").all();\n'
+        "async function listLeads(env: Env): Promise<Record<string, unknown>[]> {\n"
+        "  const db = drizzle(env.DB);\n"
+        "  const rows = await db.select().from(leads).orderBy(desc(leads.id)).limit(200).all();\n"
+        "  return rows as Record<string, unknown>[];\n"
         "}\n\n"
         "// Server-rendered leads table — EVERY cell escaped via escapeHtml (no raw\n"
         "// interpolation of lead values into HTML).\n"
@@ -1041,15 +1100,15 @@ def _emit_worker_ts(lead: Entity) -> str:
         "      if (!isAuthorized(request, env)) {\n"
         '        return json({ error: "unauthorized" }, 401);\n'
         "      }\n"
-        "      const result = await listLeads(env);\n"
-        "      return json({ leads: result.results ?? [] });\n"
+        "      const rows = await listLeads(env);\n"
+        "      return json({ leads: rows });\n"
         "    }\n"
         '    if (url.pathname === "/admin" && request.method === "GET") {\n'
         "      if (!isAuthorized(request, env)) {\n"
         "        return adminLoginPage();\n"
         "      }\n"
-        "      const result = await listLeads(env);\n"
-        "      return adminTable((result.results ?? []) as Record<string, unknown>[]);\n"
+        "      const rows = await listLeads(env);\n"
+        "      return adminTable(rows);\n"
         "    }\n"
         "    return env.ASSETS.fetch(request);\n"
         "  },\n"
@@ -1077,11 +1136,13 @@ def _emit_package_json(app: AppSpec, db_name: str) -> str:
             "deploy": "wrangler deploy",
         },
         "dependencies": {
+            "drizzle-orm": "^0.44.2",
             "react": "^18.3.1",
             "react-dom": "^18.3.1",
         },
         "devDependencies": {
             "@vitejs/plugin-react": "^4.3.1",
+            "drizzle-kit": "^0.31.4",
             "typescript": "^5.5.4",
             "vite": "^5.4.2",
             # v4.20+ for the array form of assets.run_worker_first (see wrangler.toml).
@@ -1221,6 +1282,10 @@ def _emit_owner_guide_md(app: AppSpec, lead: Entity, db_name: str) -> str:
         "  the Worker's structure enforces the lead/admin contract (public POST insert is\n"
         "  parameterized; reads are Bearer-gated and fail closed when `ADMIN_TOKEN` is\n"
         "  unset); the SPA routes and sections render.\n"
+        "- **Drizzle schema layer:** `src/db/schema.ts` is the typed Drizzle source of\n"
+        "  truth used by the Worker; `schema.sql` remains the D1 migration applied by\n"
+        "  `wrangler d1 execute`. Both are generated from the same lead entity, so the\n"
+        "  typed schema and migration stay in sync by construction.\n"
         "- **You deploy:** create the real D1 database, load the schema, set the\n"
         "  `ADMIN_TOKEN` secret, build the SPA, and publish the Worker.\n"
         "\n"
@@ -1329,6 +1394,7 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
     files: dict[str, str] = {
         "index.html": _emit_index_html(app_spec, design_spec),
         "package.json": _emit_package_json(app_spec, db_name),
+        "drizzle.config.ts": _emit_drizzle_config_ts(),
         "tsconfig.json": _emit_tsconfig(),
         "vite.config.ts": _emit_vite_config(),
         "wrangler.toml": _emit_wrangler_toml(app_spec, lead),
@@ -1337,6 +1403,7 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         "src/main.tsx": _emit_main_tsx(),
         "src/App.tsx": _emit_app_tsx(app_spec, names),
         "src/styles.css": _emit_styles_css(design_spec),
+        "src/db/schema.ts": _emit_drizzle_schema_ts(lead),
         "src/generated/content.ts": _emit_content_ts(app_spec, names),
         "src/generated/manifest.ts": _emit_manifest_ts(app_spec, design_spec, names),
         # Epic I — Cloudflare export deliverables (config completeness + owner guide).

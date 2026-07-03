@@ -240,6 +240,7 @@ async def test_directory_verify_passes_directory_check_set(stub_browser):
     # no lead-gen-only checks leaked into the directory verdict
     assert "worker_contract" not in names
     assert "schema_sql_valid" not in names
+    assert "drizzle_schema_valid" not in names
     assert v["passed"] is True, v["summary"]
 
 

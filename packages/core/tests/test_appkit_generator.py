@@ -28,6 +28,7 @@ from disco.core.appkit import (
     Page,
     Section,
     SectionContent,
+    check_drizzle_schema,
     default_lead_gen_app_spec,
     ensure_lead_entity,
     generate,
@@ -141,6 +142,7 @@ def test_generate_emits_the_expected_tree():
         "src/main.tsx",
         "src/App.tsx",
         "src/styles.css",
+        "src/db/schema.ts",
         "src/generated/content.ts",
         "src/generated/manifest.ts",
         # the Cloudflare side
@@ -148,6 +150,7 @@ def test_generate_emits_the_expected_tree():
         "schema.sql",
         "wrangler.toml",
         # build glue
+        "drizzle.config.ts",
         "package.json",
         "tsconfig.json",
         "vite.config.ts",
@@ -472,6 +475,67 @@ def test_schema_columns_track_entity_fields():
     _ = app
 
 
+def test_drizzle_schema_tracks_entity_fields_and_config_is_minimal():
+    custom = AppSpec.model_validate(
+        {
+            **_app().model_dump(mode="json"),
+            "entities": [
+                {
+                    "id": "lead",
+                    "name": "Lead",
+                    "fields": [
+                        {"name": "name", "type": "str", "required": True},
+                        {"name": "company", "type": "str", "required": False},
+                        {"name": "headcount", "type": "int", "required": False},
+                        {"name": "budget", "type": "float", "required": False},
+                    ],
+                }
+            ],
+        }
+    )
+    tree = generate(custom, _design())
+    schema_ts = tree["src/db/schema.ts"]
+    assert 'export const leads = sqliteTable("leads", {' in schema_ts
+    assert 'id: integer("id").primaryKey({ autoIncrement: true })' in schema_ts
+    assert 'name: text("name").notNull()' in schema_ts
+    assert 'company: text("company")' in schema_ts
+    assert 'headcount: integer("headcount")' in schema_ts
+    assert 'budget: real("budget")' in schema_ts
+    assert "created_at" in schema_ts and ".default(sql`(datetime('now'))`)" in schema_ts
+    assert tree["drizzle.config.ts"] == (
+        'import { defineConfig } from "drizzle-kit";\n'
+        "\n"
+        "export default defineConfig({\n"
+        '  dialect: "sqlite",\n'
+        '  schema: "./src/db/schema.ts",\n'
+        '  out: "./drizzle",\n'
+        "});\n"
+    )
+
+
+def test_check_drizzle_schema_passes_on_generated_tree_and_catches_drift():
+    tree = generate(_app(), _design())
+    res = check_drizzle_schema(tree)
+    assert res.passed, res.evidence
+
+    missing_column = {
+        **tree,
+        "src/db/schema.ts": tree["src/db/schema.ts"].replace(
+            '  message: text("message"),\n', ""
+        ),
+    }
+    missing_res = check_drizzle_schema(missing_column)
+    assert not missing_res.passed
+    assert "columns" in missing_res.evidence
+
+    pkg = json.loads(tree["package.json"])
+    del pkg["dependencies"]["drizzle-orm"]
+    missing_dep = {**tree, "package.json": json.dumps(pkg)}
+    dep_res = check_drizzle_schema(missing_dep)
+    assert not dep_res.passed
+    assert "drizzle-orm" in dep_res.evidence
+
+
 # ---- lead entity derivation ---------------------------------------------------
 
 
@@ -516,9 +580,11 @@ def test_worker_and_wrangler_wire_d1_and_spa():
     tree = generate(_app(), _design())
     worker = tree["worker/index.ts"]
     assert "/api/leads" in worker
-    # quoted identifier (defense-in-depth); the SQL lives in a TS string so the
-    # quotes are backslash-escaped in the source.
-    assert 'INSERT INTO \\"leads\\"' in worker
+    assert 'import { drizzle } from "drizzle-orm/d1";' in worker
+    assert 'import { leads } from "../src/db/schema";' in worker
+    assert "db.insert(leads).values(leadValues(rec)).run()" in worker
+    assert "db.select().from(leads)" in worker
+    assert "INSERT INTO" not in worker
     assert "/admin" in worker  # admin read-back route
     assert "env.ASSETS.fetch" in worker  # static asset serving
     wrangler = tree["wrangler.toml"]
@@ -575,6 +641,9 @@ def test_package_json_has_d1_and_cf_dev_scripts_with_consistent_db_name():
     assert scripts["db:remote"] == f"wrangler d1 execute {db_name} --remote --file=./schema.sql"
     # the owner guide references the same db name (no drift across deliverables)
     assert db_name in tree["OWNER_GUIDE.md"]
+    assert "src/db/schema.ts" in tree["OWNER_GUIDE.md"]
+    assert pkg["dependencies"]["drizzle-orm"].startswith("^")
+    assert pkg["devDependencies"]["drizzle-kit"].startswith("^")
     # wrangler v4.20+ for the array form of run_worker_first
     assert pkg["devDependencies"]["wrangler"].startswith("^4.")
 
@@ -633,9 +702,10 @@ def test_worker_post_validation_is_strict():
     assert "try {" in worker
     assert "could not save lead" in worker
     assert "}, 500)" in worker
-    # values stay parameterized
-    assert ".bind(" in worker
-    assert "prepare(" in worker
+    # values go through the generated Drizzle table, not a raw SQL string
+    assert "leadValues(rec)" in worker
+    assert "db.insert(leads).values" in worker
+    assert "prepare(" not in worker
 
 
 # ---- default lead-gen app spec ------------------------------------------------

@@ -151,6 +151,8 @@ def test_directory_tree_is_sorted_and_has_expected_paths():
         assert path in tree, path
     # a directory site ships NO lead-secret template (no admin secret to template)
     assert ".dev.vars.example" not in tree
+    assert "src/db/schema.ts" not in tree
+    assert "drizzle.config.ts" not in tree
 
 
 # ---- directory has NO server data plane ----------------------------------------
@@ -175,6 +177,8 @@ def test_directory_worker_is_static_no_lead_api_no_d1():
     pkg = json.loads(tree["package.json"])
     assert "db:local" not in pkg["scripts"]
     assert "db:remote" not in pkg["scripts"]
+    assert "drizzle-orm" not in pkg.get("dependencies", {})
+    assert "drizzle-kit" not in pkg.get("devDependencies", {})
 
 
 def test_directory_app_tsx_is_route_aware():

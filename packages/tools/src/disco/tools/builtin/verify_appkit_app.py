@@ -6,17 +6,21 @@ design-clean lead-gen app whose lead+admin contract is STRUCTURALLY correct —
 presence + ordering + parameterization + guard-first". This is STRUCTURAL
 verification of the generated source, NOT a proof that the app works at runtime:
 runtime reachability / behavioural execution of the Worker is explicitly deferred
-to Epic I's local CF (workerd) emulation. It runs EIGHT checks against the
+to Epic I's local CF (workerd) emulation. It runs NINE checks against the
 generated app in the workspace, each returning a PASS/FAIL with concrete evidence:
 
 * ``design_lint_clean``   — `lint_design(workspace_tree, design_spec)` == 0 findings.
 * ``schema_sql_valid``    — run the generated `schema.sql` in in-memory sqlite,
                             insert + read back a representative lead row, and prove
                             required columns reject NULL (pure, no deploy).
+* ``drizzle_schema_valid`` — parse `src/db/schema.ts` and `schema.sql` and prove the
+                            generated Drizzle table has the same column names +
+                            notNull flags, and package.json declares drizzle-orm +
+                            drizzle-kit.
 * ``worker_contract``     — STRUCTURALLY inspect `worker/index.ts` (presence +
                             ordering + parameterization + guard-first; NOT CF-runtime
                             execution — that is Epic I): the public POST /api/leads
-                            region CONTAINS a PARAMETERIZED prepared insert in a
+                            region CONTAINS a Drizzle insert in a
                             non-dead position; GET /api/leads AND /admin each
                             early-return 401 via the auth guard as the FIRST statement
                             BEFORE any read; isAuthorized Bearer-checks + fails closed
@@ -72,6 +76,7 @@ from disco.core.appkit import (
     DIRECTORY_PRIMITIVE_ID,
     STATIC_CF_EXPORT_FILES,
     WorkerAuthModel,
+    check_drizzle_schema,
     check_schema_sql,
     cloudflare_export_ready,
     cloudflare_export_ready_static,
@@ -89,6 +94,8 @@ from .design_lint import DesignLintArgs, DesignLintTool
 from .verify_app import VerifyWebAppArgs, VerifyWebAppTool
 
 _SCHEMA_RELPATH = "schema.sql"
+_DRIZZLE_SCHEMA_RELPATH = "src/db/schema.ts"
+_PACKAGE_RELPATH = "package.json"
 _WORKER_RELPATH = "worker/index.ts"
 _COMPONENTS_DIR = "src/components"
 
@@ -401,34 +408,52 @@ def _unconditional_exit_precedes(region: str, pos: int) -> bool:
     return False
 
 
-def _insert_in_dead_position(region: str, prepare_start: int) -> bool:
-    """True if the prepared insert at `prepare_start` can never run because it is
+def _insert_in_dead_position(region: str, insert_start: int) -> bool:
+    """True if the insert at `insert_start` can never run because it is
     inside a constant-false branch OR after an unconditional early return/throw in its
     enclosing block. These close the concrete dead-code evasions; they do NOT claim
     general reachability soundness (impossible for static regex — see Epic I)."""
     for start, end in _dead_branch_spans(region):
-        if start <= prepare_start < end:
+        if start <= insert_start < end:
             return True
-    return _unconditional_exit_precedes(region, prepare_start)
+    return _unconditional_exit_precedes(region, insert_start)
 
 
 def _region_has_run_insert(region: str) -> tuple[bool, bool]:
-    """Scan `region` for a lead INSERT that is prepared, bound, RUN, and in a
-    non-dead position — `.prepare("INSERT INTO ...").bind(...).run()` — and report
+    """Scan `region` for a Drizzle lead insert that is RUN and in a
+    non-dead position — `db.insert(leads).values(...).run()` — and report
     `(region_has_run_insert, is_parameterized)`:
 
-    * ``region_has_run_insert`` — a prepared INSERT whose `.bind(...)` is chained into
-      a `.run(` call is PRESENT in this region in a reachable (non-dead) position. A
-      bare `.prepare(...).bind(...)` with no `.run()` is a DEAD reference (never
+    * ``region_has_run_insert`` — a Drizzle insert whose `.values(...)` is chained into
+      a `.run(` call is PRESENT in this region in a reachable (non-dead) position.
+      A bare `.insert(...).values(...)` with no `.run()` is a DEAD reference (never
       executed) and does NOT count; nor does an insert after an unconditional early
       return or inside an `if (false)`/`if (0)` branch.
-    * ``is_parameterized`` — that INSERT's `VALUES (...)` are only `?` placeholders
-      (no `+`/`${}` concatenation, no value baked into the SQL) — i.e. injection-safe.
+    * ``is_parameterized`` — true only for the generated Drizzle table insert. A raw
+      SQL `INSERT INTO` in the POST data plane is reported as present-but-not-ok so
+      worker_contract fails with a specific reason.
 
     HONEST SCOPE: this proves STRUCTURAL PRESENCE + non-dead position of the insert in
     the POST handler region (see `_post_region`), NOT that runtime control actually
     REACHES it. An insert that exists only in an UNcalled function is correctly NOT
     found here; full reachability is deferred to Epic I's local CF emulation."""
+    for m in re.finditer(r"\.insert\s*\(\s*leads\s*\)", region):
+        values = re.match(r"\s*\.values\s*\(", region[m.end():])
+        if values is None:
+            continue
+        values_open = m.end() + values.end() - 1
+        values_end = _match_paren(region, values_open)
+        if values_end is None:
+            continue
+        if re.match(r"\s*\.run\s*\(", region[values_end:]) is None:
+            continue
+        if _insert_in_dead_position(region, m.start()):
+            continue
+        return True, True
+
+    # Legacy/raw SQL data planes are not the ratified generated shape. If one is
+    # present in-region, surface it as an insert that is not acceptable instead of
+    # conflating it with a completely missing insert.
     for m in re.finditer(r"\.prepare\s*\(", region):
         j = m.end()
         while j < len(region) and region[j] in " \t\r\n":
@@ -452,18 +477,7 @@ def _region_has_run_insert(region: str) -> tuple[bool, bool]:
             continue  # prepared+bound but never `.run()` — a dead reference
         if _insert_in_dead_position(region, m.start()):
             continue  # present but UNREACHABLE (dead branch / after early return)
-        # Present, run, non-dead; now classify whether it is parameterized.
-        is_param = True
-        if "+" in lit or "${" in lit:
-            is_param = False
-        else:
-            vm = re.search(r"VALUES\s*\(([^)]*)\)", lit, re.IGNORECASE)
-            if vm is None:
-                is_param = False
-            else:
-                toks = [t.strip() for t in vm.group(1).split(",") if t.strip()]
-                is_param = bool(toks) and all(t == "?" for t in toks)
-        return True, is_param
+        return True, False
     return False, False
 
 
@@ -592,11 +606,14 @@ def _pathname_handler_blocks(src: str) -> list[str]:
 
 def _block_reads_leads(src: str, block: str) -> bool:
     """True if the route `block` performs a lead-read sink: a `listLeads(...)` call (in
-    the block or a helper it calls) or an inline `SELECT ... FROM ... leads`."""
+    the block or a helper it calls), an inline Drizzle select from `leads`, or an
+    inline `SELECT ... FROM ... leads`."""
     if re.search(r"\blistLeads\s*\(", block):
         return True
     region = _post_region(src, block)
     if re.search(r"\blistLeads\s*\(", region):
+        return True
+    if re.search(r"\.select\s*\(\s*\)\s*\.from\s*\(\s*leads\s*\)", region):
         return True
     return re.search(r"\bSELECT\b[^;]*?\bFROM\b[^;]*?leads", region, re.IGNORECASE) is not None
 
@@ -631,9 +648,9 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
     behaviour, which is deferred to Epic I's local CF emulation:
 
     * POST /api/leads is PUBLIC (no auth guard) and its in-region code (the handler
-      block + any helper it calls) CONTAINS a PARAMETERIZED prepared insert
-      (`.prepare(...).bind(...).run()`) in a non-dead position — never string-built
-      SQL, never an insert that only exists in an unreached function, and never one
+      block + any helper it calls) CONTAINS a Drizzle table insert
+      (`db.insert(leads).values(...).run()`) in a non-dead position — never
+      string-built SQL, never an insert that only exists in an unreached function, and never one
       after an early return / inside a dead branch (structural presence, not a proof
       runtime control reaches it);
     * GET /api/leads AND /admin each call the auth guard and EARLY-RETURN 401 as the
@@ -671,14 +688,14 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
         reasons.append("POST /api/leads must be public — it is gated behind an auth check")
     if not post_region_has_insert:
         reasons.append(
-            "the POST /api/leads handler region does not contain a parameterized prepared "
-            "insert in a reachable (non-dead) position (.prepare(...).bind(...).run() in the "
+            "the POST /api/leads handler region does not contain a Drizzle insert in a "
+            "reachable (non-dead) position (db.insert(leads).values(...).run() in the "
             "POST handler or a helper it calls, not after an early return / inside a dead branch)"
         )
     elif not insert_parameterized:
         reasons.append(
-            "the lead insert is not a parameterized prepared statement "
-            "(.prepare(...).bind(...) with only `?` placeholders)"
+            "the lead insert is not the generated Drizzle data plane "
+            "(db.insert(leads).values(...).run(); raw SQL INSERT strings are not allowed)"
         )
 
     get_block = _route_handler(
@@ -974,9 +991,10 @@ class VerifyAppKitAppTool:
         description=(
             "STRUCTURALLY verify the generated AppKit lead-gen app and return a STRUCTURED "
             "pass/fail verdict (presence + ordering + parameterization + guard-first; runtime "
-            "behaviour is deferred to Epic I local CF emulation). Runs eight checks: "
-            "design_lint clean, schema.sql valid (sqlite round-trip + NOT NULL), worker "
-            "contract (public POST /api/leads region contains a parameterized insert in a "
+            "behaviour is deferred to Epic I local CF emulation). Runs nine checks: "
+            "design_lint clean, schema.sql valid (sqlite round-trip + NOT NULL), Drizzle "
+            "schema valid (src/db/schema.ts matches schema.sql and package deps exist), worker "
+            "contract (public POST /api/leads region contains a Drizzle insert in a "
             "non-dead position; GET /api/leads + /admin Bearer-gated, guard-first; fail-closed "
             "when ADMIN_TOKEN unset), the lead form POSTs JSON to /api/leads, a LOCAL D1 "
             "model round-trip (modelled post inserts, unauth reads 401, authed read returns "
@@ -1034,12 +1052,15 @@ class VerifyAppKitAppTool:
     async def _lead_gen_checks(
         self, ctx: ToolContext, app: AppSpec | None
     ) -> list[dict[str, Any]]:
-        """The LEAD-GEN contract checks (Epic E/G/I): schema_sql_valid, worker_contract,
-        lead_form_posts, local_api_roundtrip, cloudflare_export_ready — in that order."""
+        """The LEAD-GEN contract checks (Epic E/G/I): schema_sql_valid,
+        drizzle_schema_valid, worker_contract, lead_form_posts, local_api_roundtrip,
+        cloudflare_export_ready — in that order."""
         lead = resolve_lead_entity(app) if app is not None else None
         checks: list[dict[str, Any]] = []
 
         schema_sql = await self._read_text(ctx, _SCHEMA_RELPATH)
+        drizzle_schema = await self._read_text(ctx, _DRIZZLE_SCHEMA_RELPATH)
+        package_json = await self._read_text(ctx, _PACKAGE_RELPATH)
         worker_ts = await self._read_text(ctx, _WORKER_RELPATH)
         auth_model: WorkerAuthModel | None = None
 
@@ -1054,6 +1075,15 @@ class VerifyAppKitAppTool:
         else:
             res = check_schema_sql(schema_sql, lead)
             checks.append(_check(res.name, res.passed, res.evidence))
+
+        drizzle_res = check_drizzle_schema(
+            {
+                "schema.sql": schema_sql,
+                "src/db/schema.ts": drizzle_schema,
+                "package.json": package_json,
+            }
+        )
+        checks.append(_check(drizzle_res.name, drizzle_res.passed, drizzle_res.evidence))
 
         if worker_ts is None:
             checks.append(
@@ -1070,8 +1100,8 @@ class VerifyAppKitAppTool:
             )
             evidence = (
                 "STRUCTURE verified (presence + ordering + parameterization + "
-                "guard-first): public POST /api/leads region contains a parameterized "
-                "prepared insert in a non-dead position; GET /api/leads + /admin "
+                "guard-first): public POST /api/leads region contains a Drizzle "
+                "insert in a non-dead position; GET /api/leads + /admin "
                 "early-return 401 as the first guard statement before any read; "
                 "Bearer-checked + fail-closed on missing ADMIN_TOKEN. Runtime "
                 "reachability/behaviour deferred to Epic I local CF emulation."

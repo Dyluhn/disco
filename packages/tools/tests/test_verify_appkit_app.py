@@ -4,10 +4,11 @@ The pure core shim (`check_schema_sql`, `local_api_roundtrip`) and the static
 inspectors (`inspect_worker`, `inspect_lead_form`) are tested directly. The full
 `run()` is exercised against a fake sandbox holding a REAL generated
 editorial-ledger app, with the browser stubbed (no Playwright daemon): the
-known-good app passes ALL eight checks (incl. the Epic I cloudflare_export_ready
+known-good app passes ALL nine checks (incl. the Epic I cloudflare_export_ready
 gate), and each broken variant fails the RIGHT check while leaving the others green.
 """
 
+import json
 import re
 import shlex
 
@@ -15,6 +16,7 @@ import pytest
 from disco.core.appkit import (
     CF_EXPORT_FILES,
     WorkerAuthModel,
+    check_drizzle_schema,
     check_schema_sql,
     cloudflare_export_ready,
     default_lead_gen_app_spec,
@@ -179,6 +181,33 @@ def test_check_schema_sql_flags_missing_not_null():
     assert "NULL" in res.evidence
 
 
+def test_check_drizzle_schema_passes_on_generated_tree():
+    tree, _ = _build_tree()
+    res = check_drizzle_schema(tree)
+    assert res.passed, res.evidence
+
+
+def test_check_drizzle_schema_fails_when_column_missing():
+    tree, _ = _build_tree()
+    schema_ts = tree["src/db/schema.ts"].decode().replace(
+        '  message: text("message"),\n', ""
+    )
+    tree["src/db/schema.ts"] = schema_ts.encode()
+    res = check_drizzle_schema(tree)
+    assert not res.passed
+    assert "columns" in res.evidence
+
+
+def test_check_drizzle_schema_fails_when_drizzle_orm_missing():
+    tree, _ = _build_tree()
+    pkg = json.loads(tree["package.json"].decode())
+    del pkg["dependencies"]["drizzle-orm"]
+    tree["package.json"] = json.dumps(pkg).encode()
+    res = check_drizzle_schema(tree)
+    assert not res.passed
+    assert "drizzle-orm" in res.evidence
+
+
 def test_local_api_roundtrip_passes_with_full_contract():
     tree, app = _build_tree()
     lead = resolve_lead_entity(app)
@@ -269,6 +298,7 @@ async def test_known_good_passes_all_checks(stub_browser):
     assert names == {
         "design_lint_clean",
         "schema_sql_valid",
+        "drizzle_schema_valid",
         "worker_contract",
         "lead_form_posts",
         "local_api_roundtrip",
@@ -373,8 +403,11 @@ async def test_dropped_admin_guard_fails_worker_and_roundtrip(stub_browser):
 async def test_removed_insert_fails_worker_contract(stub_browser):
     tree, _ = _build_tree()
     src = tree["worker/index.ts"].decode()
-    # Neuter the parameterized insert (drop the INSERT INTO statement entirely).
-    broken = src.replace("INSERT INTO", "SELECT 1 --")
+    # Neuter the Drizzle insert entirely.
+    broken = src.replace(
+        "db.insert(leads).values(leadValues(rec)).run()",
+        "db.select().from(leads).all()",
+    )
     assert broken != src
     tree["worker/index.ts"] = broken.encode()
     out = await VerifyAppKitAppTool().run(
@@ -483,28 +516,33 @@ async def test_get_leads_returns_200_instead_of_401_fails(stub_browser):
     assert checks["local_api_roundtrip"]["passed"] is False
 
 
-def test_inspect_worker_string_concat_insert_fails():
-    # A string-concatenated INSERT (SQL injection) — NOT a parameterized prepared
-    # statement. `.prepare`/`.bind` still appear, but `VALUES (?, ?, ?)` is gone.
+def test_inspect_worker_raw_sql_insert_fails():
+    # A raw SQL INSERT is no longer the ratified generated data plane. Even a
+    # parameterized `.prepare(...).bind(...).run()` insert must fail in favor of
+    # Drizzle's typed table insert.
     tree, app = _build_tree()
     lead = resolve_lead_entity(app)
     src = tree["worker/index.ts"].decode()
     broken = src.replace(
-        "VALUES (?, ?, ?)", 'VALUES (\'" + rec["name"] + "\', ?, ?)'
+        "db.insert(leads).values(leadValues(rec)).run()",
+        'env.DB.prepare("INSERT INTO \\"leads\\" (\\"name\\") VALUES (?)")'
+        '.bind(rec["name"]).run()',
     )
     assert broken != src
     post_ok, model, reasons = inspect_worker(broken, lead)
     assert not post_ok
     assert not model.insert_parameterized
-    assert any("parameterized" in r for r in reasons)
+    assert any("Drizzle" in r for r in reasons)
 
 
 @pytest.mark.asyncio
-async def test_string_concat_insert_fails_worker_contract(stub_browser):
+async def test_raw_sql_insert_fails_worker_contract(stub_browser):
     tree, _ = _build_tree()
     src = tree["worker/index.ts"].decode()
     tree["worker/index.ts"] = src.replace(
-        "VALUES (?, ?, ?)", 'VALUES (\'" + rec["name"] + "\', ?, ?)'
+        "db.insert(leads).values(leadValues(rec)).run()",
+        'env.DB.prepare("INSERT INTO \\"leads\\" (\\"name\\") VALUES (?)")'
+        '.bind(rec["name"]).run()',
     ).encode()
     out = await _run(tree)
     checks = _checks_by_name(out.structured)
@@ -572,7 +610,7 @@ async def test_unbound_form_field_fails_lead_form_check(stub_browser):
 #
 # After the first tightening, three proofs were still TOKEN-PRESENCE, not region-scoped,
 # so a broken/insecure generated worker/form still PASSED:
-#   1. the parameterized insert was checked GLOBALLY, then the POST route accepted
+#   1. the Drizzle insert was checked GLOBALLY, then the POST route accepted
 #      separately → a POST that returns before/without the insert passed because an
 #      insert existed ELSEWHERE.
 #   2. the 401 proof accepted any return+denial text in the guard body → a denial
@@ -595,14 +633,14 @@ _POST_BODY = (
 
 def test_inspect_worker_post_returns_without_reaching_insert_fails():
     # (1) The POST handler short-circuits to `return json({ ok: true })`; the
-    # parameterized insert still EXISTS in insertLead() but the POST route never
+    # Drizzle insert still EXISTS in insertLead() but the POST route never
     # reaches it. The old GLOBAL insert check false-passed; region-scoping must FAIL.
     tree, app = _build_tree()
     lead = resolve_lead_entity(app)
     src = tree["worker/index.ts"].decode()
     broken = src.replace(_POST_BODY, "      return json({ ok: true }, 201);")
     assert broken != src
-    assert "INSERT INTO" in broken  # the insert is still present elsewhere in the file
+    assert "db.insert(leads)" in broken  # the insert is still present elsewhere in the file
     post_ok, model, reasons = inspect_worker(broken, lead)
     assert not post_ok
     assert not model.post_region_has_insert
@@ -701,7 +739,7 @@ def test_inspect_worker_known_good_flags_all_true_after_tightening():
 
 # ===== DEAD/UNREACHABLE INSERT POSITION (Epic G P1.3): close the concrete dead cases =====
 #
-# Region-scoping proves the parameterized insert is PRESENT in the POST region — but an
+# Region-scoping proves the Drizzle insert is PRESENT in the POST region — but an
 # insert sitting AFTER an unconditional early return, or inside an `if (false)`/`if (0)`
 # branch, can never run even though it is in-region. Static regex cannot SOUNDLY prove
 # runtime reachability, so the verifier no longer CLAIMS it does (wording is structural);
@@ -715,11 +753,11 @@ def test_inspect_worker_insert_after_early_return_fails():
     lead = resolve_lead_entity(app)
     src = tree["worker/index.ts"].decode()
     broken = src.replace(
-        "  try {\n    await env.DB.prepare(\n",
-        "  try {\n    return json({ ok: true }, 201);\n    await env.DB.prepare(\n",
+        "  try {\n    const db = drizzle(env.DB);\n",
+        "  try {\n    return json({ ok: true }, 201);\n    const db = drizzle(env.DB);\n",
     )
     assert broken != src
-    assert "INSERT INTO" in broken  # the insert is still structurally present
+    assert "db.insert(leads)" in broken  # the insert is still structurally present
     post_ok, model, reasons = inspect_worker(broken, lead)
     assert not post_ok
     assert not model.post_region_has_insert
@@ -731,8 +769,8 @@ async def test_insert_after_early_return_fails_worker_and_roundtrip(stub_browser
     tree, _ = _build_tree()
     src = tree["worker/index.ts"].decode()
     tree["worker/index.ts"] = src.replace(
-        "  try {\n    await env.DB.prepare(\n",
-        "  try {\n    return json({ ok: true }, 201);\n    await env.DB.prepare(\n",
+        "  try {\n    const db = drizzle(env.DB);\n",
+        "  try {\n    return json({ ok: true }, 201);\n    const db = drizzle(env.DB);\n",
     ).encode()
     out = await _run(tree)
     checks = _checks_by_name(out.structured)
@@ -748,11 +786,11 @@ def test_inspect_worker_insert_in_dead_branch_fails():
     lead = resolve_lead_entity(app)
     src = tree["worker/index.ts"].decode()
     broken = src.replace(
-        "    await env.DB.prepare(\n",
-        "    if (false)\n    await env.DB.prepare(\n",
+        "    await db.insert(leads)",
+        "    if (false)\n    await db.insert(leads)",
     )
     assert broken != src
-    assert "INSERT INTO" in broken  # still present, just dead
+    assert "db.insert(leads)" in broken  # still present, just dead
     post_ok, model, reasons = inspect_worker(broken, lead)
     assert not post_ok
     assert not model.post_region_has_insert
@@ -764,8 +802,8 @@ async def test_insert_in_dead_branch_fails_worker_and_roundtrip(stub_browser):
     tree, _ = _build_tree()
     src = tree["worker/index.ts"].decode()
     tree["worker/index.ts"] = src.replace(
-        "    await env.DB.prepare(\n",
-        "    if (false)\n    await env.DB.prepare(\n",
+        "    await db.insert(leads)",
+        "    if (false)\n    await db.insert(leads)",
     ).encode()
     out = await _run(tree)
     checks = _checks_by_name(out.structured)
@@ -1197,7 +1235,13 @@ async def test_missing_owner_guide_fails_only_export_check(stub_browser):
     checks = _checks_by_name(v)
     assert v["passed"] is False
     assert checks["cloudflare_export_ready"]["passed"] is False
-    for other in ("schema_sql_valid", "worker_contract", "lead_form_posts", "local_api_roundtrip"):
+    for other in (
+        "schema_sql_valid",
+        "drizzle_schema_valid",
+        "worker_contract",
+        "lead_form_posts",
+        "local_api_roundtrip",
+    ):
         assert checks[other]["passed"] is True, checks[other]["evidence"]
     wc = _checks_by_name(v)["worker_contract"]
     assert "structure verified" in wc["evidence"].lower()

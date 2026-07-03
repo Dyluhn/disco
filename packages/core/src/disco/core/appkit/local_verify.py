@@ -30,6 +30,7 @@ driven by the worker's inspected structure, not by an idealized contract.
 from __future__ import annotations
 
 import fnmatch
+import json
 import math
 import re
 import sqlite3
@@ -56,11 +57,11 @@ class WorkerAuthModel:
     * ``fail_closed_without_token`` — that check DENIES when ADMIN_TOKEN is unset
       (the worker's ``if (!expected) return false`` fail-closed line), rather than
       defaulting open.
-    * ``insert_parameterized`` — the POST insert binds values as parameters (`?`),
-      never string-concatenated SQL.
+    * ``insert_parameterized`` — the POST insert uses the generated Drizzle table
+      (`db.insert(leads).values(...)`), never string-concatenated SQL.
     * ``post_region_has_insert`` — the POST /api/leads handler region (the handler
       block + any helper it calls) STRUCTURALLY CONTAINS a parameterized
-      ``.prepare(...).bind(...).run()`` lead insert in a non-dead position (not after
+      ``db.insert(leads).values(...).run()`` lead insert in a non-dead position (not after
       an unconditional early return, not inside an `if (false)`/`if (0)` branch).
       This is structural PRESENCE + ordering, NOT a runtime proof that a submission
       persists — actual reachability is deferred to Epic I emulation. A POST route
@@ -171,6 +172,114 @@ def check_schema_sql(schema_sql: str, lead: Entity) -> CheckResult:
         conn.close()
 
 
+def _tree_text(tree: Mapping[str, str | bytes | None], path: str) -> str | None:
+    value = tree.get(path)
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return value
+
+
+def _parse_schema_sql_columns(schema_sql: str) -> list[tuple[str, bool]] | None:
+    m = re.search(
+        r'CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+"[^"]+"\s*\(\s*(.*?)\s*\)\s*;',
+        schema_sql,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m is None:
+        return None
+    cols: list[tuple[str, bool]] = []
+    for raw in m.group(1).splitlines():
+        line = raw.strip().rstrip(",")
+        if not line:
+            continue
+        cm = re.match(r'"([^"]+)"\s+(?:TEXT|INTEGER|REAL)\b(.*)$', line, re.IGNORECASE)
+        if cm is None:
+            return None
+        cols.append((cm.group(1), "NOT NULL" in cm.group(2).upper()))
+    return cols
+
+
+def _parse_drizzle_schema_columns(schema_ts: str) -> list[tuple[str, bool]] | None:
+    if re.search(r"\bexport\s+const\s+leads\s*=\s*sqliteTable\s*\(", schema_ts) is None:
+        return None
+    cols: list[tuple[str, bool]] = []
+    for m in re.finditer(
+        r'^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*)\s*:\s*'
+        r'(?:text|integer|real)\(\s*"([^"]+)"\s*\)([^\n]*)',
+        schema_ts,
+        re.MULTILINE,
+    ):
+        cols.append((m.group(1), ".notNull()" in m.group(2)))
+    return cols
+
+
+def check_drizzle_schema(tree: Mapping[str, str | bytes | None]) -> CheckResult:
+    """Validate the generated Drizzle schema against the generated D1 migration.
+
+    Pure string-structural check: no Node/npm execution. Because both files are
+    owned by the generator, parsing the emitted shapes is enough to prove the Drizzle
+    column set (names + notNull flags) still matches `schema.sql`, and that the app
+    declares the Drizzle runtime/tooling dependencies it imports.
+    """
+    name = "drizzle_schema_valid"
+    schema_sql = _tree_text(tree, "schema.sql")
+    schema_ts = _tree_text(tree, "src/db/schema.ts")
+    package_json = _tree_text(tree, "package.json")
+    if schema_sql is None or not schema_sql.strip():
+        return CheckResult(name, False, "missing schema.sql.")
+    if schema_ts is None or not schema_ts.strip():
+        return CheckResult(name, False, "missing src/db/schema.ts.")
+    if package_json is None or not package_json.strip():
+        return CheckResult(name, False, "missing package.json.")
+
+    sql_cols = _parse_schema_sql_columns(schema_sql)
+    if sql_cols is None or not sql_cols:
+        return CheckResult(name, False, "schema.sql columns could not be parsed.")
+    drizzle_cols = _parse_drizzle_schema_columns(schema_ts)
+    if drizzle_cols is None or not drizzle_cols:
+        return CheckResult(
+            name,
+            False,
+            "src/db/schema.ts does not declare export const leads = sqliteTable(...).",
+        )
+    if drizzle_cols != sql_cols:
+        return CheckResult(
+            name,
+            False,
+            "src/db/schema.ts columns do not match schema.sql "
+            f"(drizzle={drizzle_cols!r}, sql={sql_cols!r}).",
+        )
+
+    try:
+        pkg = json.loads(package_json)
+    except json.JSONDecodeError as exc:
+        return CheckResult(name, False, f"package.json is not valid JSON: {exc}")
+    if not isinstance(pkg, dict):
+        return CheckResult(name, False, "package.json is not a JSON object.")
+    deps = pkg.get("dependencies")
+    dev_deps = pkg.get("devDependencies")
+    if not isinstance(deps, dict) or "drizzle-orm" not in deps:
+        return CheckResult(
+            name,
+            False,
+            "package.json dependencies must declare drizzle-orm.",
+        )
+    if not isinstance(dev_deps, dict) or "drizzle-kit" not in dev_deps:
+        return CheckResult(
+            name,
+            False,
+            "package.json devDependencies must declare drizzle-kit.",
+        )
+    return CheckResult(
+        name,
+        True,
+        "src/db/schema.ts sqliteTable columns match schema.sql (names + notNull flags); "
+        "package.json declares drizzle-orm and drizzle-kit.",
+    )
+
+
 def _is_authorized(header: str | None, env_token: str | None, auth: WorkerAuthModel) -> bool:
     """A faithful Python model of the generated worker's ``isAuthorized`` + read
     gating. Mirrors: a missing ADMIN_TOKEN fails closed; otherwise the request must
@@ -245,9 +354,9 @@ def local_api_roundtrip(
                 "local_api_roundtrip",
                 False,
                 "the inspected POST /api/leads region does not CONTAIN a reachable lead "
-                "insert (no .prepare(...).bind(...).run() in the handler or a helper it "
+                "insert (no db.insert(leads).values(...).run() in the handler or a helper it "
                 "calls, or it sits after an early return / inside a dead branch), so the "
-                "modelled submission cannot persist. Place the parameterized insert in "
+                "modelled submission cannot persist. Place the Drizzle insert in "
                 "the POST handler's reachable path.",
             )
         record = {f.name: _representative_value(f.name, f.type) for f in lead.fields}
@@ -857,6 +966,7 @@ __all__ = [
     "STATIC_CF_EXPORT_FILES",
     "CheckResult",
     "WorkerAuthModel",
+    "check_drizzle_schema",
     "check_schema_sql",
     "cloudflare_export_ready",
     "cloudflare_export_ready_static",
