@@ -72,29 +72,55 @@
   /* ── Resolver attributes ─────────────────────────────────────────────────── */
 
   /**
-   * Walk up the DOM from el to find the nearest resolver attribute.
-   * Returns a DeckRef (data-element-id + data-slide-id) or SourceRef
-   * (data-oid), or a generic SourceRef with empty fields when neither is found.
+   * Walk up the DOM from el to resolve a typed target ref. Priority:
+   *   deck (data-element-id + data-slide-id) > semantic (data-disco-* — AppKit,
+   *   P8) > source (data-oid) > empty source.
+   * The semantic anchor is gathered ACROSS the walk-up because a field
+   * (data-disco-field) and its owning section (data-disco-section) sit on
+   * different elements — first-seen wins per attribute.
    */
+  function attrOf(cur, name) {
+    return (cur && cur.getAttribute) ? cur.getAttribute(name) : null;
+  }
+
   function resolveRef(el) {
     var cur = el;
+    // first-seen semantic attrs (a field is nested inside its section)
+    var dSection = null, dField = null, dCollection = null, dIndex = null, dScreen = null;
+    var dOid = null;
     while (cur && cur !== document.documentElement) {
-      var eid = cur.getAttribute && cur.getAttribute('data-element-id');
-      var sid = cur.getAttribute && cur.getAttribute('data-slide-id');
+      var eid = attrOf(cur, 'data-element-id');
+      var sid = attrOf(cur, 'data-slide-id');
       if (eid && sid) {
         return { kind: 'deck', slide_id: sid, element_id: eid };
       }
-      var oid = cur.getAttribute && cur.getAttribute('data-oid');
-      if (oid) {
-        var parts = oid.split(':');
-        return {
-          kind: 'source',
-          oid:  oid,
-          file: parts[0] || '',
-          line: parseInt(parts[1], 10) || 0,
-        };
-      }
+      if (dSection == null)    dSection    = attrOf(cur, 'data-disco-section');
+      if (dField == null)      dField      = attrOf(cur, 'data-disco-field');
+      if (dCollection == null) dCollection = attrOf(cur, 'data-disco-collection');
+      if (dIndex == null)      dIndex      = attrOf(cur, 'data-disco-index');
+      if (dScreen == null)     dScreen     = attrOf(cur, 'data-disco-screen-label');
+      if (dOid == null)        dOid        = attrOf(cur, 'data-oid');
       cur = cur.parentElement;
+    }
+    if (dSection) {
+      var ref = { kind: 'semantic', section_id: dSection };
+      if (dField)   ref.field_id = dField;
+      if (dCollection) ref.collection_id = dCollection;
+      if (dIndex != null && dIndex !== '') {
+        var idx = parseInt(dIndex, 10);
+        if (idx >= 0) ref.index = idx;
+      }
+      if (dScreen)  ref.screen_label = dScreen;
+      return ref;
+    }
+    if (dOid) {
+      var parts = dOid.split(':');
+      return {
+        kind: 'source',
+        oid:  dOid,
+        file: parts[0] || '',
+        line: parseInt(parts[1], 10) || 0,
+      };
     }
     return { kind: 'source', oid: '', file: '', line: 0 };
   }

@@ -70,6 +70,11 @@ class WSClientFrame(BaseModel):
         # accepted in v1. The `steer` frame type is reused for DR steers
         # (the WS handler routes based on whether a DR run is active).
         "inject_source",
+        # P8 semantic direct manipulation: the user clicked one preview element and
+        # described a change. `selection_ref` (a SelectionRef mirror) + `edit_instruction`
+        # are turned into a host-owned scoped-edit directive (core/selection_edit.py) and
+        # fed to the loop as a steer — so the model targets exactly that element.
+        "selection_edit",
     ]
     # send_message / request_plan: free text (a user message / the (re)plan instruction).
     content: str | None = None
@@ -91,3 +96,10 @@ class WSClientFrame(BaseModel):
     # short visible user `content`, so the model gets the full report while the
     # history shows only "Make slides for the deep research report: …".
     context: str | None = None
+    # selection_edit (P8): the typed ref of the clicked preview element (a SelectionRef
+    # mirror — see core/selection_edit.py) and the user's verbatim change instruction.
+    selection_ref: dict[str, Any] | None = None
+    edit_instruction: str | None = None
+    # selection_edit: the selection agent's readable element description
+    # (e.g. `h1 — "Nightshift Coffee"`) — helps the model disambiguate the target.
+    human_label: str | None = None

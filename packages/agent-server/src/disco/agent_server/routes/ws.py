@@ -11,6 +11,11 @@ from disco.core import (
     WSClientFrame,
     WSServerFrame,
 )
+from disco.core.selection_edit import (
+    build_scoped_edit_directive,
+    parse_selection_ref,
+    selection_edit_frame_valid,
+)
 from disco.core.store.sqlite import SqliteEventStore
 from disco.retrieval.local_encoders import EncoderUnavailable
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
@@ -32,7 +37,9 @@ async def _handle_frame(
     A message KICKS the loop (Stage 2) so a real answer streams back."""
     if frame.type == "ping":
         await websocket.send_json(WSServerFrame(type="pong").model_dump(mode="json"))
-    elif frame.type in ("send_message", "steer", "inject_source", "confirm", "reject") and (
+    elif frame.type in (
+        "send_message", "steer", "inject_source", "confirm", "reject", "selection_edit"
+    ) and (
         store.conversation_origin(conversation_id) == "imported"
     ):
         # Imported (untrusted, read-only) conversations refuse every revive path —
@@ -73,6 +80,22 @@ async def _handle_frame(
             await runtime.send_user_turn(conversation_id, frame.steer_text, steer=True)
         else:
             await store.append(conversation_id, _user_message(frame.steer_text, steer=True))
+    elif frame.type == "selection_edit":
+        # P8 semantic direct manipulation: the user clicked one preview element and
+        # described a change. Build a host-owned, precisely-anchored scoped-edit
+        # directive (core owns the truth) and feed it to the loop as a steer user-turn,
+        # so the existing targeted-edit law + no-rewrite guards mutate ONLY that element.
+        # A malformed frame (bad ref / empty instruction) is dropped, not kicked.
+        if selection_edit_frame_valid(frame.selection_ref, frame.edit_instruction):
+            ref = parse_selection_ref(frame.selection_ref)
+            assert ref is not None and frame.edit_instruction is not None  # validated above
+            directive = build_scoped_edit_directive(
+                ref, frame.edit_instruction, human_label=frame.human_label
+            )
+            if runtime is not None:
+                await runtime.send_user_turn(conversation_id, directive, steer=True)
+            else:
+                await store.append(conversation_id, _user_message(directive, steer=True))
     elif frame.type == "inject_source" and frame.inject_source_text is not None:
         # D3: inject a plaintext snippet into the DR run's corpus mid-run.
         # The text is converted immediately to a Passage so the engine's

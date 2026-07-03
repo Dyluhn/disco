@@ -16,7 +16,6 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  formatEditSteer,
   formatSelectionContext,
   humanLabel,
   parseOid,
@@ -89,23 +88,6 @@ describe("humanLabel", () => {
   });
 });
 
-describe("formatEditSteer", () => {
-  it("forms the In {file} near line {line}, {instruction} steer", () => {
-    expect(
-      formatEditSteer({ file: "index.html", line: 42 }, "make the heading larger"),
-    ).toBe("In index.html near line 42, make the heading larger");
-  });
-
-  it("trims the instruction", () => {
-    expect(formatEditSteer({ file: "a.html", line: 3 }, "  fix the color  ")).toBe(
-      "In a.html near line 3, fix the color",
-    );
-  });
-
-  it("returns null for a blank instruction (no steer on empty input)", () => {
-    expect(formatEditSteer({ file: "a.html", line: 3 }, "   ")).toBeNull();
-  });
-});
 
 describe("formatSelectionContext (W-26)", () => {
   it("names a source element with its file:line, not duplicating the location", () => {

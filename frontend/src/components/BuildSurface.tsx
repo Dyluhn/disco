@@ -647,9 +647,11 @@ export function BuildSurface({
             status={b.status}
             cid={b.cid}
             streamingFile={b.streamingFile}
-            // A1.4 — click-to-edit: the preview-pane edit affordance steers the
-            // agent. Same wire as the steer composer above (useBuildStream).
+            // Discuss affordance → free-form steer. Same wire as the steer composer.
             onSteer={steerable ? b.steer : undefined}
+            // P8 click-to-edit: the preview-pane edit box submits the selected
+            // element's typed ref + change; the host scopes the targeted edit.
+            onSelectionEdit={steerable ? b.selectionEdit : undefined}
           />
         )
       }

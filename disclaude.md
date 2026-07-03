@@ -5704,3 +5704,54 @@ deliverable/status/agent_error) all render.
 **Op note:** the canonical Vite on :5173 binds IPv6 `[::1]` only — an IPv4 `127.0.0.1` curl
 reads it as dead (000). Probe via `http://localhost:5173/` (what Playwright uses) → 200.
 Backend :8000/:8800 return 404 on `/` = ALIVE (they only mount /api/*).
+
+## P8 SEMANTIC DIRECT MANIPULATION — FULLY WIRED + LIVE-PROVEN (2026-07-03)
+
+**Decision (Dylan): "wire p8 fully."** The audit found P8 ~60% scaffolded with the
+semantic layer ORPHANED (test-only consumers) and a working-but-cruder prose-steer
+path. Built the load-bearing wire so click-to-edit makes a TARGETED edit to exactly
+the selected element.
+
+**What shipped:**
+- `packages/core/src/disco/core/selection_edit.py` (NEW, pure): typed `SelectionRef`
+  union (source/deck/semantic) mirroring `selectionBridge.ts` + `parse_selection_ref`
+  + `build_scoped_edit_directive` (HOST-owned directive naming the exact anchor +
+  mandating a targeted-edit tool) + `selection_edit_frame_valid`. 20 unit tests.
+- `core/wire.py`: `WSClientFrame` gains `selection_edit` type + `selection_ref`/
+  `edit_instruction`/`human_label` fields.
+- `agent-server/routes/ws.py`: `selection_edit` dispatch → build directive →
+  `send_user_turn(steer=True)` (re-kicks a FINISHED build; `is_revision_intent`
+  matches the directive → loop re-enters + applies the edit). Imported-read-only guard.
+- Frontend: `selection_agent.js resolveRef` now reads `data-disco-*` (semantic
+  enrichment, gathered across walk-up) — deck > semantic > source priority.
+  `selectionBridge.ts` + `types/agent.ts` add the SemanticRef + `selection_edit` frame.
+  `useBuildStream.selectionEdit()` sends the frame w/ optimistic echo. The existing
+  `EditAffordance` was REROUTED from frontend-built prose (`formatEditSteer`, now
+  DELETED as dead) to the host-owned `selectionEdit` wire, generalized to all ref kinds.
+  Threaded onSelectionEdit through BuildSurface→ExecutionCanvas→PreviewPane.
+
+**LIVE PROOF (harness/product_build/p8_selection_edit_run.py, MiniMax-M3, 0 OpenRouter):**
+built a non-dictated NightOwl page → sent the exact `selection_edit` frame the UI sends
+(source ref from the real `preview_edit` data-oid stamp) → **h1 `NightOwl <span>Coffee</span>`
+→ `NIGHTOWL_HERO_EDITED`, footer+tagline UNCHANGED, targeted `file_edit` used (no rewrite).**
+PASS. (UI browser screenshot: edit-smoke.spec.ts, in flight.)
+
+**★ FINDING — dictated-content reverts a user selection-edit (REL-RC-O interaction):**
+the FIRST proof used a build prompt dictating the headline verbatim (`MUST contain X`).
+That quoted literal became a REL-RC-O finish FLOOR; the model applied the selection-edit
+(ORIG→EDITED) then REVERTED it (EDITED→ORIG) to satisfy the original floor. So a user's
+click-to-edit that CONTRADICTS an earlier dictated literal is silently reverted by the
+finish gate. Real UX bug for click-to-edit — a user edit should supersede the original
+build's dictated content. NOT a P8-wire defect (wire delivered the edit); a separate
+finish-gate fix. Isolated the proof by using a non-dictated build prompt.
+
+**★ FINDING — arch-budget gate PRE-EXISTING RED (P11 release blocker):** the REL
+campaign grew the loop core into god-objects; `scripts/check_arch_budget.py` fails with
+25 violations at HEAD (ConversationRuntime 3064>1360, FinishGate 1951>800, AgentLoop
+1861>1100, +22 funcs/classes). P8 is arch-NEUTRAL (new fns <50 LOC) and I decomposed
+`workspace_snapshot_message` (−1). The other 3 gates GREEN (basedpyright 0, lint-imports
+KEPT, diagram fresh). Fixing the 25 is P11 work, not P8.
+
+**LESSON:** the FIRST live proof failed with "invalid client frame" because the running
+agent-server was launched BEFORE the P8 code — a live proof MUST restart the server on
+the code under test. (Rule: no restarts while soak lanes live; none were.)

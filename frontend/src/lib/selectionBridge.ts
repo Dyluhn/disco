@@ -37,7 +37,19 @@ export type SourceRef = {
   line: number;
 };
 
-export type SelectionRef = DeckRef | SourceRef;
+/** An AppKit `data-disco-*` semantic anchor (P8). `field_id` ⇒ a single field of a
+ *  section; `collection_id`+`index` ⇒ the Nth item; section-only ⇒ the whole section.
+ *  Mirrors the Python `SemanticSelectionRef` (core/selection_edit.py). */
+export type SemanticRef = {
+  kind: "semantic";
+  section_id: string;
+  field_id?: string;
+  collection_id?: string;
+  index?: number;
+  screen_label?: string;
+};
+
+export type SelectionRef = DeckRef | SourceRef | SemanticRef;
 
 /** Common header stamped on every bridge frame (host→iframe and iframe→host). */
 interface BridgeFrame {
@@ -216,7 +228,21 @@ function isSelectionRef(r: unknown): r is SelectionRef {
       typeof o["line"] === "number"
     );
   }
+  if (o["kind"] === "semantic") {
+    // section_id required; each optional field must be the right type WHEN present.
+    return (
+      typeof o["section_id"] === "string" &&
+      _optStr(o["field_id"]) &&
+      _optStr(o["collection_id"]) &&
+      _optStr(o["screen_label"]) &&
+      (o["index"] === undefined || typeof o["index"] === "number")
+    );
+  }
   return false;
+}
+
+function _optStr(v: unknown): boolean {
+  return v === undefined || typeof v === "string";
 }
 
 // ─── Host → iframe transport ──────────────────────────────────────────────────

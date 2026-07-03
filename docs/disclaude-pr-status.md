@@ -74,12 +74,13 @@ Each killed one build-loop defect category; zero recurrence after fix.
 | **P3** WorkflowPromptPack | WPP-1/2/3 | Prompt-pack format + 5 bundled packs, kernel-neutral assembly, skill-mount policy (no global skill soup) | ✅ ACCEPTED |
 | **P4** Mutation Tools | TOOL-1 (AppKit) | Specialized `app_*` mutation tools | 🟡 landed; needs streaming edit + hot-reload + blunt-tool removal |
 | **P5** Delivery | P5-DELIVERY | Host-owned delivery shape (app\|files) per contract | ✅ landed |
-| **P6** Finalizers | P6-FINALIZERS | Contract-verification finalizer as a finish-alias | 🟢 landed; builder/verifier **context split** + wake-on-fail still a gap |
-| **P7** Kits | P7-KITS | Starter kit registry + 2 scaffolds (`app_shell`, `lead_form`), path-safety, single-source | ✅ ACCEPTED — but 🟡 **thin catalog** (2 of 6 spec'd; no deck_stage / image-slot / device-frames / animation / metrics-overlay under the funnel) |
-| **P8** Semantic Direct Manipulation | P8B (`data-disco-*` metadata) landed | Point-at-element editing, comment anchors, edit-overrides | ⚪ **core NOT started** (P8B conventions only; playbook §10 is the spec seed) |
-| **P9** TweakSpec | P9B (`.disco/tweaks.json` IO), P9C (`app_set_tweak`) | Tweak IO + typed tweak tool; small-change / versioning-by-copy discipline | 🟡 tweak plumbing ✅; the prompt-side small-change discipline is cheap + remaining |
-| **P10** Export/Handoff | P10b (export smoke, in REL-6) | Export path + capture-side validation flags the model must judge | 🟡 PARTIAL (smoke passes; validation flags remaining) |
-| **P11** Feature + release | — | The actual product features + open-source release engineering | ⚪ **UNBLOCKED** by REL-6, not started |
+| **P6** Finalizers | P6-FINALIZERS | Contract-verification finalizer as a finish-alias | 🟡 **~70% (audited)**. Finalizer real; host verifier + bounded wake-on-fail exist and CAN gate — but **advisory by default** (`DISCO_HOST_VERIFY_AUTHORITATIVE` off). Missing: true builder/verifier **context split** (verify runs in-band in the builder's own context) |
+| **P7** Kits | P7-KITS | Starter kit registry + 2 scaffolds (`app_shell`, `lead_form`), path-safety, single-source | ✅ ACCEPTED — but 🟡 **thin catalog** (2 of 6 spec'd; `image-slot` genuinely missing — the purest anti-false-affordance kit; `deck_stage` exists elsewhere, not under the funnel) |
+| **P8** Semantic Direct Manipulation | selection_edit wire (2026-07-03) | Point-at-element editing | ✅ **WIRED + LIVE-PROVEN**. Click element → `EditAffordance` → `selection_edit` frame → host-owned scoped-edit directive (`core/selection_edit.py`) → targeted `file_edit` on ONLY that element. Live: h1 `NightOwl Coffee`→`NIGHTOWL_HERO_EDITED`, rest unchanged, no rewrite, MiniMax-only. `selection_agent.js` now reads `data-disco-*` (semantic enrichment). Dead `formatEditSteer` prose path removed. ⚠️ Open finding: a selection-edit that contradicts a build's dictated literal is reverted by the REL-RC-O finish floor (separate fix) |
+| **P9** TweakSpec / small-change | P9B (`.disco/tweaks.json` IO), P9C (`app_set_tweak`) | Small-change discipline + versioning-by-copy | ✅ **DONE + deep (audited)**. Multi-layer prompt + "Targeted edit law" in every pack + 5 tool guards (F1/RC-M/RC-L/CD-TOOLS-1/otnf) + AppKit semantic tools + **REL-6 TARGETED 30/30**. Residue (minor): no generic versioning-by-copy snapshot; `file_write` desc over-nudges rewrites; F6 rewrite-directive computed-but-unwired (intentional, assist-only) |
+| **P10** Export/Handoff | P10b (export smoke, in REL-6) | Export path + capture-side validation flags the model must judge | 🟡 **~40% (audited)**. Produces a real, non-empty, structurally-valid file (valid %PDF header, honest capability gating). **Gap = a false-affordance-of-completeness:** NO model-facing render-correctness flag → a blank/truncated/mis-rendered deck passes BOTH the oracle and the finish gate undetected. `ExportContract` `validate` stage declared but **never executed** |
+| **P2** Contract Runtime | contract registry/enforce/scopes | Artifact contract | 🟡 **~65% (audited)**. REAL host-owned **tool-scope + delivery-shape** enforcement runtime (not thin). Missing: host-assembles-document-from-parts + single-format schema validation (model still hand-writes whole files); `ExportContract` pipeline tuple is **inert data, no executor** |
+| **P11** Feature + release | — | Open-source release engineering (README, secret scrub, self-host, packaging, CI) | ⚪ **UNBLOCKED, not started — the real ship gate.** License blocker RESOLVED (MIT reranker default) |
 | (new) questions_v2 | — | Structured pre-plan clarification intake | ⚪ NOT STARTED (small) |
 
 ---
@@ -91,12 +92,32 @@ Each killed one build-loop defect category; zero recurrence after fix.
 - This status doc + the UI-readiness ledger entry in `disclaude.md`.
 - (No production code changed today — verification + docs only.)
 
-## Suggested next sequence (Dylan's week ends ~2026-07-08)
+## Corrected next sequence (ground-truth audit, 2026-07-03)
 
-1. **P9 prompt discipline** — cheap, kills rewrite-thrash.
-2. **P10 export validation flags** — small delta on passing smoke; closes export false-affordances.
-3. **P7 catalog depth** — `image-slot` (the purest anti-false-affordance kit) + fold in existing `deck_stage`.
-4. **P8 semantic direct manipulation** — the one genuinely large build; decide in-scope-this-week vs first-after-release.
-5. **P11 release engineering** — open-source the result.
+The 6-phase re-audit (P2/P6/P7/P8/P9/P10) found the stale doc wrong in 4 places:
+P9 is DONE (not remaining), P8 is 60% scaffolded (not unstarted), P6/P2 are real
+runtimes (not thin), and the license blocker is already resolved. So the features
+are more built than believed — **the real remaining work is (1) closing the last
+false-affordances-of-completeness and (2) release engineering.**
+
+**Tier 1 — kill the remaining false-completeness (ON-MISSION: Dylan's #3 hated mode):**
+1. **P10 export-correctness gate** — a capture-side render check (slide/page count > 0,
+   non-blank) the finish gate consults, so a blank/truncated export can't report FINISHED.
+   Biggest remaining completeness hole. Medium effort.
+2. **Flip REL-1e host-verify authoritative** (agreement evidence banked) — makes app-render
+   verification gating not advisory; kills "looks done but renders blank." Low effort.
+
+**Tier 2 — honesty pass (Dylan hates dead scaffolding "written to look done"):**
+3. Resolve the built-but-unwired seams: P8 semantic layer (wire minimally OR cut),
+   `ExportContract` inert pipeline (implement `validate` OR remove the dead tuple),
+   F6 rewrite-directive (wire assist-only OR document as deferred). Don't ship dead code
+   that reads as a feature.
+
+**Tier 3 — P11 release engineering (the actual ship gate):**
+4. README, secret scrub, self-host verification, packaging, CI. License already clear.
+
+**Deferred / optional bigger builds (not release-blocking):**
+5. P8 full semantic scoped-edit wire (~1-2d, marquee UX) · P7 `image-slot` kit ·
+   P6 builder/verifier context split · P2 host-assembles-document.
 
 Optional flips (evidence already banked): REL-1e authority, REL-2a reader promote.

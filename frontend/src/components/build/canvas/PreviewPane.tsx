@@ -10,7 +10,8 @@ import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { EditAffordance } from "@/components/build/canvas/EditAffordance";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
-import { formatEditSteer, formatSelectionContext, parseOid } from "@/lib/resolvers/appResolver";
+import { formatSelectionContext } from "@/lib/resolvers/appResolver";
+import type { SelectionRef } from "@/lib/selectionBridge";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 /** One phase-aware pane (replacing the redundant Preview + Live tabs). When the agent's
@@ -23,6 +24,7 @@ export function PreviewPane({
   events,
   untrusted = false,
   onSteer,
+  onSelectionEdit,
 }: {
   status: ConversationStatus;
   cid: string | null;
@@ -31,9 +33,12 @@ export function PreviewPane({
    * `allow-scripts` from the static-preview iframe — with open-CORS no-auth APIs,
    * a script in that frame could fetch this instance's endpoints. */
   untrusted?: boolean;
-  /** A1.4 — steer the agent from the click-to-edit affordance. When undefined,
-   * the Edit toggle is hidden (no false affordance: nothing to steer). */
+  /** Steer the agent (free-form) — used by the Inspect "Discuss" affordance. */
   onSteer?: (text: string) => void;
+  /** P8 click-to-edit — submit a clicked element's typed ref + a change instruction;
+   * the host builds the scoped-edit directive. When undefined, the Edit toggle is
+   * hidden (no false affordance: nothing to edit through). */
+  onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void;
 }) {
   // Keep the backend preview active through FINISHED/STUCK too (UI 2.2): the
   // pane shouldn't go MORE dead at the moment of completion.
@@ -87,16 +92,8 @@ export function PreviewPane({
   // A1.4/A1.6 — Edit mode is only offered when there's a real steer wire, a real
   // entry HTML to stamp, a conversation, and the run is trusted. Otherwise no
   // toggle is shown (no false affordance).
-  const canEdit = Boolean(onSteer && entryHtmlPath && cid && !untrusted);
+  const canEdit = Boolean(onSelectionEdit && entryHtmlPath && cid && !untrusted);
   const [editMode, setEditMode] = useState(false);
-  // The current source-kind selection that carries a real (stamped) file:line —
-  // the only case the inline edit box appears for. A deck/non-source/blank-oid
-  // selection keeps the existing inspect-only behaviour.
-  const sourceRef = useMemo(() => {
-    const ref = srcdocSelection?.selection_ref;
-    if (!ref || ref.kind !== "source") return null;
-    return parseOid(ref.oid);
-  }, [srcdocSelection]);
   // The server-stamped, selection-injected edit URL for the entry HTML. The
   // iframe's `key={reloadKey}` already forces a fresh load on Refresh, so no
   // cache-buster query is needed here.
@@ -106,10 +103,11 @@ export function PreviewPane({
       : null;
 
   function applyEdit(instruction: string) {
-    if (!onSteer || !sourceRef) return;
-    const steerText = formatEditSteer(sourceRef, instruction);
-    if (steerText === null) return; // blank instruction → no-op
-    onSteer(steerText);
+    if (!onSelectionEdit || !srcdocSelection) return;
+    if (!instruction.trim()) return; // blank instruction → no-op
+    // Submit the clicked element's TYPED ref — the host builds the precisely-anchored,
+    // targeted-edit directive (core/selection_edit.py), so the model edits ONLY it.
+    onSelectionEdit(srcdocSelection.selection_ref, instruction, srcdocSelection.human_label);
     srcdocResetSelection();
   }
 
@@ -405,13 +403,13 @@ export function PreviewPane({
                 : undefined
             }
           />
-          {/* A1.4 — inline edit box. Appears ONLY for a source-kind selection that
-              carries a real stamped file:line; a deck/non-source/blank selection
-              shows nothing here (no false affordance). */}
-          {showEdit && sourceRef !== null && srcdocSelection !== null && (
+          {/* P8 — inline scoped-edit box. In edit mode the preview_edit route stamps a
+              precise anchor (data-oid / data-disco-*) on every element, so ANY clicked
+              selection is editable; the host scopes the edit to exactly that element.
+              Only mounts in edit mode with a live selection (no false affordance). */}
+          {showEdit && srcdocSelection !== null && (
             <EditAffordance
-              file={sourceRef.file}
-              line={sourceRef.line}
+              targetLabel={srcdocSelection.human_label}
               rect={srcdocSelection.rect}
               onApply={applyEdit}
               onCancel={srcdocResetSelection}

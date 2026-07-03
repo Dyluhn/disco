@@ -16,7 +16,14 @@ function greenObservations(): ProductObservations {
     shown: { artifact_shown: true, preview_shown: true },
     verification: { ready_for_verification_called: true, passed: true },
     export: { requested: true, download_present: true, download_bytes: 4096 },
-    cleanup: { orphans: 0, workspace_released: true, scope: "conversation" },
+    cleanup: {
+      orphans: 0,
+      workspace_released: true,
+      scope: "conversation",
+      container_orphans: 0,
+      volume_orphans: 0,
+      volume_scope: "conversation",
+    },
   };
 }
 

@@ -19,6 +19,7 @@ import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useSessions } from "@/hooks/useSessions";
 import type { StreamingFile } from "@/hooks/useBuildStream";
+import type { SelectionRef } from "@/lib/selectionBridge";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 import { FilesPane } from "./canvas/FilesPane";
 import { TerminalPane } from "./canvas/TerminalPane";
@@ -41,6 +42,7 @@ export function ExecutionCanvas({
   streamingFile = null,
   untrusted = false,
   onSteer,
+  onSelectionEdit,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
@@ -48,9 +50,11 @@ export function ExecutionCanvas({
   streamingFile?: StreamingFile | null;
   /** Third-party events (shared/imported run) → harden the preview iframe. */
   untrusted?: boolean;
-  /** A1.4 — steer the agent from the preview-pane click-to-edit affordance.
+  /** Steer the agent (free-form) from the preview-pane "Discuss" affordance.
    * Undefined when steering isn't available (no conversation / static view). */
   onSteer?: (text: string) => void;
+  /** P8 click-to-edit — submit a selected element's ref + change to the host. */
+  onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void;
 }) {
   // C5: detect any previewable HTML — either a client-side artifact (srcDoc) or
   // a server-side .html from slides_generate / deliverable (empty content, served
@@ -184,6 +188,7 @@ export function ExecutionCanvas({
             events={events}
             untrusted={untrusted}
             onSteer={onSteer}
+            onSelectionEdit={onSelectionEdit}
           />
         </Tabs.Content>
         <Tabs.Content value="cockpit" className="h-full focus:outline-none">

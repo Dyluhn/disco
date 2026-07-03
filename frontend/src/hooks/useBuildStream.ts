@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { resumeConversation, subscribeConversation, type AgentHandle } from "@/api/agent";
+import type { SelectionRef } from "@/lib/selectionBridge";
 import {
   derivePlan,
   derivePlanProgress,
@@ -261,6 +262,8 @@ export interface BuildStream extends BuildStreamState {
   reject: () => void;
   cancel: () => void;
   steer: (text: string) => void;
+  /** P8 click-to-edit: apply a scoped change to exactly the selected element. */
+  selectionEdit: (ref: SelectionRef, instruction: string, humanLabel?: string) => void;
   /** Answer the agent's free-form question — resumes the loop (alias of steer,
    *  named for the Ask-gate so the AskPanel reads clearly). */
   answer: (text: string) => void;
@@ -314,6 +317,23 @@ export function useBuildStream(
     dispatch({ type: "local_message", event: localUserMessage(trimmed, makeId) });
     handle.current?.send({ type: "steer", steer_text: trimmed });
   }, [makeId]);
+  // P8: click-to-edit. Send the typed selection ref + the user's change; the host
+  // builds the precisely-anchored scoped-edit directive (core/selection_edit.py) and
+  // steers the loop. Optimistic echo so the change lands in the timeline immediately.
+  const selectionEdit = useCallback(
+    (ref: SelectionRef, instruction: string, humanLabel?: string) => {
+      const trimmed = instruction.trim();
+      if (!trimmed) return;
+      dispatch({ type: "local_message", event: localUserMessage(trimmed, makeId) });
+      handle.current?.send({
+        type: "selection_edit",
+        selection_ref: ref,
+        edit_instruction: trimmed,
+        ...(humanLabel ? { human_label: humanLabel } : {}),
+      });
+    },
+    [makeId],
+  );
   const approvePlan = useCallback(() => handle.current?.send({ type: "approve_plan" }), []);
   const requestPlan = useCallback((text: string) => {
     const trimmed = text.trim();
@@ -404,6 +424,7 @@ export function useBuildStream(
     reject,
     cancel,
     steer,
+    selectionEdit,
     // Answering a free-form question is just a user message that re-kicks the
     // loop — same wire path as steer, exposed under an Ask-gate-friendly name.
     answer: steer,

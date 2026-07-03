@@ -5,6 +5,7 @@
  * Research's ephemeral token stream: here the EVENTS are the source of truth.
  */
 
+import type { SelectionRef } from "@/lib/selectionBridge";
 import type { VerifiedClaim } from "@/types/grounded";
 
 export type ConversationStatus =
@@ -358,7 +359,15 @@ export type WSClientFrame =
   | { type: "cancel" }
   | { type: "resume" } // continue a stopped/incomplete run (explicit, never on open)
   | { type: "ping" }
-  | { type: "inject_source"; inject_source_text: string };
+  | { type: "inject_source"; inject_source_text: string }
+  // P8: the user clicked one preview element and described a change. The host
+  // builds the scoped-edit directive (core/selection_edit.py) and steers the loop.
+  | {
+      type: "selection_edit";
+      selection_ref: SelectionRef;
+      edit_instruction: string;
+      human_label?: string;
+    };
 
 /** Which isolation tier backs the sandbox — surfaced so the lower-isolation tier is
  * legible at the point of use (the cost-legible picker, applied to isolation). */

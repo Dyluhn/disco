@@ -133,6 +133,48 @@ async def _read_working_file(
     return raw
 
 
+def _workspace_snapshot_preamble(pin_full: bool) -> str:
+    """The CURRENT WORKSPACE block preamble. Per-tier wording (CW-3 / CW P1-c):
+    ``pin_full`` (assist OFF) moves the block to the cacheable PREFIX, so it names
+    ITSELF ("this prompt") instead of a directional "above/below"; the assist-ON
+    tail-placement keeps the original directional wording byte-for-byte."""
+    if pin_full:
+        return (
+            f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
+            "This block contains the live, exact content of the files you are working "
+            "on, re-read from disk this turn. It OVERRIDES any other copy of these "
+            "files shown elsewhere in this prompt; trust THIS over your memory.\n"
+            "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
+            "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
+            "the line numbers shown for each file in this block). For a full rewrite, "
+            "use `file_write` with the FULL new content — but you MUST call `file_read` "
+            "on this file first if you have written to it before, or the write will be "
+            "refused. Keep every existing function, constant, and docstring you are not "
+            "deliberately removing — do not drop code you did not mean to delete.\n"
+            "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
+            "acknowledge the snapshot in your reply (no 'I can see the files', "
+            "'the workspace shows…', 'good, the content is here', etc.). "
+            "Just continue the work.\n\n"
+        )
+    return (
+        f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
+        "Below is the live, exact content of the files you are working on, "
+        "re-read from disk this turn. It OVERRIDES any earlier or elided copy of "
+        "these files shown above; trust THIS over your memory.\n"
+        "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
+        "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
+        "the line numbers shown below). For a full rewrite, use `file_write` with "
+        "the FULL new content — but you MUST call `file_read` on this file first "
+        "if you have written to it before, or the write will be refused. Keep "
+        "every existing function, constant, and docstring you are not deliberately "
+        "removing — do not drop code you did not mean to delete.\n"
+        "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
+        "acknowledge the snapshot in your reply (no 'I can see the files', "
+        "'the workspace shows…', 'good, the content is here', etc.). "
+        "Just continue the work.\n\n"
+    )
+
+
 async def workspace_snapshot_message(
     sbx: Sandbox | None,
     events: list[Event],
@@ -194,42 +236,7 @@ async def workspace_snapshot_message(
     # prompt"). assist-ON keeps the block in the TAIL (after the history), so the
     # ORIGINAL pre-CW-3 directional wording is CORRECT — and restoring it byte-for-byte
     # keeps the assist-ON rendered prompt byte-identical to pre-CW-3 (P1-c).
-    if pin_full:
-        preamble = (
-            f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
-            "This block contains the live, exact content of the files you are working "
-            "on, re-read from disk this turn. It OVERRIDES any other copy of these "
-            "files shown elsewhere in this prompt; trust THIS over your memory.\n"
-            "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
-            "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
-            "the line numbers shown for each file in this block). For a full rewrite, "
-            "use `file_write` with the FULL new content — but you MUST call `file_read` "
-            "on this file first if you have written to it before, or the write will be "
-            "refused. Keep every existing function, constant, and docstring you are not "
-            "deliberately removing — do not drop code you did not mean to delete.\n"
-            "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
-            "acknowledge the snapshot in your reply (no 'I can see the files', "
-            "'the workspace shows…', 'good, the content is here', etc.). "
-            "Just continue the work.\n\n"
-        )
-    else:
-        preamble = (
-            f"{WORKSPACE_SNAPSHOT_SENTINEL} — your files on disk RIGHT NOW (authoritative).\n"
-            "Below is the live, exact content of the files you are working on, "
-            "re-read from disk this turn. It OVERRIDES any earlier or elided copy of "
-            "these files shown above; trust THIS over your memory.\n"
-            "To change a file: for a SMALL change, prefer `file_edit` (pass the exact "
-            "text you see as `old`) or `file_replace_lines` / `file_insert_lines` (use "
-            "the line numbers shown below). For a full rewrite, use `file_write` with "
-            "the FULL new content — but you MUST call `file_read` on this file first "
-            "if you have written to it before, or the write will be refused. Keep "
-            "every existing function, constant, and docstring you are not deliberately "
-            "removing — do not drop code you did not mean to delete.\n"
-            "**SILENT CONTEXT** — use this block without narrating it. Do NOT "
-            "acknowledge the snapshot in your reply (no 'I can see the files', "
-            "'the workspace shows…', 'good, the content is here', etc.). "
-            "Just continue the work.\n\n"
-        )
+    preamble = _workspace_snapshot_preamble(pin_full)
     blocks: list[str] = []
     # E4 (T8) — per-file notes appended to the trailing omitted-notice.
     # Each note tells the model exactly WHY a file it touched is NOT

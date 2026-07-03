@@ -64,26 +64,12 @@ export function humanLabel(ref: AppRef, textContent: string): string {
 }
 
 /**
- * Form the steer instruction sent to the agent when the user applies an edit on a
- * clicked source element: `In {file} near line {line}, {instruction}`. The agent
- * resolves {file}:{line} back to the served HTML source and makes the change.
- *
- * Returns `null` for a blank instruction (the caller must not steer on empty
- * input — no-op, no false affordance). The instruction is trimmed.
- */
-export function formatEditSteer(ref: AppRef, instruction: string): string | null {
-  const trimmed = instruction.trim();
-  if (!trimmed) return null;
-  return `In ${ref.file} near line ${ref.line}, ${trimmed}`;
-}
-
-/**
  * W-26 — turn ANY selection envelope (source OR deck OR non-source) into a steer
- * string that names the element, for the "Discuss with agent" affordance. Unlike
- * `formatEditSteer` (source-only, requires an instruction), this works for every
- * selection kind and carries no instruction — it just hands the agent the context
- * of WHAT the user clicked so a conversation can begin. It lands via the existing
- * steer → send_message path (no backend change).
+ * string that names the element, for the "Discuss with agent" affordance. It carries
+ * no instruction — it just hands the agent the context of WHAT the user clicked so a
+ * conversation can begin. It lands via the existing steer → send_message path. (The
+ * scoped "Change this element" path is separate — it goes through the `selection_edit`
+ * wire so the HOST builds a precisely-anchored targeted-edit directive.)
  *
  * - source: `{file}:{line}` plus the human label (de-duped if the label already
  *   leads with the location, which `humanLabel` produces).
@@ -97,8 +83,16 @@ export function formatSelectionContext(sel: SelectionEnvelope): string {
     const loc = `${ref.file}:${ref.line}`;
     // humanLabel() already prefixes the location for source refs — don't repeat it.
     target = label ? (label.startsWith(loc) ? label : `${label} (${loc})`) : loc;
-  } else {
+  } else if (ref.kind === "deck") {
     const loc = `slide ${ref.slide_id} · element ${ref.element_id}`;
+    target = label ? `${label} (${loc})` : loc;
+  } else {
+    // semantic (data-disco-*) ref — describe by section/field.
+    const loc = ref.field_id
+      ? `${ref.section_id}.${ref.field_id}`
+      : ref.collection_id && ref.index !== undefined
+        ? `${ref.collection_id}[${ref.index}]`
+        : `${ref.section_id} section`;
     target = label ? `${label} (${loc})` : loc;
   }
   return `Let's discuss the element I selected in the preview: ${target}.`;

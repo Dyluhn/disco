@@ -1,7 +1,7 @@
 /**
  * PreviewPane — A1.6 edit-mode toggle.
  *
- * The "Edit" toggle appears only when there's a real steer wire (onSteer), a
+ * The "Edit" toggle appears only when there's a real scoped-edit wire (onSelectionEdit), a
  * client-side entry HTML to stamp, a conversation, and a trusted run. Toggling it
  * swaps the client-side `srcDoc` iframe for the server-stamped preview-edit route
  * (`src=`), where click-to-edit works. No onSteer / untrusted / no-cid → no toggle
@@ -54,10 +54,10 @@ afterEach(() => {
 });
 
 describe("PreviewPane — A1.6 edit toggle", () => {
-  it("shows the Edit toggle when onSteer + an entry HTML + cid are present", () => {
+  it("shows the Edit toggle when onSelectionEdit + an entry HTML + cid are present", () => {
     render(
       withClient(
-        <PreviewPane status="FINISHED" cid="conv_edit1" events={[HTML]} onSteer={vi.fn()} />,
+        <PreviewPane status="FINISHED" cid="conv_edit1" events={[HTML]} onSelectionEdit={vi.fn()} />,
       ),
     );
     expect(screen.getByRole("button", { name: /Edit/i })).toBeInTheDocument();
@@ -69,7 +69,7 @@ describe("PreviewPane — A1.6 edit toggle", () => {
   it("toggling Edit swaps the iframe to the server preview-edit route URL", () => {
     render(
       withClient(
-        <PreviewPane status="FINISHED" cid="conv_edit2" events={[HTML]} onSteer={vi.fn()} />,
+        <PreviewPane status="FINISHED" cid="conv_edit2" events={[HTML]} onSelectionEdit={vi.fn()} />,
       ),
     );
     fireEvent.click(screen.getByRole("button", { name: /Edit/i }));
@@ -82,7 +82,7 @@ describe("PreviewPane — A1.6 edit toggle", () => {
     expect(iframe.getAttribute("sandbox")).toBe("allow-scripts");
   });
 
-  it("hides the Edit toggle when onSteer is absent (nothing to steer)", () => {
+  it("hides the Edit toggle when onSelectionEdit is absent (nothing to edit through)", () => {
     render(withClient(<PreviewPane status="FINISHED" cid="conv_edit3" events={[HTML]} />));
     expect(screen.queryByRole("button", { name: /Edit/i })).not.toBeInTheDocument();
   });
@@ -94,7 +94,7 @@ describe("PreviewPane — A1.6 edit toggle", () => {
           status="FINISHED"
           cid="conv_edit4"
           events={[HTML]}
-          onSteer={vi.fn()}
+          onSelectionEdit={vi.fn()}
           untrusted
         />,
       ),
