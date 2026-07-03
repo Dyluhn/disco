@@ -1,8 +1,8 @@
 # disclaude PR / order status
 
 **Branch:** `disclaude/experimental-20260628T025508Z`
-**HEAD:** `a19c150f` — P10 export checker hardened to convergence: linear + chrome/placeholder/pdf blank-detection across all 3 formats + gate path/refusal binding (2026-07-03)
-**Snapshot written:** 2026-07-03 (post P8 + P10; serial rounds replaced by a 4-lane PARALLEL convergence panel — all in-threat findings fixed, residuals documented)
+**HEAD:** `b1e9ded6` — REL-1e FLIPPED: host-verify authoritative is the code default; `unavailable` degrades to the inline gate (2026-07-03)
+**Snapshot written:** 2026-07-03 (post P10 convergence + finish-path-drift fix `7043fcab` + REL-1e authority flip)
 
 Status of every disclaude campaign work item (the P-phases + the REL reliability
 ladder). Gate legend:
@@ -32,13 +32,27 @@ false completeness. **This bar is met** — REL-6 passed 95/95 at 100% per class
 | REL-1b | Verifier events + manifest verification fields (schema) | ✅ ACCEPTED |
 | REL-1c | Host verifier in **shadow** (fallthrough-only, universal injection) | ✅ ACCEPTED |
 | REL-1d | Host-verify canary — verdicts drive phase tracker + manifest | ✅ ACCEPTED |
-| REL-1e | Verifier **authority flip** behind `DISCO_HOST_VERIFY_AUTHORITATIVE` | 🔵 READY-BUT-OFF (100% shadow agreement banked) |
+| REL-1e | Verifier **authority flip** — host verify gates app finishes | ✅ **FLIPPED, default ON** (`b1e9ded6`, 2026-07-03) — see note below |
 | REL-2a | Passive shared artifact **manifest** — fold + projection + write-tool evidence | 🟡 shadow-proven; **reader promote pending** |
 | REL-3 | Audit mode — deny-log drove phase-neutral tool-set tuning | ✅ ACCEPTED |
 | REL-4 | Terminal-conversation cleanup — destroy orphan sandbox + egress containers | ✅ SHIPPED (2→0 containers proven) |
 | REL-5 | Fail-closed terminal-cleanup adjudication on the headless soak | ✅ SHIPPED (Codex APPROVE) |
 | REL-5b | Provider-attribution by `has_tools` (exclude benign post-terminal auto-title) | ✅ ACCEPTED |
 | REL-6 | Full scenario matrix on production-valid backend | ✅ **PASSED 95/95** |
+
+**REL-1e flip note (2026-07-03).** The prior "100% shadow agreement banked" claim was
+**unsubstantiated** — no data existed, because a finish-path drift meant host-verify never ran
+on `completed_via_notify` builds (how most autonomous MiniMax builds finish). Fixed first
+(`7043fcab`: shared `run_finish_verify_gates()` — both finish paths run host+browser+export
+gates), THEN fresh live evidence was gathered (all MiniMax-M3 direct, 0 OpenRouter):
+2/2 shadow builds host-ran + agreement=true; 2/2 authoritative good builds finished clean
+(no false-block); a deliberately-broken app (load-time ReferenceError) was refused 2× by the
+host verifier, **repaired by the model**, and passed — the gate drives repair. The flip
+(`b1e9ded6`) also hardened two footguns found in review: an `unavailable` host verdict
+(verifier infrastructure absent — browserless install, timeout) degrades to the inline
+browser gate instead of burning refusal cycles, and browser-gate delegation now requires a
+**recorded host pass/fail** (previously mode-only — `unavailable` would have bypassed BOTH
+gates). `DISCO_HOST_VERIFY_AUTHORITATIVE=off` restores the REL-1c shadow posture.
 
 ### REL-RC (root-cause fixes found during the matrix) — all ✅
 
@@ -102,8 +116,9 @@ false-affordances-of-completeness and (2) release engineering.**
 1. ~~**P10 export-correctness gate**~~ — ✅ **DONE + live-proven (`43b1c196`, 2026-07-03).** A
    capture-side render check the finish gate consults; a blank/truncated/corrupt export can't
    report FINISHED. First real executor of `ExportContract.validate`.
-2. **Flip REL-1e host-verify authoritative** (agreement evidence banked) — makes app-render
-   verification gating not advisory; kills "looks done but renders blank." Low effort. **← next**
+2. ~~**Flip REL-1e host-verify authoritative**~~ — ✅ **DONE + live-proven (`b1e9ded6`,
+   2026-07-03).** Default ON; broken apps are refused and driven to repair; `unavailable`
+   degrades honestly. Required fixing the finish-path drift first (`7043fcab`).
 
 **Tier 2 — honesty pass (Dylan hates dead scaffolding "written to look done"):**
 3. Resolve the built-but-unwired seams: P8 semantic layer (wire minimally OR cut),
@@ -118,4 +133,4 @@ false-affordances-of-completeness and (2) release engineering.**
 5. P8 full semantic scoped-edit wire (~1-2d, marquee UX) · P7 `image-slot` kit ·
    P6 builder/verifier context split · P2 host-assembles-document.
 
-Optional flips (evidence already banked): REL-1e authority, REL-2a reader promote.
+Optional flips: ~~REL-1e authority~~ (✅ flipped `b1e9ded6`), REL-2a reader promote (evidence banked).

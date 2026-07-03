@@ -5844,3 +5844,48 @@ false-refuse — all false-blanks that broke REAL decks), a blank-completeness c
 and 2 gate holes. Lesson saved to memory: parallel-panel + batch-fix + budget-rounds,
 never serial. Every fix verified vs the REAL renderer; residuals documented in the
 module threat-model note. All 4 fitness gates green (basedpyright 0), ~76 P10 tests.
+
+## REL-1e — HOST-VERIFY AUTHORITY FLIPPED, DEFAULT ON (2026-07-03, `b1e9ded6`)
+
+The last READY-BUT-OFF reliability item is now the shipped default: the host-run
+render verifier GATES app finishes instead of advising.
+
+**The premise was rotten and got fixed first.** The banked "100% shadow agreement"
+claim had NO data behind it — a finish-path drift meant `gate_host_verify` (and the
+P10 export gate) never ran on `completed_via_notify` builds, which is how most
+autonomous MiniMax builds finish. Fix `7043fcab`: both finish paths (affirmative
+`finish()` + notify valve) now run one shared `run_finish_verify_gates()`. Rule
+saved to memory: new finish gates get wired THERE, never into one path.
+
+**Live evidence before flipping (all MiniMax-M3 direct, 0 OpenRouter):**
+- 2/2 shadow builds: host verifier RAN, agreement=true.
+- 2/2 authoritative good builds: FINISHED clean — no false-block (the flip's main risk).
+- 1 deliberately-broken app (load-time ReferenceError): host verifier refused 2×,
+  MiniMax FIXED the bug, third verify passed → legitimate FINISHED. The gate drives
+  REPAIR, not just refusal. 0 unverified_release.
+
+**Two footguns found in review and fixed in the same commit:**
+1. `unavailable` (verifier infrastructure could not run — always-constructed
+   HostWebAppVerifier returns it on browserless installs/timeouts) was routed into the
+   3-refusal penalty. Absence of infrastructure is not evidence the app is broken —
+   now degrades to the inline browser gate.
+2. `_browser_verify_delegated_to_host` keyed on mode+verifier-presence only, so fix #1
+   alone would have let `unavailable` slip through BOTH gates (finish with zero
+   verification — the exact silent-bypass class `7043fcab` killed). Delegation now
+   requires a recorded host pass/fail read from the VerifierVerdictEvent audit trail.
+
+`DISCO_HOST_VERIFY_AUTHORITATIVE=off` restores REL-1c shadow. Suites green tree-wide
+(core/agent-server/tools/retrieval/app-server), lint-imports/diagram/basedpyright 0,
+arch-budget red = pre-existing FinishGate baseline (identical set on HEAD). Dev stack
+restarted on the pure code default (no env override); live default-on probe run.
+
+**Post-flip live proof on the PURE code default (no env override, verified via /proc environ):**
+build `conv_862ba214432e40f78201a4028050174e` FINISHED; host verifier ran a real render
+(HTTP 200, 878 chars visible, 2 interactive elements, no console/network errors) →
+verdict pass/verified=true/kind=app; the `inline=null` shadow signature confirms
+authoritative engaged (inline verify skipped, host primary). 27 MiniMax-M3 direct calls,
+0 OpenRouter. Honest note: one prior default-on probe hit the PRE-EXISTING M3 actionless
+stall (paused before any finish attempt — no gate involved; a mid-run nudge then
+contaminated it with a replan, discarded). Stall mode is tracked in
+disco-m3-real-build-capability; not a flip regression (env-on and default-on are the
+same code path — both read host_verify_authoritative_enabled()).
