@@ -706,6 +706,34 @@ def _successful_patch(path: str, n: int):
     return out
 
 
+def _rewrite_directive_markers(events, path: str):
+    return [
+        e
+        for e in events
+        if isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.RUNNING
+        and e.detail == f"rewrite_directive:{path}"
+    ]
+
+
+def _rewrite_directive_reminders(events, path: str):
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.message.role == "user"
+        and f"on `{path}`" in e.message.content
+        and "Rewrite the ENTIRE file cleanly" in e.message.content
+    ]
+
+
+async def _seed_f6_failed_spiral(store, path: str) -> None:
+    await store.append(CID, user_msg("fix it"))
+    for event in _failed_patch(path, 3):
+        await store.append(CID, event)
+
+
 def test_f6_per_file_rewrite_directive_fires_on_spiral_assist_on():
     """F6 — assist ON, one file spirals past the threshold ⇒ the rewrite
     directive names that file, with the failure/attempt counts it fired on."""
@@ -866,6 +894,72 @@ def test_f6_per_file_rewrite_directive_resets_on_user_message_assist_on():
         f"a user message must reset the per-file count; only 1 failure on the "
         f"post-user window must NOT fire, got {result.rewrite_directive!r}"
     )
+
+
+async def test_f6_gate_stuck_emits_rewrite_directive_for_weak_spiral():
+    """F6 — weak/assist gate consumes the detector directive before generic stuck."""
+    path = "src/app.py"
+    thresholds = StuckThresholds(per_file_rewrite_failures=3, per_file_rewrite_min_attempts=3)
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        stuck_thresholds=thresholds,
+        model_policy=ModelExecutionPolicy(tier="weak"),
+    )
+    await _seed_f6_failed_spiral(store, path)
+
+    disp = await loop._valve.gate_stuck(await store.get_events(CID))
+
+    assert disp is Disp.CONTINUE
+    events = await store.get_events(CID)
+    assert len(_rewrite_directive_markers(events, path)) == 1
+    reminders = _rewrite_directive_reminders(events, path)
+    assert len(reminders) == 1
+    content = reminders[0].message.content
+    assert content == (
+        f"You have made 3 failed patch attempts on `{path}`. "
+        "Stop patching it line-by-line. Rewrite the ENTIRE file cleanly in one "
+        "`file_write` call (write the full corrected content), then re-verify."
+    )
+
+
+async def test_f6_gate_stuck_dedupes_rewrite_directive_until_successful_edit():
+    """F6 — repeat gate passes do not re-emit while the same marker is active."""
+    path = "src/app.py"
+    thresholds = StuckThresholds(per_file_rewrite_failures=3, per_file_rewrite_min_attempts=3)
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        stuck_thresholds=thresholds,
+        model_policy=ModelExecutionPolicy(tier="weak"),
+    )
+    await _seed_f6_failed_spiral(store, path)
+
+    first = await loop._valve.gate_stuck(await store.get_events(CID))
+    second = await loop._valve.gate_stuck(await store.get_events(CID))
+
+    assert first is Disp.CONTINUE
+    assert second is Disp.FALLTHROUGH
+    events = await store.get_events(CID)
+    assert len(_rewrite_directive_markers(events, path)) == 1
+    assert len(_rewrite_directive_reminders(events, path)) == 1
+
+
+async def test_f6_gate_stuck_standard_tier_suppresses_rewrite_directive():
+    """F6 — standard tier keeps the directive path closed and falls through."""
+    path = "src/app.py"
+    thresholds = StuckThresholds(per_file_rewrite_failures=3, per_file_rewrite_min_attempts=3)
+    loop, store = build_loop(
+        ScriptedAgent([]),
+        stuck_thresholds=thresholds,
+        model_policy=ModelExecutionPolicy.standard(),
+    )
+    await _seed_f6_failed_spiral(store, path)
+
+    disp = await loop._valve.gate_stuck(await store.get_events(CID))
+
+    assert disp is Disp.FALLTHROUGH
+    events = await store.get_events(CID)
+    assert _rewrite_directive_markers(events, path) == []
+    assert _rewrite_directive_reminders(events, path) == []
 
 
 # ---- WALK-19 — semantic no-progress detector (failure-independent) ----------

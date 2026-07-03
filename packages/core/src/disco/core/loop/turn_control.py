@@ -48,7 +48,7 @@ from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS
-from .stuck import repeated_verify_no_progress
+from .stuck import F6_FILE_MUTATING_TOOLS, repeated_verify_no_progress
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -75,6 +75,34 @@ _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
 # and let the agent keep going. The frontend renders it as a distinct button;
 # pick_alternative special-cases it (reset streak + resume) rather than running a tool.
 _CONTINUE_OPTION_ID = "__continue__"
+
+
+
+def _rewrite_directive_marker_active(events: list[Event], path: str) -> bool:
+    marker_detail = f"rewrite_directive:{path}"
+    marker_index: int | None = None
+    for i, event in enumerate(events):
+        if isinstance(event, StatusEvent) and event.detail == marker_detail:
+            marker_index = i
+    if marker_index is None:
+        return False
+
+    matching_actions: set[str] = set()
+    for event in events[marker_index + 1 :]:
+        if isinstance(event, ActionEvent):
+            tc = event.tool_call
+            if (
+                tc.tool_name in F6_FILE_MUTATING_TOOLS
+                and tc.arguments.get("path") == path
+            ):
+                matching_actions.add(event.id)
+        elif (
+            isinstance(event, ObservationEvent)
+            and event.action_id in matching_actions
+            and event.tool_result.success
+        ):
+            return False
+    return True
 
 
 def _coerce_choice_label(opt: object, _depth: int = 0) -> list[str]:
@@ -641,6 +669,31 @@ class Valve:
             for e in events
         )
         stuck_result = self._loop._stuck.evaluate(self._loop._recent(events))
+        directive = stuck_result.rewrite_directive
+        if directive is not None and not _rewrite_directive_marker_active(
+            events, directive.path
+        ):
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail=f"rewrite_directive:{directive.path}",
+                )
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            f"You have made {directive.failures} failed patch attempts "
+                            f"on `{directive.path}`. Stop patching it line-by-line. "
+                            "Rewrite the ENTIRE file cleanly in one `file_write` call "
+                            "(write the full corrected content), then re-verify."
+                        ),
+                    ),
+                )
+            )
+            return Disp.CONTINUE
         if stuck_result.is_stuck:
             if escape_seq is None:
                 # First time in this user turn: drop a `stuck_escape` MARKER

@@ -11,10 +11,9 @@ prevented by the hard-reset condensation (§8) and bounded by `max_iterations`.
 F6 (patch-spiral detector, gated on assist): tracks per-file edit failures +
 total attempts; when a file crosses the threshold and assist is ON, the richer
 `StuckResult` returned by `evaluate()` carries a `RewriteDirective` that names
-the spiraling file. The engine consumes the directive via the existing stuck
-path (the new fields are ignored when the engine has not been wired to them
-yet — see `is_stuck()` which is the byte-identical bool facade). Assist OFF
-→ the directive is always None, and the bool facade is unchanged.
+the spiraling file. `gate_stuck` consumes that directive before the generic
+stuck branch and injects a full-file-rewrite reminder. Assist OFF → the
+directive is always None, and the bool facade is unchanged.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ from .signals import _NONCRITICAL_FAILURE_TOOLS  # cosmetic bookkeeping (single 
 # inline here so stuck.py stays self-contained — engine.py is held by another
 # worker and stuck.py must not import from it). A new mutating tool added in
 # one place must be added in the other.
-_F6_FILE_MUTATING_TOOLS = frozenset({
+F6_FILE_MUTATING_TOOLS = frozenset({
     "file_write",
     "file_edit",
     "file_append",
@@ -115,10 +114,10 @@ class StuckResult(BaseModel):
 
     `is_stuck` is the bool the existing stuck patterns (1–4) would have
     returned. `rewrite_directive` is None unless assist is ON AND a file
-    has crossed the per-file threshold. The engine consumes `is_stuck` via
-    `is_stuck()` (the bool facade) and can later be wired to read
-    `rewrite_directive` from `evaluate()` without a behavior change for
-    any existing caller. Assist OFF ⇒ `rewrite_directive` is always None.
+    has crossed the per-file threshold. `gate_stuck` consumes the directive
+    directly from `evaluate()`; `is_stuck()` remains the byte-identical bool
+    facade for existing callers. Assist OFF ⇒ `rewrite_directive` is always
+    None.
     """
 
     is_stuck: bool
@@ -279,7 +278,7 @@ class StuckDetector:
             if not isinstance(e, ActionEvent):
                 continue
             tc = e.tool_call
-            if tc is None or tc.tool_name not in _F6_FILE_MUTATING_TOOLS:
+            if tc is None or tc.tool_name not in F6_FILE_MUTATING_TOOLS:
                 continue
             path = tc.arguments.get("path")
             actions_by_id[e.id] = (e, path if isinstance(path, str) and path else None)
@@ -451,7 +450,7 @@ def repeated_verify_no_progress(
     *,
     distinct_edits: int = NO_PROGRESS_DISTINCT_EDITS,
     probe_tools: frozenset[str] = _NO_PROGRESS_PROBE_TOOLS,
-    edit_tools: frozenset[str] = _F6_FILE_MUTATING_TOOLS,
+    edit_tools: frozenset[str] = F6_FILE_MUTATING_TOOLS,
 ) -> bool:
     """True when >= `distinct_edits` DISTINCT edit actions all yield the SAME
     probe/verify outcome — the successful-but-useless varied-edit loop (F4).

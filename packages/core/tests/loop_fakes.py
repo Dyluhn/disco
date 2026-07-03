@@ -16,6 +16,7 @@ from disco.core import (
 )
 from disco.core.llm import (
     CompletionResponse,
+    ModelExecutionPolicy,
     OperatingMode,
     StreamChunk,
     TokenUsage,
@@ -237,6 +238,7 @@ def build_loop(
     host_verifier=None,
     host_verify_timeout_s: float = 30.0,
     host_verifier_verdict_hook=None,
+    model_policy: ModelExecutionPolicy | None = None,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed.
@@ -269,6 +271,7 @@ def build_loop(
         host_verifier=host_verifier,
         host_verify_timeout_s=host_verify_timeout_s,
         host_verifier_verdict_hook=host_verifier_verdict_hook,
+        model_policy=model_policy or ModelExecutionPolicy.standard(),
     )
     return loop, store
 
