@@ -209,3 +209,33 @@ async def test_preview_version_query_404_for_unknown_version(tmp_path: Path) -> 
         resp = await client.get(f"/conversations/{CID}/preview-app/?version=404")
 
     assert resp.status_code == 404
+
+class _LivePreviewRuntime(_PreviewRuntime):
+    """Sandbox AWAKE: wake_for_preview resolves an upstream. A ?version request
+    must STILL serve the version snapshot — the live proxy answering under a
+    "viewing vN" banner would be a false affordance (caught live 2026-07-03)."""
+
+    async def wake_for_preview(self, cid8: str, port: int) -> str | None:
+        return "http://127.0.0.1:59999"  # nothing listens; proxying = test failure
+
+
+async def test_preview_version_query_bypasses_live_proxy(tmp_path: Path) -> None:
+    store = SqliteEventStore(":memory:")
+    ps = ProjectStore(str(tmp_path))
+    _write_workspace(ps, CID, {"index.html": b"historical"})
+    version = ps.cut_version(CID, trigger="turn")
+    assert version is not None
+    _write_workspace(ps, CID, {"index.html": b"current"})
+
+    app = FastAPI()
+    app.include_router(make_preview_router(store, cast(Any, _LivePreviewRuntime(ps))))
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        versioned = await client.get(f"/conversations/{CID}/preview-app/?version={version.seq}")
+        missing = await client.get(f"/conversations/{CID}/preview-app/?version=99")
+
+    assert versioned.status_code == 200
+    assert versioned.content == b"historical"
+    # Unknown version with a LIVE sandbox: 404, never a silent live-proxy answer.
+    assert missing.status_code == 404

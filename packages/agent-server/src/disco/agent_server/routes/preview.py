@@ -358,8 +358,17 @@ def make_preview_router(
         if runtime is None:
             return Response("preview not available", status_code=503, media_type="text/plain")
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        # Historical preview is static-only: the live proxy stays pointed at the
-        # current sandbox/dev server and only the snapshot fallback honors ?version.
+        # Historical preview is static-only AND must NEVER fall through to the live
+        # proxy: a ?version request answered by the live sandbox would show current
+        # bytes under a "viewing vN" banner — a false affordance. Version requests
+        # serve from the version snapshot or 404, full stop.
+        if version is not None:
+            served = _serve_static_from_snapshot(
+                runtime, conversation_id, path, version=version
+            )
+            if served is not None:
+                return served
+            return Response("version not found", status_code=404, media_type="text/plain")
         upstream = await runtime.wake_for_preview(cid8, PREVIEW_PORT)
         if upstream is None:
             # Fix 2 (B-E): on sealed/filtered boxes no host port is published, so
