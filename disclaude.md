@@ -5642,3 +5642,23 @@ routed through the SAME finish gates (J productive-work, O content floors, plan-
 host-verify): gates pass → FINISHED honestly (loud system-reminder records the synthesis); gates
 refuse → the refusal text steers the model (it now knows exactly why it is not done). Never fires
 without productive work; never bypasses a gate. Event-derived pause counting (replayable).
+
+## ★★ REL-6 PASSED — BUILD-RELIABILITY-GATE COMPLETE — 2026-07-03 02:25Z ★★
+
+FULL MATRIX, 100% per class, MiniMax-M3 DIRECT ONLY:
+  STATIC_SMOKE 30/30 · TARGETED_EDIT 30/30 · EXPORT_SMOKE 20/20 · REVISION_CHAIN 10/10 ·
+  DISCONNECT_OR_CANCEL 5/5  = 95/95 product-clean.
+ACCEPTANCE: relay ledger 9,245 calls — ALL api.minimaxi.chat, ZERO OpenRouter (the P17-grade
+proof); zero post-terminal provider calls + zero conversation-scoped orphans enforced per-run by
+the scoped oracles on every counted run; volume-leak fix live-verified (teardown removes volumes).
+HONEST ACCOUNTING (all in this ledger, nothing hidden): 2 infra failures (podman num_locks from
+the volume leak — cause fixed) + 1 operator restart error (rule recorded) + 2 product findings
+mid-matrix (old_text_not_found spiral → f3695250; finish-dawdle → REL-RC-P 223a85a1) — each class
+containing a failure was restarted or replacement-run on fixed code per the acceptance rules.
+Matrix-era harness hardening: detail-cap fix (2ced7ff1), strict _shell_removes (6c1e4eb3),
+adversary batch #2/#3/#5/#7 (0f9df998).
+
+**P11 AND FEATURE WORK UNBLOCK. The Build product path is boringly reliable under MiniMax-M3
+direct, as specified.** Deferred (documented, non-blocking): adversary #1 opacity-laundering
+design, #4 API export-evidence wiring, #6 snapshot file cap; REL-1e flip + REL-2a reader promote
+sit ready as config/small PRs with matrix-accumulated agreement data.
