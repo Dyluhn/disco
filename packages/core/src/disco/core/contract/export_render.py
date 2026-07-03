@@ -106,7 +106,8 @@ _CHROME_CLASS_RE = re.compile(
 _HTML_MEDIA_RE = re.compile(
     r"""
     <img\b[^>]*\bsrc\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
-    |<(?:video|iframe|object|embed)\b[^>]*\bsrc\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
+    |<(?:video|iframe|embed)\b[^>]*\bsrc\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
+    |<object\b[^>]*\bdata\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
     |<(svg|canvas)\b[^>]*>.*?\S.*?</\1>
     """,
     re.IGNORECASE | re.DOTALL | re.VERBOSE,
@@ -218,6 +219,7 @@ def check_export_render(
     *,
     text: str | None = None,
     declared_units: int | None = None,
+    declared_exact: bool = True,
 ) -> ExportRenderFacts:
     """Parse a rendered export's bytes/text and report what really rendered.
 
@@ -225,6 +227,11 @@ def check_export_render(
     HTML (the rendered string) or ``data`` for pptx/pdf (the bytes). ``ok`` is the
     finish gate's signal: a well-formed file with at least one rendered unit, real
     (chrome-stripped) content, and no truncation below the declared count.
+
+    ``declared_exact`` says whether ``declared_units`` is authoritative (C1/pptx-
+    native decks, where it is ``len(deck.slides)``) or a heuristic (markdown/Marp
+    decks, where it comes from a separator split). Exact ⇒ ANY shortfall is
+    truncation; heuristic ⇒ tolerate a one-unit split miscount, flag only GROSS loss.
     """
     f = (fmt or "").strip().lower()
     is_pdf = f in ("pdf", "document")
@@ -248,8 +255,10 @@ def check_export_render(
             detail=f"no render validator for export format {f!r}",
         )
 
-    # Declared is a heuristic for markdown decks, so only flag GROSS truncation.
-    truncated = declared_units is not None and declared_units > 0 and units < declared_units - 1
+    # Exact declared counts (C1/pptx) → any shortfall is truncation; heuristic
+    # markdown counts → tolerate a one-unit split miscount (flag only GROSS loss).
+    slack = 0 if declared_exact else 1
+    truncated = declared_units is not None and declared_units > 0 and units < declared_units - slack
     ok = valid and units >= 1 and non_blank and not truncated
 
     if not valid:

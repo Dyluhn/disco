@@ -412,6 +412,10 @@ class SlidesTool:
         filename = s.get("filename")
         fmt = str(s.get("format") or "")
         declared = s.get("slide_count") if isinstance(s.get("slide_count"), int) else None
+        # The C1/native renderers set slide_count = len(deck.slides) (EXACT); the
+        # markdown/Marp paths derive it from a separator split (HEURISTIC, can be
+        # off by one) — so truncation is strict for the former, tolerant for the latter.
+        declared_exact = str(s.get("renderer") or "") not in ("marp", "fallback")
         if not isinstance(filename, str) or not filename or ctx.sandbox is None:
             return outcome
         try:
@@ -420,7 +424,7 @@ class SlidesTool:
             return outcome
         if isinstance(data, str):
             data = data.encode("utf-8")
-        facts = check_export_render(fmt, data, declared_units=declared)
+        facts = check_export_render(fmt, data, declared_units=declared, declared_exact=declared_exact)
         return outcome.model_copy(
             update={"structured": {**s, EXPORT_RENDER_KEY: facts.model_dump(mode="json")}}
         )

@@ -221,9 +221,23 @@ def test_script_img_text_does_not_count_as_media() -> None:
     assert f.non_blank is False and f.ok is False
 
 
-def test_truncation_allows_one_unit_heuristic_gap() -> None:
-    f = check_export_render("html", text=_html_deck(2), declared_units=3)
+def test_truncation_heuristic_tolerates_one_gap_but_exact_does_not() -> None:
+    # heuristic (markdown/Marp) declared count → tolerate a one-unit split miscount
+    f = check_export_render("html", text=_html_deck(2), declared_units=3, declared_exact=False)
     assert f.unit_count == 2 and f.truncated is False and f.ok is True
+    # exact (C1/pptx) declared count → a one-unit shortfall IS truncation (default strict)
+    f2 = check_export_render("html", text=_html_deck(1), declared_units=2)
+    assert f2.unit_count == 1 and f2.truncated is True and f2.ok is False
+    # gross loss is truncation regardless of exactness
+    f3 = check_export_render("html", text=_html_deck(2), declared_units=6, declared_exact=False)
+    assert f3.truncated is True
+
+
+def test_object_data_media_counts_as_content() -> None:
+    # <object data="..."> uses data=, not src= — a real embedded visual, not blank.
+    html = '<html><body><section data-slide-id="s"><object data="chart.svg"></object></section></body></html>'
+    f = check_export_render("html", text=html, declared_units=1)
+    assert f.non_blank is True and f.ok is True
 
 
 def test_count_refusals_only_environment_source() -> None:
