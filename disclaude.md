@@ -5662,3 +5662,45 @@ adversary batch #2/#3/#5/#7 (0f9df998).
 direct, as specified.** Deferred (documented, non-blocking): adversary #1 opacity-laundering
 design, #4 API export-evidence wiring, #6 snapshot file cap; REL-1e flip + REL-2a reader promote
 sit ready as config/small PRs with matrix-accumulated agreement data.
+
+### UI finding — raw <think> leak in search-surface answers — 2026-07-03
+
+Live UI smoke screenshot (search surface, MiniMax driver): the answer prose renders a raw
+"<think>The user wants me to..." reasoning block. The auto-titler already has an adversarial
+think-sanitizer (c88a18c era) but the SEARCH answer stream renders driver reasoning unsanitized
+(same leak seen in a project manifest title 2026-07-02). Fix for the feature days: strip/fold
+<think> blocks at the answer-render boundary (frontend) or the stream sanitizer (server side) for
+ALL prose surfaces, not just titles. Not REL-blocking (presentation).
+
+## UI READINESS — LIVE SMOKE PASSED (2026-07-02)
+
+**Question answered:** "can I test it to build something" + "is the UI prepared to show this?"
+Both YES, proven visually against the REAL stack (no mocks).
+
+- `frontend/e2e-live/live-smoke.spec.ts` (Firefox, `live-smoke.config.ts`) drove a real
+  build end-to-end: type prompt → BUILD surface → plan gate → approve → FINISHED with
+  artifact. **exit=0, 2.6m, minimax-m3 · Subscription** (not OpenRouter).
+- Screenshots (scratchpad/ui-shots): 04-finished shows status **"Finished"**, the rendered
+  app live in the Preview pane (exact tagline "Open when you are." verbatim), and the
+  DeliverablePanel handoff ("live app · index.html" → Open + Export). Steer-for-changes +
+  Schedules wired.
+
+**Two test-harness bugs found + fixed (false affordances in MY test, not the product):**
+1. Assertion `getByText(/FINISHED|VERIFIED/)` — case-SENSITIVE regex, never matches the
+   rendered human label. `STATUS_LABEL` in AgentStatusBar.tsx maps enum FINISHED→"Finished".
+   There is NO "VERIFIED" label. Fixed → `/\bfinished\b/i` + DeliverablePanel hook.
+2. Approve locator brittleness → switched to the STABLE test hook
+   `[data-disco-control="approve-plan"]` (PlanPanel.tsx). Full hook vocabulary exists
+   (approve-plan, build.open-app, build.download-artifact, kill/stop/resume, etc.) — use
+   these in all future e2e, never rendered text.
+
+**UI readiness is STRUCTURALLY ENFORCED:** `frontend/src/lib/eventDisposition.ts` requires
+every backend EventKind to declare rendered|suppressed; `test_event_kind_frontend_contract.py`
+pins the TS list == backend enum, so no kind ships without a UI decision. New REL machinery
+(verifier_started/verdict/shadow, context_resolved/summary) = deliberately **suppressed**
+(host-owned audit plumbing, correctly invisible); the OUTCOMES (plan/action/observation/
+deliverable/status/agent_error) all render.
+
+**Op note:** the canonical Vite on :5173 binds IPv6 `[::1]` only — an IPv4 `127.0.0.1` curl
+reads it as dead (000). Probe via `http://localhost:5173/` (what Playwright uses) → 200.
+Backend :8000/:8800 return 404 on `/` = ALIVE (they only mount /api/*).
