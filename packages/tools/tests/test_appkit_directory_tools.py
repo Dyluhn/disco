@@ -173,6 +173,17 @@ class _FakeSandbox:
             path = shlex.split(cmd)[3]
             data = self._files.get(path)
             return _ExecRes("", exit_code=1) if data is None else _ExecRes(str(len(data)))
+        if "import json, urllib.request as U" in cmd:
+            # B3-fix4 fail-closed probe: the served index must clearly reference a
+            # built /assets bundle, else the platform tries a real build (which this
+            # fake cannot run).
+            import json as _json
+
+            return _ExecRes(_json.dumps({
+                "status": 200,
+                "content_type": "text/html",
+                "body": '<script type="module" src="/assets/index-dir1234.js"></script>',
+            }))
         return _ExecRes("200")
 
 
