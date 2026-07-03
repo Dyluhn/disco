@@ -130,6 +130,10 @@ SCENARIO_CONTRACT_UNSATISFIABLE = "SCENARIO_CONTRACT_UNSATISFIABLE"
 # re-runs an INVALID_RUN instead of freezing a false product failure.
 RUN_INTERRUPTED = "RUN_INTERRUPTED"
 RUN_TIMEOUT_WHILE_PROGRESSING = "RUN_TIMEOUT_WHILE_PROGRESSING"
+# The cancel_at after_first_file_write trigger observed a successful file mutation, but the
+# build had already reached a terminal status before the harness could issue the kill. That is
+# not a valid disconnect/cancel test; re-run instead of counting a post-finish kill as coverage.
+CANCEL_MISSED_WINDOW = "CANCEL_MISSED_WINDOW"
 # The host ProjectStore workspace snapshot never reached the build's AGENT-FINAL state
 # within the snapshot-wait budget — i.e. the snapshot's on-disk bytes for a declared file
 # never matched what the agent last wrote to it (a stale/slow flush, or a multi-revision
@@ -158,6 +162,7 @@ HARNESS_VALIDITY_CODES = frozenset(
         SCENARIO_CONTRACT_UNSATISFIABLE,
         RUN_INTERRUPTED,
         RUN_TIMEOUT_WHILE_PROGRESSING,
+        CANCEL_MISSED_WINDOW,
         WORKSPACE_SNAPSHOT_NOT_READY,
         WORKSPACE_SNAPSHOT_UNVERIFIED,
         EDIT_ORACLE_EVIDENCE_MALFORMED,  # P8D: present-but-malformed edit evidence → INVALID_RUN

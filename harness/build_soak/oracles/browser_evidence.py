@@ -106,7 +106,19 @@ class SidecarStopOracle:
         sc = _slice(product_evidence, "sidecar")
         if sc is None:
             return [skipping(self._NAME, reason="no sidecar evidence (headless run)")]
-        calls_after = _int(sc.get("provider_calls_after_terminal", 0))
+        if "provider_calls_after_terminal" not in sc:
+            return [
+                failing(
+                    self._NAME,
+                    fc.MISSING_REQUIRED_EVIDENCE,
+                    first_broken_link="terminal -> sidecar_call_count_captured",
+                    facts={
+                        "missing_field": "sidecar.provider_calls_after_terminal",
+                        "stopped_at_terminal": sc.get("stopped_at_terminal"),
+                    },
+                )
+            ]
+        calls_after = _int(sc.get("provider_calls_after_terminal"))
         # require an EXPLICIT stop + a well-formed zero post-terminal call count.
         if sc.get("stopped_at_terminal", False) is not True or calls_after is None or calls_after > 0:
             return [
@@ -230,7 +242,20 @@ class CleanupOracle:
         cu = _slice(product_evidence, "cleanup")
         if cu is None:
             return [skipping(self._NAME, reason="no cleanup evidence (headless run)")]
-        orphans = _int(cu.get("orphans", 0))
+        if "orphans" not in cu:
+            return [
+                failing(
+                    self._NAME,
+                    fc.MISSING_REQUIRED_EVIDENCE,
+                    first_broken_link="terminal -> cleanup_orphan_count_captured",
+                    facts={
+                        "missing_field": "cleanup.orphans",
+                        "workspace_released": cu.get("workspace_released"),
+                        "scope": cu.get("scope"),
+                    },
+                )
+            ]
+        orphans = _int(cu.get("orphans"))
         volume_present = "volume_orphans" in cu
         volume_orphans = _int(cu.get("volume_orphans", 0))
         # fail-closed: malformed orphan count, any orphan, or a non-explicit release.

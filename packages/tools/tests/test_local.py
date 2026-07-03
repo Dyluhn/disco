@@ -39,6 +39,7 @@ class FakeContainer:
         self.exec_results: list[tuple[int, bytes, bytes]] = []
         self.fs: dict[str, bytes] = {}
         self.attrs: dict = {}  # NetworkSettings populated on reload() if needed (E8)
+        self.remove_kwargs: dict | None = None
 
     def exec_run(self, cmd, demux=False, workdir=None, detach=False):
         self.exec_calls.append(cmd)
@@ -75,8 +76,9 @@ class FakeContainer:
     def stop(self, timeout=None):
         self.stopped = True
 
-    def remove(self, force=False):
+    def remove(self, force=False, v=False):
         self.removed = True
+        self.remove_kwargs = {"force": force, "v": v}
 
 
 class _Images:
@@ -92,9 +94,36 @@ class _Images:
 class _Volumes:
     def __init__(self) -> None:
         self.created: list[str] = []
+        self.objects: dict[str, FakeVolume] = {}
 
-    def create(self, name):
+    def create(self, name, labels=None):
         self.created.append(name)
+        vol = FakeVolume(name, labels or {})
+        self.objects[name] = vol
+        return vol
+
+    def list(self, filters=None):
+        label = (filters or {}).get("label")
+        if not label:
+            return list(self.objects.values())
+        key, _, val = label.partition("=")
+        return [vol for vol in self.objects.values() if vol.labels.get(key) == val]
+
+    def get(self, name):
+        return self.objects[name]
+
+
+class FakeVolume:
+    def __init__(self, name: str, labels: dict[str, str]) -> None:
+        self.name = name
+        self.id = "vol-" + name
+        self.labels = labels
+        self.removed = False
+        self.remove_kwargs: dict | None = None
+
+    def remove(self, force=False):
+        self.removed = True
+        self.remove_kwargs = {"force": force}
 
 
 class _FakeLocalNetwork:
@@ -180,6 +209,9 @@ async def test_create_exec_close_named_volume_on_local_socket():
     assert client.last.exec_calls[0][:1] == ["timeout"]
     await inst.destroy()
     assert client.last.stopped and client.last.removed
+    assert client.last.remove_kwargs == {"force": True, "v": True}
+    assert client.volumes.objects[vol].removed is True
+    assert client.volumes.objects[vol].labels == {"disco.conversation_id": "c"}
     with pytest.raises(SandboxError):
         await inst.exec_shell("echo", timeout_s=5)
 

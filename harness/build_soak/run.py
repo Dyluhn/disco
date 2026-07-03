@@ -110,6 +110,15 @@ def _is_cancel_after_first_write(cancel_at: dict[str, Any] | None) -> bool:
     )
 
 
+class CancelMissedWindowError(Exception):
+    """The cancel_at watcher found its trigger only after the build had terminalized."""
+
+    def __init__(self, reason: str, facts: dict[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.facts = facts or {}
+
+
 # ---- orchestration (acts as the user) ---------------------------------------
 
 
@@ -214,6 +223,32 @@ async def _cancel_at_trigger(
     before_status = ""
     with contextlib.suppress(Exception):
         before_status = DiscoApiClient._status_of(await client.get_state(cid))
+    terminal_seq = -1
+    with contextlib.suppress(Exception):
+        terminal_seq = client._latest_terminal_seq(cid)
+    if trigger == _TRIGGER_AFTER_FIRST_FILE_WRITE and (
+        (
+            trigger_seq is not None
+            and terminal_seq > trigger_seq
+        )
+        or (
+            trigger_seq is None
+            and terminal_seq >= 0
+        )
+        or before_status in TERMINAL_STATES
+    ):
+        reason = (
+            "cancel_at after_first_file_write missed the interrupt window: "
+            "the build reached a terminal status before the harness could issue kill"
+        )
+        facts = {
+            "trigger": trigger,
+            "trigger_seq": trigger_seq,
+            "terminal_seq": terminal_seq if terminal_seq >= 0 else None,
+            "status_before_kill": before_status or None,
+        }
+        timeline.append(f"{reason} (facts={facts})")
+        raise CancelMissedWindowError(reason, facts)
     resp = await client.kill(cid)
     seq_note = f" (seq={trigger_seq})" if trigger_seq is not None else ""
     timeline.append(
@@ -431,12 +466,16 @@ async def _drive_to_terminal(
             if (
                 injector is not None
                 and _is_cancel_after_first_write(cancel_at)
-                and not injector.done()
             ):
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(
-                        asyncio.shield(injector), timeout=min(inactivity_s, 60.0)
-                    )
+                if injector.done():
+                    injector.result()
+                else:
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(
+                            asyncio.shield(injector), timeout=min(inactivity_s, 60.0)
+                        )
+                    if injector.done():
+                        injector.result()
             timeline.append(f"reached terminal/stop status: {status}")
             return status
     finally:
@@ -1344,6 +1383,16 @@ async def run_once(
                 exc.reason,
                 code=fc.RUN_INTERRUPTED,
                 first_broken_link="followup_send -> no_pickup_before_bound",
+                facts=exc.facts,
+            )
+        except CancelMissedWindowError as exc:
+            return _invalid_run_record(
+                out_root,
+                run_id,
+                scenario,
+                exc.reason,
+                code=fc.CANCEL_MISSED_WINDOW,
+                first_broken_link="cancel_at -> terminal_before_kill",
                 facts=exc.facts,
             )
         except SnapshotNotReadyError as exc:

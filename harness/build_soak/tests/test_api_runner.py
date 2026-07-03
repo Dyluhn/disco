@@ -10,6 +10,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from harness.build_soak.adapters.disco_api import (
     FOLLOWUP_PICKED_UP,
     FOLLOWUP_PICKUP_TIMEOUT,
     FOLLOWUP_REPLANNED,
+    CollectedRun,
     DiscoApiClient,
     SnapshotNotReadyError,
 )
@@ -1274,6 +1276,7 @@ async def test_resolve_decision_first_valid_when_no_recommendation(tmp_path):
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
 
     resolved = await client.resolve_decision(_CID)
+    assert resolved is not None
     assert resolved["option_id"] == "opt_a"  # first valid
 
 
@@ -1290,6 +1293,7 @@ async def test_resolve_decision_scenario_override(tmp_path):
     client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
 
     resolved = await client.resolve_decision(_CID, preferred_option_id="opt_a")
+    assert resolved is not None
     assert resolved["option_id"] == "opt_a"  # the scenario override is honored over recommended
 
 
@@ -1940,6 +1944,64 @@ def _insert_event(db_path, cid, event):
         conn.close()
 
 
+def _observation_for_action(seq: int, event: dict[str, Any], *, success: bool = True) -> dict[str, Any]:
+    tc = event["tool_call"]
+    return {
+        "id": f"evt_{seq}",
+        "seq": seq,
+        "kind": "observation",
+        "source": "environment",
+        "action_id": event["id"],
+        "tool_result": {
+            "call_id": tc["call_id"],
+            "tool_name": tc["tool_name"],
+            "success": success,
+            "content": "ok" if success else "failed",
+            "error": None if success else "boom",
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_wait_for_first_file_write_requires_successful_write_family_observation(tmp_path):
+    db = tmp_path / "disco.db"
+    shell = action(2, "shell", args={"cmd": "touch index.html"}, action_id="act_shell")
+    verify = action(4, "verify_web_app", action_id="act_verify")
+    preview = action(6, "preview", action_id="act_preview")
+    failed_write = action(
+        8,
+        "file_write",
+        args={"path": "index.html", "content": "bad"},
+        action_id="act_failed_write",
+    )
+    good_write = action(
+        10,
+        "exact_replace",
+        args={"path": "index.html", "old": "bad", "new": "good"},
+        action_id="act_good_write",
+    )
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build"),
+            shell,
+            _observation_for_action(3, shell),
+            verify,
+            _observation_for_action(5, verify),
+            preview,
+            _observation_for_action(7, preview),
+            failed_write,
+            _observation_for_action(9, failed_write, success=False),
+            good_write,
+            _observation_for_action(11, good_write),
+        ],
+    )
+    client = DiscoApiClient(FakeTransport(db, states=["RUNNING"]), db_path=str(db), poll_interval_s=0.0)
+
+    assert await client.wait_for_first_file_write(_CID, timeout_s=0.1) == 10
+
+
 class _ScriptStateTransport(FakeTransport):
     """GET /state yields scripted statuses (clamped at last). `on_read(n)` fires on each
     /state read (1-based) so a test can mutate the DB as the pickup wait polls — modelling
@@ -2199,14 +2261,14 @@ class _CancelAtRecoveryTransport(FakeTransport):
                 and self._state_reads >= 2
             ):
                 seq = self._next_seq()
-                self._append(
-                    action(
-                        seq,
-                        "file_write",
-                        args={"path": "index.html", "content": "<h1>partial</h1>"},
-                        action_id=f"act{seq}",
-                    )
+                write = action(
+                    seq,
+                    "file_write",
+                    args={"path": "index.html", "content": "<h1>partial</h1>"},
+                    action_id=f"act{seq}",
                 )
+                self._append(write)
+                self._append(_observation_for_action(self._next_seq(), write))
                 self._file_write_inserted = True
 
             if self._recovery_reads is not None:
@@ -2254,6 +2316,44 @@ class _CancelAtRecoveryTransport(FakeTransport):
             self.send_log.append(self._state_reads)
             self._append(msg(self._next_seq(), "user", str(frame.get("content") or "")))
             self._recovery_reads = 0
+
+
+class _CancelMissedWindowTransport(FakeTransport):
+    def __init__(self, db_path, **kw):
+        super().__init__(
+            db_path,
+            states=["RUNNING"],
+            workspace={"index.html": "<h1>finished too fast</h1>"},
+            preview_html="<h1>finished too fast</h1>",
+            **kw,
+        )
+        self._seq = 5
+        self._state_reads = 0
+        self._terminal_inserted = False
+
+    def _append(self, event):
+        _insert_event(self.db_path, self.cid, event)
+
+    def _next_seq(self) -> int:
+        self._seq += 1
+        return self._seq
+
+    async def get_json(self, path):
+        if path.endswith("/state"):
+            self._state_reads += 1
+            if not self._terminal_inserted and self._state_reads >= 2:
+                write = action(
+                    self._next_seq(),
+                    "file_write",
+                    args={"path": "index.html", "content": "<h1>finished too fast</h1>"},
+                    action_id="act_fast_write",
+                )
+                self._append(write)
+                self._append(_observation_for_action(self._next_seq(), write))
+                self._append(status(self._next_seq(), "FINISHED"))
+                self._terminal_inserted = True
+            return 200, {"execution_status": "FINISHED" if self._terminal_inserted else "RUNNING"}
+        return await super().get_json(path)
 
 
 @pytest.mark.asyncio
@@ -2351,6 +2451,45 @@ async def test_cancel_at_after_first_file_write_kills_then_followup_recovers(tmp
     assert run.declared_followup_requires_revision == [True]
     assert any("cancel_at fired at after_first_file_write" in t for t in run.timeline)
     assert any("cancel_at settled to stable IDLE" in t for t in run.timeline)
+
+
+@pytest.mark.asyncio
+async def test_cancel_at_after_first_file_write_terminal_race_is_invalid_run(tmp_path):
+    db = tmp_path / "disco.db"
+    _seed_db(
+        db,
+        _CID,
+        [
+            msg(1, "user", "build"),
+            status(2, "RUNNING"),
+            plan(3, revision=1),
+            status(4, "RUNNING", "plan_approved"),
+            status(5, "RUNNING"),
+        ],
+    )
+    transport = _CancelMissedWindowTransport(db)
+    client = DiscoApiClient(transport, db_path=str(db), poll_interval_s=0.0)
+    scenario = {**_smoke_scenario(), "cancel_at": {"trigger": "after_first_file_write"}}
+
+    record = await run_once(
+        client,
+        scenario,
+        run_id="run_cancel_missed_window_001",
+        out_root=tmp_path / "out",
+        model="m",
+        autonomous=False,
+        commit="abc",
+        timeout_s=1.0,
+        hard_cap_s=5.0,
+    )
+
+    assert record["status"] == "INVALID_RUN"
+    assert record["code"] == "CANCEL_MISSED_WINDOW"
+    assert record["facts"]["terminal_seq"] > record["facts"]["trigger_seq"]
+    # One kill is still expected from final runner hygiene; a second one would be the
+    # invalid post-finish cancel trigger this test forbids.
+    kills = [p for p in transport.posts if p[0] == f"/conversations/{_CID}/kill"]
+    assert len(kills) == 1
 
 
 @pytest.mark.asyncio
@@ -2607,13 +2746,17 @@ async def test_provider_calls_after_terminal_are_conversation_scoped(tmp_path, m
     async def collect(records: list[dict]) -> dict:
         relay = tmp_path / "relay.jsonl"
         relay.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
-        run = type("Run", (), {})()
-        run.events = events
-        run.state_final = {"status": "FINISHED"}
-        run.timeline = ["RUNNING", "FINISHED"]
-        run.product_evidence = {}
+        run = CollectedRun(
+            conversation_id="conv_terminal",
+            events=events,
+            state_initial={},
+            state_final={"status": "FINISHED"},
+            workspace_manifest={},
+            preview=None,
+            timeline=["RUNNING", "FINISHED"],
+        )
         return await _run_mod._collect_terminal_cleanup_evidence(
-            _KillClient(),
+            cast(DiscoApiClient, _KillClient()),
             "conv_terminal",
             run,
             baseline_containers=0,
@@ -2659,13 +2802,16 @@ class _CleanupKillClient:
         return dict(self.response)
 
 
-def _cleanup_run(state_final=None):
-    run = type("Run", (), {})()
-    run.events = []
-    run.state_final = state_final or {"status": "FINISHED"}
-    run.timeline = ["RUNNING", "FINISHED"]
-    run.product_evidence = {}
-    return run
+def _cleanup_run(state_final: dict[str, Any] | None = None) -> CollectedRun:
+    return CollectedRun(
+        conversation_id="conv_terminal",
+        events=[],
+        state_initial={},
+        state_final=state_final or {"status": "FINISHED"},
+        workspace_manifest={},
+        preview=None,
+        timeline=["RUNNING", "FINISHED"],
+    )
 
 
 def _fake_podman(
@@ -2726,7 +2872,7 @@ async def test_cleanup_orphans_are_scoped_to_this_conversation_sandbox_ids(monke
     )
 
     ev = await _run_mod._collect_terminal_cleanup_evidence(
-        _CleanupKillClient(),
+        cast(DiscoApiClient, _CleanupKillClient()),
         "conv_terminal",
         run,
         baseline_containers=0,
@@ -2761,7 +2907,7 @@ async def test_cleanup_scoped_count_ignores_other_conversation_live_sandboxes(mo
     run = _cleanup_run()
 
     ev = await _run_mod._collect_terminal_cleanup_evidence(
-        _CleanupKillClient({"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]}),
+        cast(DiscoApiClient, _CleanupKillClient({"http_status": 200, "sandbox_instance_ids": ["sbx_this_conv"]})),
         "conv_terminal",
         run,
         baseline_containers=0,
@@ -2798,7 +2944,7 @@ async def test_cleanup_counts_scoped_leftover_workspace_volume_as_orphan(monkeyp
     )
 
     ev = await _run_mod._collect_terminal_cleanup_evidence(
-        _CleanupKillClient(),
+        cast(DiscoApiClient, _CleanupKillClient()),
         "conv_terminal",
         run,
         baseline_containers=0,
@@ -2840,7 +2986,7 @@ async def test_cleanup_orphan_count_falls_back_to_global_delta_without_sandbox_i
     run = _cleanup_run({"status": "FINISHED", "extras": {}})
 
     ev = await _run_mod._collect_terminal_cleanup_evidence(
-        _CleanupKillClient(),
+        cast(DiscoApiClient, _CleanupKillClient()),
         "conv_terminal",
         run,
         baseline_containers=2,
@@ -3008,7 +3154,7 @@ def test_new_scenarios_assert_deterministic_oracle_checkable_output():
     assert rt["assertions"]["revisions"]["expected_final_plan_revision"] == 3
 
 
-# ---- REL-6 finding #5: _shell_removes strictness (basename false-absent) --------------------
+# ---- REL-6 finding #2: _shell_removes strictness (basename false-absent) --------------------
 def test_shell_removes_requires_exact_path_and_pure_rm():
     from harness.build_soak.adapters.disco_api import _shell_removes
 
@@ -3022,3 +3168,26 @@ def test_shell_removes_requires_exact_path_and_pure_rm():
     # The genuine case still detects.
     assert _shell_removes("rm index.html", "index.html")
     assert _shell_removes("rm -f index.html", "index.html")
+    assert _shell_removes("rm -- 'space path/index page.html'", "space path/index page.html")
+    # Recursive parent deletes mark declared children absent, but non-recursive parent rm does not.
+    assert _shell_removes("rm -rf 'site output'", "site output/index.html")
+    assert _shell_removes("rm -r -- 'site output'", "site output/nested/index.html")
+    assert not _shell_removes("rm -f 'site output'", "site output/index.html")
+    # A pure two-path mv removes the declared source from its original path.
+    assert _shell_removes("mv 'index page.html' archive/index.html", "index page.html")
+    assert _shell_removes("mv -- 'space path/index.html' archive/index.html", "space path/index.html")
+    assert not _shell_removes("mv export/index.html index.html", "index.html")
+
+
+def test_verified_is_terminal_in_adapter_and_event_predicates():
+    from harness.build_soak.adapters.disco_api import TERMINAL_STATES
+    from harness.build_soak.events import (
+        EXECUTION_EXPECTED_TERMINALS,
+        TERMINAL_STATUSES,
+        terminal_status,
+    )
+
+    assert "VERIFIED" in TERMINAL_STATES
+    assert "VERIFIED" in TERMINAL_STATUSES
+    assert "VERIFIED" in EXECUTION_EXPECTED_TERMINALS
+    assert terminal_status([status(1, "VERIFIED")]) == "VERIFIED"

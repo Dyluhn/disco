@@ -19,9 +19,18 @@ default, so the weak sandbox is never silently as permissive as the strong tier.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
-from ._container import PUBLISHED_PORTS, ContainerInstance, egress_mode, resolve_bounds
+from ._container import (
+    PUBLISHED_PORTS,
+    ContainerInstance,
+    _create_named_volume,
+    _remove_container,
+    _remove_volume,
+    egress_mode,
+    resolve_bounds,
+)
 from .base import SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_local_config
 from .gvisor import GvisorSandboxService, _keepalive_command
@@ -30,7 +39,7 @@ from .naming import LABEL_CONV, SBX_NAME_PREFIX
 
 class LocalSandboxInstance(ContainerInstance):
     """A running local container — shared ContainerInstance behavior. The workspace is
-    a per-run named volume on the LOCAL host, persisting across the container."""
+    a per-run named volume on the LOCAL host, removed during sandbox teardown."""
 
 
 class LocalSandboxService(GvisorSandboxService):
@@ -97,8 +106,9 @@ class LocalSandboxService(GvisorSandboxService):
             ports = None
         # Bind `ports` at function-frame (the conditional expression above might
         # leave it unbound on an unrecognised mode — defense in depth).
+        volume = None
         try:
-            client.volumes.create(name=vol_name)  # auto-created; persists across the box
+            volume = _create_named_volume(client.volumes, name=vol_name, labels=labels)
             container = client.containers.run(
                 image=self._cfg.image,
                 # keepalive
@@ -129,7 +139,7 @@ class LocalSandboxService(GvisorSandboxService):
             # Don't leak the egress aux if the sandbox itself failed to start (E8).
             if egress_sidecar is not None:
                 try:
-                    egress_sidecar.remove(force=True)
+                    _remove_container(egress_sidecar)
                 except Exception:  # noqa: BLE001 — best-effort
                     pass
             if egress_network is not None:
@@ -137,6 +147,8 @@ class LocalSandboxService(GvisorSandboxService):
                     egress_network.remove()
                 except Exception:  # noqa: BLE001 — best-effort
                     pass
+            with contextlib.suppress(Exception):
+                _remove_volume(volume)
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
         # [FIX6 podman-parity] The parent gVisor `_start_container` launches the inbound
         # preview forwarder on the sidecar after the sandbox starts; this override has
@@ -147,4 +159,4 @@ class LocalSandboxService(GvisorSandboxService):
         # it, 502. Best-effort (never raises), same as the parent.
         if mode == "filtered" and egress_sidecar is not None:
             self._launch_inbound_forwarder(egress_sidecar, container, net_name)
-        return container, egress_network, egress_sidecar
+        return container, egress_network, egress_sidecar, volume

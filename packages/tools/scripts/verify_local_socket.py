@@ -92,15 +92,15 @@ async def main() -> None:
 
     vol_name = f"{cfg.workspace_volume_prefix}-{inst.id}"
 
-    # 7: teardown — container gone, workspace (named volume) handled (persists, like Podman).
+    # 7: teardown — container gone, workspace named volume removed.
     await inst.destroy()
     import docker
 
     c = docker.DockerClient(base_url=cfg.docker_socket)
     gone = not any(f"pmx-sbx-{inst.id}" in (ct.name or "") for ct in c.containers.list(all=True))
-    vol_remains = any(vol_name in (v.name or "") for v in c.volumes.list())
+    vol_removed = not any(vol_name in (v.name or "") for v in c.volumes.list())
     ok("7. teardown: container removed", gone, "")
-    ok("7. teardown: workspace named volume persists", vol_remains, vol_name)
+    ok("7. teardown: workspace named volume removed", vol_removed, vol_name)
 
     # 4: limits BITE through the LOCAL socket (the rootless footgun — confirm not silently cgroupfs).
     mem_inst = await svc.create(SandboxSpec(memory_mb=128), owner_id="local", conversation_id="verify")

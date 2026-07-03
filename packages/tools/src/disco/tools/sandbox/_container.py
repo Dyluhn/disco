@@ -262,6 +262,7 @@ class ContainerInstance:
         workspace_uid: int = 1000,
         preview_host: str = "localhost",
         reload_timeout_s: float = _DEFAULT_RELOAD_TIMEOUT_S,
+        workspace_volume: Any | None = None,
     ) -> None:
         self.id = id
         self.owner_id = owner_id
@@ -277,6 +278,10 @@ class ContainerInstance:
         # by it so the sandbox user can EDIT them — put_archive defaults to uid 0 (root),
         # which a non-root container user can read but not modify.
         self._workspace_uid = workspace_uid
+        # Local/Podman workspaces are explicit named volumes. Keep the object so
+        # instance teardown can remove it even when the runtime only removes
+        # anonymous attached volumes from container.remove(v=True).
+        self._workspace_volume = workspace_volume
         # Wedge-guard bound for `_safe_reload()` (Dispo #25). A hung or failing
         # docker/podman client must never block the event loop. The service sources
         # this from `SandboxConfig.reload_timeout_s` at create time (hot-apply).
@@ -744,7 +749,7 @@ class ContainerInstance:
             except Exception:  # noqa: BLE001 — best-effort; force-remove next
                 pass
             try:
-                sidecar.remove(force=True)
+                _remove_container(sidecar)
             except Exception:  # noqa: BLE001 — already gone is fine
                 pass
         if network is not None:
@@ -756,10 +761,10 @@ class ContainerInstance:
 
     async def destroy(self) -> None:
         """Stop + remove the container, then tear down the filtered-egress aux (if
-        any). The workspace persists on the daemon host (bind dir for gVisor,
-        named volume for Podman / local); only the container + the aux are
-        ephemeral. The aux teardown is shared across every backend that supports
-        the allowlisting proxy (E8) — see `_teardown_egress_aux`."""
+        any). The workspace bind dir persists for gVisor; named workspace volumes
+        for Podman / local are ephemeral and removed with the container. The aux
+        teardown is shared across every backend that supports the allowlisting
+        proxy (E8) — see `_teardown_egress_aux`."""
         if self._destroyed:
             return
         self._destroyed = True
@@ -770,7 +775,11 @@ class ContainerInstance:
             except Exception:  # noqa: BLE001 — best-effort stop; force-remove next
                 pass
             try:
-                self._container.remove(force=True)
+                _remove_container(self._container)
+            except Exception:  # noqa: BLE001 — already gone is fine
+                pass
+            try:
+                _remove_volume(self._workspace_volume)
             except Exception:  # noqa: BLE001 — already gone is fine
                 pass
 
@@ -778,3 +787,45 @@ class ContainerInstance:
         # Aux AFTER the sandbox: the sandbox is on the internal net; removing the
         # net while the sandbox still references it would error out.
         await asyncio.to_thread(self._teardown_egress_aux)
+
+
+def _remove_container(container: Any, *, force: bool = True, volumes: bool = True) -> None:
+    """Remove a docker/podman container and ask the runtime to drop attached volumes.
+
+    docker-py and podman-py both expose the Docker API's ``v`` flag; some tests and
+    old compatibility fakes only accept ``force``. Teardown is best-effort, so fall
+    back only for signature incompatibility.
+    """
+    if container is None:
+        return
+    try:
+        container.remove(force=force, v=volumes)
+        return
+    except TypeError:
+        pass
+    try:
+        container.remove(force=force, volumes=volumes)
+        return
+    except TypeError:
+        pass
+    container.remove(force=force)
+
+
+def _remove_volume(volume: Any, *, force: bool = True) -> None:
+    """Best-effort named-volume remove across docker-py/podman-py and fakes."""
+    if volume is None:
+        return
+    try:
+        volume.remove(force=force)
+        return
+    except TypeError:
+        pass
+    volume.remove()
+
+
+def _create_named_volume(volumes: Any, *, name: str, labels: dict[str, str]) -> Any:
+    """Create a named workspace volume, labeling it when the client supports labels."""
+    try:
+        return volumes.create(name=name, labels=labels)
+    except TypeError:
+        return volumes.create(name=name)

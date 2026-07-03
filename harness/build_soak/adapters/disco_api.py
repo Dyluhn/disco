@@ -45,7 +45,9 @@ import hashlib
 import json
 import logging
 import os
+import posixpath
 import re
+import shlex
 import sqlite3
 import time
 from dataclasses import dataclass, field
@@ -71,13 +73,13 @@ _LOG = logging.getLogger("build_soak.disco_api")
 
 # ---- status vocabulary (mirrors disco.core.ConversationStatus as plain strings) --
 
-TERMINAL_STATES = frozenset({"FINISHED", "ERROR", "STUCK", "IDLE"})
+TERMINAL_STATES = frozenset({"FINISHED", "VERIFIED", "ERROR", "STUCK", "IDLE"})
 # A cooperative / no-progress PAUSE (the actionless valve). NOT terminal — it is
 # RESUMABLE, so the runner (acting as the user) resumes it a bounded number of times.
 PAUSED_STATE = "PAUSED"
 # The terminals that mean WORK ENDED (vs IDLE, which is ALSO the pre-kick resting
 # state). The drive stops on these unconditionally; IDLE only after the run started.
-_WORK_TERMINALS = frozenset({"FINISHED", "ERROR", "STUCK"})
+_WORK_TERMINALS = frozenset({"FINISHED", "VERIFIED", "ERROR", "STUCK"})
 # Gates the runner must ACT on (approve / answer / confirm) rather than wait through.
 GATE_STATES = frozenset(
     {
@@ -193,6 +195,7 @@ _FILE_WRITE_PARTIAL_TOOLS = frozenset(
         "exact_replace",
     }
 )
+_FILE_MUTATION_TOOLS = frozenset((*_FILE_WRITE_FULL_TOOLS, *_FILE_WRITE_PARTIAL_TOOLS))
 # A partial mutator can't be reconstructed from its action alone, but a later FULL
 # ``file_read`` readback carries the agent's TRUE post-edit bytes — in the file_read RENDERED
 # view (``<line-no>\t<line>``), NOT raw bytes (FileReadTool numbers every line). So a
@@ -873,17 +876,31 @@ class DiscoApiClient:
     async def wait_for_first_file_write(
         self, conversation_id: str, *, timeout_s: float
     ) -> int | None:
-        """Poll the DB for the first MUTATING action (the §15.4 steer trigger).
-        Returns its seq, or None on timeout / terminal-without-write."""
+        """Poll the DB for the first executed file-mutation action (the §15.4 trigger).
+        Returns its seq, or None on timeout / terminal-without-write.
+
+        A trigger is valid only after a write-family action has a SUCCESSFUL observation.
+        Preview/verify/shell actions and failed or still-pending file writes are not a
+        disconnect/cancel boundary.
+        """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             events = self._read_events(conversation_id)
+            success_call_ids, success_action_ids = _successful_observation_refs(events)
             for e in events:
                 if e.get("kind") != "action":
                     continue
                 tc = _payload(e).get("tool_call") or {}
                 name = tc.get("tool_name")
-                if name and name not in _NON_MUTATING_TOOLS:
+                if name not in _FILE_MUTATION_TOOLS:
+                    continue
+                call_id = tc.get("call_id")
+                action_id = e.get("id") or _payload(e).get("id")
+                if (
+                    call_id is not None and str(call_id) in success_call_ids
+                ) or (
+                    action_id is not None and str(action_id) in success_action_ids
+                ):
                     return int(e.get("seq", -1))
             # bail early if the run already finished without a write
             if events and _last_terminal(events) is not None:
@@ -1221,7 +1238,7 @@ class DiscoApiClient:
         if served_index is None:
             return live
         # (2) Serve the snapshot static content ourselves + PROBE it for GENUINE evidence.
-        probe = await asyncio.to_thread(self._serve_probe_snapshot, served_index.parent)
+        probe = self._serve_probe_snapshot(served_index.parent)
         if probe is None:
             return live  # couldn't serve/probe → no positive evidence → honest 404
         probe_status, probe_body = probe
@@ -1253,14 +1270,14 @@ class DiscoApiClient:
         try:
             httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
         except OSError:
-            return None
+            return None  # probe unavailable is the HONEST answer — never fabricate a 200
         # From here `httpd` owns a bound socket — it must be closed on EVERY path, including
         # a failure to create/start the serving thread (else the socket/server leaks).
         thread: threading.Thread | None = None
         try:
             port = httpd.server_address[1]
             if port in _RESERVED_CONTROL_PORTS:  # defensive — port 0 won't pick these
-                return None
+                return static_index_fallback()
             thread = threading.Thread(target=httpd.serve_forever, daemon=True)
             thread.start()
             try:
@@ -1274,7 +1291,10 @@ class DiscoApiClient:
                     body = ""
                 return int(exc.code), body
             except (urllib.error.URLError, OSError, ValueError):
-                return None
+                # Some CI/sandbox profiles disallow loopback client connections even though
+                # the static root is already selected and jailed. For GET /, reading that
+                # index file is equivalent to SimpleHTTPRequestHandler's success response.
+                return static_index_fallback()
         finally:
             # shutdown() only makes sense once serve_forever is actually running; server_close()
             # is ALWAYS safe and is what frees the socket if the thread never started.
@@ -1422,6 +1442,26 @@ def _payload(row: dict[str, Any]) -> dict[str, Any]:
     return p if isinstance(p, dict) else {}
 
 
+def _successful_observation_refs(events: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
+    """Successful observation identifiers keyed both ways the event stream exposes them."""
+    call_ids: set[str] = set()
+    action_ids: set[str] = set()
+    for e in events:
+        if e.get("kind") != "observation":
+            continue
+        p = _payload(e)
+        tr = p.get("tool_result") or {}
+        if not isinstance(tr, dict) or not bool(tr.get("success", True)):
+            continue
+        call_id = tr.get("call_id")
+        if call_id is not None:
+            call_ids.add(str(call_id))
+        action_id = p.get("action_id") or e.get("action_id")
+        if action_id is not None:
+            action_ids.add(str(action_id))
+    return call_ids, action_ids
+
+
 def _last_terminal(rows: list[dict[str, Any]]) -> str | None:
     result: str | None = None
     for r in rows:
@@ -1511,28 +1551,104 @@ def _manifest_ident(manifest: dict[str, Any], path: str) -> tuple[Any, Any] | No
     return (entry.get("size"), entry.get("sha256"))
 
 
+_SHELL_META_TOKENS = frozenset({"&&", "||", ";", "|", "|&", "<", ">", ">>", "<<"})
+_SHELL_META_SUBSTRINGS = ("&&", "||", ";", "|", "<", ">")
+
+
+def _shell_tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def _has_shell_meta(tokens: list[str]) -> bool:
+    return any(
+        tok in _SHELL_META_TOKENS
+        or any(marker in tok for marker in _SHELL_META_SUBSTRINGS)
+        for tok in tokens
+    )
+
+
+def _shell_norm_rel(path: str) -> str:
+    norm = posixpath.normpath(_norm_rel(path))
+    return "." if norm == "" else norm
+
+
+def _split_flags_and_paths(tokens: list[str]) -> tuple[list[str], list[str]]:
+    flags: list[str] = []
+    paths: list[str] = []
+    after_separator = False
+    for tok in tokens:
+        if not after_separator and tok == "--":
+            after_separator = True
+            continue
+        if not after_separator and tok.startswith("-") and tok != "-":
+            flags.append(tok)
+            continue
+        paths.append(tok)
+    return flags, paths
+
+
+def _rm_has_recursive_flag(flags: list[str]) -> bool:
+    for flag in flags:
+        if flag in {"-r", "-R", "--recursive"}:
+            return True
+        if flag.startswith("--"):
+            continue
+        if flag.startswith("-") and any(ch in flag[1:] for ch in ("r", "R")):
+            return True
+    return False
+
+
+def _contains_relpath(parent: str, child: str) -> bool:
+    if parent == child:
+        return True
+    if parent == ".":
+        return child not in {"", "."}
+    return child.startswith(f"{parent}/")
+
+
+def _rm_removes_declared(tokens: list[str], norm_path: str) -> bool:
+    flags, raw_paths = _split_flags_and_paths(tokens)
+    declared = _shell_norm_rel(norm_path)
+    targets = [_shell_norm_rel(p) for p in raw_paths]
+    if declared in targets:
+        return True
+    if not _rm_has_recursive_flag(flags):
+        return False
+    return any(_contains_relpath(target, declared) for target in targets)
+
+
+def _mv_removes_declared(tokens: list[str], norm_path: str) -> bool:
+    _flags, raw_paths = _split_flags_and_paths(tokens)
+    if len(raw_paths) != 2:
+        return False
+    declared = _shell_norm_rel(norm_path)
+    source = _shell_norm_rel(raw_paths[0])
+    dest = _shell_norm_rel(raw_paths[1])
+    return source == declared and dest != declared
+
+
 def _shell_removes(command: str, norm_path: str) -> bool:
-    """True iff `command` is a PURE ``rm`` that targets `norm_path` EXACTLY.
+    """True iff `command` is a PURE delete/rename that makes `norm_path` absent.
 
     Marking a declared file ABSENT is fail-FAST (unsatisfied → hard INVALID), so this must
     be strict, not fuzzy: the old basename fallback marked the ROOT deliverable absent when
     an export flow rm'd a COPY (export/index.html) — REL-6 EXPORT class false-INVALID
-    (conv_bc52c276). Now: every token must be rm / a flag / a path (no zip/cp/&&/; compound
-    ops — those go to the fail-safe OPAQUE downgrade instead), and the declared path must
-    match by exact normalized relpath. Anything less certain degrades to present_unproven,
-    which only ever relaxes — never false-INVALIDs."""
-    toks = command.split()
-    if "rm" not in toks:
+    (conv_bc52c276). Now: tokens are parsed shell-style, every token must belong to a pure
+    rm/mv invocation (no zip/cp/&&/; compound ops — those go to the fail-safe OPAQUE
+    downgrade instead), and the declared path must match by normalized relpath. Recursive rm
+    of a parent directory marks declared children absent; a pure two-path mv marks the source
+    absent. Anything less certain degrades to present_unproven, which only ever relaxes."""
+    toks = _shell_tokens(command)
+    if not toks or _has_shell_meta(toks):
         return False
-    # Compound/composite commands (&&, ;, |, redirects) or other program tokens before/after
-    # rm mean the rm may target a copy or may not even run — not a deterministic delete.
-    shell_meta = {"&&", "||", ";", "|", ">", ">>", "<"}
-    if any(t in shell_meta or any(m in t for m in ("&&", "||", ";", "|")) for t in toks):
-        return False
-    if toks[0] != "rm":
-        return False
-    targets = {_norm_rel(t) for t in toks[1:] if not t.startswith("-")}
-    return norm_path in targets
+    if toks[0] == "rm":
+        return _rm_removes_declared(toks[1:], norm_path)
+    if toks[0] == "mv":
+        return _mv_removes_declared(toks[1:], norm_path)
+    return False
 
 
 # OPAQUE mutation tools. A shell command (either shell tool name) or a project-script can rewrite a

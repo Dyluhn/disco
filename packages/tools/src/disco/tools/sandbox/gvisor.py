@@ -34,6 +34,8 @@ from ._container import (
     proxy_run_argv,
     resolve_bounds,
     sealed,
+    _remove_container,
+    _remove_volume,
 )
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_sandbox_config
@@ -516,7 +518,7 @@ class GvisorSandboxService:
     def _best_effort_cleanup(network: Any, sidecar: Any) -> None:
         if sidecar is not None:
             try:
-                sidecar.remove(force=True)
+                _remove_container(sidecar)
             except Exception:  # noqa: BLE001 — best-effort
                 pass
         if network is not None:
@@ -530,9 +532,14 @@ class GvisorSandboxService:
     ) -> SandboxInstance:
         instance_id = f"sbx_{uuid.uuid4().hex}"
         host_workspace = posixpath.join(self._cfg.workspace_root, instance_id)
-        container, egress_network, egress_sidecar = await asyncio.to_thread(
+        started = await asyncio.to_thread(
             self._start_container, spec, instance_id, host_workspace, conversation_id
         )
+        if len(started) == 3:
+            container, egress_network, egress_sidecar = started
+            workspace_volume = None
+        else:
+            container, egress_network, egress_sidecar, workspace_volume = started
         instance = self._instance_cls(
             id=instance_id,
             owner_id=owner_id,
@@ -549,6 +556,7 @@ class GvisorSandboxService:
             # updates, the service caller can also assign `inst._reload_timeout_s
             # = new_value` directly.
             reload_timeout_s=self._cfg.reload_timeout_s,
+            workspace_volume=workspace_volume,
         )
         # Attach the filtered-egress aux so destroy() tears down the proxy + network.
         instance._egress_network = egress_network
@@ -609,7 +617,7 @@ class GvisorSandboxService:
                     try:  # legacy/unlabeled: reap on sight (see docstring)
                         _LOG.info("reaping unlabeled legacy sandbox container %s", c.name)
                         c.stop(timeout=2)
-                        c.remove(force=True)
+                        _remove_container(c)
                     except Exception:  # noqa: BLE001 — best-effort
                         pass
                 return result
@@ -627,6 +635,7 @@ class GvisorSandboxService:
                 # a container/network started under the old label scheme is still
                 # torn down after the rename.
                 seen_ids: set[str] = set()
+                workspace_volume_names: set[str] = set()
                 for key in LABEL_CONV_KEYS:
                     for c in client.containers.list(
                         all=True,
@@ -635,12 +644,19 @@ class GvisorSandboxService:
                         if c.id in seen_ids:
                             continue
                         seen_ids.add(c.id)
+                        name = str(getattr(c, "name", "") or "").lstrip("/")
+                        for prefix in SBX_NAME_PREFIXES:
+                            if name.startswith(prefix):
+                                workspace_volume_names.add(
+                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix):]}"
+                                )
+                                break
                         try:
                             c.stop(timeout=2)
                         except Exception:  # noqa: BLE001 — already stopped is fine
                             pass
                         try:
-                            c.remove(force=True)
+                            _remove_container(c)
                         except Exception:  # noqa: BLE001 — already gone is fine
                             pass
                 # Clean up the egress internal network(s) by LABEL — networks are
@@ -659,6 +675,40 @@ class GvisorSandboxService:
                         try:
                             net.remove()
                         except Exception:  # noqa: BLE001 — in-use or gone
+                            pass
+                # LocalSandboxService inherits this release path and uses per-run
+                # named workspace volumes. Remove labeled volumes after containers
+                # have gone so no Podman/Docker volume lock survives release.
+                volumes = getattr(client, "volumes", None)
+                if volumes is not None:
+                    seen_vols: set[str] = set()
+                    for key in LABEL_CONV_KEYS:
+                        try:
+                            candidates = volumes.list(
+                                filters={"label": f"{key}={conversation_id}"}
+                            )
+                        except Exception:  # noqa: BLE001 — client lacks volume listing
+                            continue
+                        for vol in candidates:
+                            name = getattr(vol, "name", "") or getattr(vol, "id", "")
+                            if name in seen_vols:
+                                continue
+                            seen_vols.add(name)
+                            try:
+                                _remove_volume(vol)
+                            except Exception:  # noqa: BLE001 — already gone / in use
+                                pass
+                    for name in workspace_volume_names:
+                        if name in seen_vols:
+                            continue
+                        try:
+                            vol = volumes.get(name)
+                        except Exception:  # noqa: BLE001 — missing or unsupported
+                            continue
+                        seen_vols.add(name)
+                        try:
+                            _remove_volume(vol)
+                        except Exception:  # noqa: BLE001 — already gone / in use
                             pass
             except Exception:  # noqa: BLE001 — docker unreachable: best-effort
                 pass

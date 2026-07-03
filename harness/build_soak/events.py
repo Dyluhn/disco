@@ -52,19 +52,20 @@ SRC_SYSTEM = "system"
 # STUCK/approve_plan_no_execution after the execution-nudge cap). The loop has
 # EXITED — there is no further work without a fresh user turn — so it is terminal
 # for adjudication. Omitting it let a STUCK approve-no-exec run read as "still
-# running / incomplete" and slip past the approval chain as a false PASS; recognizing
-# it as terminal makes the EventChainOracle classify it as the FAIL it is
-# (APPROVE_PLAN_NO_EXECUTION). PAUSED is deliberately NOT terminal: a cooperative
-# pause is resumable (the user re-kicks), so a paused run is legitimately incomplete,
-# never a failure.
-TERMINAL_STATUSES = frozenset({"FINISHED", "ERROR", "IDLE", "STUCK"})
+    # running / incomplete" and slip past the approval chain as a false PASS; recognizing
+    # it as terminal makes the EventChainOracle classify it as the FAIL it is
+    # (APPROVE_PLAN_NO_EXECUTION). VERIFIED is a clean work terminal, same as FINISHED
+    # for adjudication. PAUSED is deliberately NOT terminal: a cooperative
+    # pause is resumable (the user re-kicks), so a paused run is legitimately incomplete,
+    # never a failure.
+TERMINAL_STATUSES = frozenset({"FINISHED", "VERIFIED", "ERROR", "IDLE", "STUCK"})
 
 # The subset of terminal states in which the post-approval EXECUTION chain is
 # expected to have produced an action (§11.2). A FINISHED run claims it completed;
 # a STUCK run gave up in-loop — for BOTH, an approved plan that emitted no execution
 # action is the APPROVE_PLAN_NO_EXECUTION failure. ERROR (a thrown/preflight failure)
 # and IDLE (parked) are terminal but do NOT carry that execution expectation.
-EXECUTION_EXPECTED_TERMINALS = frozenset({"FINISHED", "STUCK"})
+EXECUTION_EXPECTED_TERMINALS = frozenset({"FINISHED", "VERIFIED", "STUCK"})
 
 # The status the loop stamps while a proposed plan is halted for the human to
 # approve (engine.py _gate_planning_mode, non-autonomous path). It MUST precede a

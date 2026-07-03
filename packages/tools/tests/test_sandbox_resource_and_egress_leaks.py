@@ -319,12 +319,27 @@ class _ReconContainer:
         self.labels = labels
         self.stopped = False
         self.removed = False
+        self.remove_kwargs: dict[str, Any] | None = None
 
     def stop(self, timeout: Any = None) -> None:
         self.stopped = True
 
+    def remove(self, force: bool = False, v: bool = False) -> None:
+        self.removed = True
+        self.remove_kwargs = {"force": force, "v": v}
+
+
+class _ReconVolume:
+    def __init__(self, name: str, labels: dict[str, str]) -> None:
+        self.name = name
+        self.id = "id-" + name
+        self.labels = labels
+        self.removed = False
+        self.remove_kwargs: dict[str, Any] | None = None
+
     def remove(self, force: bool = False) -> None:
         self.removed = True
+        self.remove_kwargs = {"force": force}
 
 
 class _ReconNetworksMgr:
@@ -347,12 +362,32 @@ class _ReconContainersMgr:
         return [c for c in self._containers if c.labels.get(key) == val]
 
 
+class _ReconVolumesMgr:
+    def __init__(self, volumes: list[_ReconVolume]) -> None:
+        self._volumes = volumes
+
+    def list(self, filters: dict[str, str] | None = None) -> list[_ReconVolume]:
+        label = (filters or {}).get("label", "")
+        key, _, val = label.partition("=")
+        return [v for v in self._volumes if v.labels.get(key) == val]
+
+    def get(self, name: str) -> _ReconVolume:
+        for volume in self._volumes:
+            if volume.name == name:
+                return volume
+        raise KeyError(name)
+
+
 class _ReconClient:
     def __init__(
-        self, containers: list[_ReconContainer], nets: list[_ReconNet]
+        self,
+        containers: list[_ReconContainer],
+        nets: list[_ReconNet],
+        volumes: list[_ReconVolume] | None = None,
     ) -> None:
         self.containers = _ReconContainersMgr(containers)
         self.networks = _ReconNetworksMgr(nets)
+        self.volumes = _ReconVolumesMgr(volumes or [])
 
 
 async def test_podman_destroy_by_conversation_removes_labeled_egress_networks() -> None:
@@ -363,14 +398,22 @@ async def test_podman_destroy_by_conversation_removes_labeled_egress_networks() 
     sidecar = _ReconContainer("disco-egr-1", {_LABEL: _CONV})
     egr_net = _ReconNet("disco-egr-1", {_LABEL: _CONV})
     other_net = _ReconNet("disco-egr-other", {_LABEL: "different-conv"})
-    client = _ReconClient([sbx, sidecar], [egr_net, other_net])
+    ws_vol = _ReconVolume("disco-ws-1", {})  # old in-flight volumes predate volume labels
+    other_vol = _ReconVolume("disco-ws-other", {_LABEL: "different-conv"})
+    client = _ReconClient([sbx, sidecar], [egr_net, other_net], [ws_vol, other_vol])
     svc = PodmanSandboxService(default_podman_config(), client=client)
 
     await svc.destroy_by_conversation(_CONV)
 
     # The labeled containers are gone...
     assert sbx.removed and sidecar.removed
+    assert sbx.remove_kwargs == {"force": True, "v": True}
+    assert sidecar.remove_kwargs == {"force": True, "v": True}
     # ...AND the labeled egress network is removed (the P2 fix).
     assert egr_net.removed is True, "labeled egress network was stranded (P2 leak)"
+    # ...AND the derived workspace volume name is removed (REL-6 finding #4).
+    assert ws_vol.removed is True, "workspace volume was stranded (REL-6 leak)"
+    assert ws_vol.remove_kwargs == {"force": True}
     # A network for a DIFFERENT conversation is left untouched.
     assert other_net.removed is False
+    assert other_vol.removed is False

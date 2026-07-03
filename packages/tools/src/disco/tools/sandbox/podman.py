@@ -16,7 +16,8 @@ Three load-bearing Podman constraints:
      `containers.create` (not `run`), so nothing ever pulls from a registry.
 
   3. Workspace = a per-run NAMED VOLUME (Podman doesn't auto-create bind sources and
-     rootless can't write root-owned host paths). Auto-created, persists.
+     rootless can't write root-owned host paths). Auto-created and removed on sandbox
+     teardown.
 
 Transport split (a real podman-py-vs-docker-py difference, verified live): podman-py
 drives create/lifecycle/volumes/images/`put_archive` cleanly, but its `exec_run`
@@ -31,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import io
 import logging
 import pathlib
@@ -55,6 +57,9 @@ from ._container import (
     proxy_env,
     proxy_run_argv,
     resolve_bounds,
+    _create_named_volume,
+    _remove_container,
+    _remove_volume,
 )
 from .base import (
     ExecResult,
@@ -136,6 +141,7 @@ class PodmanSandboxInstance(ContainerInstance):
         workspace_uid: int = 1000,
         preview_host: str = "localhost",
         reload_timeout_s: float = 0.5,
+        workspace_volume: Any | None = None,
     ) -> None:
         super().__init__(
             id=id,
@@ -148,6 +154,7 @@ class PodmanSandboxInstance(ContainerInstance):
             workspace_uid=workspace_uid,
             preview_host=preview_host,
             reload_timeout_s=reload_timeout_s,
+            workspace_volume=workspace_volume,
         )
         self._cli_url = cli_url
         self._name = container_name
@@ -386,7 +393,7 @@ class PodmanSandboxService:
         is independently guarded so a failure on one still attempts the other."""
         if egress_sidecar is not None:
             try:
-                egress_sidecar.remove(force=True)
+                _remove_container(egress_sidecar)
             except Exception:  # noqa: BLE001 — best-effort
                 pass
         if egress_network is not None:
@@ -578,13 +585,14 @@ class PodmanSandboxService:
 
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
-    ) -> tuple[Any, str, Any, Any]:
+    ) -> tuple[Any, str, Any, Any, Any]:
         """The blocking Podman work for `create`, in a thread. Image-by-load (never
         pull); limits via the socket; typed errors on failure. Returns
-        (container, name, egress_network, egress_sidecar) — the last two are
-        non-None ONLY for a "filtered" box (the allowlisting proxy aux), None for
-        sealed / open. The shared `ContainerInstance.destroy()` teardown walks
-        the aux refs and tears them down (E8 wiring)."""
+        (container, name, egress_network, egress_sidecar, workspace_volume) —
+        the egress refs are non-None ONLY for a "filtered" box (the allowlisting
+        proxy aux), None for sealed / open. The shared
+        `ContainerInstance.destroy()` teardown walks the aux refs and tears them
+        down (E8 wiring) and removes the named workspace volume."""
         client = self._client()
 
         try:
@@ -633,8 +641,9 @@ class PodmanSandboxService:
         else:  # sealed
             net_kwargs = {"network_mode": "none"}
 
+        volume = None
         try:
-            client.volumes.create(name=vol_name)  # auto-created; persists past the container
+            volume = _create_named_volume(client.volumes, name=vol_name, labels=labels)
             container = client.containers.create(
                 image=self._cfg.image,
                 command=["sleep", "infinity"],  # keepalive
@@ -659,7 +668,7 @@ class PodmanSandboxService:
             # Best-effort: never raises, so it can't leak the just-started box.
             if mode == "filtered" and egress_sidecar is not None:
                 self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
-            return container, name, egress_network, egress_sidecar
+            return container, name, egress_network, egress_sidecar, volume
         except SandboxUnavailableError:
             raise
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
@@ -674,13 +683,15 @@ class PodmanSandboxService:
             self._best_effort_cleanup(
                 egress_network=egress_network, egress_sidecar=egress_sidecar
             )
+            with contextlib.suppress(Exception):
+                _remove_volume(volume)
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
 
     async def create(
         self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
     ) -> SandboxInstance:
         instance_id = f"sbx_{uuid.uuid4().hex}"
-        container, name, egress_network, egress_sidecar = await asyncio.to_thread(
+        container, name, egress_network, egress_sidecar, workspace_volume = await asyncio.to_thread(
             self._start_container, spec, instance_id, conversation_id
         )
         instance = PodmanSandboxInstance(
@@ -701,6 +712,7 @@ class PodmanSandboxService:
             preview_host=self._cfg.preview_host or _preview_host(self._cli_url),
             # Wedge-guard timeout (Dispo #25, E5 wiring) — untouched in E8.
             reload_timeout_s=self._cfg.reload_timeout_s,
+            workspace_volume=workspace_volume,
         )
         # E8: attach the filtered-egress aux so the inherited ContainerInstance
         # teardown tears down the proxy sidecar + internal network. For sealed /
@@ -752,7 +764,7 @@ class PodmanSandboxService:
                         continue
                     try:  # legacy/unlabeled: reap on sight (see docstring)
                         c.stop(timeout=2)
-                        c.remove(force=True)
+                        _remove_container(c)
                     except Exception:  # noqa: BLE001 — best-effort
                         pass
                 return result
@@ -768,6 +780,7 @@ class PodmanSandboxService:
                 # Dual-read: match BOTH the current and legacy conversation label
                 # keys (union, dedup) so an old-scheme container is still removed.
                 seen_ids: set[str] = set()
+                workspace_volume_names: set[str] = set()
                 for key in LABEL_CONV_KEYS:
                     for c in client.containers.list(
                         all=True,
@@ -776,12 +789,19 @@ class PodmanSandboxService:
                         if c.id in seen_ids:
                             continue
                         seen_ids.add(c.id)
+                        name = str(getattr(c, "name", "") or "").lstrip("/")
+                        for prefix in SBX_NAME_PREFIXES:
+                            if name.startswith(prefix):
+                                workspace_volume_names.add(
+                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix):]}"
+                                )
+                                break
                         try:
                             c.stop(timeout=2)
                         except Exception:  # noqa: BLE001
                             pass
                         try:
-                            c.remove(force=True)
+                            _remove_container(c)
                         except Exception:  # noqa: BLE001
                             pass
                 # [P2] Clean up the filtered-egress internal network(s) by LABEL too —
@@ -801,6 +821,41 @@ class PodmanSandboxService:
                         try:
                             net.remove()
                         except Exception:  # noqa: BLE001 — in-use or gone
+                            pass
+                # Remove the per-sandbox named workspace volume(s) labeled with
+                # this conversation. This is the release path used by soak kill;
+                # container.remove(v=True) covers attached/anonymous volumes, but
+                # named volumes may need explicit removal by the SDK.
+                volumes = getattr(client, "volumes", None)
+                if volumes is not None:
+                    seen_vols: set[str] = set()
+                    for key in LABEL_CONV_KEYS:
+                        try:
+                            candidates = volumes.list(
+                                filters={"label": f"{key}={conversation_id}"}
+                            )
+                        except Exception:  # noqa: BLE001 — client lacks volume listing
+                            continue
+                        for vol in candidates:
+                            name = getattr(vol, "name", "") or getattr(vol, "id", "")
+                            if name in seen_vols:
+                                continue
+                            seen_vols.add(name)
+                            try:
+                                _remove_volume(vol)
+                            except Exception:  # noqa: BLE001 — already gone / in use
+                                pass
+                    for name in workspace_volume_names:
+                        if name in seen_vols:
+                            continue
+                        try:
+                            vol = volumes.get(name)
+                        except Exception:  # noqa: BLE001 — missing or unsupported
+                            continue
+                        seen_vols.add(name)
+                        try:
+                            _remove_volume(vol)
+                        except Exception:  # noqa: BLE001 — already gone / in use
                             pass
             except Exception:  # noqa: BLE001 — best-effort
                 pass

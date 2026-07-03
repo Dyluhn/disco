@@ -69,15 +69,15 @@ async def main() -> None:
 
     vol_name = f"{cfg.workspace_volume_prefix}-{inst.id}"
 
-    # 8: teardown — container gone, workspace (named volume) remains.
+    # 8: teardown — container gone, workspace named volume removed.
     await inst.destroy()
     from podman import PodmanClient
 
     with PodmanClient(base_url=cfg.podman_url) as c:
         gone = not c.containers.exists(f"pmx-sbx-{inst.id}")
-        vol_remains = c.volumes.exists(vol_name)
+        vol_removed = not c.volumes.exists(vol_name)
     ok("8. close: container removed", gone, "")
-    ok("8. close: workspace volume persists", vol_remains, vol_name)
+    ok("8. close: workspace volume removed", vol_removed, vol_name)
 
     # 4: limits BITE through the socket (the load-bearing #2 guarantee), isolated box.
     mem_inst = await svc.create(

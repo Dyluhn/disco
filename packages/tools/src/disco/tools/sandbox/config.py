@@ -55,7 +55,7 @@ class SandboxConfig(BaseModel):
     podman_url: str = "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock"
     # Podman has no auto-created bind source + rootless can't write under root-owned
     # paths, so the workspace is a per-run NAMED VOLUME (auto-created, socket-mediated,
-    # persists across the container). This prefix names it.
+    # removed during sandbox teardown). This prefix names it.
     workspace_volume_prefix: str = "disco-ws"
 
     # default resource bounds applied on create. EPIC H (P1): these are the deployment
@@ -150,5 +150,6 @@ def default_local_config() -> SandboxConfig:
     (`docker_socket` default) with the standard `runc` runtime — no SSH, no remote.
     The lowest-isolation tier (shared host kernel); see `isolation.py`. Workspace is a
     per-run named volume (`workspace_volume_prefix`), portable across local Docker and
-    rootless Podman. The cross-platform target (Windows validation deferred)."""
+    rootless Podman and removed on teardown. The cross-platform target (Windows validation
+    deferred)."""
     return SandboxConfig(backend="local", runtime="runc")

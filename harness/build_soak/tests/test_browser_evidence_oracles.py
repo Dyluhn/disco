@@ -158,6 +158,17 @@ def test_malformed_sidecar_count_fail_closed():
     assert SidecarStopOracle().check(product_evidence=ev)[0].code == "SIDECAR_NOT_STOPPED"
 
 
+def test_sidecar_missing_call_count_is_invalid_run():
+    ev = _green_evidence()
+    del ev["sidecar"]["provider_calls_after_terminal"]
+
+    r = SidecarStopOracle().check(product_evidence=ev)[0]
+    assert r.code == "MISSING_REQUIRED_EVIDENCE"
+    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+    assert c["status"] == "INVALID_RUN"
+    assert c["code"] == "MISSING_REQUIRED_EVIDENCE"
+
+
 def test_preview_missing_owner_is_fail_closed():
     ev = _green_evidence(); ev["preview"] = {"manual_port": False}  # no owner field
     assert PreviewOwnershipOracle().check(product_evidence=ev)[0].code == "PREVIEW_OWNERSHIP_VIOLATION"
@@ -166,6 +177,17 @@ def test_preview_missing_owner_is_fail_closed():
 def test_cleanup_missing_release_field_is_fail_closed():
     ev = _green_evidence(); ev["cleanup"] = {"orphans": 0}  # no workspace_released
     assert CleanupOracle().check(product_evidence=ev)[0].code == "WORKSPACE_NOT_CLEANED"
+
+
+def test_cleanup_missing_orphans_is_invalid_run():
+    ev = _green_evidence()
+    ev["cleanup"] = {"workspace_released": True}
+
+    r = CleanupOracle().check(product_evidence=ev)[0]
+    assert r.code == "MISSING_REQUIRED_EVIDENCE"
+    c = classify(clean_smoke_log(), scenario=_scn(), product_evidence=ev)
+    assert c["status"] == "INVALID_RUN"
+    assert c["code"] == "MISSING_REQUIRED_EVIDENCE"
 
 
 def test_verification_missing_passed_is_fail_closed():
