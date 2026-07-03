@@ -1,27 +1,20 @@
 # Disco
 
-A self-hosted **Research + Agent** platform — a Perplexity-class grounded answer
-engine and a Manus-class autonomous agent — built as **one agent core over an
-append-only event log**, and engineered to be **reliable on local / open-weight
-models**, not just frontier APIs.
+A self-hosted **Research + Agent + Build** platform. Disco combines a grounded
+answer engine, a deep-research report writer, and a sandboxed build agent on one
+append-only event log. It is designed to run with local or open-weight models,
+not only frontier hosted APIs.
 
-> Design authority: [`basis-of-design.md`](./basis-of-design.md) (the cornerstone)
-> and [`event-state-contract.md`](./event-state-contract.md) (the spine's binding
-> contract). When code and prose disagree, those documents win. The road from here
-> to a public release is in [`docs/release-execution-plan.md`](./docs/release-execution-plan.md).
+The architecture authority is [`basis-of-design.md`](./basis-of-design.md);
+the event/state contract is [`event-state-contract.md`](./event-state-contract.md).
+When implementation and prose disagree, those documents define the intended
+shape of the system.
 
 ## Status
 
-**The product works end-to-end, and the release engineering has landed.** A real
-question gets a real, grounded, cited answer; the agent plans, runs tools in a sandbox,
-and produces artifacts — all driveable from local open-weight models. It now also
-*packages* for strangers: a one-command `docker compose` self-host
-([`docs/self-host.md`](./docs/self-host.md)), a published threat model
-([`SECURITY.md`](./SECURITY.md)), a contributor guide
-([`CONTRIBUTING.md`](./CONTRIBUTING.md)) + provider/VRAM matrix
-([`docs/provider-matrix.md`](./docs/provider-matrix.md)), and **`disco verify`** — a
-command that checks *your* model actually drives the loop. What's left before a public
-v0.1 is small: a LICENSE + CI, and a mobile polish pass.
+Disco is single-tenant software. There is no built-in auth layer yet; every
+conversation is scoped to the local owner. Keep the default loopback binding
+unless you put your own TLS and authentication in front of it.
 
 ### Surfaces
 
@@ -31,7 +24,7 @@ Four surfaces, one shared event log + agent core:
 |---|---|
 | **Search** | A single grounded answer — claims tethered to extracted passages, with a citation-verification (NLI) pass that marks unsupported claims rather than hiding them. |
 | **Deep Research** | A multi-source report: decompose → parallel retrieval → adversarial claim verification → cited synthesis, with depth tiers, replay, and export (Markdown / PDF / DOCX). |
-| **Build** | A single-threaded coding agent in a sandbox — shell sessions, dev-server preview, a browser daemon, a persistent IPython kernel, file/code artifacts, plan + risk-gated execution, workspace snapshot/resume. |
+| **Build** | A single-threaded coding agent in a sandbox: shell sessions, dev-server preview, browser automation, a persistent IPython kernel, file/code artifacts, plan + risk-gated execution, workspace versions, preview, and rollback. |
 | **Agent** | The *same* agent machinery as Build, framed as a general task agent — point it at any multi-step task, extend its reach with MCP servers. |
 
 ### What's live
@@ -63,15 +56,14 @@ Four surfaces, one shared event log + agent core:
   viewer; scheduled (cron) re-runs; rich report blocks (charts, tables, citations).
 - **Web UI** — the full Vite/React/TS frontend: the four surfaces, settings
   (model matrix, encoders, data providers, sandbox, audio, MCP), history, projects.
+- **AppKit builds** — generated React/Vite/TypeScript apps with Worker/D1 exports,
+  Drizzle schema checks, a strict AppKit verifier, versioned previews, and
+  owner-gated Cloudflare deploy routes.
 
-### Honest gaps (the road to v0.1)
+### Known limits
 
-What's left: a **LICENSE + CI**, and a **mobile polish pass** (the research + history
-surfaces are mostly responsive; the Build/Agent inspector is desktop-first). **No auth
-yet** — every conversation is owner `"local"`, so don't expose it without your own TLS +
-auth in front. Windows is via WSL2 / Docker, not native (POSIX deps: tmux sessions,
-gVisor/podman). The sequenced plan is in
-[`docs/release-execution-plan.md`](./docs/release-execution-plan.md).
+The Build/Agent inspector is desktop-first. Windows is via WSL2 or Docker, not
+native, because the sandbox/tooling path uses POSIX process tools such as tmux.
 
 ## Layout
 
@@ -92,42 +84,132 @@ Dependency direction: `core → tools → agent-server → app-server`; the fron
 to the servers over HTTP/WS. `disco` is a PEP 420 namespace package, so every
 workspace member shares the `disco.*` namespace.
 
-## Quickstart (self-host)
+## Quickstart
 
-A clean Linux box (or WSL2) with a container runtime. Disco's servers + the ONNX
-search encoders are light (the encoders are ~0.15 GB on the `lite` tier, ~4 GB on
-`full`). You **wire in the driver model** yourself — there's no bundled one (a
-keyless CPU 4B is a demo, not a real driver). Point `DISCO_DRIVER_BASE_URL` at a
-self-hosted endpoint (Ollama / llama.cpp / vLLM / LM Studio) or a paid
-OpenAI-compatible API.
+This path starts the full stack from a clean checkout for local development. It
+uses the `process` sandbox so a first build works without a container socket; do
+not use that sandbox for exposed deployments.
 
 ```bash
-cp .env.example .env            # then skim it — set DISCO_DRIVER_BASE_URL + security notes
-docker compose up -d --build    # podman compose works too
-open http://localhost:8088
-# confirm your model can actually drive the loop:
-docker compose exec agent-server python -m disco.agent_server.verify
+uv sync --all-packages
+cp .env.example .env
+python - <<'PY'
+from pathlib import Path
+import secrets
+
+p = Path(".env")
+text = p.read_text()
+text = text.replace(
+    "DISCO_SECRET_KEY=\n",
+    f"DISCO_SECRET_KEY={secrets.token_urlsafe(32)}\n",
+)
+p.write_text(text)
+PY
+mkdir -p .data
 ```
 
-Keyless for everything except the driver (DuckDuckGo search + local extraction +
-bundled ONNX encoders + in-process TTS) — a grounded answer needs no API key beyond
-your model endpoint. For real agent work, point it at a 24–32B-class endpoint (see
-[`docs/provider-matrix.md`](./docs/provider-matrix.md)). **No auth in v1** — defaults
-bind `127.0.0.1`; read [`SECURITY.md`](./SECURITY.md) before exposing it. The full story
-is in [`docs/self-host.md`](./docs/self-host.md).
+In terminal 1:
+
+```bash
+set -a; source .env; set +a
+export DISCO_DB="$PWD/.data/disco.db"
+export DISCO_CONFIG="$PWD/.data/disco-config.json"
+export DISCO_SECRETS="$PWD/.data/secrets.json"
+export DISCO_PROJECTS_ROOT="$PWD/.data/projects"
+export DISCO_SANDBOX=process
+export DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1
+uv run python scripts/seed_config.py
+uv run python -m disco.agent_server
+```
+
+In terminal 2:
+
+```bash
+set -a; source .env; set +a
+export DISCO_DB="$PWD/.data/disco.db"
+export DISCO_CONFIG="$PWD/.data/disco-config.json"
+export DISCO_SECRETS="$PWD/.data/secrets.json"
+uv run python -m disco.app_server
+```
+
+In terminal 3:
+
+```bash
+cd frontend
+npm ci
+VITE_API_BASE=http://localhost:8800 \
+VITE_AGENT_BASE=http://localhost:8000 \
+npm run dev
+```
+
+Open `http://localhost:5173`, go to **Build**, ask for a small static page, and
+approve the plan. For a production frontend bundle, run:
+
+```bash
+cd frontend
+npm run build
+```
+
+For the containerized self-host path:
+
+```bash
+cp .env.example .env
+# Set DISCO_SECRET_KEY and point DISCO_DRIVER_BASE_URL/DISCO_DRIVER_MODEL_ID
+# at your OpenAI-compatible driver model endpoint.
+docker compose up -d --build
+open http://localhost:8088
+docker compose exec agent-server python -m disco.agent_server.verify --quick
+```
+
+## Providers
+
+Disco has keyless defaults for retrieval and local artifact services. The driver
+LLM is intentionally not bundled; point it at a model endpoint you run or a paid
+OpenAI-compatible API.
+
+| Capability | Keyless default | Self-host option | Paid/BYO-key option |
+|---|---|---|---|
+| Driver LLM | OpenAI-compatible local endpoint, if you run one | Ollama, llama.cpp, vLLM, LM Studio | Any OpenAI-compatible endpoint configured in Settings |
+| Search | DuckDuckGo via `ddgs` | SearXNG | Tavily or Brave |
+| Extraction | Local HTTP fetch/readability | Crawl4AI | Firecrawl |
+| Embeddings/rerank/NLI | Bundled ONNX CPU encoders | Remote encoder/NLI endpoints | OpenAI-compatible embedding endpoints where configured |
+| TTS | Bundled Kokoro ONNX | Speaches/OpenAI-compatible TTS | OpenAI-compatible TTS |
+| Image generation | None bundled | ComfyUI | OpenAI-compatible image API or OpenRouter |
+| App deploy | Local export and dry-run plan | Cloudflare account connected by owner | Cloudflare API token, owner-gated |
+
+Provider keys are read from encrypted Settings secrets first, then matching
+environment variables such as `DISCO_OPENROUTER_API_KEY`, `TAVILY_API_KEY`,
+`BRAVE_API_KEY`, `FIRECRAWL_API_KEY`, or `OPENAI_API_KEY`.
+
+## Hardware
+
+- **Basic research/dev:** 8 GB RAM is workable with `DISCO_ENCODER_TIER=lite`.
+  The lite encoder tier downloads about 0.15 GB of ONNX models.
+- **Full local retrieval quality:** use `DISCO_ENCODER_TIER=full` on a box with
+  at least 16 GB RAM; the full encoder tier is roughly 4 GB of model weights.
+- **Useful local agent driver:** use a 24-32B-class instruction model with a
+  32k+ context window, served by Ollama, llama.cpp, vLLM, LM Studio, or a LAN
+  endpoint. Smaller CPU-only models are suitable only for smoke tests.
+- **Build isolation:** Docker or rootless Podman is recommended for real Build
+  runs. The `process` sandbox is a convenience for local development only.
+- **Windows:** use WSL2 or Docker.
 
 ## Develop
 
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.12+ (and Node for the frontend).
-See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full contributor guide.
+Requires [uv](https://docs.astral.sh/uv/), Python 3.12+, and Node 22 LTS for the
+frontend. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the full contributor guide.
 
 ```bash
-uv sync --all-packages     # provision the venv + install every workspace member
-uv run pytest              # the headless test suite (no LLM, no network)
-uv run ruff check .        # lint
-uv run ruff format .       # format
+uv sync --all-packages
+uv run pytest -m "not integration"
+uv run ruff check packages harness
+uv run basedpyright
 
-cd frontend && npm install && npm run dev   # the web UI (fixtures unless VITE_API_BASE is set)
+cd frontend
+npm ci
+npm run typecheck:build
+npm run build
+npm run test
 ```
 
 Audio overviews (RP-09) use the **bundled** in-process Kokoro TTS — `kokoro-onnx` +

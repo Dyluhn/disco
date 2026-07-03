@@ -1,22 +1,22 @@
 # Contributing to Disco
 
-A self-hosted Research + Agent platform built as one agent core over an append-only
-event log. Before you start, skim the two design authorities — when code and prose
-disagree, they win:
+A self-hosted Research + Agent + Build platform built as one agent core over an
+append-only event log. Before you start, skim the two design authorities — when
+code and prose disagree, they win:
 
 - [`basis-of-design.md`](./basis-of-design.md) — the cornerstone design document.
 - [`event-state-contract.md`](./event-state-contract.md) — the spine's binding contract.
 
-There is no hosted CI yet; the `Makefile` *is* the runner. Run it locally before you
-push.
+Hosted CI runs the deterministic release gates. Before opening a PR, run the
+local equivalents for the area you touched; the `Makefile` remains the fastest
+way to exercise the Python and harness suites.
 
 ## Prerequisites
 
 - **[uv](https://docs.astral.sh/uv/)** — the workspace/dependency manager (this is a
   `uv` workspace; do not use bare `pip`).
 - **Python 3.12+** — every package declares `requires-python = ">=3.12"`.
-- **Node** for the frontend — the Vite/React/TS app; the frontend pins
-  `@types/node ^22`, so Node 22 LTS is the safe target.
+- **Node 22 LTS** for the frontend — the Vite/React/TS app pins `@types/node ^22`.
 - **A container runtime** (Docker or rootless Podman) for the sandbox-backed tests and
   for running the Build/Agent surface for real. The fully hermetic `make test` path
   does not need one (it uses the `process` backend on the host); the integration tests
@@ -32,8 +32,8 @@ push.
   Without it, deck→PDF fails soft with an honest message naming the missing binary; the
   rest of the app is unaffected.
 
-First run also fetches a few one-time artifacts that the dev deps drive: Playwright's
-Chromium (`playwright install chromium`) for the browser-daemon integration test, and
+First run also fetches a few one-time artifacts: Playwright's Chromium
+(`uv run playwright install chromium`) for browser-daemon integration tests, and
 the fastembed ONNX encoders on the first grounded answer.
 
 ## Getting set up
@@ -52,32 +52,76 @@ so install them with `--package` (e.g. the tools `browser` extra for Playwright)
 
 ### Running the servers
 
-Two FastAPI/uvicorn servers share one SQLite event store (`PMX_DB`, default
-`./disco.db`). Run each as a module:
+Two FastAPI/uvicorn servers share one SQLite event store (`DISCO_DB`, default
+`./disco.db`; legacy `PMX_DB` is still honored). For local dev, use a
+repo-local data dir and a generated app secret:
+
+```bash
+cp .env.example .env
+python - <<'PY'
+from pathlib import Path
+import secrets
+
+p = Path(".env")
+text = p.read_text()
+text = text.replace(
+    "DISCO_SECRET_KEY=\n",
+    f"DISCO_SECRET_KEY={secrets.token_urlsafe(32)}\n",
+)
+p.write_text(text)
+PY
+mkdir -p .data
+```
+
+Export the shared dev environment in each server terminal:
+
+```bash
+set -a; source .env; set +a
+export DISCO_DB="$PWD/.data/disco.db"
+export DISCO_CONFIG="$PWD/.data/disco-config.json"
+export DISCO_SECRETS="$PWD/.data/secrets.json"
+```
+
+Seed first-run model/project config once:
+
+```bash
+export DISCO_PROJECTS_ROOT="$PWD/.data/projects"
+uv run python scripts/seed_config.py
+```
+
+Then run the servers in separate terminals with the shared environment above.
+Agent-server:
 
 ```bash
 # Agent-server — per-conversation runtime (WebSocket + REST).
-# Env: PMX_HOST (default 127.0.0.1), PMX_PORT (default 8000), PMX_DB.
-#      PMX_SANDBOX (process|local|gvisor|podman) optionally forces a sandbox backend;
+# Env: DISCO_HOST (default 127.0.0.1), DISCO_PORT (default 8000), DISCO_DB.
+#      DISCO_SANDBOX (process|local|gvisor|podman) optionally forces a sandbox backend;
 #      unset → the persisted Settings selector decides per request.
+export DISCO_SANDBOX=process
+export DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1
 uv run python -m disco.agent_server
+```
 
+App-server:
+
+```bash
 # App-server — settings + library gateway the frontend calls.
-# Env: PMX_HOST (default 127.0.0.1), PMX_PORT (default 8800), PMX_DB.
+# Env: DISCO_HOST (default 127.0.0.1), DISCO_PORT (default 8800), DISCO_DB.
 uv run python -m disco.app_server
 ```
 
-> Note: `.env.example` / the compose deploy use different default ports
-> (`PMX_AGENT_PORT=8000`, `PMX_APP_PORT=8800`, UI on `8088`). The module-level
-> defaults above are the bare-process dev defaults; see
-> [`docs/self-host.md`](./docs/self-host.md) for the compose story.
+The `process` sandbox is intentionally dev-only and shares the host process and
+network namespaces. Container backends are the default for real Build runs.
+Compose publishes agent `8000`, app `8800`, and the built frontend on `8088`.
 
 ### Running the frontend
 
 ```bash
 cd frontend
-npm install
-npm run dev      # the web UI — fixtures unless VITE_API_BASE points at a live app-server
+npm ci
+VITE_API_BASE=http://localhost:8800 \
+VITE_AGENT_BASE=http://localhost:8000 \
+npm run dev
 ```
 
 ## Running tests
