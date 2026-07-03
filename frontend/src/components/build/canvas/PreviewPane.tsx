@@ -220,14 +220,41 @@ export function PreviewPane({
   // HTML artifacts (content="") that deriveSrcDoc now returns null for.
   const files = useMemo(() => deriveFiles(events), [events]);
 
+  // A workspace ROLLBACK invalidates the event-derived file view: restored bytes
+  // are not event-carried (append-only log), so a srcdoc built from file events
+  // would show pre-rollback content under a "live" label. When the latest
+  // workspace_restored postdates the last file-mutating action, suppress the
+  // srcdoc entirely — the live/static HTTP routes serve the restored tree.
+  const srcdocStaleAfterRestore = useMemo(() => {
+    const MUTATING = new Set([
+      "file_write", "file_edit", "file_append", "file_replace_lines",
+      "file_insert_lines", "exact_replace", "app_create", "app_update_content",
+      "app_add_section", "app_remove_section", "app_reorder_section",
+      "app_set_design", "app_set_tweak",
+    ]);
+    let lastRestore: number | null = null;
+    let lastWrite: number | null = null;
+    for (const e of events) {
+      if (e.seq == null) continue;
+      if (e.kind === "workspace_restored") lastRestore = e.seq;
+      else if (e.kind === "action" && MUTATING.has(e.tool_call?.tool_name ?? "")) {
+        lastWrite = e.seq;
+      }
+    }
+    return lastRestore != null && (lastWrite == null || lastRestore > lastWrite);
+  }, [events]);
+
   // A client-side srcdoc render of the written files — shows the ACTUAL site the
   // agent wrote (entry HTML + inlined local css/js), no backend / dev server.
   // After the C5 fix, deriveSrcDoc returns null for server-side (content="") HTML
   // artifacts, so the guards below work correctly.
   // §4.1 C-EDIT-1: inject the selection agent into trusted (non-untrusted) srcdoc.
   const srcDoc = useMemo(
-    () => deriveSrcDoc(files, untrusted ? undefined : SELECTION_AGENT_SCRIPT),
-    [files, untrusted],
+    () =>
+      srcdocStaleAfterRestore
+        ? null
+        : deriveSrcDoc(files, untrusted ? undefined : SELECTION_AGENT_SCRIPT),
+    [files, untrusted, srcdocStaleAfterRestore],
   );
 
   // §4.1 C-EDIT-1: ref + selection state for the srcdoc preview iframe.
