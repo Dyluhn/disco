@@ -1029,9 +1029,11 @@ class FileWriteTool:
     definition = ToolDef(
         name="file_write",
         description=(
-            "The PREFERRED way to author file content: write (create/overwrite) a "
-            "UTF-8 text file in the workspace with its full content. Use this instead "
-            "of shell redirection. To change part of an existing file, use file_edit."
+            "Create a NEW UTF-8 text file in the workspace with its full content "
+            "(preferred over shell redirection for new files). To change an EXISTING "
+            "file, make a targeted edit with file_edit / file_replace_lines instead — "
+            "only rewrite a whole existing file when a targeted edit cannot express "
+            "the change."
         ),
         args_model=FileWriteArgs,
         needs=_FS,
