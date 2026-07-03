@@ -271,6 +271,19 @@ class Valve:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
 
+    async def _pause_actionless(self, content: str) -> bool:
+        """Emit the actionless PAUSE as a durable REL-RC-P counter event."""
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=content),
+            )
+        )
+        await self._loop._emit(
+            StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+        )
+        return True
+
     async def actionless_valve(self, events: list[Event], noops: int) -> bool:
         """Shared circuit-breaker ladder for steps that consumed a model turn
         without doing real work — the tool-less noop path AND the non-blocking
@@ -384,62 +397,19 @@ class Valve:
             ):
                 return True
             if incomplete:
-                # BW-02 — SECONDARY escalation. The first actionless pause is a
-                # useful stop (it waits for a human steer). But if the run is
-                # RESUMED and the very next segment again does ZERO tool actions
-                # (no tool call AT ALL since the resume — a file_read/search/
-                # browser would count as acting and reset this), the model is in a
-                # degenerate "keeps pausing" loop the plain pause never breaks.
-                # Halt VISIBLY (STUCK) on the 2nd consecutive zero-action pause
-                # instead of re-pausing forever. (consecutive_actionless_pauses
-                # counts the pauses ALREADY in the log; >= 1 prior + this one == 2.)
-                if (
-                    signals.actions_since_last_resume(events) == 0
-                    and signals.consecutive_actionless_pauses(events) >= 1
-                ):
-                    await self._loop._emit(
-                        MessageEvent(
-                            source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user",
-                                content=(
-                                    "<system-reminder>\nThe agent was resumed but"
-                                    " again produced no action — two consecutive run"
-                                    " segments did zero real work while plan steps"
-                                    " remain undone. This is a degenerate loop;"
-                                    " halting (STUCK) instead of pausing again."
-                                    " A human steer with concrete next steps, or a"
-                                    " corrected workspace, is needed to proceed.\n"
-                                    "</system-reminder>"
-                                ),
-                            ),
-                        )
-                    )
-                    await self._loop._emit(
-                        StatusEvent(
-                            status=ConversationStatus.STUCK,
-                            detail="actionless_loop",
-                        )
-                    )
-                    return True
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "The agent produced 3 consecutive responses"
-                                " without doing any real work while plan steps"
-                                " remain undone — pausing instead of burning"
-                                " tokens. Resume to continue."
-                            ),
-                        ),
-                    )
+                # M3 / REL-RC-P — the first actionless pause remains the useful
+                # parked stop. The second is persisted as another
+                # PAUSED(actionless), then immediately routes through the existing
+                # synthetic-finish valve when the event-derived counter says the
+                # repeated-pause finish conditions are met. This replaces the old
+                # in-loop-memory STUCK(actionless_loop) branch, which reset across
+                # resume/recreate and prevented REL-RC-P from ever seeing pause #2.
+                return await self._pause_actionless(
+                    "The agent produced 3 consecutive responses"
+                    " without doing any real work while plan steps"
+                    " remain undone — pausing instead of burning"
+                    " tokens. Resume to continue."
                 )
-                await self._loop._emit(
-                    StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
-                )
-                return True
 
         if noops >= self._loop._max_consecutive_noops:
             if pending_revision:

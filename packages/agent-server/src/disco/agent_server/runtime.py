@@ -257,6 +257,17 @@ class _ToolScopeAuditRecorder:
 # guards against a wedged model step).
 _RESUME_DRAIN_TIMEOUT_S = 10.0
 
+_ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
+_ACTIONLESS_AUTO_RESUME_NUDGE = (
+    "<system-reminder>\n"
+    f"{_ACTIONLESS_AUTO_RESUME_MARKER}: host is resuming this autonomous build "
+    "once after an actionless pause. Continue from the first unfinished plan "
+    "step now: call a concrete tool that changes or verifies the deliverable, "
+    "or call `finish` if the work is genuinely complete. Do not wait for a "
+    "human response.\n"
+    "</system-reminder>"
+)
+
 
 class _MCPToolWrapper:
     """Thin Tool-protocol wrapper that adapts an MCP ToolDef for the registry.
@@ -2401,6 +2412,91 @@ class ConversationRuntime:
         )
         self.kick(conversation_id)
 
+    @staticmethod
+    def _latest_status_event(events: list[Event]) -> StatusEvent | None:
+        for event in reversed(events):
+            if isinstance(event, StatusEvent):
+                return event
+        return None
+
+    @staticmethod
+    def _actionless_auto_resume_attempted(events: list[Event]) -> bool:
+        return any(
+            isinstance(event, MessageEvent)
+            and event.source == EventSource.ENVIRONMENT
+            and event.message is not None
+            and _ACTIONLESS_AUTO_RESUME_MARKER in (event.message.content or "")
+            for event in events
+        )
+
+    async def _maybe_auto_resume_actionless_pause(
+        self,
+        conversation_id: str,
+        status: ConversationStatus,
+        generation: int | None,
+    ) -> bool:
+        """M3: drive the autonomous actionless-pause ladder.
+
+        The durable state is the event log: the current PAUSED(actionless), the
+        event-derived actionless-pause count, and the host nudge marker. Pause
+        #1 gets the one concrete continue-nudge; pause #2 re-enters through the
+        normal resume endpoint only when the core REL-RC-P predicate will fire.
+        """
+        if status != ConversationStatus.PAUSED:
+            return False
+        if (
+            generation is not None
+            and self._run_generation.get(conversation_id) != generation
+        ):
+            return False
+        surface = self._surface_of(conversation_id)
+        if surface not in self._BUILD_LIKE_SURFACES:
+            return False
+        if not self._effective_autonomous(conversation_id):
+            return False
+        try:
+            events = await self._store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — supervisor hook is best-effort
+            logger.exception(
+                "actionless auto-resume could not read events for %s",
+                conversation_id,
+            )
+            return False
+        latest_status = self._latest_status_event(events)
+        if (
+            latest_status is None
+            or latest_status.status != ConversationStatus.PAUSED
+            or latest_status.detail != "actionless"
+        ):
+            return False
+        pause_count = signals.actionless_pause_count_current_execution_segment(events)
+        if pause_count == 1:
+            if self._actionless_auto_resume_attempted(events):
+                return False
+            await self._store.append(
+                conversation_id,
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user", content=_ACTIONLESS_AUTO_RESUME_NUDGE
+                    ),
+                ),
+            )
+        elif pause_count == 2:
+            if not signals.should_synthesize_finish_after_actionless_pauses(events):
+                return False
+        else:
+            return False
+        result = await self.resume_conversation(conversation_id)
+        if result.get("ok") is True:
+            return True
+        logger.warning(
+            "actionless auto-resume for %s was not accepted: %s",
+            conversation_id,
+            result,
+        )
+        return False
+
     async def _finalize_clean_return(
         self, conversation_id: str, generation: int | None = None
     ) -> None:
@@ -2421,6 +2517,10 @@ class ConversationRuntime:
         # tell a gate-parked conv (don't evict — preserve its mid-gate workspace) from
         # a truly idle/finished one (safe to evict).
         self._last_status[conversation_id] = status
+        if await self._maybe_auto_resume_actionless_pause(
+            conversation_id, status, generation
+        ):
+            return
         if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
             # Healthy ending → reset the per-cid re-kick budget for the next segment.
             self._nonterminal_rekicks.pop(conversation_id, None)

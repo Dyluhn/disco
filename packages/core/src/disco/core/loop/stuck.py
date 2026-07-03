@@ -31,7 +31,10 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
 )
-from .signals import _NONCRITICAL_FAILURE_TOOLS  # cosmetic bookkeeping (single source)
+from .signals import (
+    _NON_PRODUCTIVE_TOOLS,
+    _NONCRITICAL_FAILURE_TOOLS,
+)
 
 # F6 — tools whose ActionEvents count as "patch attempts" for the per-file
 # rewrite tracker. Mirrors `_WORKSPACE_MUTATING_TOOLS` in engine.py (kept
@@ -57,6 +60,23 @@ _NO_PROGRESS_PROBE_TOOLS = frozenset(
 # Distinct varied edits that must recur against ONE stable probe outcome before
 # the no-progress breaker trips. 4 mirrors the circuit-breaker's failure budget.
 NO_PROGRESS_DISTINCT_EDITS = 4
+
+# Live M3 probe-spin: a weak model can poll the same non-productive probe tool
+# repeatedly with slightly-changing output (server_status timestamps/counters), so
+# byte-identical stuck patterns never fire. This detector keys on tool-name
+# frequency instead of output equality, and resets as soon as the model attempts a
+# productive action.
+_PROBE_SPIN_TOOLS = _NO_PROGRESS_PROBE_TOOLS | frozenset(
+    {
+        "verify_appkit_app",
+        "design_lint",
+        "app_snapshot_version",
+        "shell_view",
+        "shell_wait",
+        "job_status",
+        "deploy_status",
+    }
+)
 
 # W1 — wait/poll tools exempted from patterns 1 and 4 (but NOT 2): a legit
 # "poll until server up" loop must not be flagged as stuck (OpenHands #5355 FP
@@ -89,6 +109,9 @@ class StuckThresholds(BaseModel):
     # are 3 + 3 (three failed out of three attempts). 0 disables the tracker.
     per_file_rewrite_failures: int = 3
     per_file_rewrite_min_attempts: int = 3
+    # M3 — same non-productive probe tool calls in the recent window, with no
+    # productive action between them. 0 disables the detector.
+    probe_spin_calls: int = 12
 
 
 class RewriteDirective(BaseModel):
@@ -180,6 +203,17 @@ class StuckDetector:
         changing the bool-return contract of this method."""
         return self.evaluate(recent).is_stuck
 
+    def required_scan_window(self) -> int:
+        """Number of raw recent events needed by all enabled patterns.
+
+        The legacy identical-repeat patterns are governed by ``scan_window``.
+        Probe-spin counts ActionEvents, which normally arrive paired with
+        ObservationEvents, so N probe calls require roughly 2N raw events.
+        """
+        if self.t.probe_spin_calls <= 0:
+            return self.t.scan_window
+        return max(self.t.scan_window, self.t.probe_spin_calls * 2)
+
     def evaluate(self, recent: list[Event]) -> StuckResult:
         """The richer stuck signal. Returns the same stuck bool the four
         patterns have always returned, plus an optional F6 rewrite directive
@@ -206,17 +240,41 @@ class StuckDetector:
         bool is byte-identical; we just additionally surface which pattern won
         so the gate_stuck STUCK emit can NAME the breaker. `recent` is already
         sliced to after the last user message by the caller."""
-        if self._repeated_action_observation(recent):
+        legacy_recent = recent[-self.t.scan_window :]
+        if self._repeated_action_observation(legacy_recent):
             return "repeated_action_observation"  # pattern 1 (W-30/W-31: repeated reads)
-        if self._repeated_action_error(recent):
+        if self._repeated_action_error(legacy_recent):
             return "repeated_action_error"  # pattern 2
-        if self._agent_monologue(recent):
+        if self._agent_monologue(legacy_recent):
             return "agent_monologue"  # pattern 3
-        if self._alternating(recent):
+        if self._alternating(legacy_recent):
             return "alternating_actions"  # pattern 4
-        if self._pure_repeat(recent):
+        if self._pure_repeat(legacy_recent):
             return "pure_repeat"  # W1 pattern 5
+        if self._probe_spin(recent):
+            return "probe_spin"
         return None
+
+    # -- M3 pattern 6: repeated varying probe calls --------------------------
+
+    def _probe_spin(self, events: list[Event]) -> bool:
+        threshold = self.t.probe_spin_calls
+        if threshold <= 0:
+            return False
+        counts: dict[str, int] = {}
+        for event in events:
+            if not isinstance(event, ActionEvent) or event.tool_call is None:
+                continue
+            tool_name = event.tool_call.tool_name
+            if event.meta.get("verify_probe"):
+                continue
+            if tool_name not in _NON_PRODUCTIVE_TOOLS:
+                counts.clear()
+                continue
+            if tool_name not in _PROBE_SPIN_TOOLS:
+                continue
+            counts[tool_name] = counts.get(tool_name, 0) + 1
+        return any(count >= threshold for count in counts.values())
 
     # -- W1 pattern 5: Roo-style pure-repeat (back-to-back identical actions) ----
     #

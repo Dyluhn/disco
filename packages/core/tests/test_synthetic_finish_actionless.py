@@ -312,6 +312,51 @@ async def test_no_productive_work_never_synthesizes_finish() -> None:
 
 
 @pytest.mark.asyncio
+async def test_actionless_pause_counter_survives_simulated_resume() -> None:
+    seed_loop, store = build_loop(
+        ScriptedAgent([]),
+        conversation_id=CID,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"file_read"}),
+    )
+    await store.append(CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")))
+    await store.append(CID, PlanEvent(summary="p", steps=[{"title": "one"}], revision=1))
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
+    await _append_success(store, "shell", {"command": "echo built"})
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
+    await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"))
+    await store.append(
+        CID,
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(role="user", content="resume context"),
+        ),
+    )
+    await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
+    assert seed_loop is not None
+
+    events = await store.get_events(CID)
+    assert signals.actionless_pause_count_current_execution_segment(events) == 2
+    assert signals.should_synthesize_finish_after_actionless_pauses(events)
+
+    rebuilt_agent = ScriptedAgent([action_step("shell", {"command": "echo should-not-run"})])
+    rebuilt, _ = build_loop(
+        rebuilt_agent,
+        store=store,
+        conversation_id=CID,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"file_read"}),
+    )
+
+    state = await rebuilt.resume()
+    events = await store.get_events(CID)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert rebuilt_agent.calls == 0
+    assert any("REL-RC-P SYNTHETIC FINISH" in m for m in _env_messages(events))
+
+
+@pytest.mark.asyncio
 async def test_synthetic_finish_is_replay_derived_after_rebuild() -> None:
     seed_loop, store = build_loop(
         ScriptedAgent([]),

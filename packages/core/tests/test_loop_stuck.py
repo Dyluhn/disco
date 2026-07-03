@@ -183,6 +183,30 @@ def test_events_outside_window_dont_count():
     assert d.is_stuck(events[-4:]) is False  # only 2 pairs visible in the window
 
 
+def test_probe_spin_trips_on_varying_server_status_output():
+    d = StuckDetector(StuckThresholds(probe_spin_calls=12))
+    events = []
+    for i in range(12):
+        probe = action(
+            thought=f"poll {i}",
+            tool="server_status",
+            args={"url": "http://127.0.0.1:5173"},
+        )
+        events += [
+            probe,
+            observation(
+                action_id=probe.id,
+                tool="server_status",
+                content=f"server still starting; attempt={i}",
+            ),
+        ]
+
+    result = d.evaluate(events)
+
+    assert result.is_stuck is True
+    assert result.reason == "probe_spin"
+
+
 # ---- loop integration: STUCK then resume ------------------------------------
 
 

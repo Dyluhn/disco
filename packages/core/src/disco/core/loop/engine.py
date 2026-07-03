@@ -834,7 +834,7 @@ class AgentLoop:
         return None
 
     def _recent(self, events: list[Event]) -> list[Event]:
-        return events[-self._stuck.t.scan_window :]
+        return events[-self._stuck.required_scan_window() :]
 
 
     # ---- plan-mode helpers (Build) ------------------------------------------

@@ -11,17 +11,21 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 from disco.agent_server import ConversationRuntime, create_app
 from disco.core import (
+    ActionEvent,
     ConversationStatus,
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     SqliteEventStore,
     StatusEvent,
+    ToolCall,
+    ToolResult,
 )
 from disco.core.events import PlanEvent
 from disco.core.llm import (
@@ -232,6 +236,126 @@ async def test_resume_from_finished_is_409():
 
     assert result["ok"] is False
     assert result["reason"] == "conversation_finished"
+
+
+async def _seed_first_actionless_pause(store: SqliteEventStore, cid: str) -> None:
+    store.create_conversation(cid, owner_id="local", surface="build")
+    await store.append(cid, _user("build it"))
+    await store.append(cid, PlanEvent(summary="p", steps=[{"title": "one"}], revision=1))
+    await store.append(
+        cid,
+        StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"),
+    )
+    tool_call = ToolCall(tool_name="shell", arguments={"command": "echo built"})
+    action = await store.append(
+        cid,
+        ActionEvent(
+            thought="do work",
+            tool_call=tool_call,
+        ),
+    )
+    await store.append(
+        cid,
+        ObservationEvent(
+            action_id=action.id,
+            tool_result=ToolResult(
+                call_id=tool_call.call_id,
+                tool_name="shell",
+                success=True,
+                content="ok",
+            ),
+        ),
+    )
+    await store.append(
+        cid,
+        StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"),
+    )
+
+
+async def test_actionless_auto_resume_once_only_for_autonomous_build(monkeypatch):
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    auto_cid = f"{CID}-auto"
+    await _seed_first_actionless_pause(store, auto_cid)
+    rt.set_surface(auto_cid, "build")
+    rt.set_autonomous(auto_cid, True)
+    resume = AsyncMock(return_value={"ok": True, "status": "RUNNING"})
+    monkeypatch.setattr(rt, "resume_conversation", resume)
+
+    await rt._finalize_clean_return(auto_cid)
+    await rt._finalize_clean_return(auto_cid)
+
+    resume.assert_awaited_once_with(auto_cid)
+    auto_events = await store.get_events(auto_cid)
+    auto_nudges = [
+        e
+        for e in auto_events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.message is not None
+        and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
+    ]
+    assert len(auto_nudges) == 1
+
+    manual_cid = f"{CID}-manual"
+    await _seed_first_actionless_pause(store, manual_cid)
+    rt.set_surface(manual_cid, "build")
+
+    await rt._finalize_clean_return(manual_cid)
+
+    resume.assert_awaited_once_with(auto_cid)
+    manual_events = await store.get_events(manual_cid)
+    assert not any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.message is not None
+        and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
+        for e in manual_events
+    )
+
+
+async def test_second_actionless_pause_reenters_resume_endpoint_for_synthetic_finish(
+    monkeypatch,
+):
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = f"{CID}-second-actionless"
+    await _seed_first_actionless_pause(store, cid)
+    await store.append(
+        cid,
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(
+                role="user",
+                content="AUTO-RESUME-ONCE(actionless): already nudged",
+            ),
+        ),
+    )
+    await store.append(
+        cid,
+        StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"),
+    )
+    await store.append(
+        cid,
+        StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"),
+    )
+    rt.set_surface(cid, "build")
+    rt.set_autonomous(cid, True)
+    resume = AsyncMock(return_value={"ok": True, "status": "RUNNING"})
+    monkeypatch.setattr(rt, "resume_conversation", resume)
+
+    await rt._finalize_clean_return(cid)
+
+    resume.assert_awaited_once_with(cid)
+    events = await store.get_events(cid)
+    assert sum(
+        1
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.message is not None
+        and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
+    ) == 1
 
 
 async def test_resume_from_error_is_legal_and_preserves_history():

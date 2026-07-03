@@ -281,7 +281,7 @@ def test_count_recent_failures_ignores_update_plan_progress():
     assert signals.count_recent_failures(reals) == 3
 
 
-# ---- BW-02: escalate a degenerate "keeps pausing" loop to STUCK --------------
+# ---- BW-02/M3: repeated actionless pauses are event-persisted ----------------
 
 
 def _agent_msg(text):
@@ -329,10 +329,10 @@ def test_consecutive_actionless_pauses_helper():
     assert signals.consecutive_actionless_pauses([other, resumed, _agent_msg("a")]) == 0
 
 
-async def test_second_zero_action_actionless_pause_escalates_to_stuck():
-    """BW-02 — the model is resumed after an actionless pause and AGAIN does nothing
-    (zero tool calls). The plain pause would loop forever; the valve escalates to a
-    VISIBLE STUCK on the 2nd consecutive zero-action pause."""
+async def test_second_zero_action_actionless_pause_persists_another_pause():
+    """M3 — a resumed zero-action segment persists another PAUSED(actionless)
+    instead of the old STUCK(actionless_loop) branch, so REL-RC-P can derive
+    pause #2 from status events."""
     loop, store = build_loop(ScriptedAgent([]))
     paused = StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
     resumed = StatusEvent(status=ConversationStatus.RUNNING, detail="resumed")
@@ -348,13 +348,10 @@ async def test_second_zero_action_actionless_pause_escalates_to_stuck():
     assert landed is True
     emitted = await store.get_events(CID)
     statuses = [e for e in emitted if isinstance(e, StatusEvent)]
-    assert statuses, "the valve must land a terminal"
-    assert statuses[-1].status == ConversationStatus.STUCK
-    assert statuses[-1].detail == "actionless_loop"
-    # It must NOT have re-emitted another silent PAUSED/actionless.
-    assert not any(
-        s.status == ConversationStatus.PAUSED and s.detail == "actionless" for s in statuses
-    )
+    assert statuses, "the valve must land a pause"
+    assert statuses[-1].status == ConversationStatus.PAUSED
+    assert statuses[-1].detail == "actionless"
+    assert not any(s.status == ConversationStatus.STUCK for s in statuses)
 
 
 async def test_action_between_pauses_does_not_escalate():
@@ -378,15 +375,14 @@ async def test_action_between_pauses_does_not_escalate():
     assert not any(s.status == ConversationStatus.STUCK for s in statuses)
 
 
-async def test_bare_running_resume_after_prior_work_still_escalates_to_stuck():
+async def test_bare_running_resume_after_prior_work_still_persists_second_pause():
     """codex P1 — the bare-RUNNING resume blind spot. A run that DID real work
     (a file_read) BEFORE the first actionless pause, then is resumed by the live
     `AgentLoop.resume()` BARE StatusEvent(RUNNING) (NO detail="resumed"), then
-    again does zero actions, MUST still escalate to STUCK. The old
+    again does zero actions, MUST still persist pause #2. The old
     `actions_since_last_resume` keyed only on detail=="resumed", so it counted
-    the pre-pause file_read (>0) and the `== 0` escalation gate never fired —
-    the build re-paused forever. Resetting at the real resume boundary (the
-    PAUSED / bare RUNNING) closes it."""
+    the pre-pause file_read (>0) and the old escalation gate never fired. The
+    REL-RC-P replacement is keyed on persisted PAUSED(actionless) events."""
     loop, store = build_loop(ScriptedAgent([]))
     paused = StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
     bare_resume = StatusEvent(status=ConversationStatus.RUNNING)  # the LIVE resume marker
@@ -402,12 +398,10 @@ async def test_bare_running_resume_after_prior_work_still_escalates_to_stuck():
     landed = await loop._valve.actionless_valve(events, loop._ACTIONLESS_BREAK_CAP)
     assert landed is True
     statuses = [e for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
-    assert statuses, "the valve must land a terminal"
-    assert statuses[-1].status == ConversationStatus.STUCK
-    assert statuses[-1].detail == "actionless_loop"
-    assert not any(
-        s.status == ConversationStatus.PAUSED and s.detail == "actionless" for s in statuses
-    )
+    assert statuses, "the valve must land a pause"
+    assert statuses[-1].status == ConversationStatus.PAUSED
+    assert statuses[-1].detail == "actionless"
+    assert not any(s.status == ConversationStatus.STUCK for s in statuses)
 
 
 async def test_real_action_after_bare_running_resume_does_not_escalate():

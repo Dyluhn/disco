@@ -369,6 +369,11 @@ def _finalize_fake(store: SqliteEventStore):
     fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
     fake._last_status = {}
     fake._nonterminal_rekicks = {}
+
+    async def _no_auto_resume(cid, status, generation):
+        return False  # M3 ladder hook — this fake never auto-resumes
+
+    fake._maybe_auto_resume_actionless_pause = _no_auto_resume
     fake._post_terminal_rekick_seq = {}  # engine-rekick fix: post-terminal re-kick guard
     fake.kick = MagicMock()
     fake._emit_persistence_reminder = AsyncMock()
