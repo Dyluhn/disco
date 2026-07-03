@@ -203,6 +203,18 @@ async def test_app_update_content_touches_only_content_and_spec():
     assert "A brand-new headline" in sbx._fs["src/generated/content.ts"].decode("utf-8")
 
 
+async def test_app_create_refuses_essay_brief_with_guidance():
+    """Live-caught 2026-07-03: the whole build request passed as `brief` poisons
+    the app name + seeded hero copy. Long briefs refuse with guidance."""
+    sbx = FakeSandboxInstance()
+    out = await AppCreateTool().run(
+        AppCreateArgs(recipe_id="editorial-ledger", brief="B" * 80),
+        _ctx(sbx),
+    )
+    assert not out.success
+    assert "SHORT brand name" in out.content
+
+
 async def test_app_update_content_refuses_semantic_noop_with_ground_truth():
     """RC-M, live-caught 2026-07-03: echoing the EXISTING values back must refuse
     (with the current content in the message), never report success with

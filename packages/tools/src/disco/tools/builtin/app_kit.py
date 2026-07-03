@@ -204,8 +204,10 @@ class AppCreateArgs(BaseModel):
     )
     brief: str | None = Field(
         default=None,
-        description="Optional free-text brief; used to name a default app when "
-        "no explicit app_spec is given.",
+        description="A SHORT app/brand NAME only (a few words, e.g. 'Ember & Oak' — "
+        "max 60 chars). NOT the full request: it becomes the app's display name and "
+        "hero heading seed. The scaffold seeds PLACEHOLDER copy — replace it with "
+        "app_update_content after creating.",
     )
     app_spec: dict[str, Any] | None = Field(
         default=None,
@@ -274,7 +276,18 @@ class AppCreateTool:
                 primitive = get_primitive(args.primitive_id)
                 if primitive is None:
                     raise _AppKitError(_unknown_primitive_msg(args.primitive_id))
-                app = primitive.default_app_spec(args.brief or "Your Brand", recipe)
+                brief = (args.brief or "").strip()
+                if len(brief) > 60:
+                    # Live-caught 2026-07-03: the model passed the ENTIRE build
+                    # request here, poisoning the app name + seeded hero copy
+                    # (which then made its content edits look like no-ops).
+                    # Refuse with guidance instead of silently truncating.
+                    raise _AppKitError(
+                        f"brief is {len(brief)} chars — it must be a SHORT brand "
+                        "name (max 60 chars, e.g. 'Ember & Oak'). Put the rest of "
+                        "the request into app_update_content edits after creating."
+                    )
+                app = primitive.default_app_spec(brief or "Your Brand", recipe)
             # The primitive's airtight normalization (e.g. lead-gen appends the lead
             # entity the worker targets; directory is identity).
             app = primitive.prepare_app_spec(app)
