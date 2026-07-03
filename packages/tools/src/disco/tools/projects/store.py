@@ -39,7 +39,7 @@ import os
 import shutil
 import hashlib
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -443,6 +443,33 @@ class ProjectStore:
         records = self._existing_version_records(conversation_id)
         records.sort(key=lambda r: r.seq, reverse=True)
         return records
+
+    def set_version_pinned(
+        self, conversation_id: str, seq: int, pinned: bool
+    ) -> VersionRecord:
+        """Mark a version as retention-protected in the index and sidecar."""
+        if not _safe_seq(seq):
+            raise StorageError(f"unsafe version seq: {seq!r}")
+        records = self._read_version_index(conversation_id)
+        updated: VersionRecord | None = None
+        next_records: list[VersionRecord] = []
+        for record in records:
+            if record.seq == seq:
+                updated = replace(record, pinned=bool(pinned))
+                next_records.append(updated)
+            else:
+                next_records.append(record)
+        if updated is None:
+            raise StorageError(f"unknown version seq: {seq!r}")
+
+        version_dir = self._version_dir(conversation_id, updated)
+        metadata = version_dir / _VERSION_METADATA
+        if not metadata.is_file():
+            raise StorageError(f"version metadata missing: {seq!r}")
+
+        _write_json_atomic(metadata, _version_to_dict(updated))
+        self._write_version_index(conversation_id, next_records)
+        return updated
 
     def version_workspace_path(self, conversation_id: str, seq: int) -> Path:
         if not _safe_seq(seq):

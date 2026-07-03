@@ -3318,6 +3318,10 @@ class ConversationRuntime:
             version_dir = store.version_workspace_path(conversation_id, seq)
         except StorageError as exc:
             raise WorkspaceVersionNotFound(str(exc)) from exc
+        try:
+            record = store.set_version_pinned(conversation_id, seq, True)
+        except StorageError as exc:
+            raise WorkspaceRestoreStorageError(str(exc)) from exc
 
         session = self.live_session(conversation_id)
         if session is None:

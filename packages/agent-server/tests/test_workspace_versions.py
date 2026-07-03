@@ -145,6 +145,7 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.post(f"/conversations/{CID}/versions/{old.seq}/restore")
+        listed = await client.get(f"/conversations/{CID}/versions")
 
     assert resp.status_code == 200
     body = resp.json()
@@ -174,6 +175,14 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     assert [v.seq for v in versions] == [3, 2, 1]
     assert versions[0].trigger == "restore"
     assert versions[0].tree_digest == old.tree_digest
+    assert versions[2].seq == old.seq
+    assert versions[2].pinned is True
+
+    assert listed.status_code == 200
+    listed_old = next(
+        row for row in listed.json()["versions"] if row["seq"] == old.seq
+    )
+    assert listed_old["pinned"] is True
 
 
 class _PreviewRuntime:
