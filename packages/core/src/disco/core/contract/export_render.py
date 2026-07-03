@@ -23,6 +23,14 @@ Pure and dependency-light on purpose: stdlib ``zipfile``/``re`` only, no
 import. The producer (``tools``) calls :func:`check_export_render` at render time
 and stamps :class:`ExportRenderFacts` into ``tool_result.structured``; the finish
 gate (``core``) reads it back via :func:`latest_export_render_facts`.
+
+THREAT MODEL (documented limitation, Codex P10-4/P10-5): the input is the OUTPUT of
+a trusted renderer (LibreOffice / python-pptx / Marp / the C3 template), NOT an
+adversary. These checks catch RENDERER FAILURES — blank, truncated, zero-unit,
+missing-header — not maliciously-crafted bytes that mimic a valid header (e.g. a
+non-PDF with ``%PDF``+``%%EOF``+``/Type /Page`` padding, or a zip with a junk
+``ppt/media`` entry). A full parse (pypdf/python-pptx) would close that gap but
+belongs in ``tools`` and is out of scope for the finish gate's core-side check.
 """
 
 from __future__ import annotations
@@ -33,7 +41,7 @@ import zipfile
 
 from pydantic import BaseModel, ConfigDict
 
-from ..events import Event, MessageEvent, ObservationEvent
+from ..events import Event, EventSource, MessageEvent, ObservationEvent
 
 # The structured-payload key the producer stamps and the gate reads. One name,
 # both sides — a typo here silently disables the gate, so it is a single const.
@@ -84,6 +92,20 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # Strip <script>/<style> BODIES before measuring visible text — their contents are
 # not rendered prose (a 2MB inlined stylesheet must not read as slide content).
 _SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+# Strip default-template CHROME by CLASS (the "Disco." wordmark + Latin colophon +
+# their bc-* pieces) BEFORE measuring content — token-matching the rendered strings
+# is fragile (tag-stripping inserts spaces: `Disco<span>.` → "Disco ."), so a blank
+# BRANDED deck slipped past as non-blank. Looped to unwind one nesting level at a
+# time (the colophon nests bc-* divs). Structural, so it survives chrome text edits.
+_CHROME_CLASS_RE = re.compile(
+    r'<(\w+)[^>]*\bclass="[^"]*\b(?:brand[\w-]*|colophon|wordmark|watermark|bc-[\w-]+)\b[^"]*"[^>]*>.*?</\1>',
+    re.IGNORECASE | re.DOTALL,
+)
+# Visual content that is NOT text — an image/figure-only slide is a real deck, not
+# blank (mirrors the pptx embedded-media rule). Its presence makes a slide non-blank.
+_HTML_MEDIA_RE = re.compile(
+    r"<(?:img|svg|video|canvas|picture|figure|iframe|object|embed)\b", re.IGNORECASE
+)
 _PPTX_TEXT_RE = re.compile(rb"<a:t>(.*?)</a:t>", re.IGNORECASE | re.DOTALL)
 _SLIDE_XML_RE = re.compile(r"^ppt/slides/slide\d+\.xml$")
 
@@ -122,12 +144,21 @@ def _html_facts(html: str) -> tuple[int, int, bool, bool]:
     slides = len({sid for sid in _SLIDE_ID_RE.findall(html) if sid})
     if slides == 0:
         slides = len(_SECTION_RE.findall(html))
-    visible = _strip_chrome(_TAG_RE.sub(" ", _SCRIPT_STYLE_RE.sub(" ", html)))
-    valid_header = "<" in html and ">" in html and bool(visible or slides)
-    # A single-page (non-deck) HTML doc is one unit if it has real content.
-    if slides == 0 and len(visible) >= _TEXT_FLOOR:
+    # Remove <script>/<style> bodies, then unwind template CHROME by class (looped so
+    # nested colophon pieces go too), then strip tags + any residual chrome tokens.
+    body = _SCRIPT_STYLE_RE.sub(" ", html)
+    prev = ""
+    while prev != body:
+        prev = body
+        body = _CHROME_CLASS_RE.sub(" ", body)
+    visible = _strip_chrome(_TAG_RE.sub(" ", body))
+    has_media = bool(_HTML_MEDIA_RE.search(html))
+    valid_header = "<" in html and ">" in html and bool(visible or slides or has_media)
+    non_blank = len(visible) >= _TEXT_FLOOR or has_media
+    # A single-page (non-deck) HTML doc is one unit if it has real content/media.
+    if slides == 0 and non_blank:
         slides = 1
-    return slides, len(visible), valid_header, len(visible) >= _TEXT_FLOOR
+    return slides, len(visible), valid_header, non_blank
 
 
 def _pptx_facts(data: bytes) -> tuple[int, int, bool, bool]:
@@ -267,14 +298,35 @@ def latest_export_render_facts(events: list[Event]) -> ExportRenderFacts | None:
     return None
 
 
+def latest_export_render_index(events: list[Event]) -> int:
+    """Index of the newest stamped export observation, or -1. Lets the gate tell
+    whether an app deliverable is NEWER than the export (a fresh app handoff that
+    supersedes a stale deck) vs OLDER (a stale app that must not mask a fresh broken
+    deck) — the difference between falling through and refusing."""
+    for i in range(len(events) - 1, -1, -1):
+        ev = events[i]
+        if (
+            isinstance(ev, ObservationEvent)
+            and ev.tool_result.success
+            and ev.tool_result.structured
+            and render_facts_from_structured(ev.tool_result.structured) is not None
+        ):
+            return i
+    return -1
+
+
 def count_export_gate_refusals(events: list[Event]) -> int:
     """How many times the export gate has already refused this run — counted from
     its own refusal markers in the log, so the cap needs no loop state and survives
-    reconstruction/resume."""
+    reconstruction/resume. Restricted to ENVIRONMENT-source messages (the gate emits
+    those) so a USER/AGENT message that merely quotes the token can't force an early
+    release of the cap."""
     return sum(
         1
         for e in events
-        if isinstance(e, MessageEvent) and EXPORT_GATE_TOKEN in (e.message.content or "")
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and EXPORT_GATE_TOKEN in (e.message.content or "")
     )
 
 

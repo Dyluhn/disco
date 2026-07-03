@@ -244,9 +244,16 @@ def _basic_md_to_html(md: str) -> str:
 
 def _split_slides(markdown: str) -> list[str]:
     """Split markdown into slides on '---' separators. Handles leading/trailing
-    separators and CRLF line endings."""
+    separators and CRLF line endings. A leading YAML/Marp frontmatter block is
+    stripped first so it is never counted or rendered as a slide (Codex P10-7: it
+    otherwise inflated the declared slide count → false truncation at the gate)."""
     # Normalize line endings
     md = markdown.replace("\r\n", "\n")
+    # Strip a leading Marp/YAML frontmatter block: `---` on the VERY first line (no
+    # leading separator) whose body is NOT a markdown heading (so a real leading
+    # `---\n# Slide\n---` separator+content is left intact — that guard is what the
+    # empty-filtered test pins).
+    md = re.sub(r"\A---\n(?!#).*?\n---[ \t]*(?:\n|\Z)", "", md, count=1, flags=re.DOTALL)
     # Split on \n---\n (slide separator on its own line)
     parts = re.split(r"\n---\n", md)
     # Filter empty slides

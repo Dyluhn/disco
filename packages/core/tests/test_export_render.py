@@ -158,6 +158,52 @@ def test_html_from_bytes_read_back() -> None:
     assert f.unit_count == 3 and f.non_blank and f.ok
 
 
+# ── Codex hardening: false-pass / false-refusal edges ───────────────────────
+
+_C3_CHROME = (
+    '<div class="brand-wordmark">Disco<span class="dot">.</span></div>'
+    '<div class="brand-colophon"><span class="bc-hw">disco</span>'
+    '<div class="bc-gloss">“I learn; I become acquainted with.”</div>'
+    '<div class="bc-root">from <em>discere</em> — to learn</div></div>'
+)
+
+
+def test_blank_branded_deck_refused() -> None:
+    # P10-3: a slide with ONLY the C3 brand chrome (wordmark + colophon) is BLANK —
+    # chrome must be stripped structurally so it can't read as content.
+    html = f'<html><body><section data-slide-id="slide-0">{_C3_CHROME}</section></body></html>'
+    f = check_export_render("html", text=html, declared_units=1)
+    assert f.visible_text_len == 0 and f.non_blank is False and f.ok is False
+
+
+def test_branded_deck_with_real_content_passes() -> None:
+    # the chrome strip must NOT eat authored content around it (no new false refusal).
+    html = (
+        f'<html><body><section data-slide-id="slide-0">{_C3_CHROME}'
+        "<h1>Green tea boosts metabolism and focus</h1>"
+        "<p>Multiple studies show a measurable effect.</p></section></body></html>"
+    )
+    f = check_export_render("html", text=html, declared_units=1)
+    assert f.non_blank and f.ok and f.visible_text_len >= 12
+
+
+def test_image_only_html_deck_non_blank() -> None:
+    # P10-6: an image/figure-only slide is a real visual deck, not blank.
+    for media in ('<img src="d.png" alt="">', "<svg><rect/></svg>", "<figure></figure>"):
+        html = f'<html><body><section data-slide-id="slide-0">{media}</section></body></html>'
+        f = check_export_render("html", text=html, declared_units=1)
+        assert f.non_blank is True and f.ok is True, media
+
+
+def test_count_refusals_only_environment_source() -> None:
+    # P10-2: a USER/AGENT message quoting the token must not advance the cap.
+    def m(src: EventSource) -> MessageEvent:
+        return MessageEvent(source=src, message=LLMMessage(role="user", content=f"{EXPORT_GATE_TOKEN} x"))
+
+    events = [m(EventSource.USER), m(EventSource.AGENT), m(EventSource.ENVIRONMENT)]
+    assert count_export_gate_refusals(events) == 1
+
+
 # ── PDF ─────────────────────────────────────────────────────────────────────
 
 def test_pdf_good_ok() -> None:

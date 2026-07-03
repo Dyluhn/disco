@@ -129,6 +129,13 @@ def build_scoped_edit_directive(
     so the loop mutates only the selected element. ``instruction`` is the user's
     verbatim change; ``human_label`` is the selection-agent's readable description
     (e.g. ``h1 — "Nightshift Coffee"``), used to disambiguate for the model.
+
+    TRUST NOTE (documented limitation, Codex P8-1): a source ref's ``file``/``line``
+    come from a ``data-oid`` in the served DOM. The host stamps those serve-time, but
+    a page whose CONTENT embeds an authored ``data-oid`` could steer the edit at a
+    different workspace file. This is bounded — the edit is a targeted change inside
+    the run's own sandboxed workspace (no path escape, no privilege gain) — but a
+    fully robust fix would re-verify the ref against the host's own stamp registry.
     """
     instruction = instruction.strip()
     label = f' ({human_label.strip()})' if human_label and human_label.strip() else ""

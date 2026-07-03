@@ -125,8 +125,9 @@ async def test_corrupt_pptx_refuses() -> None:
 
 
 @pytest.mark.asyncio
-async def test_app_deliverable_not_blocked_by_stale_deck() -> None:
-    """A blank deck must NOT block a build whose final deliverable is an app."""
+async def test_app_deliverable_after_deck_not_blocked() -> None:
+    """A blank deck followed by a NEWER app deliverable must NOT block — the app is
+    the current handoff; the deck is superseded."""
     loop, _ = build_loop(ScriptedAgent([]))
     events = [
         _deck_obs("html", **_blank_html()),
@@ -134,6 +135,25 @@ async def test_app_deliverable_not_blocked_by_stale_deck() -> None:
     ]
     disp = await _gate(loop)(finish_step(), events)
     assert disp is Disp.FALLTHROUGH
+
+
+@pytest.mark.asyncio
+async def test_stale_app_deliverable_does_not_mask_later_bad_deck() -> None:
+    """P10-1: an app deliverable from EARLIER in the conversation must NOT disable
+    the gate for a freshly-produced broken deck (the deck is newer → gate it)."""
+    loop, _ = build_loop(ScriptedAgent([]))
+    events = [
+        DeliverableEvent(title="Old app", path="site", artifact_kind="app"),
+        _deck_obs("html", **_blank_html()),  # produced AFTER the app handoff
+        _files_deliverable(),
+    ]
+    disp = await _gate(loop)(finish_step(), events)
+    assert disp is Disp.CONTINUE
+    steer = [
+        e for e in await loop._events()
+        if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
+    ]
+    assert steer, "stale app deliverable wrongly masked the bad deck"
 
 
 @pytest.mark.asyncio

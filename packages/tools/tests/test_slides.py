@@ -120,6 +120,17 @@ def test_split_slides_empty_filtered():
     assert "# Real" in slides[0]
 
 
+def test_split_slides_strips_marp_frontmatter():
+    """P10-7: a leading Marp/YAML frontmatter block is not counted as a slide (it
+    otherwise inflated the declared count → false truncation at the export gate)."""
+    md = "---\nmarp: true\ntheme: default\n---\n# One\n\n---\n\n# Two"
+    slides = _split_slides(md)
+    assert len(slides) == 2
+    assert "marp: true" not in slides[0]
+    # a genuine leading `---\n# Slide\n---` separator (heading body) is NOT frontmatter
+    assert len(_split_slides("\n---\n# Real\n---\n")) == 1
+
+
 # ---- HTML fallback renderer --------------------------------------------------
 
 

@@ -24,6 +24,7 @@ from ..contract.export_render import (
     export_gate_refusal_reminder,
     export_gate_release_warning,
     latest_export_render_facts,
+    latest_export_render_index,
 )
 from ..dod import FileExistsPredicate
 from ..dod_evaluator import DoDEvaluator, HttpProbeResult
@@ -2692,11 +2693,16 @@ class FinishGate:
         if facts is None or facts.ok:
             return Disp.FALLTHROUGH  # no export stamped, or it renders fine
 
-        # If the build's FINAL deliverable is an app (not files), a stale/broken
-        # intermediate deck must not block it — the app gates own that path.
-        latest = _latest_deliverable_event(events)
-        if latest is not None and latest.artifact_kind == "app":
-            return Disp.FALLTHROUGH
+        # An app deliverable emitted AFTER the broken export means the app is the
+        # current handoff and the deck is superseded — fall through (the app gates
+        # own that path). But an app deliverable from EARLIER in the conversation
+        # must NOT mask a freshly-produced broken deck, so compare by recency, not
+        # just "is the latest deliverable an app". (Codex P10-1.)
+        export_idx = latest_export_render_index(events)
+        for i in range(len(events) - 1, export_idx, -1):
+            ev = events[i]
+            if isinstance(ev, DeliverableEvent) and ev.artifact_kind == "app":
+                return Disp.FALLTHROUGH
 
         if count_export_gate_refusals(events) >= EXPORT_GATE_MAX_REFUSALS:
             await self._loop._emit(
