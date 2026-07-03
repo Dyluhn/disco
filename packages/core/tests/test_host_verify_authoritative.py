@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pytest
-
 from disco.core import (
     ActionEvent,
     ConversationStatus,
@@ -19,7 +18,13 @@ from disco.core import (
 from disco.core.events import EventSource
 from disco.core.llm import ModelRole, OperatingMode, ToolSpec
 from disco.core.llm.prompts import DriverPrompts
-from disco.core.loop import AgentLoop, NeverConfirm, host_verify_authoritative_enabled
+from disco.core.loop import (
+    AgentLoop,
+    NeverConfirm,
+    TypedVerifierVerdict,
+    VerifierContextSeed,
+    host_verify_authoritative_enabled,
+)
 from loop_fakes import (
     FakeAnalyzer,
     FakeExecutor,
@@ -89,7 +94,26 @@ class _HostVerifier:
         return self._verdict
 
 
-def _loop(agent, executor, *, host_verifier=None, hook=None):
+class _VerifierJudge:
+    def __init__(self, verdict: TypedVerifierVerdict) -> None:
+        self._verdict = verdict
+        self.seeds: list[VerifierContextSeed] = []
+        self.transcript = "SECRET VERIFY TRANSCRIPT"
+
+    async def judge(self, seed: VerifierContextSeed) -> TypedVerifierVerdict:
+        self.seeds.append(seed)
+        return self._verdict
+
+
+def _loop(
+    agent,
+    executor,
+    *,
+    host_verifier=None,
+    hook=None,
+    verifier_judge=None,
+    finish_alias: str | None = None,
+):
     store = SqliteEventStore(":memory:")
     loop = AgentLoop(
         "conv",
@@ -103,9 +127,11 @@ def _loop(agent, executor, *, host_verifier=None, hook=None):
         FakeSummarizer(),
         mode=OperatingMode.LONG_HORIZON,
         planning_tools=frozenset({"submit_plan"}),
+        finish_alias=finish_alias,
         host_verifier=host_verifier,
         host_verifier_verdict_hook=hook,
         host_verify_authoritative=True,
+        verifier_judge=verifier_judge,
     )
     return loop, store
 
@@ -191,6 +217,77 @@ async def test_host_fail_refuses_then_releases_loudly_without_inline_verify() ->
     assert any("WITHOUT a passing host verifier verdict" in m for m in env)
     assert ("RUNNING", "unverified_release") in _statuses(events)
     assert loop._browser_verify_refusals == 0
+
+
+@pytest.mark.asyncio
+async def test_model_verifier_gets_bounded_seed_and_builder_gets_summary_only() -> None:
+    raw = _verdict(passed=True, fp="HOST")
+    raw["summary"] = "RAW_CHECK_SECRET"
+    raw["screenshot_path"] = ".pmx/screenshots/0001-navigate.png"
+    host = _HostVerifier(raw)
+    judge = _VerifierJudge(
+        TypedVerifierVerdict(
+            verified=False,
+            verdict="fail",
+            detail="Typed verifier summary only.",
+            failures=[{"kind": "copy_quality", "message": "Typed failure only."}],
+            next_action="Revise the hero copy.",
+            failure_fingerprint="typed-copy-quality",
+        )
+    )
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(
+        agent,
+        execu,
+        host_verifier=host,
+        verifier_judge=judge,
+        finish_alias="ready_for_static_site_verification",
+    )
+
+    await loop.send_message("build a page")
+    await loop.run()
+
+    assert judge.seeds
+    seed = judge.seeds[0]
+    assert set(seed.model_dump(mode="json")) == {
+        "contract",
+        "deliverable_paths",
+        "check_results",
+        "screenshot",
+    }
+    assert seed.contract["verify"]["finalizer"] == "ready_for_static_site_verification"
+    assert seed.deliverable_paths == ["index.html"]
+    assert seed.check_results["summary"] == "RAW_CHECK_SECRET"
+    assert seed.screenshot.path == ".pmx/screenshots/0001-navigate.png"
+
+    events = await store.get_events("conv")
+    verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
+    assert verdicts
+    assert verdicts[0].verdict == "fail"
+    assert verdicts[0].detail == "Typed verifier summary only."
+    assert verdicts[0].failures[0]["message"] == "Typed failure only."
+
+    builder_context = "\n".join(
+        msg.content
+        for view in agent.seen_views
+        for msg in view.messages
+    )
+    assert "Typed verifier summary only." in builder_context
+    assert "Typed failure only." in builder_context
+    assert "RAW_CHECK_SECRET" not in builder_context
+    assert judge.transcript not in builder_context
 
 
 @pytest.mark.asyncio

@@ -614,6 +614,7 @@ def default_config() -> RouterConfig:
         ModelRole.QUERY_REWRITER: "rewriter-local",
         ModelRole.SUMMARIZER: "summarizer-local",
         ModelRole.NLI_VERIFIER: "nli-local",
+        ModelRole.VERIFIER: "rewriter-local",
     }
     return RouterConfig(
         models=models,

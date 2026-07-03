@@ -61,6 +61,7 @@ from .boundaries import (
     SecurityAnalyzer,
     StopHook,
     ToolExecutor,
+    VerifierJudge,
     is_finish_tool_name,  # P6 — re-exported; canonical def lives in boundaries
 )
 from .control import Disp
@@ -587,6 +588,8 @@ class AgentLoop:
             Callable[[VerifierVerdictEvent], Awaitable[None]] | None
         ) = None,
         host_verify_authoritative: bool | None = None,
+        verifier_judge: VerifierJudge | None = None,
+        verifier_judge_timeout_s: float = 30.0,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -708,6 +711,8 @@ class AgentLoop:
             if host_verify_authoritative is None
             else bool(host_verify_authoritative)
         )
+        self._verifier_judge = verifier_judge
+        self._verifier_judge_timeout_s = float(verifier_judge_timeout_s)
         # Consecutive DoD-refusal streak (telemetry; the gate has no cap — the
         # loop's max_iterations + the user's kill switch are the ultimate exit,
         # same as the browser-verify and execution-nudge gates).

@@ -18,6 +18,10 @@ from .boundaries import (
     SecurityAnalyzer,
     StopHook,
     ToolExecutor,
+    TypedVerifierVerdict,
+    VerifierContextSeed,
+    VerifierJudge,
+    VerifierScreenshot,
 )
 from .engine import AgentLoop
 from .finish import host_verify_authoritative_enabled
@@ -52,5 +56,9 @@ __all__ = [
     "StopHook",
     "StuckDetector",
     "StuckThresholds",
+    "TypedVerifierVerdict",
     "ToolExecutor",
+    "VerifierContextSeed",
+    "VerifierJudge",
+    "VerifierScreenshot",
 ]

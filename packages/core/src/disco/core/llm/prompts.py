@@ -19,6 +19,7 @@ _DEFAULT_MODE_BY_ROLE: dict[ModelRole, OperatingMode] = {
     ModelRole.QUERY_REWRITER: OperatingMode.INTERACTIVE,
     ModelRole.SUMMARIZER: OperatingMode.INTERACTIVE,
     ModelRole.NLI_VERIFIER: OperatingMode.INTERACTIVE,
+    ModelRole.VERIFIER: OperatingMode.INTERACTIVE,
 }
 
 # Ordered (substring -> family) derivation. First match wins. [VERIFY] tags.

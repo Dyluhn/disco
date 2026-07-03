@@ -238,6 +238,8 @@ def build_loop(
     host_verifier=None,
     host_verify_timeout_s: float = 30.0,
     host_verifier_verdict_hook=None,
+    verifier_judge=None,
+    verifier_judge_timeout_s: float = 30.0,
     model_policy: ModelExecutionPolicy | None = None,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
@@ -271,6 +273,8 @@ def build_loop(
         host_verifier=host_verifier,
         host_verify_timeout_s=host_verify_timeout_s,
         host_verifier_verdict_hook=host_verifier_verdict_hook,
+        verifier_judge=verifier_judge,
+        verifier_judge_timeout_s=verifier_judge_timeout_s,
         model_policy=model_policy or ModelExecutionPolicy.standard(),
     )
     return loop, store

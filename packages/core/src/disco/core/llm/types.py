@@ -29,6 +29,7 @@ class ModelRole(str, Enum):
     QUERY_REWRITER = "query_rewriter"  # query expansion/decomposition
     SUMMARIZER = "summarizer"  # condensation (cheap, separate model)
     NLI_VERIFIER = "nli_verifier"  # citation entailment (a cross-encoder, §9)
+    VERIFIER = "verifier"  # bounded artifact-verdict judge, separate from builder
 
 
 class Difficulty(str, Enum):

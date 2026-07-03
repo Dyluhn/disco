@@ -124,6 +124,7 @@ def simple_config() -> RouterConfig:
     assignments = {
         ModelRole.RAG_ANSWERER: "local",
         ModelRole.SUMMARIZER: "local",
+        ModelRole.VERIFIER: "local",
     }
     return RouterConfig(models=models, default_model="local", assignments=assignments)
 

@@ -18,6 +18,12 @@ import posixpath
 import re
 from typing import TYPE_CHECKING, Any, cast
 
+from ..context.artifact_projection import (
+    artifact_manifest_reader_enabled,
+    artifact_paths_from_events,
+    artifact_paths_from_manifest_records,
+    manifest_path_divergence,
+)
 from ..contract.export_render import (
     EXPORT_GATE_MAX_REFUSALS,
     ExportRenderFacts,
@@ -27,12 +33,6 @@ from ..contract.export_render import (
     export_render_facts_for_path,
     latest_export_render_facts,
     latest_export_render_index,
-)
-from ..context.artifact_projection import (
-    artifact_manifest_reader_enabled,
-    artifact_paths_from_events,
-    artifact_paths_from_manifest_records,
-    manifest_path_divergence,
 )
 from ..dod import FileExistsPredicate
 from ..dod_evaluator import DoDEvaluator, HttpProbeResult
@@ -58,7 +58,13 @@ from ..llm import OperatingMode
 from ..state import ConversationState
 from ..view import effective_plan_progress
 from . import signals
-from .boundaries import AgentStep, HostVerificationDeliverable
+from .boundaries import (
+    AgentStep,
+    HostVerificationDeliverable,
+    TypedVerifierVerdict,
+    VerifierContextSeed,
+    VerifierScreenshot,
+)
 from .control import Disp
 from .plan_conditions import (
     DictatedContentCondition,
@@ -172,6 +178,32 @@ def _static_verify_command(path: str) -> str:
 # verify gate. A full pixel screenshot needs a browser in the sandbox image (not
 # present on the process backend) — this is the honest server-up post-condition.
 _APP_VERIFY_PREFIX = "app"
+_VERIFIER_CHECK_KEYS = frozenset(
+    {
+        "passed",
+        "verdict",
+        "url",
+        "http_status",
+        "title",
+        "meaningful_content",
+        "visible_text_chars",
+        "elements_count",
+        "console_errors",
+        "console_warnings",
+        "network_failures",
+        "checks",
+        "browser_unavailable",
+        "vision",
+        "summary",
+        "detail",
+        "next_action",
+        "failure_fingerprint",
+        "screenshot_path",
+    }
+)
+_VERIFIER_MAX_STRING_CHARS = 2000
+_VERIFIER_MAX_LIST_ITEMS = 20
+_VERIFIER_MAX_DICT_ITEMS = 40
 
 
 def _app_verify_command(url: str) -> str:
@@ -196,6 +228,65 @@ def _app_verify_command(url: str) -> str:
         "print('OK '+u+' '+str(code)+' bytes='+str(len(b)))"
     )
     return f'python3 -c "{script}"'
+
+
+def _bounded_verifier_value(value: Any, *, depth: int = 0) -> Any:
+    """Return a JSON-ish, size-bounded value for the verifier context.
+
+    The verifier may inspect deterministic check evidence, but it never needs an
+    unbounded page dump or raw tool transcript. This helper keeps the seed small
+    and explicit at the core boundary.
+    """
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= _VERIFIER_MAX_STRING_CHARS:
+            return value
+        return value[:_VERIFIER_MAX_STRING_CHARS] + "...[truncated]"
+    if depth >= 4:
+        return str(value)[:_VERIFIER_MAX_STRING_CHARS]
+    if isinstance(value, list):
+        return [
+            _bounded_verifier_value(item, depth=depth + 1)
+            for item in value[:_VERIFIER_MAX_LIST_ITEMS]
+        ]
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for i, (k, v) in enumerate(value.items()):
+            if i >= _VERIFIER_MAX_DICT_ITEMS:
+                break
+            if not isinstance(k, str):
+                continue
+            out[k] = _bounded_verifier_value(v, depth=depth + 1)
+        return out
+    return str(value)[:_VERIFIER_MAX_STRING_CHARS]
+
+
+def _bounded_verifier_check_results(verdict: dict[str, Any]) -> dict[str, Any]:
+    """The only check-result fields allowed into the verifier model seed."""
+
+    return {
+        key: _bounded_verifier_value(value)
+        for key, value in verdict.items()
+        if key in _VERIFIER_CHECK_KEYS
+    }
+
+
+def _screenshot_from_verdict(verdict: dict[str, Any]) -> VerifierScreenshot:
+    image_data_url = str(
+        verdict.get("screenshot")
+        or verdict.get("screenshot_data_url")
+        or verdict.get("screenshot_image")
+        or ""
+    )
+    b64 = verdict.get("screenshot_b64")
+    if not image_data_url and isinstance(b64, str) and b64.strip():
+        image_data_url = f"data:image/png;base64,{b64.strip()}"
+    return VerifierScreenshot(
+        path=str(verdict.get("screenshot_path") or ""),
+        image_data_url=image_data_url,
+    )
 
 
 def _last_productive_seq(events: list[Event]) -> int:
@@ -1275,6 +1366,9 @@ class FinishGate:
     @staticmethod
     def _verdict_failures(verdict: dict) -> list[dict[str, object]]:
         failures: list[dict[str, object]] = []
+        for item in verdict.get("failures") or []:
+            if isinstance(item, dict):
+                failures.append(dict(item))
         for err in verdict.get("console_errors") or []:
             if isinstance(err, dict):
                 failures.append({"kind": "console_error", **err})
@@ -1342,6 +1436,149 @@ class FinishGate:
             if message:
                 return str(message)
         return ""
+
+    def _verifier_contract_payload(self) -> dict[str, Any]:
+        alias = getattr(self._loop, "_finish_alias", None)
+        if not alias:
+            return {}
+        try:
+            from ..contract.registry import BuildContractRegistry
+
+            reg = BuildContractRegistry.default()
+            for kind in reg.kinds():
+                c = reg.get(kind)
+                if c is not None and c.verify.finalizer == alias:
+                    return c.model_dump(mode="json")
+        except Exception:  # noqa: BLE001 — verifier seed degrades to finalizer-only
+            pass
+        return {"verify": {"finalizer": alias}}
+
+    async def _verifier_deliverable_paths(
+        self,
+        deliverable: HostVerificationDeliverable,
+        events: list[Event],
+    ) -> list[str]:
+        paths: list[str] = [deliverable.artifact_path]
+        paths.extend(_deliverable_event_paths(events))
+        paths.extend(_plan_file_exists_paths(events))
+        paths.extend(self._contract_required_deliverable_paths())
+        spec = await self._loop.store.get_dod_spec(self._loop.conversation_id)
+        if spec is not None:
+            for pred in spec.predicates:
+                if isinstance(pred, FileExistsPredicate):
+                    p = _safe_deliverable_file_path(pred.path)
+                    if p is not None:
+                        paths.append(p)
+
+        out: list[str] = []
+        seen: set[str] = set()
+        for p in paths:
+            safe = _safe_deliverable_file_path(str(p))
+            if safe is None or safe in seen:
+                continue
+            seen.add(safe)
+            out.append(safe)
+        return out
+
+    async def _verifier_context_seed(
+        self,
+        deliverable: HostVerificationDeliverable,
+        events: list[Event],
+        check_verdict: dict[str, Any],
+    ) -> VerifierContextSeed:
+        return VerifierContextSeed(
+            contract=self._verifier_contract_payload(),
+            deliverable_paths=await self._verifier_deliverable_paths(deliverable, events),
+            check_results=_bounded_verifier_check_results(check_verdict),
+            screenshot=_screenshot_from_verdict(check_verdict),
+        )
+
+    @staticmethod
+    def _typed_verifier_verdict_to_host_verdict(
+        base: dict[str, Any], typed: TypedVerifierVerdict
+    ) -> dict[str, Any]:
+        out = dict(base)
+        out.update(
+            {
+                "passed": bool(typed.verified),
+                "verdict": typed.verdict,
+                "summary": typed.detail or str(base.get("summary") or ""),
+                "detail": typed.detail or None,
+                "next_action": typed.next_action or str(base.get("next_action") or ""),
+                "failure_fingerprint": (
+                    typed.failure_fingerprint
+                    or str(base.get("failure_fingerprint") or "model_verifier")
+                ),
+                "failures": list(typed.failures),
+                "model_verifier": True,
+            }
+        )
+        return out
+
+    async def _model_judged_verdict(
+        self,
+        deliverable: HostVerificationDeliverable,
+        events: list[Event],
+        host_verdict: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run the optional model verifier behind a bounded context boundary.
+
+        The seed is built from contract + deliverable paths + deterministic check
+        results + screenshot only. The model transcript is never appended to the
+        builder event log; only the typed verdict summary returned here can flow
+        into VerifierVerdictEvent and wake-on-fail.
+        """
+
+        judge = getattr(self._loop, "_verifier_judge", None)
+        if judge is None:
+            return host_verdict
+        host_label = self._verdict_label(host_verdict)
+        if host_label in {"unavailable", "unverifiable"}:
+            return host_verdict
+
+        seed = await self._verifier_context_seed(deliverable, events, host_verdict)
+        try:
+            raw_typed = await asyncio.wait_for(
+                judge.judge(seed),
+                timeout=max(
+                    0.001,
+                    float(getattr(self._loop, "_verifier_judge_timeout_s", 30.0)),
+                ),
+            )
+            typed = (
+                raw_typed
+                if isinstance(raw_typed, TypedVerifierVerdict)
+                else TypedVerifierVerdict.model_validate(raw_typed)
+            )
+        except TimeoutError:
+            _LOG.warning(
+                "model verifier timed out for %s:%s",
+                self._loop.conversation_id,
+                deliverable.artifact_path,
+            )
+            return host_verdict
+        except Exception:  # noqa: BLE001 — verifier judge must not crash finish flow
+            _LOG.warning(
+                "model verifier failed for %s:%s",
+                self._loop.conversation_id,
+                deliverable.artifact_path,
+                exc_info=True,
+            )
+            return host_verdict
+
+        judged = self._typed_verifier_verdict_to_host_verdict(host_verdict, typed)
+        # Deterministic host failures are a hard floor. A reading/vision judge can
+        # add detail to a failure, but it cannot green-light a broken runtime.
+        if not host_verdict.get("passed") and (
+            typed.verified or typed.verdict in {"unavailable", "unverifiable"}
+        ):
+            return host_verdict
+        if (
+            typed.verdict == "unavailable"
+            and typed.failure_fingerprint == "model_verifier_unavailable"
+        ):
+            return host_verdict
+        return judged
 
     async def _host_verify_failure_disposition(
         self, deliverable: HostVerificationDeliverable, verdict: dict
@@ -1453,11 +1690,12 @@ class FinishGate:
                 if not isinstance(raw_host_verdict, dict):
                     host_verdict = self._host_unavailable_verdict(
                         deliverable,
-                        "verification could not run: host verifier did not return a usable verdict.",
+                        "verification could not run: host verifier did not return "
+                        "a usable verdict.",
                     )
                 else:
                     host_verdict = raw_host_verdict
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 host_verdict = self._host_unavailable_verdict(
                     deliverable,
                     "verification could not run: host verifier timed out.",
@@ -1474,6 +1712,9 @@ class FinishGate:
                     f"verification could not run: host verifier failed ({exc}).",
                 )
 
+        host_verdict = await self._model_judged_verdict(
+            deliverable, events, cast(dict[str, Any], host_verdict)
+        )
         inline_verdict = _latest_verify_verdict(
             events,
             _last_productive_seq(events),

@@ -192,7 +192,11 @@ def _entry_from(upsert: ModelUpsert, *, provider: str) -> ModelEntry:
 #  - NLI_VERIFIER is an ENCODER (cross-encoder), bundled in-process / remote via the
 #    Encoders setting — it does NOT route through the LLM model assignments, so
 #    surfacing it as an assignable LLM role would be a false affordance.
-_NON_ASSIGNABLE_ROLES = frozenset({ModelRole.AGENT_DRIVER, ModelRole.NLI_VERIFIER})
+#  - VERIFIER is a bounded artifact judge wired by the finish gate. It has a
+#    config assignment, but is not part of the ordinary generation matrix.
+_NON_ASSIGNABLE_ROLES = frozenset(
+    {ModelRole.AGENT_DRIVER, ModelRole.NLI_VERIFIER, ModelRole.VERIFIER}
+)
 
 
 def _assignments_from(config: RouterConfig) -> AssignmentsDTO:

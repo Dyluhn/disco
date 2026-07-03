@@ -14,9 +14,9 @@ about the interiors behind these seams.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..events import ActionEvent, Event, SecurityRisk, ToolCall, ToolResult
 from ..llm import OperatingMode, OverflowSignal, StreamChunk, ToolSpec
@@ -80,6 +80,44 @@ class HostVerificationDeliverable(BaseModel):
     requested_verification: bool = False
 
 
+class VerifierScreenshot(BaseModel):
+    """Screenshot evidence allowed into the bounded verifier context."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str = ""
+    image_data_url: str = ""
+
+
+class VerifierContextSeed(BaseModel):
+    """The complete verifier-model context.
+
+    This is intentionally narrower than the builder's View: the verifier gets
+    only the contract, deliverable paths, deterministic check results, and a
+    screenshot reference/image. It never receives the builder transcript.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    contract: dict[str, Any] = Field(default_factory=dict)
+    deliverable_paths: list[str] = Field(default_factory=list)
+    check_results: dict[str, Any] = Field(default_factory=dict)
+    screenshot: VerifierScreenshot = Field(default_factory=VerifierScreenshot)
+
+
+class TypedVerifierVerdict(BaseModel):
+    """Typed verdict returned by the bounded verifier model."""
+
+    model_config = ConfigDict(frozen=True)
+
+    verified: bool
+    verdict: Literal["pass", "fail", "degraded", "unavailable", "unverifiable"]
+    detail: str = ""
+    failures: list[dict[str, Any]] = Field(default_factory=list)
+    next_action: str = ""
+    failure_fingerprint: str = ""
+
+
 @runtime_checkable
 class HostVerifier(Protocol):
     """REL-1c host-owned verifier seam.
@@ -90,6 +128,18 @@ class HostVerifier(Protocol):
     """
 
     async def verify(self, deliverable: HostVerificationDeliverable) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class VerifierJudge(Protocol):
+    """Model-judged verifier boundary.
+
+    The loop calls this with a :class:`VerifierContextSeed` only. Implementations
+    may use an LLM internally, but the transcript stays behind this protocol and
+    the loop persists only the resulting typed verdict summary.
+    """
+
+    async def judge(self, seed: VerifierContextSeed) -> TypedVerifierVerdict: ...
 
 
 @runtime_checkable

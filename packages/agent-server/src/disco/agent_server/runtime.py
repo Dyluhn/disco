@@ -164,6 +164,7 @@ from .sessions_service import SessionsService
 from .share_service import ShareService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
+from .verify.model_verifier import ModelVerifier
 
 _HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
 _TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
@@ -2105,6 +2106,7 @@ class ConversationRuntime:
         # finalizer alias would starve the shadow exactly like the REL-2a dead
         # hook). The alias still separately drives requested_verification.
         host_verifier = HostWebAppVerifier(executor)
+        verifier_judge = ModelVerifier(router, conversation_id=conversation_id)
         host_verify_canary_hook = self._host_verify_canary_hook_for(conversation_id)
         _set_alias = getattr(agent, "set_finish_alias", None)
         if callable(_set_alias):
@@ -2136,6 +2138,7 @@ class ConversationRuntime:
                 model_policy=model_policy,
                 finish_alias=_finish_alias,  # P6 contract finalizer alias
                 host_verifier=host_verifier,
+                verifier_judge=verifier_judge,
                 host_verifier_verdict_hook=host_verify_canary_hook,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
             )
@@ -2182,6 +2185,7 @@ class ConversationRuntime:
             model_policy=model_policy,
             finish_alias=_finish_alias,  # P6 contract finalizer alias
             host_verifier=host_verifier,
+            verifier_judge=verifier_judge,
             host_verifier_verdict_hook=host_verify_canary_hook,
             host_verify_authoritative=host_verify_authoritative_enabled(),
         )
