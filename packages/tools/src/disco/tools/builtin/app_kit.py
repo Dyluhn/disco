@@ -468,6 +468,21 @@ class AppUpdateContentTool:
                 )
             existing = sec.get("content") or {}
             merged = {**existing, **args.updates}
+            if merged == existing:
+                # RC-M convention (live-caught 2026-07-03): a semantic no-op MUST
+                # refuse with ground truth, not report success with "0 file(s)" —
+                # the model cannot tell the edit didn't take and repeats it into
+                # the stuck breaker. Carry the current values so the refusal is
+                # self-recovering.
+                import json as _json
+
+                raise _AppKitError(
+                    f"no-op: section {args.section_id!r} already has exactly these "
+                    f"values — nothing changed. Current content: "
+                    f"{_json.dumps(existing, ensure_ascii=False)[:600]}. Send a "
+                    "DIFFERENT value for a slot (heading/subheading/body/cta_label/"
+                    "items) or target another section."
+                )
             try:
                 # Validate the bounded content in isolation for a precise error.
                 _ = SectionContent.model_validate(merged)
@@ -581,6 +596,15 @@ class AppSetDesignTool:
             tree = generate(app, design)
             _lint_gate(tree, design)
             touched = await _apply_tree(ctx, tree)
+            if not touched and not app_changed:
+                # Same RC-M rule as app_update_content: an identical design applied
+                # to an unchanged app regenerates an identical tree — refuse loudly
+                # instead of reporting a hollow success the model will retry.
+                raise _AppKitError(
+                    "no-op: this design produced an identical generated tree — the "
+                    "app already uses it. Pick a different recipe_id/design_spec or "
+                    "change sections first."
+                )
             await _save_design_spec(ctx, design)
             specs = [DESIGNSPEC_RELPATH]
             if app_changed:

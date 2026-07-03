@@ -203,6 +203,43 @@ async def test_app_update_content_touches_only_content_and_spec():
     assert "A brand-new headline" in sbx._fs["src/generated/content.ts"].decode("utf-8")
 
 
+async def test_app_update_content_refuses_semantic_noop_with_ground_truth():
+    """RC-M, live-caught 2026-07-03: echoing the EXISTING values back must refuse
+    (with the current content in the message), never report success with
+    "0 file(s)" — MiniMax looped an identical no-op edit into the stuck breaker."""
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+    first = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            page_id="home", section_id="hero", updates={"heading": "Same headline"}
+        ),
+        _ctx(sbx),
+    )
+    assert first.success, first.content
+    repeat = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            page_id="home", section_id="hero", updates={"heading": "Same headline"}
+        ),
+        _ctx(sbx),
+    )
+    assert not repeat.success
+    assert repeat.error == "app_update_content_refused"
+    assert "no-op" in repeat.content
+    # self-recovering: the refusal carries the CURRENT values as ground truth
+    assert "Same headline" in repeat.content
+
+
+async def test_app_set_design_refuses_identical_design_noop():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx, recipe="editorial-ledger")).success
+    repeat = await AppSetDesignTool().run(
+        AppSetDesignArgs(recipe_id="editorial-ledger"),
+        _ctx(sbx),
+    )
+    assert not repeat.success
+    assert "no-op" in repeat.content
+
+
 async def test_app_update_content_rejects_unknown_slot():
     sbx = FakeSandboxInstance()
     assert (await _create(sbx)).success
