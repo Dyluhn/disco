@@ -5889,3 +5889,33 @@ stall (paused before any finish attempt — no gate involved; a mid-run nudge th
 contaminated it with a replan, discarded). Stall mode is tracked in
 disco-m3-real-build-capability; not a flip regression (env-on and default-on are the
 same code path — both read host_verify_authoritative_enabled()).
+
+## A+B WAVES — VERSIONING/ROLLBACK SHIPPED + APPKIT PORTED (2026-07-03)
+
+**A wave (versioning + rollback) — DONE + LIVE-PROVEN, UI evidence sent to Dylan.**
+A1 `ffb2cad1` versioned ProjectStore (hardlink dedup, 20/512MB retention) · A2+A3
+`f319df81` WorkspaceRestoredEvent + restore orchestration (clears sandbox before
+rehydrate) + versions/restore API + ?version preview · A4 `fada5074` picker/banner/
+confirm UI · live-caught fixes: `5e7be614` (?version must bypass the live proxy),
+`[A4-fix]` srcdoc suppressed after restore (event-derived render can't know restores).
+Live: real MiniMax build → edit → v1/v2/v3 history → restore → all surfaces truthful.
+
+**B wave (AppKit port + Drizzle + deploy) — ALL CODE LANDED.**
+B1a `81762060` core engine (4,890 LOC) · B2 `6be7c3a4` tool layer (7-check verifier,
+design_lint, strict scopes) · B3 `93eb65be` runtime wiring (appkit_mode, brief intake,
+finish-gate verify selection) · B4 `e4e7a924` Drizzle-over-D1 lowering +
+drizzle_schema_valid check · B5 `f22ff122` Epic-O deploy layer (7 gates, owner-only,
+inert w/o token) + verify dashboard. Suites/gates green throughout.
+
+**Live bake-off (6 attempts, MiniMax-M3 direct, 0 OpenRouter) — engine gates ALL held;
+5 real defects live-caught and fixed:** `4cb59586` mutator no-op refusals w/ ground
+truth · `8b2f1681` delegate_explore stub-affordance killed + pre-create finish gated ·
+`9dfe8208` brief bounded to brand-name · `576a9ecf`+follow-up fail-closed vite-preview
+probe (route/section coverage now build+serve the SPA platform-side). Best run
+(attempt 4): full app scaffolded+content-filled, verify_appkit_app 7/9 (only
+route/section coverage failed — the vite-probe bug, now fixed). HONEST RESIDUAL:
+MiniMax's strict-mode completion rate is low (wandering/probe-spins; one run called
+server_status 65× without tripping the identical-repeat breaker — probe outputs vary,
+so the breaker needs a tool-frequency dimension). That is the §M/task-14 ladder work
+(auto-resume + event-persisted pause counts + probe-spin breaker), NOT a port defect.
+Task 12 closed with this caveat; the all-checks live pass rides on task 14.
