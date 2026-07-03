@@ -125,6 +125,32 @@ def test_send_message_over_ws_is_echoed_as_event(client):
         assert ev["event"]["message"]["content"] == "hi from ws"
 
 
+def test_file_stream_ephemeral_payload_is_normalized_for_ws_frame():
+    from disco.agent_server.routes.ws import _file_stream_payload
+    from disco.core import WSServerFrame
+
+    payload = _file_stream_payload(
+        {
+            "type": "file_stream",
+            "tool": "file_edit",
+            "path": "src/App.tsx",
+            "index": "0",
+            "delta": "return <main>Live</main>;\n",
+            "field": "new",
+        }
+    )
+
+    frame = WSServerFrame(type="file_stream", file_stream=payload).model_dump(mode="json")
+    assert frame["type"] == "file_stream"
+    assert frame["file_stream"] == {
+        "tool": "file_edit",
+        "path": "src/App.tsx",
+        "index": 0,
+        "delta": "return <main>Live</main>;\n",
+        "field": "new",
+    }
+
+
 def test_malformed_frame_gets_error_and_socket_survives(client):
     cid = _create(client)
     with client.websocket_connect(f"/ws/conversations/{cid}") as ws:

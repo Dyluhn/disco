@@ -803,8 +803,9 @@ class AgentLoop:
 
     # ---- emission + small helpers -------------------------------------------
 
-    # Tools whose streamed arguments carry a file body worth watching assemble.
-    _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file")
+    # Tools whose streamed arguments carry a file body/edit replacement worth
+    # watching assemble.
+    _STREAMING_WRITE_TOOLS = ("file_write", "file_append", "write_file", "file_edit")
     # Coalesce threshold: don't publish a frame until this many new content chars
     # have accrued (or a newline appears) — keeps the type-out smooth without
     # firing a WS frame per 3-char model token. The trailing remainder below the

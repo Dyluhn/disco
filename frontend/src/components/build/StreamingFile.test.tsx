@@ -19,7 +19,15 @@ import { ExecutionCanvas } from "@/components/build/ExecutionCanvas";
 const streaming: StreamingFile = {
   path: "styles.css",
   tool: "file_write",
+  field: "content",
   content: "/* dark theme */\nbody { background: #0b0b0f; }",
+};
+
+const streamingEdit: StreamingFile = {
+  path: "src/App.tsx",
+  tool: "file_edit",
+  field: "new",
+  content: "return <main>Live edit</main>;",
 };
 
 function renderCanvas(streamingFile: StreamingFile | null) {
@@ -45,5 +53,12 @@ describe("ExecutionCanvas — watch-it-write", () => {
   it("falls back to the empty files state when nothing is streaming", () => {
     renderCanvas(null);
     expect(screen.getByText(/No files written yet/i)).toBeInTheDocument();
+  });
+
+  it("shows file_edit replacement text as an editing stream", () => {
+    renderCanvas(streamingEdit);
+    expect(screen.getByText(/Live edit/)).toBeInTheDocument();
+    expect(screen.getAllByText("src/App.tsx").length).toBeGreaterThan(0);
+    expect(screen.getByText(/editing/i)).toBeInTheDocument();
   });
 });

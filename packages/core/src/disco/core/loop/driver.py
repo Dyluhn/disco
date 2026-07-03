@@ -150,7 +150,7 @@ class Driver:
 
     def build_stream_hook(self) -> StreamHook | None:
         """Per-step watch-it-write hook (or None if no sink is wired). Decodes the
-        driver's streamed tool-call arg fragments into growing file-content frames
+        driver's streamed tool-call arg fragments into growing file/edit frames
         and publishes them live via `self.stream_sink`. The frontend appends each
         `delta` to a per-path buffer and reconciles against the final, authoritative
         ActionEvent when it lands (which supersedes the streamed text)."""
@@ -168,14 +168,17 @@ class Driver:
             if chunk.tool_name:
                 st["tool"] = chunk.tool_name
             if st["tool"] not in self._loop._STREAMING_WRITE_TOOLS:
-                return  # only stream tools that carry a file body
+                return  # only stream tools that carry a file body/edit replacement
             if not st["path"]:
                 # Require the WHOLE path (closing quote present) so a frame never
                 # shows a half-typed filename like "styles" for "styles.css".
                 p = extract_partial_string_field(st["args"], "path", require_complete=True)
                 if p:
                     st["path"] = p
-            content = extract_partial_string_field(st["args"], "content")
+            if not st["path"]:
+                return
+            field = "new" if st["tool"] == "file_edit" else "content"
+            content = extract_partial_string_field(st["args"], field)
             if content is None:
                 return
             new = content[st["sent"] :]
@@ -189,6 +192,7 @@ class Driver:
                     "path": st["path"] or "",
                     "index": chunk.tool_index,
                     "delta": new,
+                    "field": field,
                 }
             )
 

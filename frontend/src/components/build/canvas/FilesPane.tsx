@@ -6,11 +6,12 @@ import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { AgentEvent } from "@/types/agent";
 import { Empty } from "./Empty";
 
-/** The live watch-it-write pane: the file the driver is composing RIGHT NOW,
+/** The live watch-it-write pane: the file the driver is composing/editing RIGHT NOW,
  *  content growing with a blinking cursor. Auto-scrolls to follow the tail so the
  *  newest line is always visible (the whole point — see it isn't hung). */
 function StreamingFileView({ file }: { file: StreamingFile }) {
   const tailRef = useRef<HTMLDivElement | null>(null);
+  const verb = file.tool === "file_edit" ? "editing" : "writing";
   useEffect(() => {
     // follow the writing edge; cheap because content only ever appends
     tailRef.current?.scrollIntoView({ block: "end" });
@@ -20,9 +21,11 @@ function StreamingFileView({ file }: { file: StreamingFile }) {
       <div className="flex items-center justify-between border-b border-accent/30 bg-accent/5 px-body py-hair font-mono text-[0.74rem]">
         <span className="flex items-center gap-hair text-accent">
           <PenLine className="size-3 shrink-0 animate-pulse" aria-hidden />
-          <span className="truncate text-text">{file.path || "writing…"}</span>
+          <span className="truncate text-text">{file.path || `${verb}...`}</span>
         </span>
-        <span className="text-text-faint">{file.content.length} B · writing</span>
+        <span className="text-text-faint">
+          {file.content.length} B · {verb}
+        </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <pre className="whitespace-pre-wrap px-body py-inline font-mono text-[0.78rem] leading-relaxed text-text">
@@ -44,7 +47,7 @@ export function FilesPane({
 }) {
   const files = useMemo(() => deriveFiles(events), [events]);
   const [active, setActive] = useState(0);
-  // While a write is streaming, it is the hero — show the live buffer regardless
+  // While a file mutation is streaming, it is the hero — show the live buffer regardless
   // of which file was selected. The final ActionEvent retires it (streamingFile →
   // null) and the file then appears in the list as a normal, complete entry.
   if (streamingFile) return <StreamingFileView file={streamingFile} />;

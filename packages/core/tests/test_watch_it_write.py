@@ -80,12 +80,17 @@ async def test_publish_with_no_listener_is_dropped_not_raised():
 # ---- the engine hook end-to-end (synthetic stream) --------------------------
 
 
-def _chunks_for(path: str, content: str, *, frag: int = 5):
-    """Split a file_write tool call's JSON arguments into StreamChunk fragments,
+def _chunks_for(
+    tool: str,
+    arguments: dict,
+    *,
+    frag: int = 5,
+):
+    """Split a tool call's JSON arguments into StreamChunk fragments,
     the way an OpenAI-compatible provider streams `function.arguments` deltas."""
-    args = json.dumps({"path": path, "content": content})
+    args = json.dumps(arguments)
     return [
-        StreamChunk(tool_name="file_write", tool_index=0, tool_args_delta=args[i : i + frag])
+        StreamChunk(tool_name=tool, tool_index=0, tool_args_delta=args[i : i + frag])
         for i in range(0, len(args), frag)
     ]
 
@@ -107,7 +112,7 @@ async def test_hook_publishes_growing_frames_that_reconstruct_the_file():
 
     content = "/* header */\n" + "body { color: red; }\n" * 12  # > flush threshold
     hook = loop._build_stream_hook()
-    for ch in _chunks_for("styles.css", content):
+    for ch in _chunks_for("file_write", {"path": "styles.css", "content": content}):
         await hook(ch)
     await asyncio.sleep(0.02)
     task.cancel()
@@ -121,6 +126,29 @@ async def test_hook_publishes_growing_frames_that_reconstruct_the_file():
     rebuilt = "".join(f["delta"] for f in frames)
     assert content.startswith(rebuilt)
     assert len(rebuilt) >= len(content) - loop._STREAM_FLUSH_CHARS
+
+
+async def test_hook_streams_file_edit_new_argument():
+    cid = "build-edit"
+    loop, _ = build_loop(ScriptedAgent([finish_step()]), conversation_id=cid)
+    published: list[dict] = []
+    loop.stream_sink = published.append
+
+    replacement = "export function App() {\n  return <main>Live edit</main>;\n}\n"
+    hook = loop._build_stream_hook()
+    for ch in _chunks_for(
+        "file_edit",
+        {"path": "src/App.tsx", "old": "old body", "new": replacement},
+    ):
+        await hook(ch)
+
+    assert published, "expected file_edit to publish replacement text frames"
+    assert {f["tool"] for f in published} == {"file_edit"}
+    assert {f["path"] for f in published} == {"src/App.tsx"}
+    assert {f["field"] for f in published} == {"new"}
+    rebuilt = "".join(f["delta"] for f in published)
+    assert replacement.startswith(rebuilt)
+    assert len(rebuilt) >= len(replacement) - loop._STREAM_FLUSH_CHARS
 
 
 async def test_hook_ignores_non_write_tools():

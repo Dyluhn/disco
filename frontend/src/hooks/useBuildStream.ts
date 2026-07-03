@@ -63,13 +63,14 @@ export interface BuildSession {
   kick?: boolean;
 }
 
-/** The file the driver is writing RIGHT NOW, assembled from file_stream deltas.
- *  Cleared when the authoritative ActionEvent for that write lands (or the run
+/** The file the driver is writing/editing RIGHT NOW, assembled from file_stream deltas.
+ *  Cleared when the authoritative ActionEvent for that tool call lands (or the run
  *  leaves RUNNING). One at a time — the driver emits one tool call per step. */
 export interface StreamingFile {
   path: string;
   content: string;
   tool: string;
+  field?: "content" | "new";
 }
 
 export interface BuildStreamState {
@@ -157,10 +158,20 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
     // ActionEvent will supersede this with the authoritative content below.
     const fs = f.file_stream;
     const prior =
-      state.streamingFile && state.streamingFile.path === fs.path ? state.streamingFile.content : "";
+      state.streamingFile &&
+      state.streamingFile.path === fs.path &&
+      state.streamingFile.tool === fs.tool &&
+      state.streamingFile.field === fs.field
+        ? state.streamingFile.content
+        : "";
     return {
       ...state,
-      streamingFile: { path: fs.path, tool: fs.tool, content: prior + fs.delta },
+      streamingFile: {
+        path: fs.path,
+        tool: fs.tool,
+        field: fs.field,
+        content: prior + fs.delta,
+      },
     };
   }
   if (f.type === "event") {

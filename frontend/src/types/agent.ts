@@ -349,6 +349,7 @@ export interface FileStreamFrame {
   path: string;
   index: number;
   delta: string;
+  field?: "content" | "new";
 }
 
 // R3: optional `context` carries large hidden context (e.g. a full DR report)

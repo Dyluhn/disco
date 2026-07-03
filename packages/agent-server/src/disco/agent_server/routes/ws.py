@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from disco.core import (
     WSClientFrame,
+    FileStreamFrame,
     WSServerFrame,
 )
 from disco.core.appkit import classify_build_brief
@@ -24,6 +25,25 @@ from pydantic import ValidationError
 
 from ..runtime import ConversationRuntime
 from ._common import _build_brief_message, _context_message, _user_message
+
+
+def _file_stream_payload(frame: dict[str, Any]) -> FileStreamFrame:
+    """Normalize the internal ephemeral bus envelope to the typed WS payload."""
+    inner = frame.get("file_stream")
+    payload: dict[str, Any] = inner if isinstance(inner, dict) else frame
+    raw_index = payload.get("index", 0)
+    try:
+        index = int(raw_index)
+    except (TypeError, ValueError):
+        index = 0
+    field = payload.get("field")
+    return FileStreamFrame(
+        tool=str(payload.get("tool") or ""),
+        path=str(payload.get("path") or ""),
+        index=index,
+        delta=str(payload.get("delta") or ""),
+        field=field if field in ("content", "new") else "content",
+    )
 
 
 async def _handle_frame(
@@ -215,7 +235,9 @@ def make_ws_router(
                     )
                 else:
                     await websocket.send_json(
-                        WSServerFrame(type="file_stream", file_stream=frame).model_dump(mode="json")
+                        WSServerFrame(
+                            type="file_stream", file_stream=_file_stream_payload(frame)
+                        ).model_dump(mode="json")
                     )
 
         sender = asyncio.create_task(pump_events())

@@ -81,7 +81,7 @@ from .view import (
     Summarizer,
     View,
 )
-from .wire import WSClientFrame, WSServerFrame
+from .wire import FileStreamFrame, WSClientFrame, WSServerFrame
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -116,6 +116,7 @@ __all__ = [
     "EventKind",
     "EventSource",
     "EventStore",
+    "FileStreamFrame",
     "HttpProbeResult",
     "KnowledgeEvent",
     "LLMConvertible",

@@ -18,6 +18,22 @@ from .events import Event
 from .state import ConversationState
 
 
+class FileStreamFrame(BaseModel):
+    """Payload for a transient watch-it-write frame.
+
+    `delta` appends to the streamed value named by `field`: `content` for
+    file_write/file_append-style calls, `new` for file_edit replacement text.
+    The final persisted ActionEvent remains authoritative.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    tool: str
+    path: str
+    index: int
+    delta: str
+    field: Literal["content", "new"] = "content"
+
+
 class WSServerFrame(BaseModel):
     """[CONTRACT] One server→client frame. Discriminated by `type`."""
 
@@ -33,10 +49,9 @@ class WSServerFrame(BaseModel):
     token: str | None = None
     token_for_event_id: str | None = None
     # type == "file_stream": a watch-it-write delta — the driver is assembling a
-    # file body in a tool call. {path, delta, tool, index}: `delta` appends to the
-    # per-path buffer. NOT persisted; superseded by the final ActionEvent when it
-    # lands (which carries the authoritative full content).
-    file_stream: dict[str, Any] | None = None
+    # file body/edit replacement in a tool call. NOT persisted; superseded by the
+    # final ActionEvent when it lands (which carries the authoritative arguments).
+    file_stream: FileStreamFrame | None = None
     # type == "state": a ConversationState snapshot (on connect + on change).
     state: ConversationState | None = None
     # type == "error": a transport/protocol error (NOT an agent error).
