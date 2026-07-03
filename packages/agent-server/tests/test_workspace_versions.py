@@ -12,6 +12,8 @@ from disco.agent_server.routes.preview import make_preview_router
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import (
     ConversationStatus,
+    EventSource,
+    MessageEvent,
     SqliteEventStore,
     StatusEvent,
     WorkspaceRestoredEvent,
@@ -158,6 +160,16 @@ async def test_restore_endpoint_appends_event_and_cuts_new_version(tmp_path: Pat
     assert len(restored) == 1
     assert restored[0].version_seq == old.seq
     assert restored[0].tree_digest == old.tree_digest
+    restored_idx = events.index(restored[0])
+    assert restored_idx + 1 < len(events)
+    notice = events[restored_idx + 1]
+    assert isinstance(notice, MessageEvent)
+    assert notice.source == EventSource.ENVIRONMENT
+    assert notice.message.role == "user"
+    assert notice.message.content.startswith("<system-reminder>")
+    assert f"workspace back to version {old.seq} (digest {old.tree_digest})" in notice.message.content
+    assert "NO LONGER EXIST on disk" in notice.message.content
+    assert notice.message.content.endswith("</system-reminder>")
     versions = ps.list_versions(CID)
     assert [v.seq for v in versions] == [3, 2, 1]
     assert versions[0].trigger == "restore"

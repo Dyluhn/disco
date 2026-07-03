@@ -23,6 +23,8 @@
 import { useState } from "react";
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   CircleDashed,
   CirclePause,
   ClipboardList,
@@ -49,32 +51,42 @@ function StepIcon({ state }: { state: StepState }) {
   return <CircleDashed className="size-3.5 shrink-0 text-text-faint" aria-hidden />;
 }
 
+export function defaultPlanPanelExpanded({
+  gate,
+  status,
+}: {
+  gate: boolean;
+  status?: ConversationStatus;
+}): boolean {
+  return gate || status === "AWAITING_PLAN_APPROVAL";
+}
+
 /** Build's single, honest progress signal: derived from the REAL conversation status,
  * not from model-reported step marks. Building while the loop runs; Done when it
  * actually finishes; Paused/Stopped surfaced truthfully. */
 function StatusChip({ status }: { status: ConversationStatus }) {
   if (status === "FINISHED")
     return (
-      <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-supported">
+      <span className="flex items-center gap-hair font-ui text-[0.72rem] font-medium text-supported">
         <Check className="size-3.5" aria-hidden /> Done
       </span>
     );
   if (status === "PAUSED")
     return (
-      <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-warn">
+      <span className="flex items-center gap-hair font-ui text-[0.72rem] font-medium text-warn">
         <CirclePause className="size-3.5" aria-hidden /> Paused
       </span>
     );
   if (status === "STUCK" || status === "ERROR")
     return (
-      <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-warn">
+      <span className="flex items-center gap-hair font-ui text-[0.72rem] font-medium text-warn">
         <TriangleAlert className="size-3.5" aria-hidden /> Stopped
       </span>
     );
   if (status === "IDLE") return null;
   // RUNNING and the awaiting-* states all read as actively in-flight.
   return (
-    <span className="ml-auto flex items-center gap-hair font-ui text-[0.72rem] font-medium text-accent">
+    <span className="flex items-center gap-hair font-ui text-[0.72rem] font-medium text-accent">
       <Loader2 className="size-3.5 animate-spin" aria-hidden /> Building…
     </span>
   );
@@ -110,7 +122,26 @@ export function PlanPanel({
   // Checklist mode only when a reliable engine-derived progress map is supplied
   // (Deep Research) and we're not at the approval gate.
   const checklist = !gate && progress !== undefined;
-  const summary = checklist ? planProgressSummary(plan.steps.length, progress!) : null;
+  const progressSummary = checklist ? planProgressSummary(plan.steps.length, progress!) : null;
+  const stepSummary =
+    plan.steps.length > 0
+      ? {
+          done: progressSummary
+            ? progressSummary.done
+            : status === "FINISHED"
+              ? plan.steps.length
+              : 0,
+          total: progressSummary ? progressSummary.total : plan.steps.length,
+          fraction: progressSummary
+            ? progressSummary.fraction
+            : status === "FINISHED"
+              ? 1
+              : 0,
+        }
+      : null;
+  const defaultExpanded = defaultPlanPanelExpanded({ gate, status });
+  const [manualExpanded, setManualExpanded] = useState<boolean | null>(null);
+  const expanded = manualExpanded ?? defaultExpanded;
 
   const submitRevision = () => {
     const t = text.trim();
@@ -130,140 +161,168 @@ export function PlanPanel({
       )}
     >
       <header className="flex items-center gap-inline">
-        <ClipboardList className="size-4 shrink-0 text-accent" aria-hidden />
-        <h2 className="font-ui text-[0.9rem] font-medium text-text">
-          {gate ? "Review the plan" : "Plan"}
-        </h2>
-        {plan.revision > 1 && (
-          <span className="rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
+        <button
+          type="button"
+          onClick={() => setManualExpanded(!expanded)}
+          aria-expanded={expanded}
+          aria-controls={`plan-panel-body-${plan.id}`}
+          aria-label={expanded ? "Collapse plan" : "Expand plan"}
+          data-disco-control="plan-panel-toggle"
+          className="-mx-hair flex min-w-0 flex-1 items-center gap-inline rounded-control px-hair py-hair text-left transition-colors hover:bg-surface-2/60 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+          )}
+          <ClipboardList className="size-4 shrink-0 text-accent" aria-hidden />
+          <span className="min-w-0 font-ui text-[0.9rem] font-medium text-text">
+            {gate ? "Review the plan" : "Plan"}
+          </span>
+          <span className="shrink-0 rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">
             revision {plan.revision}
           </span>
-        )}
+          <span className="ml-auto flex shrink-0 items-center gap-inline">
+            {stepSummary && (
+              <span className="flex items-center gap-hair">
+                <span className="font-mono text-[0.72rem] text-text-faint">
+                  {stepSummary.done}/{stepSummary.total}
+                </span>
+                <span className="h-1 w-14 overflow-hidden rounded-full bg-surface-2" aria-hidden>
+                  <span
+                    className="block h-full bg-accent transition-[width]"
+                    style={{ width: `${Math.round(stepSummary.fraction * 100)}%` }}
+                  />
+                </span>
+              </span>
+            )}
+            {/* Build: one honest status chip from the real run state. */}
+            {!gate && !checklist && status && <StatusChip status={status} />}
+          </span>
+        </button>
         {gate && (
-          <span className="ml-auto rounded-full border border-accent px-inline py-px font-ui text-[0.7rem] uppercase tracking-wide text-accent">
+          <span className="shrink-0 rounded-full border border-accent px-inline py-px font-ui text-[0.7rem] uppercase tracking-wide text-accent">
             needs your approval
           </span>
         )}
-        {/* Deep Research: glanceable aggregate progress (reliable engine-derived). */}
-        {checklist && plan.steps.length > 0 && (
-          <span className="ml-auto flex items-center gap-hair">
-            <span className="font-mono text-[0.72rem] text-text-faint">
-              {summary!.done}/{summary!.total}
-            </span>
-            <span className="h-1 w-14 overflow-hidden rounded-full bg-surface-2" aria-hidden>
-              <span
-                className="block h-full bg-accent transition-[width]"
-                style={{ width: `${Math.round(summary!.fraction * 100)}%` }}
-              />
-            </span>
-          </span>
-        )}
-        {/* Build: one honest status chip from the real run state. */}
-        {!gate && !checklist && status && <StatusChip status={status} />}
       </header>
 
-      <p className="mt-inline font-ui text-[0.84rem] leading-snug text-text-muted">{plan.summary}</p>
+      <div
+        id={`plan-panel-body-${plan.id}`}
+        data-testid="plan-panel-body"
+        aria-hidden={!expanded}
+        className={cn(
+          "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+          expanded ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <p className="mt-inline font-ui text-[0.84rem] leading-snug text-text-muted">
+            {plan.summary}
+          </p>
 
-      {plan.context && (
-        <details
-          className="mt-inline rounded-control border border-hairline bg-surface-2 px-inline py-hair"
-          // Open by default at the gate (the rationale is the user's load-bearing input
-          // to the approve/revise decision); collapsed during execution.
-          open={gate}
-        >
-          <summary className="cursor-pointer font-ui text-[0.74rem] uppercase tracking-wide text-text-faint">
-            Context &amp; rationale
-          </summary>
-          <div className="mt-hair text-[0.84rem] leading-relaxed text-text-muted">
-            <Markdown>{plan.context}</Markdown>
-          </div>
-        </details>
-      )}
-
-      {plan.steps.length > 0 && (
-        <ol className="mt-body flex flex-col gap-hair">
-          {plan.steps.map((step, i) => {
-            // Checklist mode (DR) shows a per-step icon; Build shows a static
-            // numbered outline of the approach (no per-step state at all).
-            const state = checklist ? (progress!.get(i + 1) ?? "pending") : null;
-            return (
-              <li key={i} className="flex items-start gap-inline">
-                <span className="mt-px flex items-center gap-hair">
-                  <span className="w-4 text-right font-mono text-[0.72rem] text-text-faint">
-                    {i + 1}
-                  </span>
-                  {state && <StepIcon state={state} />}
-                </span>
-                <span
-                  className={cn(
-                    "font-ui text-[0.84rem] leading-snug",
-                    state === "done" ? "text-text-muted" : "text-text",
-                  )}
-                >
-                  {step.title}
-                  {step.detail && (
-                    <span className="block text-[0.76rem] text-text-faint">{step.detail}</span>
-                  )}
-                </span>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-
-      {gate && (
-        <>
-          {revising ? (
-            <div className="mt-body flex flex-col gap-hair">
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                rows={2}
-                autoFocus
-                placeholder="Describe the changes you want in the plan…"
-                className="w-full resize-none rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
-              />
-              <div className="flex items-center justify-end gap-inline">
-                <button
-                  type="button"
-                  onClick={() => setRevising(false)}
-                  className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={submitRevision}
-                  disabled={!text.trim()}
-                  data-disco-control="revise-plan"
-                  className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
-                >
-                  Send revision
-                </button>
+          {plan.context && (
+            <details
+              className="mt-inline rounded-control border border-hairline bg-surface-2 px-inline py-hair"
+              // Open by default at the gate (the rationale is the user's load-bearing input
+              // to the approve/revise decision); collapsed during execution.
+              open={gate}
+            >
+              <summary className="cursor-pointer font-ui text-[0.74rem] uppercase tracking-wide text-text-faint">
+                Context &amp; rationale
+              </summary>
+              <div className="mt-hair text-[0.84rem] leading-relaxed text-text-muted">
+                <Markdown>{plan.context}</Markdown>
               </div>
-            </div>
-          ) : (
-            <div className="mt-body flex items-center justify-end gap-inline">
-              <button
-                type="button"
-                onClick={() => setRevising(true)}
-                data-disco-control="revise-plan-open"
-                className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
-              >
-                Revise…
-              </button>
-              <button
-                type="button"
-                onClick={onApprove}
-                data-disco-control="approve-plan"
-                className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
-              >
-                {approveLabel ?? "Approve & build"}
-              </button>
-            </div>
+            </details>
           )}
-        </>
-      )}
+
+          {plan.steps.length > 0 && (
+            <ol className="mt-body flex flex-col gap-hair">
+              {plan.steps.map((step, i) => {
+                // Checklist mode (DR) shows a per-step icon; Build shows a static
+                // numbered outline of the approach (no per-step state at all).
+                const state = checklist ? (progress!.get(i + 1) ?? "pending") : null;
+                return (
+                  <li key={i} className="flex items-start gap-inline">
+                    <span className="mt-px flex items-center gap-hair">
+                      <span className="w-4 text-right font-mono text-[0.72rem] text-text-faint">
+                        {i + 1}
+                      </span>
+                      {state && <StepIcon state={state} />}
+                    </span>
+                    <span
+                      className={cn(
+                        "font-ui text-[0.84rem] leading-snug",
+                        state === "done" ? "text-text-muted" : "text-text",
+                      )}
+                    >
+                      {step.title}
+                      {step.detail && (
+                        <span className="block text-[0.76rem] text-text-faint">{step.detail}</span>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+
+          {gate && (
+            <>
+              {revising ? (
+                <div className="mt-body flex flex-col gap-hair">
+                  <textarea
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    rows={2}
+                    autoFocus
+                    placeholder="Describe the changes you want in the plan…"
+                    className="w-full resize-none rounded-control border border-hairline bg-surface-2 px-inline py-hair font-ui text-[0.82rem] text-text outline-none focus:border-accent"
+                  />
+                  <div className="flex items-center justify-end gap-inline">
+                    <button
+                      type="button"
+                      onClick={() => setRevising(false)}
+                      className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={submitRevision}
+                      disabled={!text.trim()}
+                      data-disco-control="revise-plan"
+                      className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-40"
+                    >
+                      Send revision
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-body flex items-center justify-end gap-inline">
+                  <button
+                    type="button"
+                    onClick={() => setRevising(true)}
+                    data-disco-control="revise-plan-open"
+                    className="rounded-control border border-hairline px-body py-hair font-ui text-[0.82rem] text-text-muted transition-colors hover:text-text"
+                  >
+                    Revise…
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onApprove}
+                    data-disco-control="approve-plan"
+                    className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90"
+                  >
+                    {approveLabel ?? "Approve & build"}
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </section>
   );
 }

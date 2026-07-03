@@ -9,8 +9,9 @@
  */
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { PlanPanel } from "@/components/build/PlanPanel";
+import { defaultPlanPanelExpanded, PlanPanel } from "@/components/build/PlanPanel";
 import type { PlanView } from "@/lib/buildTrace";
 
 const NO_STEPS: PlanView = {
@@ -27,6 +28,14 @@ const WITH_STEPS: PlanView = {
 };
 
 describe("PlanPanel — no-steps render", () => {
+  it("derives its initial expanded state from the approval/run status", () => {
+    expect(defaultPlanPanelExpanded({ gate: true })).toBe(true);
+    expect(defaultPlanPanelExpanded({ gate: false, status: "AWAITING_PLAN_APPROVAL" })).toBe(true);
+    expect(defaultPlanPanelExpanded({ gate: false, status: "RUNNING" })).toBe(false);
+    expect(defaultPlanPanelExpanded({ gate: false, status: "FINISHED" })).toBe(false);
+    expect(defaultPlanPanelExpanded({ gate: false })).toBe(false);
+  });
+
   it("shows the summary but renders NO numbered list when there are no steps", () => {
     const { container } = render(<PlanPanel plan={NO_STEPS} status="RUNNING" />);
     expect(screen.getByText(NO_STEPS.summary)).toBeInTheDocument();
@@ -39,5 +48,42 @@ describe("PlanPanel — no-steps render", () => {
     const { container } = render(<PlanPanel plan={WITH_STEPS} status="RUNNING" />);
     expect(container.querySelector("ol")).not.toBeNull();
     expect(screen.getByText("Tune the spawn point")).toBeInTheDocument();
+  });
+
+  it("defaults expanded while awaiting approval and collapsed while running", () => {
+    const { rerender } = render(<PlanPanel plan={WITH_STEPS} onApprove={() => {}} />);
+    expect(screen.getByRole("button", { name: /collapse plan/i })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByTestId("plan-panel-body")).toHaveAttribute("aria-hidden", "false");
+
+    rerender(<PlanPanel plan={WITH_STEPS} status="RUNNING" />);
+    expect(screen.getByRole("button", { name: /expand plan/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    expect(screen.getByTestId("plan-panel-body")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("toggles and keeps the user's manual choice for the component session", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<PlanPanel plan={WITH_STEPS} status="RUNNING" />);
+
+    const toggle = screen.getByRole("button", { name: /expand plan/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(toggle);
+    expect(screen.getByRole("button", { name: /collapse plan/i })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByTestId("plan-panel-body")).toHaveAttribute("aria-hidden", "false");
+
+    rerender(<PlanPanel plan={WITH_STEPS} status="FINISHED" />);
+    expect(screen.getByRole("button", { name: /collapse plan/i })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
   });
 });

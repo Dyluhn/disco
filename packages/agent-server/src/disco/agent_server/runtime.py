@@ -3373,6 +3373,23 @@ class ConversationRuntime:
                 label=record.label,
             ),
         )
+        await self._store.append(
+            conversation_id,
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        f"The user rolled the workspace back to version {seq} "
+                        f"(digest {record.tree_digest}). Files on disk now reflect "
+                        "that version — any writes you made after it NO LONGER EXIST "
+                        "on disk. Re-read files before editing; do not rewrite from memory.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            ),
+        )
         try:
             new_record = store.cut_version(conversation_id, trigger="restore")
         except StorageError as exc:
