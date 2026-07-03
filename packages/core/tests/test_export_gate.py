@@ -10,15 +10,14 @@ releases with a loud UNVERIFIED warning rather than trapping the run.
 from __future__ import annotations
 
 import pytest
-
 from disco.core.contract.export_render import (
     EXPORT_GATE_TOKEN as _EXPORT_GATE_TOKEN,
+)
+from disco.core.contract.export_render import (
     EXPORT_RENDER_KEY,
     check_export_render,
 )
-from disco.core.loop.control import Disp
 from disco.core.events import (
-    ConversationStatus,
     DeliverableEvent,
     EventSource,
     LLMMessage,
@@ -27,6 +26,7 @@ from disco.core.events import (
     StatusEvent,
     ToolResult,
 )
+from disco.core.loop.control import Disp
 from loop_fakes import ScriptedAgent, build_loop, finish_step
 
 
@@ -174,17 +174,42 @@ async def test_stale_app_deliverable_does_not_mask_later_bad_deck() -> None:
     assert steer, "stale app deliverable wrongly masked the bad deck"
 
 
+def _refusal() -> MessageEvent:
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(
+            role="user",
+            content=f"<system-reminder>\n{_EXPORT_GATE_TOKEN}: prior\n</system-reminder>",
+        ),
+    )
+
+
+def _deck_obs_named(filename: str, facts_fmt: str, **kw) -> ObservationEvent:
+    facts = check_export_render(facts_fmt, **kw)
+    return ObservationEvent(
+        action_id="a1",
+        tool_result=ToolResult(
+            call_id="c1",
+            tool_name="slides_generate",
+            success=True,
+            content="deck written",
+            structured={"filename": filename, EXPORT_RENDER_KEY: facts.model_dump(mode="json")},
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_refusal_cap_releases_with_warning() -> None:
+    # 3 refusals AFTER the current export (the gate's own emissions across 3 finish
+    # attempts) hit the per-export cap → release with the UNVERIFIED warning.
     loop, _ = build_loop(ScriptedAgent([]))
-    prior = [
-        MessageEvent(
-            source=EventSource.ENVIRONMENT,
-            message=LLMMessage(role="user", content=f"<system-reminder>\n{_EXPORT_GATE_TOKEN}: prior\n</system-reminder>"),
-        )
-        for _ in range(3)
+    events = [
+        _deck_obs("html", **_blank_html()),
+        _refusal(),
+        _refusal(),
+        _refusal(),
+        _files_deliverable(),
     ]
-    events = [*prior, _deck_obs("html", **_blank_html()), _files_deliverable()]
     disp = await _gate(loop)(finish_step(), events)
     assert disp is Disp.FALLTHROUGH
     emitted = await loop._events()
@@ -193,3 +218,33 @@ async def test_refusal_cap_releases_with_warning() -> None:
         isinstance(e, MessageEvent) and "UNVERIFIED" in (e.message.content or "")
         for e in emitted
     )
+
+
+@pytest.mark.asyncio
+async def test_stale_refusals_do_not_release_a_fresh_deck() -> None:
+    # [G2] 3 refusals for an EARLIER deck must NOT spend a freshly generated blank
+    # deck's budget — the new deck gets its own attempts and is refused, not released.
+    loop, _ = build_loop(ScriptedAgent([]))
+    events = [
+        _refusal(),
+        _refusal(),
+        _refusal(),
+        _deck_obs("html", **_blank_html()),  # fresh export AFTER the stale refusals
+        _files_deliverable(),
+    ]
+    disp = await _gate(loop)(finish_step(), events)
+    assert disp is Disp.CONTINUE
+
+
+@pytest.mark.asyncio
+async def test_delivering_bad_file_gates_on_that_file_not_newer_good() -> None:
+    # [G4] generate bad.pptx, then good.pptx, then deliver bad.pptx: the gate must
+    # check bad.pptx's OWN facts, not the newer good sibling's, and refuse.
+    loop, _ = build_loop(ScriptedAgent([]))
+    events = [
+        _deck_obs_named("bad.html", "html", **_blank_html()),
+        _deck_obs_named("good.html", "html", **_good_html()),
+        DeliverableEvent(title="Deck", path="bad.html", artifact_kind="files"),
+    ]
+    disp = await _gate(loop)(finish_step(), events)
+    assert disp is Disp.CONTINUE

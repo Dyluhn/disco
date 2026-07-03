@@ -20,9 +20,11 @@ from typing import TYPE_CHECKING, Any, cast
 
 from ..contract.export_render import (
     EXPORT_GATE_MAX_REFUSALS,
+    ExportRenderFacts,
     count_export_gate_refusals,
     export_gate_refusal_reminder,
     export_gate_release_warning,
+    export_render_facts_for_path,
     latest_export_render_facts,
     latest_export_render_index,
 )
@@ -2689,14 +2691,9 @@ class FinishGate:
         genuinely-broken renderer can't trap the run — it releases with a loud
         UNVERIFIED warning, exactly like the browser-verify valve. Decision/message
         logic is pure (``contract.export_render``); this method only emits."""
-        facts = latest_export_render_facts(events)
-        if facts is None or facts.ok:
-            return Disp.FALLTHROUGH  # no export stamped, or it renders fine
-
-        # An app deliverable emitted AFTER the broken export means the app is the
-        # current handoff and the deck is superseded — fall through (the app gates
-        # own that path). But only the latest post-export deliverable counts: a
-        # newer files handoff means the broken deck is current and must be gated.
+        # The latest deliverable AFTER the export decides which facts govern this
+        # finish (only the latest counts: a newer files handoff means the broken deck
+        # is current and must be gated).
         export_idx = latest_export_render_index(events)
         latest_post_export_deliverable: DeliverableEvent | None = None
         for i in range(len(events) - 1, export_idx, -1):
@@ -2704,13 +2701,32 @@ class FinishGate:
             if isinstance(ev, DeliverableEvent):
                 latest_post_export_deliverable = ev
                 break
+        # An app deliverable emitted AFTER the broken export means the app is the
+        # current handoff and the deck is superseded — fall through (the app gates
+        # own that path).
         if (
             latest_post_export_deliverable is not None
             and latest_post_export_deliverable.artifact_kind == "app"
         ):
             return Disp.FALLTHROUGH
 
-        if count_export_gate_refusals(events) >= EXPORT_GATE_MAX_REFUSALS:
+        # A FILES handoff naming a specific stamped file is gated on THAT file's facts,
+        # so delivering a known-bad export can't clear on a newer sibling's good facts.
+        # Otherwise the latest stamped export governs.
+        facts: ExportRenderFacts | None = None
+        if (
+            latest_post_export_deliverable is not None
+            and latest_post_export_deliverable.artifact_kind == "files"
+        ):
+            facts = export_render_facts_for_path(
+                events, latest_post_export_deliverable.path
+            )
+        if facts is None:
+            facts = latest_export_render_facts(events)
+        if facts is None or facts.ok:
+            return Disp.FALLTHROUGH  # no export stamped, or it renders fine
+
+        if count_export_gate_refusals(events, since=export_idx) >= EXPORT_GATE_MAX_REFUSALS:
             await self._loop._emit(
                 StatusEvent(status=ConversationStatus.RUNNING, detail="unverified_export"),
             )

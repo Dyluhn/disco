@@ -407,16 +407,46 @@ def latest_export_render_index(events: list[Event]) -> int:
     return -1
 
 
-def count_export_gate_refusals(events: list[Event]) -> int:
-    """How many times the export gate has already refused this run — counted from
+def export_render_facts_for_path(events: list[Event], path: str) -> ExportRenderFacts | None:
+    """The latest stamped facts for the export whose producer wrote *path* (matched by
+    the structured ``filename``), or None. Lets the finish gate check the SPECIFICALLY
+    delivered file: generating ``bad.pptx`` then ``good.pptx`` then delivering
+    ``bad.pptx`` must gate on bad.pptx's facts, not the newer good sibling's. Matched by
+    basename so a deliverable's workspace-relative path lines up with the stamp."""
+    target = path.rsplit("/", 1)[-1]
+    if not target:
+        return None
+    for ev in reversed(events):
+        if not (
+            isinstance(ev, ObservationEvent)
+            and ev.tool_result.success
+            and isinstance(ev.tool_result.structured, dict)
+        ):
+            continue
+        fn = ev.tool_result.structured.get("filename")
+        if isinstance(fn, str) and fn and fn.rsplit("/", 1)[-1] == target:
+            facts = render_facts_from_structured(ev.tool_result.structured)
+            if facts is not None:
+                return facts
+    return None
+
+
+def count_export_gate_refusals(events: list[Event], since: int = -1) -> int:
+    """How many times the export gate has refused the CURRENT export — counted from
     its own refusal markers in the log, so the cap needs no loop state and survives
     reconstruction/resume. Restricted to ENVIRONMENT-source messages (the gate emits
     those) so a USER/AGENT message that merely quotes the token can't force an early
-    release of the cap."""
+    release of the cap.
+
+    ``since`` bounds the count to events AFTER that index (the latest export's stamp
+    point) so the cap is PER-EXPORT: refusals of an earlier, since-replaced deck do
+    not spend a freshly generated deck's refusal budget (which would release a new
+    broken deck on its first finish attempt)."""
     return sum(
         1
-        for e in events
-        if isinstance(e, MessageEvent)
+        for i, e in enumerate(events)
+        if i > since
+        and isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and EXPORT_GATE_TOKEN in (e.message.content or "")
     )
