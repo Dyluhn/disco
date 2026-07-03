@@ -5812,3 +5812,35 @@ but CPython caches imported modules in the live process. Each live proof require
 
 **Arch-budget:** FinishGate grew ~55 LOC net (after extracting pure logic to `export_render.py`);
 still the pre-existing god-object red (25 violations at HEAD) tracked for P11. Other 3 gates GREEN.
+
+### P10 CONVERGENCE — adversarial hardening to done (2026-07-03, HEAD `6ed5392c`)
+
+After the live-proven landing, an adversarial review campaign hardened the checker to
+convergence. Commit trail: `378fa250` (linearity) → `3185e46d` (PPTX chrome) →
+`e1416277` (PDF byte-floor) → `b18563ee` (parallel-panel batch) → `a19c150f` (gate) →
+`6ed5392c` (residuals doc).
+
+**What was fixed:**
+- **Linearity (structural, not capped):** every lazy `.*?</tag>` scan made linear.
+  `_strip_script_style` is a `str.find` walk — measured a REAL deck shipping a 2.48MB
+  inline three.js bundle in one `<script>`, so a small cap would have re-inflated
+  content; chrome/pptx inner scans bounded. SVG catastrophic backtracking → linear.
+- **Blank detection across ALL 3 formats:** HTML by CSS class; PPTX + PDF by a SINGLE
+  SOURCE OF TRUTH `mark.BRAND_CHROME_TEXTS` (a hand-copied token list had DRIFTED,
+  letting a blank branded PPTX pass); deck PDF judged by its sibling-PPTX verdict
+  (LibreOffice-converted). `<head>`/`<title>` dropped; `mark.RENDER_PLACEHOLDERS`
+  ("[image]"/"(no table data)"/"[no data]") subtracted.
+- **Gate:** per-export refusal cap (G2, `count_export_gate_refusals(since=)`); facts
+  bound to the delivered file (G4, `export_render_facts_for_path`) so delivering a
+  known-bad export can't clear on a newer good sibling.
+
+**★ METHOD FINDING (Dylan flagged the turn cost):** the first ~5 rounds ran SERIALLY
+(one review → one finding → one fix → repeat), which is slow and misses cross-cutting
+gaps. Switched to a **4-lane PARALLEL convergence panel** (blank / truncation / gate /
+regression, each reviewer blind). One round then caught, in a single batch: **3
+REGRESSIONS the earlier hardening itself introduced** (İ length-changing-lowercase
+index-misalign; bare "disco" substring gutting "Discovery"; media-only PDF
+false-refuse — all false-blanks that broke REAL decks), a blank-completeness class,
+and 2 gate holes. Lesson saved to memory: parallel-panel + batch-fix + budget-rounds,
+never serial. Every fix verified vs the REAL renderer; residuals documented in the
+module threat-model note. All 4 fitness gates green (basedpyright 0), ~76 P10 tests.
