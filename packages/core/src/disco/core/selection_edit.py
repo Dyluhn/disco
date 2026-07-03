@@ -20,7 +20,7 @@ no runtime/tool imports, exactly like ``semantic_refs.py``.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -67,7 +67,7 @@ class SemanticSelectionRef(BaseModel):
     screen_label: str | None = None
 
 
-SelectionRef = Union[SourceSelectionRef, DeckSelectionRef, SemanticSelectionRef]
+SelectionRef = SourceSelectionRef | DeckSelectionRef | SemanticSelectionRef
 
 _REF_MODELS: tuple[type[BaseModel], ...] = (
     SourceSelectionRef,
@@ -117,6 +117,11 @@ _TARGETED_LAW = (
 )
 
 
+def is_scoped_edit_directive(text: str) -> bool:
+    """True when ``text`` is a host-owned scoped edit directive."""
+    return text.startswith(_PREFIX)
+
+
 def build_scoped_edit_directive(
     ref: SelectionRef,
     instruction: str,
@@ -155,7 +160,11 @@ def build_scoped_edit_directive(
         )
     else:
         # No usable anchor — fall back to the human label so the model can locate it.
-        desc = human_label.strip() if human_label and human_label.strip() else "the selected element"
+        desc = (
+            human_label.strip()
+            if human_label and human_label.strip()
+            else "the selected element"
+        )
         where = (
             f"The user selected {desc} in the preview (no precise source anchor was "
             "captured). Read the relevant file, locate that element, and edit only it "
@@ -201,5 +210,6 @@ __all__ = [
     "SelectionRef",
     "parse_selection_ref",
     "build_scoped_edit_directive",
+    "is_scoped_edit_directive",
     "selection_edit_frame_valid",
 ]

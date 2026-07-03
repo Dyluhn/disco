@@ -25,6 +25,7 @@ from disco.core.loop.plan_conditions import (
     dictated_content_conditions_from_events,
     extract_dictated_content_literals,
 )
+from disco.core.selection_edit import SourceSelectionRef, build_scoped_edit_directive
 from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop
 
 
@@ -130,6 +131,18 @@ def _status(detail: str, seq: int) -> StatusEvent:
     )
 
 
+def _scoped_edit_directive(
+    *,
+    human_label: str | None,
+    instruction: str = "Change it to Midnight Coffee.",
+) -> str:
+    return build_scoped_edit_directive(
+        SourceSelectionRef(oid="index.html:1", file="index.html", line=1),
+        instruction,
+        human_label=human_label,
+    )
+
+
 def test_extracts_prompt_and_followup_literals_but_skips_commands_and_paths():
     text = (
         'Build a hero "Launch Day" with CTA \'Get Started\', keep "Plans / Pricing", '
@@ -158,6 +171,45 @@ def test_extracts_prompt_and_followup_literals_but_skips_commands_and_paths():
     ]
 
 
+def test_scoped_edit_supersedes_old_literal_without_harvesting_label_text():
+    directive = _scoped_edit_directive(human_label='h1 — "NightOwl Coffee"')
+    events = [
+        _user('Build a hero titled "NightOwl Coffee" and include "Contact us today".', 1),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user(directive, 4),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(c.revision, c.literal) for c in conditions] == [
+        (1, "Contact us today"),
+    ]
+
+
+def test_label_less_scoped_edit_supersedes_no_prior_literal():
+    directive = _scoped_edit_directive(
+        human_label=None,
+        instruction="Make the selected heading shorter.",
+    )
+    events = [
+        _user('Build a hero titled "NightOwl Coffee".', 1),
+        _plan(1, 2),
+        _status("plan_approved", 3),
+        _user(directive, 4),
+        _status("planning", 5),
+        _plan(2, 6),
+    ]
+
+    conditions = dictated_content_conditions_from_events(events)
+
+    assert [(c.revision, c.literal) for c in conditions] == [
+        (1, "NightOwl Coffee"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_finish_refused_until_dictated_literal_lands(tmp_path: Path):
     loop, store = build_loop(
@@ -181,6 +233,40 @@ async def test_finish_refused_until_dictated_literal_lands(tmp_path: Path):
     assert state.execution_status == ConversationStatus.FINISHED
     assert any("Get Started" in m and "artifact.txt" in m for m in env)
     assert sum("quoted user literal is missing" in m for m in env) == 1
+
+
+@pytest.mark.asyncio
+async def test_finish_gate_allows_selection_edit_to_replace_dictated_literal(
+    tmp_path: Path,
+):
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan("rev1")]),
+        conversation_id="dictated-selection-edit",
+        executor=_FSBuildExecutor(tmp_path),
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message('Build the artifact with heading "NightOwl Coffee".')
+    await loop.run()
+    await loop.approve_plan()
+
+    loop.agent = ScriptedAgent([_write("NightOwl Coffee"), _finish()])
+    await loop.run()
+
+    directive = _scoped_edit_directive(human_label='h1 — "NightOwl Coffee"')
+    loop.agent = ScriptedAgent([_submit_plan("rev2")])
+    await loop.steer(directive)
+    await loop.run()
+    await loop.approve_plan()
+
+    loop.agent = ScriptedAgent([_write("Midnight Coffee"), _finish()])
+    state = await loop.run()
+
+    events = await store.get_events("dictated-selection-edit")
+    env = _env_messages(events)
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert "NightOwl Coffee" not in (tmp_path / "artifact.txt").read_text(encoding="utf-8")
+    assert not any("quoted user literal is missing" in m for m in env)
 
 
 @pytest.mark.asyncio

@@ -9,9 +9,9 @@ byte-identical to the former AgentLoop methods.
 
 from __future__ import annotations
 
-import shlex
 import os
 import re
+import shlex
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +30,7 @@ from ..events import (
     PlanEvent,
     StatusEvent,
 )
+from ..selection_edit import is_scoped_edit_directive
 from ..view import effective_plan_progress
 
 if TYPE_CHECKING:
@@ -163,6 +164,46 @@ def extract_dictated_content_literals(text: str) -> list[str]:
     return out
 
 
+def _scoped_edit_user_messages(events: list[Event]) -> list[MessageEvent]:
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.USER
+        and is_scoped_edit_directive(e.message.content or "")
+    ]
+
+
+def _superseded_by_scoped_edit(
+    condition: DictatedContentCondition,
+    scoped_edits: list[MessageEvent],
+) -> bool:
+    if condition.source_seq is None:
+        return False
+    for edit in scoped_edits:
+        if edit.seq is None or edit.seq <= condition.source_seq:
+            continue
+        if condition.literal in (edit.message.content or ""):
+            return True
+    return False
+
+
+def _drop_scoped_edit_superseded_conditions(
+    conditions: list[DictatedContentCondition],
+    events: list[Event],
+) -> list[DictatedContentCondition]:
+    scoped_edits = _scoped_edit_user_messages(events)
+    if not scoped_edits:
+        return conditions
+    # A label-less directive only supersedes when it still contains the old literal.
+    # Otherwise the prior dictated condition remains, by design.
+    return [
+        c
+        for c in conditions
+        if not _superseded_by_scoped_edit(c, scoped_edits)
+    ]
+
+
 def dictated_content_conditions_from_events(
     events: list[Event],
 ) -> list[DictatedContentCondition]:
@@ -202,7 +243,10 @@ def dictated_content_conditions_from_events(
                 e for e in users if signals.is_revision_intent(e.message.content or "")
             ]
         for user in users:
-            for literal in extract_dictated_content_literals(user.message.content or ""):
+            content = user.message.content or ""
+            if is_scoped_edit_directive(content):
+                continue
+            for literal in extract_dictated_content_literals(content):
                 key = (plan.revision, literal)
                 if key in seen:
                     continue
@@ -216,7 +260,7 @@ def dictated_content_conditions_from_events(
                     )
                 )
         prev_plan_idx = plan_idx
-    return out
+    return _drop_scoped_edit_superseded_conditions(out, events)
 
 
 class PlanStepConditions:
