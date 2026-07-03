@@ -5930,3 +5930,18 @@ parts + doc_export at the P10 choke; pipeline tuple honest) · F3 `df4bff0f`
 watch-it-write streaming (file_stream frames; files tab renders in-flight writes —
 live evidence sent to Dylan). Remaining: task 14 (K/L/M + probe-spin breaker →
 appkit all-checks live pass rides on M), task 15 (P11 → v0.1).
+
+## TASK-14 — K/L/M LANDED + APPKIT LIVE STATUS (2026-07-03)
+
+K+L `4f7f3c30`: questions_v2 structured intake (LIVE-PROVEN — ambiguous prompt →
+batched 3-question form, screenshot sent to Dylan; autonomous skips + logs
+assumptions) + FinishGate decomposed into finish/ (2058-LOC budget red RETIRED,
+behavior byte-identical per unchanged suites). M `9564723c`: auto-resume-once,
+event-derived pause counter (valve survives resume), probe-spin breaker (tool-
+frequency dimension). Appkit live attempt 7 (ladder active): app_create clean
+(brief fix), 9 content edits, then MiniMax repeated a no-op edit against explicit
+ground-truth refusals → repeated_action_error breaker fired correctly. VERDICT
+after 7 attempts: every engine gate + breaker live-proven; the residual is
+MiniMax-M3's refusal-following on validated-patch tools (model-quality wall,
+same class as the M3 completion-rate memo). All-checks live pass deferred to a
+stronger driver or prompt-pack tuning — NOT an engine defect. 0 OpenRouter all day.
