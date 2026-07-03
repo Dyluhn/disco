@@ -17,6 +17,8 @@ from disco.core.contract.export_render import (
     EXPORT_RENDER_KEY,
     check_export_render,
 )
+from disco.core.context import ArtifactMemoryStore
+from disco.core.context.ledger import ArtifactRecord
 from disco.core.events import (
     DeliverableEvent,
     EventSource,
@@ -28,6 +30,19 @@ from disco.core.events import (
 )
 from disco.core.loop.control import Disp
 from loop_fakes import ScriptedAgent, build_loop, finish_step
+
+
+class _ManifestFS:
+    def __init__(self) -> None:
+        self.files: dict[str, bytes] = {}
+
+    async def read_file(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self.files[path] = data
 
 
 def _deck_obs(facts_fmt: str, **kw) -> ObservationEvent:
@@ -248,3 +263,31 @@ async def test_delivering_bad_file_gates_on_that_file_not_newer_good() -> None:
     ]
     disp = await _gate(loop)(finish_step(), events)
     assert disp is Disp.CONTINUE
+
+
+@pytest.mark.asyncio
+async def test_manifest_shown_export_path_gates_that_file_without_deliverable() -> None:
+    # REL-2a reader promote: when the manifest has a shown export, P10 gates that
+    # artifact's facts instead of silently accepting a newer sibling's good facts.
+    loop, _ = build_loop(ScriptedAgent([]))
+    fs = _ManifestFS()
+    loop.executor.sandbox = fs  # type: ignore[attr-defined]
+    await ArtifactMemoryStore(fs).upsert_artifact(
+        ArtifactRecord(path="bad.html", kind="files", shown=True)
+    )
+    await ArtifactMemoryStore(fs).upsert_artifact(
+        ArtifactRecord(path="good.html", kind="files", shown=False)
+    )
+    events = [
+        _deck_obs_named("bad.html", "html", **_blank_html()),
+        _deck_obs_named("good.html", "html", **_good_html()),
+    ]
+
+    disp = await _gate(loop)(finish_step(), events)
+
+    assert disp is Disp.CONTINUE
+    steer = [
+        e for e in await loop._events()
+        if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
+    ]
+    assert steer and "content-empty" in steer[0].message.content

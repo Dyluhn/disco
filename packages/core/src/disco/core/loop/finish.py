@@ -28,6 +28,12 @@ from ..contract.export_render import (
     latest_export_render_facts,
     latest_export_render_index,
 )
+from ..context.artifact_projection import (
+    artifact_manifest_reader_enabled,
+    artifact_paths_from_events,
+    artifact_paths_from_manifest_records,
+    manifest_path_divergence,
+)
 from ..dod import FileExistsPredicate
 from ..dod_evaluator import DoDEvaluator, HttpProbeResult
 from ..env import disco_env
@@ -305,6 +311,11 @@ def _latest_deliverable_event(events: list[Event]) -> DeliverableEvent | None:
         if isinstance(ev, DeliverableEvent):
             return ev
     return None
+
+
+def _artifact_record_kind(record: Any) -> str:
+    kind = getattr(record, "kind", "files")
+    return kind if isinstance(kind, str) and kind else "files"
 
 
 # ---- Bug 6: actionless honest-unverifiable-static finish helpers ------------
@@ -1081,6 +1092,65 @@ class FinishGate:
         except Exception:  # noqa: BLE001 — path resolution is advisory; skip only on known absence
             return None
 
+    async def _artifact_manifest_records(
+        self, events: list[Event], *, consumer: str
+    ) -> tuple[Any, ...] | None:
+        """Read REL-2a artifact manifest records for promoted readers.
+
+        Empty manifests are NOT agreement: the REL-1e flip exposed how easy it is
+        to bank a shadow claim when no shadow data was actually recorded. This
+        helper only returns records when the manifest has at least one path, and
+        always logs the event-projection comparison while the reader soaks.
+        """
+
+        if not artifact_manifest_reader_enabled():
+            return None
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is None:
+            _LOG.info(
+                "artifact-manifest reader skipped for %s:%s: sandbox unavailable",
+                self._loop.conversation_id,
+                consumer,
+            )
+            return None
+        try:
+            from ..context import ArtifactMemoryStore
+
+            records = tuple(await ArtifactMemoryStore(sbx).read_artifacts())
+        except Exception:  # noqa: BLE001 — manifest reader must fail open to legacy readers
+            _LOG.warning(
+                "artifact-manifest reader failed for %s:%s",
+                self._loop.conversation_id,
+                consumer,
+                exc_info=True,
+            )
+            return None
+
+        manifest_paths = artifact_paths_from_manifest_records(records)
+        projected = artifact_paths_from_events(events)
+        if not manifest_paths:
+            _LOG.info(
+                "artifact-manifest reader skipped for %s:%s: no manifest data "
+                "(projected=%d)",
+                self._loop.conversation_id,
+                consumer,
+                len(projected),
+            )
+            return None
+
+        missing, extra = manifest_path_divergence(projected, manifest_paths)
+        _LOG.info(
+            "artifact-manifest reader compare for %s:%s: projected=%d manifest=%d "
+            "missing=%s extra=%s",
+            self._loop.conversation_id,
+            consumer,
+            len(projected),
+            len(manifest_paths),
+            sorted(missing),
+            sorted(extra),
+        )
+        return records
+
     async def _host_verify_artifact_path(self, raw_path: str) -> str | None:
         path = _safe_deliverable_file_path(raw_path, app_root=True)
         if path is None:
@@ -1094,6 +1164,54 @@ class FinishGate:
         if directory_like and await self._host_artifact_file_exists(path) is False:
             return None
         return path
+
+    async def _host_verify_manifest_deliverable(
+        self,
+        step: AgentStep,
+        events: list[Event],
+        *,
+        include_unverifiable: bool,
+    ) -> HostVerificationDeliverable | None:
+        records = await self._artifact_manifest_records(events, consumer="host_verify")
+        if records is None:
+            return None
+
+        app_records = [r for r in records if _artifact_record_kind(r) == "app"]
+        for record in reversed(app_records):
+            raw_path = getattr(record, "path", None)
+            if not isinstance(raw_path, str):
+                continue
+            path = await self._host_verify_artifact_path(raw_path)
+            if path is None:
+                continue
+            return HostVerificationDeliverable(
+                conversation_id=self._loop.conversation_id,
+                artifact_path=path,
+                artifact_kind="app",
+                deployment_url="",
+                requested_verification=step.requested_verification,
+            )
+
+        if not include_unverifiable:
+            return None
+
+        file_records = [r for r in records if _artifact_record_kind(r) != "app"]
+        shown_records = [r for r in file_records if bool(getattr(r, "shown", False))]
+        for record in reversed(shown_records or file_records):
+            raw_path = getattr(record, "path", None)
+            if not isinstance(raw_path, str):
+                continue
+            path = _safe_deliverable_file_path(raw_path)
+            if path is None:
+                continue
+            return HostVerificationDeliverable(
+                conversation_id=self._loop.conversation_id,
+                artifact_path=path,
+                artifact_kind=_artifact_record_kind(record),
+                deployment_url="",
+                requested_verification=step.requested_verification,
+            )
+        return None
 
     def _host_verify_authoritative(self) -> bool:
         return bool(getattr(self._loop, "_host_verify_authoritative", False))
@@ -1114,6 +1232,12 @@ class FinishGate:
         resolved to their primary index.html-style file, never verified as the
         directory path itself.
         """
+
+        manifest_deliverable = await self._host_verify_manifest_deliverable(
+            step, events, include_unverifiable=include_unverifiable
+        )
+        if manifest_deliverable is not None:
+            return manifest_deliverable
 
         app_event = _latest_app_deliverable_event(events)
         any_event = _latest_deliverable_event(events) if include_unverifiable else app_event
@@ -2749,6 +2873,47 @@ class FinishGate:
                 )
         return Disp.FALLTHROUGH
 
+    async def _manifest_export_artifact_path(
+        self, events: list[Event], *, require_shown: bool
+    ) -> str | None:
+        records = await self._artifact_manifest_records(events, consumer="export_render")
+        if records is None:
+            return None
+
+        shown: list[str] = []
+        unshown: list[str] = []
+        seen: set[str] = set()
+        for record in records:
+            if _artifact_record_kind(record) == "app":
+                continue
+            raw_path = getattr(record, "path", None)
+            if not isinstance(raw_path, str):
+                continue
+            path = _safe_deliverable_file_path(raw_path)
+            if path is None or path in seen:
+                continue
+            if export_render_facts_for_path(events, path) is None:
+                continue
+            seen.add(path)
+            if bool(getattr(record, "shown", False)):
+                shown.append(path)
+            else:
+                unshown.append(path)
+
+        if shown:
+            return shown[-1]
+        if require_shown:
+            return None
+        if len(unshown) == 1:
+            return unshown[0]
+        if len(unshown) > 1:
+            _LOG.info(
+                "artifact-manifest reader export path ambiguous for %s: %s",
+                self._loop.conversation_id,
+                unshown,
+            )
+        return None
+
     async def gate_export_render(self, step: AgentStep, events: list[Event]) -> Disp:
         """[P10] Refuse FINISHED when a rendered export (deck/document) is BLANK,
         TRUNCATED, or CORRUPT — the "looks done but the file is empty" false
@@ -2785,8 +2950,18 @@ class FinishGate:
         # so delivering a known-bad export can't clear on a newer sibling's good facts.
         # Otherwise the latest stamped export governs.
         facts: ExportRenderFacts | None = None
+        manifest_path = await self._manifest_export_artifact_path(
+            events,
+            require_shown=(
+                latest_post_export_deliverable is not None
+                and latest_post_export_deliverable.artifact_kind == "files"
+            ),
+        )
+        if manifest_path is not None:
+            facts = export_render_facts_for_path(events, manifest_path)
         if (
-            latest_post_export_deliverable is not None
+            facts is None
+            and latest_post_export_deliverable is not None
             and latest_post_export_deliverable.artifact_kind == "files"
         ):
             facts = export_render_facts_for_path(

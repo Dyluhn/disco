@@ -15,7 +15,9 @@ Sources collected per tool (unchanged from the original route logic):
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 import posixpath
+from typing import Any
 
 from ..env import disco_env
 from ..events import DeliverableEvent, Event, ObservationEvent
@@ -24,6 +26,8 @@ from ..events import DeliverableEvent, Event, ObservationEvent
 # compares the maintained manifest against this projection, logging divergence (RETURNS legacy; no
 # reader switched). Default OFF → byte-identical to today. Promote only after live 0-divergence.
 _SHADOW_FLAG = "ARTIFACT_MANIFEST_SHADOW"
+_READER_FLAG = "ARTIFACT_MANIFEST_READER"
+_FALSY = frozenset({"0", "false", "no", "off"})
 
 _WRITE_ARTIFACT_TOOLS = frozenset(
     {
@@ -42,6 +46,26 @@ _WRITE_ARTIFACT_TOOLS = frozenset(
 def manifest_shadow_enabled() -> bool:
     """True iff DISCO_ARTIFACT_MANIFEST_SHADOW is set truthy (default OFF)."""
     return str(disco_env(_SHADOW_FLAG) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def artifact_manifest_reader_enabled() -> bool:
+    """Default ON unless DISCO_ARTIFACT_MANIFEST_READER is explicitly falsy."""
+    return str(disco_env(_READER_FLAG) or "").strip().lower() not in _FALSY
+
+
+def artifact_paths_from_manifest_records(records: Iterable[Any]) -> set[str]:
+    """The set of normalized paths carried by artifact-manifest records.
+
+    This is intentionally tiny and duck-typed so core readers can compare the
+    maintained manifest against the legacy event projection without importing the
+    pydantic record type at module import time.
+    """
+    out: set[str] = set()
+    for record in records:
+        path = getattr(record, "path", None)
+        if isinstance(path, str) and path:
+            out.add(posixpath.normpath(path))
+    return out
 
 
 def manifest_path_divergence(

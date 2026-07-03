@@ -17,6 +17,8 @@ from disco.core import (
     VerifierStartedEvent,
     VerifierVerdictEvent,
 )
+from disco.core.context import ArtifactMemoryStore
+from disco.core.context.ledger import ArtifactRecord
 from disco.core.llm import OperatingMode, ToolSpec
 from disco.core.loop import AgentLoop, NeverConfirm
 from loop_fakes import (
@@ -97,6 +99,20 @@ class _PathSandbox:
 
     async def file_exists(self, path: str) -> bool:
         return path in self._existing
+
+
+class _ManifestSandbox(_PathSandbox):
+    def __init__(self, existing: set[str]) -> None:
+        super().__init__(existing)
+        self.files: dict[str, bytes] = {}
+
+    async def read_file(self, path: str) -> bytes:
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return self.files[path]
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self.files[path] = data
 
 
 def _web_agent() -> ScriptedAgent:
@@ -292,6 +308,78 @@ async def test_directory_deliverable_without_primary_artifact_skips_host_verify(
         isinstance(e, (VerifierStartedEvent, VerifierShadowEvent, VerifierVerdictEvent))
         for e in events
     )
+
+
+@pytest.mark.asyncio
+async def test_manifest_app_record_resolves_host_verify_without_deliverable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DISCO_ARTIFACT_MANIFEST_READER", raising=False)
+    monkeypatch.delenv("PMX_ARTIFACT_MANIFEST_READER", raising=False)
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    sbx = _ManifestSandbox({"dist/index.html"})
+    await ArtifactMemoryStore(sbx).upsert_artifact(
+        ArtifactRecord(path="dist", kind="app", shown=True)
+    )
+    execu.sandbox = sbx  # type: ignore[attr-defined]
+    loop, store = _loop(_non_web_agent(), execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert len(host.calls) == 1
+    assert host.calls[0].artifact_path == "dist/index.html"
+    events = await store.get_events("conv")
+    verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
+    assert len(verdicts) == 1
+    assert verdicts[0].artifact_path == "dist/index.html"
+
+
+@pytest.mark.asyncio
+async def test_manifest_reader_explicit_off_preserves_event_only_host_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DISCO_ARTIFACT_MANIFEST_READER", "off")
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    sbx = _ManifestSandbox({"dist/index.html"})
+    await ArtifactMemoryStore(sbx).upsert_artifact(
+        ArtifactRecord(path="dist", kind="app", shown=True)
+    )
+    execu.sandbox = sbx  # type: ignore[attr-defined]
+    loop, store = _loop(_non_web_agent(), execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert host.calls == []
+    events = await store.get_events("conv")
+    assert not any(isinstance(e, VerifierVerdictEvent) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_empty_manifest_does_not_resolve_host_deliverable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DISCO_ARTIFACT_MANIFEST_READER", raising=False)
+    monkeypatch.delenv("PMX_ARTIFACT_MANIFEST_READER", raising=False)
+    host = _HostVerifier(_verdict(passed=True, fp="HOST"))
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    sbx = _ManifestSandbox({"dist/index.html"})
+    await ArtifactMemoryStore(sbx).record_artifacts(())
+    execu.sandbox = sbx  # type: ignore[attr-defined]
+    loop, store = _loop(_non_web_agent(), execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert host.calls == []
+    events = await store.get_events("conv")
+    assert not any(isinstance(e, VerifierVerdictEvent) for e in events)
 
 
 @pytest.mark.asyncio
