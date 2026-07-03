@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -48,6 +49,14 @@ from typing import Any
 # here so the agent-server doesn't depend on string literals scattered around.
 _MANIFEST = "manifest.json"
 _WORKSPACE = "workspace"
+_VERSIONS = "versions"
+_VERSIONS_INDEX = "versions.json"
+_VERSION_METADATA = "version.json"
+
+# UX retention: unlabeled auto-cuts are cheap, but the picker must stay bounded.
+_MAX_UNLABELED = 20
+# Disk retention: one conversation should not silently consume a whole data volume.
+_MAX_VERSION_BYTES = 512 * 1024 * 1024
 
 
 def default_projects_root() -> str:
@@ -125,6 +134,21 @@ class ProjectRecord:
     files_missing: bool  # True iff manifest exists but workspace/ is gone or empty
 
 
+@dataclass(frozen=True)
+class VersionRecord:
+    """A workspace version summary. The same shape is written to versions.json
+    and to each per-version version.json sidecar."""
+
+    seq: int
+    ts: str
+    label: str
+    trigger: str
+    file_count: int
+    total_bytes: int
+    tree_digest: str
+    pinned: bool
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -138,6 +162,82 @@ def _safe_segment(s: str) -> bool:
     if "/" in s or "\\" in s or "\x00" in s:
         return False
     return True
+
+
+def _safe_seq(seq: object) -> bool:
+    if type(seq) is not int:
+        return False
+    return seq > 0
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for block in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _scan_tree(root: Path) -> tuple[dict[str, str], int]:
+    if not root.is_dir():
+        raise StorageError(f"workspace directory missing: {root}")
+    hashes: dict[str, str] = {}
+    total_bytes = 0
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        rel = path.relative_to(root).as_posix()
+        stat = path.stat()
+        hashes[rel] = _file_sha256(path)
+        total_bytes += stat.st_size
+    return hashes, total_bytes
+
+
+def _tree_digest_from_hashes(file_hashes: dict[str, str]) -> str:
+    h = hashlib.sha256()
+    for rel in sorted(file_hashes):
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        h.update(file_hashes[rel].encode("ascii"))
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def tree_digest(root: Path) -> str:
+    """Stable sha256 over sorted workspace-relative path + file-sha256 pairs."""
+    file_hashes, _ = _scan_tree(root)
+    return _tree_digest_from_hashes(file_hashes)
+
+
+def _version_to_dict(record: VersionRecord) -> dict[str, Any]:
+    return {
+        "seq": record.seq,
+        "ts": record.ts,
+        "label": record.label,
+        "trigger": record.trigger,
+        "file_count": record.file_count,
+        "total_bytes": record.total_bytes,
+        "tree_digest": record.tree_digest,
+        "pinned": record.pinned,
+    }
+
+
+def _version_from_dict(data: dict[str, Any]) -> VersionRecord:
+    return VersionRecord(
+        seq=int(data["seq"]),
+        ts=str(data["ts"]),
+        label=str(data.get("label") or ""),
+        trigger=str(data.get("trigger") or ""),
+        file_count=int(data.get("file_count") or 0),
+        total_bytes=int(data.get("total_bytes") or 0),
+        tree_digest=str(data["tree_digest"]),
+        pinned=bool(data.get("pinned") or False),
+    )
+
+
+def _write_json_atomic(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(path)  # atomic on POSIX; close-enough elsewhere
 
 
 def validate_root(root_str: str) -> StorageStatus:
@@ -174,7 +274,9 @@ class ProjectStore:
     settings round-trip + the read-only browse endpoint work even on a bad
     root (the user has to be able to see + fix the configuration)."""
 
-    def __init__(self, root_str: str) -> None:
+    def __init__(
+        self, root_str: str, *, version_byte_budget: int = _MAX_VERSION_BYTES
+    ) -> None:
         # _configured keeps the raw value for the settings DTO (so the UI can
         # display what the user explicitly saved, not the auto-default path).
         self._configured_str = root_str
@@ -182,6 +284,7 @@ class ProjectStore:
         # root_str → resolve_projects_root auto-creates and returns the default.
         self._root_str = resolve_projects_root(root_str)
         self._root = Path(self._root_str).expanduser()
+        self._version_byte_budget = version_byte_budget
 
     @property
     def root(self) -> Path | None:
@@ -208,6 +311,197 @@ class ProjectStore:
         if not _safe_segment(conversation_id):
             raise StorageError(f"unsafe conversation_id: {conversation_id!r}")
         return self._root / conversation_id / _MANIFEST
+
+    def _project_dir(self, conversation_id: str) -> Path:
+        if self._root is None:
+            raise StorageError("projects_root is not configured")
+        if not _safe_segment(conversation_id):
+            raise StorageError(f"unsafe conversation_id: {conversation_id!r}")
+        return self._root / conversation_id
+
+    def _versions_dir(self, conversation_id: str) -> Path:
+        return self._project_dir(conversation_id) / _VERSIONS
+
+    def _versions_index(self, conversation_id: str) -> Path:
+        return self._project_dir(conversation_id) / _VERSIONS_INDEX
+
+    def _version_dir(self, conversation_id: str, record: VersionRecord) -> Path:
+        digest12 = record.tree_digest[:12]
+        return self._versions_dir(conversation_id) / f"{record.seq:03d}-{digest12}"
+
+    def _read_version_index(self, conversation_id: str) -> list[VersionRecord]:
+        index = self._versions_index(conversation_id)
+        if not index.is_file():
+            return []
+        try:
+            raw = json.loads(index.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StorageError(f"versions index unreadable: {exc}") from exc
+        if not isinstance(raw, list):
+            raise StorageError("versions index unreadable: expected a list")
+        records: list[VersionRecord] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                raise StorageError("versions index unreadable: malformed row")
+            records.append(_version_from_dict(item))
+        records.sort(key=lambda r: r.seq)
+        return records
+
+    def _write_version_index(
+        self, conversation_id: str, records: list[VersionRecord]
+    ) -> None:
+        payload = [_version_to_dict(record) for record in sorted(records, key=lambda r: r.seq)]
+        _write_json_atomic(self._versions_index(conversation_id), payload)
+
+    def _existing_version_records(self, conversation_id: str) -> list[VersionRecord]:
+        return [
+            record
+            for record in self._read_version_index(conversation_id)
+            if (self._version_dir(conversation_id, record) / _WORKSPACE).is_dir()
+        ]
+
+    def _copy_version_workspace(
+        self,
+        conversation_id: str,
+        *,
+        live_workspace: Path,
+        dest_workspace: Path,
+        live_hashes: dict[str, str],
+        previous: VersionRecord | None,
+    ) -> None:
+        previous_workspace: Path | None = None
+        previous_hashes: dict[str, str] = {}
+        if previous is not None:
+            previous_workspace = self._version_dir(conversation_id, previous) / _WORKSPACE
+            if previous_workspace.is_dir():
+                previous_hashes, _ = _scan_tree(previous_workspace)
+
+        for rel in sorted(live_hashes):
+            source = live_workspace / rel
+            target = dest_workspace / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if (
+                previous_workspace is not None
+                and previous_hashes.get(rel) == live_hashes[rel]
+            ):
+                previous_source = previous_workspace / rel
+                try:
+                    os.link(previous_source, target)
+                    continue
+                except OSError:
+                    pass  # cross-device / unsupported hardlinks still produce a copy
+            shutil.copy2(source, target)
+
+    def cut_version(
+        self, conversation_id: str, *, label: str = "", trigger: str
+    ) -> VersionRecord | None:
+        """Capture the live workspace mirror as a deduplicated version snapshot."""
+        live_workspace = self.path_for(conversation_id)
+        live_hashes, total_bytes = _scan_tree(live_workspace)
+        digest = _tree_digest_from_hashes(live_hashes)
+        records = self._existing_version_records(conversation_id)
+        newest = records[-1] if records else None
+        if newest is not None and newest.tree_digest == digest:
+            return None
+
+        seq = (max((record.seq for record in records), default=0) + 1)
+        record = VersionRecord(
+            seq=seq,
+            ts=_now_iso(),
+            label=label,
+            trigger=trigger,
+            file_count=len(live_hashes),
+            total_bytes=total_bytes,
+            tree_digest=digest,
+            pinned=False,
+        )
+        version_dir = self._version_dir(conversation_id, record)
+        if version_dir.exists():
+            raise StorageError(f"version directory already exists: {version_dir}")
+        dest_workspace = version_dir / _WORKSPACE
+        dest_workspace.mkdir(parents=True, exist_ok=False)
+        try:
+            self._copy_version_workspace(
+                conversation_id,
+                live_workspace=live_workspace,
+                dest_workspace=dest_workspace,
+                live_hashes=live_hashes,
+                previous=newest,
+            )
+            _write_json_atomic(version_dir / _VERSION_METADATA, _version_to_dict(record))
+            records.append(record)
+            self._write_version_index(conversation_id, records)
+            self._prune(conversation_id)
+        except Exception:
+            if version_dir.exists():
+                shutil.rmtree(version_dir)
+            raise
+        return record
+
+    def list_versions(self, conversation_id: str) -> list[VersionRecord]:
+        """Version summaries, newest first. Missing version dirs are ignored."""
+        records = self._existing_version_records(conversation_id)
+        records.sort(key=lambda r: r.seq, reverse=True)
+        return records
+
+    def version_workspace_path(self, conversation_id: str, seq: int) -> Path:
+        if not _safe_seq(seq):
+            raise StorageError(f"unsafe version seq: {seq!r}")
+        for record in self._read_version_index(conversation_id):
+            if record.seq != seq:
+                continue
+            workspace = self._version_dir(conversation_id, record) / _WORKSPACE
+            if not workspace.is_dir():
+                raise StorageError(f"version workspace missing: {seq!r}")
+            return workspace
+        raise StorageError(f"unknown version seq: {seq!r}")
+
+    def _versions_total_bytes(
+        self, conversation_id: str, records: list[VersionRecord]
+    ) -> int:
+        seen: set[tuple[int, int]] = set()
+        total = 0
+        for record in records:
+            workspace = self._version_dir(conversation_id, record) / _WORKSPACE
+            if not workspace.is_dir():
+                continue
+            for path in sorted(p for p in workspace.rglob("*") if p.is_file()):
+                stat = path.stat()
+                key = (stat.st_dev, stat.st_ino)
+                if key in seen:
+                    continue
+                seen.add(key)
+                total += stat.st_size
+        return total
+
+    def _drop_version(self, conversation_id: str, record: VersionRecord) -> None:
+        version_dir = self._version_dir(conversation_id, record)
+        if version_dir.exists():
+            shutil.rmtree(version_dir)
+
+    def _prune(self, conversation_id: str) -> None:
+        records = self._existing_version_records(conversation_id)
+        changed = len(records) != len(self._read_version_index(conversation_id))
+
+        prunable = [record for record in records if not record.label and not record.pinned]
+        for record in prunable[:-_MAX_UNLABELED]:
+            self._drop_version(conversation_id, record)
+            records.remove(record)
+            changed = True
+
+        while self._versions_total_bytes(conversation_id, records) > self._version_byte_budget:
+            candidate = next(
+                (record for record in records if not record.label and not record.pinned),
+                None,
+            )
+            if candidate is None:
+                break
+            self._drop_version(conversation_id, candidate)
+            records.remove(candidate)
+            changed = True
+
+        if changed:
+            self._write_version_index(conversation_id, records)
 
     def list_projects(self) -> list[ProjectRecord]:
         """All projects with a manifest under the root, newest snapshot first.
