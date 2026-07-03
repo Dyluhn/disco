@@ -121,6 +121,45 @@ export async function getPreview(cid: string): Promise<PreviewInfo> {
   return agentGet<PreviewInfo>(`/conversations/${cid}/preview`);
 }
 
+export interface WorkspaceVersion {
+  seq: number;
+  ts: string;
+  label?: string | null;
+  trigger: "turn" | "finish" | "restore" | string;
+  file_count: number;
+  total_bytes: number;
+  tree_digest: string;
+  pinned: boolean;
+}
+
+export interface RestoreWorkspaceVersionResult {
+  restored: number;
+  new_version: number | null;
+  tree_digest: string;
+}
+
+/** Workspace snapshot history for the Preview pane version picker. Offline → no
+ * picker (no false affordance); live uses the agent-server history endpoint. */
+export async function listWorkspaceVersions(cid: string): Promise<WorkspaceVersion[]> {
+  if (!agentLive()) return [];
+  const r = await agentGet<{ versions: WorkspaceVersion[] }>(
+    `/conversations/${encodeURIComponent(cid)}/versions`,
+  );
+  return r.versions ?? [];
+}
+
+/** Restore a workspace snapshot. The caller surfaces ApiError.status (409/404/503)
+ * with the backend's reason text. */
+export async function restoreWorkspaceVersion(
+  cid: string,
+  seq: number,
+): Promise<RestoreWorkspaceVersionResult> {
+  return agentSend<RestoreWorkspaceVersionResult>(
+    "POST",
+    `/conversations/${encodeURIComponent(cid)}/versions/${seq}/restore`,
+  );
+}
+
 /** Bring a down preview back (§E7): bounded, idempotent restart of the static
  *  serve on the conversation's sandbox. Returns whether a server is now up. */
 export async function restartPreview(cid: string): Promise<boolean> {

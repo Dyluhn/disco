@@ -22,10 +22,17 @@ export interface ActivityItem {
    * environment meta (nudges, reminders) stays hidden; "system_note" is a
    * NEUTRAL environment line the human caused and should see confirmed
    * (BP-11's upload announcement) — informational, not an alarm, so it gets
-   * its own kind rather than borrowing system_warning's ⚠ styling. The feed
-   * becomes a unified chat-and-actions log rather than an action-only
-   * ledger. */
-  kind: "action" | "user" | "agent_message" | "system_warning" | "system_note";
+   * its own kind rather than borrowing system_warning's ⚠ styling. A
+   * "rollback_marker" is the one non-chat audit chip allowed for
+   * workspace_restored events. The feed becomes a unified chat-and-actions log
+   * rather than an action-only ledger. */
+  kind:
+    | "action"
+    | "user"
+    | "agent_message"
+    | "system_warning"
+    | "system_note"
+    | "rollback_marker";
   label: string; // plain language ("Wrote fizzbuzz.py" / "You: skip the cleanup")
   /** The agent's natural-language THOUGHT — its reasoning + plain-English
    * explanation of what it's doing. NEVER truncated; rendered wrapped. This
@@ -368,6 +375,14 @@ export function deriveActivity(
           attention: false,
         });
       }
+    } else if (e.kind === "workspace_restored") {
+      out.push({
+        id: e.id,
+        kind: "rollback_marker",
+        label: `↩ rolled back to v${e.version_seq}`,
+        status: "done",
+        attention: false,
+      });
     }
   }
   return out;

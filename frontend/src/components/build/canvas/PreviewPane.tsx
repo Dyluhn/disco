@@ -1,18 +1,143 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, MonitorPlay, Pencil, RotateCw } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, History, MonitorPlay, Pencil, RotateCw, Undo2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
-import { agentHttpBase, previewHostUrl } from "@/api/client";
-import { restartPreview } from "@/api/agent";
+import { agentHttpBase, ApiError, previewHostUrl } from "@/api/client";
+import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
+import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { EditAffordance } from "@/components/build/canvas/EditAffordance";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useToast } from "@/components/Toast";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
 import { formatSelectionContext } from "@/lib/resolvers/appResolver";
 import type { SelectionRef } from "@/lib/selectionBridge";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
+
+function formatRelativeTime(ts: string): string {
+  const t = new Date(ts).getTime();
+  if (!Number.isFinite(t)) return "unknown time";
+  const diffSeconds = Math.round((Date.now() - t) / 1000);
+  const future = diffSeconds < 0;
+  const abs = Math.abs(diffSeconds);
+  const units: Array<[number, string]> = [
+    [60 * 60 * 24 * 30, "month"],
+    [60 * 60 * 24, "day"],
+    [60 * 60, "hour"],
+    [60, "minute"],
+  ];
+  if (abs < 45) return "just now";
+  for (const [seconds, unit] of units) {
+    if (abs >= seconds) {
+      const n = Math.max(1, Math.round(abs / seconds));
+      return future
+        ? `in ${n} ${unit}${n === 1 ? "" : "s"}`
+        : `${n} ${unit}${n === 1 ? "" : "s"} ago`;
+    }
+  }
+  return future ? "in 1 minute" : "1 minute ago";
+}
+
+function versionLabel(v: WorkspaceVersion): string {
+  const label = v.label?.trim() || v.trigger;
+  return `v${v.seq} · ${formatRelativeTime(v.ts)} · ${label}`;
+}
+
+function triggerBadgeClass(trigger: string): string {
+  if (trigger === "turn") return "border-accent/30 bg-accent/10 text-accent";
+  if (trigger === "finish") return "border-supported/30 bg-supported/10 text-supported";
+  if (trigger === "restore") return "border-warn/30 bg-warn/10 text-warn";
+  return "border-hairline bg-surface-1 text-text-faint";
+}
+
+function parseErrorReason(message: string): string | null {
+  try {
+    const body = JSON.parse(message) as { detail?: unknown };
+    if (typeof body.detail === "string") return body.detail;
+    if (
+      body.detail &&
+      typeof body.detail === "object" &&
+      "reason" in body.detail &&
+      typeof body.detail.reason === "string"
+    ) {
+      return body.detail.reason;
+    }
+  } catch {
+    // fall through to plain-text messages
+  }
+  return message.trim() || null;
+}
+
+function restoreErrorCopy(err: unknown): string {
+  if (err instanceof ApiError) {
+    if (err.status === 409) return "build is running — pause or wait";
+    return parseErrorReason(err.message) ?? `restore failed (${err.status})`;
+  }
+  return err instanceof Error ? err.message : "restore failed";
+}
+
+function VersionPicker({
+  versions,
+  selectedSeq,
+  onSelect,
+}: {
+  versions: WorkspaceVersion[];
+  selectedSeq: number | null;
+  onSelect: (seq: number | null) => void;
+}) {
+  if (versions.length === 0) return null;
+  const selected = selectedSeq == null ? null : versions.find((v) => v.seq === selectedSeq);
+  return (
+    <Dropdown.Root>
+      <Dropdown.Trigger
+        aria-label="Version history"
+        className="flex max-w-[18rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text"
+      >
+        <History className="size-3.5 shrink-0" aria-hidden />
+        <span className="truncate">{selected ? `v${selected.seq}` : "Live"}</span>
+        <ChevronDown className="size-3 shrink-0 opacity-60" aria-hidden />
+      </Dropdown.Trigger>
+      <Dropdown.Portal>
+        <Dropdown.Content
+          align="end"
+          sideOffset={6}
+          className="z-50 min-w-[18rem] max-w-[min(28rem,92vw)] rounded-card border border-hairline bg-bg p-px shadow-none"
+        >
+          <Dropdown.Item
+            onSelect={() => onSelect(null)}
+            className="flex cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.78rem] text-text outline-none data-[highlighted]:bg-surface-2"
+          >
+            <Check className={cn("size-3.5 shrink-0", selectedSeq === null ? "text-accent" : "opacity-0")} aria-hidden />
+            <span className="min-w-0 flex-1 truncate">Live</span>
+          </Dropdown.Item>
+          <Dropdown.Separator className="my-px h-px bg-hairline" />
+          {versions.map((v) => (
+            <Dropdown.Item
+              key={v.seq}
+              onSelect={() => onSelect(v.seq)}
+              className="flex cursor-pointer items-center gap-inline rounded-control px-inline py-hair font-ui text-[0.78rem] text-text outline-none data-[highlighted]:bg-surface-2"
+            >
+              <Check className={cn("size-3.5 shrink-0", selectedSeq === v.seq ? "text-accent" : "opacity-0")} aria-hidden />
+              <span className="min-w-0 flex-1 truncate">{versionLabel(v)}</span>
+              <span
+                className={cn(
+                  "shrink-0 rounded-full border px-hair py-px font-ui text-[0.62rem] uppercase tracking-wide",
+                  triggerBadgeClass(v.trigger),
+                )}
+              >
+                {v.trigger}
+              </span>
+            </Dropdown.Item>
+          ))}
+        </Dropdown.Content>
+      </Dropdown.Portal>
+    </Dropdown.Root>
+  );
+}
 
 /** One phase-aware pane (replacing the redundant Preview + Live tabs). When the agent's
  * dev server is reachable (via the ACTIVE backend's port exposure — local direct, gVisor
@@ -49,6 +174,47 @@ export function PreviewPane({
     status === "STUCK";
   const { data } = useBuildPreview(cid, active);
   const qc = useQueryClient();
+  const toast = useToast();
+  const {
+    versions,
+    refetch: refetchVersions,
+  } = useWorkspaceVersions(cid, events, status);
+  const [selectedVersionSeq, setSelectedVersionSeq] = useState<number | null>(null);
+  const [restoringSeq, setRestoringSeq] = useState<number | null>(null);
+  const [restoreNotice, setRestoreNotice] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  function selectVersion(seq: number | null) {
+    setSelectedVersionSeq(seq);
+    setRestoreNotice(null);
+  }
+
+  async function rollBackToVersion(seq: number) {
+    if (!cid || restoringSeq !== null) return;
+    setRestoringSeq(seq);
+    setRestoreNotice(null);
+    try {
+      const r = await restoreWorkspaceVersion(cid, seq);
+      await refetchVersions();
+      setSelectedVersionSeq(null);
+      setReloadKey((k) => k + 1);
+      const text =
+        r.new_version == null
+          ? `Rolled back to v${seq}.`
+          : `Rolled back to v${seq}; saved as v${r.new_version}.`;
+      setRestoreNotice({ tone: "success", text });
+      toast.show({
+        title: `Rolled back to v${seq}`,
+        body: r.new_version == null ? undefined : `Saved as v${r.new_version}.`,
+      });
+    } catch (err) {
+      setRestoreNotice({ tone: "error", text: restoreErrorCopy(err) });
+    } finally {
+      setRestoringSeq(null);
+    }
+  }
 
   // C5: separate the file list so we can both derive srcDoc AND detect server-side
   // HTML artifacts (content="") that deriveSrcDoc now returns null for.
@@ -187,6 +353,22 @@ export function PreviewPane({
       {restarting ? "Restarting…" : "Refresh"}
     </button>
   );
+  const VersionControl = (
+    <VersionPicker versions={versions} selectedSeq={selectedVersionSeq} onSelect={selectVersion} />
+  );
+  const RestoreNotice = restoreNotice ? (
+    <div
+      role={restoreNotice.tone === "error" ? "alert" : "status"}
+      className={cn(
+        "shrink-0 border-b px-body py-hair font-ui text-[0.72rem]",
+        restoreNotice.tone === "error"
+          ? "border-unsupported/30 bg-unsupported/10 text-unsupported"
+          : "border-supported/30 bg-supported/10 text-supported",
+      )}
+    >
+      {restoreNotice.text}
+    </div>
+  ) : null;
   const proxySrc = cid ? `${previewHostUrl(cid, previewPort)}/?r=${reloadKey}` : null;
   // E3 — Firefox-safe path-based route. The origin-true `{cid8}-{port}.localhost`
   // URL above is the most correct (separate origin, dev-server assets resolve
@@ -199,6 +381,10 @@ export function PreviewPane({
   const openInNewTabUrl = cid
     ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/`
     : null;
+  const historicalPreviewSrc =
+    cid && selectedVersionSeq !== null
+      ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/?version=${selectedVersionSeq}&r=${reloadKey}`
+      : null;
 
   // PRIORITY (the fix): default to the RENDERED view, because the backend's bare
   // `python -m http.server` shows a useless directory LISTING (file paths) when
@@ -222,6 +408,66 @@ export function PreviewPane({
     previewPort === 8000
       ? data?.owner
       : (data?.ports ?? []).find((p) => p.port === previewPort)?.owner;
+
+  if (selectedVersionSeq !== null && historicalPreviewSrc) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">
+            preview history
+          </span>
+          <div className="flex items-center gap-inline">
+            {VersionControl}
+            {RefreshButton}
+          </div>
+        </div>
+        {RestoreNotice}
+        <div className="relative min-h-0 flex-1">
+          <div className="absolute left-body right-body top-body z-10 flex flex-wrap items-center justify-between gap-inline rounded-control border border-warn/30 bg-bg/95 px-body py-hair shadow-sm backdrop-blur">
+            <span className="font-ui text-[0.78rem] text-warn">
+              viewing v{selectedVersionSeq} (read-only)
+            </span>
+            <div className="flex items-center gap-inline">
+              <button
+                type="button"
+                onClick={() => selectVersion(null)}
+                className="flex items-center gap-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text"
+              >
+                <MonitorPlay className="size-3" aria-hidden />
+                Back to live
+              </button>
+              <ConfirmDialog
+                title={`Roll back to v${selectedVersionSeq}?`}
+                description="Restores the workspace to this version. Nothing is deleted — the rollback is saved as a new version on top of history."
+                confirmLabel="Roll back"
+                confirmContext="workspace-rollback"
+                onConfirm={() => void rollBackToVersion(selectedVersionSeq)}
+                trigger={
+                  <button
+                    type="button"
+                    disabled={restoringSeq !== null}
+                    className="flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.74rem] text-warn transition-colors hover:border-warn hover:text-warn disabled:opacity-50"
+                  >
+                    <Undo2 className={cn("size-3", restoringSeq === selectedVersionSeq && "animate-spin")} aria-hidden />
+                    {restoringSeq === selectedVersionSeq
+                      ? "Rolling back…"
+                      : "Roll back to this version"}
+                  </button>
+                }
+              />
+            </div>
+          </div>
+          <iframe
+            key={`${reloadKey}-version-${selectedVersionSeq}`}
+            title="Historical preview"
+            src={historicalPreviewSrc}
+            sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
+            className="h-full w-full border-0 bg-white"
+          />
+        </div>
+      </div>
+    );
+  }
 
   if (showLive && proxySrc) {
     return (
@@ -257,6 +503,7 @@ export function PreviewPane({
             )}
           </div>
           <div className="flex items-center gap-inline">
+            {VersionControl}
             {RefreshButton}
             {srcDoc != null && (
               <button
@@ -288,6 +535,7 @@ export function PreviewPane({
             )}
           </div>
         </div>
+        {RestoreNotice}
         {/* E3 — honest cross-browser hint. The iframe above points at the
             origin-true `{cid8}-{port}.localhost` subdomain, which Chrome
             resolves but Firefox does not. Tell the user the truth (no
@@ -321,6 +569,7 @@ export function PreviewPane({
             {showEdit ? "edit" : "preview"}
           </span>
           <div className="flex items-center gap-inline">
+            {VersionControl}
             {RefreshButton}
             {/* A1.4 — Edit toggle (only when steering + a stampable entry exist). */}
             {canEdit && (
@@ -354,6 +603,7 @@ export function PreviewPane({
             )}
           </div>
         </div>
+        {RestoreNotice}
         {untrusted && (
           <div className="shrink-0 border-b border-hairline bg-surface-1 px-body py-hair font-ui text-[0.72rem] text-text-faint">
             Scripted preview is disabled for shared/imported runs (untrusted content).
@@ -434,9 +684,11 @@ export function PreviewPane({
         <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
           <span className="truncate font-mono text-[0.74rem] text-text-faint">preview</span>
           <div className="flex items-center gap-inline">
+            {VersionControl}
             {RefreshButton}
           </div>
         </div>
+        {RestoreNotice}
         {untrusted && (
           <div className="shrink-0 border-b border-hairline bg-surface-1 px-body py-hair font-ui text-[0.72rem] text-text-faint">
             Scripted preview is disabled for shared/imported runs (untrusted content).
@@ -456,33 +708,45 @@ export function PreviewPane({
 
   const done = status === "FINISHED" || status === "IDLE";
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-inline px-body text-center">
-      <p className="font-ui text-[0.9rem] text-text-muted">
-        {done ? "Live view" : "Building preview"}
-      </p>
-      <p className="max-w-measure font-ui text-[0.8rem] text-text-faint">
-        {data?.reason ??
-          "While the agent builds, a live preview of the deliverable renders here when its dev server starts."}
-      </p>
-      {data?.stub && (
-        <span className="rounded-full border border-weak px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-weak">
-          podman stub
-        </span>
+    <div className="flex h-full min-h-0 flex-col">
+      {versions.length > 0 && (
+        <div className="flex shrink-0 items-center justify-between gap-inline border-b border-hairline px-body py-hair">
+          <span className="truncate font-mono text-[0.74rem] text-text-faint">preview</span>
+          <div className="flex items-center gap-inline">
+            {VersionControl}
+            {RefreshButton}
+          </div>
+        </div>
       )}
-      {/* one-click recovery even when nothing renders yet (§E7) */}
-      {cid && !data?.stub && (
-        <button
-          type="button"
-          onClick={refresh}
-          disabled={restarting}
-          aria-label="Refresh or restart the preview server"
-          data-disco-control="build.preview-restart"
-          className="mt-hair flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-50"
-        >
-          <RotateCw className={cn("size-3.5", restarting && "animate-spin")} aria-hidden />
-          {restarting ? "Restarting preview…" : "Refresh / restart preview"}
-        </button>
-      )}
+      {RestoreNotice}
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-inline px-body text-center">
+        <p className="font-ui text-[0.9rem] text-text-muted">
+          {done ? "Live view" : "Building preview"}
+        </p>
+        <p className="max-w-measure font-ui text-[0.8rem] text-text-faint">
+          {data?.reason ??
+            "While the agent builds, a live preview of the deliverable renders here when its dev server starts."}
+        </p>
+        {data?.stub && (
+          <span className="rounded-full border border-weak px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-weak">
+            podman stub
+          </span>
+        )}
+        {/* one-click recovery even when nothing renders yet (§E7) */}
+        {cid && !data?.stub && (
+          <button
+            type="button"
+            onClick={refresh}
+            disabled={restarting}
+            aria-label="Refresh or restart the preview server"
+            data-disco-control="build.preview-restart"
+            className="mt-hair flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:opacity-50"
+          >
+            <RotateCw className={cn("size-3.5", restarting && "animate-spin")} aria-hidden />
+            {restarting ? "Restarting preview…" : "Refresh / restart preview"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

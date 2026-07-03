@@ -352,6 +352,15 @@ export function ActivityFeed({
   return (
     <ol className="flex flex-col">
       {items.map((item, i) => {
+        if (item.kind === "rollback_marker") {
+          return (
+            <li key={item.id} className="pmx-rise flex justify-center py-hair">
+              <span className="rounded-full border border-warn/30 bg-warn/10 px-inline py-px font-ui text-[0.72rem] text-warn">
+                {item.label}
+              </span>
+            </li>
+          );
+        }
         const isMessage =
           item.kind === "user" ||
           item.kind === "agent_message" ||
