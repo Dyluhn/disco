@@ -8,6 +8,7 @@ All driven through sweep_idle_once() — no sleeping required.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +22,7 @@ from disco.core import (
     StatusEvent,
 )
 from disco.tools import ProcessSandboxService
+from disco.tools.projects import SnapshotResult, StorageStatus
 
 # ---- helpers -----------------------------------------------------------------
 
@@ -51,6 +53,81 @@ async def _make_conversation(store: SqliteEventStore, status: ConversationStatus
     if status != ConversationStatus.IDLE:
         await store.append(cid, StatusEvent(status=status))
     return cid
+
+
+class _VersionCutStore:
+    def __init__(self, root: Path, *, fail_cut: bool = False) -> None:
+        self._root = root
+        self.fail_cut = fail_cut
+        self.manifest_writes = 0
+        self.cut_triggers: list[str] = []
+
+    def status(self) -> StorageStatus:
+        return StorageStatus.OK
+
+    def path_for(self, conversation_id: str) -> Path:
+        return self._root / conversation_id / "workspace"
+
+    def write_manifest(self, conversation_id: str, **kwargs) -> Path:
+        self.manifest_writes += 1
+        path = self._root / conversation_id / "manifest.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}")
+        return path
+
+    def cut_version(self, conversation_id: str, *, trigger: str):
+        self.cut_triggers.append(trigger)
+        if self.fail_cut:
+            raise RuntimeError("version store unavailable")
+        return None
+
+
+# ---- snapshot version cuts ---------------------------------------------------
+
+
+async def test_maybe_snapshot_cuts_version_after_manifest(monkeypatch, tmp_path):
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = "conv-snapshot-version"
+    project_store = _VersionCutStore(tmp_path)
+    rt._project_store_now = MagicMock(return_value=project_store)
+    rt._executors[cid] = MagicMock(_sandbox=object())
+
+    async def _snapshot(session, dest):
+        assert dest == project_store.path_for(cid)
+        return SnapshotResult(file_count=1, total_bytes=4, paths=["a.txt"])
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", _snapshot)
+
+    await rt._maybe_snapshot(cid, trigger="finish")
+
+    assert project_store.manifest_writes == 1
+    assert project_store.cut_triggers == ["finish"]
+
+
+async def test_maybe_snapshot_survives_cut_version_failure(
+    monkeypatch, tmp_path, caplog
+):
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = "conv-snapshot-cut-fails"
+    project_store = _VersionCutStore(tmp_path, fail_cut=True)
+    rt._project_store_now = MagicMock(return_value=project_store)
+    rt._emit_persistence_reminder = AsyncMock()
+    rt._executors[cid] = MagicMock(_sandbox=object())
+
+    async def _snapshot(session, dest):
+        return SnapshotResult(file_count=1, total_bytes=4, paths=["a.txt"])
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", _snapshot)
+    caplog.set_level("WARNING")
+
+    await rt._maybe_snapshot(cid)
+
+    assert project_store.manifest_writes == 1
+    assert project_store.cut_triggers == ["turn"]
+    rt._emit_persistence_reminder.assert_not_awaited()
+    assert "version cut failed" in caplog.text
 
 
 # ---- idleness truth table ----------------------------------------------------

@@ -45,6 +45,7 @@ class EventKind(str, Enum):
     AGENT_ERROR = "agent_error"
     CONDENSATION = "condensation"
     STATUS = "status"
+    WORKSPACE_RESTORED = "workspace_restored"
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
     REPORT = "report"  # a finished Deep Research multi-section grounded report
@@ -599,6 +600,21 @@ class StatusEvent(BaseEvent):
     detail: str | None = None
 
 
+class WorkspaceRestoredEvent(BaseEvent):
+    """A user-requested workspace rollback was applied.
+
+    NOT LLMConvertible — this is audit/UI bookkeeping. The restored files live in
+    the workspace/version store; the model sees the current workspace through the
+    fresh per-turn workspace snapshot instead of this event body.
+    """
+
+    kind: Literal[EventKind.WORKSPACE_RESTORED] = EventKind.WORKSPACE_RESTORED
+    source: EventSource = EventSource.USER
+    version_seq: int
+    tree_digest: str
+    label: str = ""
+
+
 class PlanEvent(BaseEvent, LLMConvertible):
     """A structured plan the agent proposed (in PLANNING mode) and the human is
     asked to approve before any work runs. LLMConvertible so the committed plan
@@ -956,6 +972,7 @@ Event = Annotated[
     | AgentErrorEvent
     | CondensationEvent
     | StatusEvent
+    | WorkspaceRestoredEvent
     | PlanEvent
     | ReportEvent
     | AlternativesEvent

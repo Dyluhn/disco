@@ -21,6 +21,7 @@ import logging
 import os
 import posixpath
 import re
+import shutil
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
@@ -47,6 +48,7 @@ from disco.core import (
     ToolCall,
     ToolResult,
     VerifierVerdictEvent,
+    WorkspaceRestoredEvent,
     render_skills_for_prompt,
 )
 from disco.core.context.artifact_projection import (
@@ -127,7 +129,10 @@ from disco.tools import (
 from disco.tools.mcp import McpPool
 from disco.tools.projects import (
     ProjectStore,
+    StorageError,
     StorageStatus,
+    rehydrate_workspace,
+    snapshot_workspace,
 )
 from disco.tools.sandbox import (
     SandboxConfig,
@@ -158,6 +163,18 @@ from .verify.host import HostWebAppVerifier
 _HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
 _TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+class WorkspaceRestoreConflict(ValueError):
+    """The workspace cannot be restored while the conversation is actively running."""
+
+
+class WorkspaceVersionNotFound(LookupError):
+    """The requested workspace version does not exist or its files are gone."""
+
+
+class WorkspaceRestoreStorageError(RuntimeError):
+    """Workspace restore could not complete because storage or sandbox I/O failed."""
 
 
 def host_verify_canary_enabled() -> bool:
@@ -3014,7 +3031,7 @@ class ConversationRuntime:
             # the later clean-return finalizer backstop cannot double-fold.
             if ended_state.execution_status is ConversationStatus.FINISHED:
                 await self._maybe_shadow_fold_finished_manifest(conversation_id)
-            await self._maybe_snapshot(conversation_id)
+            await self._maybe_snapshot(conversation_id, trigger="finish")
             # FINISHED now rides the idle sweep like STUCK/ERROR/PAUSED;
             # suspend = sweep_idle_once -> _suspend
         return state
@@ -3093,6 +3110,97 @@ class ConversationRuntime:
         auto-default path rather than returning None."""
         return self._project_store_now()
 
+    async def restore_workspace_version(self, conversation_id: str, seq: int) -> dict:
+        """Restore a prior ProjectStore workspace version into the live build workspace.
+
+        The event log remains append-only: restore is represented by a new
+        WorkspaceRestoredEvent plus a new head version cut from the restored tree.
+        """
+        state = await self._store.get_state(conversation_id)
+        if state.execution_status is ConversationStatus.RUNNING:
+            raise WorkspaceRestoreConflict("conversation is running")
+
+        store = self._project_store_now()
+        status = store.status()
+        if status != StorageStatus.OK:
+            raise WorkspaceRestoreStorageError(f"project storage is {status.value}")
+
+        try:
+            versions = store.list_versions(conversation_id)
+        except StorageError as exc:
+            raise WorkspaceRestoreStorageError(str(exc)) from exc
+        record = next((r for r in versions if r.seq == seq), None)
+        if record is None:
+            raise WorkspaceVersionNotFound(f"unknown version seq: {seq!r}")
+        try:
+            version_dir = store.version_workspace_path(conversation_id, seq)
+        except StorageError as exc:
+            raise WorkspaceVersionNotFound(str(exc)) from exc
+
+        session = self.live_session(conversation_id)
+        if session is None:
+            cid8 = conversation_id.removeprefix("conv_")[:8]
+            with contextlib.suppress(Exception):
+                await self.wake_for_preview(cid8, PREVIEW_PORT)
+            session = self.live_session(conversation_id)
+        if session is None:
+            try:
+                self._loop_for(conversation_id)
+            except Exception as exc:  # noqa: BLE001 — route maps to a named storage error
+                raise WorkspaceRestoreStorageError(
+                    f"could not create sandbox for restore: {exc}"
+                ) from exc
+            session = self.live_session(conversation_id)
+        if session is None:
+            raise WorkspaceRestoreStorageError("sandbox unavailable for restore")
+
+        try:
+            clear = await session.exec_shell(
+                "find . -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +",
+                timeout_s=30,
+            )
+            if clear.exit_code != 0:
+                detail = (clear.stderr or clear.stdout or "workspace clear failed").strip()
+                raise WorkspaceRestoreStorageError(detail[:300])
+            await rehydrate_workspace(session, version_dir)
+
+            live_workspace = store.path_for(conversation_id)
+            if live_workspace.exists():
+                shutil.rmtree(live_workspace)
+            result = await snapshot_workspace(session, live_workspace)
+
+            project_record = store.get(conversation_id)
+            store.write_manifest(
+                conversation_id,
+                title=project_record.title if project_record is not None else None,
+                owner_id=project_record.owner_id if project_record is not None else None,
+                created_at=project_record.created_at if project_record is not None else None,
+                file_count=result.file_count,
+                total_bytes=result.total_bytes,
+            )
+        except WorkspaceRestoreStorageError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise WorkspaceRestoreStorageError(str(exc)) from exc
+
+        await self._store.append(
+            conversation_id,
+            WorkspaceRestoredEvent(
+                version_seq=seq,
+                tree_digest=record.tree_digest,
+                label=record.label,
+            ),
+        )
+        try:
+            new_record = store.cut_version(conversation_id, trigger="restore")
+        except StorageError as exc:
+            raise WorkspaceRestoreStorageError(str(exc)) from exc
+        return {
+            "restored": seq,
+            "new_version": new_record.seq if new_record is not None else None,
+            "tree_digest": record.tree_digest,
+        }
+
     # ---- share export (RP-06) ----------------------------------------------
 
     async def share_export(
@@ -3169,8 +3277,8 @@ class ConversationRuntime:
     async def _rematerialize_uploads(self, conversation_id: str) -> None:
         return await self._lifecycle._rematerialize_uploads(conversation_id)
 
-    async def _maybe_snapshot(self, conversation_id: str) -> None:
-        return await self._lifecycle._maybe_snapshot(conversation_id)
+    async def _maybe_snapshot(self, conversation_id: str, *, trigger: str = "turn") -> None:
+        return await self._lifecycle._maybe_snapshot(conversation_id, trigger=trigger)
 
     async def _emit_persistence_reminder(self, conversation_id: str, body: str) -> None:
         """Surface a project-persistence problem on the event log as an implicit

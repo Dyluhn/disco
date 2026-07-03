@@ -7,17 +7,21 @@ import mimetypes
 
 import httpx
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools.projects import StorageStatus
+from disco.tools.projects import StorageError, StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
 
 
 def _serve_static_from_snapshot(
-    runtime: ConversationRuntime, conversation_id: str, rel_path: str
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    rel_path: str,
+    *,
+    version: int | None = None,
 ) -> Response | None:
     """runthru-v2: serve a FINISHED build's static site DIRECTLY from the host
     ProjectStore snapshot when the sandbox can't be woken (build finished + reaped,
@@ -29,7 +33,14 @@ def _serve_static_from_snapshot(
         ps = runtime.project_store()
         if ps is None or ps.status() != StorageStatus.OK:
             return None
-        ws = ps.path_for(conversation_id).resolve()
+        if version is None:
+            ws = ps.path_for(conversation_id).resolve()
+        else:
+            ws = ps.version_workspace_path(conversation_id, version).resolve()
+    except StorageError:
+        if version is not None:
+            return Response("version not found", status_code=404, media_type="text/plain")
+        return None
     except Exception:  # noqa: BLE001 — no snapshot → caller falls back to 503
         return None
     rel = strip_redundant_workspace_prefix(rel_path or "").strip("/") or "index.html"
@@ -332,7 +343,11 @@ def make_preview_router(
     # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages.
     # WALK-10: now wakes suspended sandboxes via wake_for_preview — fixes the Open button
     # and the PreviewPane "Open in new tab" link that returned 503 after sandbox auto-suspend.
-    async def preview_app(conversation_id: str, path: str = "") -> Response:
+    async def preview_app(
+        conversation_id: str,
+        path: str = "",
+        version: int | None = Query(default=None),
+    ) -> Response:
         """Proxy the agent's dev server through THIS (tailnet-reachable) origin — the
         backend-derived upstream (localhost for local, the remote tailnet IP for gVisor) is
         reached server-side, so no random container port is exposed and previews work over
@@ -343,6 +358,8 @@ def make_preview_router(
         if runtime is None:
             return Response("preview not available", status_code=503, media_type="text/plain")
         cid8 = conversation_id.removeprefix("conv_")[:8]
+        # Historical preview is static-only: the live proxy stays pointed at the
+        # current sandbox/dev server and only the snapshot fallback honors ?version.
         upstream = await runtime.wake_for_preview(cid8, PREVIEW_PORT)
         if upstream is None:
             # Fix 2 (B-E): on sealed/filtered boxes no host port is published, so
@@ -356,7 +373,9 @@ def make_preview_router(
             # runthru-v2: the sandbox can't be woken (finished build / backend
             # unavailable), but the built static site may already be on the host
             # snapshot — serve it directly instead of a 503 for a file we have.
-            served = _serve_static_from_snapshot(runtime, conversation_id, path)
+            served = _serve_static_from_snapshot(
+                runtime, conversation_id, path, version=version
+            )
             if served is not None:
                 return served
             return Response("preview not available", status_code=503, media_type="text/plain")

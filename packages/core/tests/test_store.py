@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from disco.core import SqliteEventStore
+from disco.core import EventKind, SqliteEventStore, WorkspaceRestoredEvent
 from event_fakes import action, user_msg
 from pydantic import ValidationError
 
@@ -57,6 +57,24 @@ async def test_g1_seq_assigned_on_return(store):
     assert e.seq is None
     stored = await store.append(CID, e)
     assert stored.seq == 1
+
+
+async def test_workspace_restored_event_round_trips_through_store(store):
+    event = WorkspaceRestoredEvent(
+        version_seq=3,
+        tree_digest="abc123",
+        label="before refactor",
+    )
+    stored = await store.append(CID, event)
+    events = await store.get_events(CID)
+
+    assert events == [stored]
+    restored = events[0]
+    assert isinstance(restored, WorkspaceRestoredEvent)
+    assert restored.kind is EventKind.WORKSPACE_RESTORED
+    assert restored.version_seq == 3
+    assert restored.tree_digest == "abc123"
+    assert restored.label == "before refactor"
 
 
 # ---- G4: idempotency --------------------------------------------------------

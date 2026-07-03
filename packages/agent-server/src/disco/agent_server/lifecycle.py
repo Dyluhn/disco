@@ -672,7 +672,7 @@ class LifecycleManager:
                 written, conversation_id,
             )
 
-    async def _maybe_snapshot(self, conversation_id: str) -> None:
+    async def _maybe_snapshot(self, conversation_id: str, *, trigger: str = "turn") -> None:
         """Mirror the live workspace out to disk + update the manifest."""
         store = self._rt._project_store_now()
         if store is None:
@@ -734,6 +734,12 @@ class LifecycleManager:
                 file_count=result.file_count,
                 total_bytes=result.total_bytes,
             )
+            try:
+                store.cut_version(conversation_id, trigger=trigger)
+            except Exception:  # noqa: BLE001 — versions are additive; mirror stays authoritative
+                _LOG.warning(
+                    "version cut failed for %s after snapshot", conversation_id, exc_info=True
+                )
         except Exception as exc:  # noqa: BLE001 — surface, don't crash
             await self._rt._emit_persistence_reminder(
                 conversation_id,

@@ -64,6 +64,7 @@ from .events import (
     VerifierShadowEvent,
     VerifierStartedEvent,
     VerifierVerdictEvent,
+    WorkspaceRestoredEvent,
     event_from_json_dict,
     event_to_json_dict,
 )
@@ -150,6 +151,7 @@ __all__ = [
     "VerifierShadowEvent",
     "VerifierStartedEvent",
     "VerifierVerdictEvent",
+    "WorkspaceRestoredEvent",
     "View",
     "WSClientFrame",
     "WSServerFrame",

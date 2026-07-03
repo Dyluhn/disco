@@ -90,6 +90,12 @@ export interface StatusEvent extends EventBase {
   status: ConversationStatus;
   detail?: string | null;
 }
+export interface WorkspaceRestoredEvent extends EventBase {
+  kind: "workspace_restored";
+  version_seq: number;
+  tree_digest: string;
+  label: string;
+}
 export interface PlanStep {
   title: string;
   detail?: string | null;
@@ -278,6 +284,7 @@ export type AgentEvent =
   | AgentErrorEvent
   | CondensationEvent
   | StatusEvent
+  | WorkspaceRestoredEvent
   | PlanEvent
   | ReportEvent
   | AlternativesEvent

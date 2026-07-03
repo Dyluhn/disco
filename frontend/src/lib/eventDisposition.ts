@@ -34,6 +34,7 @@ export const KNOWN_EVENT_KINDS = [
   "agent_error",
   "condensation",
   "status",
+  "workspace_restored",
   "error",
   "plan",
   "report",
@@ -68,6 +69,10 @@ export const EVENT_DISPOSITION: Record<
   observation: { disposition: "rendered", where: "Build/Agent ActivityFeed (tool results, screenshots)." },
   agent_error: { disposition: "rendered", where: "Build/Agent ActivityFeed error rows + status." },
   status: { disposition: "rendered", where: "AgentStatusBar / lifecycle state machine across all surfaces." },
+  workspace_restored: {
+    disposition: "suppressed",
+    where: "Workspace rollback audit marker. Version history UI will surface it from the versions API, not as a chat turn.",
+  },
   error: { disposition: "rendered", where: "Conversation-level error surface (states.tsx error card)." },
   plan: { disposition: "rendered", where: "PlanPanel (Build + Deep Research plan gate)." },
   report: { disposition: "rendered", where: "DeepReportView (Deep Research)." },
