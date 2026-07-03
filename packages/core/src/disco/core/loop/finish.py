@@ -95,12 +95,20 @@ _DOD_REFUSAL_CAP = 3
 _DICTATED_CONTENT_REFUSAL_CAP = 3
 
 _HOST_VERIFY_AUTHORITATIVE_FLAG = "HOST_VERIFY_AUTHORITATIVE"
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSY = frozenset({"0", "false", "no", "off"})
 
 
 def host_verify_authoritative_enabled() -> bool:
-    """True iff DISCO_HOST_VERIFY_AUTHORITATIVE is truthy (default OFF)."""
-    return str(disco_env(_HOST_VERIFY_AUTHORITATIVE_FLAG) or "").strip().lower() in _TRUTHY
+    """Default ON unless DISCO_HOST_VERIFY_AUTHORITATIVE is explicitly falsy.
+
+    Explicit off restores the REL-1c shadow posture. The authoritative default
+    is live-proven as of 2026-07-03: no false-block on good builds, broken apps
+    are caught and driven to repair, and an ``unavailable`` host verdict
+    (browser infrastructure absent) degrades to the inline browser gate rather
+    than hard-refusing.
+    """
+    return str(disco_env(_HOST_VERIFY_AUTHORITATIVE_FLAG) or "").strip().lower() not in _FALSY
+
 
 # W5 — execution-nudge cap. The execution gate was the ONE uncapped gate in the
 # finish path (the comment "No cap" in the old code). After _EXECUTION_NUDGE_CAP
@@ -823,6 +831,19 @@ def _latest_verify_verdict(
     return None
 
 
+def _latest_host_verifier_verdict(events: list[Event], since_seq: int) -> str | None:
+    """Verdict label of the LATEST host-verifier ``VerifierVerdictEvent`` since
+    ``since_seq``, or None when the host gate has not recorded one for the
+    current served output (a productive edit advances ``since_seq`` past stale
+    verdicts, same cache-key rule as ``_latest_verify_verdict``)."""
+    for ev in reversed(events):
+        if ev.seq is None or ev.seq <= since_seq:
+            continue
+        if isinstance(ev, VerifierVerdictEvent):
+            return str(ev.verdict) if ev.verdict is not None else None
+    return None
+
+
 def _prior_verify_marker_fp(events: list[Event], since_seq: int) -> str | None:
     """failure_fingerprint stamped on the most recent `verify_no_progress:<fp>`
     marker since `since_seq`. None when the gate has not yet refused for the
@@ -1242,11 +1263,15 @@ class FinishGate:
     async def gate_host_verify(self, step: AgentStep, events: list[Event]) -> Disp:
         """REL-1c/1e — run the host verifier and emit audit telemetry.
 
-        Default behavior is REL-1c shadow: FALLTHROUGH-only, preserving the
-        existing inline self-verify/browser gate. When
-        DISCO_HOST_VERIFY_AUTHORITATIVE is enabled at loop construction, app
-        verdicts become authoritative and non-app/no-validator handoffs record
-        an honest ``unverifiable`` verdict without claiming verification.
+        Authoritative (the default since 2026-07-03): a real host ``fail`` on an
+        app deliverable refuses the finish (bounded by the 3-refusal release
+        valve); ``unavailable`` (verifier infrastructure could not run) degrades
+        to FALLTHROUGH so the inline browser gate stays the enforcement path on
+        browserless installs; non-app/no-validator handoffs record an honest
+        ``unverifiable`` verdict without claiming verification. With
+        DISCO_HOST_VERIFY_AUTHORITATIVE explicitly off (REL-1c shadow posture)
+        this gate is FALLTHROUGH-only telemetry, preserving the inline
+        self-verify/browser gate as sole enforcement.
         """
 
         authoritative = self._host_verify_authoritative()
@@ -1356,6 +1381,10 @@ class FinishGate:
         if authoritative and deliverable.artifact_kind == "app":
             if host_verdict.get("passed"):
                 self._loop._browser_verify_refusals = 0
+                return Disp.FALLTHROUGH
+            if host_label == "unavailable":
+                # Missing host-verifier infrastructure is not proof the app is broken;
+                # fall through so the inline browser gate remains the enforcement path.
                 return Disp.FALLTHROUGH
             return await self._host_verify_failure_disposition(deliverable, host_verdict)
         return Disp.FALLTHROUGH
@@ -2569,7 +2598,15 @@ class FinishGate:
         if getattr(self._loop, "_host_verifier", None) is None:
             return False
         deliverable = await self._host_verify_deliverable(step, events)
-        return deliverable is not None and deliverable.artifact_kind == "app"
+        if deliverable is None or deliverable.artifact_kind != "app":
+            return False
+        # Delegate only when the host verifier actually RAN on the current
+        # output (recorded pass/fail). An ``unavailable`` verdict (verifier
+        # infrastructure could not run) or no verdict at all must keep the
+        # inline browser gate as enforcement — otherwise unavailable would slip
+        # through BOTH gates and an app could finish with no verification.
+        verdict = _latest_host_verifier_verdict(events, _last_productive_seq(events))
+        return verdict in ("pass", "fail")
 
     async def gate_browser_verify(self, step: AgentStep, events: list[Event]) -> Disp:
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish

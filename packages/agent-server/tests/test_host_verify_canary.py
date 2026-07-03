@@ -67,14 +67,23 @@ def test_host_verify_canary_flag_default_off(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_host_verify_canary_flag_off_installs_no_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hook installs when canary OR authoritative is enabled. Authoritative
+    became the code default with the REL-1e flip, so the no-hook posture now
+    requires BOTH explicitly off — and the default env installs the hook."""
     monkeypatch.delenv("DISCO_HOST_VERIFY_CANARY", raising=False)
     monkeypatch.delenv("PMX_HOST_VERIFY_CANARY", raising=False)
+    monkeypatch.delenv("DISCO_HOST_VERIFY_AUTHORITATIVE", raising=False)
+    monkeypatch.delenv("PMX_HOST_VERIFY_AUTHORITATIVE", raising=False)
     rt = _runtime()
     cid = "conv_canary_off"
     rt.set_surface(cid, "build")
     fs = MemFS()
     _inject_executor(rt, cid, fs)
 
+    # REL-1e default: authoritative ON → verdict bookkeeping hook installed.
+    assert rt._host_verify_canary_hook_for(cid) is not None
+
+    monkeypatch.setenv("DISCO_HOST_VERIFY_AUTHORITATIVE", "off")
     assert rt._host_verify_canary_hook_for(cid) is None
     assert cid not in rt._build_trackers
     assert await ArtifactMemoryStore(fs).read_artifacts() == ()

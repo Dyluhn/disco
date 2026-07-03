@@ -194,6 +194,48 @@ async def test_host_fail_refuses_then_releases_loudly_without_inline_verify() ->
 
 
 @pytest.mark.asyncio
+async def test_host_unavailable_degrades_to_inline_gate_not_refusal() -> None:
+    """REL-1e flip safety: ``unavailable`` (verifier infra could not run) is not
+    evidence the app is broken — it must NOT burn host-refusal cycles, and it
+    must NOT delegate the browser gate to the host either (that would let the
+    app finish with no verification at all). The inline verify_web_app gate
+    stays the enforcement path."""
+    host = _HostVerifier(
+        _verdict(passed=False, fp="host_verifier_unavailable", verdict="unavailable")
+    )
+    execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="file_write",
+                args={"path": "index.html", "content": "<h1>hello</h1>"},
+            ),
+            finish_step(),
+            action_step(tool="verify_web_app", args={}),
+            finish_step(),
+        ]
+    )
+    loop, store = _loop(agent, execu, host_verifier=host)
+
+    await loop.send_message("build a page")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    # The inline gate enforced: the agent had to run a real verify_web_app.
+    assert execu.verify_calls >= 1
+    events = await store.get_events("conv")
+    env = _env_messages(events)
+    # No host-refusal cycle was burned and no loud unverified release happened.
+    assert not any("Host verification did not pass" in m for m in env)
+    assert not any("WITHOUT a passing host verifier verdict" in m for m in env)
+    assert ("RUNNING", "unverified_release") not in _statuses(events)
+    # The honest ``unavailable`` verdict is still on the audit trail.
+    verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
+    assert verdicts and all(v.verdict == "unavailable" for v in verdicts)
+    assert all(v.verified is False for v in verdicts)
+
+
+@pytest.mark.asyncio
 async def test_authoritative_non_web_without_handoff_stays_unchanged() -> None:
     host = _HostVerifier(_verdict(passed=True, fp="HOST"))
     execu = _VerifyExecutor(_verdict(passed=True, fp="INLINE"))
@@ -260,16 +302,19 @@ async def test_files_handoff_without_validator_records_unverifiable() -> None:
     assert verdict_events == verdicts
 
 
-def test_authoritative_flag_default_off_and_truthy(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_authoritative_flag_default_on_and_explicit_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REL-1e flip (2026-07-03): authoritative is the DEFAULT; only an explicit
+    falsy value restores the REL-1c shadow posture."""
     monkeypatch.delenv("DISCO_HOST_VERIFY_AUTHORITATIVE", raising=False)
     monkeypatch.delenv("PMX_HOST_VERIFY_AUTHORITATIVE", raising=False)
-    assert host_verify_authoritative_enabled() is False
+    assert host_verify_authoritative_enabled() is True
 
     monkeypatch.setenv("DISCO_HOST_VERIFY_AUTHORITATIVE", "on")
     assert host_verify_authoritative_enabled() is True
 
-    monkeypatch.setenv("DISCO_HOST_VERIFY_AUTHORITATIVE", "0")
-    assert host_verify_authoritative_enabled() is False
+    for falsy in ("0", "false", "no", "off", " OFF "):
+        monkeypatch.setenv("DISCO_HOST_VERIFY_AUTHORITATIVE", falsy)
+        assert host_verify_authoritative_enabled() is False, falsy
 
 
 def test_prompt_self_verify_mandate_softens_only_when_authoritative() -> None:

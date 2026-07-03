@@ -179,6 +179,11 @@ def _loop(
         host_verifier=host_verifier,
         host_verify_timeout_s=host_verify_timeout_s,
         host_verifier_verdict_hook=host_verifier_verdict_hook,
+        # This file exercises the REL-1c SHADOW posture (advisory host verify).
+        # Authoritative became the code default with the REL-1e flip, so pin
+        # shadow explicitly; authoritative behavior is covered by
+        # test_host_verify_authoritative.py.
+        host_verify_authoritative=False,
     )
     return loop, store
 
