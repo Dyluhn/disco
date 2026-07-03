@@ -17,6 +17,7 @@ from disco.core import (
     EventSource,
     MessageEvent,
     StatusEvent,
+    VerifierVerdictEvent,
 )
 from disco.core.llm import OperatingMode
 from disco.core.loop.stuck import StuckThresholds
@@ -251,6 +252,61 @@ async def test_unverified_web_completion_routes_through_browser_gate():
         if isinstance(e, StatusEvent) and e.detail == "completed_via_notify"
     ]
     assert all(e.seq is not None and e.seq > first_nudge_seq for e in cvn)
+
+
+class _FakeHostVerifier:
+    """Minimal host verifier: records .verify() calls, returns a passing verdict."""
+
+    def __init__(self) -> None:
+        self.calls: list[object] = []
+
+    async def verify(self, deliverable):
+        self.calls.append(deliverable)
+        return {
+            "passed": True, "verdict": "pass", "url": "http://127.0.0.1:8000/",
+            "http_status": 200, "summary": "ok", "meaningful_content": True,
+            "console_errors": [], "network_failures": [],
+        }
+
+
+async def test_notify_completed_web_build_runs_host_verify():
+    """REL-1e drift fix — the completed_via_notify path must run the SAME shared
+    render-verify gates handle_finish_path runs. It historically skipped
+    gate_host_verify, so the host verifier (shadow telemetry / authoritative gating)
+    NEVER ran on notify-completed builds — proven live: pre-fix a real notify build
+    emitted ZERO verifier_shadow/verdict events. A web build completing via notify
+    must now invoke the host verifier and emit a host VerifierVerdictEvent."""
+    from disco.core.llm import ToolSpec
+    from loop_fakes import FakeExecutor
+
+    host = _FakeHostVerifier()
+    agent = ScriptedAgent([
+        action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("file_write", {"path": "index.html", "content": "<html><body>Hi there</body></html>"}),
+        action_step("plan_step", {"index": 1, "state": "done"}),
+        _notify("done 1"), _notify("done 2"), _notify("done 3"),
+        _notify("done 4"), _notify("done 5"), _notify("done 6"),
+    ])
+    executor = FakeExecutor(
+        tools=[
+            ToolSpec(name=n, description=n, parameters_schema={})
+            for n in ("file_write", "notify_user", "file_read")
+        ]
+    )
+    loop, store = build_loop(
+        executor=executor, agent=agent, host_verifier=host,
+        planning_tools=frozenset(["file_read"]),
+    )
+    loop.mode = OperatingMode.PLANNING
+    await loop.send_message("go")
+    await loop.run()
+    await loop.approve_plan()
+    await loop.run()
+    events = await store.get_events(CID)
+
+    verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]
+    assert verdicts, "host verifier did not run on the completed_via_notify path (drift regressed)"
+    assert host.calls, "host verifier .verify() never called on the notify path"
 
 
 async def test_verified_web_completion_finishes_via_notify():

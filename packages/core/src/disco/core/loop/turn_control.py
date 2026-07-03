@@ -507,16 +507,19 @@ class Valve:
         events = await self._loop._events()
         if not await finish.dictated_content_gate_passed(events):
             return False
-        # (2) browser-verify gate — THE W-32 catch for web builds: refuses to
-        # finish until a clean browser observation exists since the last
-        # state-changing edit (it drives its own probe + is bounded by a
-        # 3-refusal release). Re-poll first: gate_execution_nudge may have emitted.
+        # (2) render-verify gates — THE W-32 catch, via the SAME shared sequence
+        # handle_finish_path runs: host+browser app-verify (per the authoritative
+        # flag) THEN the P10 export-render gate. Routing the shared helper (not a bare
+        # gate_browser_verify) is what keeps this notify path from drifting: it now
+        # runs host-verify (shadow telemetry / authoritative gating) and the deck/doc
+        # export gate too, both of which it silently skipped before. Re-poll first:
+        # gate_execution_nudge may have emitted.
         events = await self._loop._events()
-        disp = await finish.gate_browser_verify(finish_step, events)
+        disp = await finish.run_finish_verify_gates(finish_step, events)
         if disp is Disp.CONTINUE:
             return False
         if disp is Disp.HALT:
-            # W-45: the verify gate halted the run STUCK (repeated same-fingerprint
+            # W-45: a verify gate halted the run STUCK (repeated same-fingerprint
             # failure with no progress) and emitted the terminal status itself.
             return True
         # (3) external Definition-of-Done gate (no spec → no-op pass-through).

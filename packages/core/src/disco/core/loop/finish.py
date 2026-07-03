@@ -2785,6 +2785,38 @@ class FinishGate:
         )
         return Disp.CONTINUE
 
+    async def run_finish_verify_gates(self, step: AgentStep, events: list[Event]) -> Disp:
+        """The render-verify gate sequence shared by EVERY finish path: host+browser
+        app-verify (order depends on the authoritative flag) THEN the P10 export-render
+        gate for file deliverables.
+
+        Extracted so ``handle_finish_path`` (affirmative ``finish()``) and
+        ``_completed_via_notify_finish`` (the actionless/notify valve) run the SAME
+        gates — they had DRIFTED: the notify path historically skipped both
+        ``gate_host_verify`` (so shadow agreement was never measurable on
+        notify-completed builds, and an authoritative flip would leave a verify
+        bypass) AND ``gate_export_render`` (a blank deck finishing via notify escaped
+        the P10 check). Returns CONTINUE (a gate refused — caller must not finish),
+        HALT (a gate landed the terminal status / loop-breaker), or FALLTHROUGH (all
+        render-verify gates clear)."""
+        if self._host_verify_authoritative():
+            disp = await self.gate_host_verify(step, events)
+            if disp is Disp.CONTINUE or disp is Disp.HALT:
+                return disp
+            events = await self._loop._events()
+            disp = await self.gate_browser_verify(step, events)
+        else:
+            disp = await self.gate_browser_verify(step, events)
+            events = await self._loop._events()
+            await self.gate_host_verify(step, events)  # shadow: advisory, records telemetry
+        if disp is Disp.CONTINUE or disp is Disp.HALT:
+            return disp
+        # [P10] Export render-correctness gate — for a files-deliverable (deck/
+        # document) the app/browser gates above fall through, so THIS is the check
+        # that a blank/truncated/corrupt export can't report FINISHED.
+        events = await self._loop._events()
+        return await self.gate_export_render(step, events)
+
     async def handle_finish_path(
         self, step: AgentStep, state: ConversationState, events: list[Event]
     ) -> Disp:
@@ -2799,34 +2831,13 @@ class FinishGate:
             return Disp.CONTINUE
 
         events = await self._loop._events()
-        if self._host_verify_authoritative():
-            disp = await self.gate_host_verify(step, events)
-            if disp is Disp.CONTINUE:
-                return Disp.CONTINUE
-            if disp is Disp.HALT:
-                return Disp.HALT
-            events = await self._loop._events()
-            disp = await self.gate_browser_verify(step, events)
-        else:
-            disp = await self.gate_browser_verify(step, events)
-            events = await self._loop._events()
-            await self.gate_host_verify(step, events)
+        disp = await self.run_finish_verify_gates(step, events)
         if disp is Disp.CONTINUE:
             return Disp.CONTINUE
         if disp is Disp.HALT:
-            # W-45 loop breaker: the verify gate marked the run STUCK (same failure
+            # W-45 loop breaker: a verify gate marked the run STUCK (same failure
             # fingerprint with no productive edit) and already emitted the terminal
             # status — propagate the halt so the engine exits the loop.
-            return Disp.HALT
-
-        # [P10] Export render-correctness gate — for a files-deliverable (deck/
-        # document) the app/browser gates above fall through, so THIS is the check
-        # that a blank/truncated/corrupt export can't report FINISHED.
-        events = await self._loop._events()
-        disp = await self.gate_export_render(step, events)
-        if disp is Disp.CONTINUE:
-            return Disp.CONTINUE
-        if disp is Disp.HALT:
             return Disp.HALT
         events = await self._loop._events()
 
