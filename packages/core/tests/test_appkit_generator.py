@@ -20,6 +20,7 @@ import sqlite3
 
 import pytest
 from disco.core.appkit.spec import AppSpec
+from disco.core.appkit.semantic_metadata import METADATA_VERSION
 from disco.core.appkit import (
     Action,
     DesignSpec,
@@ -212,20 +213,21 @@ def test_content_lives_in_content_ts_not_components():
 # ---- EPIC J: semantic edit metadata (data-disco-*) ----------------------------
 
 
-def test_section_roots_carry_disco_semantic_attrs():
+def test_document_and_section_roots_carry_disco_semantic_attrs():
     # Every section root maps a UI click back to the AppSpec slot it renders: the
-    # spec file, the page id, and the section id (what `app_update_content` targets).
+    # spec file, section id, and stable screen label (what the P8 selection agent reads).
     tree = generate(_app(), _design())
-    for stem, page_id, section_id in (
-        ("HeroSection.tsx", "home", "hero"),
-        ("FeatSection.tsx", "home", "feat"),
-        ("SignupSection.tsx", "home", "signup"),
-        ("FootSection.tsx", "home", "foot"),
+    assert f'<html lang="en" data-disco-version="{METADATA_VERSION}">' in tree["index.html"]
+    for stem, section_id, screen_label in (
+        ("HeroSection.tsx", "hero", "hero"),
+        ("FeatSection.tsx", "feat", "feat"),
+        ("SignupSection.tsx", "signup", "signup"),
+        ("FootSection.tsx", "foot", "foot"),
     ):
         comp = next(tree[p] for p in tree if p.endswith(stem))
         assert 'data-disco-file=".disco/appspec.json"' in comp, stem
-        assert f'data-disco-page={json.dumps(page_id)}' in comp, stem
         assert f'data-disco-section={json.dumps(section_id)}' in comp, stem
+        assert f'data-disco-screen-label={json.dumps(screen_label)}' in comp, stem
         # the Epic G marker is still present (coverage + back-compat)
         assert f'data-appkit-section={json.dumps(section_id)}' in comp, stem
 
@@ -240,7 +242,9 @@ def test_content_elements_carry_field_slot_tags():
     feat = next(tree[p] for p in tree if p.endswith("FeatSection.tsx"))
     # item rows carry the slot AND their 0-based index so a single item maps back
     assert 'data-disco-field="items"' in feat
+    assert 'data-disco-collection="feat.items"' in feat
     assert "data-disco-index={i}" in feat
+    assert 'data-disco-item-kind="item"' in feat
     form = next(tree[p] for p in tree if p.endswith("SignupSection.tsx"))
     assert 'data-disco-field="heading"' in form
     assert 'data-disco-field="cta_label"' in form  # the submit button
@@ -279,7 +283,27 @@ def test_generic_section_branch_carries_appkit_and_disco_markers():
     comp = next(tree[p] for p in tree if p.endswith("Section.tsx"))
     assert 'data-appkit-section="custom_block"' in comp
     assert 'data-disco-section="custom_block"' in comp
+    assert 'data-disco-screen-label="custom-block"' in comp
     assert 'data-disco-file=".disco/appspec.json"' in comp
+
+
+def test_directory_listing_branch_carries_disco_semantic_attrs():
+    recipe = get_recipe("editorial-ledger")
+    assert recipe is not None
+    from disco.core.appkit import default_directory_app_spec
+
+    app = default_directory_app_spec("Acme Directory", recipe)
+    tree = generate(app, recipe.to_design_spec())
+    listing = next(tree[p] for p in tree if p.endswith("ListingsSection.tsx"))
+    assert 'data-appkit-section="listings"' in listing
+    assert 'data-disco-section="listings"' in listing
+    assert 'data-disco-screen-label="listings"' in listing
+    assert 'data-disco-field="heading"' in listing
+    assert 'data-disco-field="subheading"' in listing
+    assert 'data-disco-field="items"' in listing
+    assert 'data-disco-collection="listings.items"' in listing
+    assert "data-disco-index={i}" in listing
+    assert 'data-disco-item-kind="item"' in listing
 
 
 def test_disco_metadata_preserves_determinism_and_no_content_leak():

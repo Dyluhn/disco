@@ -5,8 +5,11 @@ re-rendering a self-contained `index.html`. The model edits the spec — not raw
 so a copy/color/section change touches exactly one thing (the targeted-edit law). A raw
 file rewrite is NOT in this set; it lives only in the repair/custom contract scopes.
 
-Tools: app_create / app_update_content / app_add_section / app_remove_section /
-app_reorder_section / app_set_design / app_set_tweak / app_snapshot_version.
+The overlapping legacy creation/edit/design tools are no longer registered on the
+normal Build surface; v2 AppKit tools are registered explicitly by the strict
+AppKit executor path. This module remains for persisted-AppSpec adapter paths and
+keeps the two legacy wrappers that are still load-bearing:
+app_set_tweak / app_snapshot_version.
 """
 
 from __future__ import annotations
@@ -288,12 +291,6 @@ class AppSnapshotVersionTool:
 
 
 APP_TOOLS: tuple[type, ...] = (
-    AppCreateTool,
-    AppUpdateContentTool,
-    AppAddSectionTool,
-    AppRemoveSectionTool,
-    AppReorderSectionTool,
-    AppSetDesignTool,
     AppSetTweakTool,
     AppSnapshotVersionTool,
 )

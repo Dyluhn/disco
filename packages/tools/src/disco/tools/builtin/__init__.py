@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from ..registry import ToolRegistry
 from ._deck_patch import DeckPatchTool
+from .app_kit import APPKIT_V2_TOOLS
 from .appkit import APP_TOOLS
 from .audio_overview import AudioOverviewTool
 from .scaffold_starter import ScaffoldStarterTool
@@ -146,7 +147,18 @@ def build_default_registry() -> ToolRegistry:
         DeckPatchTool(),  # deck_patch: C-EDIT-4 RFC-6902 JSON Patch + re-render
         ThinkTool(),  # think: NO-OP reasoning scratchpad (avoids prose-into-action degeneration)
         ContextMemoryTool(),  # CXT-2: durable .disco/context/* read + narrative write
-        *(cls() for cls in APP_TOOLS),  # P4/TOOL-1: AppKit semantic mutation tools
+        *(cls() for cls in APP_TOOLS),  # legacy AppKit wrappers still used by governed paths
+        # Hard-replace endpoint (fix-2): with the legacy overlapping app_* retired,
+        # the v2 AppKit tools own their names in the default registry; contract
+        # scopes + the AppKit executor still gate where they are callable. The
+        # LEGACY app_snapshot_version stays the registered owner of its name
+        # (governed persisted-v1 paths depend on it) — skip the v2 duplicate here;
+        # the AppKit executor registers the full v2 set for strict-mode builds.
+        *(
+            cls()
+            for cls in APPKIT_V2_TOOLS
+            if cls().definition.name != "app_snapshot_version"
+        ),
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned

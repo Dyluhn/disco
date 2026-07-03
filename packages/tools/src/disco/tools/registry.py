@@ -117,13 +117,8 @@ AGENT_TOOLS = frozenset(
         "think",  # NO-OP reasoning scratchpad — let a small model "say" things without side effects
         # CXT-2: durable .disco/context/* working memory (read any kind; write narrative kinds).
         "context_memory",
-        # P4/TOOL-1: AppKit semantic mutation tools (edit the AppSpec, not raw HTML).
-        "app_create",
-        "app_update_content",
-        "app_add_section",
-        "app_remove_section",
-        "app_reorder_section",
-        "app_set_design",
+        # Legacy AppKit wrappers still used by governed persisted-AppSpec paths.
+        # The overlapping create/edit/design tools are v2-only in strict AppKit mode.
         "app_set_tweak",
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame
@@ -178,13 +173,7 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
         "think",
         # CXT-2: durable context memory is safe in artifact scope (workspace FS only)
         "context_memory",
-        # P4/TOOL-1: AppKit semantic mutation tools are safe in artifact scope (FS only)
-        "app_create",
-        "app_update_content",
-        "app_add_section",
-        "app_remove_section",
-        "app_reorder_section",
-        "app_set_design",
+        # Legacy AppKit wrappers still used by governed persisted-AppSpec paths.
         "app_set_tweak",
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame (workspace FS only)

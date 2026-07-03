@@ -250,7 +250,12 @@ def test_dod_methods_on_protocol_do_not_appear_on_agent_tools() -> None:
     forbidden_method_names = ("set_dod_spec", "replace_dod_spec", "get_dod_spec")
     for name in reg.names():
         tool = reg.get(name, scope=agent_scope(model_policy=ModelExecutionPolicy.standard()))  # type: ignore[arg-type]
-        assert tool is not None, f"tool {name!r} not in agent scope"
+        if tool is None:
+            # Contract-scoped tools (e.g. the v2 app_* set after the fix-2
+            # hard-replace) are registered but not agent-scoped; the no-DoD-
+            # handle property must hold for them too — check the raw instance.
+            tool = reg._tools.get(name)  # type: ignore[attr-defined]
+        assert tool is not None, f"tool {name!r} not registered"
         for attr in dir(tool):
             assert attr not in forbidden_method_names, (
                 f"agent tool {type(tool).__name__}.{attr} shadows a DoD "

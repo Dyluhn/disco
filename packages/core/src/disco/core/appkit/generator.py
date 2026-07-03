@@ -35,6 +35,7 @@ import json
 import re
 from urllib.parse import quote
 
+from . import semantic_metadata as _md
 from .primitives import (
     DIRECTORY_PRIMITIVE_ID,
     LEAD_GEN_PRIMITIVE_ID,
@@ -452,9 +453,9 @@ def _emit_styles_css(design: DesignSpec) -> str:
 # back to the AppSpec slot it came from, so the host can steer an `app_update_content`
 # patch (the in-frame selection agent reads these; see selection_agent.js / appResolver).
 # They never change layout/content and are design_lint-inert (the linter scans for
-# slop tells, not data-attributes). The section root carries file/page/section; a
-# content-bearing element carries the AppSpec slot name (`data-disco-field`), and an
-# item row also carries its 0-based index (`data-disco-index`).
+# slop tells, not data-attributes). The section root carries file/section/screen-label;
+# a content-bearing element carries the AppSpec slot name (`data-disco-field`), and an
+# item row carries its collection id + 0-based index + item kind.
 #
 # The file is ALWAYS `.disco/appspec.json` (where `app_update_content` mutates), and
 # the field names are AppSpec slot names — `cta_label` (NOT the `ctaLabel` content.ts
@@ -463,12 +464,39 @@ def _emit_styles_css(design: DesignSpec) -> str:
 _DISCO_SPEC_FILE = ".disco/appspec.json"
 
 
-def _disco_section_attrs(page: Page, section: Section) -> str:
-    """The semantic-edit attrs stamped on a section root: the spec file, the page id,
-    and the section id — enough for a UI click to target `app_update_content`."""
+def _disco_attr(a: _md.DataDiscoAttr, value: object) -> str:
+    """A JSX-safe static `data-disco-*` attribute fragment in canonical attr order."""
+    return f" {a.value}={_ts(value)}"
+
+
+def _disco_expr_attr(a: _md.DataDiscoAttr, expr: str) -> str:
+    """A JSX expression-valued `data-disco-*` attribute fragment."""
+    return f" {a.value}={{{expr}}}"
+
+
+def _disco_field_attr(field: str) -> str:
+    return _disco_attr(_md.DataDiscoAttr.FIELD, field)
+
+
+def _disco_section_attrs(section: Section) -> str:
+    """The semantic-edit attrs stamped on a section root through the canonical
+    vocabulary: the spec file, section id, and stable screen label."""
     return (
-        f' data-disco-file="{_DISCO_SPEC_FILE}"'
-        f" data-disco-page={_ts(page.id)} data-disco-section={_ts(section.id)}"
+        _disco_attr(_md.DataDiscoAttr.FILE, _DISCO_SPEC_FILE)
+        + _disco_attr(_md.DataDiscoAttr.SECTION, section.id)
+        + _disco_attr(
+            _md.DataDiscoAttr.SCREEN_LABEL,
+            _md.screen_label_value(section.id),
+        )
+    )
+
+
+def _disco_item_attrs(section: Section, *, index_expr: str, item_kind: str) -> str:
+    """Semantic metadata for one generated `content.items` row."""
+    return (
+        _disco_attr(_md.DataDiscoAttr.COLLECTION, f"{section.id}.items")
+        + _disco_expr_attr(_md.DataDiscoAttr.INDEX, index_expr)
+        + _disco_attr(_md.DataDiscoAttr.ITEM_KIND, item_kind)
     )
 
 
@@ -479,10 +507,10 @@ def _render_body(comp_id: str) -> str:
     a `data-disco-field` slot tag (Epic J) so a UI click maps back to the spec slot."""
     return (
         "      {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
-        "      {c.heading ? <h2 data-disco-field=\"heading\">{c.heading}</h2> : null}\n"
-        "      {c.subheading ? <p className=\"subheading\" data-disco-field=\"subheading\">"
+        f"      {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
+        f"      {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
         "{c.subheading}</p> : null}\n"
-        "      {c.body ? <p data-disco-field=\"body\">{c.body}</p> : null}\n"
+        f"      {{c.body ? <p{_disco_field_attr('body')}>{{c.body}}</p> : null}}\n"
     )
 
 
@@ -495,7 +523,7 @@ def _emit_component(comp: str, page: Page, section: Section, lead: Entity) -> st
     if kind == "form":
         return _emit_form_component(comp, comp_id, page, section, lead, classes)
 
-    disco_attrs = _disco_section_attrs(page, section)
+    disco_attrs = _disco_section_attrs(section)
 
     header = (
         '/* Auto-generated section component — do NOT hand-edit; regenerated from '
@@ -512,12 +540,12 @@ def _emit_component(comp: str, page: Page, section: Section, lead: Entity) -> st
             f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
             f'      <div className="app-main">\n'
             "        {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
-            "        {c.heading ? <h1 data-disco-field=\"heading\">{c.heading}</h1> : null}\n"
-            "        {c.subheading ? <p className=\"subheading\" data-disco-field=\"subheading\">"
+            f"        {{c.heading ? <h1{_disco_field_attr('heading')}>{{c.heading}}</h1> : null}}\n"
+            f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
             "{c.subheading}</p> : null}\n"
-            "        {c.body ? <p data-disco-field=\"body\">{c.body}</p> : null}\n"
+            f"        {{c.body ? <p{_disco_field_attr('body')}>{{c.body}}</p> : null}}\n"
             "        {c.ctaLabel ? (\n"
-            '          <p><a className="btn" href="#lead-form" data-disco-field="cta_label">'
+            f'          <p><a className="btn" href="#lead-form"{_disco_field_attr("cta_label")}>'
             "{c.ctaLabel}</a></p>\n"
             "        ) : null}\n"
             "      </div>\n"
@@ -540,7 +568,7 @@ def _emit_component(comp: str, page: Page, section: Section, lead: Entity) -> st
             + f"        {wrap_open} className={_ts(list_cls)}>\n"
             "          {(c.items ?? []).map((item, i) => (\n"
             f'            <{item_tag} className="feature-item" key={{i}}'
-            ' data-disco-field="items" data-disco-index={i}>'
+            f'{_disco_field_attr("items")}{_disco_item_attrs(section, index_expr="i", item_kind="item")}>'
             f"{{item}}</{item_tag}>\n"
             "          ))}\n"
             f"        {wrap_close}\n"
@@ -558,7 +586,7 @@ def _emit_component(comp: str, page: Page, section: Section, lead: Entity) -> st
             f'      <div className="app-main">\n'
             + "  " + _render_body(comp_id)
             + "        {c.ctaLabel ? (\n"
-            '          <p><a className="btn" href="#lead-form" data-disco-field="cta_label">'
+            f'          <p><a className="btn" href="#lead-form"{_disco_field_attr("cta_label")}>'
             "{c.ctaLabel}</a></p>\n"
             "        ) : null}\n"
             "      </div>\n"
@@ -573,8 +601,8 @@ def _emit_component(comp: str, page: Page, section: Section, lead: Entity) -> st
             f'    <footer className={_ts("site-footer " + classes)} id={_ts(section.id)}'
             f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
             f'      <div className="app-main">\n'
-            "        {c.heading ? <p data-disco-field=\"heading\">{c.heading}</p> : null}\n"
-            "        {c.body ? <p data-disco-field=\"body\">{c.body}</p> : null}\n"
+            f"        {{c.heading ? <p{_disco_field_attr('heading')}>{{c.heading}}</p> : null}}\n"
+            f"        {{c.body ? <p{_disco_field_attr('body')}>{{c.body}}</p> : null}}\n"
             "      </div>\n"
             "    </footer>\n"
             "  );\n}\n"
@@ -629,7 +657,7 @@ def _emit_form_component(
     comp: str, comp_id: str, page: Page, section: Section, lead: Entity, classes: str
 ) -> str:
     inputs = "\n".join(_input_for(f) for f in lead.fields)
-    disco_attrs = _disco_section_attrs(page, section)
+    disco_attrs = _disco_section_attrs(section)
     return (
         '/* Auto-generated lead-capture component — do NOT hand-edit; regenerated from '
         '.disco/appspec.json. */\n'
@@ -655,12 +683,12 @@ def _emit_form_component(
         f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
         f'      <div className="app-main">\n'
         "        {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
-        "        {c.heading ? <h2 data-disco-field=\"heading\">{c.heading}</h2> : null}\n"
-        "        {c.subheading ? <p className=\"subheading\" data-disco-field=\"subheading\">"
+        f"        {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
+        f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
         "{c.subheading}</p> : null}\n"
         '        <form className="lead-form" onSubmit={onSubmit}>\n'
         + inputs + "\n"
-        '          <button className="btn" type="submit" data-disco-field="cta_label">'
+        f'          <button className="btn" type="submit"{_disco_field_attr("cta_label")}>'
         '{c.ctaLabel ?? "Submit"}</button>\n'
         '          {status ? <p className="form-status">{status}</p> : null}\n'
         "        </form>\n"
@@ -746,9 +774,10 @@ def _emit_main_tsx() -> str:
 
 def _emit_index_html(app: AppSpec, design: DesignSpec) -> str:
     href = _google_fonts_href(design)
+    ver = _md.attr(_md.DataDiscoAttr.VERSION, _md.METADATA_VERSION)
     return (
         "<!doctype html>\n"
-        '<html lang="en">\n'
+        f'<html lang="en"{ver}>\n'
         "  <head>\n"
         '    <meta charset="utf-8" />\n'
         '    <meta name="viewport" content="width=device-width, initial-scale=1" />\n'
@@ -1635,13 +1664,14 @@ def _emit_directory_owner_guide_md(app: AppSpec) -> str:
     )
 
 
-def _emit_directory_listing_component(comp: str, section: Section) -> str:
+def _emit_directory_listing_component(comp: str, page: Page, section: Section) -> str:
     """A SEARCHABLE/filterable directory listing component (the directory primitive's
     distinguishing section): a controlled search input filters the section's `items`
     (from content.ts) client-side. Reads copy from CONTENT by id like every other
     section, so updating content never regenerates this component."""
     layout = _variant_layout(section)
     classes = f"section kind-list variant-{layout} directory"
+    disco_attrs = _disco_section_attrs(section)
     return (
         "/* Auto-generated directory listing component — do NOT hand-edit; regenerated "
         "from .disco/appspec.json. */\n"
@@ -1657,11 +1687,12 @@ def _emit_directory_listing_component(comp: str, section: Section) -> str:
         "  );\n"
         "  return (\n"
         f'    <section className={_ts(classes)} id={_ts(section.id)}'
-        f" data-appkit-section={_ts(section.id)}>\n"
+        f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
         '      <div className="app-main">\n'
         '        {c.eyebrow ? <p className="eyebrow">{c.eyebrow}</p> : null}\n'
-        "        {c.heading ? <h2>{c.heading}</h2> : null}\n"
-        '        {c.subheading ? <p className="subheading">{c.subheading}</p> : null}\n'
+        f"        {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
+        f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
+        "{c.subheading}</p> : null}\n"
         '        <label className="directory-search">\n'
         "          <span>Search</span>\n"
         '          <input type="text" name="q" value={query}\n'
@@ -1670,7 +1701,8 @@ def _emit_directory_listing_component(comp: str, section: Section) -> str:
         "        </label>\n"
         '        <ul className="stacked-list">\n'
         "          {filtered.map((item, i) => (\n"
-        '            <li className="feature-item" key={i}>{item}</li>\n'
+        f'            <li className="feature-item" key={{i}}{_disco_field_attr("items")}'
+        f'{_disco_item_attrs(section, index_expr="i", item_kind="item")}>{{item}}</li>\n'
         "          ))}\n"
         "        </ul>\n"
         "      </div>\n"
@@ -1765,7 +1797,7 @@ def _generate_directory(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str,
     for page, section in _iter_sections(app_spec):
         comp = _comp_name(names, page, section)
         if section.kind == "list":
-            files[f"src/components/{comp}.tsx"] = _emit_directory_listing_component(comp, section)
+            files[f"src/components/{comp}.tsx"] = _emit_directory_listing_component(comp, page, section)
         else:
             files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
     return dict(sorted(files.items()))

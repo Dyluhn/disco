@@ -87,10 +87,9 @@ async def test_file_write_allowed_in_repair_phase() -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_phase_advance_then_block_end_to_end() -> None:
-    # CONTRACT-ACTIVATE end-to-end: a real bootstrap tool succeeds → the tracker
-    # advances BOOTSTRAP→EDIT via the executor's on_tool_success → a subsequent raw
-    # file_write is then denied. This is exactly the runtime's wiring.
+async def test_retired_legacy_bootstrap_is_not_available_on_normal_agent_scope() -> None:
+    # AppKit bootstrap now runs through the strict AppKit executor's v2 registry.
+    # The normal default registry must not keep the retired legacy app_create alive.
     sbx = FakeSandboxInstance()
     tracker = BuildPhaseTracker(_appkit())
     ex = DefaultToolExecutor(
@@ -103,12 +102,12 @@ async def test_live_phase_advance_then_block_end_to_end() -> None:
     assert tracker.current() is Phase.BOOTSTRAP
     # file_write is blocked even in BOOTSTRAP (appkit bootstrap = app_create only)
     assert _scope_denied(await ex.execute(call("file_write", path="index.html", content="x")))
-    # the real bootstrap tool runs + succeeds → advances the phase to EDIT
+    # The retired legacy bootstrap tool is not registered/allowed on normal Build.
     created = await ex.execute(call("app_create", title="Acme"))
-    assert created.success and tracker.current() is Phase.EDIT
-    assert ".disco/appspec.json" in sbx._fs
-    # now in EDIT: raw file_write is denied (must use the semantic app_* tools)
-    assert _scope_denied(await ex.execute(call("file_write", path="index.html", content="y")))
+    assert not created.success
+    assert created.structured is not None and created.structured["kind"] == "unknown_tool"
+    assert tracker.current() is Phase.BOOTSTRAP
+    assert ".disco/appspec.json" not in sbx._fs
 
 
 @pytest.mark.asyncio

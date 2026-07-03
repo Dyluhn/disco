@@ -194,15 +194,9 @@ def test_constructing_agent_flavor_does_not_mutate_module_constants():
 # That is the point: any scope change must touch this file, making it a
 # deliberate, code-reviewed decision rather than silent drift.
 _EXPECTED_AGENT_TOOLS = [
-    # P4/TOOL-1: AppKit semantic mutation tools
-    "app_add_section",
-    "app_create",
-    "app_remove_section",
-    "app_reorder_section",
-    "app_set_design",
+    # Legacy AppKit wrappers still used by governed persisted-AppSpec paths
     "app_set_tweak",
     "app_snapshot_version",
-    "app_update_content",
     "audio_overview",
     "browser",
     "code_exec",

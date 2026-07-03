@@ -33,9 +33,12 @@ from disco.tools.secrets import CapabilityBroker
 
 from tool_fakes import FakeSandboxInstance
 
-_APP_NAMES = (
+_RETIRED_LEGACY_APP_NAMES = (
     "app_create", "app_update_content", "app_add_section", "app_remove_section",
-    "app_reorder_section", "app_set_design", "app_set_tweak", "app_snapshot_version",
+    "app_reorder_section", "app_set_design",
+)
+_KEPT_LEGACY_APP_NAMES = (
+    "app_set_tweak", "app_snapshot_version",
 )
 
 
@@ -51,15 +54,28 @@ def _spec_of(sbx: FakeSandboxInstance) -> AppSpec:
 
 
 # --- registry + scope ---------------------------------------------------------
-def test_app_tools_registered_and_in_scopes() -> None:
+def test_legacy_app_tools_registration_retirement() -> None:
     reg = build_default_registry()
     names = reg.names()
     agent = {t.definition.name for t in reg.in_scope(agent_scope(model_policy=ModelExecutionPolicy.standard()))}
     artifact = {t.definition.name for t in reg.in_scope(artifact_scope())}
-    for n in _APP_NAMES:
+    for n in _KEPT_LEGACY_APP_NAMES:
         assert n in names, n
         assert n in agent, n
         assert n in artifact, n
+    # Hard-replace endpoint (fix-2): the retired legacy names are now OWNED by
+    # the v2 AppKit tools in the default registry (the appkit.leadgen contract
+    # references them); they stay OUT of the generic agent/artifact scopes —
+    # only appkit contract scopes / the strict executor advertise them.
+    from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
+
+    v2_classes = {cls().definition.name: cls for cls in APPKIT_V2_TOOLS}
+    for n in _RETIRED_LEGACY_APP_NAMES:
+        if n in names:
+            got = reg._tools.get(n) if hasattr(reg, "_tools") else None
+            assert got is not None and isinstance(got, v2_classes[n]), n
+        assert n not in agent, n
+        assert n not in artifact, n
 
 
 # --- create + render ----------------------------------------------------------

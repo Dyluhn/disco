@@ -56,8 +56,9 @@ def _appkit_leadgen() -> BuildContract:
             edit_tools=(
                 "app_update_content",
                 "app_add_section",
-                "app_remove_section",
-                "app_reorder_section",
+                # remove/reorder were legacy v1-spec extensions; the v2 engine
+                # (hard-replace, fix-2) mutates structure via app_add_section +
+                # app_update_content + regeneration — no remove/reorder surface.
                 "app_set_design",
                 "app_set_tweak",
                 "app_snapshot_version",
