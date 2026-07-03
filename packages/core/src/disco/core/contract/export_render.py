@@ -208,6 +208,23 @@ def _html_facts(html: str) -> tuple[int, int, bool, bool]:
     return slides, len(visible), valid_header, non_blank
 
 
+def pptx_visible_text(data: bytes) -> str:
+    """Raw joined ``<a:t>`` text runs from PPTX bytes, before chrome stripping."""
+    if not data.startswith(b"PK"):
+        return ""
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        slide_names = [n for n in zf.namelist() if _SLIDE_XML_RE.match(n)]
+        texts: list[str] = []
+        for n in slide_names:
+            try:
+                xml = zf.read(n)
+            except Exception:
+                continue
+            for m in _PPTX_TEXT_RE.findall(xml):
+                texts.append(m.decode("utf-8", "replace"))
+    return " ".join(texts)
+
+
 def _pptx_facts(data: bytes) -> tuple[int, int, bool, bool]:
     """(slide_count, visible_text_len, valid_header, non_blank) for PPTX bytes.
 
@@ -220,17 +237,12 @@ def _pptx_facts(data: bytes) -> tuple[int, int, bool, bool]:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             names = zf.namelist()
             slide_names = [n for n in names if _SLIDE_XML_RE.match(n)]
-            texts: list[str] = []
-            for n in slide_names:
-                try:
-                    xml = zf.read(n)
-                except Exception:
-                    continue
-                for m in _PPTX_TEXT_RE.findall(xml):
-                    texts.append(m.decode("utf-8", "replace"))
     except (zipfile.BadZipFile, OSError):
         return 0, 0, False, False
-    visible = _strip_chrome(" ".join(texts))
+    try:
+        visible = _strip_chrome(pptx_visible_text(data))
+    except (zipfile.BadZipFile, OSError):
+        return 0, 0, False, False
     # A valid OOXML deck always carries [Content_Types].xml; a zip lacking it and
     # any slide is not a real presentation.
     valid_header = "[Content_Types].xml" in names and len(slide_names) > 0
@@ -239,15 +251,20 @@ def _pptx_facts(data: bytes) -> tuple[int, int, bool, bool]:
     return len(slide_names), len(visible), valid_header, non_blank
 
 
-def _pdf_facts(data: bytes) -> tuple[int, int, bool, bool]:
+def _pdf_facts(data: bytes, text: str | None = None) -> tuple[int, int, bool, bool]:
     """(page_count, visible_text_len, valid_header, non_blank) for PDF bytes.
 
-    Page text is not extracted (PDF text lives in compressed content streams that
-    need a full parser); ``non_blank`` is a BYTE floor — a real rendered page is
+    When source text is supplied by the producer, ``non_blank`` uses the same
+    chrome-aware content floor as PPTX/HTML. Otherwise page text is not extracted
+    (PDF text lives in compressed content streams that need a full parser), so
+    ``non_blank`` falls back to the existing BYTE floor — a real rendered page is
     comfortably multi-KB while a truncated/near-empty PDF falls below it.
     """
     valid_header = data[:5].startswith(b"%PDF") and b"%%EOF" in data[-1024:]
     pages = len(_PDF_PAGE_RE.findall(data))
+    if text is not None:
+        visible = _strip_chrome(text)
+        return pages, len(visible), valid_header, valid_header and len(visible) >= _TEXT_FLOOR
     # Reported proxy (for the steer message), plus the real byte-floor non_blank.
     text_proxy = 0 if not valid_header else max(0, (len(data) // 1024) - 1)
     non_blank = valid_header and len(data) >= _PDF_BYTE_FLOOR
@@ -265,8 +282,10 @@ def check_export_render(
     """Parse a rendered export's bytes/text and report what really rendered.
 
     ``fmt`` is the producer's format id ("html"/"pptx"/"pdf"). Pass ``text`` for
-    HTML (the rendered string) or ``data`` for pptx/pdf (the bytes). ``ok`` is the
-    finish gate's signal: a well-formed file with at least one rendered unit, real
+    HTML (the rendered string) or for PDF when a source-text proxy is available;
+    pass ``data`` for pptx/pdf bytes. PDF checks are text-aware when that proxy is
+    supplied and retain the byte-floor fallback otherwise. ``ok`` is the finish
+    gate's signal: a well-formed file with at least one rendered unit, real
     (chrome-stripped) content, and no truncation below the declared count.
 
     ``declared_exact`` says whether ``declared_units`` is authoritative (C1/pptx-
@@ -287,7 +306,7 @@ def check_export_render(
     elif is_pdf:
         buf = data or b""
         byte_len = len(buf)
-        units, visible_len, valid, non_blank = _pdf_facts(buf)
+        units, visible_len, valid, non_blank = _pdf_facts(buf, text)
     else:
         # Unknown format → honestly unverifiable (never fabricate a pass/fail).
         return ExportRenderFacts(

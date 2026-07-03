@@ -14,10 +14,14 @@ Proves:
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from disco.core.contract.export_render import check_export_render
+from disco.core.contract.export_render import check_export_render, pptx_visible_text
 from disco.tools.builtin._pptx_render import (
     DeckSlide,
     MinimalDeck,
@@ -639,6 +643,69 @@ def _content_branded_checker_deck() -> AuthoredDeck:
 def test_pptx_export_render_refuses_blank_branded_real_render() -> None:
     data = render_pptx(lower_deck(_blank_branded_checker_deck()))
     f = check_export_render("pptx", data, declared_units=3)
+    assert f.non_blank is False and f.ok is False
+
+
+@dataclass(frozen=True)
+class _LocalExecResult:
+    exit_code: int
+    timed_out: bool = False
+    stderr: str = ""
+    stdout: str = ""
+
+
+class _LocalSofficeSandbox:
+    def __init__(self, cwd: Path) -> None:
+        self._cwd = cwd
+
+    async def exec_shell(self, cmd: str, *, timeout_s: int) -> _LocalExecResult:
+        try:
+            res = subprocess.run(
+                cmd,
+                shell=True,
+                cwd=self._cwd,
+                timeout=timeout_s,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            return _LocalExecResult(
+                exit_code=1,
+                timed_out=True,
+                stderr="" if exc.stderr is None else str(exc.stderr),
+            )
+        return _LocalExecResult(
+            exit_code=res.returncode,
+            timed_out=False,
+            stderr=res.stderr,
+            stdout=res.stdout,
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(shutil.which("soffice") is None, reason="soffice not installed")
+@pytest.mark.asyncio
+async def test_pdf_export_render_refuses_blank_branded_real_soffice(
+    tmp_path: Path,
+) -> None:
+    pptx_bytes = render_pptx(lower_deck(_blank_branded_checker_deck()))
+    pptx_name = "blank-branded.pptx"
+    (tmp_path / pptx_name).write_bytes(pptx_bytes)
+
+    ctx = MagicMock()
+    ctx.sandbox = _LocalSofficeSandbox(tmp_path)
+
+    ok, err = await convert_to_pdf(ctx, pptx_name)
+    assert ok is True, err
+
+    pdf_bytes = (tmp_path / "blank-branded.pdf").read_bytes()
+    f = check_export_render(
+        "pdf",
+        pdf_bytes,
+        text=pptx_visible_text(pptx_bytes),
+        declared_units=3,
+    )
     assert f.non_blank is False and f.ok is False
 
 

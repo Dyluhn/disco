@@ -378,6 +378,31 @@ def test_pdf_good_ok() -> None:
     assert f.valid_header and f.unit_count == 4 and f.non_blank and f.ok
 
 
+def test_pdf_source_text_chrome_only_refused() -> None:
+    f = check_export_render(
+        "pdf",
+        _pdf_bytes(1),
+        text="Disco LATIN · VERB /ˈdɪs.koː/ from discere — to learn",
+        declared_units=1,
+    )
+    assert f.non_blank is False and f.ok is False
+
+
+def test_pdf_source_text_real_content_passes() -> None:
+    f = check_export_render(
+        "pdf",
+        _pdf_bytes(1),
+        text="Quarterly revenue grew 40% across all regions and product lines",
+        declared_units=1,
+    )
+    assert f.non_blank is True and f.ok is True
+
+
+def test_pdf_without_source_text_keeps_byte_floor_fallback() -> None:
+    f = check_export_render("pdf", _pdf_bytes(1), declared_units=1)
+    assert f.non_blank is True
+
+
 def test_pdf_no_header_refused() -> None:
     f = check_export_render("pdf", b"just some text, not a pdf", declared_units=1)
     assert f.valid_header is False and f.ok is False

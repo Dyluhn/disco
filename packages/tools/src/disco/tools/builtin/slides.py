@@ -24,9 +24,12 @@ import shlex
 from textwrap import dedent
 from typing import Literal
 
+from disco.core.contract.export_render import (
+    EXPORT_RENDER_KEY,
+    check_export_render,
+    pptx_visible_text,
+)
 from pydantic import BaseModel, Field
-
-from disco.core.contract.export_render import EXPORT_RENDER_KEY, check_export_render
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from .image_gen import ImageGenNotConfigured, select_image_backend
@@ -424,7 +427,25 @@ class SlidesTool:
             return outcome
         if isinstance(data, str):
             data = data.encode("utf-8")
-        facts = check_export_render(fmt, data, declared_units=declared, declared_exact=declared_exact)
+        source_text: str | None = None
+        if fmt == "pdf":
+            base_name = s.get("base_name")
+            if isinstance(base_name, str) and base_name:
+                try:
+                    pptx_data = await ctx.sandbox.read_file(f"{base_name}.pptx")
+                    if isinstance(pptx_data, str):
+                        pptx_data = pptx_data.encode("utf-8")
+                    if pptx_data.startswith(b"PK"):
+                        source_text = pptx_visible_text(pptx_data)
+                except Exception:
+                    source_text = None
+        facts = check_export_render(
+            fmt,
+            data,
+            text=source_text,
+            declared_units=declared,
+            declared_exact=declared_exact,
+        )
         return outcome.model_copy(
             update={"structured": {**s, EXPORT_RENDER_KEY: facts.model_dump(mode="json")}}
         )
