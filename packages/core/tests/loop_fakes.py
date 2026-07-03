@@ -241,6 +241,7 @@ def build_loop(
     verifier_judge=None,
     verifier_judge_timeout_s: float = 30.0,
     model_policy: ModelExecutionPolicy | None = None,
+    autonomous: bool = False,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed.
@@ -276,6 +277,7 @@ def build_loop(
         verifier_judge=verifier_judge,
         verifier_judge_timeout_s=verifier_judge_timeout_s,
         model_policy=model_policy or ModelExecutionPolicy.standard(),
+        autonomous=autonomous,
     )
     return loop, store
 

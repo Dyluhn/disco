@@ -29,7 +29,7 @@ def _frontend_known_kinds() -> set[str]:
     text = _DISPOSITION_TS.read_text(encoding="utf-8")
     m = re.search(r"KNOWN_EVENT_KINDS\s*=\s*\[(.*?)\]\s*as const", text, re.DOTALL)
     assert m, "could not find KNOWN_EVENT_KINDS array in eventDisposition.ts"
-    return set(re.findall(r'"([a-z_]+)"', m.group(1)))
+    return set(re.findall(r'"([a-z0-9_]+)"', m.group(1)))
 
 
 def test_frontend_classifies_every_backend_event_kind() -> None:

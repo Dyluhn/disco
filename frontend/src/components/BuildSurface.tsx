@@ -46,6 +46,7 @@ import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
 import { ClarifyPanel } from "@/components/build/ClarifyPanel";
+import { QuestionsV2Panel } from "@/components/build/QuestionsV2Panel";
 import { ReplayScrubber } from "@/components/build/ReplayScrubber";
 import { ScheduleSection } from "@/components/settings/ScheduleSection";
 
@@ -566,7 +567,19 @@ export function BuildSurface({
               onPick={b.pickAlternative}
             />
           )}
-          {b.awaitingQuestion && b.pendingClarify && (
+          {b.awaitingQuestion && b.pendingQuestionsV2 && (
+            <QuestionsV2Panel
+              question={b.pendingQuestionsV2.question}
+              items={b.pendingQuestionsV2.items.map((it) => ({
+                id: it.id,
+                question: it.question,
+                options: it.options,
+                allow_free_text: it.allow_free_text,
+              }))}
+              onAnswer={b.answer}
+            />
+          )}
+          {b.awaitingQuestion && !b.pendingQuestionsV2 && b.pendingClarify && (
             <ClarifyPanel
               question={b.pendingClarify.question}
               items={b.pendingClarify.items.map((it) => ({
@@ -578,7 +591,7 @@ export function BuildSurface({
               onAnswer={b.answer}
             />
           )}
-          {b.awaitingQuestion && !b.pendingClarify && (
+          {b.awaitingQuestion && !b.pendingQuestionsV2 && !b.pendingClarify && (
             <AskPanel
               question={b.pendingQuestion?.message?.content ?? finalMessage ?? "The agent has a question."}
               onAnswer={b.answer}

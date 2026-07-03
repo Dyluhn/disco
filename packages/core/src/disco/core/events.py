@@ -58,7 +58,8 @@ class EventKind(str, Enum):
     VERIFIER_SHADOW = "verifier_shadow"  # REL-1b: inline-vs-host verifier comparison
     SCHEDULE = "schedule"  # a schedule was created or deleted (RP-08)
     SCHEDULE_RUN = "schedule_run"  # a scheduled run fired (RP-08)
-    CLARIFY = "clarify"  # pre-plan typed clarification questions (RP-13)
+    CLARIFY = "clarify"  # legacy pre-plan typed clarification questions (RP-13)
+    QUESTIONS_V2 = "questions_v2"  # structured pre-plan intake (gap-close §K)
     CONTEXT_RESOLVED = "context_resolved"  # CXT-3: agent's DEFERRED snip mark (resolved range)
     CONTEXT_SUMMARY = "context_summary"  # CXT-3: durable summary written for a resolved range
 
@@ -926,6 +927,37 @@ class ClarifyEvent(BaseEvent):
     items: list[ClarifyQuestionItem]
 
 
+class QuestionsV2Item(BaseModel):
+    """One question in a QuestionsV2Event.
+
+    Unlike the legacy clarify item, each v2 item always supports both a bounded
+    option pick and free text. The UI accepts either; selecting "Other" can be
+    refined in the free-text box.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    id: str
+    question: str
+    options: list[str] = Field(default_factory=list)
+    allow_free_text: bool = True
+    answer: str = ""
+
+
+class QuestionsV2Event(BaseEvent):
+    """Structured pre-plan intake gate (§K).
+
+    In interactive planning, the model may emit exactly one batched
+    `questions_v2` tool call before `submit_plan`. The loop turns that call into
+    this typed event and halts at AWAITING_USER_QUESTION. Autonomous runs skip the
+    gate and put assumptions in the plan context instead.
+    """
+
+    kind: Literal[EventKind.QUESTIONS_V2] = EventKind.QUESTIONS_V2
+    source: EventSource = EventSource.AGENT
+    question: str
+    items: list[QuestionsV2Item]
+
+
 class ContextResolvedEvent(BaseEvent):
     """CXT-3 — the agent's DEFERRED 'snip' mark: a seq range [start,end] the agent
     has declared resolved (an exploration concluded, stale tool chatter) and that
@@ -986,6 +1018,7 @@ Event = Annotated[
     | ScheduleEvent
     | ScheduleRunEvent
     | ClarifyEvent
+    | QuestionsV2Event
     | ContextResolvedEvent
     | ContextSummaryEvent,
     Field(discriminator="kind"),

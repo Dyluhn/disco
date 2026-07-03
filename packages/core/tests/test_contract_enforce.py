@@ -52,6 +52,7 @@ def test_dangerous_tool_denied_outside_its_phase() -> None:
         ("think", False),
         ("notify_user", False),
         ("ask_user", False),
+        ("questions_v2", False),
         ("clarify", False),
         ("finish", False),
         ("ready_for_app_verification", False),

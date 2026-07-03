@@ -48,6 +48,7 @@ from .tool_specs import (
     _clarify_tool_singleton,
     _notify_user_tool_singleton,
     _propose_plan_update_tool_singleton,
+    _questions_v2_tool_singleton,
 )
 
 if TYPE_CHECKING:
@@ -251,11 +252,11 @@ class Driver:
           - the plan tool itself (loop-intercepted, never executed) — always
             allowed even if the executor doesn't advertise it or `_planning_tools`
             omits it;
-          - the virtual ask_user / clarify escape hatches — ALWAYS permitted
+          - the virtual ask_user / questions_v2 / clarify escape hatches — ALWAYS permitted
             (even in autonomous mode, where they are withheld from *advertisement*
-            so the planner doesn't stall on a human): a hallucinated ask/clarify
-            must reach its downstream handler / the autonomous-stall guard, not be
-            rejected by this gate.
+            so the planner doesn't stall on a human): a hallucinated ask/intake
+            call must reach its downstream handler / the autonomous-stall guard,
+            not be rejected by this gate.
         """
         readonly = self.readonly_tool_names()  # frozenset | None (None=unknown)
         allow = self._loop._planning_tools
@@ -277,7 +278,7 @@ class Driver:
             if isinstance(name, str) and _planner_ok(name):
                 names.add(name)
         names.add(self._loop._plan_tool)  # submit_plan — always intercepted
-        names.update({"ask_user", "clarify"})  # virtual escape hatches
+        names.update({"ask_user", "questions_v2", "clarify"})  # virtual escape hatches
         return frozenset(names)
 
     def force_submit_read_calls_remaining(self) -> int:
@@ -392,13 +393,13 @@ class Driver:
                 return True
 
             planner_tools = [t for t in tools if _planner_ok(getattr(t, "name", None))]
-            # Append the VIRTUAL ask_user + clarify even while planning: an under-specified
+            # Append the VIRTUAL ask_user + questions_v2 + clarify even while planning: an under-specified
             # task most needs clarification BEFORE a plan is committed (the user
             # named a detail only they know). ask_user is read-only-safe — the loop
             # intercepts it (never executes it against the sandbox) and halts at the
-            # Ask-gate, same as in execution. clarify is the MULTI-QUESTION variant
-            # for when several specifics are missing. Without this the planner is forced
-            # to guess and bury the unknown in the plan instead of just asking.
+            # Ask-gate, same as in execution. questions_v2 is the structured §K
+            # batch-intake variant; clarify stays as a legacy alias. Without this
+            # the planner is forced to guess and bury the unknown in the plan.
             #
             # C20 — `delegate_explore` is intentionally ABSENT from the planning
             # tool set. It is an EXECUTION-only tool: the call DISPATCHES a
@@ -419,6 +420,7 @@ class Driver:
                 return planner_tools
             return planner_tools + [
                 _ask_user_tool_singleton(),
+                _questions_v2_tool_singleton(),
                 _clarify_tool_singleton(),
             ]
         if self._loop._planning_tools:
@@ -484,6 +486,7 @@ class Driver:
             known_tool_names = {t.name for t in self._loop.executor.available_tools()}
         virtual_names = {
             "ask_user",
+            "questions_v2",
             "clarify",
             "propose_plan_update",
             "plan_step",

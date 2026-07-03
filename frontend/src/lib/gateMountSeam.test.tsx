@@ -1,10 +1,11 @@
 /**
- * Gap #14 — a DETERMINISTIC MOUNT SEAM for the four model-gated panels.
+ * Gap #14 — a DETERMINISTIC MOUNT SEAM for the model-gated panels.
  *
- * The Confirm / Ask / Clarify / Alternatives gates only render when the LIVE
- * model emits the triggering tool call (risky-action / ask_user / clarify /
- * 4-consecutive-failures), which makes them flaky-to-impossible to reach in a
- * live run — "the single highest-leverage missing seam" (Opus-A). The panels are
+ * The Confirm / Ask / QuestionsV2 / Clarify / Alternatives gates only render
+ * when the LIVE model emits the triggering tool call (risky-action / ask_user /
+ * questions_v2 / clarify / 4-consecutive-failures), which makes them
+ * flaky-to-impossible to reach in a live run — "the single highest-leverage
+ * missing seam" (Opus-A). The panels are
  * pure, prop-driven components that already carry stable `data-disco-control`
  * handles; this harness MOUNTS each one in its gate state ON DEMAND and proves
  * the handle renders + is driveable, with no model in the loop.
@@ -26,6 +27,7 @@ import type { ActionEvent, AlternativesEvent } from "@/types/agent";
 import { ConfirmationPanel } from "@/components/build/ConfirmationPanel";
 import { AskPanel } from "@/components/build/AskPanel";
 import { ClarifyPanel, type ClarifyQuestionItem } from "@/components/build/ClarifyPanel";
+import { QuestionsV2Panel, type QuestionsV2Item } from "@/components/build/QuestionsV2Panel";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 
 /** A stable risky-action fixture (the WAITING_FOR_CONFIRMATION trigger). */
@@ -111,6 +113,25 @@ describe("gate mount seam #14 — Clarify gate (AWAITING_USER_QUESTION, typed)",
     await user.click(handle as Element);
     expect(onAnswer).toHaveBeenCalledTimes(1);
     expect(onAnswer.mock.calls[0]?.[0]).toContain("React");
+  });
+});
+
+describe("gate mount seam #14 — Questions v2 gate (AWAITING_USER_QUESTION, structured intake)", () => {
+  it("mounts on demand and submit fires once every item is answered", async () => {
+    const onAnswer = vi.fn();
+    const user = userEvent.setup();
+    const items: QuestionsV2Item[] = [
+      { id: "style", question: "Starting style?", options: ["Minimal"] },
+    ];
+    const { container } = render(
+      <QuestionsV2Panel question="A few details before I plan." items={items} onAnswer={onAnswer} />,
+    );
+    const handle = container.querySelector('[data-disco-control="submit-questions-v2"]');
+    expect(handle).not.toBeNull();
+    await user.click(screen.getByText("Minimal"));
+    await user.click(handle as Element);
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+    expect(onAnswer.mock.calls[0]?.[0]).toContain("Minimal");
   });
 });
 

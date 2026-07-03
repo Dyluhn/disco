@@ -2,7 +2,8 @@
 
 Extracted from `engine.py` (god-file decomposition, Wave 1). These build the
 static ToolSpec objects for the loop-intercepted virtual tools that never reach
-the executor: `ask_user`, `clarify`, `propose_plan_update`, and `notify_user`.
+the executor: `ask_user`, `questions_v2`, `clarify`, `propose_plan_update`, and
+`notify_user`.
 
 Each builder lazy-imports ToolSpec from ..llm.types inside the function to avoid
 a circular import at module-load time; the `_*_tool_singleton()` accessors build
@@ -106,6 +107,66 @@ _CLARIFY_PARAMETERS_SCHEMA = {
             },
             "minItems": 1,
             "maxItems": 5,
+        },
+    },
+    "required": ["question", "questions"],
+}
+
+# questions_v2 — the §K structured intake tool. This supersedes the legacy
+# `clarify` card for pre-plan intake: one batched round, <=4 questions, each with
+# bounded options plus free text. The loop enforces the one-round cap.
+_QUESTIONS_V2_TOOL_NAME = "questions_v2"
+_QUESTIONS_V2_REQUIRED_OPTIONS = (
+    "Explore a few options",
+    "Decide for me",
+    "Other",
+)
+_QUESTIONS_V2_DESCRIPTION = (
+    "Pause BEFORE submit_plan and ask ONE batched structured intake round. "
+    "Use this only in PLANNING mode when a new or ambiguous request needs user "
+    "input before a good plan can be proposed. Ask at most 4 questions. Each "
+    "question should include concise option labels and the UI will also provide "
+    "free text. Every question MUST include these options exactly: "
+    '"Explore a few options", "Decide for me", and "Other". '
+    "After calling this tool, end the turn; the user answers in the form and the "
+    "next turn continues planning. Do not call it more than once before "
+    "submit_plan; if something remains ambiguous after the answer, state a "
+    "reasonable assumption in submit_plan.context and proceed."
+)
+_QUESTIONS_V2_PARAMETERS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "question": {
+            "type": "string",
+            "description": "One-sentence summary shown above the intake form.",
+        },
+        "questions": {
+            "type": "array",
+            "description": "The structured intake questions to ask (1-4 items).",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Short stable id, e.g. 'style' or 'audience'.",
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "The question text the user sees.",
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": (
+                            "Flat string option labels. Include the mandatory "
+                            "labels: Explore a few options, Decide for me, Other."
+                        ),
+                    },
+                },
+                "required": ["id", "question"],
+            },
+            "minItems": 1,
+            "maxItems": 4,
         },
     },
     "required": ["question", "questions"],
@@ -241,10 +302,21 @@ def _clarify_tool_spec():
     )
 
 
+def _questions_v2_tool_spec():
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name=_QUESTIONS_V2_TOOL_NAME,
+        description=_QUESTIONS_V2_DESCRIPTION,
+        parameters_schema=_QUESTIONS_V2_PARAMETERS_SCHEMA,
+    )
+
+
 # Lazy singletons — built on first access so module-level import order stays clean.
 _ASK_USER_TOOL_SPEC = None
 _PROPOSE_PLAN_UPDATE_TOOL_SPEC = None
 _CLARIFY_TOOL_SPEC = None
+_QUESTIONS_V2_TOOL_SPEC = None
 
 
 def _ask_user_tool_singleton():
@@ -266,6 +338,13 @@ def _clarify_tool_singleton():
     if _CLARIFY_TOOL_SPEC is None:
         _CLARIFY_TOOL_SPEC = _clarify_tool_spec()
     return _CLARIFY_TOOL_SPEC
+
+
+def _questions_v2_tool_singleton():
+    global _QUESTIONS_V2_TOOL_SPEC
+    if _QUESTIONS_V2_TOOL_SPEC is None:
+        _QUESTIONS_V2_TOOL_SPEC = _questions_v2_tool_spec()
+    return _QUESTIONS_V2_TOOL_SPEC
 
 
 # GAP B turn-taking — `notify_user` (non-blocking progress / mid-run reply).

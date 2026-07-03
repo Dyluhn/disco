@@ -62,6 +62,11 @@ _PLAN_TAG_RE = re.compile(
     r"</?\s*(?:" + "|".join(_PLAN_WRAPPER_TAGS) + r")\s*/?>",
     re.IGNORECASE,
 )
+_AUTONOMOUS_ASSUMPTIONS_PREAMBLE = (
+    "## Assumptions\n"
+    "- Autonomous mode is on, so questions_v2 structured intake was skipped.\n"
+    "- Defer-don't-block: ambiguous preferences will be handled with reasonable defaults and kept easy to revise.\n"
+)
 
 
 def _strip_plan_tags(text: object | None) -> str:
@@ -76,6 +81,14 @@ def _strip_plan_tags(text: object | None) -> str:
     if not text:
         return ""
     return _PLAN_TAG_RE.sub("", str(text)).strip()
+
+
+def _with_autonomous_assumptions(context: str) -> str:
+    if "questions_v2 structured intake was skipped" in context:
+        return context
+    if context:
+        return f"{_AUTONOMOUS_ASSUMPTIONS_PREAMBLE}\n{context}"
+    return _AUTONOMOUS_ASSUMPTIONS_PREAMBLE.strip()
 
 
 def _coerce_step(s: object) -> PlanStep | None:
@@ -262,6 +275,8 @@ class Planner:
         context = _strip_plan_tags(
             arguments.get("context") or arguments.get("rationale")
         )
+        if getattr(self._loop, "_autonomous", False):
+            context = _with_autonomous_assumptions(context)
         # C18 — harvest the predicates (revision-scoped). We walk the raw
         # args (not the rebuilt `steps`) so we can preserve the 1-based
         # step index even when the title/format was leniently coerced.

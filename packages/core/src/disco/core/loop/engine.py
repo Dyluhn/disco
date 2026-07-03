@@ -200,8 +200,9 @@ _PLAN_NUDGE = (
     "`context` block, or (b) if required details are genuinely missing and you "
     "cannot plan well without them (the user named something only they know — a "
     "color, a credential, a target, a file that isn't here), call `ask_user` with "
-    "a clear `question` (for ONE missing detail) or `clarify` (for SEVERAL) to get "
-    "them BEFORE planning. Prefer asking over guessing on "
+    "a clear `question` (for ONE missing detail) or `questions_v2` (for ONE "
+    "batched structured intake round, up to four questions) to get them BEFORE "
+    "planning. Prefer asking over guessing on "
     "details the user explicitly required. You may also keep reading (file_list, "
     "file_read, search, extract) for more context, but a prose reply alone doesn't "
     "advance the conversation.\n"
@@ -238,7 +239,7 @@ _MIDSTEP_STEER_REFUSAL = (
     "mid-step, so this action would have landed on the OLD, now-stale plan. The "
     "build has re-entered PLANNING. Fold the new request into a REVISED plan and "
     "call `submit_plan`; once it is approved you can apply the change. You may also "
-    "read (file_read/file_list/search/extract) or ask/clarify first.\n"
+    "read (file_read/file_list/search/extract) or ask/questions_v2 first.\n"
     "</system-reminder>"
 )
 
@@ -251,7 +252,7 @@ def _planning_tool_refusal_message(
     detail = (
         f"REFUSED: `{tool_name}` is not available in PLANNING mode. No workspace "
         "mutation or execution is allowed before plan approval. Call `submit_plan`, "
-        "use a safe read tool (file_read/file_list/search/extract), or ask/clarify "
+        "use a safe read tool (file_read/file_list/search/extract), or ask/questions_v2 "
         "if details are missing."
     )
     if streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT:
@@ -1197,7 +1198,7 @@ class AgentLoop:
             # names ↔ tools_for_step), so the gate and the advertised tools can
             # never drift: the read/explore tools (file_read/file_list/search/
             # extract — capability-and-allowlist gated), submit_plan (always, even
-            # if unadvertised), and the virtual ask_user/clarify escape hatches.
+            # if unadvertised), and the virtual ask_user/questions_v2/clarify escape hatches.
             # ANY OTHER tool (file_write, shell, browser, serve, finish, remember,
             # notify_user, delegate_explore, ...) must NOT mutate the workspace or
             # execute before the plan is approved (spec §11.1/11.3/11.7). REJECT it
@@ -1210,9 +1211,9 @@ class AgentLoop:
             # loop) so finish/serve/remember/notify_user/delegate_explore can't slip
             # past to their handlers; and it ALSO closes the revision re-entry leak
             # (enter_planning() puts the loop back in PLANNING).
-            planning_virtuals = {"ask_user", "clarify"}
+            planning_virtuals = {"ask_user", "questions_v2", "clarify"}
             # Free planning steps that must NOT count toward the explore-read cap:
-            # the ask/clarify escape hatches (handled by their own halt handlers,
+            # the ask/intake escape hatches (handled by their own halt handlers,
             # never executed) PLUS `think` — a pure NO-OP reasoning scratchpad. None
             # of these GATHER context, so none should push the planner toward the
             # forced-plan cap; `think` still falls through and EXECUTES (a harmless
@@ -1242,7 +1243,7 @@ class AgentLoop:
                     )
                 )
                 return Disp.CONTINUE
-            # An allowed planning tool. ask_user/clarify are virtual escape hatches
+            # An allowed planning tool. ask_user/questions_v2/clarify are virtual escape hatches
             # handled by their own halt handlers downstream — do NOT count them as
             # exploration reads. Only an ACTUAL read tool (file_read/file_list/
             # search/extract) counts toward the explore cap + can force a plan at
@@ -1593,7 +1594,7 @@ class AgentLoop:
                 # handlers below so NOTHING outside the planning allowlist reaches
                 # its handler or execution while in PLANNING. submit_plan is
                 # intercepted, a no-tool prose turn is nudged, read/explore tools +
-                # ask_user/clarify fall through to their normal paths, and EVERY
+                # ask_user/questions_v2/clarify fall through to their normal paths, and EVERY
                 # other tool (finish/serve/remember/notify_user/delegate_explore/
                 # file_write/shell/browser/…) gets a recoverable rejection — closing
                 # the bypass where a finish/serve/remember could run before plan
@@ -1704,11 +1705,12 @@ class AgentLoop:
                         return await self.get_state()
                     continue
 
-                # (g.5) Model-chosen escape hatches: ask_user / clarify (halt for
-                # human input), propose_plan_update (re-plan + re-approval). Each is
+                # (g.5) Model-chosen escape hatches: ask_user / questions_v2 /
+                # clarify (halt for human input), propose_plan_update
+                # (re-plan + re-approval). Each is
                 # intercepted by its handler below; the loop never nudges the model
                 # toward them. First, the fresh-session backstop: a hallucinated
-                # ask/clarify/propose before any real action this session is refused
+                # ask/intake/propose before any real action this session is refused
                 # with actionable feedback (see _gate_ask_fresh_session).
                 disp = await self._meta.gate_ask_fresh_session(step, events)
                 if disp is Disp.CONTINUE:
@@ -1717,10 +1719,10 @@ class AgentLoop:
                     return await self.get_state()
 
                 # AUTONOMOUS HEADLESS-STALL GUARD. _tools_for_step withholds
-                # ask_user/clarify from the schema in autonomous mode, but a weak
+                # ask_user/questions_v2/clarify from the schema in autonomous mode, but a weak
                 # model can still hallucinate the NAME (prefill, imitation of
                 # training data). The first-action guard above only fires before any
-                # real work; once work has happened a hallucinated ask_user/clarify
+                # real work; once work has happened a hallucinated ask/intake
                 # would fall through to the handlers below and halt at
                 # AWAITING_USER_QUESTION — a silent headless stall, since there is no
                 # user to answer. Convert it into a self-directed nudge: record the
@@ -1741,6 +1743,13 @@ class AgentLoop:
                     if disp is Disp.CONTINUE:
                         continue
                     if disp is Disp.HALT:
+                        return await self.get_state()
+
+                if (
+                    step.tool_call is not None
+                    and step.tool_call.tool_name == "questions_v2"
+                ):
+                    if await self._meta.handle_questions_v2(step, events) is Disp.HALT:
                         return await self.get_state()
 
                 if step.tool_call is not None and step.tool_call.tool_name == "clarify":

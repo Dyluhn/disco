@@ -1,5 +1,5 @@
 """Autonomous mode (issue A) — the flag must DEFAULT OFF (interactive behavior
-fully preserved) and, when ON, withhold the ask gates from the model's tool set.
+fully preserved) and, when ON, withhold the ask/intake gates from the model's tool set.
 
 These tests pin the load-bearing property Dylan asked to verify: "when autonomous
 mode is off, it actually turns off." We assert the tool schema directly — the
@@ -49,6 +49,7 @@ def test_default_is_off_and_offers_ask_gates_in_execution():
     names = _names(loop._tools_for_step())
     assert "ask_user" in names
     assert "clarify" in names
+    assert "questions_v2" not in names
     assert loop._autonomous is False  # constructed default
 
 
@@ -57,6 +58,7 @@ def test_autonomous_withholds_ask_gates_in_execution():
     names = _names(loop._tools_for_step())
     assert "ask_user" not in names
     assert "clarify" not in names
+    assert "questions_v2" not in names
     # the rest of the meta-tools are still there (self-correction affordances)
     assert "finish" in names
     assert "notify_user" in names
@@ -66,6 +68,7 @@ def test_default_offers_ask_gates_in_planning():
     loop = _loop(mode=OperatingMode.PLANNING, autonomous=False)
     names = _names(loop._tools_for_step())
     assert "ask_user" in names
+    assert "questions_v2" in names
     assert "clarify" in names
 
 
@@ -73,6 +76,7 @@ def test_autonomous_withholds_ask_gates_in_planning():
     loop = _loop(mode=OperatingMode.PLANNING, autonomous=True)
     names = _names(loop._tools_for_step())
     assert "ask_user" not in names
+    assert "questions_v2" not in names
     assert "clarify" not in names
 
 

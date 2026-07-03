@@ -141,16 +141,17 @@ _PLANNING_DRIVER_PROMPT = (
     "library docs, a URL the user shared).\n"
     "  • `ask_user(question)` — pause and ask the user for a SINGLE detail you genuinely "
     "need BEFORE you can plan well. Use it when ONE specific unknown is blocking you. "
-    "  • `clarify(question, questions[])` — pause and ask the user MULTIPLE structured "
-    "questions at once. Use when the request is ambiguous and you need SEVERAL specific "
-    "answers before committing to a good plan — a brand color, a tech preference, a "
-    "target host, a file name, a layout choice. Each item in `questions[]` has: `id` "
-    "(a short stable key like 'color'), `question` text, `type` ('short_text' for one "
-    "word, 'long_text' for a sentence, 'choice' for options), and optional `options` "
-    "list for choice-type — a FLAT list of plain strings (the exact pick labels, "
-    "e.g. [\"Modern\", \"Classic\"]), never objects or nested lists. "
-    "Prefer 2-5 questions — enough to disambiguate, not an "
-    "interrogation. If only ONE thing is missing, `ask_user` is simpler."
+    "  • `questions_v2(question, questions[])` — pause and ask ONE batched structured "
+    "intake form before `submit_plan`. Use when the request is ambiguous and you need "
+    "several specific answers before committing to a good plan — a starting design "
+    "system, variation direction, brand color, tech preference, target host, file "
+    "name, or layout choice. Ask at most 4 questions. Each item has: `id`, `question`, "
+    "and optional `options` as a FLAT list of plain strings (never objects or nested "
+    "lists). Every question MUST include these options exactly: \"Explore a few "
+    "options\", \"Decide for me\", and \"Other\"; the UI also provides free text. "
+    "After calling `questions_v2`, END THE TURN. Do not call it more than once before "
+    "`submit_plan`; if ambiguity remains, state a reasonable assumption in the plan "
+    "context. If only ONE thing is missing, `ask_user` is simpler."
     "\n  Both tools: the user named something specific "
     "that only they know and you cannot obtain or sensibly default — a brand color "
     "or hex, a credential/API key, a target host/account, a file or dataset that "
@@ -175,7 +176,8 @@ _PLANNING_DRIVER_PROMPT = (
     "For a re-plan, list and re-read the files the prior build produced.\n"
     "  Phase 1.5 — ASK IF BLOCKED. If a detail (or several details) the user explicitly "
     "required is missing and you can't sensibly default it, call `ask_user` (for one "
-    "missing detail) or `clarify` (for several) to get it now — a plan built on "
+    "missing detail) or `questions_v2` (for one batched intake round, up to four "
+    "questions) to get it now — a plan built on "
     "a guessed required value is a plan that ships the wrong thing.\n"
     "  Phase 2 — PROPOSE. Call the `submit_plan` tool exactly once with:\n"
     "    - summary (REQUIRED — never omit it): one or two plain-language sentences "
@@ -480,15 +482,15 @@ _AUTONOMOUS_PROMPT_PREFIX = (
     "AUTONOMOUS MODE — no human is available to answer questions or approve your "
     "plan. Do NOT try to ask the user anything (the ask tools are not available). "
     "When a detail is missing or ambiguous, choose the most reasonable default, "
-    "state the assumption with `notify_user`, and proceed. Do not end your turns "
-    "with questions. You must drive the task to `finish` yourself; if something is "
+    "log the assumption in the `submit_plan.context` preamble, and proceed. Do not "
+    "end your turns with questions. You must drive the task to `finish` yourself; if something is "
     "genuinely impossible, call `finish` and explain what is blocked in the summary.\n\n"
 )
 
 # [E5] Agent-surface planning: capability-awareness block.
 #
 # During planning the engine exposes ONLY read-only tools (search, extract,
-# file_read, file_list, ask_user, clarify, submit_plan, think).  Without this
+# file_read, file_list, ask_user, questions_v2, clarify, submit_plan, think).  Without this
 # block the model may falsely deny owning a browser, shell, slides generator,
 # etc. — because those tools are literally absent from its tool list.  Appending
 # this note to the planning prompt lets the model plan steps that use execution

@@ -42,6 +42,8 @@ class WSServerFrame(BaseModel):
         "event", "token", "file_stream", "state", "error", "pong", "mcp_approval_required"
     ]
     # type == "event": a newly-appended Event (full object, §2). PRIMARY signal.
+    # Structured intake is carried here as event.kind == "questions_v2" so replay,
+    # reconnect, and normal event-state derivation all stay on the same path.
     event: Event | None = None
     # type == "token": an incremental token for typewriter rendering. Tokens are
     # NOT persisted as events; the final Action/MessageEvent is the truth.
@@ -93,6 +95,8 @@ class WSClientFrame(BaseModel):
         "selection_edit",
     ]
     # send_message / request_plan: free text (a user message / the (re)plan instruction).
+    # Also carries answers to ask_user / clarify / questions_v2 gates; answering is
+    # just the user's next turn, which resumes the loop.
     content: str | None = None
     # confirm/reject: respond to WAITING_FOR_CONFIRMATION (echoes pending_action_id).
     action_id: str | None = None

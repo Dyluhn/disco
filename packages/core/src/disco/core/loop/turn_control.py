@@ -1,6 +1,6 @@
 """Turn-taking control: the actionless/stuck/circuit-breaker valves and the
 virtual meta-tool handlers (notify_user / remember / serve / delegate_explore /
-ask_user / clarify / propose_plan_update / no-op).
+ask_user / questions_v2 / clarify / propose_plan_update / no-op).
 
 Extracted from engine.py as TWO co-located back-ref collaborators (they both
 poke the shared `self._loop._invisible_steps` counter, so they ship together):
@@ -164,6 +164,35 @@ def _normalize_clarify_options(raw: object) -> list[str]:
                 seen.add(label)
                 out.append(label)
     return out
+
+
+_QUESTIONS_V2_REQUIRED_OPTIONS = (
+    "Explore a few options",
+    "Decide for me",
+    "Other",
+)
+
+
+def _normalize_questions_v2_options(raw: object) -> list[str]:
+    options = _normalize_clarify_options(raw)
+    seen = {o.casefold() for o in options}
+    for required in _QUESTIONS_V2_REQUIRED_OPTIONS:
+        if required.casefold() not in seen:
+            options.append(required)
+            seen.add(required.casefold())
+    return options
+
+
+def _questions_v2_used_since_last_plan(events: list[Event]) -> bool:
+    from ..events import QuestionsV2Event
+
+    for event in reversed(events):
+        if isinstance(event, PlanEvent):
+            return False
+        if isinstance(event, QuestionsV2Event):
+            return True
+    return False
+
 
 # WALK-19 — the corrective reminder injected when the no-progress breaker first
 # trips. Failure-independent: the model's edits are "succeeding" but the app is
@@ -1369,17 +1398,18 @@ class MetaToolHandlers:
     async def gate_ask_fresh_session(self, step: AgentStep, events: list[Event]) -> Disp:
         if (
             step.tool_call is not None
-            and step.tool_call.tool_name in ("ask_user", "clarify", "propose_plan_update")
+            and step.tool_call.tool_name
+            in ("ask_user", "questions_v2", "clarify", "propose_plan_update")
             and self._loop.mode != OperatingMode.PLANNING
             and signals.actions_since_last_resume(events) == 0
-            # In autonomous mode, ask_user/clarify are owned by the headless-
+            # In autonomous mode, ask_user/questions_v2/clarify are owned by the headless-
             # stall guard below (a clean "no user — decide yourself" nudge);
             # don't pre-empt them here with the interactive "do work, then ask"
             # message, which tells the model it can ask when it can't. (g.5)
             # still governs propose_plan_update on a fresh session.
             and not (
                 self._loop._autonomous
-                and step.tool_call.tool_name in ("ask_user", "clarify")
+                and step.tool_call.tool_name in ("ask_user", "questions_v2", "clarify")
             )
         ):
             return await self._loop._valve.refuse_fresh_session(
@@ -1397,7 +1427,7 @@ class MetaToolHandlers:
         if (
             self._loop._autonomous
             and step.tool_call is not None
-            and step.tool_call.tool_name in ("ask_user", "clarify")
+            and step.tool_call.tool_name in ("ask_user", "questions_v2", "clarify")
         ):
             asked = str(
                 step.tool_call.arguments.get("question") or ""
@@ -1416,8 +1446,9 @@ class MetaToolHandlers:
                         "Autonomous mode is ON — there is no user available "
                         f"to answer. `{step.tool_call.tool_name}` is "
                         "unavailable in this mode. Make the best decision you "
-                        "can from the information you already have and continue "
-                        "working toward the goal."
+                        "can from the information you already have, log the "
+                        "assumptions in the submit_plan.context preamble, and "
+                        "continue working toward the goal."
                         + (f"\nYour question was: {asked}" if asked else "")
                         + "\n</system-reminder>"
                     ),
@@ -1512,6 +1543,126 @@ class MetaToolHandlers:
             StatusEvent(
                 status=ConversationStatus.AWAITING_PLAN_APPROVAL,
                 detail=new_plan.id,
+            )
+        )
+        return Disp.HALT
+
+    async def handle_questions_v2(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
+        from ..events import QuestionsV2Event as _QuestionsV2Event
+        from ..events import QuestionsV2Item
+
+        if self._loop.mode != OperatingMode.PLANNING:
+            action = ActionEvent(
+                thought=step.thought,
+                tool_call=step.tool_call,
+                self_assessed_risk=step.self_assessed_risk,
+                llm_response_id=step.llm_response_id,
+            )
+            await self._loop._emit(action)
+            await self._loop._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        "questions_v2 refused: structured intake is only available "
+                        "before submit_plan, while the run is still in PLANNING. "
+                        "If execution is blocked on human input, use ask_user; if "
+                        "the plan itself is wrong, use propose_plan_update.\n"
+                        "</system-reminder>"
+                    ),
+                    action_id=action.id,
+                    tool_call_id=step.tool_call.call_id,
+                )
+            )
+            return Disp.CONTINUE
+
+        if _questions_v2_used_since_last_plan(events):
+            action = ActionEvent(
+                thought=step.thought,
+                tool_call=step.tool_call,
+                self_assessed_risk=step.self_assessed_risk,
+                llm_response_id=step.llm_response_id,
+            )
+            await self._loop._emit(action)
+            await self._loop._emit(
+                AgentErrorEvent(
+                    error=(
+                        "<system-reminder>\n"
+                        "questions_v2 refused: you already used the one allowed "
+                        "structured intake round for this planning pass. Do not "
+                        "ask another batch before submit_plan. Use the user's "
+                        "answers, choose reasonable defaults for anything still "
+                        "ambiguous, and log those assumptions in submit_plan.context.\n"
+                        "</system-reminder>"
+                    ),
+                    action_id=action.id,
+                    tool_call_id=step.tool_call.call_id,
+                )
+            )
+            return Disp.CONTINUE
+
+        question = str(
+            step.tool_call.arguments.get("question")
+            or step.tool_call.arguments.get("summary")
+            or ""
+        ).strip() or step.thought.strip()
+        raw_items = (
+            step.tool_call.arguments.get("questions")
+            or step.tool_call.arguments.get("items")
+            or []
+        )
+        source_items = raw_items if isinstance(raw_items, list) else []
+        items: list[QuestionsV2Item] = []
+        used_ids: set[str] = set()
+        for it in source_items:
+            if len(items) >= 4:
+                break
+            if not isinstance(it, dict):
+                continue
+            qtext = str(it.get("question") or it.get("label") or "").strip()
+            if not qtext:
+                continue
+            qid = str(it.get("id") or f"q{len(items) + 1}").strip() or f"q{len(items) + 1}"
+            if qid in used_ids:
+                qid = f"q{len(items) + 1}"
+            used_ids.add(qid)
+            items.append(
+                QuestionsV2Item(
+                    id=qid,
+                    question=qtext,
+                    options=_normalize_questions_v2_options(it.get("options")),
+                    allow_free_text=True,
+                )
+            )
+
+        if not items:
+            q_event = MessageEvent(
+                source=EventSource.AGENT,
+                message=LLMMessage(
+                    role="assistant",
+                    content=(
+                        question or "The agent needs clarification before planning."
+                    ),
+                ),
+            )
+            await self._loop._emit(q_event)
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.AWAITING_USER_QUESTION,
+                    detail=q_event.id,
+                )
+            )
+            return Disp.HALT
+
+        intake_event = _QuestionsV2Event(
+            question=question or "A few details before I propose a plan.",
+            items=items,
+        )
+        await self._loop._emit(intake_event)
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.AWAITING_USER_QUESTION,
+                detail=intake_event.id,
             )
         )
         return Disp.HALT

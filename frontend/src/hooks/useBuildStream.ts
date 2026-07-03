@@ -22,6 +22,7 @@ import type {
   ClarifyEvent,
   ConversationStatus,
   MessageEvent,
+  QuestionsV2Event,
   WSServerFrame,
 } from "@/types/agent";
 
@@ -82,6 +83,7 @@ export interface BuildStreamState {
   pendingAlternativesId: string | null;
   pendingQuestionId: string | null;
   pendingClarifyId: string | null;
+  pendingQuestionsV2Id: string | null;
   /** Runtime sandbox liveness from the state frame's extras overlay (bp-13):
    *  'suspended' = container torn down, workspace saved (badge);
    *  'active' = live; null = unknown / no sandbox context. */
@@ -108,6 +110,7 @@ const initial: BuildStreamState = {
   pendingAlternativesId: null,
   pendingQuestionId: null,
   pendingClarifyId: null,
+  pendingQuestionsV2Id: null,
   sandboxState: null,
   autonomous: false,
   assist: false,
@@ -146,6 +149,7 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
       pendingAlternativesId: f.state.pending_alternatives_id ?? null,
       pendingQuestionId: f.state.pending_question_id ?? null,
       pendingClarifyId: f.state.pending_clarify_id ?? null,
+      pendingQuestionsV2Id: f.state.pending_questions_v2_id ?? null,
       sandboxState: f.state.extras?.sandbox ?? null,
       autonomous: f.state.extras?.autonomous ?? state.autonomous,
       assist: f.state.extras?.assist ?? state.assist,
@@ -237,6 +241,10 @@ function reducer(state: BuildStreamState, action: Action): BuildStreamState {
           status === "AWAITING_USER_QUESTION"
             ? (events.find((e) => e.id === statusDetail && e.kind === "clarify")?.id ?? null)
             : null,
+        pendingQuestionsV2Id:
+          status === "AWAITING_USER_QUESTION"
+            ? (events.find((e) => e.id === statusDetail && e.kind === "questions_v2")?.id ?? null)
+            : null,
       };
     }
     if (f.event.kind === "error") {
@@ -263,6 +271,8 @@ export interface BuildStream extends BuildStreamState {
   pendingQuestion: MessageEvent | null;
   /** The clarify card's event, when status is AWAITING_USER_QUESTION via clarify. */
   pendingClarify: ClarifyEvent | null;
+  /** The structured intake event, when status is AWAITING_USER_QUESTION via questions_v2. */
+  pendingQuestionsV2: QuestionsV2Event | null;
   plan: PlanView | null;
   planProgress: Map<number, StepState>;
   buildProgress: Map<number, StepState>;
@@ -403,6 +413,12 @@ export function useBuildStream(
         (e) => e.id === state.pendingClarifyId && e.kind === "clarify",
       ) as ClarifyEvent | undefined)) ||
     null;
+  const pendingQuestionsV2 =
+    (state.pendingQuestionsV2Id &&
+      (state.events.find(
+        (e) => e.id === state.pendingQuestionsV2Id && e.kind === "questions_v2",
+      ) as QuestionsV2Event | undefined)) ||
+    null;
 
   const plan = useMemo(() => derivePlan(state.events), [state.events]);
   const planProgress = useMemo(
@@ -425,6 +441,7 @@ export function useBuildStream(
     pendingAlternatives,
     pendingQuestion,
     pendingClarify,
+    pendingQuestionsV2,
     plan,
     planProgress,
     buildProgress,

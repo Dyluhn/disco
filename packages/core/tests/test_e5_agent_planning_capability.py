@@ -1,7 +1,7 @@
 """E5 — Agent-surface planning capability-awareness.
 
 When planning, the engine only exposes read-only tools (search, extract,
-file_read, file_list, clarify, submit_plan, think).  Without an explicit note
+file_read, file_list, questions_v2, clarify, submit_plan, think). Without an explicit note
 the model may falsely deny owning a browser, shell, slides generator, etc.
 
 This guard verifies:

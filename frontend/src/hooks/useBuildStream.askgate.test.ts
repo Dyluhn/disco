@@ -85,4 +85,45 @@ describe("useBuildStream — Ask-gate", () => {
     expect(result.current.awaitingQuestion).toBe(false);
     expect(result.current.pendingQuestion).toBeNull();
   });
+
+  it("resolves a questions_v2 status detail into the structured intake gate", () => {
+    const session = { cid: "c_qv2", task: "build" };
+    const { result } = renderHook(() => useBuildStream(session));
+
+    act(() => {
+      sink!({
+        type: "event",
+        event: {
+          id: "qv2",
+          kind: "questions_v2",
+          source: "agent",
+          question: "A few details before I plan.",
+          items: [
+            {
+              id: "style",
+              question: "Which starting style?",
+              options: ["Minimal", "Editorial", "Other"],
+              allow_free_text: true,
+              answer: "",
+            },
+          ],
+        },
+      });
+      sink!({
+        type: "event",
+        event: {
+          id: "s1",
+          kind: "status",
+          source: "system",
+          status: "AWAITING_USER_QUESTION",
+          detail: "qv2",
+        },
+      });
+    });
+
+    expect(result.current.awaitingQuestion).toBe(true);
+    expect(result.current.pendingQuestionsV2?.items[0]?.id).toBe("style");
+    expect(result.current.pendingClarify).toBeNull();
+    expect(result.current.pendingQuestion).toBeNull();
+  });
 });

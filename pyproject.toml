@@ -99,5 +99,14 @@ include = [
 ]
 exclude = ["**/__pycache__", "**/tests", "**/.venv", "archived God files"]
 pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+extraPaths = [
+    "packages/core/src",
+    "packages/retrieval/src",
+    "packages/tools/src",
+    "packages/agent-server/src",
+    "packages/app-server/src",
+]
 typeCheckingMode = "standard"
 reportMissingImports = true

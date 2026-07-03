@@ -23,6 +23,7 @@ from .events import (
     EventSource,
     MessageEvent,
     PlanEvent,
+    QuestionsV2Event,
     StatusEvent,
 )
 
@@ -58,6 +59,10 @@ class ConversationState(BaseModel):
     # ask_user question). The frontend resolves this to render ClarifyPanel
     # instead of AskPanel.
     pending_clarify_id: str | None = None
+    # The id of a QuestionsV2Event awaiting answers, if status is
+    # AWAITING_USER_QUESTION and the gate is a structured intake form. This is
+    # distinct from legacy clarify so clients can render the richer v2 form.
+    pending_questions_v2_id: str | None = None
     # Feature-scoped scratch state; keys are namespaced by subsystem,
     # e.g. "memory.last_condense_seq". [CONTRACT]
     extras: dict[str, Any] = Field(default_factory=dict)
@@ -85,6 +90,9 @@ class ConversationState(BaseModel):
         # The most recent ClarifyEvent id — the candidate when the loop
         # transitions to AWAITING_USER_QUESTION via the clarify gate.
         last_clarify_id: str | None = None
+        # The most recent QuestionsV2Event id — the candidate when the loop
+        # transitions to AWAITING_USER_QUESTION via the questions_v2 gate.
+        last_questions_v2_id: str | None = None
 
         for e in events:
             if e.seq is not None:
@@ -117,9 +125,13 @@ class ConversationState(BaseModel):
                     st.pending_clarify_id = (
                         last_clarify_id if e.detail == last_clarify_id else None
                     )
+                    st.pending_questions_v2_id = (
+                        last_questions_v2_id if e.detail == last_questions_v2_id else None
+                    )
                 else:
                     st.pending_question_id = None
                     st.pending_clarify_id = None
+                    st.pending_questions_v2_id = None
             elif isinstance(e, ActionEvent):
                 run_iteration += 1
                 last_action_id = e.id
@@ -136,6 +148,8 @@ class ConversationState(BaseModel):
                 last_agent_message_id = e.id
             elif isinstance(e, ClarifyEvent):
                 last_clarify_id = e.id
+            elif isinstance(e, QuestionsV2Event):
+                last_questions_v2_id = e.id
             elif isinstance(e, ErrorEvent):
                 st.execution_status = ConversationStatus.ERROR
 

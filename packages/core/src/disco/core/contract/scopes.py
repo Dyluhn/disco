@@ -68,6 +68,7 @@ PHASE_NEUTRAL_TOOLS: frozenset[str] = frozenset(
         "finish",
         "notify_user",
         "plan_step",
+        "questions_v2",
         "think",
         "update_plan_progress",
         # read / inspect

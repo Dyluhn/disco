@@ -50,6 +50,7 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
         "plan_step",
         "update_plan_progress",  # declarative progress snapshot — pure UI signal, no work
         "ask_user",
+        "questions_v2",
         "propose_plan_update",
         "notify_user",
         "finish",

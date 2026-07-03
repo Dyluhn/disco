@@ -48,6 +48,7 @@ export const KNOWN_EVENT_KINDS = [
   "schedule",
   "schedule_run",
   "clarify",
+  "questions_v2",
   "context_resolved",
   "context_summary",
 ] as const;
@@ -79,6 +80,10 @@ export const EVENT_DISPOSITION: Record<
   alternatives: { disposition: "rendered", where: "AlternativesGate (Build/Agent, after repeated tool failure)." },
   deliverable: { disposition: "rendered", where: "DeliverablePanel (Build finished-artifact handoff)." },
   clarify: { disposition: "rendered", where: "ClarifyPanel (pre-plan clarification questions)." },
+  questions_v2: {
+    disposition: "rendered",
+    where: "QuestionsV2Panel (structured pre-plan intake form).",
+  },
   schedule: { disposition: "rendered", where: "Settings → Schedules section / schedule confirmation card." },
   schedule_run: {
     disposition: "rendered",

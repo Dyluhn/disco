@@ -254,6 +254,22 @@ export interface ClarifyEvent extends EventBase {
   items: ClarifyQuestionItem[];
 }
 
+export interface QuestionsV2Item {
+  id: string;
+  question: string;
+  options: string[];
+  allow_free_text?: boolean;
+  answer: string;
+}
+
+/** Structured pre-plan intake (§K). The planner may call `questions_v2` once
+ *  before submit_plan; the UI renders a form with options and free text. */
+export interface QuestionsV2Event extends EventBase {
+  kind: "questions_v2";
+  question: string;
+  items: QuestionsV2Item[];
+}
+
 /** A schedule was created or deleted for this conversation (RP-08). The UI
  *  surfaces a `created` notification in the activity panel + writes the new
  *  row to the schedule list; `deleted` removes it. NOT rendered as a
@@ -289,6 +305,7 @@ export type AgentEvent =
   | ReportEvent
   | AlternativesEvent
   | ClarifyEvent
+  | QuestionsV2Event
   | ScheduleEvent
   | ScheduleRunEvent
   | DeliverableEvent
@@ -312,6 +329,8 @@ export interface ConversationState {
   pending_question_id?: string | null;
   // The ClarifyEvent id, if status is AWAITING_USER_QUESTION and the gate is a clarify card.
   pending_clarify_id?: string | null;
+  // The QuestionsV2Event id, if status is AWAITING_USER_QUESTION and the gate is structured intake.
+  pending_questions_v2_id?: string | null;
   // Runtime-overlaid sandbox liveness; absent for non-build surfaces.
   // `autonomous` is set when the run is headless (no ask_user, auto-approved plan).
   // `assist` is the server-derived execution tier (true = weak/assist; false/absent = standard).
