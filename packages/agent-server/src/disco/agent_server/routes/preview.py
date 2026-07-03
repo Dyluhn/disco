@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json as _json
+import logging
 import mimetypes
+import urllib.parse
 
 import httpx
+import websockets
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageError, StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Response, WebSocket
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
+
+_LOG = logging.getLogger(__name__)
 
 
 def _serve_static_from_snapshot(
@@ -82,6 +89,82 @@ async def _fetch_inside_response(
     return Response(
         content=body, status_code=status, media_type=ctype or "application/octet-stream"
     )
+
+
+async def _close_ws(websocket: WebSocket, code: int, reason: str) -> None:
+    with contextlib.suppress(Exception):
+        await websocket.close(code=code, reason=reason)
+
+
+async def _proxy_websocket_to_upstream(
+    websocket: WebSocket, upstream: str, rel_path: str
+) -> None:
+    """Bridge preview WebSocket frames to the live upstream (Vite HMR, etc.)."""
+    upstream_parsed = urllib.parse.urlparse(upstream)
+    ws_scheme = "wss" if upstream_parsed.scheme in {"https", "wss"} else "ws"
+    target_path = "/" + rel_path.lstrip("/")
+    query_string = websocket.scope.get("query_string", b"").decode("latin1")
+    target_url = urllib.parse.urlunparse(
+        (ws_scheme, upstream_parsed.netloc, target_path, "", query_string, "")
+    )
+
+    from websockets.typing import Subprotocol
+
+    subprotocols = [Subprotocol(p) for p in websocket.scope.get("subprotocols", [])]
+    if not subprotocols:
+        proto = websocket.headers.get("sec-websocket-protocol")
+        if proto:
+            subprotocols = [Subprotocol(p.strip()) for p in proto.split(",") if p.strip()]
+
+    try:
+        ws_client = await websockets.connect(target_url, subprotocols=subprotocols)
+    except Exception as exc:  # noqa: BLE001 — failed upgrade should close, not 500
+        _LOG.warning("preview websocket upstream connect error: %s", exc)
+        await _close_ws(websocket, 1011, "preview upstream unreachable")
+        return
+
+    await websocket.accept(subprotocol=ws_client.subprotocol)
+
+    async def client_to_upstream() -> None:
+        try:
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.receive":
+                    if "text" in message:
+                        await ws_client.send(message["text"])
+                    elif "bytes" in message:
+                        await ws_client.send(message["bytes"])
+                elif message["type"] == "websocket.disconnect":
+                    await ws_client.close(message.get("code", 1000))
+                    break
+        except Exception:  # noqa: BLE001 — peer went away / upstream closed
+            with contextlib.suppress(Exception):
+                await ws_client.close(1011)
+
+    async def upstream_to_client() -> None:
+        try:
+            async for message in ws_client:
+                if isinstance(message, str):
+                    await websocket.send_text(message)
+                else:
+                    await websocket.send_bytes(message)
+            await _close_ws(websocket, 1000, "")
+        except websockets.ConnectionClosed as exc:
+            await _close_ws(websocket, exc.code, exc.reason)
+        except Exception:  # noqa: BLE001 — downstream disconnected / send failed
+            await _close_ws(websocket, 1011, "preview websocket failed")
+
+    t1 = asyncio.create_task(client_to_upstream())
+    t2 = asyncio.create_task(upstream_to_client())
+    try:
+        _done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
+        for task in pending:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    finally:
+        with contextlib.suppress(Exception):
+            await ws_client.close()
 
 
 def make_preview_router(
@@ -405,6 +488,27 @@ def make_preview_router(
             media_type=r.headers.get("content-type", "text/html"),
         )
 
+    @router.websocket("/conversations/{conversation_id}/preview-app/{path:path}")
+    @router.websocket("/conversations/{conversation_id}/preview-app/")
+    async def preview_app_websocket(
+        websocket: WebSocket,
+        conversation_id: str,
+        path: str = "",
+    ) -> None:
+        """Proxy live preview WebSockets (Vite HMR) through the path preview URL."""
+        if runtime is None:
+            await _close_ws(websocket, 1008, "preview not available")
+            return
+        if websocket.query_params.get("version") is not None:
+            await _close_ws(websocket, 1008, "historical previews are static")
+            return
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+        upstream = await runtime.wake_for_preview(cid8, PREVIEW_PORT)
+        if upstream is None:
+            await _close_ws(websocket, 1008, "preview not available")
+            return
+        await _proxy_websocket_to_upstream(websocket, upstream, path)
+
     @router.get("/conversations/{conversation_id}/port/{port}/{path:path}")
     @router.get("/conversations/{conversation_id}/port/{port}/")
     # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages.
@@ -443,5 +547,27 @@ def make_preview_router(
             status_code=r.status_code,
             media_type=r.headers.get("content-type", "text/html"),
         )
+
+    @router.websocket("/conversations/{conversation_id}/port/{port}/{path:path}")
+    @router.websocket("/conversations/{conversation_id}/port/{port}/")
+    async def port_app_websocket(
+        websocket: WebSocket,
+        conversation_id: str,
+        port: int,
+        path: str = "",
+    ) -> None:
+        """Proxy live curated-port WebSockets (including Vite HMR)."""
+        if port not in USER_PORTS:
+            await _close_ws(websocket, 1008, "unknown port")
+            return
+        if runtime is None:
+            await _close_ws(websocket, 1008, "preview not available")
+            return
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+        upstream = await runtime.wake_for_preview(cid8, port)
+        if upstream is None:
+            await _close_ws(websocket, 1008, "preview not available")
+            return
+        await _proxy_websocket_to_upstream(websocket, upstream, path)
 
     return router
