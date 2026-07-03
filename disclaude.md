@@ -5755,3 +5755,60 @@ KEPT, diagram fresh). Fixing the 25 is P11 work, not P8.
 **LESSON:** the FIRST live proof failed with "invalid client frame" because the running
 agent-server was launched BEFORE the P8 code — a live proof MUST restart the server on
 the code under test. (Rule: no restarts while soak lanes live; none were.)
+
+---
+
+## P10 — Export render-correctness gate (2026-07-03, HEAD `43b1c196`)
+
+**Closed the biggest remaining false-affordance-of-completeness on the Build surface:**
+a deck/document that renders BLANK, TRUNCATED, or CORRUPT could still report FINISHED,
+because the producer stamped `slide_count = len(deck.slides)` — the model's DECLARED
+count from the deck *spec* (computed before rendering) — and the finish gate trusted it.
+The gate now consults what the bytes ACTUALLY rendered.
+
+**Layering-clean (FinishGate is in `core`; the WeasyPrint/pptx renderers are in `tools`,
+which `core` may not import) → facts flow through the event log:**
+- `core/contract/export_render.py` (NEW, pure, stdlib `zipfile`/`re` only): `ExportRenderFacts`
+  + `check_export_render(fmt, bytes/text)` parses the REAL output — PDF `%header`+`%%EOF`+
+  `/Type/Page` count; PPTX OOXML zip slide entries + `<a:t>` text OR embedded `ppt/media/*`
+  (Marp image decks aren't blank); HTML DISTINCT `data-slide-id` sections + chrome/script/
+  style-stripped text. Reports valid_header/unit_count/visible_text_len/truncated/non_blank/ok.
+  **First real EXECUTOR for the previously-inert `ExportContract.validate` stage.** + pure gate
+  helpers (stateless refusal counter, steer/warning builders).
+- `tools/builtin/slides.py`: a SINGLE choke point in `SlidesGenerate.run` reads the persisted
+  artifact back from the sandbox and stamps facts into `tool_result.structured[export_render]`
+  — path-agnostic (C1/Marp/fallback, all formats), catches write failures too.
+- `core/loop/finish.py`: `gate_export_render` (thin, emit-only) reads `latest_export_render_facts`
+  and refuses FINISHED (`Disp.CONTINUE` + concrete steer) for a blank/truncated/corrupt files-
+  deliverable; falls through for a good export / an app deliverable / none. Bounded by a stateless
+  cap (counts its own `EXPORT RENDER CHECK` markers on the log) that releases with a loud
+  UNVERIFIED warning so a broken renderer can't trap the run. Wired into `handle_finish_path`
+  as a sibling to the host/browser gates.
+
+**Evidence:**
+- **Deterministic:** 22 checker tests (real byte layouts, all 3 formats, good/blank/truncated/
+  corrupt/image-deck; caught a genuine char-floor-vs-byte-proxy bug in the PDF branch) + 7 gate-
+  branch tests + 3 pure-helper tests + **2 REAL-LOOP integration tests** (`test_export_gate_finish_path`):
+  a blank deck is refused up to the cap then honestly released; a good deck clean-FINISHES — the A/B
+  proving the gate is consulted inside the real finish path.
+- **LIVE (`harness/product_build/p10_export_render_run.py`, MiniMax-M3, 0 OpenRouter, 23 calls):**
+  the model built a real 6-slide C3-brand HTML deck; the producer read it back + stamped facts
+  (unit_count 6 == declared 6, non_blank, valid_header, NOT truncated, ok); the deck reached
+  FINISHED with ZERO export-gate refusals (no false block). **PASS ✅.**
+
+**★ FINDING — live proof forced the checker to be correct against the REAL renderer.** The first
+live run failed two ways the synthetic fixtures could never have caught: (1) the model drove the
+Marp/markdown render path, not the C1 branch I'd instrumented → NO facts stamped (fix: single
+read-back choke point in `run`); (2) against the real C3-brand HTML the checker over-counted units
+37-vs-7 (C3 stamps `data-slide-id` on child elements → count DISTINCT ids) and mis-measured text
+2.5M chars (a `<style>` body counted as slide text → strip script/style first). Both fixed; the
+re-run PASSED clean (unit_count 6==6, visible_text_len 2.5M→2116). This is the canonical case for
+"only a live model end-to-end proves it works."
+
+**★ NOTE — server restart discipline (P8 lesson re-confirmed):** the dev agent-server runs disclaude
+source via a `PYTHONPATH` override (Disco-Pi venv interpreter), so it LOOKS like it'd hot-pick edits,
+but CPython caches imported modules in the live process. Each live proof required a fresh
+`~/disco-dev-up.sh` restart to load the code under test.
+
+**Arch-budget:** FinishGate grew ~55 LOC net (after extracting pure logic to `export_render.py`);
+still the pre-existing god-object red (25 violations at HEAD) tracked for P11. Other 3 gates GREEN.

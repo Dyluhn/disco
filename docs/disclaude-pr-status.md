@@ -1,8 +1,8 @@
 # disclaude PR / order status
 
 **Branch:** `disclaude/experimental-20260628T025508Z`
-**HEAD:** `c0a3f5aa` — P8 semantic direct manipulation wired + live-proven + committed (2026-07-03)
-**Snapshot written:** 2026-07-03 (post P8 commit)
+**HEAD:** `43b1c196` — P10 export render-correctness gate DONE + live-proven (2026-07-03)
+**Snapshot written:** 2026-07-03 (post P8 + P10 commits)
 
 Status of every disclaude campaign work item (the P-phases + the REL reliability
 ladder). Gate legend:
@@ -78,7 +78,7 @@ Each killed one build-loop defect category; zero recurrence after fix.
 | **P7** Kits | P7-KITS | Starter kit registry + 2 scaffolds (`app_shell`, `lead_form`), path-safety, single-source | ✅ ACCEPTED — but 🟡 **thin catalog** (2 of 6 spec'd; `image-slot` genuinely missing — the purest anti-false-affordance kit; `deck_stage` exists elsewhere, not under the funnel) |
 | **P8** Semantic Direct Manipulation | selection_edit wire (2026-07-03) | Point-at-element editing | ✅ **WIRED + LIVE-PROVEN**. Click element → `EditAffordance` → `selection_edit` frame → host-owned scoped-edit directive (`core/selection_edit.py`) → targeted `file_edit` on ONLY that element. Live: h1 `NightOwl Coffee`→`NIGHTOWL_HERO_EDITED`, rest unchanged, no rewrite, MiniMax-only. `selection_agent.js` now reads `data-disco-*` (semantic enrichment). Dead `formatEditSteer` prose path removed. ⚠️ Open finding: a selection-edit that contradicts a build's dictated literal is reverted by the REL-RC-O finish floor (separate fix) |
 | **P9** TweakSpec / small-change | P9B (`.disco/tweaks.json` IO), P9C (`app_set_tweak`) | Small-change discipline + versioning-by-copy | ✅ **DONE + deep (audited)**. Multi-layer prompt + "Targeted edit law" in every pack + 5 tool guards (F1/RC-M/RC-L/CD-TOOLS-1/otnf) + AppKit semantic tools + **REL-6 TARGETED 30/30**. Residue (minor): no generic versioning-by-copy snapshot; `file_write` desc over-nudges rewrites; F6 rewrite-directive computed-but-unwired (intentional, assist-only) |
-| **P10** Export/Handoff | P10b (export smoke, in REL-6) | Export path + capture-side validation flags the model must judge | 🟡 **~40% (audited)**. Produces a real, non-empty, structurally-valid file (valid %PDF header, honest capability gating). **Gap = a false-affordance-of-completeness:** NO model-facing render-correctness flag → a blank/truncated/mis-rendered deck passes BOTH the oracle and the finish gate undetected. `ExportContract` `validate` stage declared but **never executed** |
+| **P10** Export/Handoff | export render-correctness gate (2026-07-03, `43b1c196`) | Export path + capture-side render check the finish gate consults | ✅ **DONE + LIVE-PROVEN**. The false-affordance is CLOSED: `core/contract/export_render.py` parses the ACTUAL output bytes (PDF pages / PPTX slides+text-or-media / HTML distinct sections+text) → `ExportRenderFacts` stamped at a single read-back choke point in `SlidesGenerate.run` → `gate_export_render` refuses FINISHED for a blank/truncated/corrupt deck (bounded cap → honest release). This is the first real EXECUTOR of the once-inert `ExportContract.validate` stage. Evidence: 34 unit + 2 real-loop integration tests + live MiniMax-M3 (6-slide C3 deck, ok, FINISHED, 0 refusals, 0 OpenRouter). Live proof forced the checker correct vs the real C3 renderer (distinct-id count, script/style strip, Marp image-deck) |
 | **P2** Contract Runtime | contract registry/enforce/scopes | Artifact contract | 🟡 **~65% (audited)**. REAL host-owned **tool-scope + delivery-shape** enforcement runtime (not thin). Missing: host-assembles-document-from-parts + single-format schema validation (model still hand-writes whole files); `ExportContract` pipeline tuple is **inert data, no executor** |
 | **P11** Feature + release | — | Open-source release engineering (README, secret scrub, self-host, packaging, CI) | ⚪ **UNBLOCKED, not started — the real ship gate.** License blocker RESOLVED (MIT reranker default) |
 | (new) questions_v2 | — | Structured pre-plan clarification intake | ⚪ NOT STARTED (small) |
@@ -99,11 +99,11 @@ are more built than believed — **the real remaining work is (1) closing the la
 false-affordances-of-completeness and (2) release engineering.**
 
 **Tier 1 — kill the remaining false-completeness (ON-MISSION: Dylan's #3 hated mode):**
-1. **P10 export-correctness gate** — a capture-side render check (slide/page count > 0,
-   non-blank) the finish gate consults, so a blank/truncated export can't report FINISHED.
-   Biggest remaining completeness hole. Medium effort.
+1. ~~**P10 export-correctness gate**~~ — ✅ **DONE + live-proven (`43b1c196`, 2026-07-03).** A
+   capture-side render check the finish gate consults; a blank/truncated/corrupt export can't
+   report FINISHED. First real executor of `ExportContract.validate`.
 2. **Flip REL-1e host-verify authoritative** (agreement evidence banked) — makes app-render
-   verification gating not advisory; kills "looks done but renders blank." Low effort.
+   verification gating not advisory; kills "looks done but renders blank." Low effort. **← next**
 
 **Tier 2 — honesty pass (Dylan hates dead scaffolding "written to look done"):**
 3. Resolve the built-but-unwired seams: P8 semantic layer (wire minimally OR cut),
