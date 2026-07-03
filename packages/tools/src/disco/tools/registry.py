@@ -93,6 +93,10 @@ AGENT_TOOLS = frozenset(
         # W-45 — verify_web_app: structured web-app self-test → the finish gate's
         # clean pass/fail verdict (kills the 25-40× browser reload verify-loop).
         "verify_web_app",
+        # EPIC D3 — design_lint: read-only design-slop scanner (designspec-
+        # justification aware). A verification PROBE like verify_web_app, not a
+        # productive edit (registered beside it in the non-productive probe set).
+        "design_lint",
         # EPIC F — platform-owned preview surface. These four SUPERSEDE the old
         # `deploy_preview` placeholder (which was a deferred, never-registered name):
         # the model declares intent (dir/framework/command) and the platform owns

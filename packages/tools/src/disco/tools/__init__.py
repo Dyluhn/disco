@@ -17,6 +17,16 @@ from .anatomy import (
     ToolExecutionError,
     ToolOutcome,
 )
+from .appkit_exec import AppKitToolExecutor
+from .appkit_scope import (
+    APPKIT_MUTATORS,
+    APPKIT_PROBES,
+    APPKIT_READ_TOOLS,
+    REQUEST_CUSTOM_BUILD,
+    AppKitPhase,
+    AppKitPhaseState,
+    appkit_effective_scope,
+)
 from .builtin import build_default_registry
 from .executor import DefaultToolExecutor, validate_args
 from .registry import (
@@ -50,7 +60,14 @@ from .secrets import (
 
 __all__ = [
     "AGENT_TOOLS",
+    "APPKIT_MUTATORS",
+    "APPKIT_PROBES",
+    "APPKIT_READ_TOOLS",
     "ARTIFACT_TOOLS",
+    "AppKitPhase",
+    "AppKitPhaseState",
+    "AppKitToolExecutor",
+    "REQUEST_CUSTOM_BUILD",
     "RESEARCH_TOOLS",
     "Capability",
     "CapabilityBroker",
@@ -76,6 +93,7 @@ __all__ = [
     "ToolRegistry",
     "ToolScope",
     "agent_scope",
+    "appkit_effective_scope",
     "artifact_scope",
     "build_default_registry",
     "research_scope",

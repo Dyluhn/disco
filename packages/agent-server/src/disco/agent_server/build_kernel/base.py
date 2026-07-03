@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 from disco.core import ConversationState, Event, MessageEvent
+from disco.core.appkit import BuildBrief
 
 # The experimental gate lives in the shared core layer (one source of truth for
 # both sibling server packages) and is re-exported here so the build_kernel API
@@ -126,6 +127,7 @@ class BuildKernel(Protocol):
         text: str,
         *,
         context: str | None = None,
+        build_brief: BuildBrief | None = None,
         steer: bool = False,
     ) -> MessageEvent:
         """Append a user turn (optionally a context block, optionally a mid-run

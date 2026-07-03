@@ -806,11 +806,15 @@ def _verdict_targets_preview(verdict: dict, target_url: str | None) -> bool:
 
 
 def _latest_verify_verdict(
-    events: list[Event], since_seq: int, target_url: str | None = None
+    events: list[Event],
+    since_seq: int,
+    target_url: str | None = None,
+    tool_name: str = "verify_web_app",
 ) -> dict | None:
-    """Structured verdict of the LATEST `verify_web_app` observation since
+    """Structured verdict of the LATEST `tool_name` observation since
     `since_seq` whose url BINDS to the current preview `target_url` (P1-1). None
-    when no such verdict exists.
+    when no such verdict exists. `tool_name` is `verify_web_app` on normal Build
+    and `verify_appkit_app` in strict AppKit mode; both emit the same verdict shape.
 
     The cache key is effectively (since_seq, server/port, url): a non-productive
     probe (browser/navigate/verify_web_app itself) does NOT move `since_seq`, AND
@@ -822,7 +826,7 @@ def _latest_verify_verdict(
     for ev in reversed(events):
         if ev.seq is None or ev.seq <= since_seq:
             continue
-        if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == "verify_web_app":
+        if isinstance(ev, ObservationEvent) and ev.tool_result.tool_name == tool_name:
             res = ev.tool_result
             if res.success and res.structured and _verdict_targets_preview(
                 res.structured, target_url
@@ -1042,17 +1046,30 @@ class FinishGate:
         )
         return isinstance(obs, ObservationEvent) and obs.tool_result.success
 
-    def _verify_tool_available(self) -> bool:
-        """W-45 — is the `verify_web_app` tool in the execution set? Present on the
-        build surface; absent on browserless backends and the legacy tests, where
-        the gate falls back to its raw browser-observation check."""
+    def _available_tool_names(self) -> set[str | None]:
         try:
-            tool_names = {
+            return {
                 getattr(t, "name", None) for t in self._loop.executor.available_tools()
             }
         except Exception:  # noqa: BLE001 — introspection failure → degrade safely
-            return False
-        return "verify_web_app" in tool_names
+            return set()
+
+    def _verify_tool_available(self) -> bool:
+        """W-45 — is a structured app verifier in the execution set?"""
+        return self._active_verify_tool() is not None
+
+    def _active_verify_tool(self) -> str | None:
+        """Return the structured verifier active for this executor.
+
+        Strict AppKit mode advertises `verify_appkit_app` from the AppKit-only
+        allowlist. Prefer it; otherwise fall back to normal Build's `verify_web_app`.
+        """
+        tool_names = self._available_tool_names()
+        if "verify_appkit_app" in tool_names:
+            return "verify_appkit_app"
+        if "verify_web_app" in tool_names:
+            return "verify_web_app"
+        return None
 
     async def _host_artifact_file_exists(self, path: str) -> bool | None:
         sbx = getattr(self._loop.executor, "sandbox", None)
@@ -1334,7 +1351,10 @@ class FinishGate:
                 )
 
         inline_verdict = _latest_verify_verdict(
-            events, _last_productive_seq(events), target_url=None
+            events,
+            _last_productive_seq(events),
+            target_url=None,
+            tool_name=self._active_verify_tool() or "verify_web_app",
         )
         host_label = self._verdict_label(host_verdict)
         inline_label = self._verdict_label(inline_verdict)
@@ -1682,8 +1702,10 @@ class FinishGate:
                 return f"http://127.0.0.1:{int(line)}/"
         return None
 
-    async def _drive_verify_web_app(self, target_url: str | None = None) -> bool:
-        """W-45 ACTIVE verify: DRIVE one `verify_web_app` call when the agent
+    async def _drive_verify_web_app(
+        self, target_url: str | None = None, tool_name: str = "verify_web_app"
+    ) -> bool:
+        """W-45 ACTIVE verify: DRIVE one structured verifier call when the agent
         declares done without a fresh verdict. Mirrors `_drive_finish_browser_probe`
         — the probe ActionEvent is tagged `verify_probe` so it never counts as
         agent work. Returns True iff the call produced a usable observation.
@@ -1693,12 +1715,9 @@ class FinishGate:
         passed EXPLICITLY so the tool verifies the build's actual served port instead
         of repeating its own auto-detect (Bug 7). None ⇒ `{}` ⇒ the tool auto-detects
         (which itself uses the same backend-aware resolver)."""
-        call = ToolCall(
-            tool_name="verify_web_app",
-            arguments={"url": target_url} if target_url else {},
-        )
+        call = ToolCall(tool_name=tool_name, arguments={"url": target_url} if target_url else {})
         action = ActionEvent(
-            thought="Verifying the app: running verify_web_app on the running preview.",
+            thought=f"Verifying the app: running {tool_name} on the running preview.",
             tool_call=call,
             meta={"verify_probe": True},
         )
@@ -2193,13 +2212,15 @@ class FinishGate:
         self._loop._execution_nudges = 0
         return Disp.FALLTHROUGH
 
-    async def _gate_verify_web_app(self, events: list[Event]) -> Disp:
+    async def _gate_verify_web_app(
+        self, events: list[Event], tool_name: str = "verify_web_app"
+    ) -> Disp:
         """W-45 — the verdict-consuming finish gate (the loop-killer).
 
         Replaces `_browser_verified()` as the PRIMARY completion check for web
-        builds with "the latest `verify_web_app` verdict since the last productive
+        builds with "the latest structured verifier verdict since the last productive
         edit". If none exists when the agent calls finish, the gate DRIVES
-        `verify_web_app` itself (ONE call). pass → finish; fail → emit the verdict's
+        the verifier itself (ONE call). pass → finish; fail → emit the verdict's
         summary + first concrete error + screenshot + next_action and CONTINUE.
 
         LOOP BREAKER: the verdict is cached by `_last_productive_seq` — a browser/
@@ -2217,19 +2238,21 @@ class FinishGate:
         # must NOT satisfy the gate — it drives a fresh verify against the real
         # preview instead. target_url=None (preview undetectable) disables binding.
         target_url = await self._detect_preview_url()
-        verdict = _latest_verify_verdict(events, since_seq, target_url)
+        verdict = _latest_verify_verdict(events, since_seq, target_url, tool_name)
         if verdict is None:
             # No fresh verdict bound to the current preview — the agent may have
             # overclaimed, or only a stale/foreign-url verdict exists. Drive ONE
             # against the resolved real preview (target_url is backend-aware — never
             # the agent-server's 8000 on the process backend, Bug 7).
-            if await self._drive_verify_web_app(target_url):
+            if await self._drive_verify_web_app(target_url, tool_name):
                 events = await self._loop._events()
                 # The freshly driven verify auto-detected + tested the CURRENT
                 # preview, so its verdict IS bound by construction — read it
                 # unconditionally (target_url=None) rather than re-binding against a
                 # detection that could disagree with the tool's own auto-detect.
-                verdict = _latest_verify_verdict(events, since_seq, target_url=None)
+                verdict = _latest_verify_verdict(
+                    events, since_seq, target_url=None, tool_name=tool_name
+                )
         if verdict is None:
             # P1-2: the verifier could not produce a usable verdict (execution
             # error / empty / the driven verify failed). This must NOT fall through
@@ -2237,7 +2260,7 @@ class FinishGate:
             # PASS verdict (W-32: route completion THROUGH the gate). Refuse-and-
             # continue (bounded), then an EXPLICIT unverified release at the cap;
             # never a silent done, never a fall-back to the legacy browser gate.
-            return await self._verifier_unavailable_disposition()
+            return await self._verifier_unavailable_disposition(tool_name)
 
         if verdict.get("passed"):
             self._loop._browser_verify_refusals = 0  # clean pass → reset the streak
@@ -2269,7 +2292,7 @@ class FinishGate:
 
         # FAIL / DEGRADED. Build the concrete next-step payload from the verdict.
         fp = str(verdict.get("failure_fingerprint") or "")
-        summary = str(verdict.get("summary") or "verify_web_app did not pass")
+        summary = str(verdict.get("summary") or f"{tool_name} did not pass")
         next_action = str(verdict.get("next_action") or "")
         screenshot = str(verdict.get("screenshot_path") or "")
         errs = verdict.get("console_errors") or []
@@ -2297,7 +2320,7 @@ class FinishGate:
             # productive edit and the gate already nudged for it — no new
             # information. Halt STUCK (named) instead of re-loading forever.
             blocked = (
-                "⚠ Stopped: verify_web_app keeps returning the SAME failure with no "
+                f"⚠ Stopped: {tool_name} keeps returning the SAME failure with no "
                 "progress since the last edit — re-loading won't help.\n"
                 f"{summary}\n"
                 + (f"error: {first_error}\n" if first_error else "")
@@ -2320,7 +2343,7 @@ class FinishGate:
         if self._loop._browser_verify_refusals < 3:
             self._loop._browser_verify_refusals += 1
             payload = (
-                f"verify_web_app did not pass ({verdict.get('verdict')}). {summary}\n"
+                f"{tool_name} did not pass ({verdict.get('verdict')}). {summary}\n"
                 + (f"first error: {first_error}\n" if first_error else "")
                 + (f"screenshot: {screenshot}\n" if screenshot else "")
                 + (f"next step: {next_action}" if next_action else "Fix the issue, then finish.")
@@ -2354,7 +2377,7 @@ class FinishGate:
             )
         )
         warn = (
-            "⚠ Finished WITHOUT a passing verify_web_app verdict (3 attempts) — the "
+            f"⚠ Finished WITHOUT a passing {tool_name} verdict (3 attempts) — the "
             f"deliverable is INCOMPLETE. {summary}"
             + (f" Outstanding: {next_action}" if next_action else "")
             + " Note this clearly in your summary."
@@ -2537,8 +2560,10 @@ class FinishGate:
         self._loop._browser_verify_refusals = 0
         return True
 
-    async def _verifier_unavailable_disposition(self) -> Disp:
-        """P1-2 — disposition when `verify_web_app` is advertised but produced NO
+    async def _verifier_unavailable_disposition(
+        self, tool_name: str = "verify_web_app"
+    ) -> Disp:
+        """P1-2 — disposition when the structured verifier is advertised but produced NO
         usable verdict (verifier execution error / empty / the driven verify
         failed). On the build/web surface a clean FINISH requires a real PASS
         verdict, so this must NOT fall through to finalization (the W-32 regression
@@ -2555,7 +2580,7 @@ class FinishGate:
                     message=LLMMessage(
                         role="user",
                         content=(
-                            "verification could not run: verify_web_app did not return a "
+                            f"verification could not run: {tool_name} did not return a "
                             "usable verdict (the verifier failed to execute, or the preview "
                             "server is not reachable on its port). The build is NOT verified "
                             "— start/repair the dev server on the preview port, then finish "
@@ -2580,7 +2605,7 @@ class FinishGate:
                 message=LLMMessage(
                     role="user",
                     content=(
-                        "⚠ Finished WITHOUT a verify_web_app verdict — the verifier could "
+                        f"⚠ Finished WITHOUT a {tool_name} verdict — the verifier could "
                         "not run after 3 attempts, so the deliverable is UNVERIFIED and may "
                         "be INCOMPLETE. Note this clearly in your summary."
                     ),
@@ -2612,21 +2637,23 @@ class FinishGate:
         # BROWSER-VERIFY GATE — §BP-05. If web deliverable holds, refuse finish
         # until a clean browser observation (zero console errors) exists
         # since the last state-changing edit.
+        verify_tool = self._active_verify_tool()
+        is_appkit = verify_tool == "verify_appkit_app"
         if (
             self._loop._planning_tools
             and self._loop.mode != OperatingMode.PLANNING
-            and _is_web_deliverable(events)
+            and (is_appkit or _is_web_deliverable(events))
         ):
             # W-45: when the structured `verify_web_app` tool is in the execution
             # set (the build surface), consume its VERDICT as the primary check —
             # the clean actionable signal that kills the reload loop. The legacy
             # raw-observation path below stays for browserless backends / tests
             # without the tool (non-web + assist paths are untouched: this whole
-            # block is gated on _is_web_deliverable).
+            # block is gated on _is_web_deliverable / strict AppKit mode).
             if await self._browser_verify_delegated_to_host(step, events):
                 return Disp.FALLTHROUGH
-            if self._verify_tool_available():
-                return await self._gate_verify_web_app(events)
+            if verify_tool is not None:
+                return await self._gate_verify_web_app(events, verify_tool)
             since_seq = _last_productive_seq(events)
             # The preview platform assigns a RANDOM port — there is NO fixed :8000
             # inside the sandbox (a curl there 404s). Resolve the live preview the

@@ -11,6 +11,7 @@ from disco.core import (
     WSClientFrame,
     WSServerFrame,
 )
+from disco.core.appkit import classify_build_brief
 from disco.core.selection_edit import (
     build_scoped_edit_directive,
     parse_selection_ref,
@@ -22,7 +23,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from ..runtime import ConversationRuntime
-from ._common import _context_message, _user_message
+from ._common import _build_brief_message, _context_message, _user_message
 
 
 async def _handle_frame(
@@ -53,6 +54,7 @@ async def _handle_frame(
             ).model_dump(mode="json")
         )
     elif frame.type == "send_message" and frame.content is not None:
+        brief = classify_build_brief(frame.content) if frame.build_brief is not None else None
         # R3: an optional large `context` (e.g. a full DR report) is stored as a
         # HIDDEN ENVIRONMENT message FIRST, then the short visible user message —
         # so the model receives the report while the history shows only the
@@ -62,12 +64,16 @@ async def _handle_frame(
         # context+user append + kick. (No runtime ⇒ append only, unchanged.)
         if runtime is not None:
             await runtime.send_user_turn(
-                conversation_id, frame.content, context=frame.context
+                conversation_id, frame.content, context=frame.context, build_brief=brief
             )
         else:
+            pending = []
             if frame.context:
-                await store.append(conversation_id, _context_message(frame.context))
-            await store.append(conversation_id, _user_message(frame.content))
+                pending.append(_context_message(frame.context))
+            if brief is not None:
+                pending.append(_build_brief_message(brief))
+            pending.append(_user_message(frame.content))
+            await store.append_many(conversation_id, pending)
     elif frame.type == "steer" and frame.steer_text is not None:
         # D3: when a DR run is in flight for this cid, route the steer into the
         # DR queue instead of kicking the agent loop. The engine drains the queue

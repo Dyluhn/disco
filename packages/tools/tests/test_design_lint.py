@@ -517,7 +517,6 @@ async def test_tool_with_invalid_designspec_json_fires_rules():
 
 
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="B3 runtime wiring")
 async def test_tool_is_read_only_and_registered():
     from disco.tools.builtin import build_default_registry
 

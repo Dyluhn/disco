@@ -209,6 +209,7 @@ _EXPECTED_AGENT_TOOLS = [
     "context_memory",  # CXT-2: durable .disco/context working memory
     "deck_patch",   # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
+    "design_lint",  # B3 appkit port — read-only design-slop probe (nightly EPIC D3 parity)
     "exact_replace",  # CD-TOOLS-2 — atomic exact-match batch replace (anchored-edit tier)
     "extract",
     "file_append",

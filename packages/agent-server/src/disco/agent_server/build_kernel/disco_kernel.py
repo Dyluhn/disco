@@ -32,8 +32,9 @@ from disco.core import (
     MessageEvent,
     StatusEvent,
 )
+from disco.core.appkit import BuildBrief
 
-from ..build_messages import _context_message, _user_message
+from ..build_messages import _build_brief_message, _context_message, _user_message
 from .base import KernelEvent
 
 if TYPE_CHECKING:
@@ -59,6 +60,7 @@ class DiscoKernel:
         text: str,
         *,
         context: str | None = None,
+        build_brief: BuildBrief | None = None,
         steer: bool = False,
     ) -> MessageEvent:
         """Append the (optional hidden context +) user message, then kick — the
@@ -66,11 +68,14 @@ class DiscoKernel:
 
         Returns the stored USER message (the REST send/followup routes report its
         id/seq) — byte-identical to the append the routes did inline before the seam."""
+        pending = []
         if context:
-            await self._rt._store.append(conversation_id, _context_message(context))
-        stored = await self._rt._store.append(
-            conversation_id, _user_message(text, steer=steer)
-        )
+            pending.append(_context_message(context))
+        if build_brief is not None:
+            pending.append(_build_brief_message(build_brief))
+        pending.append(_user_message(text, steer=steer))
+        stored_events = await self._rt._store.append_many(conversation_id, pending)
+        stored = stored_events[-1]
         # DURABLE NO_REPLAN fix (codex RCA2): a live revision STEER must re-enter
         # PLANNING, but `kick()` is a no-op during an active run AND the loop's
         # unprocessed-text re-plan guards get masked by in-flight Action/Observation

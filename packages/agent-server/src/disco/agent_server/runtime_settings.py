@@ -502,3 +502,14 @@ class RuntimeSettings:
     def _effective_artifact_mode(self, conversation_id: str) -> bool:
         """True when the conversation was created with artifact_mode=True."""
         return self._rt._artifact_mode.get(conversation_id, False)
+
+    # ---- appkit_mode (EPIC F) ----------------------------------------------
+
+    def set_appkit_mode(self, conversation_id: str, on: bool) -> None:
+        """Mark a conversation as an AppKit build. In-memory only, set at create
+        time; default OFF so normal Build/Research behavior is untouched."""
+        self._rt._appkit_mode[conversation_id] = bool(on)
+
+    def _effective_appkit_mode(self, conversation_id: str) -> bool:
+        """True when the conversation was created with appkit_mode=True."""
+        return self._rt._appkit_mode.get(conversation_id, False)

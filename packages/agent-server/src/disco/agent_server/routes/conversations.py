@@ -11,6 +11,7 @@ from disco.core import (
     DEFAULT_OWNER_ID,
     ConversationStatus,
 )
+from disco.core.appkit import classify_build_brief
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -27,6 +28,7 @@ from ._common import (
     CreateConversationBody,
     SendMessageBody,
     UpdateSettingsBody,
+    _build_brief_message,
     _reject_if_imported,
     _user_message,
 )
@@ -96,6 +98,9 @@ def make_conversations_router(
             # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
             if body.artifact_mode:
                 runtime.set_artifact_mode(conversation_id, True)
+            # EPIC F: appkit_mode — strict phase-based tool allowlist on the build loop.
+            if body.appkit_mode:
+                runtime.set_appkit_mode(conversation_id, True)
         return {
             "conversation_id": conversation_id,
             "conversation_url": f"/ws/conversations/{conversation_id}",
@@ -161,10 +166,17 @@ def make_conversations_router(
         # for the default `disco` kernel this is byte-identical to the inline
         # append + kick. (No runtime ⇒ wire-only: append, no kick — unchanged.)
         _reject_if_imported(store, conversation_id)
+        brief = classify_build_brief(body.content) if body.build_brief is not None else None
         if runtime is not None:
-            stored = await runtime.send_user_turn(conversation_id, body.content)
+            stored = await runtime.send_user_turn(
+                conversation_id, body.content, build_brief=brief
+            )
         else:
-            stored = await store.append(conversation_id, _user_message(body.content))
+            pending = []
+            if brief is not None:
+                pending.append(_build_brief_message(brief))
+            pending.append(_user_message(body.content))
+            stored = (await store.append_many(conversation_id, pending))[-1]
         return {"event_id": stored.id, "seq": stored.seq}
 
     @router.post("/conversations/{conversation_id}/followup")

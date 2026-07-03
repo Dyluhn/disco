@@ -14,7 +14,10 @@ Behaviour is byte-identical to the original definitions previously inlined in
 
 from __future__ import annotations
 
+import json
+
 from disco.core import EventSource, LLMMessage, MessageEvent
+from disco.core.appkit import BuildBrief
 
 
 def _user_message(content: str, *, steer: bool = False) -> MessageEvent:
@@ -35,4 +38,42 @@ def _context_message(content: str) -> MessageEvent:
     return MessageEvent(
         source=EventSource.ENVIRONMENT,
         message=LLMMessage(role="user", content=content),
+    )
+
+
+# --- injection-safety caps for the persisted brief ---------------------------
+# The brief is server-derived, but these caps keep a future classifier change from
+# making the hidden environment wrapper unbounded.
+_BRIEF_GOAL_MAX = 200
+_BRIEF_LIST_MAX = 16
+_BRIEF_ELEM_MAX = 64
+
+
+def _bounded_brief_payload(brief: BuildBrief) -> dict[str, object]:
+    """A length-clamped plain-dict view of the brief for safe serialization."""
+
+    def _clamp_list(items: list[str]) -> list[str]:
+        return [str(x)[:_BRIEF_ELEM_MAX] for x in items[:_BRIEF_LIST_MAX]]
+
+    return {
+        "app_kind": str(brief.app_kind)[:_BRIEF_ELEM_MAX],
+        "primary_goal": str(brief.primary_goal)[:_BRIEF_GOAL_MAX],
+        "audience": str(brief.audience)[:_BRIEF_ELEM_MAX],
+        "key_entities": _clamp_list(brief.key_entities),
+        "must_have_sections": _clamp_list(brief.must_have_sections),
+    }
+
+
+def _build_brief_message(brief: BuildBrief) -> MessageEvent:
+    """Hidden ENVIRONMENT message carrying the deterministic AppKit Build Brief.
+
+    The JSON payload is wrapped in ``<build_brief>`` tags for the model, while any
+    angle brackets inside user-influenced string values are escaped so the payload
+    cannot forge markup or close the wrapper.
+    """
+    payload = json.dumps(_bounded_brief_payload(brief), ensure_ascii=True)
+    safe = payload.replace("<", "\\u003c").replace(">", "\\u003e")
+    return MessageEvent(
+        source=EventSource.ENVIRONMENT,
+        message=LLMMessage(role="user", content=f"<build_brief>{safe}</build_brief>"),
     )

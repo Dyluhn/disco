@@ -43,6 +43,7 @@ from disco.core import (
     ObservationEvent,
     PlanEvent,
     ReportEvent,
+    SecurityRisk,
     SkillStore,
     StatusEvent,
     ToolCall,
@@ -56,6 +57,7 @@ from disco.core.context.artifact_projection import (
     manifest_path_divergence,
     manifest_shadow_enabled,
 )
+from disco.core.appkit import BuildBrief
 from disco.core.context.ledger import ArtifactRecord
 from disco.core.context.store import ArtifactMemoryStore
 from disco.core.contract import (
@@ -112,6 +114,8 @@ from disco.retrieval.deep_research import (
 )
 from disco.retrieval.wiring import retrieval_capability_handlers
 from disco.tools import (
+    AppKitPhaseState,
+    AppKitToolExecutor,
     REGISTRY_EGRESS_ALLOW,
     Capability,
     CapabilityBroker,
@@ -120,6 +124,7 @@ from disco.tools import (
     SandboxSession,
     SandboxSpec,
     ToolDef,
+    ToolRegistry,
     agent_scope,
     artifact_scope,
     build_default_registry,
@@ -380,6 +385,24 @@ def _apply_mcp_scope(
         executor._scope = executor._scope.model_copy(
             update={"advertised_tools": executor._scope.advertised_tools | mcp_names}
         )
+
+
+def _build_appkit_registry() -> ToolRegistry:
+    """Default registry plus AppKit-only tools for strict AppKit executors."""
+    from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
+    from disco.tools.builtin.design_lint import DesignLintTool
+    from disco.tools.builtin.request_custom_build import RequestCustomBuildTool
+    from disco.tools.builtin.verify_appkit_app import VerifyAppKitAppTool
+
+    registry = build_default_registry()
+    for tool_cls in (
+        *APPKIT_V2_TOOLS,
+        DesignLintTool,
+        RequestCustomBuildTool,
+        VerifyAppKitAppTool,
+    ):
+        registry.register(tool_cls())
+    return registry
 
 
 _LOG = logging.getLogger(__name__)
@@ -691,6 +714,8 @@ class ConversationRuntime:
         # C6: per-conversation artifact_mode flag. In-memory only — set at create
         # time from the body; artifact sessions are short-lived, no sidecar needed.
         self._artifact_mode: dict[str, bool] = {}
+        # EPIC F: per-conversation AppKit mode flag. In-memory only, default OFF.
+        self._appkit_mode: dict[str, bool] = {}
         # CONTRACT-ACTIVATE: per-conversation Build contract + live phase tracker. In an
         # artifact-mode run the executor's ContractScopeGuard reads the tracker's phase
         # to gate tools (e.g. no raw rewrite during the edit phase). Default contract is
@@ -1282,6 +1307,14 @@ class ConversationRuntime:
 
     def _effective_artifact_mode(self, conversation_id: str) -> bool:
         return self._settings._effective_artifact_mode(conversation_id)
+
+    # ---- appkit_mode (EPIC F) ----------------------------------------------
+
+    def set_appkit_mode(self, conversation_id: str, on: bool) -> None:
+        self._settings.set_appkit_mode(conversation_id, on)
+
+    def _effective_appkit_mode(self, conversation_id: str) -> bool:
+        return self._settings._effective_appkit_mode(conversation_id)
 
     # ---- CONTRACT-ACTIVATE: build contract + live phase ---------------------
 
@@ -1953,9 +1986,11 @@ class ConversationRuntime:
             _scope_guard, _on_tool_success = self._build_scope_audit_guard(conversation_id)
         else:
             _scope_guard, _on_tool_success = (None, None)
-        executor = DefaultToolExecutor(
-            build_default_registry(),
-            _scope,
+        # EPIC F: strict AppKit mode is mutually exclusive with artifact mode.
+        _appkit_mode = self._effective_appkit_mode(conversation_id) and not _art_mode
+        _appkit_autonomous = self._effective_autonomous(conversation_id)
+        _appkit_phase = AppKitPhaseState() if _appkit_mode else None
+        _common_exec_kwargs: dict[str, Any] = dict(
             # SandboxSession is a drop-in SandboxInstance (it implements the
             # protocol at runtime); the `id` attribute differs only in being a
             # property rather than a plain attribute, which trips the
@@ -1971,12 +2006,35 @@ class ConversationRuntime:
             driver_llm=self._effective_driver_endpoint(conversation_id),
             # CW-6: capability-derived file_read page budget (see above).
             read_char_budget=_read_char_budget,
-            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only).
+            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only;
+            # optional observe-only audit on normal/AppKit builds).
             scope_guard=_scope_guard,
             on_tool_success=_on_tool_success,
             # P7: the active contract's starter_kit for scaffold_starter.
             starter_kit=self._starter_kit_for(conversation_id),
         )
+        executor: DefaultToolExecutor
+        if _appkit_mode:
+            assert _appkit_phase is not None
+            executor = AppKitToolExecutor(
+                _build_appkit_registry(),
+                _scope,
+                appkit_phase=_appkit_phase,
+                base_scope=_scope,
+                autonomous=_appkit_autonomous,
+                # Read the live loop mode after _loop_for registers it. Before that
+                # point, fail closed to PLANNING, which is also the loop's initial mode.
+                mode_getter=lambda cid=conversation_id: (
+                    self._loops[cid].mode if cid in self._loops else OperatingMode.PLANNING
+                ),
+                **_common_exec_kwargs,
+            )
+        else:
+            executor = DefaultToolExecutor(
+                build_default_registry(),
+                _scope,
+                **_common_exec_kwargs,
+            )
         # RP-05 rung A+B: extend the registry with MCP tools from the pool
         # snapshot (stdio) AND the HTTP-managed tools (rung B streamable_http).
         # The snapshot is frozen per conversation — list_changed notifications do
@@ -1992,10 +2050,25 @@ class ConversationRuntime:
             # non-MCP tools + tool_search are advertised; all remain callable.
             _mcp_cfg = self._config_store.load()
             max_schemas = _mcp_cfg.mcp.max_active_schemas if _mcp_cfg.mcp else 20
-            _apply_mcp_scope(
-                executor, all_mcp_tools, self._mcp_call_target,
-                max_active_schemas=max_schemas,
-            )
+            if _appkit_mode and isinstance(executor, AppKitToolExecutor):
+                # In strict AppKit mode, MCP names must not bypass the phase scope.
+                # Apply the whole delta only after request_custom_build widens to
+                # the normal Build scope.
+                executor.set_widen_callback(
+                    lambda ex=executor, tools=all_mcp_tools, ms=max_schemas: _apply_mcp_scope(
+                        ex,
+                        tools,
+                        self._mcp_call_target,
+                        max_active_schemas=ms,
+                    )
+                )
+            else:
+                _apply_mcp_scope(
+                    executor,
+                    all_mcp_tools,
+                    self._mcp_call_target,
+                    max_active_schemas=max_schemas,
+                )
 
             # RP-05b §3: the retrieval-tier MCP providers are composed into the
             # bundled search/extraction in `_compose_mcp_retrieval` (consumed by
@@ -2066,13 +2139,18 @@ class ConversationRuntime:
                 host_verifier_verdict_hook=host_verify_canary_hook,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
             )
+        _analyzer = (
+            RuleBasedAnalyzer({"request_custom_build": SecurityRisk.HIGH})
+            if _appkit_mode
+            else RuleBasedAnalyzer()
+        )
         return AgentLoop(
             conversation_id,
             self._store,
             agent,
             executor,
             router,
-            RuleBasedAnalyzer(),
+            _analyzer,
             # DC-03: sandboxed ops auto-approve (confinement is the blast radius);
             # host-scope/unknown ops keep ConfirmRisky semantics; publish always gates.
             BlastRadiusConfirm(),
@@ -3466,6 +3544,7 @@ class ConversationRuntime:
         text: str,
         *,
         context: str | None = None,
+        build_brief: BuildBrief | None = None,
         steer: bool = False,
     ) -> MessageEvent:
         """Append a user turn (optional hidden context, optional steer) and
@@ -3483,7 +3562,11 @@ class ConversationRuntime:
         kernel = self._ensure_kernel_pinned(conversation_id)
         try:
             return await kernel.send_user_turn(
-                conversation_id, text, context=context, steer=steer
+                conversation_id,
+                text,
+                context=context,
+                build_brief=build_brief,
+                steer=steer,
             )
         except BaseException:
             if newly_pinned:
@@ -3681,6 +3764,7 @@ class ConversationRuntime:
             self._autonomous,
             self._assist,
             self._artifact_mode,
+            self._appkit_mode,
             self._depth,
             self._driver_preflight_ok,
             self._dr_steer,

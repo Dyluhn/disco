@@ -68,6 +68,18 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
         # must not move _last_productive_seq, or the finish-gate loop breaker
         # (same verdict since the last edit ⇒ stuck) could never key on it.
         "verify_web_app",
+        # EPIC G: verify_appkit_app is the STRICT app verifier — a probe beside
+        # verify_web_app (the finish gate drives it in AppKit mode). Re-verifying
+        # without a productive edit must read as no-progress, never as work.
+        "verify_appkit_app",
+        # EPIC D3: design_lint is a READ-ONLY design-slop scanner — a verification
+        # probe beside verify_web_app, never a productive edit. Re-linting without
+        # an edit must read as no-progress (same verdict ⇒ stuck), not as work.
+        "design_lint",
+        # EPIC H3: app_snapshot_version checkpoints the specs+tree (writes only a
+        # version record, never the deliverable). Re-snapshotting without a
+        # productive edit must read as no-progress, not as task work.
+        "app_snapshot_version",
     }
 )
 

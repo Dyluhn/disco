@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Literal
 from disco.core import (
     DEFAULT_OWNER_ID,
 )
+from disco.core.appkit import BuildBrief
 from disco.core.context.artifact_projection import artifact_paths_from_events
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import HTTPException
@@ -26,6 +27,7 @@ from pydantic import BaseModel
 # seam need not depend on the route layer (Disco Pi campaign, finding #3). They
 # are re-exported here so the existing `routes._common` import path keeps working.
 from ..build_messages import (  # noqa: F401 — re-exported for the existing import path
+    _build_brief_message,
     _context_message,
     _user_message,
 )
@@ -105,10 +107,17 @@ class CreateConversationBody(BaseModel):
     # C6 (Track C §3.6): low-friction artifact authoring (NeverConfirm + INTERACTIVE +
     # artifact_scope) on the build-like machinery. False ⇒ normal build loop.
     artifact_mode: bool = False
+    # EPIC F: AppKit build — enforce the STRICT phase-based tool allowlist (raw
+    # free-form tools barred; only the validated app_* mutators + reads/probes; a
+    # HIGH-risk request_custom_build escape hatch). False ⇒ normal build loop.
+    appkit_mode: bool = False
 
 
 class SendMessageBody(BaseModel):
     content: str
+    # AppKit EPIC B: advisory presence flag. The persisted brief is recomputed
+    # server-side from content; client-supplied fields are never trusted.
+    build_brief: BuildBrief | None = None
 
 
 class UpdateSettingsBody(BaseModel):

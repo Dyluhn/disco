@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from .appkit import BuildBrief
 from .events import Event
 from .state import ConversationState
 
@@ -96,6 +97,9 @@ class WSClientFrame(BaseModel):
     # short visible user `content`, so the model gets the full report while the
     # history shows only "Make slides for the deep research report: …".
     context: str | None = None
+    # send_message (AppKit EPIC B): advisory presence flag. The server recomputes
+    # and persists the hidden `<build_brief>` ENVIRONMENT message from content.
+    build_brief: BuildBrief | None = None
     # selection_edit (P8): the typed ref of the clicked preview element (a SelectionRef
     # mirror — see core/selection_edit.py) and the user's verbatim change instruction.
     selection_ref: dict[str, Any] | None = None

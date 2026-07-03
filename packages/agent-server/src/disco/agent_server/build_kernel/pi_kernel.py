@@ -59,12 +59,13 @@ from disco.core import (
     ToolCall,
     ToolResult,
 )
+from disco.core.appkit import BuildBrief
 from disco.core.env import disco_env
 from disco.core.inspect import inspect_enabled
 from disco.core.llm import ModelRole
 from disco.core.obs import log_event
 
-from ..build_messages import _context_message, _user_message
+from ..build_messages import _build_brief_message, _context_message, _user_message
 from .base import KernelEvent
 from .pi_event_mapper import map_pi_event
 from .pi_process import KernelInitConfig, PiProcess, default_pi_kernel_entry
@@ -257,6 +258,7 @@ class PiKernel:
         text: str,
         *,
         context: str | None = None,
+        build_brief: BuildBrief | None = None,
         steer: bool = False,
     ) -> MessageEvent:
         """Append a user turn and start/continue the Pi run. If an ask/clarify gate is
@@ -264,11 +266,14 @@ class PiKernel:
         return (Pi continues its in-flight tool). Otherwise it (re)starts the session
         (fresh) or forwards as a follow-up (live). Returns the stored USER message."""
         self._managed.add(conversation_id)
+        pending = []
         if context:
-            await self._rt._store.append(conversation_id, _context_message(context))
-        stored = await self._rt._store.append(
-            conversation_id, _user_message(text, steer=steer)
-        )
+            pending.append(_context_message(context))
+        if build_brief is not None:
+            pending.append(_build_brief_message(build_brief))
+        pending.append(_user_message(text, steer=steer))
+        stored_events = await self._rt._store.append_many(conversation_id, pending)
+        stored = stored_events[-1]
 
         # An ask_user / clarify gate is held PYTHON-side over the bridge HTTP — the
         # user's reply IS the resume signal. Resolve it; Pi's tool call returns.

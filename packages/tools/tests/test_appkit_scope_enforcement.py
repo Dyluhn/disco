@@ -15,6 +15,7 @@ from disco.core.security import RuleBasedAnalyzer
 from disco.tools import (
     AGENT_TOOLS,
     DefaultToolExecutor,
+    ToolRegistry,
     agent_scope,
     build_default_registry,
     research_scope,
@@ -30,6 +31,11 @@ from disco.tools.appkit_scope import (
     AppKitPhaseState,
     appkit_effective_scope,
 )
+from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
+from disco.tools.builtin.app_kit import AppSnapshotVersionTool as V2AppSnapshotVersionTool
+from disco.tools.builtin.design_lint import DesignLintTool
+from disco.tools.builtin.request_custom_build import RequestCustomBuildTool
+from disco.tools.builtin.verify_appkit_app import VerifyAppKitAppTool
 from pydantic import BaseModel
 from tool_fakes import FakeSandboxInstance, call
 
@@ -55,6 +61,18 @@ _RAW_TOOLS = ("file_write", "shell", "code_exec", "file_str_replace", "browser")
 _REGISTERED_AGENT_TOOLS = AGENT_TOOLS & build_default_registry().names()
 
 
+def _appkit_registry() -> ToolRegistry:
+    registry = build_default_registry()
+    for tool_cls in (
+        *APPKIT_V2_TOOLS,
+        DesignLintTool,
+        RequestCustomBuildTool,
+        VerifyAppKitAppTool,
+    ):
+        registry.register(tool_cls())
+    return registry
+
+
 def _appkit_exec(
     *,
     phase: AppKitPhase = AppKitPhase.PLANNING,
@@ -65,7 +83,7 @@ def _appkit_exec(
     state = AppKitPhaseState(phase=phase)
     base = agent_scope(model_policy=_STANDARD)
     ex = AppKitToolExecutor(
-        build_default_registry(),
+        _appkit_registry(),
         base,
         appkit_phase=state,
         base_scope=base,
@@ -84,7 +102,6 @@ async def _scaffold(ex: AppKitToolExecutor):
 # ---- (c) planning phase (loop PLANNING) narrows the allowlist ----------------
 
 
-@pytest.mark.skip(reason="B3 runtime wiring")
 def test_planning_phase_callable_names_are_reads_plus_plan_plus_hatch():
     ex, _ = _appkit_exec(loop_mode=OperatingMode.PLANNING)
     callable_names = ex.callable_tool_names()
@@ -112,7 +129,6 @@ async def test_build_phase_refuses_raw_tools_by_qualified_name():
 # ---- (b) the AppKit mutators + probes ARE callable in build phase ------------
 
 
-@pytest.mark.skip(reason="B3 runtime wiring")
 def test_build_phase_allows_appkit_mutators_and_probes():
     ex, _ = _appkit_exec(phase=AppKitPhase.BUILD)
     callable_names = ex.callable_tool_names()
@@ -132,7 +148,6 @@ def test_build_phase_allows_appkit_mutators_and_probes():
 # ---- (b2) EPIC H3: app_snapshot_version is BUILD-phase-only -------------------
 
 
-@pytest.mark.skip(reason="B3 runtime wiring")
 def test_app_snapshot_version_build_phase_only_and_not_on_normal_build():
     # callable in the build phase
     build_ex, _ = _appkit_exec(phase=AppKitPhase.BUILD)
@@ -142,15 +157,18 @@ def test_app_snapshot_version_build_phase_only_and_not_on_normal_build():
     # NOT callable in the planning phase (an app must already exist)
     plan_ex, _ = _appkit_exec(phase=AppKitPhase.PLANNING)
     assert "app_snapshot_version" not in plan_ex.callable_tool_names()
-    # NOT in the normal Build surface scope (build-scope-only, like verify_appkit_app)
-    assert "app_snapshot_version" not in AGENT_TOOLS
-    assert "app_snapshot_version" not in _REGISTERED_AGENT_TOOLS
+    # disclaude's normal Build still carries the legacy v1 app_snapshot_version
+    # tool; B3 only keeps the V2 AppKit snapshot implementation out of normal Build.
+    normal_tool = build_default_registry().get(
+        "app_snapshot_version", scope=agent_scope(model_policy=_STANDARD)
+    )
+    assert normal_tool is not None
+    assert not isinstance(normal_tool, V2AppSnapshotVersionTool)
 
 
 # ---- (d) a SUCCESSFUL app_create transitions planning → build ----------------
 
 
-@pytest.mark.skip(reason="B3 runtime wiring")
 async def test_successful_app_create_transitions_planning_to_build():
     ex, state = _appkit_exec(phase=AppKitPhase.PLANNING, loop_mode=OperatingMode.LONG_HORIZON)
     # bootstrap: app_create callable in execution-mode planning; the rest of the
@@ -195,7 +213,6 @@ def test_request_custom_build_is_high_risk_and_gated():
     ) is True
 
 
-@pytest.mark.skip(reason="B3 runtime wiring")
 async def test_confirmed_request_custom_build_widens_to_agent_scope():
     ex, state = _appkit_exec(phase=AppKitPhase.BUILD)
     # before: raw tools barred.
@@ -236,7 +253,6 @@ def test_planning_autonomous_drops_hatch():
 # ---- (g) P0: MCP names are NOT in the allowlist in strict mode ---------------
 
 
-@pytest.mark.skip(reason="B3 runtime wiring")
 async def test_mcp_delta_not_applied_in_strict_mode_until_widen():
     applied: list[str] = []
 

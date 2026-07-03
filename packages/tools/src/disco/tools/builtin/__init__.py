@@ -16,6 +16,7 @@ from .audio_overview import AudioOverviewTool
 from .scaffold_starter import ScaffoldStarterTool
 from .browser import BrowserTool
 from .context_memory import ContextMemoryTool
+from .design_lint import DesignLintTool
 from .files import (
     ExactReplaceTool,
     FileAppendTool,
@@ -59,6 +60,7 @@ __all__ = [
     "CodeExecTool",
     "ContextMemoryTool",
     "DeckPatchTool",
+    "DesignLintTool",
     "ExactReplaceTool",
     "DelegateExploreTool",  # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
     "ExtractTool",
@@ -123,6 +125,7 @@ def build_default_registry() -> ToolRegistry:
         ExtractTool(),
         BrowserTool(),
         VerifyWebAppTool(),  # W-45: structured web-app self-test → clean finish-gate verdict
+        DesignLintTool(),  # AppKit D3: read-only design-slop scanner (scope-gated)
         ServerStatusTool(),
         # EPIC F: platform-owned preview — the model declares intent, never a port.
         PreviewStartTool(),

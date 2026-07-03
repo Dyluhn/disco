@@ -1,0 +1,70 @@
+"""AppKit EPIC F — `request_custom_build`, the gated escape hatch.
+
+Strict AppKit mode bars raw file/shell/code/browser tools. This in-process tool
+is only a control signal: after the human confirmation gate allows it, the
+AppKit executor observes the successful call and widens to the normal Build
+scope.
+"""
+
+from __future__ import annotations
+
+from disco.core import SecurityRisk
+from pydantic import BaseModel, Field
+
+from ..anatomy import ToolContext, ToolDef, ToolOutcome
+
+
+class RequestCustomBuildArgs(BaseModel):
+    reason: str = Field(
+        description=(
+            "Why the validated AppKit mutators are insufficient and a full custom "
+            "build with raw tool access is required."
+        )
+    )
+    needed_capabilities: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The raw capabilities needed, such as 'shell', 'file_write', "
+            "'code_exec', or 'browser'."
+        ),
+    )
+
+
+class RequestCustomBuildTool:
+    """Escalate a strict AppKit build to the normal Build toolset."""
+
+    definition = ToolDef(
+        name="request_custom_build",
+        description=(
+            "Escalate from the strict AppKit toolset to a full custom build with "
+            "raw file/shell/code access. Use only when the AppKit mutators cannot "
+            "express the change. Requires human confirmation and is unavailable "
+            "in autonomous runs."
+        ),
+        args_model=RequestCustomBuildArgs,
+        base_risk=SecurityRisk.HIGH,
+        runs_in="in_process",
+        read_only=False,
+    )
+
+    async def run(self, args: RequestCustomBuildArgs, ctx: ToolContext) -> ToolOutcome:
+        caps = (
+            ", ".join(args.needed_capabilities)
+            if args.needed_capabilities
+            else "(unspecified)"
+        )
+        return ToolOutcome(
+            success=True,
+            content=(
+                "Custom build approved; scope widened to the full toolset. "
+                f"Requested capabilities: {caps}. Reason: {args.reason}"
+            ),
+            structured={
+                "reason": args.reason,
+                "needed_capabilities": list(args.needed_capabilities),
+                "widened_to": "custom_build",
+            },
+        )
+
+
+__all__ = ["RequestCustomBuildArgs", "RequestCustomBuildTool"]
