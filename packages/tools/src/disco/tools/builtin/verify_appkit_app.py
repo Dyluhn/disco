@@ -106,7 +106,7 @@ _VITE_PACKAGE_SHA_RELPATH = ".disco/appkit-vite-package.sha256"
 _VITE_BUILD_TIMEOUT_S = 300
 _BUILT_PREVIEW_NAME = "appkit-built-vite"
 _VITE_PREVIEW_COMMAND = (
-    "npm run preview -- --host 0.0.0.0 --port {port} --strictPort"
+    "npx vite preview --host 0.0.0.0 --port {port} --strictPort"
 )
 
 
@@ -1417,10 +1417,10 @@ class VerifyAppKitAppTool:
         """If this is a Vite SPA and the current preview is source-served, build it
         and serve the compiled app through the platform PreviewManager.
 
-        Unit-test fakes sometimes return opaque output for the HTTP probe. That is
-        treated as "unknown" and left alone; the real failure this closes is explicit
-        and detectable: the served index references ``/src/main.tsx`` instead of a
-        built ``/assets/*.js`` bundle.
+        Only a preview whose index clearly references a built ``/assets/*.js`` bundle
+        is accepted as already prepared. A missing, failing, source-served, or opaque
+        probe is not proof of a built app, so the platform builds and starts a compiled
+        preview before the browser checks.
         """
         assert ctx.sandbox is not None
         package_json = await self._read_text(ctx, _PACKAGE_RELPATH)
@@ -1435,18 +1435,13 @@ class VerifyAppKitAppTool:
         should_build = not base
         if base:
             probe = await self._fetch_preview_index(ctx, base)
-            if probe is None:
-                return _PreparedPreview(url=(requested_url or "").strip())
-            if probe.error:
+            if probe is None or probe.error:
                 should_build = True
             else:
                 built = _served_preview_uses_built_bundle(probe.body)
                 if built is True:
                     return _PreparedPreview(url=base)
-                if built is False:
-                    should_build = True
-                else:
-                    return _PreparedPreview(url=base)
+                should_build = True
 
         if not should_build:
             return _PreparedPreview(url=base)

@@ -31,10 +31,12 @@ from disco.core.appkit import (
 )
 from disco.tools.anatomy import ToolContext, ToolOutcome
 from disco.tools.builtin import browser as browser_mod
+from disco.tools.builtin import preview as preview_mod
 from disco.tools.builtin.verify_appkit_app import (
     VerifyAppKitAppArgs,
     VerifyAppKitAppTool,
     WorkerAuthVerdict,
+    _VITE_PREVIEW_COMMAND,
     _is_vite_app_tree,
     _served_preview_uses_built_bundle,
     inspect_lead_form,
@@ -108,6 +110,16 @@ class FakeSandbox:
             if data is None:
                 return _ExecRes("", exit_code=1)
             return _ExecRes(str(len(data)))
+        if "import json, urllib.request as U" in cmd:
+            return _ExecRes(
+                json.dumps(
+                    {
+                        "status": 200,
+                        "content_type": "text/html",
+                        "body": '<script type="module" src="/assets/index-abcd1234.js"></script>',
+                    }
+                )
+            )
         # the verify_web_app http probe (python3 -c ...) → server up
         return _ExecRes("200")
 
@@ -127,7 +139,7 @@ class BuildTrackingSandbox(FakeSandbox):
 
     async def exec_shell(self, cmd: str, timeout_s=None):
         self.commands.append(cmd)
-        if "urllib.request" in cmd and self.served_index is not None:
+        if "import json, urllib.request as U" in cmd and self.served_index is not None:
             return _ExecRes(
                 json.dumps(
                     {
@@ -148,6 +160,33 @@ class BuildTrackingSandbox(FakeSandbox):
         return await super().exec_shell(cmd, timeout_s=timeout_s)
 
 
+class _PreviewStatus:
+    def __init__(self, value: str):
+        self.value = value
+
+
+class BuiltPreviewManager:
+    def __init__(self, *, port: int = 9134):
+        self.port = port
+        self.starts: list[dict] = []
+        self.stops: list[str] = []
+
+    async def start(self, **kwargs):
+        self.starts.append(kwargs)
+        return type(
+            "PreviewSession",
+            (),
+            {
+                "status": _PreviewStatus("running"),
+                "port": self.port,
+                "detail": "",
+            },
+        )()
+
+    async def stop(self, name: str):
+        self.stops.append(name)
+
+
 def _ctx(sandbox) -> ToolContext:
     return ToolContext(
         sandbox=sandbox,
@@ -166,9 +205,11 @@ def stub_browser(monkeypatch):
     state = {
         "console": [],
         "markers": ["hero", "features", "contact", "footer"],
+        "urls": [],
     }
 
     async def fake_run(self, args, ctx):
+        state["urls"].append(args.url)
         return ToolOutcome(
             success=True,
             content="browsed",
@@ -389,6 +430,40 @@ async def test_vite_build_failure_fails_route_and_section_with_stderr(stub_brows
     assert "src/App.tsx: boom" in checks["route_coverage"]["evidence"]
     assert "npm ci --no-audit --no-fund" in sandbox.commands
     assert "npm run build" in sandbox.commands
+
+
+@pytest.mark.asyncio
+async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, stub_browser):
+    tree, _ = _build_tree()
+    sandbox = BuildTrackingSandbox(
+        tree,
+        served_index='<script type="module" src="/src/main.tsx"></script>',
+    )
+    manager = BuiltPreviewManager(port=9134)
+    monkeypatch.setattr(preview_mod, "_manager", lambda ctx: manager)
+
+    out = await VerifyAppKitAppTool().run(
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _ctx(sandbox)
+    )
+
+    assert out.success and out.structured is not None
+    assert out.structured["passed"] is True, out.structured["summary"]
+    assert "npm ci --no-audit --no-fund" in sandbox.commands
+    assert "npm run build" in sandbox.commands
+    assert manager.starts == [
+        {
+            "command": _VITE_PREVIEW_COMMAND,
+            "name": "appkit-built-vite",
+            "supervise": False,
+        }
+    ]
+    assert manager.stops == ["appkit-built-vite"]
+    assert stub_browser["urls"]
+    assert all(
+        url == "http://127.0.0.1:9134"
+        or url.startswith("http://127.0.0.1:9134/")
+        for url in stub_browser["urls"]
+    )
 
 
 # ============================ FULL TOOL RUN ===================================
