@@ -27,7 +27,6 @@ from typing import Literal
 from disco.core.contract.export_render import (
     EXPORT_RENDER_KEY,
     check_export_render,
-    pptx_visible_text,
 )
 from pydantic import BaseModel, Field
 
@@ -428,7 +427,13 @@ class SlidesTool:
         if isinstance(data, str):
             data = data.encode("utf-8")
         source_text: str | None = None
-        if fmt == "pdf":
+        # A deck PDF is LibreOffice-converted from a FRESH sibling .pptx written this
+        # same run (renderer=="libreoffice"); gate on that so a stale leftover .pptx
+        # from an earlier run can't judge the current PDF. Use the pptx's own
+        # chrome/placeholder/media-aware verdict, not its raw text: "" forces the PDF
+        # content check to refuse a blank deck, while None lets the byte-floor pass a
+        # real deck (incl. a media-only visual deck whose text is empty/placeholder).
+        if fmt == "pdf" and str(s.get("renderer") or "") == "libreoffice":
             base_name = s.get("base_name")
             if isinstance(base_name, str) and base_name:
                 try:
@@ -436,7 +441,8 @@ class SlidesTool:
                     if isinstance(pptx_data, str):
                         pptx_data = pptx_data.encode("utf-8")
                     if pptx_data.startswith(b"PK"):
-                        source_text = pptx_visible_text(pptx_data)
+                        pf = check_export_render("pptx", pptx_data)
+                        source_text = None if pf.non_blank else ""
                 except Exception:
                     source_text = None
         facts = check_export_render(

@@ -11,7 +11,7 @@ from __future__ import annotations
 import io
 import zipfile
 
-from disco.core.brand.mark import BRAND_CHROME_TEXTS
+from disco.core.brand.mark import BRAND_CHROME_TEXTS, RENDER_PLACEHOLDERS
 from disco.core.contract.export_render import (
     EXPORT_GATE_TOKEN,
     EXPORT_RENDER_KEY,
@@ -147,8 +147,6 @@ def test_pptx_renderer_brand_chrome_only_refused() -> None:
         "/ˈdɪs.koː/",
         "I learn; I become acquainted with.",
         "from discere — to learn",
-        "discere",
-        "to learn",
     )
     f = check_export_render(
         "pptx",
@@ -163,6 +161,57 @@ def test_pptx_renderer_brand_chrome_only_refused() -> None:
         ),
         declared_units=1,
     )
+    assert f.non_blank is False and f.ok is False
+
+
+def test_render_placeholders_are_pinned_and_stripped() -> None:
+    # RENDER_PLACEHOLDERS must match the renderer literals; a deck of only these is BLANK.
+    assert RENDER_PLACEHOLDERS == ("[image]", "(no table data)", "[no data]")
+    deck = (
+        '<html><body>'
+        '<section data-slide-id="s1"><div>[image]</div></section>'
+        '<section data-slide-id="s2"><p>(no table data)</p></section>'
+        '<section data-slide-id="s3"><div>[no data]</div></section>'
+        "</body></html>"
+    )
+    f = check_export_render("html", text=deck, declared_units=3)
+    assert f.unit_count == 3 and f.non_blank is False and f.ok is False
+
+
+def test_chrome_token_does_not_strip_real_words() -> None:
+    # Regression: bare "disco" must NOT gut "discovery"/"disconnect" (word-boundary match).
+    deck = '<html><body><section data-slide-id="s"><h1>Discovery Plan for Q3</h1></section></body></html>'
+    f = check_export_render("html", text=deck, declared_units=1)
+    assert f.non_blank is True and f.ok is True  # a real "Discovery Plan" deck is content
+    # but the standalone wordmark/headword still strips
+    f2 = check_export_render(
+        "html",
+        text='<html><body><section data-slide-id="s"><div class="brand-wordmark">Disco</div><span>disco</span></section></body></html>',
+        declared_units=1,
+    )
+    assert f2.non_blank is False
+
+
+def test_length_changing_lowercase_in_style_does_not_drop_content() -> None:
+    # Regression: "İ" (U+0130) lowercases to TWO code points; the script/style strip
+    # must not index a lowercased copy against the original or it slices out real text.
+    html = (
+        "<html><style>" + ("İ" * 50) + "</style><body>"
+        '<section data-slide-id="s"><h1>Real headline content here</h1></section>'
+        "</body></html>"
+    )
+    f = check_export_render("html", text=html, declared_units=1)
+    assert f.non_blank is True and f.ok is True  # real headline survives the strip
+
+
+def test_head_title_not_counted_as_slide_content() -> None:
+    # A blank branded slide whose only text is the doc <title> must still be BLANK.
+    html = (
+        "<html><head><title>Quarterly Strategy Review Deck</title></head><body>"
+        '<section data-slide-id="s"><div class="brand-wordmark">Disco.</div></section>'
+        "</body></html>"
+    )
+    f = check_export_render("html", text=html, declared_units=1)
     assert f.non_blank is False and f.ok is False
 
 

@@ -39,7 +39,7 @@ import io
 import re
 import zipfile
 
-from disco.core.brand.mark import BRAND_CHROME_TEXTS
+from disco.core.brand.mark import BRAND_CHROME_TEXTS, RENDER_PLACEHOLDERS
 from pydantic import BaseModel, ConfigDict
 
 from ..events import Event, EventSource, MessageEvent, ObservationEvent
@@ -70,11 +70,17 @@ _TEXT_FLOOR = 12
 # made a legit 4KB PDF read as blank — the bug this constant fixes).
 _PDF_BYTE_FLOOR = 2048
 
-# Template chrome the default deck renderer stamps on every branded deck. Counting
-# it as content would let a genuinely blank deck read as non-blank, so it is
-# removed before measuring text. Tokens are derived from the shared brand mark
-# source of truth and normalized to match PPTX runs whose case/spacing differs.
-_CHROME_TOKENS = tuple(re.sub(r"\s+", " ", t).casefold() for t in BRAND_CHROME_TEXTS)
+# Template chrome + renderer placeholders that must NOT count as slide content
+# (branding on every slide; "[image]"/"[no data]" for empty slots). Derived from the
+# shared brand-mark source of truth, normalized to match PPTX runs whose case/spacing
+# differs. Matched at WORD BOUNDARIES ((?<!\w)...(?!\w)) so a bare token like "disco"
+# strips the standalone wordmark but NOT real words ("discovery", "disconnect").
+_CHROME_TOKENS = tuple(
+    re.sub(r"\s+", " ", t).casefold() for t in (*BRAND_CHROME_TEXTS, *RENDER_PLACEHOLDERS)
+)
+_CHROME_RE = re.compile(
+    "|".join(rf"(?<!\w){re.escape(tok)}(?!\w)" for tok in _CHROME_TOKENS)
+)
 
 _PDF_PAGE_RE = re.compile(rb"/Type\s*/Page(?![s])")
 # Capture the id VALUE, not just the attribute — renderers (the C3 deck template)
@@ -83,6 +89,11 @@ _PDF_PAGE_RE = re.compile(rb"/Type\s*/Page(?![s])")
 _SLIDE_ID_RE = re.compile(r'data-slide-id\s*=\s*"([^"]*)"')
 _SECTION_RE = re.compile(r"<section\b", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
+# <head> holds <title>/<meta>, NOT rendered slide prose — the renderer emits
+# <title>{deck.title}</title>, which would otherwise count a blank deck's title as
+# visible content. Stripped before measuring (after script/style, so the head's own
+# <style> is already gone). Bounded scans (one real head, closes fast) keep it linear.
+_HEAD_RE = re.compile(r"<head\b[^>]{0,4000}?>.{0,200000}?</head>", re.IGNORECASE | re.DOTALL)
 # Strip <script>/<style> BODIES before measuring visible text — their contents are
 # not rendered prose (a real deck ships a 2.48 MB inline three.js bundle in ONE
 # <script>, so a blank deck must not read as non-blank off that).
@@ -96,11 +107,18 @@ _TAG_RE = re.compile(r"<[^>]+>")
 # TAG is bounded (attrs are always tiny, <4KB); the BODY is found with str.find,
 # which is linear at any size. A truncated/unclosed final tag drops to EOF.
 _SCRIPT_STYLE_OPEN_RE = re.compile(r"<(script|style)\b[^>]{0,4000}?>", re.IGNORECASE)
+# Case-insensitive CLOSE-tag matchers, searched against the ORIGINAL string. We must
+# NOT index a lowercased copy against the original: some characters change LENGTH
+# under case folding (e.g. "İ" U+0130 → "i̇", two code points), which shifts every
+# index past them and would slice out real content. re.IGNORECASE keeps offsets exact.
+_SCRIPT_STYLE_CLOSE_RE = {
+    "script": re.compile(r"</script\s*>", re.IGNORECASE),
+    "style": re.compile(r"</style\s*>", re.IGNORECASE),
+}
 
 
 def _strip_script_style(html: str) -> str:
     """Remove <script>/<style>...</tag> bodies of ANY size in a single linear pass."""
-    lower = html.lower()
     out: list[str] = []
     i = 0
     n = len(html)
@@ -110,11 +128,10 @@ def _strip_script_style(html: str) -> str:
             out.append(html[i:])
             break
         out.append(html[i : m.start()])
-        close = f"</{m.group(1).lower()}>"
-        j = lower.find(close, m.end())
-        if j == -1:  # unclosed (truncated) — nothing after the open is visible prose
+        cm = _SCRIPT_STYLE_CLOSE_RE[m.group(1).lower()].search(html, m.end())
+        if cm is None:  # unclosed (truncated) — nothing after the open is visible prose
             break
-        i = j + len(close)
+        i = cm.end()
     return "".join(out)
 # Strip default-template CHROME by CLASS (the "Disco." wordmark + Latin colophon +
 # their bc-* pieces) BEFORE measuring content — token-matching the rendered strings
@@ -181,8 +198,7 @@ class ExportRenderFacts(BaseModel):
 
 def _strip_chrome(text: str) -> str:
     norm = re.sub(r"\s+", " ", text).casefold()
-    for tok in _CHROME_TOKENS:
-        norm = norm.replace(tok, " ")
+    norm = _CHROME_RE.sub(" ", norm)
     return re.sub(r"\s+", " ", norm).strip()
 
 
@@ -191,9 +207,10 @@ def _html_facts(html: str) -> tuple[int, int, bool, bool]:
     slides = len({sid for sid in _SLIDE_ID_RE.findall(html) if sid})
     if slides == 0:
         slides = len(_SECTION_RE.findall(html))
-    # Remove <script>/<style> bodies, then unwind template CHROME by class (looped so
-    # nested colophon pieces go too), then strip tags + any residual chrome tokens.
-    body = _strip_script_style(html)
+    # Remove <script>/<style> bodies, drop the <head> (title/meta aren't slide prose),
+    # then unwind template CHROME by class (looped so nested colophon pieces go too),
+    # then strip tags + any residual chrome/placeholder tokens.
+    body = _HEAD_RE.sub(" ", _strip_script_style(html))
     prev = ""
     while prev != body:
         prev = body

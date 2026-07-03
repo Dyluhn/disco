@@ -21,7 +21,10 @@ from typing import Literal
 
 # SINGLE SOURCE OF TRUTH shared by the PPTX renderer chrome and the export
 # render-correctness checker; a drift here once let a blank branded PPTX pass
-# the finish gate.
+# the finish gate. Matched at WORD BOUNDARIES by the checker, so bare "disco"
+# does NOT strip real words like "discovery" — the colophon fragments are kept as
+# WHOLE phrases ("from discere — to learn"), never split into common bigrams like
+# "to learn" that would gut real prose.
 BRAND_CHROME_TEXTS: tuple[str, ...] = (
     "Disco",
     "disco",
@@ -29,8 +32,17 @@ BRAND_CHROME_TEXTS: tuple[str, ...] = (
     "/ˈdɪs.koː/",
     "I learn; I become acquainted with.",
     "from discere — to learn",
-    "discere",
-    "to learn",
+)
+
+# Non-content PLACEHOLDER strings the renderers stamp for empty slots (a failed/
+# absent image, an empty chart/table). Counting them as slide text let a deck of
+# empty placeholders read as non-blank, so the checker subtracts them too. Verbatim
+# from _pptx_render.py ("[image]") and _c8_chart_layouts.py ("(no table data)" /
+# "[no data]") — a test pins these against the renderers.
+RENDER_PLACEHOLDERS: tuple[str, ...] = (
+    "[image]",
+    "(no table data)",
+    "[no data]",
 )
 
 # Scale class map — mirrors _definition.html:43-45
