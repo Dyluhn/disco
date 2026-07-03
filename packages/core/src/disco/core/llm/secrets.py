@@ -74,6 +74,16 @@ def _looks_weak(secret: str) -> bool:
 _weak_secret_warned = False
 
 
+class WeakSecretError(RuntimeError):
+    """Raised when a high-value deploy credential would be stored or used under a
+    weak or absent app secret.
+
+    Ordinary provider secrets keep the existing warn-only behavior for weak
+    ``DISCO_SECRET_KEY`` values. Deploy credentials pass ``strong_required=True``
+    so they fail closed instead of being protected by a brute-forceable app secret.
+    """
+
+
 def _warn_if_weak_secret(secret: str) -> None:
     """Log ONCE per process if the app secret looks weak. A warning, not an
     error: an existing deployment with a short key must keep working (raising
@@ -108,6 +118,7 @@ class SecretBox:
     def __init__(self, app_secret: str | None) -> None:
         if app_secret:
             _warn_if_weak_secret(app_secret)
+        self._app_secret = app_secret
         self._fernet = _fernet_from(app_secret) if app_secret else None
 
     @classmethod
@@ -123,6 +134,10 @@ class SecretBox:
     @property
     def available(self) -> bool:
         return self._fernet is not None
+
+    @property
+    def is_strong(self) -> bool:
+        return bool(self._app_secret and not _looks_weak(self._app_secret))
 
     def encrypt(self, plaintext: str) -> str:
         if self._fernet is None:
@@ -175,14 +190,33 @@ class SecretStore:
     # build time — exactly the OpenRouter mechanism, generalized. "openrouter"
     # is a reserved legacy slot (see the wrappers below).
 
+    def _require_strong(self, name: str) -> None:
+        """Hard gate for high-value deploy credentials."""
+        if self._box.is_strong:
+            return
+        why = (
+            f"{_ENV_SECRET} is not set"
+            if not self._box.available
+            else f"{_ENV_SECRET} is low-entropy"
+        )
+        raise WeakSecretError(
+            f"refusing to store or use the high-value deploy credential {name!r}: "
+            f"{why}. Set a high-entropy {_ENV_SECRET} (for example, "
+            "`openssl rand -base64 32`) and reconnect."
+        )
+
     def has_secret(self, name: str) -> bool:
         return bool(self._raw().get(name))
 
-    def get_secret(self, name: str) -> str | None:
+    def get_secret(self, name: str, *, strong_required: bool = False) -> str | None:
+        if strong_required:
+            self._require_strong(name)
         token = self._raw().get(name)
         return self._box.decrypt(token) if isinstance(token, str) else None
 
-    def set_secret(self, name: str, plaintext: str) -> None:
+    def set_secret(self, name: str, plaintext: str, *, strong_required: bool = False) -> None:
+        if strong_required:
+            self._require_strong(name)
         if not self._box.available:
             raise RuntimeError(f"{_ENV_SECRET} is not set — cannot store an encrypted key")
         data = self._raw()

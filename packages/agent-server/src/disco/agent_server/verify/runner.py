@@ -64,9 +64,13 @@ class AbstractVerifyClient(ABC):
 
     @abstractmethod
     async def create_conversation(
-        self, surface: str, model_override: str | None
+        self, surface: str, model_override: str | None, *, appkit_mode: bool = False
     ) -> str:
-        """POST /conversations → return the new conversation_id."""
+        """POST /conversations → return the new conversation_id.
+
+        ``appkit_mode`` (EPIC M) creates the conversation under the strict AppKit
+        tool allowlist (EPIC F) — the same flag the Build UI sends for an AppKit app.
+        """
         ...
 
     @abstractmethod
@@ -79,12 +83,15 @@ class AbstractVerifyClient(ABC):
         timeout_s: float,
         ws_commands: list[dict[str, Any]] | None = None,
         auto_answer: str | None = None,
+        send_build_brief: bool = False,
     ) -> None:
         """Open the WS, send the user message, optionally approve the plan, then
         send any extra ``ws_commands`` frames (gap #3 — steer/stop/resume/…).
 
-        The connection is closed before returning; the caller then polls
-        HTTP state separately.
+        ``send_build_brief`` (EPIC M) attaches the Build first-send brief signal to
+        the initial ``send_message`` frame (the server recomputes the brief from the
+        prompt — the value is advisory). The connection is closed before returning;
+        the caller then polls HTTP state separately.
         """
         ...
 
@@ -166,13 +173,13 @@ class HttpVerifyClient(AbstractVerifyClient):
         self._base_url = base_url.rstrip("/")
 
     async def create_conversation(
-        self, surface: str, model_override: str | None
+        self, surface: str, model_override: str | None, *, appkit_mode: bool = False
     ) -> str:
         async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
-            resp = await hc.post(
-                "/conversations",
-                json={"surface": surface, "model_override": model_override},
-            )
+            body: dict[str, Any] = {"surface": surface, "model_override": model_override}
+            if appkit_mode:
+                body["appkit_mode"] = True
+            resp = await hc.post("/conversations", json=body)
             resp.raise_for_status()
             return str(resp.json()["conversation_id"])
 
@@ -185,6 +192,7 @@ class HttpVerifyClient(AbstractVerifyClient):
         timeout_s: float,
         ws_commands: list[dict[str, Any]] | None = None,
         auto_answer: str | None = None,
+        send_build_brief: bool = False,
     ) -> None:
         ws_base = (
             self._base_url.replace("http://", "ws://").replace("https://", "wss://")
@@ -195,9 +203,13 @@ class HttpVerifyClient(AbstractVerifyClient):
         sent_cmds = False
         try:
             async with _ws_connect(ws_url) as ws:
-                await ws.send(
-                    json.dumps({"type": "send_message", "content": prompt})
-                )
+                first_frame: dict[str, Any] = {"type": "send_message", "content": prompt}
+                if send_build_brief:
+                    # EPIC M: presence signals the Build first-send. The server RECOMPUTES
+                    # the brief from `content` (classify_build_brief) and ignores this value,
+                    # so an empty (all-default) BuildBrief is a valid, sufficient signal.
+                    first_frame["build_brief"] = {}
+                await ws.send(json.dumps(first_frame))
                 # Drive EVERY gate to terminal on ONE long-lived WS — a live model
                 # hits plan-approval AND mid-run questions, and closing the socket
                 # right after approve_plan raced the frame delivery (ConnectionClosed
@@ -518,6 +530,117 @@ def _run_forbid_checks(
     return problems
 
 
+def _tool_names_used(events: list[dict[str, Any]]) -> set[str]:
+    """All tool names the run touched — from ActionEvents (the tool the agent CHOSE,
+    ``tool_call.tool_name``) and ObservationEvents (the tool that RAN,
+    ``tool_result.tool_name``). EPIC M expect_tools/forbid_tools are judged against this:
+    an attempted-but-failed call still counts as "used" so a forbidden escape can't hide
+    behind a non-success result."""
+    names: set[str] = set()
+    for evt in events:
+        kind = evt.get("kind")
+        if kind == "action":
+            tc = evt.get("tool_call") or {}
+            name = tc.get("tool_name")
+            if isinstance(name, str) and name:
+                names.add(name)
+        elif kind == "observation":
+            tr = evt.get("tool_result") or {}
+            name = tr.get("tool_name")
+            if isinstance(name, str) and name:
+                names.add(name)
+    return names
+
+
+def _tools_with_success(events: list[dict[str, Any]]) -> set[str]:
+    """Tool names that produced a SUCCESSFUL OBSERVATION (a real tool RESULT with
+    ``success`` truthy) — NOT merely an emitted action. EPIC M ``expect_tools`` is judged
+    against this: a golden-path tool that was ATTEMPTED but FAILED (an ActionEvent with no
+    successful observation — e.g. an ``app_create`` that errored) must NOT satisfy
+    ``expect_tools`` (P1 — codex). Otherwise a degenerate run where app_create was emitted
+    but never succeeded would be falsely green on the golden-path check."""
+    names: set[str] = set()
+    for evt in events:
+        if evt.get("kind") != "observation":
+            continue
+        tr = evt.get("tool_result") or {}
+        if not tr.get("success"):
+            continue
+        name = tr.get("tool_name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
+
+
+def _run_tool_checks(
+    scenario: Scenario, events: list[dict[str, Any]]
+) -> list[str]:
+    """EPIC M: prove the run took the strict AppKit golden path. Every ``expect_tools``
+    entry must have a SUCCESSFUL OBSERVATION in the event log (not just an emitted action —
+    P1); no ``forbid_tools`` entry may appear at all (action OR observation, so a forbidden
+    escape can't hide behind a non-success result). Proves ``app_create``/``verify_appkit_app``
+    actually SUCCEEDED while the escape hatch (``request_custom_build``) and raw build tools
+    (shell/file_write/code_exec) did NOT run."""
+    problems: list[str] = []
+    if not scenario.expect_tools and not scenario.forbid_tools:
+        return problems
+    # forbid: ANY use (attempted action OR observation) counts — a forbidden escape that
+    # erred still escaped. expect: only a SUCCESSFUL OBSERVATION counts — an attempted-but-
+    # failed golden-path tool must NOT satisfy the requirement.
+    used = _tool_names_used(events)
+    succeeded = _tools_with_success(events)
+    missing = [t for t in scenario.expect_tools if t not in succeeded]
+    if missing:
+        problems.append(
+            f"expect_tools: required tool(s) had no successful observation "
+            f"(attempted-but-failed or never run): {missing} "
+            f"(succeeded: {sorted(succeeded)}, any-use: {sorted(used)})"
+        )
+    present = [t for t in scenario.forbid_tools if t in used]
+    if present:
+        problems.append(
+            f"forbid_tools: forbidden tool(s) were used: {present} — the strict "
+            f"AppKit scope did not hold"
+        )
+    return problems
+
+
+def _appkit_verdicts(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every SUCCESSFUL ``verify_appkit_app`` structured verdict in the log, in order."""
+    verdicts: list[dict[str, Any]] = []
+    for evt in events:
+        if evt.get("kind") != "observation":
+            continue
+        tr = evt.get("tool_result") or {}
+        if tr.get("tool_name") != "verify_appkit_app" or not tr.get("success"):
+            continue
+        structured = tr.get("structured")
+        if isinstance(structured, dict):
+            verdicts.append(structured)
+    return verdicts
+
+
+def _run_appkit_verify_check(events: list[dict[str, Any]]) -> list[str]:
+    """EPIC M: require the EPIC G structural verifier (``verify_appkit_app``) to have run
+    AND passed. The LAST verdict is authoritative (the agent may iterate to green). A
+    missing verdict, a failing verdict, or any failing individual check is a problem —
+    each named so the dashboard/dossier can surface the first failing AppKit check."""
+    verdicts = _appkit_verdicts(events)
+    if not verdicts:
+        return ["expect_appkit_verify: no successful verify_appkit_app observation found"]
+    final = verdicts[-1]
+    if final.get("passed") is True:
+        return []
+    checks = final.get("checks") or []
+    failed = [
+        str(c.get("name", "?")) for c in checks if isinstance(c, dict) and not c.get("passed")
+    ]
+    fp = final.get("failure_fingerprint") or ""
+    detail = f" — failing checks: {failed}" if failed else ""
+    fp_detail = f" (fingerprint: {fp})" if fp else ""
+    return [f"expect_appkit_verify: verify_appkit_app did NOT pass{detail}{fp_detail}"]
+
+
 async def _run_file_validators(
     deliverables: list[dict[str, Any]],
     *,
@@ -625,8 +748,11 @@ async def _run_validators(
     dest_dir: Path,
 ) -> list[str]:
     """Forbid checks (no IO) + file validators on the real downloaded bytes + live-app
-    reachability checks."""
+    reachability checks + EPIC M AppKit tool-path / verifier checks (no IO)."""
     problems = _run_forbid_checks(scenario, deliverables, events)
+    problems.extend(_run_tool_checks(scenario, events))
+    if scenario.expect_appkit_verify:
+        problems.extend(_run_appkit_verify_check(events))
     problems.extend(
         await _run_file_validators(deliverables, client=client, cid=cid, dest_dir=dest_dir)
     )
@@ -742,8 +868,10 @@ async def run_scenario(
 
     log.info("[%s] scenario=%r surface=%s", run_id, scenario.id, scenario.surface)
 
-    # (a) create conversation
-    cid = await client.create_conversation(scenario.surface, scenario.model_override)
+    # (a) create conversation (EPIC M: appkit_mode → strict AppKit tool allowlist)
+    cid = await client.create_conversation(
+        scenario.surface, scenario.model_override, appkit_mode=scenario.appkit_mode
+    )
     log.info("[%s] cid=%s", run_id, cid)
 
     # (b) WS exchange: send message; optionally wait for plan approval; then send
@@ -755,6 +883,7 @@ async def run_scenario(
         auto_answer=scenario.auto_answer,
         timeout_s=effective_timeout,
         ws_commands=scenario.ws_commands,
+        send_build_brief=scenario.send_build_brief,
     )
 
     # (c) poll until terminal

@@ -140,3 +140,51 @@ research_report_export = Scenario(
     auto_answer=_AUTO_ANSWER,
     timeout_s=600,
 )
+
+
+# ---------------------------------------------------------------------------
+# appkit_live_golden  (EPIC M — M1 headless live AppKit acceptance)
+# ---------------------------------------------------------------------------
+# The headless live acceptance for the AppKit golden path: a real `app_create` →
+# `verify_appkit_app` end-to-end against a live model + sandbox. Creates a BUILD
+# conversation under the strict AppKit allowlist (appkit_mode=True, EPIC F), sends
+# the Build first-send brief signal, approves the plan, and then proves:
+#   • the run reached FINISHED (no silent hang),
+#   • the AppKit mutator `app_create` AND the strict verifier `verify_appkit_app`
+#     were both used (expect_tools) — i.e. the golden path actually ran,
+#   • the escape hatch (`request_custom_build`) and raw build tools
+#     (shell/file_write/code_exec) were NOT used (forbid_tools) — the strict scope held,
+#   • the final `verify_appkit_app` verdict PASSED all seven EPIC G structural checks
+#     (expect_appkit_verify).
+# This is the LIVE tier — it needs a real driver model + sandbox, so it runs on the
+# VM-201 nightly/on-demand host, never on the PR critical path (see scenarios_run / the
+# evidence-harness workflow). The runner's logic is contract-tested in
+# test_disco_verify_runner.py with a FakeVerifyClient (no live server).
+
+appkit_live_golden = Scenario(
+    id="appkit_live_golden",
+    surface="build",
+    prompt=(
+        "Build a lead-generation landing page for a small accounting firm called "
+        "Ledgerly. It needs a hero section, a services section, an about section, "
+        "and a contact form that captures name, email, and message as leads, plus a "
+        "token-protected admin page to review submitted leads."
+    ),
+    model_override=None,
+    appkit_mode=True,
+    send_build_brief=True,
+    approve_plan=True,
+    expect={"terminal_status": "FINISHED"},
+    expect_tools=["app_create", "verify_appkit_app"],
+    forbid_tools=[
+        "request_custom_build",  # the escape hatch — must NOT widen out of AppKit
+        "shell",
+        "shell_exec",
+        "code_exec",
+        "file_write",
+        "file_edit",
+    ],
+    expect_appkit_verify=True,
+    auto_answer=_AUTO_ANSWER,
+    timeout_s=1200,
+)

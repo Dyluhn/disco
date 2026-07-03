@@ -47,6 +47,12 @@ ALLOW_FUNCS = {
     # G1/DR-4 +1 LOC: self._upload_passages dict init tipped __init__ just over
     # the default 200-line cap; D3 steer-queue inits were already close to 200.
     ("agent_server/runtime.py", "__init__"): 210,   # +G1/DR-4 upload_passages init
+    # B5 Epic-O port (verbatim from nightly's 11-wave-audited deploy code): the
+    # real wrangler sequence is a deliberately LINEAR, gate-laden script — every
+    # step logged, refusal-coded, and audited as one readable unit. Decomposing
+    # it would scatter the audited order across helpers. Capped at ported size.
+    ("appkit_cloudflare/deploy.py", "_run_real_deploy"): 400,
+    ("appkit_cloudflare/routes.py", "make_cloudflare_router"): 245,  # flat endpoint registrations (router-factory class, like siblings)
 }
 
 

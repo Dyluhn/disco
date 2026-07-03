@@ -8,6 +8,7 @@ known-good app passes ALL nine checks (incl. the Epic I cloudflare_export_ready
 gate), and each broken variant fails the RIGHT check while leaving the others green.
 """
 
+import hashlib
 import json
 import re
 import shlex
@@ -34,6 +35,8 @@ from disco.tools.builtin.verify_appkit_app import (
     VerifyAppKitAppArgs,
     VerifyAppKitAppTool,
     WorkerAuthVerdict,
+    _is_vite_app_tree,
+    _served_preview_uses_built_bundle,
     inspect_lead_form,
     inspect_worker,
 )
@@ -107,6 +110,42 @@ class FakeSandbox:
             return _ExecRes(str(len(data)))
         # the verify_web_app http probe (python3 -c ...) → server up
         return _ExecRes("200")
+
+
+class BuildTrackingSandbox(FakeSandbox):
+    def __init__(
+        self,
+        files: dict[str, bytes],
+        *,
+        served_index: str | None = None,
+        fail_build: bool = False,
+    ):
+        super().__init__(files)
+        self.served_index = served_index
+        self.fail_build = fail_build
+        self.commands: list[str] = []
+
+    async def exec_shell(self, cmd: str, timeout_s=None):
+        self.commands.append(cmd)
+        if "urllib.request" in cmd and self.served_index is not None:
+            return _ExecRes(
+                json.dumps(
+                    {
+                        "status": 200,
+                        "content_type": "text/html",
+                        "body": self.served_index,
+                    }
+                )
+            )
+        if cmd == "npm ci --no-audit --no-fund":
+            return _ExecRes("installed")
+        if cmd == "npm run build":
+            if self.fail_build:
+                res = _ExecRes("", exit_code=1)
+                res.stderr = "vite build failed\nsrc/App.tsx: boom"
+                return res
+            return _ExecRes("built")
+        return await super().exec_shell(cmd, timeout_s=timeout_s)
 
 
 def _ctx(sandbox) -> ToolContext:
@@ -279,6 +318,77 @@ def test_inspect_lead_form_known_good_and_broken_path():
     broken = form.replace('fetch("/api/leads"', 'fetch("/api/wrong"')
     ok2, reasons2 = inspect_lead_form(broken, lead)
     assert not ok2 and any("/api/leads" in r for r in reasons2)
+
+
+# ====================== PLATFORM VITE BUILD PREP ===============================
+
+
+def test_vite_tree_detection_requires_vite_devdep_and_config():
+    tree, _ = _build_tree()
+    package_json = tree["package.json"].decode()
+    assert _is_vite_app_tree(package_json, has_vite_config=True) is True
+    assert _is_vite_app_tree(package_json, has_vite_config=False) is False
+
+    pkg = json.loads(package_json)
+    del pkg["devDependencies"]["vite"]
+    assert _is_vite_app_tree(json.dumps(pkg), has_vite_config=True) is False
+    assert _is_vite_app_tree("{not json", has_vite_config=True) is False
+
+
+def test_served_preview_detection_distinguishes_source_from_built_vite():
+    assert (
+        _served_preview_uses_built_bundle(
+            '<script type="module" src="/src/main.tsx"></script>'
+        )
+        is False
+    )
+    assert (
+        _served_preview_uses_built_bundle(
+            '<script type="module" crossorigin src="/assets/index-abcd1234.js"></script>'
+        )
+        is True
+    )
+    assert _served_preview_uses_built_bundle("<h1>not vite</h1>") is None
+
+
+@pytest.mark.asyncio
+async def test_vite_build_cache_skips_npm_ci_when_package_unchanged():
+    tree, _ = _build_tree()
+    package_json = tree["package.json"].decode()
+    package_sha = hashlib.sha256(package_json.encode("utf-8")).hexdigest()
+    tree["node_modules/.package-lock.json"] = b"{}"
+    tree[".disco/appkit-vite-package.sha256"] = (package_sha + "\n").encode()
+
+    sandbox = BuildTrackingSandbox(tree)
+    result = await VerifyAppKitAppTool()._ensure_vite_platform_build(
+        _ctx(sandbox), package_json
+    )
+
+    assert result.ok, result.evidence
+    assert "npm ci --no-audit --no-fund" not in sandbox.commands
+    assert "npm run build" in sandbox.commands
+
+
+@pytest.mark.asyncio
+async def test_vite_build_failure_fails_route_and_section_with_stderr(stub_browser):
+    tree, _ = _build_tree()
+    sandbox = BuildTrackingSandbox(
+        tree,
+        served_index='<script type="module" src="/src/main.tsx"></script>',
+        fail_build=True,
+    )
+
+    out = await VerifyAppKitAppTool().run(
+        VerifyAppKitAppArgs(url="http://127.0.0.1:8000/"), _ctx(sandbox)
+    )
+
+    assert out.success and out.structured is not None
+    checks = _checks_by_name(out.structured)
+    assert checks["route_coverage"]["passed"] is False
+    assert checks["section_coverage"]["passed"] is False
+    assert "src/App.tsx: boom" in checks["route_coverage"]["evidence"]
+    assert "npm ci --no-audit --no-fund" in sandbox.commands
+    assert "npm run build" in sandbox.commands
 
 
 # ============================ FULL TOOL RUN ===================================

@@ -64,7 +64,10 @@ browser/sandbox-dependent route+section coverage stays here.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
+import shlex
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -98,6 +101,13 @@ _DRIZZLE_SCHEMA_RELPATH = "src/db/schema.ts"
 _PACKAGE_RELPATH = "package.json"
 _WORKER_RELPATH = "worker/index.ts"
 _COMPONENTS_DIR = "src/components"
+_VITE_CONFIG_RELPATH = "vite.config.ts"
+_VITE_PACKAGE_SHA_RELPATH = ".disco/appkit-vite-package.sha256"
+_VITE_BUILD_TIMEOUT_S = 300
+_BUILT_PREVIEW_NAME = "appkit-built-vite"
+_VITE_PREVIEW_COMMAND = (
+    "npm run preview -- --host 0.0.0.0 --port {port} --strictPort"
+)
 
 
 @dataclass(frozen=True)
@@ -897,6 +907,87 @@ def _check(name: str, passed: bool, evidence: str) -> dict[str, Any]:
     return {"name": name, "passed": bool(passed), "evidence": evidence}
 
 
+@dataclass(frozen=True)
+class _PreviewProbe:
+    status: int
+    content_type: str
+    body: str
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class _BuildResult:
+    ok: bool
+    evidence: str = ""
+
+
+@dataclass(frozen=True)
+class _PreparedPreview:
+    url: str
+    stop_name: str | None = None
+    failure_evidence: str | None = None
+
+
+def _is_vite_app_tree(package_json: str | None, has_vite_config: bool) -> bool:
+    """True for the generated React/Vite app shape the browser verifier must build.
+
+    The trigger is intentionally narrow: package.json must be valid JSON with a
+    ``devDependencies.vite`` entry and the workspace must carry ``vite.config.ts``.
+    """
+    if not package_json or not has_vite_config:
+        return False
+    try:
+        pkg = json.loads(package_json)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(pkg, dict):
+        return False
+    dev_deps = pkg.get("devDependencies")
+    return isinstance(dev_deps, dict) and "vite" in dev_deps
+
+
+_UNBUILT_VITE_ENTRY_RE = re.compile(
+    r"""<script\b(?=[^>]*\btype=["']module["'])(?=[^>]*\bsrc=["']/src/[^"']+)""",
+    re.IGNORECASE,
+)
+_BUILT_VITE_BUNDLE_RE = re.compile(
+    r"""<script\b(?=[^>]*\btype=["']module["'])(?=[^>]*\bsrc=["'][^"']*/assets/[^"']+\.js["'])""",
+    re.IGNORECASE,
+)
+
+
+def _served_preview_uses_built_bundle(index_html: str) -> bool | None:
+    """Classify a served Vite index page.
+
+    ``False`` means the preview is definitely the source tree (for example,
+    ``/src/main.tsx``). ``True`` means it is definitely built Vite output
+    (hashed ``/assets/*.js`` bundle). ``None`` means the body is not recognizable
+    enough to force a platform rebuild.
+    """
+    if _UNBUILT_VITE_ENTRY_RE.search(index_html) or "/src/main.tsx" in index_html:
+        return False
+    if _BUILT_VITE_BUNDLE_RE.search(index_html):
+        return True
+    return None
+
+
+def _tail(text: str, *, limit: int = 2000) -> str:
+    stripped = (text or "").strip()
+    if len(stripped) <= limit:
+        return stripped
+    return "..." + stripped[-limit:]
+
+
+def _exec_failure_evidence(step: str, res: Any) -> str:
+    reason = "timed out" if bool(getattr(res, "timed_out", False)) else (
+        f"exit {getattr(res, 'exit_code', 'unknown')}"
+    )
+    stderr = _tail(str(getattr(res, "stderr", "") or ""))
+    stdout = _tail(str(getattr(res, "stdout", "") or ""))
+    tail = stderr or stdout or "(no stderr/stdout captured)"
+    return f"platform Vite build failed during `{step}` ({reason}); stderr tail: {tail}"
+
+
 def _composite_fingerprint(checks: list[dict[str, Any]], embedded_fp: str) -> str:
     """Stable hash over the FAILING check names + the embedded verify_web_app
     fingerprint. Identical failures → identical fingerprint (the finish-gate
@@ -1011,7 +1102,7 @@ class VerifyAppKitAppTool:
         ),
         base_risk=SecurityRisk.LOW,
         runs_in="sandbox",
-        read_only=True,  # observes only — a verification probe, never a productive edit
+        read_only=False,  # runs platform-owned npm build/preview work when Vite needs it
     )
 
     async def run(self, args: VerifyAppKitAppArgs, ctx: ToolContext) -> ToolOutcome:
@@ -1038,7 +1129,33 @@ class VerifyAppKitAppTool:
                 checks.extend(await self._lead_gen_checks(ctx, app))
 
             # last. route + section coverage + the embedded verify_web_app verdict — COMMON.
-            embedded, route_check, section_check = await self._browser_checks(ctx, app, args.url)
+            # Vite SPAs need a platform-owned compiled preview: the model has no shell in
+            # strict AppKit mode, but the browser checks must hit built JS, not /src/*.tsx.
+            prepared = await self._prepare_vite_preview_for_browser_checks(ctx, args.url)
+            try:
+                if prepared.failure_evidence is not None:
+                    embedded = {
+                        "verdict": "fail",
+                        "passed": False,
+                        "url": prepared.url,
+                        "summary": prepared.failure_evidence,
+                        "failure_fingerprint": hashlib.sha256(
+                            prepared.failure_evidence.encode("utf-8")
+                        ).hexdigest()[:16],
+                    }
+                    route_check = _check(
+                        "route_coverage", False, prepared.failure_evidence
+                    )
+                    section_check = _check(
+                        "section_coverage", False, prepared.failure_evidence
+                    )
+                else:
+                    embedded, route_check, section_check = await self._browser_checks(
+                        ctx, app, prepared.url
+                    )
+            finally:
+                if prepared.stop_name is not None:
+                    await self._stop_prepared_preview(ctx, prepared.stop_name)
             checks.append(route_check)
             checks.append(section_check)
 
@@ -1090,13 +1207,14 @@ class VerifyAppKitAppTool:
                 _check("worker_contract", False, "no worker/index.ts in the workspace.")
             )
         elif lead is not None:
-            post_ok, auth_model, reasons = inspect_worker(worker_ts, lead)
+            post_ok, inspected_auth, reasons = inspect_worker(worker_ts, lead)
+            auth_model = inspected_auth
             ok = (
                 post_ok
-                and auth_model.reads_require_auth
-                and auth_model.fail_closed_without_token
-                and auth_model.admin_token_safe
-                and auth_model.all_lead_reads_guarded
+                and inspected_auth.reads_require_auth
+                and inspected_auth.fail_closed_without_token
+                and inspected_auth.admin_token_safe
+                and inspected_auth.all_lead_reads_guarded
             )
             evidence = (
                 "STRUCTURE verified (presence + ordering + parameterization + "
@@ -1292,6 +1410,191 @@ class VerifyAppKitAppTool:
             f"the lead form POSTs JSON to /api/leads with an input per lead field "
             f"({', '.join(f.name for f in lead.fields)}).",
         )
+
+    async def _prepare_vite_preview_for_browser_checks(
+        self, ctx: ToolContext, requested_url: str
+    ) -> _PreparedPreview:
+        """If this is a Vite SPA and the current preview is source-served, build it
+        and serve the compiled app through the platform PreviewManager.
+
+        Unit-test fakes sometimes return opaque output for the HTTP probe. That is
+        treated as "unknown" and left alone; the real failure this closes is explicit
+        and detectable: the served index references ``/src/main.tsx`` instead of a
+        built ``/assets/*.js`` bundle.
+        """
+        assert ctx.sandbox is not None
+        package_json = await self._read_text(ctx, _PACKAGE_RELPATH)
+        if not _is_vite_app_tree(
+            package_json, await ctx.sandbox.file_exists(_VITE_CONFIG_RELPATH)
+        ):
+            return _PreparedPreview(url=(requested_url or "").strip())
+
+        vtool = VerifyWebAppTool()
+        base = (requested_url or "").strip() or await vtool._detect_preview_url(ctx)
+        base = base.rstrip("/") if base else ""
+        should_build = not base
+        if base:
+            probe = await self._fetch_preview_index(ctx, base)
+            if probe is None:
+                return _PreparedPreview(url=(requested_url or "").strip())
+            if probe.error:
+                should_build = True
+            else:
+                built = _served_preview_uses_built_bundle(probe.body)
+                if built is True:
+                    return _PreparedPreview(url=base)
+                if built is False:
+                    should_build = True
+                else:
+                    return _PreparedPreview(url=base)
+
+        if not should_build:
+            return _PreparedPreview(url=base)
+
+        build = await self._ensure_vite_platform_build(ctx, package_json or "")
+        if not build.ok:
+            return _PreparedPreview(url=base, failure_evidence=build.evidence)
+        return await self._start_built_vite_preview(ctx)
+
+    async def _fetch_preview_index(
+        self, ctx: ToolContext, base_url: str
+    ) -> _PreviewProbe | None:
+        """Fetch the current preview's root from inside the sandbox.
+
+        Returns ``None`` only when the sandbox fake/output is not the JSON frame this
+        helper emits; real network errors are framed as ``error`` so they remain loud
+        enough to trigger a platform build.
+        """
+        assert ctx.sandbox is not None
+        url = base_url.rstrip("/") + "/"
+        script = (
+            "import json, urllib.request as U\n"
+            "try:\n"
+            f"    r=U.urlopen({url!r},timeout=10)\n"
+            "    body=r.read(200000).decode('utf-8','replace')\n"
+            "    print(json.dumps({'status': getattr(r, 'status', None) or r.getcode(), "
+            "'content_type': r.headers.get('content-type',''), 'body': body}))\n"
+            "except Exception as e:\n"
+            "    print(json.dumps({'status': 0, 'content_type': '', 'body': '', "
+            "'error': str(e)}))\n"
+        )
+        try:
+            res = await ctx.sandbox.exec_shell(
+                f"python3 -c {shlex.quote(script)}", timeout_s=15
+            )
+        except Exception:  # noqa: BLE001 — let browser checks handle opaque fakes
+            return None
+        try:
+            data = json.loads(str(getattr(res, "stdout", "") or ""))
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        return _PreviewProbe(
+            status=int(data.get("status") or 0),
+            content_type=str(data.get("content_type") or ""),
+            body=str(data.get("body") or ""),
+            error=str(data.get("error") or ""),
+        )
+
+    async def _ensure_vite_platform_build(
+        self, ctx: ToolContext, package_json: str
+    ) -> _BuildResult:
+        """Run the bounded platform-owned Vite build inside the sandbox.
+
+        ``npm ci`` is skipped only when a node_modules directory exists and the cache
+        marker contains the exact current package.json SHA. ``npm run build`` always
+        runs because the source tree may have changed while dependencies did not.
+        """
+        assert ctx.sandbox is not None
+        package_sha = hashlib.sha256(package_json.encode("utf-8")).hexdigest()
+        node_modules_exists = await self._sandbox_dir_exists(ctx, "node_modules")
+        marker = (await self._read_text(ctx, _VITE_PACKAGE_SHA_RELPATH) or "").strip()
+        need_ci = not (node_modules_exists and marker == package_sha)
+        started = time.monotonic()
+
+        if need_ci:
+            try:
+                ci = await ctx.sandbox.exec_shell(
+                    "npm ci --no-audit --no-fund", timeout_s=_VITE_BUILD_TIMEOUT_S
+                )
+            except Exception as exc:  # noqa: BLE001 — loud verdict evidence
+                return _BuildResult(
+                    False, f"platform Vite build could not run `npm ci`: {exc}"
+                )
+            if getattr(ci, "exit_code", 1) != 0 or bool(getattr(ci, "timed_out", False)):
+                return _BuildResult(
+                    False, _exec_failure_evidence("npm ci --no-audit --no-fund", ci)
+                )
+            try:
+                await ctx.sandbox.write_file(
+                    _VITE_PACKAGE_SHA_RELPATH, (package_sha + "\n").encode("utf-8")
+                )
+            except Exception:  # noqa: BLE001 — cache marker failure must not hide build evidence
+                pass
+
+        elapsed = int(time.monotonic() - started)
+        remaining = max(1, _VITE_BUILD_TIMEOUT_S - elapsed)
+        try:
+            build = await ctx.sandbox.exec_shell("npm run build", timeout_s=remaining)
+        except Exception as exc:  # noqa: BLE001 — loud verdict evidence
+            return _BuildResult(False, f"platform Vite build could not run `npm run build`: {exc}")
+        if getattr(build, "exit_code", 1) != 0 or bool(getattr(build, "timed_out", False)):
+            return _BuildResult(False, _exec_failure_evidence("npm run build", build))
+        return _BuildResult(True)
+
+    async def _start_built_vite_preview(self, ctx: ToolContext) -> _PreparedPreview:
+        """Serve the compiled Vite app with Vite's preview server under platform port
+        ownership, then return the in-sandbox URL the browser verifier can reach."""
+        try:
+            from .preview import _manager
+
+            mgr = _manager(ctx)
+            session = await mgr.start(
+                command=_VITE_PREVIEW_COMMAND,
+                name=_BUILT_PREVIEW_NAME,
+                supervise=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — route/section fail loudly
+            return _PreparedPreview(
+                url="",
+                failure_evidence=(
+                    "platform Vite build succeeded, but serving the built app failed "
+                    f"while starting `{_VITE_PREVIEW_COMMAND}`: {exc}"
+                ),
+            )
+
+        status = getattr(getattr(session, "status", ""), "value", str(getattr(session, "status", "")))
+        port = getattr(session, "port", None)
+        if status not in {"running", "unavailable"} or not isinstance(port, int):
+            detail = str(getattr(session, "detail", "") or "preview did not become healthy")
+            return _PreparedPreview(
+                url="",
+                failure_evidence=(
+                    "platform Vite build succeeded, but the built-app preview failed "
+                    f"to become healthy (status={status or 'unknown'}): {detail}"
+                ),
+            )
+        return _PreparedPreview(
+            url=f"http://127.0.0.1:{port}/",
+            stop_name=_BUILT_PREVIEW_NAME,
+        )
+
+    async def _stop_prepared_preview(self, ctx: ToolContext, name: str) -> None:
+        try:
+            from .preview import _manager
+
+            await _manager(ctx).stop(name)
+        except Exception:  # noqa: BLE001 — cleanup must not mask the verifier result
+            pass
+
+    async def _sandbox_dir_exists(self, ctx: ToolContext, relpath: str) -> bool:
+        assert ctx.sandbox is not None
+        try:
+            await ctx.sandbox.list_dir(relpath)
+            return True
+        except Exception:  # noqa: BLE001 — absent or not a directory
+            return False
 
     async def _browser_checks(
         self, ctx: ToolContext, app: AppSpec | None, url: str

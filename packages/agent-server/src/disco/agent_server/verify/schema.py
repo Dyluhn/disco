@@ -57,6 +57,23 @@ class Scenario(BaseModel):
     fire_schedule_id: str | None = None
     # Per-scenario timeout in seconds (overridden downward by run_scenario timeout_s).
     timeout_s: int = 600
+    # EPIC M (M1 — AppKit live golden harness): create the conversation with
+    # appkit_mode=True so the strict, phase-based AppKit tool allowlist governs the
+    # build loop (EPIC F). The harness then proves the run stayed on that strict path.
+    appkit_mode: bool = False
+    # EPIC M: signal the Build first-send so a hidden `<build_brief>` ENVIRONMENT
+    # message is attached (server RECOMPUTES it deterministically from the prompt —
+    # the value is advisory). Mirrors the real Build surface's first send.
+    send_build_brief: bool = False
+    # EPIC M: tool names that MUST appear in the run's action/observation log
+    # (e.g. ["app_create", "verify_appkit_app"]) — proves the AppKit golden path ran.
+    expect_tools: list[str] = Field(default_factory=list)
+    # EPIC M: tool names that must NOT appear — the escape hatch (request_custom_build)
+    # and raw build tools (shell/file_write/code_exec). Proves the strict scope held.
+    forbid_tools: list[str] = Field(default_factory=list)
+    # EPIC M: require a SUCCESSFUL verify_appkit_app verdict in the event log — the
+    # final structural verifier (EPIC G) must have run AND passed all its checks.
+    expect_appkit_verify: bool = False
 
 
 class VerifyResult(BaseModel):

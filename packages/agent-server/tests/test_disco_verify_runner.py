@@ -75,11 +75,15 @@ class FakeVerifyClient(AbstractVerifyClient):
         self.export_fmt: str | None = None
         self.fired_schedule_id: str | None = None
         self._get_events_count = 0
+        # EPIC M call-tracking
+        self.created_appkit_mode: bool = False
+        self.ws_send_build_brief: bool = False
 
     async def create_conversation(
-        self, surface: str, model_override: str | None
+        self, surface: str, model_override: str | None, *, appkit_mode: bool = False
     ) -> str:
         self.calls.append("create_conversation")
+        self.created_appkit_mode = appkit_mode
         return self.cid
 
     async def run_ws_exchange(
@@ -91,11 +95,13 @@ class FakeVerifyClient(AbstractVerifyClient):
         timeout_s: float,
         ws_commands: list[dict[str, Any]] | None = None,
         auto_answer: str | None = None,
+        send_build_brief: bool = False,
     ) -> None:
         self.calls.append("run_ws_exchange")
         self.ws_prompt = prompt
         self.ws_approve_plan = approve_plan
         self.ws_commands = list(ws_commands or [])
+        self.ws_send_build_brief = send_build_brief
 
     async def poll_until_terminal(
         self,

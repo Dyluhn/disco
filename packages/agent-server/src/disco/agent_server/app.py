@@ -21,6 +21,7 @@ from disco.core.store.sqlite import SqliteEventStore
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .appkit_cloudflare import CloudflareDeployCorsMiddleware, make_cloudflare_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
 from .pi_inference import PiInferenceTokenStore
 from .routes import (
@@ -121,6 +122,10 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         # renders on sealed/filtered backends that publish no host port.
         session_resolver=make_preview_session_resolver(runtime),
     )
+    # EPIC O P0-3 — strip the permissive wildcard CORS from the owner-only
+    # Cloudflare deploy surface. Added LAST so it is the OUTERMOST middleware and
+    # can override the global CORSMiddleware's headers on those paths.
+    app.add_middleware(CloudflareDeployCorsMiddleware)
 
     # Per-domain routers (routes/<domain>.py). Registration order preserves the
     # original relative order; the `{path:path}` catch-alls (workspace/artifacts/
@@ -144,6 +149,9 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_share_router(store, runtime))
     app.include_router(make_debug_router(store, runtime))
     app.include_router(make_probes_router())
+    # EPIC O — owner-only Cloudflare deploy API (real deploy is HARD-GATED +
+    # dry-run by default; the mutation path sits OUTSIDE the LLM tool loop).
+    app.include_router(make_cloudflare_router(store, runtime))
     # EPIC C — the DiscoInferenceGateway: a loopback, run-scoped, OpenAI-compatible
     # endpoint that lets the Pi sidecar drive the UI-selected model WITHOUT ever
     # seeing a provider key. The ephemeral token store is held on app.state so the
