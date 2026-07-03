@@ -1,8 +1,8 @@
 # disclaude PR / order status
 
 **Branch:** `disclaude/experimental-20260628T025508Z`
-**HEAD:** `45e74def` — REL-6 PASSED (2026-07-02)
-**Snapshot written:** 2026-07-02 (post REL-6, post live-UI smoke)
+**HEAD:** `c0a3f5aa` — P8 semantic direct manipulation wired + live-proven + committed (2026-07-03)
+**Snapshot written:** 2026-07-03 (post P8 commit)
 
 Status of every disclaude campaign work item (the P-phases + the REL reliability
 ladder). Gate legend:
@@ -87,10 +87,8 @@ Each killed one build-loop defect category; zero recurrence after fix.
 
 ## What's uncommitted right now
 
-- Live UI build smoke (`frontend/e2e-live/live-smoke.spec.ts` + `live-smoke.config.ts`)
-  — **PASSED** (exit=0, 2.6m, MiniMax-M3, artifact rendered). Hook-based, not text-based.
-- This status doc + the UI-readiness ledger entry in `disclaude.md`.
-- (No production code changed today — verification + docs only.)
+- (P8 committed as `c0a3f5aa` — see the P8 row above. All gates green except the
+  pre-existing arch-budget god-object red, which P8 does not touch.)
 
 ## Corrected next sequence (ground-truth audit, 2026-07-03)
 
