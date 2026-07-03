@@ -947,6 +947,19 @@ class AgentLoop:
         and the planning-mode gate."""
         return await self._valve.post_noop_valve()
 
+    async def _maybe_synthesize_finish_after_actionless_pauses(
+        self, state: ConversationState, events: list[Event]
+    ) -> Disp:
+        """REL-RC-P: before another resumed model turn, attempt finish when the
+        event log shows repeated actionless pauses after productive work."""
+        if self.mode == OperatingMode.PLANNING:
+            return Disp.FALLTHROUGH
+        if not signals.should_synthesize_finish_after_actionless_pauses(events):
+            return Disp.FALLTHROUGH
+        return await self._finish.synthetic_finish_after_actionless_pauses(
+            state, events
+        )
+
     async def _route_plan_approval_gate(self, plan: PlanEvent) -> Disp:
         """Route a newly-emitted PlanEvent through the normal approval gate."""
         if self._autonomous:
@@ -1549,6 +1562,14 @@ class AgentLoop:
                 # Lock is held here (caller frame). Pure Q&A is exempt.
                 if await self._maybe_reenter_planning_for_followup(events):
                     events = await self._events()
+
+                disp = await self._maybe_synthesize_finish_after_actionless_pauses(
+                    state, events
+                )
+                if disp is Disp.CONTINUE:
+                    continue
+                if disp is Disp.HALT:
+                    return await self.get_state()
 
                 # (d) build the model-facing View, condensing if triggered (§8)
                 view = await self._materialize_view(events)

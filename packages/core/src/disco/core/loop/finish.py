@@ -180,7 +180,9 @@ def _last_productive_seq(events: list[Event]) -> int:
     action_succeeded: dict[str, bool] = {}
     for ev in events:
         if isinstance(ev, ObservationEvent):
-            action_succeeded.setdefault(ev.action_id, bool(ev.tool_result.success))
+            action_id = ev.action_id
+            if isinstance(action_id, str):
+                action_succeeded.setdefault(action_id, bool(ev.tool_result.success))
         elif isinstance(ev, AgentErrorEvent) and ev.action_id is not None:
             action_succeeded.setdefault(ev.action_id, False)
     for ev in reversed(events):
@@ -2744,3 +2746,50 @@ class FinishGate:
         if disp is Disp.HALT:
             return Disp.HALT
         return Disp.FALLTHROUGH
+
+    async def synthetic_finish_after_actionless_pauses(
+        self, state: ConversationState, events: list[Event]
+    ) -> Disp:
+        """REL-RC-P — synthesize a finish call after repeated actionless pauses.
+
+        This emits an explicit host reminder and durable marker, then routes a
+        synthetic ``finish(summary=...)`` through the same two-stage path a real
+        model finish call uses: ``normalize_finish_step`` followed by
+        ``handle_finish_path``. Gate refusal therefore lands the existing concrete
+        reminder and returns CONTINUE; gate success lands FINISHED normally.
+        """
+        summary = signals.latest_agent_prose_message(events) or "work complete"
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "REL-RC-P SYNTHETIC FINISH: host is attempting completion: "
+                        "work appears done and the loop has paused actionless twice. "
+                        "Routing a synthetic finish(summary=...) through the normal "
+                        "finish gates; any refusal below is authoritative and should "
+                        "be fixed before finishing.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail=signals.SYNTHETIC_FINISH_ATTEMPT_DETAIL,
+            )
+        )
+        step = AgentStep(
+            tool_call=ToolCall(tool_name="finish", arguments={"summary": summary})
+        )
+        step, disp = await self.normalize_finish_step(step, await self._loop._events())
+        if disp is Disp.CONTINUE:
+            return Disp.CONTINUE
+        if disp is Disp.HALT:
+            return Disp.HALT
+        return await self.handle_finish_path(
+            step, state, await self._loop._events()
+        )

@@ -71,13 +71,21 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
     }
 )
 
+SYNTHETIC_FINISH_ATTEMPT_DETAIL = "synthetic_finish_attempted"
+
+
+def _event_seq(event: Event, fallback: int) -> int:
+    return event.seq if event.seq is not None else fallback
+
 
 def _successful_action_ids(events: list[Event]) -> set[str]:
     """Action ids whose paired result is a successful ObservationEvent."""
     succeeded: dict[str, bool] = {}
     for e in events:
         if isinstance(e, ObservationEvent):
-            succeeded.setdefault(e.action_id, bool(e.tool_result.success))
+            action_id = e.action_id
+            if isinstance(action_id, str):
+                succeeded.setdefault(action_id, bool(e.tool_result.success))
         elif isinstance(e, AgentErrorEvent) and e.action_id is not None:
             succeeded.setdefault(e.action_id, False)
     return {action_id for action_id, ok in succeeded.items() if ok}
@@ -88,7 +96,9 @@ def _paired_action_ids(events: list[Event]) -> set[str]:
     paired: set[str] = set()
     for e in events:
         if isinstance(e, ObservationEvent):
-            paired.add(e.action_id)
+            action_id = e.action_id
+            if isinstance(action_id, str):
+                paired.add(action_id)
         elif isinstance(e, AgentErrorEvent) and e.action_id is not None:
             paired.add(e.action_id)
     return paired
@@ -118,6 +128,117 @@ def productive_action_since_approval(events: list[Event]) -> bool:
             if e.id in successful_actions and e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
                 return True
     return False
+
+
+def _is_successful_productive_action(
+    event: Event, successful_actions: set[str]
+) -> bool:
+    if not isinstance(event, ActionEvent) or event.tool_call is None:
+        return False
+    if event.meta.get("verify_probe"):
+        return False
+    return (
+        event.id in successful_actions
+        and event.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS
+    )
+
+
+_SYNTHETIC_FINISH_RESET_STATUSES = frozenset(
+    {
+        ConversationStatus.IDLE,
+        ConversationStatus.FINISHED,
+        ConversationStatus.STUCK,
+        ConversationStatus.ERROR,
+        ConversationStatus.WAITING_FOR_CONFIRMATION,
+        ConversationStatus.AWAITING_PLAN_APPROVAL,
+        ConversationStatus.AWAITING_USER_DECISION,
+        ConversationStatus.AWAITING_USER_QUESTION,
+    }
+)
+
+
+def actionless_pause_count_current_execution_segment(events: list[Event]) -> int:
+    """REL-RC-P: consecutive actionless PAUSE landings in the current execution
+    segment.
+
+    The segment starts at the latest ``plan_approved`` marker. Walking backward
+    from the tail, actionless pauses count; resume/RUNNING markers, assistant
+    prose, observations, and non-productive tools are transparent. A successful
+    productive action or any terminal/parked status resets the count. This is the
+    finish-boundary sibling of the older BW-02 pause-loop signal, but deliberately
+    does not reset on reads/browser probes: those are activity, not productive
+    completion work.
+    """
+    indexed = [(idx, event) for idx, event in enumerate(events, start=1)]
+    approval_seq: int | None = None
+    for idx, event in indexed:
+        if isinstance(event, StatusEvent) and event.detail == "plan_approved":
+            approval_seq = _event_seq(event, idx)
+    if approval_seq is None:
+        return 0
+
+    successful_actions = _successful_action_ids(events)
+    count = 0
+    for idx, event in reversed(indexed):
+        seq = _event_seq(event, idx)
+        if seq <= approval_seq:
+            break
+        if _is_successful_productive_action(event, successful_actions):
+            break
+        if isinstance(event, StatusEvent):
+            if (
+                event.status == ConversationStatus.PAUSED
+                and event.detail == "actionless"
+            ):
+                count += 1
+                continue
+            if event.status == ConversationStatus.RUNNING:
+                continue
+            if event.status in _SYNTHETIC_FINISH_RESET_STATUSES:
+                break
+            if event.status == ConversationStatus.PAUSED:
+                break
+    return count
+
+
+def _latest_actionless_pause_seq(events: list[Event]) -> int | None:
+    latest: int | None = None
+    for idx, event in enumerate(events, start=1):
+        if (
+            isinstance(event, StatusEvent)
+            and event.status == ConversationStatus.PAUSED
+            and event.detail == "actionless"
+        ):
+            latest = _event_seq(event, idx)
+    return latest
+
+
+def synthetic_finish_attempted_for_current_pause(events: list[Event]) -> bool:
+    """True iff REL-RC-P already attempted finish after the latest actionless
+    pause. A later actionless pause re-arms the behavior; in-memory counters are
+    not involved."""
+    latest_pause = _latest_actionless_pause_seq(events)
+    if latest_pause is None:
+        return False
+    for idx, event in enumerate(events, start=1):
+        if _event_seq(event, idx) <= latest_pause:
+            continue
+        if (
+            isinstance(event, StatusEvent)
+            and event.detail == SYNTHETIC_FINISH_ATTEMPT_DETAIL
+        ):
+            return True
+    return False
+
+
+def should_synthesize_finish_after_actionless_pauses(events: list[Event]) -> bool:
+    """REL-RC-P decision predicate. The engine separately checks it is not in
+    planning mode; this pure helper owns the replayable event-derived guards."""
+    return (
+        actionless_pause_count_current_execution_segment(events) >= 2
+        and productive_action_since_approval(events)
+        and not synthetic_finish_attempted_for_current_pause(events)
+    )
 
 
 def hard_deny_reason(action: ActionEvent) -> str | None:
@@ -716,6 +837,21 @@ def latest_prose_plan_summary(events: list[Event]) -> str | None:
     raw = plan_lines[-1] if plan_lines else (lines[0] if lines else "")
     summary = _strip_prose_step_markdown(raw)
     return summary[:200] if summary else None
+
+
+def latest_agent_prose_message(events: list[Event]) -> str | None:
+    """Latest assistant prose message, stripped of hidden think blocks.
+
+    Used by REL-RC-P's synthetic finish summary. Restricting this to
+    ``source=AGENT`` avoids feeding system reminders or user instructions back as
+    the completion summary.
+    """
+    for e in reversed(events):
+        if isinstance(e, MessageEvent) and e.source == EventSource.AGENT:
+            content = _strip_think_blocks(e.message.content or "").strip()
+            if content:
+                return content
+    return None
 
 
 def harvest_prose_plan_steps(events: list[Event]) -> list[PlanStep]:

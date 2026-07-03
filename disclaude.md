@@ -5630,3 +5630,15 @@ here, not hidden. Product fix: sandbox destroy must remove its volumes; orphan a
 volume counting (volumes are orphans within the "0 orphan sandboxes" acceptance).
 ADDENDUM: TARGETED iter 4 (rel6-A3 003, same minute) = identical num_locks error — both round-3
 failures so far are the ONE pre-prune infra event. +1 replacement iteration for TARGETED too.
+
+### REL-RC-P — synthetic finish after actionless-pause loop — 2026-07-03
+
+EXPORT iter 7 (conv_6fd212da): initial build did the work, then actionless PAUSED, runner resumed,
+model browsed ×2 + prose, PAUSED again → runner followup bound → RUN_INTERRUPTED (product-caused
+INVALID). The finish-boundary sibling of REL-RC-N's prose-planning: model won't CALL finish.
+**Fix (N precedent at the finish boundary):** in execution mode, after the 2nd consecutive
+actionless PAUSE with productive work done since approval, the host attempts a SYNTHETIC finish
+routed through the SAME finish gates (J productive-work, O content floors, plan-completeness,
+host-verify): gates pass → FINISHED honestly (loud system-reminder records the synthesis); gates
+refuse → the refusal text steers the model (it now knows exactly why it is not done). Never fires
+without productive work; never bypasses a gate. Event-derived pause counting (replayable).
