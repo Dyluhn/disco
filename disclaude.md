@@ -5919,3 +5919,14 @@ server_status 65× without tripping the identical-repeat breaker — probe outpu
 so the breaker needs a tool-frequency dimension). That is the §M/task-14 ladder work
 (auto-resume + event-persisted pause counts + probe-spin breaker), NOT a port defect.
 Task 12 closed with this caveat; the all-checks live pass rides on task 14.
+
+## TASK-13 POST-PORT WAVE — ALL FIVE LANES LANDED (2026-07-03)
+
+D `1e1b67ef` REL-2a manifest reader promoted (default ON, divergence-logged) ·
+F2 `f2f35980` Vite HMR WebSocket passthrough (gating parity, no noVNC bypass) ·
+G `8ee23c05` builder/verifier context split (bounded VERIFIER role; builder sees
+only the verdict) · E `d987e168` host-assembles-document (doc_set_section validated
+parts + doc_export at the P10 choke; pipeline tuple honest) · F3 `df4bff0f`
+watch-it-write streaming (file_stream frames; files tab renders in-flight writes —
+live evidence sent to Dylan). Remaining: task 14 (K/L/M + probe-spin breaker →
+appkit all-checks live pass rides on M), task 15 (P11 → v0.1).
