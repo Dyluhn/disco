@@ -37,6 +37,7 @@ from disco.core.evidence.schema import redact
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
 
 from .probe import app_body_problem, validate_app_deliverables
+from .reliability import run_reliability_metrics
 from .schema import Scenario, VerifyResult
 
 log = logging.getLogger(__name__)
@@ -968,6 +969,7 @@ async def run_scenario(
         deliverables=deliverables,
         validator_problems=validator_problems,
         passed=passed,
+        reliability_metrics=dict(run_reliability_metrics(events)),
         dossier_path=str(dossier_path.resolve()),
     )
 

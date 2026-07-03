@@ -38,6 +38,10 @@ from ._setup_checks import (  # noqa: F401  (public re-export)
 # ---- API-first scenario runner (W15) ----------------------------------------
 from .host import HostWebAppVerifier  # noqa: F401
 from .model_verifier import ModelVerifier  # noqa: F401
+from .reliability import (  # noqa: F401
+    aggregate_reliability_metrics,
+    run_reliability_metrics,
+)
 from .runner import AbstractVerifyClient, HttpVerifyClient, run_scenario  # noqa: F401
 from .schema import Scenario, VerifyResult  # noqa: F401
 
@@ -58,5 +62,7 @@ __all__ = [
     "ModelVerifier",
     "Scenario",
     "VerifyResult",
+    "aggregate_reliability_metrics",
+    "run_reliability_metrics",
     "run_scenario",
 ]

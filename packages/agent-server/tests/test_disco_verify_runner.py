@@ -432,6 +432,7 @@ async def test_run_scenario_happy_path_writes_dossier(tmp_path: Path) -> None:
         events=[
             _slides_observation_event("deck.pptx"),
             _deliverable_files_event("deck.pptx"),
+            {"kind": "status", "source": "system", "status": "FINISHED", "detail": None},
         ],
         artifacts={"deck.pptx": _clean_pptx_bytes()},  # a real, clean deck → validators pass
     )
@@ -462,6 +463,8 @@ async def test_run_scenario_happy_path_writes_dossier(tmp_path: Path) -> None:
     data = json.loads((dossier / "result.json").read_text())
     assert data["scenario"]["id"] == scenario.id
     assert data["result"]["passed"] is True
+    assert data["result"]["reliability_metrics"]["terminal_status"] == "FINISHED"
+    assert data["result"]["reliability_metrics"]["stalled"] is False
     assert data["conversation_id"] == "conv_test001"
 
 

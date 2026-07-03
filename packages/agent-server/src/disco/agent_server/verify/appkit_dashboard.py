@@ -40,8 +40,11 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 from pydantic import BaseModel, Field, computed_field
+
+from .reliability import aggregate_reliability_metrics, run_reliability_metrics
 
 # EPIC G structural checks, in canonical order (matches verify_appkit_app).
 _APPKIT_CHECK_ORDER: tuple[str, ...] = (
@@ -73,6 +76,7 @@ class AppKitRunRow(BaseModel):
     # Best-effort app name from the app_create observation (None when unavailable).
     app_name: str | None = None
     validator_problems: list[str] = Field(default_factory=list)
+    reliability_metrics: dict[str, Any] = Field(default_factory=dict)
     # Dossier folder, relative to the dashboard out dir when possible (else absolute).
     dossier_path: str = ""
     # UI evidence screenshots (relative paths), matched to this run's conversation id.
@@ -98,6 +102,7 @@ class DashboardSummary(BaseModel):
     failed: int
     # first-failing-check → count, so a recurring regression is obvious at a glance.
     failing_checks: dict[str, int] = Field(default_factory=dict)
+    reliability: dict[str, Any] = Field(default_factory=dict)
     rows: list[AppKitRunRow] = Field(default_factory=list)
 
 
@@ -237,6 +242,11 @@ def collect_appkit_rows(
         cid = str(result_doc.get("conversation_id", ""))
         events = _iter_events(run_dir / "events.jsonl")
         verdict = _final_appkit_verdict(events)
+        raw_reliability_metrics = result.get("reliability_metrics")
+        if isinstance(raw_reliability_metrics, dict):
+            reliability_metrics = cast(dict[str, Any], raw_reliability_metrics)
+        else:
+            reliability_metrics = dict(run_reliability_metrics(events))
 
         appkit_passed: bool | None = None
         first_fail: str | None = None
@@ -265,6 +275,7 @@ def collect_appkit_rows(
                 failure_fingerprint=fingerprint,
                 app_name=_app_name_from_events(events),
                 validator_problems=[str(p) for p in (result.get("validator_problems") or [])],
+                reliability_metrics=reliability_metrics,
                 dossier_path=dossier_rel,
                 ui_screenshots=_collect_ui_screenshots(cid, e2e_root, out_dir),
             )
@@ -289,6 +300,7 @@ def build_summary(rows: list[AppKitRunRow]) -> DashboardSummary:
         passed=sum(1 for r in rows if r.green),
         failed=sum(1 for r in rows if not r.green),
         failing_checks=dict(sorted(failing_checks.items())),
+        reliability=aggregate_reliability_metrics([r.reliability_metrics for r in rows]),
         rows=rows,
     )
 
@@ -331,6 +343,28 @@ def render_html(summary: DashboardSummary) -> str:
             for name, count in summary.failing_checks.items()
         )
         summary_line += f"<div class=\"meta\">first-failing checks: {chips}</div>"
+    reliability = summary.reliability
+    totals = reliability.get("totals") if isinstance(reliability, dict) else None
+    if isinstance(totals, dict) and summary.total:
+        nonzero = {
+            str(k): v
+            for k, v in totals.items()
+            if isinstance(v, int) and v > 0 and k != "runs"
+        }
+        if nonzero:
+            chips = " ".join(
+                f"<code>{_e(name)}&times;{count}</code>"
+                for name, count in sorted(nonzero.items())
+            )
+            stall_rate = reliability.get("stall_rate")
+            rate_text = (
+                f"{float(stall_rate):.1%}"
+                if isinstance(stall_rate, int | float)
+                else "0.0%"
+            )
+            summary_line += (
+                f"<div class=\"meta\">reliability: stall rate {rate_text}; {chips}</div>"
+            )
 
     rows_html = [
         "<table><thead><tr>"

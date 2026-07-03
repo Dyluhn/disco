@@ -96,5 +96,7 @@ class VerifyResult(BaseModel):
     validator_problems: list[str]
     # True iff validator_problems is empty AND the expected terminal_status matched.
     passed: bool
+    # Additive reliability counters derived from the event log.
+    reliability_metrics: dict[str, Any] = Field(default_factory=dict)
     # Absolute path to the written dossier folder.
     dossier_path: str
