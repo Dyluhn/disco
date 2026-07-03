@@ -5945,3 +5945,16 @@ after 7 attempts: every engine gate + breaker live-proven; the residual is
 MiniMax-M3's refusal-following on validated-patch tools (model-quality wall,
 same class as the M3 completion-rate memo). All-checks live pass deferred to a
 stronger driver or prompt-pack tuning — NOT an engine defect. 0 OpenRouter all day.
+
+## P11 RELEASE ENGINEERING — COMPLETE, v0.1.0 TAGGED LOCALLY (2026-07-03)
+
+Secret-history scan `37d403d6`: 1268 commits, 65/65 findings FALSE POSITIVE
+(64 redaction-test fixtures + 1 cassette sha256[:16] cache key) — history CLEAN,
+no rewrite needed; .gitleaks.toml keeps CI scans zero-noise. License verified
+(bge-reranker MIT default; jina opt-in). Release artifacts `80cf519c`: README
+OSS quickstart (scrubbed), .env.example (default-ON flags + off-switches),
+draft-only release.yml, CHANGELOG v0.1.0 (every claim code-verified), compose
+parity. SELF-HOST VERIFIED: fresh LXC 199 (8GB Debian), README-only — uv sync
++ secret + FULL core suite green + agent-server boots HTTP 200, first try.
+v0.1.0 tagged LOCALLY (publication = Dylan's decision). Gap-close campaign
+COMPLETE: all 15 tasks, 2026-07-03.
