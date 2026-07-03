@@ -39,6 +39,7 @@ import io
 import re
 import zipfile
 
+from disco.core.brand.mark import BRAND_CHROME_TEXTS
 from pydantic import BaseModel, ConfigDict
 
 from ..events import Event, EventSource, MessageEvent, ObservationEvent
@@ -69,18 +70,11 @@ _TEXT_FLOOR = 12
 # made a legit 4KB PDF read as blank — the bug this constant fixes).
 _PDF_BYTE_FLOOR = 2048
 
-# Template chrome the default deck renderer stamps on EVERY slide (the "Disco."
-# wordmark + the Latin colophon). Counting it as content would let a genuinely
-# blank deck read as non-blank, so it is removed before measuring text. Matching
-# the renderer's literal strings (_pptx_render._brand_marks_html) keeps this
-# honest — if the chrome text changes, this list must too (a test pins it).
-_CHROME_TOKENS = (
-    "Disco.",
-    "disco",
-    "I learn; I become acquainted with.",
-    "discere",
-    "to learn",
-)
+# Template chrome the default deck renderer stamps on every branded deck. Counting
+# it as content would let a genuinely blank deck read as non-blank, so it is
+# removed before measuring text. Tokens are derived from the shared brand mark
+# source of truth and normalized to match PPTX runs whose case/spacing differs.
+_CHROME_TOKENS = tuple(re.sub(r"\s+", " ", t).casefold() for t in BRAND_CHROME_TEXTS)
 
 _PDF_PAGE_RE = re.compile(rb"/Type\s*/Page(?![s])")
 # Capture the id VALUE, not just the attribute — renderers (the C3 deck template)
@@ -186,9 +180,10 @@ class ExportRenderFacts(BaseModel):
 
 
 def _strip_chrome(text: str) -> str:
+    norm = re.sub(r"\s+", " ", text).casefold()
     for tok in _CHROME_TOKENS:
-        text = text.replace(tok, " ")
-    return re.sub(r"\s+", " ", text).strip()
+        norm = norm.replace(tok, " ")
+    return re.sub(r"\s+", " ", norm).strip()
 
 
 def _html_facts(html: str) -> tuple[int, int, bool, bool]:

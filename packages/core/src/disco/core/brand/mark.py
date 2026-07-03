@@ -19,6 +19,20 @@ from __future__ import annotations
 
 from typing import Literal
 
+# SINGLE SOURCE OF TRUTH shared by the PPTX renderer chrome and the export
+# render-correctness checker; a drift here once let a blank branded PPTX pass
+# the finish gate.
+BRAND_CHROME_TEXTS: tuple[str, ...] = (
+    "Disco",
+    "disco",
+    "Latin · verb",
+    "/ˈdɪs.koː/",
+    "I learn; I become acquainted with.",
+    "from discere — to learn",
+    "discere",
+    "to learn",
+)
+
 # Scale class map — mirrors _definition.html:43-45
 _SCALE_CLASS: dict[str, str] = {
     "masthead": "s-lg",

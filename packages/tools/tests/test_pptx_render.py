@@ -17,6 +17,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from disco.core.contract.export_render import check_export_render
 from disco.tools.builtin._pptx_render import (
     DeckSlide,
     MinimalDeck,
@@ -597,6 +598,54 @@ def test_html_brand_chrome_is_pointer_events_none():
     assert ".brand-wordmark{" in css.replace("\n", "") or "brand-wordmark" in css
     # The rule block carries pointer-events:none for both classes.
     assert css.count("pointer-events:none") >= 2
+
+
+def _blank_branded_checker_deck() -> AuthoredDeck:
+    return AuthoredDeck(
+        title=" ",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(type="title", title="   ", body=[]),
+            AuthoredSlide(type="bullets", title=" ", body=["", "  "]),
+            AuthoredSlide(type="bullets", title="", body=[]),
+        ],
+    )
+
+
+def _content_branded_checker_deck() -> AuthoredDeck:
+    return AuthoredDeck(
+        title="Market Expansion",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="title",
+                title="Market Expansion",
+                body=["North America launch plan"],
+            ),
+            AuthoredSlide(
+                type="bullets",
+                title="Audience Signals",
+                body=["Small teams need faster onboarding", "Buyers compare total cost"],
+            ),
+            AuthoredSlide(
+                type="bullets",
+                title="Launch Plan",
+                body=["Pilot with five accounts", "Measure activation weekly"],
+            ),
+        ],
+    )
+
+
+def test_pptx_export_render_refuses_blank_branded_real_render() -> None:
+    data = render_pptx(lower_deck(_blank_branded_checker_deck()))
+    f = check_export_render("pptx", data, declared_units=3)
+    assert f.non_blank is False and f.ok is False
+
+
+def test_pptx_export_render_accepts_content_branded_real_render() -> None:
+    data = render_pptx(lower_deck(_content_branded_checker_deck()))
+    f = check_export_render("pptx", data, declared_units=3)
+    assert f.non_blank is True and f.ok is True
 
 
 # ---- C7 wire: generated image bytes embed into the deck (not [image]) --------

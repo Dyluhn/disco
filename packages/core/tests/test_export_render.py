@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import zipfile
 
+from disco.core.brand.mark import BRAND_CHROME_TEXTS
 from disco.core.contract.export_render import (
     EXPORT_GATE_TOKEN,
     EXPORT_RENDER_KEY,
@@ -29,7 +30,6 @@ from disco.core.events import (
     ObservationEvent,
     ToolResult,
 )
-
 
 # ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -63,6 +63,15 @@ def _pptx_bytes(n_slides: int, *, text_per_slide: str = "Quarterly revenue up") 
         for i in range(1, n_slides + 1):
             body = f"<a:t>{text_per_slide} {i}</a:t>" if text_per_slide else ""
             zf.writestr(f"ppt/slides/slide{i}.xml", f"<p:sld><a:p>{body}</a:p></p:sld>")
+    return buf.getvalue()
+
+
+def _pptx_bytes_with_runs(text_runs: tuple[str, ...]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types/>")
+        body = "".join(f"<a:t>{run}</a:t>" for run in text_runs)
+        zf.writestr("ppt/slides/slide1.xml", f"<p:sld><a:p>{body}</a:p></p:sld>")
     return buf.getvalue()
 
 
@@ -127,6 +136,33 @@ def test_pptx_good_ok() -> None:
 def test_pptx_blank_text_refused() -> None:
     f = check_export_render("pptx", _pptx_bytes(3, text_per_slide=""), declared_units=3)
     assert f.valid_header and f.unit_count == 3
+    assert f.non_blank is False and f.ok is False
+
+
+def test_pptx_renderer_brand_chrome_only_refused() -> None:
+    assert BRAND_CHROME_TEXTS == (
+        "Disco",
+        "disco",
+        "Latin · verb",
+        "/ˈdɪs.koː/",
+        "I learn; I become acquainted with.",
+        "from discere — to learn",
+        "discere",
+        "to learn",
+    )
+    f = check_export_render(
+        "pptx",
+        _pptx_bytes_with_runs(
+            (
+                "Disco",
+                "disco   ",
+                "LATIN · VERB    /ˈdɪs.koː/",
+                "“I learn; I become acquainted with.”",
+                "from discere — to learn",
+            )
+        ),
+        declared_units=1,
+    )
     assert f.non_blank is False and f.ok is False
 
 
