@@ -75,9 +75,15 @@ _CHROME_TOKENS = (
 )
 
 _PDF_PAGE_RE = re.compile(rb"/Type\s*/Page(?![s])")
-_SLIDE_ID_RE = re.compile(r'data-slide-id\s*=\s*"')
+# Capture the id VALUE, not just the attribute — renderers (the C3 deck template)
+# stamp data-slide-id on child elements too, so counting occurrences overcounts;
+# counting DISTINCT ids gives the true slide count.
+_SLIDE_ID_RE = re.compile(r'data-slide-id\s*=\s*"([^"]*)"')
 _SECTION_RE = re.compile(r"<section\b", re.IGNORECASE)
 _TAG_RE = re.compile(r"<[^>]+>")
+# Strip <script>/<style> BODIES before measuring visible text — their contents are
+# not rendered prose (a 2MB inlined stylesheet must not read as slide content).
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 _PPTX_TEXT_RE = re.compile(rb"<a:t>(.*?)</a:t>", re.IGNORECASE | re.DOTALL)
 _SLIDE_XML_RE = re.compile(r"^ppt/slides/slide\d+\.xml$")
 
@@ -111,23 +117,27 @@ def _strip_chrome(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _html_facts(html: str, declared: int | None) -> tuple[int, int, bool]:
-    """(unit_count, visible_text_len, valid_header) for an HTML deck/page."""
-    slides = len(_SLIDE_ID_RE.findall(html))
+def _html_facts(html: str) -> tuple[int, int, bool, bool]:
+    """(unit_count, visible_text_len, valid_header, non_blank) for an HTML deck/page."""
+    slides = len({sid for sid in _SLIDE_ID_RE.findall(html) if sid})
     if slides == 0:
         slides = len(_SECTION_RE.findall(html))
-    visible = _strip_chrome(_TAG_RE.sub(" ", html))
+    visible = _strip_chrome(_TAG_RE.sub(" ", _SCRIPT_STYLE_RE.sub(" ", html)))
     valid_header = "<" in html and ">" in html and bool(visible or slides)
     # A single-page (non-deck) HTML doc is one unit if it has real content.
     if slides == 0 and len(visible) >= _TEXT_FLOOR:
         slides = 1
-    return slides, len(visible), valid_header
+    return slides, len(visible), valid_header, len(visible) >= _TEXT_FLOOR
 
 
-def _pptx_facts(data: bytes) -> tuple[int, int, bool]:
-    """(slide_count, visible_text_len, valid_header) for PPTX (OOXML zip) bytes."""
+def _pptx_facts(data: bytes) -> tuple[int, int, bool, bool]:
+    """(slide_count, visible_text_len, valid_header, non_blank) for PPTX bytes.
+
+    ``non_blank`` accepts EITHER extractable slide text OR embedded media: a
+    Marp-style image-based deck (each slide a rendered picture, no ``<a:t>`` runs)
+    is genuine content, not blank — checking only text would false-refuse it."""
     if not data.startswith(b"PK"):
-        return 0, 0, False
+        return 0, 0, False, False
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             names = zf.namelist()
@@ -141,27 +151,29 @@ def _pptx_facts(data: bytes) -> tuple[int, int, bool]:
                 for m in _PPTX_TEXT_RE.findall(xml):
                     texts.append(m.decode("utf-8", "replace"))
     except (zipfile.BadZipFile, OSError):
-        return 0, 0, False
+        return 0, 0, False, False
     visible = _strip_chrome(" ".join(texts))
     # A valid OOXML deck always carries [Content_Types].xml; a zip lacking it and
     # any slide is not a real presentation.
     valid_header = "[Content_Types].xml" in names and len(slide_names) > 0
-    return len(slide_names), len(visible), valid_header
+    has_media = any(n.startswith("ppt/media/") for n in names)
+    non_blank = valid_header and (len(visible) >= _TEXT_FLOOR or has_media)
+    return len(slide_names), len(visible), valid_header, non_blank
 
 
-def _pdf_facts(data: bytes) -> tuple[int, int, bool]:
-    """(page_count, visible_text_len, valid_header) for PDF bytes.
+def _pdf_facts(data: bytes) -> tuple[int, int, bool, bool]:
+    """(page_count, visible_text_len, valid_header, non_blank) for PDF bytes.
 
     Page text is not extracted (PDF text lives in compressed content streams that
-    need a full parser); ``visible_text_len`` is a byte-scaled proxy so a
-    near-empty PDF still trips the blank floor while a real multi-KB PDF clears it.
+    need a full parser); ``non_blank`` is a BYTE floor — a real rendered page is
+    comfortably multi-KB while a truncated/near-empty PDF falls below it.
     """
     valid_header = data[:5].startswith(b"%PDF") and b"%%EOF" in data[-1024:]
     pages = len(_PDF_PAGE_RE.findall(data))
-    # Proxy: a real rendered PDF page is comfortably > 1KB of stream; scale so a
-    # truncated/near-empty PDF reads as blank without extracting glyphs.
+    # Reported proxy (for the steer message), plus the real byte-floor non_blank.
     text_proxy = 0 if not valid_header else max(0, (len(data) // 1024) - 1)
-    return pages, text_proxy, valid_header
+    non_blank = valid_header and len(data) >= _PDF_BYTE_FLOOR
+    return pages, text_proxy, valid_header, non_blank
 
 
 def check_export_render(
@@ -183,15 +195,15 @@ def check_export_render(
     if f in ("html", "htm", "deck_html"):
         raw = text if text is not None else (data or b"").decode("utf-8", "replace")
         byte_len = len(raw.encode("utf-8"))
-        units, visible_len, valid = _html_facts(raw, declared_units)
+        units, visible_len, valid, non_blank = _html_facts(raw)
     elif f in ("pptx", "deck", "deck_pptx"):
         buf = data or b""
         byte_len = len(buf)
-        units, visible_len, valid = _pptx_facts(buf)
+        units, visible_len, valid, non_blank = _pptx_facts(buf)
     elif is_pdf:
         buf = data or b""
         byte_len = len(buf)
-        units, visible_len, valid = _pdf_facts(buf)
+        units, visible_len, valid, non_blank = _pdf_facts(buf)
     else:
         # Unknown format → honestly unverifiable (never fabricate a pass/fail).
         return ExportRenderFacts(
@@ -201,9 +213,6 @@ def check_export_render(
         )
 
     truncated = declared_units is not None and declared_units > 0 and units < declared_units
-    # Format-aware blank floor: a byte floor for PDF (text is in compressed
-    # streams), a chrome-stripped char floor for html/pptx.
-    non_blank = (valid and byte_len >= _PDF_BYTE_FLOOR) if is_pdf else visible_len >= _TEXT_FLOOR
     ok = valid and units >= 1 and non_blank and not truncated
 
     if not valid:

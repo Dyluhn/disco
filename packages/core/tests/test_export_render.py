@@ -66,6 +66,17 @@ def _pptx_bytes(n_slides: int, *, text_per_slide: str = "Quarterly revenue up") 
     return buf.getvalue()
 
 
+def _pptx_image_deck(n_slides: int) -> bytes:
+    """A Marp-style image-based deck: slides with NO <a:t> text but embedded media."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("[Content_Types].xml", "<Types/>")
+        for i in range(1, n_slides + 1):
+            zf.writestr(f"ppt/slides/slide{i}.xml", "<p:sld><p:pic/></p:sld>")
+            zf.writestr(f"ppt/media/image{i}.png", b"\x89PNG\r\n" + b"\x00" * 200)
+    return buf.getvalue()
+
+
 def _pdf_bytes(n_pages: int, *, pad: int = 4096) -> bytes:
     pages = b"".join(b"<< /Type /Page >>\n" for _ in range(n_pages))
     filler = b"stream data " * (pad // 12)
@@ -133,6 +144,18 @@ def test_pptx_not_a_zip_refused() -> None:
 def test_pptx_truncated_refused() -> None:
     f = check_export_render("pptx", _pptx_bytes(2), declared_units=8)
     assert f.unit_count == 2 and f.truncated is True and f.ok is False
+
+
+def test_pptx_image_based_deck_is_non_blank() -> None:
+    # Marp image decks have no <a:t> text but real embedded media → NOT blank.
+    f = check_export_render("pptx", _pptx_image_deck(4), declared_units=4)
+    assert f.valid_header and f.unit_count == 4 and f.non_blank is True and f.ok is True
+
+
+def test_html_from_bytes_read_back() -> None:
+    # the producer read-back path passes bytes (not text); html must still parse.
+    f = check_export_render("html", _html_deck(3).encode("utf-8"), declared_units=3)
+    assert f.unit_count == 3 and f.non_blank and f.ok
 
 
 # ── PDF ─────────────────────────────────────────────────────────────────────
