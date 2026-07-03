@@ -1,6 +1,10 @@
 # Disclaude gap-close + AppKit-depth campaign plan
 
-**Written:** 2026-07-03 · **Status: PLAN ONLY — awaiting Dylan ratification**
+**Written:** 2026-07-03 · **Status: RATIFIED 2026-07-03 ("go with your recommendations") — EXECUTING.**
+Decisions locked: (1) Drizzle over D1 in the Worker only · (2) Epic O deploy ports NOW
+(owner-gated, inert without token) · (3) hard-replace old `app_*` tools + persisted-appspec
+adapter · (4) retention 20 unlabeled / 512MB per conversation · (5) filter-repo/fresh-export
+acceptable if the history scan finds contamination.
 **Baseline:** branch `disclaude/experimental-20260628T025508Z` @ `988858ef` (REL-1e flipped).
 **Scope:** a solid fix plan for EVERY open gap in `docs/disclaude-pr-status.md`, plus two
 new Dylan directives (2026-07-03): (1) **build versioning + user-selectable rollback in the
