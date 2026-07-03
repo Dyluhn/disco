@@ -454,7 +454,19 @@ class Driver:
                 # enforced at the call site, not in the schema (a model that
                 # calls it past the cap is refused with a system-reminder,
                 # the same shape the (c.3) bookkeeping-stuck nudge uses).
-                _delegate_explore_tool_singleton(),
+                #
+                # FALSE-AFFORDANCE GUARD (live-caught 2026-07-03): the default
+                # `_run_fanout` is a STUB that acks "helper dispatched" and
+                # returns nothing — a model that leans on it (MiniMax did, in
+                # strict AppKit mode) concludes the platform is broken and
+                # aborts the build. Advertise the tool ONLY when the runtime
+                # actually overrode the seam (instance-attribute override is
+                # the documented hook — see AgentLoop._run_fanout).
+                *(
+                    [_delegate_explore_tool_singleton()]
+                    if "_run_fanout" in vars(self._loop)
+                    else []
+                ),
             ]
         return list(tools) + virtuals
 

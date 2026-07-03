@@ -2638,7 +2638,14 @@ class FinishGate:
         # until a clean browser observation (zero console errors) exists
         # since the last state-changing edit.
         verify_tool = self._active_verify_tool()
-        is_appkit = verify_tool == "verify_appkit_app"
+        # Strict AppKit mode is detected from the EXECUTOR (duck-typed phase
+        # attribute), not only the advertised tool set: before a successful
+        # app_create the phase allowlist hides verify_appkit_app, and a finish
+        # in that window must still be gated (a zero-work appkit FINISH slipped
+        # through here, live 2026-07-03).
+        is_appkit = verify_tool == "verify_appkit_app" or (
+            getattr(self._loop.executor, "appkit_phase", None) is not None
+        )
         if (
             self._loop._planning_tools
             and self._loop.mode != OperatingMode.PLANNING

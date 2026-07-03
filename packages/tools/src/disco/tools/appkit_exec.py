@@ -54,6 +54,10 @@ class AppKitToolExecutor(DefaultToolExecutor):
         # These MUST exist before super().__init__ runs, because the base __init__
         # does `self._scope = scope`, which routes through our property setter below.
         self._appkit_phase = appkit_phase
+        # Public marker the core finish gate duck-types (getattr) to detect
+        # strict AppKit mode even while the phase allowlist hides the verify
+        # probe (pre-app_create) — a finish in that window must still be gated.
+        self.appkit_phase = appkit_phase
         self._appkit_base_scope = base_scope
         self._appkit_autonomous = autonomous
         self._appkit_mode_getter = mode_getter
