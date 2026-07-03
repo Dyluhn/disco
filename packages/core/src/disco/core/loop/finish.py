@@ -18,6 +18,13 @@ import posixpath
 import re
 from typing import TYPE_CHECKING, Any, cast
 
+from ..contract.export_render import (
+    EXPORT_GATE_MAX_REFUSALS,
+    count_export_gate_refusals,
+    export_gate_refusal_reminder,
+    export_gate_release_warning,
+    latest_export_render_facts,
+)
 from ..dod import FileExistsPredicate
 from ..dod_evaluator import DoDEvaluator, HttpProbeResult
 from ..env import disco_env
@@ -2668,6 +2675,50 @@ class FinishGate:
                 )
         return Disp.FALLTHROUGH
 
+    async def gate_export_render(self, step: AgentStep, events: list[Event]) -> Disp:
+        """[P10] Refuse FINISHED when a rendered export (deck/document) is BLANK,
+        TRUNCATED, or CORRUPT — the "looks done but the file is empty" false
+        completeness. The real executor for the inert ``ExportContract.validate``
+        stage.
+
+        Reads the render facts the producer stamped from the ACTUAL output bytes
+        (``latest_export_render_facts``), NOT the model's declared slide_count. A
+        broken export re-enters the loop with a concrete steer; a good one (or none
+        produced) falls through. Bounded by ``EXPORT_GATE_MAX_REFUSALS`` so a
+        genuinely-broken renderer can't trap the run — it releases with a loud
+        UNVERIFIED warning, exactly like the browser-verify valve. Decision/message
+        logic is pure (``contract.export_render``); this method only emits."""
+        facts = latest_export_render_facts(events)
+        if facts is None or facts.ok:
+            return Disp.FALLTHROUGH  # no export stamped, or it renders fine
+
+        # If the build's FINAL deliverable is an app (not files), a stale/broken
+        # intermediate deck must not block it — the app gates own that path.
+        latest = _latest_deliverable_event(events)
+        if latest is not None and latest.artifact_kind == "app":
+            return Disp.FALLTHROUGH
+
+        if count_export_gate_refusals(events) >= EXPORT_GATE_MAX_REFUSALS:
+            await self._loop._emit(
+                StatusEvent(status=ConversationStatus.RUNNING, detail="unverified_export"),
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=export_gate_release_warning(facts)),
+                )
+            )
+            return Disp.FALLTHROUGH
+
+        await self._record_verifier_failure_to_context(message=facts.detail, rel_path=None)
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=export_gate_refusal_reminder(facts)),
+            )
+        )
+        return Disp.CONTINUE
+
     async def finalize_finish(
         self, step: AgentStep, state: ConversationState, events: list[Event]
     ) -> Disp:
@@ -2739,6 +2790,17 @@ class FinishGate:
             # fingerprint with no productive edit) and already emitted the terminal
             # status — propagate the halt so the engine exits the loop.
             return Disp.HALT
+
+        # [P10] Export render-correctness gate — for a files-deliverable (deck/
+        # document) the app/browser gates above fall through, so THIS is the check
+        # that a blank/truncated/corrupt export can't report FINISHED.
+        events = await self._loop._events()
+        disp = await self.gate_export_render(step, events)
+        if disp is Disp.CONTINUE:
+            return Disp.CONTINUE
+        if disp is Disp.HALT:
+            return Disp.HALT
+        events = await self._loop._events()
 
         disp = await self.finalize_finish(step, state, events)
         if disp is Disp.CONTINUE:

@@ -26,6 +26,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from disco.core.contract.export_render import EXPORT_RENDER_KEY, check_export_render
+
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from .image_gen import ImageGenNotConfigured, select_image_backend
 
@@ -501,6 +503,11 @@ class SlidesTool:
         if fmt == "html":
             html_str = render_html(deck)
             await sbx.write_file(out_filename, html_str.encode("utf-8"))
+            # [P10] stamp render-correctness facts from the ACTUAL rendered bytes so
+            # the finish gate can refuse a blank/truncated deck (not the declared count).
+            render_facts = check_export_render(
+                "html", text=html_str, declared_units=len(deck.slides)
+            )
             return ToolOutcome(
                 success=True,
                 content=(
@@ -520,12 +527,17 @@ class SlidesTool:
                     # what gates the in-app deck editor tab.
                     **editable,
                     "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
+                    EXPORT_RENDER_KEY: render_facts.model_dump(mode="json"),
                 },
             )
 
         if fmt == "pptx":
             pptx_bytes = render_pptx(deck)
             await sbx.write_file(out_filename, pptx_bytes)
+            # [P10] render-correctness facts from the actual pptx bytes.
+            render_facts = check_export_render(
+                "pptx", pptx_bytes, declared_units=len(deck.slides)
+            )
 
             # Also write brand HTML alongside
             html_name = f"{args.filename}.html"
@@ -562,6 +574,7 @@ class SlidesTool:
                     # A2.0/A2.2: present only when the sidecar write actually succeeded.
                     **editable,
                     "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
+                    EXPORT_RENDER_KEY: render_facts.model_dump(mode="json"),
                 },
             )
 
@@ -570,6 +583,11 @@ class SlidesTool:
             pptx_bytes = render_pptx(deck)
             pptx_name = f"{args.filename}.pptx"
             await sbx.write_file(pptx_name, pptx_bytes)
+            # [P10] the pdf's content IS the pptx's — validate the pptx render (the
+            # LibreOffice conversion is separately gated by pdf_ok below).
+            render_facts = check_export_render(
+                "pptx", pptx_bytes, declared_units=len(deck.slides)
+            )
             pdf_ok, pdf_err = await convert_to_pdf(ctx, pptx_name)
             if not pdf_ok:
                 return ToolOutcome(
@@ -594,6 +612,7 @@ class SlidesTool:
                     # A2: a fresh sidecar makes even a pdf-format deck editable (the
                     # editor re-renders html/pptx; the pdf is flagged stale on save).
                     **editable,
+                    EXPORT_RENDER_KEY: render_facts.model_dump(mode="json"),
                 },
             )
 
