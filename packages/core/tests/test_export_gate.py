@@ -138,6 +138,24 @@ async def test_app_deliverable_after_deck_not_blocked() -> None:
 
 
 @pytest.mark.asyncio
+async def test_files_deliverable_after_app_after_deck_is_gated() -> None:
+    """A newer files handoff after the app means the bad deck is current again."""
+    loop, _ = build_loop(ScriptedAgent([]))
+    events = [
+        _deck_obs("html", **_blank_html()),
+        DeliverableEvent(title="App", path="site", artifact_kind="app"),
+        _files_deliverable(),
+    ]
+    disp = await _gate(loop)(finish_step(), events)
+    assert disp is Disp.CONTINUE
+    steer = [
+        e for e in await loop._events()
+        if isinstance(e, MessageEvent) and _EXPORT_GATE_TOKEN in (e.message.content or "")
+    ]
+    assert steer, "newer files deliverable wrongly bypassed the bad deck"
+
+
+@pytest.mark.asyncio
 async def test_stale_app_deliverable_does_not_mask_later_bad_deck() -> None:
     """P10-1: an app deliverable from EARLIER in the conversation must NOT disable
     the gate for a freshly-produced broken deck (the deck is newer → gate it)."""

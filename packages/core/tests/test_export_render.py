@@ -187,12 +187,43 @@ def test_branded_deck_with_real_content_passes() -> None:
     assert f.non_blank and f.ok and f.visible_text_len >= 12
 
 
+def test_authored_brand_case_study_class_is_not_chrome() -> None:
+    html = (
+        '<html><body><section data-slide-id="s">'
+        '<div class="brand-case-study"><h2>Acme Corp cut costs 40%</h2>'
+        "<p>Real narrative text here.</p></div></section></body></html>"
+    )
+    f = check_export_render("html", text=html, declared_units=1)
+    assert f.ok is True
+
+
 def test_image_only_html_deck_non_blank() -> None:
-    # P10-6: an image/figure-only slide is a real visual deck, not blank.
-    for media in ('<img src="d.png" alt="">', "<svg><rect/></svg>", "<figure></figure>"):
+    # P10-6: real visual media is content, but empty wrappers/placeholders are not.
+    for media in ('<img src="d.png" alt="">', "<svg><rect/></svg>"):
         html = f'<html><body><section data-slide-id="slide-0">{media}</section></body></html>'
         f = check_export_render("html", text=html, declared_units=1)
         assert f.non_blank is True and f.ok is True, media
+
+
+def test_empty_html_media_placeholders_are_blank() -> None:
+    for media in ('<img alt="">', "<figure></figure>"):
+        html = f'<html><body><section data-slide-id="slide-0">{media}</section></body></html>'
+        f = check_export_render("html", text=html, declared_units=1)
+        assert f.non_blank is False and f.ok is False, media
+
+
+def test_script_img_text_does_not_count_as_media() -> None:
+    html = (
+        '<html><body><section data-slide-id="slide-0">'
+        '<script>const x="<img src=x>"</script></section></body></html>'
+    )
+    f = check_export_render("html", text=html, declared_units=1)
+    assert f.non_blank is False and f.ok is False
+
+
+def test_truncation_allows_one_unit_heuristic_gap() -> None:
+    f = check_export_render("html", text=_html_deck(2), declared_units=3)
+    assert f.unit_count == 2 and f.truncated is False and f.ok is True
 
 
 def test_count_refusals_only_environment_source() -> None:

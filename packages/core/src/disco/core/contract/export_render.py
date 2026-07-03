@@ -98,13 +98,18 @@ _SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE 
 # BRANDED deck slipped past as non-blank. Looped to unwind one nesting level at a
 # time (the colophon nests bc-* divs). Structural, so it survives chrome text edits.
 _CHROME_CLASS_RE = re.compile(
-    r'<(\w+)[^>]*\bclass="[^"]*\b(?:brand[\w-]*|colophon|wordmark|watermark|bc-[\w-]+)\b[^"]*"[^>]*>.*?</\1>',
+    r"""<(\w+)[^>]*\bclass=(["'])(?:[^"']*\s)?(?:brand-wordmark|brand-colophon|wordmark|colophon|watermark|bc-[\w-]+)(?:\s[^"']*)?\2[^>]*>.*?</\1>""",
     re.IGNORECASE | re.DOTALL,
 )
 # Visual content that is NOT text — an image/figure-only slide is a real deck, not
 # blank (mirrors the pptx embedded-media rule). Its presence makes a slide non-blank.
 _HTML_MEDIA_RE = re.compile(
-    r"<(?:img|svg|video|canvas|picture|figure|iframe|object|embed)\b", re.IGNORECASE
+    r"""
+    <img\b[^>]*\bsrc\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
+    |<(?:video|iframe|object|embed)\b[^>]*\bsrc\s*=\s*(?:"\s*[^"\s][^"]*"|'\s*[^'\s][^']*')[^>]*>
+    |<(svg|canvas)\b[^>]*>.*?\S.*?</\1>
+    """,
+    re.IGNORECASE | re.DOTALL | re.VERBOSE,
 )
 _PPTX_TEXT_RE = re.compile(rb"<a:t>(.*?)</a:t>", re.IGNORECASE | re.DOTALL)
 _SLIDE_XML_RE = re.compile(r"^ppt/slides/slide\d+\.xml$")
@@ -152,7 +157,7 @@ def _html_facts(html: str) -> tuple[int, int, bool, bool]:
         prev = body
         body = _CHROME_CLASS_RE.sub(" ", body)
     visible = _strip_chrome(_TAG_RE.sub(" ", body))
-    has_media = bool(_HTML_MEDIA_RE.search(html))
+    has_media = bool(_HTML_MEDIA_RE.search(body))
     valid_header = "<" in html and ">" in html and bool(visible or slides or has_media)
     non_blank = len(visible) >= _TEXT_FLOOR or has_media
     # A single-page (non-deck) HTML doc is one unit if it has real content/media.
@@ -243,7 +248,8 @@ def check_export_render(
             detail=f"no render validator for export format {f!r}",
         )
 
-    truncated = declared_units is not None and declared_units > 0 and units < declared_units
+    # Declared is a heuristic for markdown decks, so only flag GROSS truncation.
+    truncated = declared_units is not None and declared_units > 0 and units < declared_units - 1
     ok = valid and units >= 1 and non_blank and not truncated
 
     if not valid:

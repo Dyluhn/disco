@@ -2695,14 +2695,20 @@ class FinishGate:
 
         # An app deliverable emitted AFTER the broken export means the app is the
         # current handoff and the deck is superseded — fall through (the app gates
-        # own that path). But an app deliverable from EARLIER in the conversation
-        # must NOT mask a freshly-produced broken deck, so compare by recency, not
-        # just "is the latest deliverable an app". (Codex P10-1.)
+        # own that path). But only the latest post-export deliverable counts: a
+        # newer files handoff means the broken deck is current and must be gated.
         export_idx = latest_export_render_index(events)
+        latest_post_export_deliverable: DeliverableEvent | None = None
         for i in range(len(events) - 1, export_idx, -1):
             ev = events[i]
-            if isinstance(ev, DeliverableEvent) and ev.artifact_kind == "app":
-                return Disp.FALLTHROUGH
+            if isinstance(ev, DeliverableEvent):
+                latest_post_export_deliverable = ev
+                break
+        if (
+            latest_post_export_deliverable is not None
+            and latest_post_export_deliverable.artifact_kind == "app"
+        ):
+            return Disp.FALLTHROUGH
 
         if count_export_gate_refusals(events) >= EXPORT_GATE_MAX_REFUSALS:
             await self._loop._emit(
