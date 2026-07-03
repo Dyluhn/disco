@@ -1,0 +1,11 @@
+You are authoring soak scenarios for the disco build harness. Read harness/build_soak/scenarios.yaml CAREFULLY (structure, assertion vocabulary: event_chain, revisions, workspace files must_contain, terminal_status_in, followups with trigger/requires_plan_revision) and docs/build-soak-guidelines.md if present.
+
+Write a NEW file harness/build_soak/scenarios_rel6_draft.yaml (do NOT modify scenarios.yaml) containing three new scenario classes for the REL-6 matrix, following the existing house style exactly (comments explaining intent, dictated verbatim markers):
+
+1. id: targeted_edit_smoke — TARGETED_EDIT class: build a small multifile site (index.html + style.css), then ONE after_terminal follow-up dictating a precise localized edit (e.g. change the <h1> heading text to a dictated literal), asserting the edit landed (must_contain new literal, must_not_contain old literal) AND the rest survived (other dictated markers still present). requires_plan_revision: true.
+
+2. id: export_smoke — EXPORT_SMOKE class: build a single-page site then a follow-up requesting export/download of the deliverable. Assert the workspace still contains the deliverable with its markers and terminal FINISHED/VERIFIED. Look at how existing scenarios assert export/deliverable evidence (grep export in the harness oracles) and use the weakest honest assertion available if no export oracle slice exists in api mode — note any gap as a YAML comment.
+
+3. id: disconnect_cancel_recovery — DISCONNECT_OR_CANCEL class: build then a follow-up, and mid-run cancellation semantics. Check run.py/scenarios for any existing cancel/disconnect mechanism (grep cancel/kill/disconnect in harness/build_soak). If the runner has no mid-run cancel hook, author the scenario with the closest existing mechanism and document the gap in a comment block at the top of the scenario.
+
+Every scenario must dictate verbatim markers (quoted literals) so content oracles have hard floors, and set requires_plan_revision on mutating follow-ups. Output ONLY the YAML file. Then print a summary of decisions + gaps found.

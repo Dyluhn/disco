@@ -1,0 +1,5 @@
+=========================== short test summary info ============================
+FAILED packages/agent-server/tests/test_build_kernel_pinning.py::test_finalize_after_new_run_started_does_not_clear_the_new_runs_pin
+PYTEST_EXIT=1
+0 errors, 0 warnings, 0 notes
+PYRIGHT_EXIT=0

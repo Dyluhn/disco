@@ -1,0 +1,7 @@
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+PYTEST_EXIT=0
+0 errors, 0 warnings, 0 notes
+PYRIGHT_EXIT=0
+Contracts: 2 kept, 0 broken.
+LINT_EXIT=0

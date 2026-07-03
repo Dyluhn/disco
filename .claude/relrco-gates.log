@@ -1,0 +1,5 @@
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+PYTEST_EXIT=0
+1 error, 0 warnings, 0 notes
+PYRIGHT_EXIT=1
