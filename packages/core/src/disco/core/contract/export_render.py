@@ -31,6 +31,22 @@ missing-header — not maliciously-crafted bytes that mimic a valid header (e.g.
 non-PDF with ``%PDF``+``%%EOF``+``/Type /Page`` padding, or a zip with a junk
 ``ppt/media`` entry). A full parse (pypdf/python-pptx) would close that gap but
 belongs in ``tools`` and is out of scope for the finish gate's core-side check.
+
+KNOWN RESIDUALS within that model (found by the 4-lane convergence panel, kept as
+documented tradeoffs rather than chased — a full renderer-side parse would be the
+real fix):
+  * Marp declares its unit count from a separator split (HEURISTIC), so heuristic
+    mode allows ±1 slack — a marp deck that renders 2 of a claimed 3 can pass.
+  * Media presence (``ppt/media/*`` / an ``<img src>``) is checked by existence, not
+    by decoding — a zero-byte/blank image counts as non-blank visual content.
+  * A single CRC-bad slide inside an otherwise-valid PPTX zip is still counted (only
+    a whole-zip ``BadZipFile`` is caught).
+  * A Marp-rendered PDF (no sibling PPTX to consult) falls back to the byte-floor, so
+    a >2KB blank marp PDF can pass; deck PDFs via LibreOffice are checked by their
+    sibling PPTX's chrome/placeholder/media-aware verdict.
+  * The refusal cap still RELEASES a known-bad export after N refusals (bounded
+    honest release with a loud UNVERIFIED warning — the anti-livelock valve), rather
+    than trapping the run forever.
 """
 
 from __future__ import annotations
