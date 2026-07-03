@@ -128,6 +128,9 @@ AGENT_TOOLS = frozenset(
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame
         "scaffold_starter",
+        # document/report: model authors parts; host assembles/stamps the export.
+        "doc_set_section",
+        "doc_export",
         "sheet_generate",
         "slides_generate",
         "audio_overview",
@@ -186,6 +189,9 @@ ARTIFACT_TOOLS: frozenset[str] = frozenset(
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame (workspace FS only)
         "scaffold_starter",
+        # document/report: workspace-only part authoring/export.
+        "doc_set_section",
+        "doc_export",
         # C-EDIT-4: deck editing is safe in artifact scope (no shell/browser)
         "deck_patch",
     }

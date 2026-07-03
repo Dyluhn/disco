@@ -69,6 +69,8 @@ def test_all_builtin_contract_tools_are_registered() -> None:
         c = reg.get(kind)
         assert c is not None
         tools = set(c.bootstrap.tools) | set(c.edit.edit_tools) | set(c.edit.repair_tools)
+        if c.export is not None:
+            tools |= set(c.export.tools)
         missing = tools - registered
         assert not missing, f"{kind.value} contract references unregistered tools: {sorted(missing)}"
 
@@ -85,6 +87,20 @@ def test_appkit_leadgen_contract_shape() -> None:
     assert c.export is not None and c.export.name == "cloudflare_project"
     assert c.prompt_pack == "build_appkit_leadgen"
     assert c.ui_card == "AppCard"
+
+
+def test_document_contract_uses_section_parts_and_real_export_tool() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.DOCUMENT)
+    assert c is not None
+    assert c.artifact.required_files == ("report.md", "report.pdf")
+    assert c.bootstrap.tools == ("doc_set_section",)
+    assert c.edit.edit_tools == ("doc_set_section",)
+    assert "file_write" not in c.bootstrap.tools
+    assert "file_write" not in c.edit.edit_tools
+    assert c.export is not None
+    assert c.export.name == "document_pdf"
+    assert c.export.pipeline == ("preflight", "bundle", "validate", "deliver")
+    assert c.export.tools == ("doc_export",)
 
 
 def test_custom_contract_allows_rewrite() -> None:

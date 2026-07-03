@@ -210,6 +210,8 @@ _EXPECTED_AGENT_TOOLS = [
     "deck_patch",   # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
     "design_lint",  # B3 appkit port — read-only design-slop probe (nightly EPIC D3 parity)
+    "doc_export",  # §E doc-assembly — host assembles the document at the P10 choke
+    "doc_set_section",  # §E doc-assembly — pydantic-validated document part writes
     "exact_replace",  # CD-TOOLS-2 — atomic exact-match batch replace (anchored-edit tier)
     "extract",
     "file_append",

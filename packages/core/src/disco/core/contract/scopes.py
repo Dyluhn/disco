@@ -97,8 +97,8 @@ def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
                     tools appear here ONLY when the contract declared them, which a custom
                     contract does via rewrite_allowed + its repair pack)
     - verify      → neutral diagnostics/finalizer only; no contract mutation tools
-    - export      → neutral tools only for now; export TOOLS ship in P10 (the
-                    ExportContract today declares a pipeline of stage names, not tool names)
+    - export      → the ExportContract's tools (host-owned bundlers/renderers) when
+                    declared, otherwise neutral tools only
     """
     neutral = PHASE_NEUTRAL_TOOLS | frozenset({contract.verify.finalizer})
     return ContractToolScopes(
@@ -106,5 +106,5 @@ def compile_tool_scopes(contract: BuildContract) -> ContractToolScopes:
         edit=neutral | frozenset(contract.edit.edit_tools),
         repair=neutral | frozenset(contract.edit.repair_tools),
         verify=neutral,
-        export=neutral,
+        export=neutral | frozenset(contract.export.tools if contract.export else ()),
     )

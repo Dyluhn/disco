@@ -92,11 +92,21 @@ def _deck() -> BuildContract:
 def _document() -> BuildContract:
     return BuildContract(
         kind=ContractKind.DOCUMENT,
-        artifact=ArtifactContract(kind=ContractKind.DOCUMENT, required_files=("report.md",)),
-        bootstrap=ToolPack(name="document.bootstrap", tools=("file_write",)),
-        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+        artifact=ArtifactContract(
+            kind=ContractKind.DOCUMENT,
+            required_files=("report.md", "report.pdf"),
+        ),
+        bootstrap=ToolPack(name="document.bootstrap", tools=("doc_set_section",)),
+        edit=EditContract(
+            edit_tools=("doc_set_section",),
+            repair_tools=("doc_set_section", "doc_export"),
+        ),
         verify=VerificationContract(finalizer="ready_for_document_verification"),
-        export=ExportContract(name="document_pdf", pipeline=("preflight", "bundle", "validate", "deliver")),
+        export=ExportContract(
+            name="document_pdf",
+            pipeline=("preflight", "bundle", "validate", "deliver"),
+            tools=("doc_export",),
+        ),
         prompt_pack="build_document",
         ui_card="DocumentCard",
     )

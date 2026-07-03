@@ -102,12 +102,13 @@ class VerificationContract(BaseModel):
 
 
 class ExportContract(BaseModel):
-    """A host-owned export pipeline (preflight → bundle → validate → deliver)."""
+    """A host-owned export pipeline plus the tool(s) that execute it."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str
     pipeline: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ()
 
 
 class ArtifactContract(BaseModel):

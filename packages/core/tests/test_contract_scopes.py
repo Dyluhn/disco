@@ -83,6 +83,18 @@ def test_static_site_contract_cannot_rewrite_during_edit() -> None:
     assert s.allowed(Phase.EDIT, "file_write") is False  # cannot clobber-rewrite during edit
 
 
+def test_document_contract_scopes_parts_and_export_tool() -> None:
+    c = BuildContractRegistry.default().get(ContractKind.DOCUMENT)
+    assert c is not None
+    s = compile_tool_scopes(c)
+    assert s.allowed(Phase.BOOTSTRAP, "doc_set_section") is True
+    assert s.allowed(Phase.EDIT, "doc_set_section") is True
+    assert s.allowed(Phase.BOOTSTRAP, "file_write") is False
+    assert s.allowed(Phase.EDIT, "file_write") is False
+    assert s.allowed(Phase.EXPORT, "doc_export") is True
+    assert s.allowed(Phase.VERIFY, "doc_export") is False
+
+
 def test_custom_contract_permits_broad_repair_only_as_declared() -> None:
     c = BuildContractRegistry.default().get(ContractKind.CUSTOM)
     assert c is not None and c.edit.rewrite_allowed is True
