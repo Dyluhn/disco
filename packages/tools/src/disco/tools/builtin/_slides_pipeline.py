@@ -179,7 +179,10 @@ Deck craft rules:
   Titles alone must tell the story.
 - Choose an archetype for every slide from the listed set. Never use more than two \
   consecutive "bullets" archetypes. Every section opens with section_divider or \
-  full_bleed_image. Include at least one big_number or quote when the content supports it.
+  full_bleed_image. Include at least one big_number or quote when the content supports it. \
+  HARD RULE for decks of 8+ slides: at least TWO slides must be image-bearing \
+  (section_divider, full_bleed_image, or photo_grid) — a long deck with zero imagery \
+  slides is invalid.
 - Commit a theme with 3-4 named accents, a non-default font pairing (never Inter, \
   Roboto, or Arial), a light/dark token pair, and one project-wide art_direction.
 - Image prompts are slots, not decoration: cover + section dividers + full_bleed_image \
