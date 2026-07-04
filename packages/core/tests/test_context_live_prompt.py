@@ -84,7 +84,7 @@ def _plan(summary: str = "Ship newest") -> PlanEvent:
 
 @pytest.mark.asyncio
 async def test_context_pack_flag_off_is_viewbuilder_byte_identical(monkeypatch) -> None:
-    monkeypatch.delenv("DISCO_CONTEXT_PACK", raising=False)
+    monkeypatch.setenv("DISCO_CONTEXT_PACK", "off")
     monkeypatch.delenv("PMX_CONTEXT_PACK", raising=False)
     events = with_seqs([user_msg("build it"), _plan()])
 

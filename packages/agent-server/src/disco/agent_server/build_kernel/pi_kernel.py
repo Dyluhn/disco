@@ -65,6 +65,7 @@ from disco.core.env import disco_env
 from disco.core.inspect import inspect_enabled
 from disco.core.llm import ModelRole
 from disco.core.loop.context_builder import build_context_pack, render_context_pack
+from disco.core.loop.context_live import context_pack_enabled
 from disco.core.obs import log_event
 from disco.core.workflows import (
     PromptPack,
@@ -121,8 +122,6 @@ _GATE_VIRTUALS: frozenset[str] = frozenset({"submit_plan", "ask_user", "clarify"
 # run token, ignoring this value — it is purely cosmetic on the wire (campaign §4.2).
 _GATEWAY_MODEL_ALIAS = "disco-selected"
 
-_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on"})
-_CONTEXT_PACK_FLAG = "CONTEXT_PACK"
 _PI_BOOTSTRAP_SYSTEM_PREFIX = ""
 _PI_RESUME_PROMPT = "Continue the build from where you left off."
 
@@ -255,8 +254,9 @@ class PiKernel:
         return cast("KernelInitConfig", init)
 
     def _context_pack_enabled(self) -> bool:
-        """Flag gate for the CXT/WPP live prompt path. Default OFF."""
-        return str(disco_env(_CONTEXT_PACK_FLAG) or "").strip().lower() in _TRUTHY
+        """Flag gate for the CXT/WPP live prompt path (shared default with the
+        Disco kernel — ON since the 2026-07-04 soak; one source of truth)."""
+        return context_pack_enabled()
 
     def _prompt_pack_for(self, conversation_id: str) -> PromptPack | None:
         """Resolve this run's WorkflowPromptPack from the runtime's contract seam.

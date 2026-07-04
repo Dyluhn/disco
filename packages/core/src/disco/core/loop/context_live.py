@@ -15,8 +15,9 @@ _TRUTHY = {"1", "true", "yes", "on"}
 
 
 def context_pack_enabled() -> bool:
-    """True iff DISCO_CONTEXT_PACK is truthy. Default OFF."""
-    return (disco_env("CONTEXT_PACK", "off") or "").strip().lower() in _TRUTHY
+    """True unless DISCO_CONTEXT_PACK is explicitly falsy. Default ON
+    (flipped after the 2026-07-04 pack-on soak: 10/10 FINISHED, marks live)."""
+    return (disco_env("CONTEXT_PACK", "on") or "").strip().lower() in _TRUTHY
 
 
 def unresolved_failure_seqs(events: list[Event]) -> frozenset[int]:

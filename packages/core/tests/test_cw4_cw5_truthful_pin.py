@@ -286,7 +286,10 @@ def test_e2e_assist_on_byte_identical_block_notice_for_all():
 # ===========================================================================
 
 
-def test_pin_survives_condensation_and_covers_touched_files():
+def test_pin_survives_condensation_and_covers_touched_files(monkeypatch):
+    # Condensation-mechanics test: the context pack (default ON) would
+    # legitimately carry the old goal, which is not what this asserts about.
+    monkeypatch.setenv("DISCO_CONTEXT_PACK", "off")
     sbx = _FakeSandbox({"app.js": b"const ANSWER = 42;\n"})
     # An OLD user message (will be forgotten) + a write that creates the working set.
     old = MessageEvent(

@@ -178,7 +178,7 @@ async def _memory_prompt_run(
     if context_pack:
         monkeypatch.setenv("DISCO_CONTEXT_PACK", "1")
     else:
-        monkeypatch.delenv("DISCO_CONTEXT_PACK", raising=False)
+        monkeypatch.setenv("DISCO_CONTEXT_PACK", "off")
         monkeypatch.delenv("PMX_CONTEXT_PACK", raising=False)
     _use_memory_pi_process(monkeypatch)
     store = SqliteEventStore(path=str(tmp_path / "events.db"))

@@ -301,7 +301,10 @@ async def test_c6_signature_drifts_on_update_plan_progress():
     )
 
 
-async def test_c6_recap_content_byte_identical_to_view_py_renderer():
+async def test_c6_recap_content_byte_identical_to_view_py_renderer(monkeypatch):
+    # Pre-pack contract: with the context pack active the recitation narrows
+    # by design (CXT-LIVE); this test pins the pack-off byte-identity only.
+    monkeypatch.setenv("DISCO_CONTEXT_PACK", "off")
     """C6 MUST NOT change the recap CONTENT. The text the model sees on
     a fired step must be byte-identical to the view.py:_recitation_message
     renderer (no new instructions, no steering — no-automatic-nudge
