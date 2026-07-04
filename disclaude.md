@@ -6046,3 +6046,14 @@ exception. Live probes: the impossible-ask build landed "Pick a recovery
 path" with three honest options NATIVELY (screenshot sent) — the lander is
 the proven deterministic floor beneath that behavior (all 12 classes
 unit-asserted with explanations).
+
+## SOAK #2 (HEAD 86a38cb5) — 20/20, EVERY LADDER MECHANISM LIVE-PROVEN (2026-07-04)
+
+vs the 2026-07-03 baseline (18/20, 5 pauses, 3 auto-resumes, 0 synthetic
+finishes, 2 dead-PAUSED): **20/20 FINISHED · 0 dead-ends**. The model wobbled
+MORE (9 actionless pauses) and the ladder caught all of it: 7 auto-resumes
+(window fix firing repeatedly) + **2 synthetic finishes — the REL-RC-P valve's
+FIRST live firings** (previously unit-proven only) + 1 blocked-landing marker.
+In-line metrics extraction worked 20/20 (driver v2). 489 relay calls, 0
+OpenRouter. The pause/stuck failure mode is now empirically dead on this
+workload: every degradation self-recovered to FINISHED.
