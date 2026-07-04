@@ -6214,3 +6214,42 @@ Remaining from the old deferral list: WPP-3 skill mount-path enforcement +
 CONTRACT-3 executor enforcement (partially superseded by ScopedPhaseExecutor)
 + P8 direct-edit capture. Flag flip to default-ON is a separate decision after
 a pack-on soak.
+
+## DO-EM-ALL SWEEP: ROUTER-UX + CXT DEFAULT-ON + ELEMENT-MENTION v1 (2026-07-04)
+
+Dylan: "do em all" — the four open threads, executed in one overnight sweep.
+
+[ROUTER-UX] `77de08a8` — router-phase denials now TEACH routing: the
+unknown/denied-tool text names list_workflows → enter_workflow(instance_id)
+and general_workspace_task for file/workspace tools; router-phase instruction
+states there are NO build tools before entering a workflow; card names the
+default. LIVE-PROVEN (conv_644e838f): the same micro-task that stalled M3
+into the allowlist wall now routes list_workflows → read_workflow_card →
+enter_workflow → builds → FINISHED with notes/hello.md.
+
+[CXT-LIVE-C] `9fa44b18` — pack-on soak build4 caught marks NEVER firing live:
+the loop hands the hook its IN-MEMORY action (seq=None until store append);
+_step_start_seq bailed silently while the unit test (pre-seeded persisted
+events) stayed green — unit-fakes-emit-what-prod-lacks, again. Hook now
+resolves the persisted copy by id; regression test pins the live shape.
+LIVE-PROVEN: probe conv 3 marks + 3 durable summaries on disk; soak builds
+7/9/10 show 3/2/2.
+
+[CXT-FLIP] `b538751b` — pack-on soak 10/10 FINISHED (one PAUSED was my own
+dev-stack restart mid-build; rerun clean), zero pack-attributable failures →
+DISCO_CONTEXT_PACK default ON; Pi kernel unified onto the shared flag helper
+(its no-default read had meant OFF); pre-pack behavioral tests pin =off
+explicitly. Snip pressure→tombstone conversion stays unit-proven (needs a
+condenser-pressure soak); its mark+summary feed is now live-proven.
+
+[MENTION-1] `e0e09349` — element-mention v1 LIVE-PROVEN end-to-end in the
+real app (Firefox): Preview tab → Point → clicked the h1 in the rendered
+Tidepool site → chip "Element: <h1> — Brands that move with the tide." →
+send → the persisted user message event carries the structured
+<mentioned-element> block (dom ancestry/text/rect) + instruction.
+Screenshots sent to Dylan. Live finding en route: preview_start crashed
+"port 8000 answering but owned by a DIFFERENT process (platform-assigned)"
+— an open preview port-assignment collision to investigate.
+
+Gmail/WF-7 remains pending exactly one human step: Dylan connects a Gmail
+MCP connector, then approves daily_email_brief on the Workflows screen.
