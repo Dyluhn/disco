@@ -60,12 +60,48 @@ from disco.core.appkit import (
     tree_file_hashes,
 )
 from disco.core.appkit.spec import AppSpec, DesignSpec, Section, SectionContent
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from .design_lint import lint_design
 
 _FS = frozenset({Capability.FILESYSTEM})
+
+
+def _unwrap_weak_fc_items_wrapper(value: Any) -> Any:
+    """Unwrap MiniMax weak-FC array wrappers at the `items` slot only.
+
+    Live 2026-07-03: with prose-only array shape guidance, MiniMax wrapped the
+    list as {"item": [...]} / {"items": [...]} and pydantic rejected the call.
+    """
+    if isinstance(value, dict) and len(value) == 1:
+        key, wrapped = next(iter(value.items()))
+        if key in {"item", "items"} and isinstance(wrapped, list):
+            return wrapped
+    return value
+
+
+def _normalize_content_items_for_weak_fc(content: Any) -> Any:
+    if not isinstance(content, dict):
+        return content
+    if len(content) == 1:
+        key, wrapped = next(iter(content.items()))
+        if key == "item" and isinstance(wrapped, list):
+            return {"items": wrapped}
+
+    raw_items = content.get("items")
+    normalized_items = _unwrap_weak_fc_items_wrapper(raw_items)
+    if normalized_items is raw_items:
+        return content
+    return {**content, "items": normalized_items}
+
+
+def _normalize_section_content_for_weak_fc(section: dict[str, Any]) -> dict[str, Any]:
+    content = section.get("content")
+    normalized_content = _normalize_content_items_for_weak_fc(content)
+    if normalized_content is content:
+        return section
+    return {**section, "content": normalized_content}
 
 
 # ---- shared sandbox spec IO + tree application --------------------------------
@@ -384,7 +420,9 @@ class AppAddSectionTool:
             app = await _load_app_spec(ctx)
             design = await _load_design_spec(ctx)
             try:
-                section = Section.model_validate(args.section)
+                section = Section.model_validate(
+                    _normalize_section_content_for_weak_fc(args.section)
+                )
             except Exception as exc:  # noqa: BLE001
                 raise _AppKitError(f"invalid section: {exc}") from exc
             _validate_variant(section)
@@ -433,10 +471,36 @@ class AppAddSectionTool:
 # ---- app_update_content -------------------------------------------------------
 
 
+class ContentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    heading: str | None = None
+    subheading: str | None = None
+    body: str | None = None
+    cta_label: str | None = None
+    items: list[str] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_top_level_items_wrapper(cls, value: Any) -> Any:
+        if isinstance(value, dict) and len(value) == 1:
+            key, wrapped = next(iter(value.items()))
+            if key == "item" and isinstance(wrapped, list):
+                return {"items": wrapped}
+        return value
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def _normalize_items_wrapper(cls, value: Any) -> Any:
+        # Live 2026-07-03: MiniMax weak function-calling wrapped arrays as
+        # {"item": [...]} / {"items": [...]} when the slot was prose-only.
+        return _unwrap_weak_fc_items_wrapper(value)
+
+
 class AppUpdateContentArgs(BaseModel):
     page_id: str = Field(description="The page that holds the section.")
     section_id: str = Field(description="The section whose content to patch.")
-    updates: dict[str, Any] = Field(
+    updates: ContentUpdate = Field(
         description="Content slots to set/merge: heading, subheading, body, cta_label, items "
         "(a list of strings). Unknown keys are rejected."
     )
@@ -479,8 +543,14 @@ class AppUpdateContentTool:
                 raise _AppKitError(
                     f"no section {args.section_id!r} on page {args.page_id!r}"
                 )
+            updates = args.updates.model_dump(mode="json", exclude_unset=True)
+            if not updates:
+                raise _AppKitError(
+                    "no updates provided — set at least one of "
+                    "heading/subheading/body/cta_label/items"
+                )
             existing = sec.get("content") or {}
-            merged = {**existing, **args.updates}
+            merged = {**existing, **updates}
             if merged == existing:
                 # RC-M convention (live-caught 2026-07-03): a semantic no-op MUST
                 # refuse with ground truth, not report success with "0 file(s)" —

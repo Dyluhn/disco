@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.app_kit import (
@@ -53,6 +55,14 @@ async def _create(sbx: FakeSandboxInstance, *, recipe="editorial-ledger", **kw):
 
 def _files(sbx: FakeSandboxInstance) -> set[str]:
     return set(sbx._fs)
+
+
+def _schema_allows_string_array(schema: dict) -> bool:
+    branches = schema.get("anyOf") or [schema]
+    return any(
+        branch.get("type") == "array" and branch.get("items", {}).get("type") == "string"
+        for branch in branches
+    )
 
 
 # ---- app_create ---------------------------------------------------------------
@@ -176,6 +186,15 @@ async def test_app_add_section_rejects_duplicate_id():
 # ---- app_update_content -------------------------------------------------------
 
 
+def test_app_update_content_advertises_typed_items_array_schema():
+    schema = AppUpdateContentTool.definition.args_model.model_json_schema()
+    ref = schema["properties"]["updates"]["$ref"]
+    update_schema = schema["$defs"][ref.rsplit("/", 1)[-1]]
+
+    assert update_schema["additionalProperties"] is False
+    assert _schema_allows_string_array(update_schema["properties"]["items"])
+
+
 async def test_app_update_content_touches_only_content_and_spec():
     sbx = FakeSandboxInstance()
     assert (await _create(sbx)).success
@@ -201,6 +220,74 @@ async def test_app_update_content_touches_only_content_and_spec():
     ]
     # the new copy is in content.ts
     assert "A brand-new headline" in sbx._fs["src/generated/content.ts"].decode("utf-8")
+
+
+async def test_app_update_content_unwraps_minimax_items_wrapper():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+    top_level = AppUpdateContentArgs(
+        page_id="home",
+        section_id="features",
+        updates={"item": ["Plan clearly", "Ship calmly"]},
+    )
+
+    assert top_level.updates.model_dump(mode="json", exclude_unset=True) == {
+        "items": ["Plan clearly", "Ship calmly"]
+    }
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            page_id="home",
+            section_id="features",
+            updates={"items": {"item": ["Plan clearly", "Ship calmly"]}},
+        ),
+        _ctx(sbx),
+    )
+
+    assert out.success, out.content
+    spec = json.loads(sbx._fs[APPSPEC_RELPATH].decode("utf-8"))
+    features = spec["pages"][0]["sections"][1]
+    assert features["content"]["items"] == ["Plan clearly", "Ship calmly"]
+
+
+async def test_app_add_section_unwraps_content_items_wrapper():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+
+    out = await AppAddSectionTool().run(
+        AppAddSectionArgs(
+            page_id="home",
+            section={
+                "id": "extra_features",
+                "kind": "features",
+                "variant_id": "features.icon-list-2col",
+                "content": {"heading": "Services", "items": {"items": ["Audit", "Launch"]}},
+            },
+        ),
+        _ctx(sbx),
+    )
+
+    assert out.success, out.content
+    spec = json.loads(sbx._fs[APPSPEC_RELPATH].decode("utf-8"))
+    extra = spec["pages"][0]["sections"][-1]
+    assert extra["content"]["items"] == ["Audit", "Launch"]
+
+
+async def test_app_update_content_refuses_empty_updates():
+    sbx = FakeSandboxInstance()
+    assert (await _create(sbx)).success
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(page_id="home", section_id="hero", updates={}),
+        _ctx(sbx),
+    )
+
+    assert not out.success
+    assert out.error == "app_update_content_refused"
+    assert (
+        out.content
+        == "no updates provided — set at least one of heading/subheading/body/cta_label/items"
+    )
 
 
 async def test_app_create_refuses_essay_brief_with_guidance():
@@ -252,15 +339,9 @@ async def test_app_set_design_refuses_identical_design_noop():
     assert "no-op" in repeat.content
 
 
-async def test_app_update_content_rejects_unknown_slot():
-    sbx = FakeSandboxInstance()
-    assert (await _create(sbx)).success
-    out = await AppUpdateContentTool().run(
-        AppUpdateContentArgs(page_id="home", section_id="hero", updates={"bogus": "x"}),
-        _ctx(sbx),
-    )
-    assert not out.success
-    assert "invalid content" in out.content.lower()
+def test_app_update_content_rejects_unknown_slot():
+    with pytest.raises(ValueError, match="bogus"):
+        AppUpdateContentArgs(page_id="home", section_id="hero", updates={"bogus": "x"})
 
 
 # ---- app_set_design -----------------------------------------------------------
