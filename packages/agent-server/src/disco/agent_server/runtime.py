@@ -117,18 +117,24 @@ from disco.tools import (
     AppKitPhaseState,
     AppKitToolExecutor,
     REGISTRY_EGRESS_ALLOW,
+    WORKFLOW_ROUTER_ALLOWED_TOOLS,
     Capability,
     CapabilityBroker,
     DefaultToolExecutor,
     SandboxService,
     SandboxSession,
     SandboxSpec,
+    ScopedPhaseExecutor,
     ToolDef,
     ToolRegistry,
+    ToolScope,
+    WorkflowPhaseState,
     agent_scope,
     artifact_scope,
     build_default_registry,
+    workflow_effective_scope,
 )
+from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore, workflow_router_tools
 
 # MCP client pool (RP-05 rung A) — built once at start, snapshotted per conversation.
 from disco.tools.mcp import McpPool
@@ -168,6 +174,7 @@ from .verify.model_verifier import ModelVerifier
 
 _HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
 _TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
+_WORKFLOW_ROUTER_FLAG = "WORKFLOW_ROUTER"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
@@ -191,6 +198,11 @@ def host_verify_canary_enabled() -> bool:
 def toolscope_audit_enabled() -> bool:
     """True iff DISCO_TOOLSCOPE_AUDIT is truthy (default OFF)."""
     return str(disco_env(_TOOLSCOPE_AUDIT_FLAG) or "").strip().lower() in _TRUTHY
+
+
+def workflow_router_enabled() -> bool:
+    """True iff DISCO_WORKFLOW_ROUTER is truthy (default OFF)."""
+    return str(disco_env(_WORKFLOW_ROUTER_FLAG) or "").strip().lower() in _TRUTHY
 
 
 class _ToolScopeAuditRecorder:
@@ -2008,6 +2020,13 @@ class ConversationRuntime:
         _appkit_mode = self._effective_appkit_mode(conversation_id) and not _art_mode
         _appkit_autonomous = self._effective_autonomous(conversation_id)
         _appkit_phase = AppKitPhaseState() if _appkit_mode else None
+        _workflow_router_mode = (
+            workflow_router_enabled()
+            and self._surface_of(conversation_id) == "agent"
+            and not _art_mode
+            and not _appkit_mode
+        )
+        _workflow_phase = WorkflowPhaseState() if _workflow_router_mode else None
         _common_exec_kwargs: dict[str, Any] = dict(
             # SandboxSession is a drop-in SandboxInstance (it implements the
             # protocol at runtime); the `id` attribute differs only in being a
@@ -2047,6 +2066,45 @@ class ConversationRuntime:
                 ),
                 **_common_exec_kwargs,
             )
+        elif _workflow_router_mode:
+            assert _workflow_phase is not None
+            workflow_registry = build_default_registry()
+            project_root = self._project_store_now().root
+            workflow_store = JsonDirWorkflowStore(project_root or "")
+
+            def _workflow_mcp_tool_names(
+                registry: ToolRegistry = workflow_registry,
+            ) -> frozenset[str]:
+                return frozenset(
+                    name for name in registry.names() if name.startswith("mcp__")
+                )
+
+            for tool in workflow_router_tools(
+                store=workflow_store,
+                phase_state=_workflow_phase,
+                mcp_tool_names_getter=_workflow_mcp_tool_names,
+            ):
+                workflow_registry.register(tool)
+
+            workflow_executor_ref: dict[str, ScopedPhaseExecutor] = {}
+
+            def _workflow_scope_resolver(
+                phase_state: WorkflowPhaseState = _workflow_phase,
+            ) -> ToolScope:
+                workflow_executor = workflow_executor_ref["executor"]
+                return workflow_effective_scope(
+                    phase=phase_state.phase,
+                    compiled_run_scope=phase_state.compiled_run_scope,
+                    base_scope=workflow_executor.widened_scope,
+                )
+
+            executor = ScopedPhaseExecutor(
+                workflow_registry,
+                _scope,
+                scope_resolver=_workflow_scope_resolver,
+                **_common_exec_kwargs,
+            )
+            workflow_executor_ref["executor"] = executor
         else:
             executor = DefaultToolExecutor(
                 build_default_registry(),
@@ -2164,6 +2222,17 @@ class ConversationRuntime:
             if _appkit_mode
             else RuleBasedAnalyzer()
         )
+        _planning_tools = frozenset(
+            # read/explore + plan + `think`. `think` is a pure NO-OP reasoning
+            # scratchpad (read_only=True, no side effect), so it belongs among
+            # the allowed PLANNING first moves (§11.1/§15.2/§20.1: submit_plan /
+            # ask / clarify / think / safe read). It passes the just-merged phase
+            # gate because it is BOTH in this allowlist AND in the read-only
+            # capability set (ToolDef.read_only) the gate intersects against.
+            {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
+        )
+        if _workflow_router_mode:
+            _planning_tools = _planning_tools | WORKFLOW_ROUTER_ALLOWED_TOOLS
         return AgentLoop(
             conversation_id,
             self._store,
@@ -2185,15 +2254,7 @@ class ConversationRuntime:
             # planner can gather context first. approve_plan flips to execution; the
             # per-action gate above still governs the build that follows.
             mode=OperatingMode.PLANNING,
-            planning_tools=frozenset(
-                # read/explore + plan + `think`. `think` is a pure NO-OP reasoning
-                # scratchpad (read_only=True, no side effect), so it belongs among
-                # the allowed PLANNING first moves (§11.1/§15.2/§20.1: submit_plan /
-                # ask / clarify / think / safe read). It passes the just-merged phase
-                # gate because it is BOTH in this allowlist AND in the read-only
-                # capability set (ToolDef.read_only) the gate intersects against.
-                {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
-            ),
+            planning_tools=_planning_tools,
             # Same gated source of truth as the router prefix and the UI badge —
             # _compose_build_loop only runs for build-like surfaces today, but reading
             # the gated value means a future caller can't desync the loop's behavior

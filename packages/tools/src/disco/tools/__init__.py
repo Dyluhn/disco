@@ -58,6 +58,14 @@ from .secrets import (
     InMemorySecretsStore,
     SecretsStore,
 )
+from .workflow_scope import (
+    WORKFLOW_ROUTER_ALLOWED_TOOLS,
+    WORKFLOW_ROUTER_CONTEXT_TOOLS,
+    WORKFLOW_ROUTER_TOOLS,
+    WorkflowPhase,
+    WorkflowPhaseState,
+    workflow_effective_scope,
+)
 
 __all__ = [
     "AGENT_TOOLS",
@@ -94,10 +102,16 @@ __all__ = [
     "ToolOutcome",
     "ToolRegistry",
     "ToolScope",
+    "WORKFLOW_ROUTER_ALLOWED_TOOLS",
+    "WORKFLOW_ROUTER_CONTEXT_TOOLS",
+    "WORKFLOW_ROUTER_TOOLS",
+    "WorkflowPhase",
+    "WorkflowPhaseState",
     "agent_scope",
     "appkit_effective_scope",
     "artifact_scope",
     "build_default_registry",
     "research_scope",
     "validate_args",
+    "workflow_effective_scope",
 ]

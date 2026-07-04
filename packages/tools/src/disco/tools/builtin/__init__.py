@@ -14,7 +14,6 @@ from ._deck_patch import DeckPatchTool
 from .app_kit import APPKIT_V2_TOOLS
 from .appkit import APP_TOOLS
 from .audio_overview import AudioOverviewTool
-from .scaffold_starter import ScaffoldStarterTool
 from .browser import BrowserTool
 from .context_memory import ContextMemoryTool
 from .design_lint import DesignLintTool
@@ -41,6 +40,7 @@ from .preview import (
 )
 from .retrieval import ExtractTool, SearchTool
 from .run_script import RunProjectScriptTool
+from .scaffold_starter import ScaffoldStarterTool
 from .server import ServerStatusTool
 from .sheets import SheetsTool
 from .shell_sessions import (
@@ -55,6 +55,7 @@ from .subagent import DelegateExploreTool
 from .system import CodeExecTool, ShellTool
 from .think import ThinkTool
 from .verify_app import VerifyWebAppTool
+from .workflow_controls import WorkflowNeedsInputTool, WorkflowSkipTool
 
 __all__ = [
     "AudioOverviewTool",
@@ -98,6 +99,8 @@ __all__ = [
     "UpdatePlanProgressTool",
     "ThinkTool",
     "VerifyWebAppTool",
+    "WorkflowNeedsInputTool",
+    "WorkflowSkipTool",
     "build_default_registry",
 ]
 
@@ -166,6 +169,10 @@ def build_default_registry() -> ToolRegistry:
         ImageGenTool(),
         # C20: read-only Explore/Plan helper dispatch+join (intercepted by loop)
         DelegateExploreTool(),
+        # WF-4: workflow-only control tools. They are registered for workflow scopes
+        # but not included in the default agent scope; the loop intercepts calls.
+        WorkflowSkipTool(),
+        WorkflowNeedsInputTool(),
     ):
         registry.register(tool)
     return registry

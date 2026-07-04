@@ -395,6 +395,26 @@ class WorkflowInstance(BaseModel):
         return self
 
 
+class WorkflowRun(BaseModel):
+    """A concrete execution of a workflow definition.
+
+    The runtime can carry this small value into the agent loop so finish gates can
+    enforce definition-level obligations without importing the tools/runtime layer.
+    """
+
+    model_config = _STRICT
+
+    run_id: _NameStr
+    definition: WorkflowDefinition
+    params: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("params")
+    @classmethod
+    def _params_are_json(cls, value: dict[str, Any]) -> dict[str, Any]:
+        _validate_json_value(value, path="params")
+        return value
+
+
 class WorkflowScope(BaseModel):
     model_config = _STRICT
 
@@ -442,6 +462,7 @@ __all__ = [
     "WorkflowApproval",
     "WorkflowDefinition",
     "WorkflowInstance",
+    "WorkflowRun",
     "WorkflowOutputContract",
     "WorkflowPolicies",
     "WorkflowScope",
