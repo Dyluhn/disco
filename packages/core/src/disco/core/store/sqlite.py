@@ -181,6 +181,11 @@ class SqliteEventStore:
     """
 
     def __init__(self, path: str | Path = ":memory:") -> None:
+        # Retained so sidecar persistence (runtime B0 overrides/surfaces/autonomous)
+        # can anchor next to the REAL event DB instead of re-deriving from env —
+        # the two diverging silently disabled every sidecar on deployments that
+        # set the DB path only at store construction (live-caught 2026-07-03).
+        self.db_path: str = "" if str(path) == ":memory:" else str(path)
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")

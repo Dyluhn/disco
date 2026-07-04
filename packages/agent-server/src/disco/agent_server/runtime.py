@@ -691,7 +691,13 @@ class ConversationRuntime:
         # B0: PERSISTED (not just in-memory) — a server restart used to silently revert
         # every conversation's picked model to the default. Persisted to a JSON sidecar
         # next to the event DB (PMX_DB) so a resumed conversation keeps its model.
-        db_path = disco_env("DB", "")
+        db_path = disco_env("DB", "") or getattr(store, "db_path", "")
+        if not db_path:
+            logger.warning(
+                "B0 sidecar persistence DISABLED (no DISCO_DB and the store has no "
+                "file path) — per-conversation override/surface/autonomous flags "
+                "will NOT survive a restart"
+            )
         # Persisted per-conversation settings (B0): override / surface / autonomous /
         # assist accessors. The dicts + sidecar paths stay declared below on the
         # runtime; the stateless service reaches them via a back-ref. Constructed

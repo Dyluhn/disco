@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any
 
@@ -54,6 +55,9 @@ _TERMINAL_SETTABLE_STATES = frozenset(
         ConversationStatus.PAUSED,
     }
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class RuntimeSettings:
@@ -213,8 +217,9 @@ class RuntimeSettings:
                 json.dump(self._rt._autonomous, f)
                 tmp_name = f.name
             os.replace(tmp_name, self._rt._autonomous_path)
-        except Exception:  # noqa: BLE001 — best-effort
-            pass
+        except Exception:  # noqa: BLE001 — best-effort, but VISIBLE (a silent
+            # no-op here cost autonomy-across-restart, live-caught 2026-07-03)
+            logger.warning("autonomous sidecar save failed", exc_info=True)
 
     def set_autonomous(self, conversation_id: str, value: bool = True) -> None:
         """Mark a conversation autonomous (headless) BEFORE it runs. Persisted (B0)."""
