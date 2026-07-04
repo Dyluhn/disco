@@ -123,7 +123,9 @@ async def decompose_query(
         temperature=0.0,
     )
     resp = await router.complete(req)
-    lines = [_clean(ln) for ln in resp.text.splitlines() if ln.strip()]
+    text = re.sub(r"<think>.*?</think>", "", resp.text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.IGNORECASE | re.DOTALL)
+    lines = [_clean(ln) for ln in text.splitlines() if ln.strip()]
     # dedup while preserving order — some models repeat near-paraphrases
     seen: set[str] = set()
     unique: list[str] = []

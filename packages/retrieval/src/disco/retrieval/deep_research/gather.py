@@ -187,7 +187,9 @@ async def _gap_reason(
         resp = await cast(_RouterWithCtx, router).complete(req, context=call_context)
     except Exception:  # noqa: BLE001 — gap-reason failure is recoverable
         return True, [], "gap reasoner failed; stopping further rounds"
-    lines = [ln.strip() for ln in resp.text.splitlines() if ln.strip()]
+    gap_text = re.sub(r"<think>.*?</think>", "", resp.text, flags=re.IGNORECASE | re.DOTALL)
+    gap_text = re.sub(r"<think>.*", "", gap_text, flags=re.IGNORECASE | re.DOTALL)
+    lines = [ln.strip() for ln in gap_text.splitlines() if ln.strip()]
     if not lines:
         return True, [], "empty gap-reason response; stopping"
     first = lines[0].upper()

@@ -15,6 +15,7 @@
  */
 
 import type { ActivityItem } from "@/lib/buildTrace";
+import { splitThink } from "@/lib/think";
 import type {
   ActionEvent,
   AgentEvent,
@@ -301,7 +302,7 @@ function plainObservation(toolName: string, structured: Record<string, unknown>)
     const rationale = String(structured.rationale ?? "");
     return sufficient
       ? `Coverage sufficient`
-      : `Gap noted: ${rationale.slice(0, 100)}`;
+      : `Gap noted: ${(splitThink(rationale).answer || rationale).slice(0, 100)}`;
   }
   return "";
 }
