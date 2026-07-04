@@ -318,6 +318,22 @@ async def test_empty_length_response_retries_with_wider_budget() -> None:
     assert md.strip()
 
 
+async def test_think_only_response_counts_as_empty_and_retries() -> None:
+    """Live-caught (DR3): a reasoning model spends the whole budget INSIDE
+    <think> — raw text is non-empty, so the empty-retry was skipped, then the
+    think-strip emptied it and 5/6 sections degraded to the honest placeholder.
+    Emptiness must be judged post-strip so the widened retry fires."""
+    router = _ScriptedRouter([
+        ("<think>reasoning that ate the whole budget", "length"),
+        ("Recovered prose about Alpha [[p1]].", "stop"),
+    ])
+    md = await _run_synth(router)
+
+    assert router.calls == 2  # think-only first response triggered the retry
+    assert "Alpha" in md
+    assert "<think" not in md
+
+
 async def test_empty_response_after_retry_degrades_honestly() -> None:
     """If the section is STILL empty after the retry, the body degrades to an
     honest placeholder — a titled section card is NEVER rendered blank."""

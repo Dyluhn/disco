@@ -534,7 +534,11 @@ async def synthesize_section(
         # to finish AND still emit prose by widening the budget; otherwise reissue at
         # the normal cap. The final empty-section guard (after post-processing) still
         # catches anything that stays empty.
-        if not resp.text.strip():
+        #
+        # Emptiness is judged POST think-strip: a think-only response (the whole
+        # budget spent inside <think>) is exactly the length-exhaustion case this
+        # retry exists for — raw-text non-emptiness must not mask it.
+        if not strip_think_spans(resp.text):
             _retry_tokens = 2800 if resp.finish_reason == "length" else 1400
             try:
                 resp = await cast(_RouterWithCtx, router).complete(
