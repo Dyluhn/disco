@@ -149,7 +149,7 @@ class BuildTrackingSandbox(FakeSandbox):
                     }
                 )
             )
-        if cmd == "npm ci --no-audit --no-fund":
+        if cmd in ("npm ci --no-audit --no-fund", "npm install --no-audit --no-fund"):
             return _ExecRes("installed")
         if cmd == "npm run build":
             if self.fail_build:
@@ -428,7 +428,7 @@ async def test_vite_build_failure_fails_route_and_section_with_stderr(stub_brows
     assert checks["route_coverage"]["passed"] is False
     assert checks["section_coverage"]["passed"] is False
     assert "src/App.tsx: boom" in checks["route_coverage"]["evidence"]
-    assert "npm ci --no-audit --no-fund" in sandbox.commands
+    assert "npm install --no-audit --no-fund" in sandbox.commands
     assert "npm run build" in sandbox.commands
 
 
@@ -448,7 +448,7 @@ async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, s
 
     assert out.success and out.structured is not None
     assert out.structured["passed"] is True, out.structured["summary"]
-    assert "npm ci --no-audit --no-fund" in sandbox.commands
+    assert "npm install --no-audit --no-fund" in sandbox.commands  # no lockfile in the fake tree -> install fallback
     assert "npm run build" in sandbox.commands
     assert manager.starts == [
         {

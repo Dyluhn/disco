@@ -1509,17 +1509,26 @@ class VerifyAppKitAppTool:
         started = time.monotonic()
 
         if need_ci:
+            # `npm ci` REQUIRES package-lock.json; the generator emits package.json
+            # only (deterministic tree — a lockfile would pin the generate step to a
+            # registry snapshot). Live-caught 2026-07-03: ci without a lock is EUSAGE.
+            has_lock = await self._sandbox_file_exists(ctx, "package-lock.json")
+            install_cmd = (
+                "npm ci --no-audit --no-fund"
+                if has_lock
+                else "npm install --no-audit --no-fund"
+            )
             try:
                 ci = await ctx.sandbox.exec_shell(
-                    "npm ci --no-audit --no-fund", timeout_s=_VITE_BUILD_TIMEOUT_S
+                    install_cmd, timeout_s=_VITE_BUILD_TIMEOUT_S
                 )
             except Exception as exc:  # noqa: BLE001 — loud verdict evidence
                 return _BuildResult(
-                    False, f"platform Vite build could not run `npm ci`: {exc}"
+                    False, f"platform Vite build could not run `{install_cmd}`: {exc}"
                 )
             if getattr(ci, "exit_code", 1) != 0 or bool(getattr(ci, "timed_out", False)):
                 return _BuildResult(
-                    False, _exec_failure_evidence("npm ci --no-audit --no-fund", ci)
+                    False, _exec_failure_evidence(install_cmd, ci)
                 )
             try:
                 await ctx.sandbox.write_file(
@@ -1582,6 +1591,13 @@ class VerifyAppKitAppTool:
             await _manager(ctx).stop(name)
         except Exception:  # noqa: BLE001 — cleanup must not mask the verifier result
             pass
+
+    async def _sandbox_file_exists(self, ctx: ToolContext, relpath: str) -> bool:
+        assert ctx.sandbox is not None
+        try:
+            return bool(await ctx.sandbox.file_exists(relpath))
+        except Exception:  # noqa: BLE001 — absence probe must never raise
+            return False
 
     async def _sandbox_dir_exists(self, ctx: ToolContext, relpath: str) -> bool:
         assert ctx.sandbox is not None
