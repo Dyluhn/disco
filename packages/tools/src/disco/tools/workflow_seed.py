@@ -7,9 +7,13 @@ from pathlib import Path
 
 from disco.core.llm import ConfigStore
 from disco.core.workflow import (
+    BROWSER_AUTOMATION_DEFINITION,
     DAILY_EMAIL_BRIEF_DEFINITION,
+    FORM_FILL_DEFINITION,
     GENERAL_WORKSPACE_TASK_DEFINITION,
+    SKILL_AUTHORING_DEFINITION,
     WorkflowApproval,
+    WorkflowDefinition,
     WorkflowInstance,
 )
 
@@ -17,10 +21,12 @@ from .projects import resolve_projects_root
 
 GENERAL_WORKSPACE_TASK_INSTANCE_ID = "general_workspace_task"
 DAILY_EMAIL_BRIEF_INSTANCE_ID = "daily_email_brief"
+BROWSER_AUTOMATION_INSTANCE_ID = "browser_automation"
+FORM_FILL_INSTANCE_ID = "form_fill"
+SKILL_AUTHORING_INSTANCE_ID = "skill_authoring"
 
 
-def general_workspace_task_instance() -> WorkflowInstance:
-    definition = GENERAL_WORKSPACE_TASK_DEFINITION
+def _approved_enabled_instance(definition: WorkflowDefinition) -> WorkflowInstance:
     digest = definition.digest()
     return WorkflowInstance(
         definition_digest=digest,
@@ -36,6 +42,10 @@ def general_workspace_task_instance() -> WorkflowInstance:
     )
 
 
+def general_workspace_task_instance() -> WorkflowInstance:
+    return _approved_enabled_instance(GENERAL_WORKSPACE_TASK_DEFINITION)
+
+
 def daily_email_brief_instance() -> WorkflowInstance:
     definition = DAILY_EMAIL_BRIEF_DEFINITION
     digest = definition.digest()
@@ -47,6 +57,18 @@ def daily_email_brief_instance() -> WorkflowInstance:
         enabled=False,
         approval=None,
     )
+
+
+def browser_automation_instance() -> WorkflowInstance:
+    return _approved_enabled_instance(BROWSER_AUTOMATION_DEFINITION)
+
+
+def form_fill_instance() -> WorkflowInstance:
+    return _approved_enabled_instance(FORM_FILL_DEFINITION)
+
+
+def skill_authoring_instance() -> WorkflowInstance:
+    return _approved_enabled_instance(SKILL_AUTHORING_DEFINITION)
 
 
 def _workflows_dir(projects_root: str | Path | None = None) -> Path:
@@ -88,11 +110,60 @@ def seed_daily_email_brief(projects_root: str | Path | None = None) -> Path:
     )
 
 
+def seed_browser_automation(projects_root: str | Path | None = None) -> Path:
+    return _seed_instance(
+        BROWSER_AUTOMATION_INSTANCE_ID,
+        browser_automation_instance(),
+        projects_root,
+    )
+
+
+def seed_form_fill(projects_root: str | Path | None = None) -> Path:
+    return _seed_instance(
+        FORM_FILL_INSTANCE_ID,
+        form_fill_instance(),
+        projects_root,
+    )
+
+
+def seed_skill_authoring(projects_root: str | Path | None = None) -> Path:
+    return _seed_instance(
+        SKILL_AUTHORING_INSTANCE_ID,
+        skill_authoring_instance(),
+        projects_root,
+    )
+
+
+def seed_builtin_workflows(
+    projects_root: str | Path | None = None,
+) -> tuple[tuple[str, Path], ...]:
+    return (
+        (
+            GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+            seed_general_workspace_task(projects_root),
+        ),
+        (DAILY_EMAIL_BRIEF_INSTANCE_ID, seed_daily_email_brief(projects_root)),
+        (BROWSER_AUTOMATION_INSTANCE_ID, seed_browser_automation(projects_root)),
+        (FORM_FILL_INSTANCE_ID, seed_form_fill(projects_root)),
+        (SKILL_AUTHORING_INSTANCE_ID, seed_skill_authoring(projects_root)),
+    )
+
+
 __all__ = [
+    "BROWSER_AUTOMATION_INSTANCE_ID",
     "DAILY_EMAIL_BRIEF_INSTANCE_ID",
+    "FORM_FILL_INSTANCE_ID",
     "GENERAL_WORKSPACE_TASK_INSTANCE_ID",
+    "SKILL_AUTHORING_INSTANCE_ID",
+    "browser_automation_instance",
     "daily_email_brief_instance",
+    "form_fill_instance",
     "general_workspace_task_instance",
+    "seed_browser_automation",
+    "seed_builtin_workflows",
     "seed_daily_email_brief",
+    "seed_form_fill",
     "seed_general_workspace_task",
+    "seed_skill_authoring",
+    "skill_authoring_instance",
 ]

@@ -8,11 +8,18 @@ import pytest
 from disco.core import SecurityRisk
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.workflow import (
+    BROWSER_AUTOMATION_DEFINITION,
+    BROWSER_AUTOMATION_TOOLS,
     BUILTIN_WORKFLOW_TOOLS,
     DAILY_EMAIL_BRIEF_DEFINITION,
     DAILY_EMAIL_BRIEF_MCP_TOOL_NAMES,
     DAILY_EMAIL_BRIEF_TOOLS,
+    FORM_FILL_DEFINITION,
+    FORM_FILL_TOOLS,
+    GENERAL_WORKSPACE_TASK_DEFINITION,
     GENERAL_WORKSPACE_TASK_TOOLS,
+    SKILL_AUTHORING_DEFINITION,
+    SKILL_AUTHORING_TOOLS,
     WORKFLOW_CONTROL_TOOLS,
     McpMount,
     WorkflowApproval,
@@ -52,8 +59,12 @@ from disco.tools.builtin.workflow_tools import (
     WorkflowStore,
 )
 from disco.tools.workflow_seed import (
+    BROWSER_AUTOMATION_INSTANCE_ID,
     DAILY_EMAIL_BRIEF_INSTANCE_ID,
+    FORM_FILL_INSTANCE_ID,
     GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+    SKILL_AUTHORING_INSTANCE_ID,
+    seed_builtin_workflows,
     seed_daily_email_brief,
     seed_general_workspace_task,
 )
@@ -162,6 +173,10 @@ def _daily_email_brief_expected_surface() -> frozenset[str]:
         }
         | WORKFLOW_CONTROL_TOOLS
     )
+
+
+def _first_party_expected_surface(tools: tuple[str, ...]) -> frozenset[str]:
+    return frozenset(tools) | WORKFLOW_CONTROL_TOOLS
 
 
 def test_workflow_router_allowlist_is_router_tools_plus_appkit_reads() -> None:
@@ -312,6 +327,80 @@ def test_daily_email_brief_definition_compiles_to_exact_gmail_surface() -> None:
             "mcp__gmail__label_thread",
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("definition", "tools", "forbidden"),
+    (
+        (
+            BROWSER_AUTOMATION_DEFINITION,
+            BROWSER_AUTOMATION_TOOLS,
+            {"shell", "shell_exec", "code_exec", "file_edit"},
+        ),
+        (
+            FORM_FILL_DEFINITION,
+            FORM_FILL_TOOLS,
+            {"shell", "shell_exec", "code_exec", "file_edit", "think"},
+        ),
+        (
+            SKILL_AUTHORING_DEFINITION,
+            SKILL_AUTHORING_TOOLS,
+            {"browser", "shell", "shell_exec", "code_exec", "file_edit"},
+        ),
+    ),
+)
+def test_new_builtin_definitions_compile_to_exact_first_party_surface(
+    definition: WorkflowDefinition,
+    tools: tuple[str, ...],
+    forbidden: set[str],
+) -> None:
+    compiled = compile_workflow_scope(definition, frozenset())
+
+    expected = _first_party_expected_surface(tools)
+    assert compiled.allowed_tools == expected
+    assert compiled.advertised == expected
+    assert compiled.advertised.isdisjoint(forbidden)
+
+
+@pytest.mark.parametrize(
+    "definition",
+    (
+        GENERAL_WORKSPACE_TASK_TOOLS,
+        BROWSER_AUTOMATION_TOOLS,
+        FORM_FILL_TOOLS,
+        SKILL_AUTHORING_TOOLS,
+        DAILY_EMAIL_BRIEF_TOOLS,
+    ),
+)
+def test_builtin_workflow_tools_are_known(definition: tuple[str, ...]) -> None:
+    assert set(definition) <= BUILTIN_WORKFLOW_TOOLS
+
+
+@pytest.mark.parametrize(
+    ("definition", "available_mcp_names"),
+    (
+        (GENERAL_WORKSPACE_TASK_DEFINITION, frozenset()),
+        (BROWSER_AUTOMATION_DEFINITION, frozenset()),
+        (FORM_FILL_DEFINITION, frozenset()),
+        (SKILL_AUTHORING_DEFINITION, frozenset()),
+        (DAILY_EMAIL_BRIEF_DEFINITION, _fake_gmail_mcp_names()),
+    ),
+)
+def test_builtin_workflow_definition_digests_are_stable(
+    definition: WorkflowDefinition,
+    available_mcp_names: frozenset[str],
+) -> None:
+    assert compile_workflow_scope(definition, available_mcp_names).allowed_tools
+    findings = validate_definition(
+        definition,
+        BUILTIN_WORKFLOW_TOOLS | WORKFLOW_CONTROL_TOOLS,
+        available_mcp_names,
+    )
+    assert findings == []
+    digest = definition.digest()
+    round_tripped = WorkflowDefinition.model_validate(definition.model_dump(mode="json"))
+    assert definition.digest() == digest
+    assert round_tripped.digest() == digest
 
 
 def test_daily_email_brief_missing_gmail_mount_reports_error_finding() -> None:
@@ -479,6 +568,50 @@ def test_seeded_daily_email_brief_is_disabled_and_unapproved(tmp_path) -> None:
     assert instance.definition == DAILY_EMAIL_BRIEF_DEFINITION
     assert instance.params == {}
     assert instance.definition.output_contract.path_template == "reports/email-brief-{date}.md"
+
+
+def test_seed_builtin_workflows_writes_all_five_instances(tmp_path) -> None:
+    seeded = seed_builtin_workflows(tmp_path)
+    store = JsonDirWorkflowStore(tmp_path)
+
+    assert [instance_id for instance_id, _ in seeded] == [
+        GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        DAILY_EMAIL_BRIEF_INSTANCE_ID,
+        BROWSER_AUTOMATION_INSTANCE_ID,
+        FORM_FILL_INSTANCE_ID,
+        SKILL_AUTHORING_INSTANCE_ID,
+    ]
+    assert {path.name for _, path in seeded} == {
+        "general_workspace_task.json",
+        "daily_email_brief.json",
+        "browser_automation.json",
+        "form_fill.json",
+        "skill_authoring.json",
+    }
+
+    instances = {
+        row.instance_id: row.instance for row in store.list_instances()
+    }
+    assert set(instances) == {
+        GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        DAILY_EMAIL_BRIEF_INSTANCE_ID,
+        BROWSER_AUTOMATION_INSTANCE_ID,
+        FORM_FILL_INSTANCE_ID,
+        SKILL_AUTHORING_INSTANCE_ID,
+    }
+    for instance_id in (
+        GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        BROWSER_AUTOMATION_INSTANCE_ID,
+        FORM_FILL_INSTANCE_ID,
+        SKILL_AUTHORING_INSTANCE_ID,
+    ):
+        instance = instances[instance_id]
+        assert instance.enabled is True
+        assert instance.approval is not None
+        assert instance.approval.surface_shown_digest == instance.definition.digest()
+
+    assert instances[DAILY_EMAIL_BRIEF_INSTANCE_ID].enabled is False
+    assert instances[DAILY_EMAIL_BRIEF_INSTANCE_ID].approval is None
 
 
 @pytest.mark.asyncio
