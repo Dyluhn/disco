@@ -14,7 +14,9 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
+from typing import Literal
 
 from cronsim import CronSim, CronSimError
 from pydantic import (
@@ -38,6 +40,9 @@ _CardStr = Annotated[str, StringConstraints(min_length=1, max_length=1200)]
 _ToolStr = Annotated[str, StringConstraints(min_length=1, max_length=160)]
 _SmallStr = Annotated[str, StringConstraints(min_length=1, max_length=240)]
 _DigestStr = Annotated[str, StringConstraints(min_length=1, max_length=80)]
+_FindingCodeStr = Annotated[str, StringConstraints(min_length=1, max_length=120)]
+_FindingPathStr = Annotated[str, StringConstraints(min_length=1, max_length=300)]
+_FindingMessageStr = Annotated[str, StringConstraints(min_length=1, max_length=1000)]
 
 
 # Snapshot of the registered first-party tool names. Kept local rather than
@@ -314,6 +319,15 @@ class WorkflowVerify(BaseModel):
         return _dedupe(value, field="checks")
 
 
+class WorkflowValidationFinding(BaseModel):
+    model_config = _STRICT
+
+    severity: Literal["error", "warning"]
+    code: _FindingCodeStr
+    path: _FindingPathStr
+    message: _FindingMessageStr
+
+
 class WorkflowDefinition(BaseModel):
     model_config = _STRICT
 
@@ -377,6 +391,7 @@ class WorkflowInstance(BaseModel):
     connector_bindings: dict[str, str] = Field(default_factory=dict)
     enabled: bool = False
     approval: WorkflowApproval | None = None
+    validation_findings: tuple[WorkflowValidationFinding, ...] = ()
 
     @field_validator("params")
     @classmethod
@@ -392,8 +407,6 @@ class WorkflowInstance(BaseModel):
                 f"definition_digest {self.definition_digest!r} does not match embedded "
                 f"definition digest {actual!r}"
             )
-        if self.approval is not None and self.approval.surface_shown_digest != actual:
-            raise ValueError("approval.surface_shown_digest must match the definition digest")
         return self
 
 
@@ -449,6 +462,299 @@ class WorkflowScope(BaseModel):
     advertised: frozenset[str]
 
 
+class WorkflowSimulationResult(BaseModel):
+    model_config = _STRICT
+
+    ok: bool
+    output_path: _SmallStr | None = None
+    output_format: _SmallStr | None = None
+    fixture_bytes: int = 0
+    findings: tuple[WorkflowValidationFinding, ...] = ()
+
+
+def _finding(
+    severity: Literal["error", "warning"],
+    code: str,
+    path: str,
+    message: str,
+) -> WorkflowValidationFinding:
+    return WorkflowValidationFinding(
+        severity=severity,
+        code=code,
+        path=path,
+        message=message,
+    )
+
+
+def _schema_findings(schema: object, *, path: str) -> list[WorkflowValidationFinding]:
+    findings: list[WorkflowValidationFinding] = []
+    if not isinstance(schema, dict):
+        return [
+            _finding(
+                "error",
+                "params_schema_invalid",
+                path,
+                "params_model_schema must be a JSON schema object",
+            )
+        ]
+    try:
+        _validate_json_value(schema, path=path)
+    except ValueError as exc:
+        findings.append(_finding("error", "params_schema_invalid_json", path, str(exc)))
+    for violation in _walk_schema(schema, path=path):
+        findings.append(
+            _finding(
+                "error",
+                "params_schema_gate",
+                violation.location,
+                f"{violation.kind}: {violation.detail}",
+            )
+        )
+    return findings
+
+
+def _compile_findings(
+    defn: WorkflowDefinition,
+    *,
+    available_builtin_names: frozenset[str],
+    available_mcp_names: frozenset[str],
+) -> list[WorkflowValidationFinding]:
+    findings: list[WorkflowValidationFinding] = []
+    unknown_builtin = sorted(
+        name for name in defn.tools if name not in available_builtin_names
+    )
+    for name in unknown_builtin:
+        findings.append(
+            _finding(
+                "error",
+                "unknown_builtin_tool",
+                "tools",
+                f"unknown workflow builtin tool: {name}",
+            )
+        )
+
+    missing_mcp: list[str] = []
+    for mount in defn.mcp_mounts:
+        for tool in mount.tool_names:
+            qualified = _qualified_mcp_name(mount.server, tool)
+            if not qualified.startswith(f"{_MCP_PREFIX}{mount.server}__"):
+                findings.append(
+                    _finding(
+                        "error",
+                        "mcp_server_mismatch",
+                        "mcp_mounts",
+                        (
+                            f"MCP tool {qualified!r} does not match server prefix "
+                            f"{mount.server!r}"
+                        ),
+                    )
+                )
+            elif qualified not in available_mcp_names:
+                missing_mcp.append(qualified)
+    for qualified in sorted(missing_mcp):
+        findings.append(
+            _finding(
+                "error",
+                "missing_mcp_tool",
+                "mcp_mounts",
+                f"missing mounted MCP tool: {qualified}",
+            )
+        )
+    return findings
+
+
+def _policy_findings(defn: WorkflowDefinition) -> list[WorkflowValidationFinding]:
+    findings: list[WorkflowValidationFinding] = []
+    writable_mounts = sorted(m.server for m in defn.mcp_mounts if not m.read_only)
+    if writable_mounts and not defn.policies.allows_writes:
+        servers = ", ".join(writable_mounts)
+        findings.append(
+            _finding(
+                "error",
+                "write_policy_inconsistent",
+                "policies.allows_writes",
+                (
+                    "writable MCP mounts require policies.allows_writes=True "
+                    f"(servers: {servers})"
+                ),
+            )
+        )
+    return findings
+
+
+def _skill_findings(
+    defn: WorkflowDefinition, *, available_skill_names: frozenset[str]
+) -> list[WorkflowValidationFinding]:
+    unknown = sorted(name for name in defn.skills if name not in available_skill_names)
+    return [
+        _finding(
+            "error",
+            "unknown_skill",
+            "skills",
+            f"unknown workflow skill: {name}",
+        )
+        for name in unknown
+    ]
+
+
+def validate_definition(
+    defn: WorkflowDefinition,
+    available_builtin_names: frozenset[str],
+    available_mcp_names: frozenset[str],
+    available_skill_names: frozenset[str] = frozenset(),
+) -> list[WorkflowValidationFinding]:
+    """Collect validation findings for a workflow definition.
+
+    This is the pre-approval collector. It mirrors the checks that make
+    ``compile_workflow_scope`` fail closed, but it reports every issue it can
+    observe instead of raising at the first failing category.
+    """
+
+    findings: list[WorkflowValidationFinding] = []
+    findings.extend(_schema_findings(defn.params_model_schema, path="params_model_schema"))
+    findings.extend(
+        _compile_findings(
+            defn,
+            available_builtin_names=available_builtin_names,
+            available_mcp_names=available_mcp_names,
+        )
+    )
+    findings.extend(_policy_findings(defn))
+    findings.extend(
+        _skill_findings(defn, available_skill_names=available_skill_names)
+    )
+    return findings
+
+
+def _stringify_path_param(value: object, *, key: str) -> str:
+    if value is None or isinstance(value, list | dict):
+        raise ValueError(f"output path parameter {key!r} must be a scalar JSON value")
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"output path parameter {key!r} resolved to an empty string")
+    return text
+
+
+def render_workflow_output_path(template: str, params: dict[str, Any]) -> str:
+    try:
+        rendered = template.format(
+            **{key: _stringify_path_param(value, key=key) for key, value in params.items()}
+        )
+    except KeyError as exc:
+        missing = exc.args[0]
+        raise ValueError(f"missing output path parameter: {missing!r}") from exc
+    except (IndexError, ValueError) as exc:
+        raise ValueError(f"invalid output path template: {exc}") from exc
+
+    if not rendered.strip():
+        raise ValueError("output path template resolved to an empty path")
+    if "\x00" in rendered:
+        raise ValueError("output path must not contain NUL bytes")
+    path = Path(rendered)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError("output path must be a relative path without dot segments")
+    return path.as_posix()
+
+
+def simulate_definition(
+    defn: WorkflowDefinition,
+    *,
+    params: dict[str, Any],
+    workspace_root: str | Path,
+    available_builtin_names: frozenset[str],
+    available_mcp_names: frozenset[str],
+) -> WorkflowSimulationResult:
+    """Dry-run a workflow definition without invoking a model.
+
+    The seam compiles the scope, renders the declared output path, writes a small
+    fixture file, and verifies that the file exists. It is a smoke test for the
+    pre-approval contract, not a proof that a live agent can complete the work.
+    """
+
+    findings: list[WorkflowValidationFinding] = []
+    findings.extend(
+        _compile_findings(
+            defn,
+            available_builtin_names=available_builtin_names,
+            available_mcp_names=available_mcp_names,
+        )
+    )
+    try:
+        compile_workflow_scope(defn, available_mcp_names)
+    except ValueError as exc:
+        findings.append(
+            _finding(
+                "error",
+                "simulation_scope_compile_failed",
+                "definition",
+                str(exc),
+            )
+        )
+
+    try:
+        output_path = render_workflow_output_path(
+            defn.output_contract.path_template, params
+        )
+    except ValueError as exc:
+        findings.append(
+            _finding(
+                "error",
+                "simulation_output_contract_failed",
+                "output_contract.path_template",
+                str(exc),
+            )
+        )
+        return WorkflowSimulationResult(ok=False, findings=tuple(findings))
+
+    root = Path(workspace_root)
+    target = (root / output_path).resolve()
+    try:
+        target.relative_to(root.resolve())
+    except ValueError:
+        findings.append(
+            _finding(
+                "error",
+                "simulation_output_contract_failed",
+                "output_contract.path_template",
+                "rendered output path escaped the workspace root",
+            )
+        )
+        return WorkflowSimulationResult(
+            ok=False,
+            output_path=output_path,
+            output_format=defn.output_contract.format,
+            findings=tuple(findings),
+        )
+
+    fixture = (
+        f"# Workflow simulation fixture\n\n"
+        f"format: {defn.output_contract.format}\n"
+        f"path: {output_path}\n"
+    )
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(fixture, encoding="utf-8")
+        fixture_bytes = target.stat().st_size
+    except OSError as exc:
+        findings.append(
+            _finding(
+                "error",
+                "simulation_fixture_write_failed",
+                "output_contract.path_template",
+                str(exc),
+            )
+        )
+        fixture_bytes = 0
+
+    return WorkflowSimulationResult(
+        ok=not any(f.severity == "error" for f in findings),
+        output_path=output_path,
+        output_format=defn.output_contract.format,
+        fixture_bytes=fixture_bytes,
+        findings=tuple(findings),
+    )
+
+
 def compile_workflow_scope(
     defn: WorkflowDefinition, mcp_tool_names_available: frozenset[str]
 ) -> WorkflowScope:
@@ -493,7 +799,12 @@ __all__ = [
     "WorkflowRun",
     "WorkflowOutputContract",
     "WorkflowPolicies",
+    "WorkflowSimulationResult",
     "WorkflowScope",
+    "WorkflowValidationFinding",
     "WorkflowVerify",
     "compile_workflow_scope",
+    "render_workflow_output_path",
+    "simulate_definition",
+    "validate_definition",
 ]

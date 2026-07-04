@@ -14,9 +14,14 @@ from .models import (
     WorkflowOutputContract,
     WorkflowPolicies,
     WorkflowRun,
+    WorkflowSimulationResult,
     WorkflowScope,
+    WorkflowValidationFinding,
     WorkflowVerify,
     compile_workflow_scope,
+    render_workflow_output_path,
+    simulate_definition,
+    validate_definition,
 )
 
 __all__ = [
@@ -32,7 +37,12 @@ __all__ = [
     "WorkflowOutputContract",
     "WorkflowPolicies",
     "WorkflowRun",
+    "WorkflowSimulationResult",
     "WorkflowScope",
+    "WorkflowValidationFinding",
     "WorkflowVerify",
     "compile_workflow_scope",
+    "render_workflow_output_path",
+    "simulate_definition",
+    "validate_definition",
 ]

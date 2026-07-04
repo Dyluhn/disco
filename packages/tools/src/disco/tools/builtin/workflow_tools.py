@@ -2,13 +2,15 @@
 
 These tools are the narrow entry surface for workflow-enabled agent runs. Saved
 instances are read from ``<projects_root>/workflows/*.json`` as
-``WorkflowInstance`` documents; approval/persistence of new enabled instances is
-reserved for WF-8, so ``draft_workflow`` only returns a draft definition.
+``WorkflowInstance`` documents; approval/persistence of new enabled instances
+is handled by the agent-server review flow, so ``draft_workflow`` only returns
+a draft definition.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -82,6 +84,17 @@ class JsonDirWorkflowStore:
             return None
         raw = path.read_text(encoding="utf-8")
         return WorkflowInstance.model_validate_json(raw)
+
+    def save_instance(self, instance_id: str, instance: WorkflowInstance) -> Path:
+        path = self._path_for(instance_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{id(instance)}.tmp")
+        tmp.write_text(
+            json.dumps(instance.model_dump(mode="json"), indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+        return path
 
 
 class ListWorkflowsArgs(BaseModel):

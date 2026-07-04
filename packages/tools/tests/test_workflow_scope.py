@@ -7,8 +7,10 @@ import json
 import pytest
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.workflow import (
+    BUILTIN_WORKFLOW_TOOLS,
     GENERAL_WORKSPACE_TASK_TOOLS,
     WORKFLOW_CONTROL_TOOLS,
+    McpMount,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
@@ -17,6 +19,8 @@ from disco.core.workflow import (
     WorkflowScope,
     WorkflowVerify,
     compile_workflow_scope,
+    simulate_definition,
+    validate_definition,
 )
 from disco.tools import (
     AGENT_TOOLS,
@@ -199,6 +203,61 @@ def test_json_dir_workflow_store_reads_instances_from_projects_root(tmp_path) ->
     assert [row.instance_id for row in rows] == ["wf_ok"]
     assert store.get_instance("wf_ok") == instance
     assert store.get_instance("missing") is None
+
+
+def test_json_dir_workflow_store_saves_instances_to_projects_root(tmp_path) -> None:
+    store = JsonDirWorkflowStore(tmp_path)
+    instance = _instance(enabled=False, approved=False)
+
+    path = store.save_instance("wf_draft", instance)
+
+    assert path == tmp_path / "workflows" / "wf_draft.json"
+    assert store.get_instance("wf_draft") == instance
+
+
+def test_validate_definition_collects_all_preapproval_findings() -> None:
+    mount = McpMount(server="github", tool_names=("create_issue",), read_only=False)
+    defn = _definition(tools=("file_read", "unknown_builtin")).model_copy(
+        update={
+            "params_model_schema": {"type": "object"},
+            "mcp_mounts": (mount,),
+            "skills": ("missing_skill",),
+        }
+    )
+
+    findings = validate_definition(
+        defn,
+        BUILTIN_WORKFLOW_TOOLS | WORKFLOW_CONTROL_TOOLS,
+        frozenset(),
+    )
+
+    codes = {finding.code for finding in findings}
+    assert {
+        "params_schema_gate",
+        "unknown_builtin_tool",
+        "missing_mcp_tool",
+        "write_policy_inconsistent",
+        "unknown_skill",
+    } <= codes
+
+
+def test_simulate_definition_writes_fixture_output(tmp_path) -> None:
+    defn = _definition(tools=("file_read",))
+
+    result = simulate_definition(
+        defn,
+        params={"query": "mcp-safety"},
+        workspace_root=tmp_path,
+        available_builtin_names=BUILTIN_WORKFLOW_TOOLS | WORKFLOW_CONTROL_TOOLS,
+        available_mcp_names=frozenset(),
+    )
+
+    assert result.ok is True
+    assert result.output_path == "outputs/mcp-safety.md"
+    assert result.output_format == "markdown"
+    assert (tmp_path / "outputs" / "mcp-safety.md").read_text(encoding="utf-8").startswith(
+        "# Workflow simulation fixture"
+    )
 
 
 @pytest.mark.asyncio

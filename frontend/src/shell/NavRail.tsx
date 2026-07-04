@@ -7,6 +7,7 @@ import {
   PanelLeftOpen,
   Plus,
   Settings,
+  Workflow,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { NavLink } from "react-router-dom";
@@ -35,6 +36,7 @@ const ITEMS: NavItem[] = [
   // Projects is its OWN surface — distinct from History (ephemeral research) and
   // Spaces (research corpora). This is for resumable Build workspaces.
   { id: "projects", to: "/projects", label: "Projects", icon: FolderGit2 },
+  { id: "workflows", to: "/workflows", label: "Workflows", icon: Workflow },
   { id: "spaces", to: "/spaces", label: "Spaces", icon: Boxes, dormant: true },
   { id: "settings", to: "/settings", label: "Settings", icon: Settings },
 ];

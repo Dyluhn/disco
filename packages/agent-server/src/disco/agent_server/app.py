@@ -44,6 +44,7 @@ from .routes import (
     make_sessions_router,
     make_share_router,
     make_storage_router,
+    make_workflows_router,
     make_ws_router,
 )
 from .routes._common import _sanitize_name, make_preview_upstream_resolver
@@ -141,6 +142,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_sessions_router(store, runtime))
     app.include_router(make_projects_router(store, runtime))
     app.include_router(make_storage_router(store, runtime))
+    app.include_router(make_workflows_router(store, runtime))
     app.include_router(make_schedules_router(store, runtime))
     app.include_router(make_activity_router(store, runtime))
     app.include_router(make_ws_router(store, runtime))
