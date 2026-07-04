@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from .builtin import GENERAL_WORKSPACE_TASK_DEFINITION, GENERAL_WORKSPACE_TASK_TOOLS
+from .builtin import (
+    DAILY_EMAIL_BRIEF_DEFINITION,
+    DAILY_EMAIL_BRIEF_MCP_TOOL_NAMES,
+    DAILY_EMAIL_BRIEF_TOOLS,
+    GENERAL_WORKSPACE_TASK_DEFINITION,
+    GENERAL_WORKSPACE_TASK_TOOLS,
+)
 from .models import (
     BUILTIN_WORKFLOW_TOOLS,
     WORKFLOW_CONTROL_TOOLS,
@@ -14,8 +20,8 @@ from .models import (
     WorkflowOutputContract,
     WorkflowPolicies,
     WorkflowRun,
-    WorkflowSimulationResult,
     WorkflowScope,
+    WorkflowSimulationResult,
     WorkflowValidationFinding,
     WorkflowVerify,
     compile_workflow_scope,
@@ -26,6 +32,9 @@ from .models import (
 
 __all__ = [
     "BUILTIN_WORKFLOW_TOOLS",
+    "DAILY_EMAIL_BRIEF_DEFINITION",
+    "DAILY_EMAIL_BRIEF_MCP_TOOL_NAMES",
+    "DAILY_EMAIL_BRIEF_TOOLS",
     "GENERAL_WORKSPACE_TASK_DEFINITION",
     "GENERAL_WORKSPACE_TASK_TOOLS",
     "McpMount",

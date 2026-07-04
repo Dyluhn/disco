@@ -7,6 +7,7 @@ from pathlib import Path
 
 from disco.core.llm import ConfigStore
 from disco.core.workflow import (
+    DAILY_EMAIL_BRIEF_DEFINITION,
     GENERAL_WORKSPACE_TASK_DEFINITION,
     WorkflowApproval,
     WorkflowInstance,
@@ -15,6 +16,7 @@ from disco.core.workflow import (
 from .projects import resolve_projects_root
 
 GENERAL_WORKSPACE_TASK_INSTANCE_ID = "general_workspace_task"
+DAILY_EMAIL_BRIEF_INSTANCE_ID = "daily_email_brief"
 
 
 def general_workspace_task_instance() -> WorkflowInstance:
@@ -34,7 +36,20 @@ def general_workspace_task_instance() -> WorkflowInstance:
     )
 
 
-def seed_general_workspace_task(projects_root: str | Path | None = None) -> Path:
+def daily_email_brief_instance() -> WorkflowInstance:
+    definition = DAILY_EMAIL_BRIEF_DEFINITION
+    digest = definition.digest()
+    return WorkflowInstance(
+        definition_digest=digest,
+        definition=definition,
+        params={},
+        connector_bindings={},
+        enabled=False,
+        approval=None,
+    )
+
+
+def _workflows_dir(projects_root: str | Path | None = None) -> Path:
     configured_root = (
         str(projects_root)
         if projects_root is not None
@@ -43,14 +58,41 @@ def seed_general_workspace_task(projects_root: str | Path | None = None) -> Path
     root = Path(resolve_projects_root(configured_root)).expanduser()
     workflows_dir = root / "workflows"
     workflows_dir.mkdir(parents=True, exist_ok=True)
-    path = workflows_dir / f"{GENERAL_WORKSPACE_TASK_INSTANCE_ID}.json"
-    payload = general_workspace_task_instance().model_dump(mode="json")
+    return workflows_dir
+
+
+def _seed_instance(
+    instance_id: str,
+    instance: WorkflowInstance,
+    projects_root: str | Path | None = None,
+) -> Path:
+    path = _workflows_dir(projects_root) / f"{instance_id}.json"
+    payload = instance.model_dump(mode="json")
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
 
 
+def seed_general_workspace_task(projects_root: str | Path | None = None) -> Path:
+    return _seed_instance(
+        GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        general_workspace_task_instance(),
+        projects_root,
+    )
+
+
+def seed_daily_email_brief(projects_root: str | Path | None = None) -> Path:
+    return _seed_instance(
+        DAILY_EMAIL_BRIEF_INSTANCE_ID,
+        daily_email_brief_instance(),
+        projects_root,
+    )
+
+
 __all__ = [
+    "DAILY_EMAIL_BRIEF_INSTANCE_ID",
     "GENERAL_WORKSPACE_TASK_INSTANCE_ID",
+    "daily_email_brief_instance",
     "general_workspace_task_instance",
+    "seed_daily_email_brief",
     "seed_general_workspace_task",
 ]

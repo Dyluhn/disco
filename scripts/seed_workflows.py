@@ -6,14 +6,16 @@ from __future__ import annotations
 import argparse
 
 from disco.tools.workflow_seed import (
+    DAILY_EMAIL_BRIEF_INSTANCE_ID,
     GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+    seed_daily_email_brief,
     seed_general_workspace_task,
 )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Seed the built-in General Workspace Task workflow instance."
+        description="Seed the built-in workflow instances."
     )
     parser.add_argument(
         "--projects-root",
@@ -27,8 +29,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
-    path = seed_general_workspace_task(args.projects_root)
-    print(f"[seed] wrote workflow {GENERAL_WORKSPACE_TASK_INSTANCE_ID} -> {path}")
+    seeded = (
+        (GENERAL_WORKSPACE_TASK_INSTANCE_ID, seed_general_workspace_task(args.projects_root)),
+        (DAILY_EMAIL_BRIEF_INSTANCE_ID, seed_daily_email_brief(args.projects_root)),
+    )
+    for instance_id, path in seeded:
+        print(f"[seed] wrote workflow {instance_id} -> {path}")
     return 0
 
 

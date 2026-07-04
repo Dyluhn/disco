@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 
 import pytest
+from disco.core import SecurityRisk
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.workflow import (
     BUILTIN_WORKFLOW_TOOLS,
+    DAILY_EMAIL_BRIEF_DEFINITION,
+    DAILY_EMAIL_BRIEF_MCP_TOOL_NAMES,
+    DAILY_EMAIL_BRIEF_TOOLS,
     GENERAL_WORKSPACE_TASK_TOOLS,
     WORKFLOW_CONTROL_TOOLS,
     McpMount,
@@ -27,6 +31,9 @@ from disco.tools import (
     WORKFLOW_ROUTER_TOOLS,
     DefaultToolExecutor,
     ScopedPhaseExecutor,
+    ToolContext,
+    ToolDef,
+    ToolOutcome,
     ToolRegistry,
     ToolScope,
     WorkflowPhase,
@@ -45,9 +52,12 @@ from disco.tools.builtin.workflow_tools import (
     WorkflowStore,
 )
 from disco.tools.workflow_seed import (
+    DAILY_EMAIL_BRIEF_INSTANCE_ID,
     GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+    seed_daily_email_brief,
     seed_general_workspace_task,
 )
+from pydantic import BaseModel, ConfigDict
 from tool_fakes import call
 
 _STANDARD = ModelExecutionPolicy.standard()
@@ -109,6 +119,49 @@ class _MemoryWorkflowStore(WorkflowStore):
 
     def get_instance(self, instance_id: str) -> WorkflowInstance | None:
         return self._instances.get(instance_id)
+
+
+class _FakeMcpArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _FakeMcpTool:
+    def __init__(self, name: str, *, read_only: bool) -> None:
+        self.definition = ToolDef(
+            name=name,
+            description=f"Fake MCP tool {name}",
+            args_model=_FakeMcpArgs,
+            base_risk=SecurityRisk.LOW,
+            runs_in="in_process",
+            read_only=read_only,
+        )
+
+    async def run(self, args: _FakeMcpArgs, ctx: ToolContext) -> ToolOutcome:  # noqa: ARG002
+        return ToolOutcome(success=True, content="ok")
+
+
+def _fake_gmail_mcp_names() -> frozenset[str]:
+    registry = build_default_registry()
+    for name, read_only in (
+        ("mcp__gmail__search_threads", True),
+        ("mcp__gmail__get_thread", True),
+        ("mcp__gmail__create_draft", False),
+        ("mcp__gmail__send_message", False),
+        ("mcp__gmail__label_thread", False),
+    ):
+        registry.register(_FakeMcpTool(name, read_only=read_only))
+    return frozenset(name for name in registry.names() if name.startswith("mcp__"))
+
+
+def _daily_email_brief_expected_surface() -> frozenset[str]:
+    return (
+        frozenset(DAILY_EMAIL_BRIEF_TOOLS)
+        | {
+            "mcp__gmail__search_threads",
+            "mcp__gmail__get_thread",
+        }
+        | WORKFLOW_CONTROL_TOOLS
+    )
 
 
 def test_workflow_router_allowlist_is_router_tools_plus_appkit_reads() -> None:
@@ -241,6 +294,68 @@ def test_validate_definition_collects_all_preapproval_findings() -> None:
     } <= codes
 
 
+def test_daily_email_brief_definition_compiles_to_exact_gmail_surface() -> None:
+    compiled = compile_workflow_scope(
+        DAILY_EMAIL_BRIEF_DEFINITION,
+        _fake_gmail_mcp_names(),
+    )
+
+    expected = _daily_email_brief_expected_surface()
+    assert DAILY_EMAIL_BRIEF_MCP_TOOL_NAMES == ("search_threads", "get_thread")
+    assert all(mount.read_only for mount in DAILY_EMAIL_BRIEF_DEFINITION.mcp_mounts)
+    assert compiled.allowed_tools == expected
+    assert compiled.advertised == expected
+    assert compiled.advertised.isdisjoint(
+        {
+            "mcp__gmail__create_draft",
+            "mcp__gmail__send_message",
+            "mcp__gmail__label_thread",
+        }
+    )
+
+
+def test_daily_email_brief_missing_gmail_mount_reports_error_finding() -> None:
+    with pytest.raises(ValueError, match="missing mounted MCP tool"):
+        compile_workflow_scope(DAILY_EMAIL_BRIEF_DEFINITION, frozenset())
+
+    findings = validate_definition(
+        DAILY_EMAIL_BRIEF_DEFINITION,
+        BUILTIN_WORKFLOW_TOOLS | WORKFLOW_CONTROL_TOOLS,
+        frozenset(),
+    )
+
+    missing = [finding for finding in findings if finding.code == "missing_mcp_tool"]
+    assert {finding.message for finding in missing} == {
+        "missing mounted MCP tool: mcp__gmail__get_thread",
+        "missing mounted MCP tool: mcp__gmail__search_threads",
+    }
+
+
+def test_daily_email_brief_sealed_schedule_scope_excludes_router_and_ask_tools() -> None:
+    compiled = compile_workflow_scope(
+        DAILY_EMAIL_BRIEF_DEFINITION,
+        _fake_gmail_mcp_names(),
+    )
+    base = ToolScope(
+        allowed_tools=AGENT_TOOLS
+        | WORKFLOW_ROUTER_TOOLS
+        | frozenset({"ask_user", "clarify", "questions_v2"}),
+        advertised_tools=None,
+    )
+
+    scope = workflow_effective_scope(
+        phase=WorkflowPhase.RUN,
+        compiled_run_scope=compiled,
+        base_scope=base,
+    )
+
+    expected = _daily_email_brief_expected_surface()
+    assert scope.allowed_tools == expected
+    assert scope.allowed_tools.isdisjoint(WORKFLOW_ROUTER_TOOLS)
+    assert scope.allowed_tools.isdisjoint({"ask_user", "clarify", "questions_v2"})
+    assert scope.advertised_tools == expected
+
+
 def test_simulate_definition_writes_fixture_output(tmp_path) -> None:
     defn = _definition(tools=("file_read",))
 
@@ -350,6 +465,20 @@ async def test_seeded_general_workspace_task_lists_and_enters_bounded_scope(
         assert rejected.success is False
         assert rejected.structured is not None
         assert rejected.structured["kind"] == "unknown_tool"
+
+
+def test_seeded_daily_email_brief_is_disabled_and_unapproved(tmp_path) -> None:
+    seed_daily_email_brief(tmp_path)
+    store = JsonDirWorkflowStore(tmp_path)
+
+    instance = store.get_instance(DAILY_EMAIL_BRIEF_INSTANCE_ID)
+
+    assert instance is not None
+    assert instance.enabled is False
+    assert instance.approval is None
+    assert instance.definition == DAILY_EMAIL_BRIEF_DEFINITION
+    assert instance.params == {}
+    assert instance.definition.output_contract.path_template == "reports/email-brief-{date}.md"
 
 
 @pytest.mark.asyncio
