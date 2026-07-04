@@ -184,3 +184,11 @@ async def test_run_noop_when_no_first_message_yet() -> None:
     await svc._run("cid")  # type: ignore[attr-defined]
     assert store.updated_to is None
     assert router.calls == 0
+
+
+def test_sanitize_title_strips_leaked_think() -> None:
+    assert sanitize_title("<think>The user wants a concise title</think>Container Shipping Overview") == (
+        "Container Shipping Overview"
+    )
+    # Unclosed think consumes everything → empty → caller falls back honestly.
+    assert sanitize_title("<think>The user wants a concise title (3-6 words, Title") == ""

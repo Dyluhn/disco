@@ -79,6 +79,14 @@ def sanitize_title(raw: str) -> str:
     text = (raw or "").strip()
     if not text:
         return ""
+    # 0. A reasoning model can leak <think>… into the summary; reasoning is never a
+    #    title. Closed spans are cut; an unclosed leading think consumes everything
+    #    (returns "" → caller falls back to the first-message heuristic).
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<think>.*", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = text.strip()
+    if not text:
+        return ""
     # 1. First non-empty line — a chatty model puts the title on line 1, prose after.
     first = next((ln for ln in text.splitlines() if ln.strip()), "")
     # 2. Pull the title out of a leading "…title: X" / "…name: X" preamble.
