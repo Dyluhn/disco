@@ -6253,3 +6253,49 @@ Screenshots sent to Dylan. Live finding en route: preview_start crashed
 
 Gmail/WF-7 remains pending exactly one human step: Dylan connects a Gmail
 MCP connector, then approves daily_email_brief on the Workflows screen.
+
+## THE FANTASTIC-OUTPUT DESIGN CAMPAIGN — EXECUTED OVERNIGHT (2026-07-04)
+
+Dylan's directive ("build fantastic looking sites and slides… games, phone
+applications… glassmorphism… images in slides"), ratified catalog
+(docs/design-primitives-catalog.md e6b91e27, 26 primitives), 10-agent
+license-verified research harvest (bd1ab87a + d2e2a305), then executed
+end-to-end in one night, ~17 commits, every wave live-proven:
+
+- PORT-FIX cc076307 — preview allocator bind-tests + space-safe ownership
+  probe; re-proven on the exact failing shape ("Harbor preview" @ 8000).
+- WAVE 1 decks 22108b56 + 2959b8fe + 38d06999 + baeb0598 + 24864b0c —
+  title-sequence discipline, archetype mix w/ image floor, art-direction
+  image prompts THAT FIRE (triple root cause: prompts made image_prompt rare;
+  _stage_assets skipped without a sandbox; dev's openrouter image tier had NO
+  model id → now google/gemini-2.5-flash-image), palette-locked generated
+  cover/photo slides live-proven; renderer polish: big_number/quote/timeline/
+  2x2 real layouts, orphan-(cont.) merge, deck lint (6 rules) +
+  deck_handwritten_html + web_default_hidden_content advisories.
+- WAVE 2 sites a56aa550 + 9f4d389b — the direction picker (9 directions incl
+  dark-glass w/ the H2 rulebook constants) committed at plan approval into
+  .disco/context and recited via the context pack; build_static_site pack 5x
+  w/ the full harvest; 4 web lint rules (one immediately caught appkit's
+  missing :focus-visible). LIVE PROOF: Driftwood roastery — warm-craft
+  committed, studio-grade page (Dylan: "holy shit dude. if you can execute on
+  all the styles that well, my God we are in good shape.")
+- WAVE 3 starters 888e1bf7 — kits 2→6 (vanilla game loop w/ clean-room synth
+  + juice, pwa_shell, device frames, dense ui_kit).
+- WAVE 4 coherence 8cefdf3e — direction→brand token bridge (PPTX exports in
+  the artifact's palette), medium-aware verify (deck/mobile/web), Chart.js
+  premium defaults.
+- SPLASH 1fc62a3f + e7ba8184 — brand-first hero (Disco + Latin entry
+  constant, surfaces as subchips per Dylan's correction), sampled chip pools
+  behind a generative-ready seam.
+- TTS-FILTER 7922f048 — normalize_tts_text at the tier-agnostic choke point;
+  dogfood: "## / ** / 200 lbs / [1] / bullets / $5M" all read as clean speech.
+- THINK-STRIP 4d990e5a + 3dbbc680 — caught ON CAMERA during video capture:
+  research answers rendered MiniMax's <think> preamble; frontend guards +
+  backend strip (final text + straddle-safe token-stream withholding).
+- RELEASE VIDEO shipped — 76s, 8 scenes, all real flows, Kokoro voiceover
+  through the new TTS filter (float32→int16 lesson), ffmpeg assembly.
+
+Residuals (tracked in the disco-design-primitives memory): PPTX timeline/2x2
+approximated; generative chips seam; deep-research landing; old stored
+answers may carry think text; advisory-only fail-visible + handwritten-deck
+lints.
