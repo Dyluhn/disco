@@ -44,6 +44,7 @@ import { ConnectionsStrip } from "@/components/build/ConnectionsStrip";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { DeliverablePanel } from "@/components/build/DeliverablePanel";
 import { ElementMentionChip } from "@/components/build/ElementMentionChip";
+import { SuggestionChips } from "@/components/SuggestionChips";
 import { SteerInput } from "@/components/build/SteerInput";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
@@ -62,21 +63,27 @@ export type BuildFraming = "build" | "agent";
 
 const FRAMING: Record<
   BuildFraming,
-  { placeholder: string; replanPlaceholder: string; startError: string; heroSubtitle?: string }
+  {
+    placeholder: string;
+    replanPlaceholder: string;
+    startError: string;
+    heroTitle: string;
+    heroSubtitle: string;
+  }
 > = {
   build: {
     placeholder: "Describe what you want the agent to build or do…",
     replanPlaceholder: "Plan a change to this build…",
     startError: "Couldn't start the build — the server didn't respond. Try again.",
-    // heroSubtitle omitted → EmptyState keeps its default copy (build left as-is).
+    heroTitle: "Build",
+    heroSubtitle: "Real software, live preview.",
   },
   agent: {
     placeholder: "Describe a task for the agent to carry out…",
     replanPlaceholder: "Plan a change to this task…",
     startError: "Couldn't start the agent — the server didn't respond. Try again.",
-    heroSubtitle:
-      "Give the agent a task. It plans first, works in a sandbox with real tools, " +
-      "and pauses on anything risky for your approval.",
+    heroTitle: "Agent",
+    heroSubtitle: "Hands-on tasks and workflows.",
   },
 };
 
@@ -93,6 +100,7 @@ export function BuildSurface({
 } = {}) {
   const b = useBuild(resumeCid, framing, seedTask, seedContext);
   const copy = FRAMING[framing];
+  const [draft, setDraft] = useState("");
 
   // BP-15: fetch the real sandbox backend name from the server state endpoint.
   // useBuildStream doesn't expose sandbox_backend yet, so we read it once via HTTP
@@ -300,7 +308,7 @@ export function BuildSurface({
     return (
       <div className="flex min-h-full flex-col pt-section">
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
-          <EmptyState subtitle={copy.heroSubtitle} />
+          <EmptyState title={copy.heroTitle} subtitle={copy.heroSubtitle} />
           <div className="w-full max-w-measure">
             <div className="mb-inline flex items-center justify-between gap-inline">
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
@@ -346,6 +354,8 @@ export function BuildSurface({
               busy={b.submitting}
               autoFocus
               placeholder={copy.placeholder}
+              value={draft}
+              onValueChange={setDraft}
               footer={
                 /* G1/DR-4 + W-07: UploadComposer in the empty state. Always
                    rendered (no longer gated on preCid, which HID the attach while
@@ -371,6 +381,7 @@ export function BuildSurface({
               </p>
             )}
           </div>
+          <SuggestionChips surface={framing} onPick={setDraft} />
         </main>
       </div>
     );

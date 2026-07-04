@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it } from "vitest";
 import { streamTiming } from "@/api/research";
@@ -11,20 +11,41 @@ describe("Main surface — empty state + reactive provider errors", () => {
     streamTiming.blockGap = 0;
   });
 
-  it("offers example-query pills that start a run", async () => {
+  it("offers suggestion chips that fill the composer", async () => {
     const user = userEvent.setup();
     render(<App />);
-    // An outlined example pill (calm identity, not a marketing card).
-    const pill = screen.getByRole("button", { name: /How RRF works/i });
-    await user.click(pill);
-    // Clicking it submits the query → the document title renders it.
-    await waitFor(
-      () =>
-        expect(
-          screen.getByRole("heading", { name: /reciprocal rank fusion/i }),
-        ).toBeInTheDocument(),
-      { timeout: 3000 },
-    );
+    const input = screen.getByPlaceholderText(/ask anything/i);
+    const pills = screen
+      .getAllByRole("button")
+      .filter((button) => button.dataset.discoControl === "search.suggestion");
+    expect(pills.length).toBeGreaterThanOrEqual(4);
+    expect(pills.length).toBeLessThanOrEqual(6);
+
+    const pillText = pills[0].textContent?.replace(/\s+/g, " ").trim() ?? "";
+    await user.click(pills[0]);
+    expect(input).toHaveValue(pillText);
+  });
+
+  it("renders distinct landing titles and descriptors per surface", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(screen.getByRole("heading", { level: 1, name: "Research" })).toBeInTheDocument();
+    expect(screen.getByText("Sourced answers on anything.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "build" }));
+    expect(screen.getByRole("heading", { level: 1, name: "Build" })).toBeInTheDocument();
+    expect(screen.getByText("Real software, live preview.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "agent" }));
+    expect(screen.getByRole("heading", { level: 1, name: "Agent" })).toBeInTheDocument();
+    expect(screen.getByText("Hands-on tasks and workflows.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("radio", { name: "search" }));
+    await user.click(screen.getByRole("button", { name: /Scope: Standard/i }));
+    await user.click(screen.getByRole("menuitem", { name: /Deep Research/i }));
+    expect(screen.getByRole("heading", { level: 1, name: "Deep Research" })).toBeInTheDocument();
+    expect(screen.getByText("Multi-step reports with cited evidence.")).toBeInTheDocument();
   });
 
   it("surfaces a provider error with its REAL content, not a generic failure", async () => {

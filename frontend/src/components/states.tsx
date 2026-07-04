@@ -1,23 +1,24 @@
 import { AlertTriangle } from "lucide-react";
 
-/** The default hero subtitle — the research framing. Other surfaces pass their own
- * via the `subtitle` prop; omitting it keeps the research/build copy unchanged. */
-const DEFAULT_SUBTITLE =
-  "Ask a question. Get a document-grade answer — every claim tethered to a source you can " +
-  "verify, and the ones that aren't, marked as such.";
+/** The default hero copy is the standard Research framing. Other surfaces pass
+ * their own title/subtitle so the landing block names the active surface. */
+const DEFAULT_TITLE = "Research";
+const DEFAULT_SUBTITLE = "Sourced answers on anything.";
 
 /** Pre-first-query empty state — calm, reflects the philosophy (a vessel for
- * facts). The wordmark is the one place the display face appears. `subtitle`
- * overrides the tagline so a non-research surface (e.g. the Agent surface) isn't
- * framed as a Q&A tool; default preserves the existing research/build copy. */
-export function EmptyState({ subtitle }: { subtitle?: string } = {}) {
+ * facts). The display face appears here as the active surface title. */
+export function EmptyState({
+  title = DEFAULT_TITLE,
+  subtitle = DEFAULT_SUBTITLE,
+}: {
+  title?: string;
+  subtitle?: string;
+} = {}) {
   return (
     <div className="flex flex-col items-center gap-section text-center">
-      <div className="font-display text-[2.6rem] font-light tracking-tight text-text">
-        Disco
-      </div>
+      <h1 className="font-display text-[2.6rem] font-light tracking-tight text-text">{title}</h1>
       <p className="max-w-measure font-reading text-[1.05rem] leading-relaxed text-text-muted">
-        {subtitle ?? DEFAULT_SUBTITLE}
+        {subtitle}
       </p>
     </div>
   );

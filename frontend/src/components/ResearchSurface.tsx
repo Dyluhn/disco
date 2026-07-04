@@ -5,10 +5,10 @@ import { useLastSelectedModel } from "@/hooks/useDriverModels";
 import type { ScopeId } from "@/shell/mode";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { AnswerDocument } from "./AnswerDocument";
-import { ExampleQueries } from "./ExampleQueries";
 import { FollowUps } from "./FollowUps";
 import { QueryInput } from "./QueryInput";
 import { SourcePanel } from "./SourcePanel";
+import { SuggestionChips } from "./SuggestionChips";
 import { TtftIndicator } from "./TtftIndicator";
 import { DeepResearchSurface } from "./research/DeepResearchSurface";
 import { EmptyState, ErrorState } from "./states";
@@ -124,7 +124,7 @@ export function ResearchSurface() {
               </p>
             )}
           </div>
-          <ExampleQueries onPick={submit} />
+          <SuggestionChips surface="search" onPick={setDraft} />
         </main>
       ) : (
         <main className="flex flex-1 flex-col gap-section pb-major">

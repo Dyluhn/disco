@@ -6,8 +6,8 @@ import { EmptyState, ErrorState } from "./states";
 describe("states", () => {
   it("empty state reflects the philosophy", () => {
     render(<EmptyState />);
-    expect(screen.getByText("Disco")).toBeInTheDocument();
-    expect(screen.getByText(/document-grade answer/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Research" })).toBeInTheDocument();
+    expect(screen.getByText(/sourced answers/i)).toBeInTheDocument();
   });
 
   it("error state shows the message and retries", async () => {

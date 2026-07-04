@@ -35,6 +35,7 @@ import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { QueryInput } from "@/components/QueryInput";
+import { SuggestionChips } from "@/components/SuggestionChips";
 import { EmptyState, ErrorState } from "@/components/states";
 import type { ScopeId } from "@/shell/mode";
 import type { ReportExportFmt } from "@/api/deepResearch";
@@ -80,6 +81,15 @@ const PENDING_BTN =
 export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId, draft, onDraftChange }: Props) {
   const r = useDeepResearch(resumeCid, initialLeaderId);
   const started = r.started;
+  const [localDraft, setLocalDraft] = useState("");
+  const draftValue = onDraftChange ? (draft ?? "") : localDraft;
+  const setDraftValue = useCallback(
+    (next: string) => {
+      if (onDraftChange) onDraftChange(next);
+      else setLocalDraft(next);
+    },
+    [onDraftChange],
+  );
   // Gap #4: publish the DR run status to the W6 E2E bridge (await RUNNING/PAUSED/
   // FINISHED/ERROR); clear on unmount.
   useEffect(() => {
@@ -150,14 +160,14 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId,
     return (
       <div className="flex min-h-full flex-col pt-section" data-dr-phase={drPhase}>
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">
-          <EmptyState />
+          <EmptyState title="Deep Research" subtitle="Multi-step reports with cited evidence." />
           <div className="flex w-full max-w-measure flex-col gap-inline">
             <QueryInput
               onSubmit={r.submit}
               busy={r.submitting}
               autoFocus
-              value={draft}
-              onValueChange={onDraftChange}
+              value={draftValue}
+              onValueChange={setDraftValue}
               placeholder="Ask a research question that deserves a multi-page report…"
               leaderId={r.leaderId}
               onLeaderChange={r.setLeaderId}
@@ -194,6 +204,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId,
               </p>
             )}
           </div>
+          <SuggestionChips surface="deep_research" onPick={setDraftValue} />
         </main>
       </div>
     );
