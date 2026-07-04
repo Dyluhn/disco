@@ -15,6 +15,7 @@ from disco.core.workflow import (
     WorkflowPolicies,
     WorkflowVerify,
     compile_workflow_scope,
+    render_workflow_output_path,
 )
 from pydantic import ValidationError
 
@@ -216,3 +217,21 @@ def test_schedule_spec_validates_cron() -> None:
             instance_digest=digest,
             cron="garbage",
         )
+
+
+def test_render_output_path_ignores_unreferenced_non_scalar_params() -> None:
+    path = render_workflow_output_path(
+        "reports/form-fill-summary.md",
+        {"url": "https://x", "fields": [{"label": "a", "value": "b"}], "submit": False},
+    )
+    assert path == "reports/form-fill-summary.md"
+
+
+def test_render_output_path_still_rejects_referenced_non_scalar_param() -> None:
+    with pytest.raises(ValueError, match="must be a scalar JSON value"):
+        render_workflow_output_path("reports/{fields}.md", {"fields": ["a"]})
+
+
+def test_render_output_path_reports_missing_referenced_param() -> None:
+    with pytest.raises(ValueError, match="missing output path parameter"):
+        render_workflow_output_path("reports/{date}.md", {"other": "x"})

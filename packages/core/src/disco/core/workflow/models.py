@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import re
+import string
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -635,10 +636,23 @@ def _stringify_path_param(value: object, *, key: str) -> str:
     return text
 
 
+def _referenced_template_fields(template: str) -> set[str]:
+    return {
+        field.split(".")[0].split("[")[0]
+        for _, field, _, _ in string.Formatter().parse(template)
+        if field
+    }
+
+
 def render_workflow_output_path(template: str, params: dict[str, Any]) -> str:
+    referenced = _referenced_template_fields(template)
     try:
         rendered = template.format(
-            **{key: _stringify_path_param(value, key=key) for key, value in params.items()}
+            **{
+                key: _stringify_path_param(value, key=key)
+                for key, value in params.items()
+                if key in referenced
+            }
         )
     except KeyError as exc:
         missing = exc.args[0]
