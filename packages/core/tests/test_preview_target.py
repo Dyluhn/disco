@@ -5,6 +5,7 @@ that the finish gate (core) and `verify_web_app` (tools) both consume."""
 from __future__ import annotations
 
 from disco.core.loop.preview_target import (
+    PORT_OWNER_PROBE_SRC,
     PREVIEW_PORTS,
     PortOwnership,
     explicit_target_allowed,
@@ -197,6 +198,23 @@ def test_parse_port_ownership_roundtrip_and_malformed():
     # malformed / empty → empty map (never raises, never wedges the gate)
     assert parse_port_ownership("not json") == {}
     assert parse_port_ownership("") == {}
+
+
+def test_port_owner_probe_preserves_tmux_session_names_with_spaces():
+    ns = {}
+    exec(PORT_OWNER_PROBE_SRC, ns)  # noqa: S102 - executes the embedded probe under test
+
+    class FakeSubprocess:
+        @staticmethod
+        def check_output(args):  # noqa: ANN001, ANN205
+            assert args == ["tmux", "list-panes", "-a", "-F", "#{pane_pid} #{session_name}"]
+            return b"123 disco-Tidepool preview\n456 disco-conv_abc-app\n"
+
+    ns["subprocess"] = FakeSubprocess
+    assert ns["get_tmux_panes"]() == {
+        123: "disco-Tidepool preview",
+        456: "disco-conv_abc-app",
+    }
 
 
 # ---- reserved-port command containment --------------------------------------

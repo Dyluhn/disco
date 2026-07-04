@@ -225,7 +225,7 @@ def get_tmux_panes():
         ).decode('utf-8')
         res = {}
         for line in out.splitlines():
-            parts = line.strip().split()
+            parts = line.strip().split(maxsplit=1)
             if len(parts) >= 2:
                 res[int(parts[0])] = parts[1]
         return res

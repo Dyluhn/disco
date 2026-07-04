@@ -719,6 +719,78 @@ async def test_allocation_skips_port_with_live_listener() -> None:
     assert await mgr._allocate_port() == 5173  # 3000 skipped (live listener)
 
 
+class _SocketOccupiedSandbox(_FakeSandbox):
+    """Ports can be occupied even when they do not answer HTTP health."""
+
+    def __init__(self, occupied: set[int]) -> None:
+        super().__init__()
+        self.occupied = set(occupied)
+
+    async def port_owner(self, port: int):  # noqa: ANN201
+        if port in self.occupied:
+            return _Owner(pid=9000 + port, session="foreign-daemon")
+        return _Owner(pid=None, session=None)
+
+
+@pytest.mark.asyncio
+async def test_allocation_skips_socket_occupied_ports_until_free_candidate() -> None:
+    """PORT-FIX: allocation must probe in-sandbox socket occupancy, not just HTTP
+    health. A non-HTTP listener on the first N candidates is occupied and must be
+    skipped; the allocator retries to the next free platform port."""
+    sandbox = _SocketOccupiedSandbox({3000, 5173})
+    mgr = _mgr(sandbox, port_pool=[3000, 5173, 8080])
+    assert await mgr._allocate_port() == 8080
+
+
+class _StalePreviewSessions(_FakeSessions):
+    def __init__(self, serving: set[int], stale: dict[int, str]) -> None:
+        super().__init__(serving)
+        self._stale = stale
+        self.kill_calls: list[str] = []
+
+    async def kill_foreground(self, name: str) -> str:
+        self.kill_calls.append(name)
+        full = f"disco-{name}"
+        for port, session in list(self._stale.items()):
+            if session == full:
+                del self._stale[port]
+                self._serving.discard(port)
+        return await super().kill_foreground(name)
+
+
+class _StalePreviewSandbox(_FakeSandbox):
+    def __init__(self) -> None:
+        super().__init__()
+        self._stale = {3000: "disco-old"}
+        self.sessions = _StalePreviewSessions(self._serving, self._stale)
+
+    async def port_owner(self, port: int):  # noqa: ANN201
+        session = self._stale.get(port)
+        if session is not None:
+            return _Owner(pid=4321, session=session)
+        return _Owner(pid=None, session=None)
+
+
+@pytest.mark.asyncio
+async def test_allocation_reclaims_stale_same_conversation_preview() -> None:
+    """PORT-FIX: if a stopped preview from this manager leaked its server, reclaim it
+    through the same stop path instead of skipping the port forever."""
+    sandbox = _StalePreviewSandbox()
+    mgr = _mgr(sandbox, port_pool=[3000, 5173])
+    mgr._sessions["old"] = PreviewSession(
+        name="old",
+        port=3000,
+        command="python3 -m http.server 3000 -d dist",
+        exec_dir="/workspace",
+        intent={},
+        status=PreviewStatus.STOPPED,
+    )
+
+    assert await mgr._allocate_port() == 3000
+    assert sandbox.sessions.kill_calls == ["old"]
+    assert sandbox._stale == {}
+
+
 @pytest.mark.asyncio
 async def test_start_coordinates_auto_preview_standdown() -> None:
     """P1 #2: the first manager-owned start stands the legacy auto-preview DOWN (so the

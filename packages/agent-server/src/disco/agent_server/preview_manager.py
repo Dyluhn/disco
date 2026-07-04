@@ -157,6 +157,21 @@ def _classify_port_flag(tok: str, nxt: str | None) -> tuple[str | None, int, str
 # tmux session-name prefix the ShellSessionManager writes (see shell_sessions._PREFIX).
 # Used to confirm a listening port is owned by THIS preview's shell session.
 _TMUX_PREFIX = "disco"
+_MAX_PORT_ALLOCATION_ATTEMPTS = 20
+
+_PORT_BIND_TEST_SRC = """\
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("0.0.0.0", port))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+"""
 
 
 class PreviewCommandError(ValueError):
@@ -235,27 +250,120 @@ class PreviewManager:
 
     # ---- platform-owned port allocation ------------------------------------
 
-    async def _allocate_port(self) -> int:
+    async def _allocate_port(self, *, reclaim_name: str | None = None) -> int:
         """THE single place a preview port is chosen. The model has no input here — the
         port comes from the curated platform pool, skipping (a) any port already held by
         one of our previews, (b) any port the SANDBOX is already tracking as a service —
         the legacy static auto-preview or an agent-launched dev server (P1 #2: allocating
         onto one would mean the legacy server's response falsely validates ours), and
-        (c) any port with a LIVE listener right now (a real owner we don't track). This
-        is the ownership point that kills port-fixation AND cross-server contamination."""
+        (c) any port with a LIVE listener right now (a real owner we don't track), as
+        proven from INSIDE the sandbox by socket ownership / bindability rather than
+        HTTP health alone. This is the ownership point that kills port-fixation AND
+        cross-server contamination."""
         taken = {s.port for s in self._sessions.values() if s.status is not PreviewStatus.STOPPED}
         taken |= self._sandbox_tracked_ports()
+        checked: list[int] = []
         for port in self._pool:
             if port in taken:
                 continue
-            # A real listener already owns this curated port (not one of ours) →
-            # skip it, or its response would falsely validate a process that EADDRINUSE'd.
-            if await self._probe_health(port):
+            checked.append(port)
+            if len(checked) > _MAX_PORT_ALLOCATION_ATTEMPTS:
+                break
+            # A real listener already owns this curated port (not one of ours) -> skip it,
+            # or its response would falsely validate a process that EADDRINUSE'd. HTTP
+            # health is only the last fallback; the primary checks are in-sandbox socket
+            # ownership and bindability.
+            if not await self._port_available_for_allocation(port, reclaim_name=reclaim_name):
                 continue
             return port
         raise NoPreviewPortAvailableError(
-            f"all {len(self._pool)} platform preview ports are in use: {sorted(self._pool)}"
+            "no free platform preview port found after checking "
+            f"{len(checked)} candidate(s): {checked or sorted(self._pool)}"
         )
+
+    async def _port_available_for_allocation(
+        self, port: int, *, reclaim_name: str | None = None
+    ) -> bool:
+        """Return True only when `port` is genuinely free in the sandbox.
+
+        `_probe_health` can miss non-HTTP listeners or listeners that are wedged before
+        serving a response. Allocation therefore checks the socket owner first, optionally
+        reclaims a stale preview that belongs to this conversation, then bind-tests the
+        port from inside the sandbox when that seam is available.
+        """
+        owner = await self._port_owner(port)
+        if owner is not None and getattr(owner, "pid", None) is not None:
+            if await self._reclaim_stale_preview_port(port, owner, reclaim_name=reclaim_name):
+                owner = await self._port_owner(port)
+                if owner is not None and getattr(owner, "pid", None) is not None:
+                    return False
+            else:
+                return False
+
+        bindable = await self._bind_test_port(port)
+        if bindable is not None:
+            return bindable
+
+        if owner is not None:
+            return getattr(owner, "pid", None) is None
+
+        # Last fallback for old/fake sandboxes without exec-shell attribution. Keep the
+        # previous behavior here, but only after stronger in-sandbox occupancy checks fail.
+        return not await self._probe_health(port)
+
+    async def _bind_test_port(self, port: int) -> bool | None:
+        """Try to bind `port` inside the sandbox. True means bindable/free, False means
+        occupied, None means this sandbox cannot run the bind probe."""
+        exec_shell = getattr(self._sandbox, "exec_shell", None)
+        if exec_shell is None:
+            return None
+        try:
+            res = await exec_shell(
+                f"python3 -c {shlex.quote(_PORT_BIND_TEST_SRC)} {int(port)}",
+                timeout_s=5,
+            )
+        except Exception:  # noqa: BLE001 — fall back to owner/health probes
+            return None
+        return getattr(res, "exit_code", 1) == 0
+
+    async def _reclaim_stale_preview_port(
+        self, port: int, owner: Any, *, reclaim_name: str | None = None
+    ) -> bool:
+        """If `port` is held by a stale preview from this same conversation, stop that
+        preview and let allocation reuse the port. Foreign, unattributed, and actively
+        tracked previews are never reclaimed here."""
+        owner_session = getattr(owner, "session", None)
+        stale_name = self._stale_preview_name_for_owner(
+            port, str(owner_session) if owner_session else None, reclaim_name=reclaim_name
+        )
+        if stale_name is None:
+            return False
+
+        if stale_name in self._sessions:
+            await self._stop_locked(stale_name)
+        else:
+            try:
+                await self._sandbox.sessions.kill_foreground(stale_name)
+            except Exception:  # noqa: BLE001 — failed reclaim means "not available"
+                return False
+        return True
+
+    def _stale_preview_name_for_owner(
+        self, port: int, owner_session: str | None, *, reclaim_name: str | None = None
+    ) -> str | None:
+        if not owner_session:
+            return None
+        ns = getattr(getattr(self._sandbox, "sessions", None), "namespace", "") or ""
+        prefix = f"{_TMUX_PREFIX}-{ns}"
+        if not owner_session.startswith(prefix):
+            return None
+        owner_name = owner_session[len(prefix) :]
+        known = self._sessions.get(owner_name)
+        if known is not None and known.port == port and known.status is PreviewStatus.STOPPED:
+            return owner_name
+        if reclaim_name is not None and owner_name == reclaim_name:
+            return owner_name
+        return None
 
     def _sandbox_tracked_ports(self) -> set[int]:
         """Curated ports the SANDBOX itself is already tracking (the static auto-preview
@@ -551,7 +659,7 @@ class PreviewManager:
                     await self._restart(existing)
                 return existing
 
-            port = await self._allocate_port()
+            port = await self._allocate_port(reclaim_name=key)
             resolved = self._resolve_command(
                 port, serve_dir=serve_dir, command=command, framework=framework
             )
@@ -784,16 +892,20 @@ class PreviewManager:
             )
             stopped: list[str] = []
             for n in names:
-                session = self._sessions[n]
-                try:
-                    await self._sandbox.sessions.kill_foreground(n)
-                except Exception:  # noqa: BLE001 — best-effort; mark stopped regardless
-                    _LOG.debug("kill_foreground failed for preview %s", n, exc_info=True)
-                session.status = PreviewStatus.STOPPED
-                session.url = None
-                session.detail = "stopped on request"
-                stopped.append(n)
+                stopped.append(await self._stop_locked(n))
             return stopped
+
+    async def _stop_locked(self, name: str) -> str:
+        """Stop one tracked preview. Caller owns `_lock` when coordinating with state."""
+        session = self._sessions[name]
+        try:
+            await self._sandbox.sessions.kill_foreground(name)
+        except Exception:  # noqa: BLE001 — best-effort; mark stopped regardless
+            _LOG.debug("kill_foreground failed for preview %s", name, exc_info=True)
+        session.status = PreviewStatus.STOPPED
+        session.url = None
+        session.detail = "stopped on request"
+        return name
 
     def list(self) -> list[PreviewSession]:
         """Snapshot of every preview this manager tracks (a fresh copy)."""
