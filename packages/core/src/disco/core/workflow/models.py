@@ -13,8 +13,10 @@ import json
 import math
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
+from cronsim import CronSim, CronSimError
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -415,6 +417,31 @@ class WorkflowRun(BaseModel):
         return value
 
 
+class ScheduleSpec(BaseModel):
+    """A sealed recurring workflow schedule.
+
+    ``instance_digest`` pins the schedule to the approved workflow instance digest
+    that was shown when the schedule was created. The server must refuse to run if
+    the saved instance id now resolves to a different digest.
+    """
+
+    model_config = _STRICT
+
+    instance_id: _SmallStr
+    instance_digest: _DigestStr
+    cron: _SmallStr
+    enabled: bool = True
+
+    @field_validator("cron")
+    @classmethod
+    def _cron_is_valid(cls, value: str) -> str:
+        try:
+            CronSim(value, datetime(2020, 1, 1, tzinfo=UTC))
+        except (CronSimError, ValueError, TypeError) as exc:
+            raise ValueError(f"invalid cron expression: {value!r}") from exc
+        return value
+
+
 class WorkflowScope(BaseModel):
     model_config = _STRICT
 
@@ -458,6 +485,7 @@ def compile_workflow_scope(
 __all__ = [
     "BUILTIN_WORKFLOW_TOOLS",
     "McpMount",
+    "ScheduleSpec",
     "WORKFLOW_CONTROL_TOOLS",
     "WorkflowApproval",
     "WorkflowDefinition",

@@ -7,6 +7,7 @@ import re
 import pytest
 from disco.core.workflow import (
     McpMount,
+    ScheduleSpec,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
@@ -197,3 +198,21 @@ def test_compile_workflow_scope_rejects_missing_mounted_mcp_tool() -> None:
 
     with pytest.raises(ValueError, match="missing mounted MCP tool"):
         compile_workflow_scope(defn, frozenset({"mcp__github__other_tool"}))
+
+
+def test_schedule_spec_validates_cron() -> None:
+    digest = "sha256:" + ("0" * 64)
+    spec = ScheduleSpec(
+        instance_id="wf_ok",
+        instance_digest=digest,
+        cron="*/5 * * * *",
+    )
+
+    assert spec.enabled is True
+
+    with pytest.raises(ValidationError, match="invalid cron expression"):
+        ScheduleSpec(
+            instance_id="wf_ok",
+            instance_digest=digest,
+            cron="garbage",
+        )

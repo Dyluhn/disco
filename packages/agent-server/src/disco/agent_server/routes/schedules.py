@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from disco.core import DEFAULT_OWNER_ID
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.workflow import ScheduleSpec
 from fastapi import APIRouter, HTTPException
 
 from ..runtime import ConversationRuntime
@@ -94,5 +95,60 @@ def make_schedules_router(
                 detail={"reason": f"Invalid or non-firing cron expression: {body.rrule!r}"},
             )
         return {"next_runs": times, "rrule": body.rrule}
+
+    @router.post("/api/workflows/schedules")
+    async def create_workflow_schedule(body: ScheduleSpec) -> dict:
+        """Create a sealed recurring workflow schedule.
+
+        This is intentionally additive to the existing conversation schedules:
+        workflow schedules fire fresh sealed agent conversations rather than
+        appending to an existing conversation.
+        """
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        try:
+            return runtime.create_workflow_schedule(
+                body,
+                owner_id=DEFAULT_OWNER_ID,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail={"reason": str(exc)}) from exc
+
+    @router.get("/api/workflows/schedules")
+    async def list_workflow_schedules() -> dict:
+        if runtime is None:
+            return {"schedules": []}
+        return {
+            "schedules": runtime.list_workflow_schedules(owner_id=DEFAULT_OWNER_ID)
+        }
+
+    @router.get("/api/workflows/schedules/runs")
+    async def list_workflow_schedule_runs(
+        schedule_id: str | None = None,
+        limit: int = 100,
+    ) -> dict:
+        if runtime is None:
+            return {"runs": []}
+        return {
+            "runs": runtime.list_workflow_schedule_runs(
+                schedule_id=schedule_id,
+                limit=limit,
+            )
+        }
+
+    @router.post("/api/workflows/schedules/{schedule_id}/fire-now")
+    async def fire_workflow_schedule_now(schedule_id: str) -> dict:
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        record = await runtime.fire_workflow_schedule_now(
+            schedule_id,
+            owner_id=DEFAULT_OWNER_ID,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "workflow_schedule_not_found"},
+            )
+        return {"ok": True, "schedule_id": schedule_id, "run": record}
 
     return router

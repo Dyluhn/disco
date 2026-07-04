@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from disco.core.workflow import ScheduleSpec
+
 
 class ScheduleService:
     def __init__(self, rt: Any) -> None:
@@ -80,6 +82,54 @@ class ScheduleService:
         return await self._schedule_manager().fire_now(
             schedule_id, owner_id=owner_id
         )
+
+    def create_workflow_schedule(
+        self,
+        spec: ScheduleSpec,
+        *,
+        owner_id: str,
+    ) -> dict:
+        row = self._schedule_manager().create_workflow_schedule(
+            spec,
+            owner_id=owner_id,
+        )
+        return row.model_dump(mode="json")
+
+    def list_workflow_schedules(self, *, owner_id: str | None = None) -> list[dict]:
+        return [
+            row.model_dump(mode="json")
+            for row in self._schedule_manager().list_workflow_schedules(
+                owner_id=owner_id,
+            )
+        ]
+
+    def list_workflow_schedule_runs(
+        self,
+        *,
+        schedule_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        return [
+            row.model_dump(mode="json")
+            for row in self._schedule_manager().list_workflow_schedule_runs(
+                schedule_id=schedule_id,
+                limit=limit,
+            )
+        ]
+
+    async def fire_workflow_schedule_now(
+        self,
+        schedule_id: str,
+        *,
+        owner_id: str,
+    ) -> dict | None:
+        row = await self._schedule_manager().fire_workflow_schedule_now(
+            schedule_id,
+            owner_id=owner_id,
+        )
+        if row is None:
+            return None
+        return row.model_dump(mode="json")
 
     def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
         """Preview next N run times for a cron expression (ISO-8601 strings).

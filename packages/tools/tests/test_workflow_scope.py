@@ -16,8 +16,10 @@ from disco.core.workflow import (
     WorkflowPolicies,
     WorkflowScope,
     WorkflowVerify,
+    compile_workflow_scope,
 )
 from disco.tools import (
+    AGENT_TOOLS,
     WORKFLOW_ROUTER_TOOLS,
     DefaultToolExecutor,
     ScopedPhaseExecutor,
@@ -159,6 +161,27 @@ def test_workflow_phase_swap_changes_scoped_executor_resolver_output() -> None:
 
     assert executor.tool_scope("file_write") == "sandbox"
     assert executor.callable_tool_names() == frozenset({"file_write"})
+
+
+def test_sealed_run_scope_excludes_router_and_ask_tools() -> None:
+    compiled = compile_workflow_scope(_definition(tools=("file_read",)), frozenset())
+    base = ToolScope(
+        allowed_tools=AGENT_TOOLS
+        | WORKFLOW_ROUTER_TOOLS
+        | frozenset({"ask_user", "clarify", "questions_v2"}),
+        advertised_tools=None,
+    )
+
+    scope = workflow_effective_scope(
+        phase=WorkflowPhase.RUN,
+        compiled_run_scope=compiled,
+        base_scope=base,
+    )
+
+    assert {"file_read", "finish", "skip", "needs_input"} <= scope.allowed_tools
+    assert scope.allowed_tools.isdisjoint(WORKFLOW_ROUTER_TOOLS)
+    assert scope.allowed_tools.isdisjoint({"ask_user", "clarify", "questions_v2"})
+    assert scope.advertised_tools == scope.allowed_tools
 
 
 def test_json_dir_workflow_store_reads_instances_from_projects_root(tmp_path) -> None:

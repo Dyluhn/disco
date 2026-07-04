@@ -23,7 +23,9 @@ import posixpath
 import re
 import shutil
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -109,6 +111,7 @@ from disco.core.loop import (
 from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.workflow import ScheduleSpec, WorkflowRun, compile_workflow_scope
 from disco.retrieval.deep_research import (
     DepthTier,
 )
@@ -128,6 +131,7 @@ from disco.tools import (
     ToolDef,
     ToolRegistry,
     ToolScope,
+    WorkflowPhase,
     WorkflowPhaseState,
     agent_scope,
     artifact_scope,
@@ -171,6 +175,7 @@ from .share_service import ShareService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
 from .verify.model_verifier import ModelVerifier
+from .workflow_schedule import WorkflowScheduleRunRecord
 
 _HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
 _TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
@@ -203,6 +208,35 @@ def toolscope_audit_enabled() -> bool:
 def workflow_router_enabled() -> bool:
     """True iff DISCO_WORKFLOW_ROUTER is truthy (default OFF)."""
     return str(disco_env(_WORKFLOW_ROUTER_FLAG) or "").strip().lower() in _TRUTHY
+
+
+class _WorkflowOutputPathParams(dict[str, object]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render_workflow_output_path(template: str, params: dict[str, object]) -> str:
+    try:
+        return template.format_map(_WorkflowOutputPathParams(params))
+    except (KeyError, IndexError, ValueError):
+        return template
+
+
+def _workflow_history_fields(
+    events: list[Event],
+    *,
+    fallback_output_path: str,
+) -> tuple[str, str]:
+    for event in reversed(events):
+        if not isinstance(event, StatusEvent):
+            continue
+        detail = event.detail or ""
+        if not detail.startswith("workflow_output_contract_"):
+            continue
+        output_path = str(event.meta.get("workflow_output_path") or fallback_output_path)
+        verdict = str(event.meta.get("verdict") or "unverified")
+        return output_path, verdict
+    return fallback_output_path, "unverified"
 
 
 class _ToolScopeAuditRecorder:
@@ -1956,7 +1990,13 @@ class ConversationRuntime:
         return list(self._upload_passages.get(conversation_id, []))
 
     def _compose_build_loop(
-        self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
+        self,
+        conversation_id: str,
+        router: DefaultLLMRouter,
+        agent: RouterAgent,
+        *,
+        sealed_workflow_run: WorkflowRun | None = None,
+        sealed_workflow_instance_id: str | None = None,
     ) -> AgentLoop:
         """[Agent surface] Compose — not reinvent — the loop for Build mode: the agent
         toolset (Prompt 1) over a resilient SandboxSession, the SecurityAnalyzer, the
@@ -1968,12 +2008,20 @@ class ConversationRuntime:
         # re-read of the directory. Create a fresh session only when there is none.
         session = self._pending_sessions.pop(conversation_id, None)
         if session is None:
+            sandbox_spec = self._build_sandbox_spec(
+                surface=self._surface_of(conversation_id),
+                mcp_egress_hosts=self._mcp_egress_hosts(),
+            )
+            if sealed_workflow_run is not None:
+                sandbox_spec = sandbox_spec.model_copy(
+                    update={
+                        "permitted": sandbox_spec.permitted - {Capability.NETWORK},
+                        "egress_allow": frozenset(),
+                    }
+                )
             session = SandboxSession(
                 self._sandbox_service_now(),
-                self._build_sandbox_spec(
-                    surface=self._surface_of(conversation_id),
-                    mcp_egress_hosts=self._mcp_egress_hosts(),
-                ),
+                sandbox_spec,
                 conversation_id=conversation_id,
                 # Mid-run death (transport drop / OOM): restore the last snapshot
                 # into the fresh instance before the agent retries (bp-13 §2).
@@ -2025,8 +2073,16 @@ class ConversationRuntime:
             and self._surface_of(conversation_id) == "agent"
             and not _art_mode
             and not _appkit_mode
+            and sealed_workflow_run is None
         )
-        _workflow_phase = WorkflowPhaseState() if _workflow_router_mode else None
+        _workflow_phase = (
+            WorkflowPhaseState(
+                phase=WorkflowPhase.RUN,
+                instance_id=sealed_workflow_instance_id,
+            )
+            if sealed_workflow_run is not None
+            else (WorkflowPhaseState() if _workflow_router_mode else None)
+        )
         _common_exec_kwargs: dict[str, Any] = dict(
             # SandboxSession is a drop-in SandboxInstance (it implements the
             # protocol at runtime); the `id` attribute differs only in being a
@@ -2066,7 +2122,7 @@ class ConversationRuntime:
                 ),
                 **_common_exec_kwargs,
             )
-        elif _workflow_router_mode:
+        elif _workflow_router_mode or sealed_workflow_run is not None:
             assert _workflow_phase is not None
             workflow_registry = build_default_registry()
             project_root = self._project_store_now().root
@@ -2079,12 +2135,13 @@ class ConversationRuntime:
                     name for name in registry.names() if name.startswith("mcp__")
                 )
 
-            for tool in workflow_router_tools(
-                store=workflow_store,
-                phase_state=_workflow_phase,
-                mcp_tool_names_getter=_workflow_mcp_tool_names,
-            ):
-                workflow_registry.register(tool)
+            if _workflow_router_mode:
+                for tool in workflow_router_tools(
+                    store=workflow_store,
+                    phase_state=_workflow_phase,
+                    mcp_tool_names_getter=_workflow_mcp_tool_names,
+                ):
+                    workflow_registry.register(tool)
 
             workflow_executor_ref: dict[str, ScopedPhaseExecutor] = {}
 
@@ -2156,6 +2213,13 @@ class ConversationRuntime:
             # broker). The cap-handler cache is invalidated when the providers are
             # (re)built so the composition picks up the live set.
 
+        if sealed_workflow_run is not None:
+            assert _workflow_phase is not None
+            _workflow_phase.compiled_run_scope = compile_workflow_scope(
+                sealed_workflow_run.definition,
+                frozenset(t.name for t in all_mcp_tools),
+            )
+
         # Emit mcp_approval_required frames for any servers that need re-approval
         for server, info in self._mcp_approval_pending.items():
             try:
@@ -2174,7 +2238,11 @@ class ConversationRuntime:
         # P6: the contract's verification finalizer, advertised as a per-kind alias of
         # `finish`. Bound on BOTH the loop (dispatch/advertisement/requery) and the agent
         # (batched-call selection); guard the agent hook for test fakes that don't have it.
-        _finish_alias = self._finalizer_alias_for(conversation_id)
+        _finish_alias = (
+            sealed_workflow_run.definition.verify.finalizer
+            if sealed_workflow_run is not None
+            else self._finalizer_alias_for(conversation_id)
+        )
         # REL-1c: inject for ALL build-like loops — the gate self-skips non-web
         # deliverables, and shadow-agreement telemetry must cover DEFAULT builds
         # (plain builds have no resolved contract, so gating injection on the
@@ -2186,6 +2254,27 @@ class ConversationRuntime:
         _set_alias = getattr(agent, "set_finish_alias", None)
         if callable(_set_alias):
             _set_alias(_finish_alias)
+        if sealed_workflow_run is not None:
+            return AgentLoop(
+                conversation_id,
+                self._store,
+                agent,
+                executor,
+                router,
+                RuleBasedAnalyzer(),
+                NeverConfirm(),
+                LLMSummarizingCondenser(context_window=self._driver_context_window()),
+                RouterSummarizer(router),
+                mode=OperatingMode.INTERACTIVE,
+                autonomous=True,
+                model_policy=model_policy,
+                workflow_run=sealed_workflow_run,
+                finish_alias=_finish_alias,
+                host_verifier=host_verifier,
+                verifier_judge=verifier_judge,
+                host_verifier_verdict_hook=host_verify_canary_hook,
+                host_verify_authoritative=host_verify_authoritative_enabled(),
+            )
         if _art_mode:
             # C6: artifact mode — low-friction authoring path:
             #   • NeverConfirm: artifacts are low-risk; no per-action approval.
@@ -4017,6 +4106,252 @@ class ConversationRuntime:
             with contextlib.suppress(Exception):
                 await session.destroy()
 
+    async def _record_workflow_schedule_error(
+        self,
+        conversation_id: str,
+        *,
+        detail: str,
+        explanation: str,
+    ) -> None:
+        await self._store.append(
+            conversation_id,
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=explanation),
+            ),
+        )
+        await self._store.append(
+            conversation_id,
+            MessageEvent(
+                source=EventSource.AGENT,
+                message=LLMMessage(role="assistant", content=explanation),
+            ),
+        )
+        await self._store.append(
+            conversation_id,
+            StatusEvent(status=ConversationStatus.ERROR, detail=detail),
+        )
+
+    async def run_sealed_workflow_schedule(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        coalesced: bool = False,
+    ) -> WorkflowScheduleRunRecord:
+        """Fire a workflow schedule as a fresh sealed agent conversation.
+
+        The schedule pins an instance id + definition digest. Any mismatch fails
+        closed before tools are exposed. Successful fires compose the normal agent
+        build loop in workflow RUN phase with the compiled workflow scope, so router
+        tools are never registered and autonomous mode withholds ask/clarify tools.
+        """
+        conversation_id = f"conv_{uuid.uuid4().hex}"
+        self._store.create_conversation(
+            conversation_id,
+            owner_id=DEFAULT_OWNER_ID,
+            surface="agent",
+            title=f"Workflow schedule {spec.instance_id}",
+        )
+        self.set_surface(conversation_id, "agent")
+        self.set_autonomous(conversation_id, True)
+
+        fired_at = datetime.now(UTC)
+        project_root = self._project_store_now().root
+        workflow_store = JsonDirWorkflowStore(project_root or "")
+        fallback_output_path = ""
+        workflow_run: WorkflowRun | None = None
+
+        try:
+            instance = workflow_store.get_instance(spec.instance_id)
+        except ValueError as exc:
+            await self._record_workflow_schedule_error(
+                conversation_id,
+                detail="workflow_instance_invalid_id",
+                explanation=f"Workflow schedule {schedule_id} could not run: {exc}",
+            )
+            return WorkflowScheduleRunRecord(
+                schedule_id=schedule_id,
+                run_cid=conversation_id,
+                fired_at=fired_at,
+                terminal_state=ConversationStatus.ERROR.value,
+                output_path="",
+                verify_verdict="error",
+                coalesced=coalesced,
+                error=str(exc),
+            )
+
+        if instance is None:
+            message = (
+                f"Workflow schedule {schedule_id} could not run: instance "
+                f"{spec.instance_id!r} was not found."
+            )
+            await self._record_workflow_schedule_error(
+                conversation_id,
+                detail="workflow_instance_not_found",
+                explanation=message,
+            )
+            return WorkflowScheduleRunRecord(
+                schedule_id=schedule_id,
+                run_cid=conversation_id,
+                fired_at=fired_at,
+                terminal_state=ConversationStatus.ERROR.value,
+                output_path="",
+                verify_verdict="error",
+                coalesced=coalesced,
+                error=message,
+            )
+
+        if instance.definition_digest != spec.instance_digest:
+            message = (
+                f"Workflow schedule {schedule_id} could not run: pinned digest "
+                f"{spec.instance_digest!r} does not match current instance digest "
+                f"{instance.definition_digest!r}."
+            )
+            await self._record_workflow_schedule_error(
+                conversation_id,
+                detail="workflow_instance_digest_mismatch",
+                explanation=message,
+            )
+            return WorkflowScheduleRunRecord(
+                schedule_id=schedule_id,
+                run_cid=conversation_id,
+                fired_at=fired_at,
+                terminal_state=ConversationStatus.ERROR.value,
+                output_path="",
+                verify_verdict="error",
+                coalesced=coalesced,
+                error=message,
+            )
+
+        if not instance.enabled or instance.approval is None:
+            reason = "workflow_instance_not_enabled" if not instance.enabled else "workflow_instance_not_approved"
+            message = (
+                f"Workflow schedule {schedule_id} could not run: instance "
+                f"{spec.instance_id!r} is not enabled and approved."
+            )
+            await self._record_workflow_schedule_error(
+                conversation_id,
+                detail=reason,
+                explanation=message,
+            )
+            return WorkflowScheduleRunRecord(
+                schedule_id=schedule_id,
+                run_cid=conversation_id,
+                fired_at=fired_at,
+                terminal_state=ConversationStatus.ERROR.value,
+                output_path="",
+                verify_verdict="error",
+                coalesced=coalesced,
+                error=message,
+            )
+
+        workflow_run = WorkflowRun(
+            run_id=f"wfrun_{uuid.uuid4().hex}",
+            definition=instance.definition,
+            params=instance.params,
+        )
+        fallback_output_path = _render_workflow_output_path(
+            instance.definition.output_contract.path_template,
+            instance.params,
+        )
+
+        await self._store.append(
+            conversation_id,
+            MessageEvent(
+                source=EventSource.USER,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "Run this sealed workflow schedule.\n"
+                        f"Schedule id: {schedule_id}\n"
+                        f"Workflow instance: {spec.instance_id}\n"
+                        f"Definition digest: {spec.instance_digest}\n"
+                        f"Output path: {fallback_output_path}\n"
+                        "Parameters:\n"
+                        f"{json.dumps(instance.params, sort_keys=True)}"
+                    ),
+                ),
+            ),
+        )
+
+        override = self._model_override.get(conversation_id)
+        router = self._router_now(
+            pick=override,
+            surface="agent",
+            autonomous=True,
+            conversation_id=conversation_id,
+        )
+        agent = BuildAgent(router, conversation_id=conversation_id, model_override=override)
+        try:
+            loop = self._compose_build_loop(
+                conversation_id,
+                router,
+                agent,
+                sealed_workflow_run=workflow_run,
+                sealed_workflow_instance_id=spec.instance_id,
+            )
+        except ValueError as exc:
+            await self._record_workflow_schedule_error(
+                conversation_id,
+                detail="workflow_scope_compile_failed",
+                explanation=(
+                    f"Workflow schedule {schedule_id} could not run because its "
+                    f"sealed tool scope failed to compile: {exc}"
+                ),
+            )
+            return WorkflowScheduleRunRecord(
+                schedule_id=schedule_id,
+                run_cid=conversation_id,
+                fired_at=fired_at,
+                terminal_state=ConversationStatus.ERROR.value,
+                output_path=fallback_output_path,
+                verify_verdict="error",
+                coalesced=coalesced,
+                error=str(exc),
+            )
+        loop.stream_sink = lambda frame, _cid=conversation_id: self._store.publish_ephemeral(
+            _cid, frame
+        )
+        self._loops[conversation_id] = loop
+
+        try:
+            state = await self._run_with_persistence(conversation_id, loop)
+        except Exception as exc:
+            await self._record_workflow_schedule_error(
+                conversation_id,
+                detail="workflow_schedule_run_failed",
+                explanation=(
+                    f"Workflow schedule {schedule_id} failed while running: {exc}"
+                ),
+            )
+            return WorkflowScheduleRunRecord(
+                schedule_id=schedule_id,
+                run_cid=conversation_id,
+                fired_at=fired_at,
+                terminal_state=ConversationStatus.ERROR.value,
+                output_path=fallback_output_path,
+                verify_verdict="error",
+                coalesced=coalesced,
+                error=str(exc),
+            )
+        authoritative = await self._store.get_state(conversation_id)
+        events = await self._store.get_events(conversation_id)
+        output_path, verify_verdict = _workflow_history_fields(
+            events,
+            fallback_output_path=fallback_output_path,
+        )
+        terminal_state = authoritative.execution_status or state.execution_status
+        return WorkflowScheduleRunRecord(
+            schedule_id=schedule_id,
+            run_cid=conversation_id,
+            fired_at=fired_at,
+            terminal_state=terminal_state.value,
+            output_path=output_path,
+            verify_verdict=verify_verdict,
+            coalesced=coalesced,
+        )
+
     # ---- RP-08: scheduled tasks ---------------------------------------------
 
     def _schedule_manager(self) -> Any:
@@ -4057,6 +4392,39 @@ class ConversationRuntime:
     async def fire_schedule_now(self, schedule_id: str, *, owner_id: str) -> bool:
         """Run a schedule immediately, out of band (gap #98). False if not found."""
         return await self._schedule.fire_now(schedule_id, owner_id=owner_id)
+
+    def create_workflow_schedule(
+        self,
+        spec: ScheduleSpec,
+        *,
+        owner_id: str,
+    ) -> dict:
+        return self._schedule.create_workflow_schedule(spec, owner_id=owner_id)
+
+    def list_workflow_schedules(self, *, owner_id: str | None = None) -> list[dict]:
+        return self._schedule.list_workflow_schedules(owner_id=owner_id)
+
+    def list_workflow_schedule_runs(
+        self,
+        *,
+        schedule_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict]:
+        return self._schedule.list_workflow_schedule_runs(
+            schedule_id=schedule_id,
+            limit=limit,
+        )
+
+    async def fire_workflow_schedule_now(
+        self,
+        schedule_id: str,
+        *,
+        owner_id: str,
+    ) -> dict | None:
+        return await self._schedule.fire_workflow_schedule_now(
+            schedule_id,
+            owner_id=owner_id,
+        )
 
     def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:
         return self._schedule.preview_schedule_runs(rrule, n)

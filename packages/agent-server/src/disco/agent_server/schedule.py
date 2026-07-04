@@ -24,8 +24,14 @@ from disco.core import (
     MessageEvent,
 )
 from disco.core.events import ScheduleRunEvent
+from disco.core.workflow import ScheduleSpec
 
 from .schedule_models import Schedule, ScheduleRun
+from .workflow_schedule import (
+    WorkflowScheduleManager,
+    WorkflowScheduleRow,
+    WorkflowScheduleRunRecord,
+)
 
 if TYPE_CHECKING:
     from disco.core.store.sqlite import SqliteEventStore
@@ -111,6 +117,7 @@ class ScheduleManager:
         self._runtime = runtime
         self._now_fn = now_fn or (lambda: datetime.now(UTC))
         self._sleep_fn = sleep_fn or asyncio.sleep  # type: ignore[assignment]
+        self._workflow = WorkflowScheduleManager(runtime, now_fn=self._now_fn)
 
     # ---- public schedule CRUD -----------------------------------------------
 
@@ -175,6 +182,35 @@ class ScheduleManager:
         await self._execute_run(sched, coalesced=False)
         return True
 
+    def create_workflow_schedule(
+        self,
+        spec: ScheduleSpec,
+        *,
+        owner_id: str = "local",
+    ) -> WorkflowScheduleRow:
+        return self._workflow.create_schedule(spec, owner_id=owner_id)
+
+    def list_workflow_schedules(
+        self, *, owner_id: str | None = None
+    ) -> list[WorkflowScheduleRow]:
+        return self._workflow.list_schedules(owner_id=owner_id)
+
+    def list_workflow_schedule_runs(
+        self,
+        *,
+        schedule_id: str | None = None,
+        limit: int = 100,
+    ) -> list[WorkflowScheduleRunRecord]:
+        return self._workflow.list_runs(schedule_id=schedule_id, limit=limit)
+
+    async def fire_workflow_schedule_now(
+        self,
+        schedule_id: str,
+        *,
+        owner_id: str = "local",
+    ) -> WorkflowScheduleRunRecord | None:
+        return await self._workflow.fire_now(schedule_id, owner_id=owner_id)
+
     # ---- background loop ----------------------------------------------------
 
     async def run(self) -> None:
@@ -217,6 +253,7 @@ class ScheduleManager:
                     sched.schedule_id,
                     next_future.isoformat() if next_future else None,
                 )
+        await self._workflow.tick()
 
     def _was_coalesced(self, sched: Schedule, now: datetime, next_run: datetime) -> bool:
         """True if this run covers more than one missed fire.
