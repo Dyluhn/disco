@@ -6169,3 +6169,48 @@ history rows) is the real fix. (b) output-contract path templating can't
 slug-ify params (skills/{slug}/SKILL.md), so skill artifacts land at literal
 contract paths. (c) fire-now does not coalesce with an in-flight run of the
 same schedule (two concurrent skill_authoring runs both completed).
+
+## CXT-LIVE: THE CONTEXT RUNTIME IS IN THE LIVE PROMPT (2026-07-04)
+
+Executed the tracked CXT/WPP runtime-integration deferrals (the arc's payload,
+parked since P0/P3). Behind DISCO_CONTEXT_PACK (default OFF, flag-off view
+byte-identical, fingerprint-anchored):
+
+[CXT-LIVE-A] `0fa228a0` — Disco kernel: exactly one <context-pack> after the
+head message before history (cache-stable prefix; raw plan renders dropped —
+the pack owns goal/version/todo/failures/refs); C6 <current-objective>
+narrowed to current-step + drift-gate (the CXT-4 Codex carried note, closed);
+snip compaction fires BEFORE the condenser under real pressure (protected:
+unresolved verifier/tool failures + in-flight action pair), re-projects, only
+condenses if still over; host-driven deferred marks at plan-step-done
+(mark + durable .disco/context/summary/<range_id>.md via store.write_summary;
+never over failure spans; model does no seq arithmetic). DISCO_INSPECT logs
+context_pack spans (cid/index/chars).
+
+[CXT-LIVE-B] `c28e99f4` — Pi kernel bootstrap+resume through
+assemble_workflow_prompt (WPP-2 closure): prefix → contract PromptPack
+(optional seam, absent = omitted) → context-pack → live turn, rendered for the
+text sidecar via new pure render_messages_as_text. All context reads
+best-effort; Pi never strands on them.
+
+LIVE PROOF (MiniMax relay, 0 OpenRouter): conv_8ab3c62a FINISHED — full
+multi-tool run (file_write/file_edit/shell verify) with context_pack spans on
+every prompt (message_index=1), contracted notes/summary.md written, content
+genuinely correct. Snip firing under pressure remains unit-proven only (short
+builds never hit the condenser) — needs a long-context soak.
+
+METHODOLOGY LESSON (cost ~40min): first two proof builds stalled actionless →
+suspected pack regression → flag-off control ALSO failed → real cause:
+DISCO_WORKFLOW_ROUTER=on in dev makes bare-agent runs ROUTE-ONLY (file_write
+correctly denied by the router allowlist; "Unknown tool" requeries were the
+phase working). Pack acquitted by A/B; proof re-run router-off. PRODUCT
+QUESTION for Dylan: with the router on, a bare-agent "just write a file" ask
+requires the model to enter_workflow — M3 instead retried file_write into the
+allowlist wall until the actionless valve landed an ask. Either the router
+card/prompt needs a stronger "route first" nudge, or direct micro-tasks need a
+default workflow the router auto-enters.
+
+Remaining from the old deferral list: WPP-3 skill mount-path enforcement +
+CONTRACT-3 executor enforcement (partially superseded by ScopedPhaseExecutor)
++ P8 direct-edit capture. Flag flip to default-ON is a separate decision after
+a pack-on soak.
