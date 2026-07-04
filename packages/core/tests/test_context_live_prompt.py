@@ -339,3 +339,23 @@ async def test_plan_step_transition_does_not_mark_failure_spans(monkeypatch) -> 
     events = await store.get_events(CID)
     assert not any(isinstance(e, ContextResolvedEvent) for e in events)
     assert not any(isinstance(e, ContextSummaryEvent) for e in events)
+
+
+@pytest.mark.asyncio
+async def test_plan_step_transition_marks_with_unnumbered_in_memory_action(
+    monkeypatch,
+) -> None:
+    """Live shape: the loop passes the IN-MEMORY action (seq=None — the store
+    assigns seq on append). The hook must resolve the persisted copy by id or
+    every mark is silently skipped (the bug the first pack-on soak caught)."""
+    monkeypatch.setenv("DISCO_CONTEXT_PACK", "on")
+    store = SqliteEventStore(":memory:")
+    loop, done, _fs = await _seed_progress_events(store)
+
+    unnumbered = done.model_copy(update={"seq": None})
+    assert unnumbered.seq is None
+
+    await loop._maybe_emit_plan_step_done_condition_note(unnumbered)
+    events = await store.get_events(CID)
+    assert any(isinstance(e, ContextResolvedEvent) for e in events)
+    assert any(isinstance(e, ContextSummaryEvent) for e in events)

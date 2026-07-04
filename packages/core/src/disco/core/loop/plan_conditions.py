@@ -374,6 +374,24 @@ class PlanStepConditions:
         sbx = getattr(self._loop.executor, "sandbox", None)
         if sbx is None:
             return
+        # The in-memory action predates store numbering (seq is assigned on
+        # append), so range math must use the PERSISTED copy — with seq=None,
+        # _step_start_seq bails and every mark is silently skipped
+        # (live-caught; the unit fake pre-seeded persisted events and hid it).
+        if action.seq is None:
+            stored = next(
+                (
+                    e
+                    for e in events
+                    if isinstance(e, ActionEvent)
+                    and e.id == action.id
+                    and e.seq is not None
+                ),
+                None,
+            )
+            if stored is None:
+                return
+            action = stored
         store = ArtifactMemoryStore(sbx)
         failures = unresolved_failure_seqs(events)
         for idx in newly_done:
