@@ -235,6 +235,89 @@ def test_workflow_phase_swap_changes_scoped_executor_resolver_output() -> None:
     assert executor.callable_tool_names() == frozenset({"file_write"})
 
 
+@pytest.mark.asyncio
+async def test_router_phase_denies_file_write_with_workflow_routing_hint() -> None:
+    state = WorkflowPhaseState()
+    registry = build_default_registry()
+    executor_ref: dict[str, ScopedPhaseExecutor] = {}
+
+    def _resolver() -> ToolScope:
+        executor = executor_ref["executor"]
+        return workflow_effective_scope(
+            phase=state.phase,
+            compiled_run_scope=state.compiled_run_scope,
+            base_scope=executor.widened_scope,
+        )
+
+    executor = ScopedPhaseExecutor(
+        registry,
+        agent_scope(model_policy=_STANDARD),
+        scope_resolver=_resolver,
+    )
+    executor_ref["executor"] = executor
+
+    result = await executor.execute(call("file_write"))
+
+    assert result.success is False
+    assert result.structured is not None
+    assert result.structured["kind"] == "unknown_tool"
+    assert "This conversation routes work through workflows" in result.content
+    assert "enter_workflow(instance_id)" in result.content
+    assert "general_workspace_task" in result.content
+    assert "file_write" in executor.known_tool_names_for_requery()
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_denial_text_unchanged_for_out_of_scope_file_write() -> None:
+    state = WorkflowPhaseState(
+        phase=WorkflowPhase.RUN,
+        instance_id="wf_read_only",
+        compiled_run_scope=WorkflowScope(
+            allowed_tools=frozenset({"file_read"}),
+            advertised=frozenset({"file_read"}),
+        ),
+    )
+    registry = build_default_registry()
+    executor_ref: dict[str, ScopedPhaseExecutor] = {}
+
+    def _resolver() -> ToolScope:
+        executor = executor_ref["executor"]
+        return workflow_effective_scope(
+            phase=state.phase,
+            compiled_run_scope=state.compiled_run_scope,
+            base_scope=executor.widened_scope,
+        )
+
+    executor = ScopedPhaseExecutor(
+        registry,
+        agent_scope(model_policy=_STANDARD),
+        scope_resolver=_resolver,
+    )
+    executor_ref["executor"] = executor
+
+    result = await executor.execute(call("file_write"))
+
+    assert result.success is False
+    assert result.content == "unknown or out-of-scope tool 'file_write'; available: ['file_read']"
+    assert "enter_workflow" not in result.content
+    assert "general_workspace_task" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_default_executor_denial_text_unchanged_when_router_not_active() -> None:
+    executor = DefaultToolExecutor(
+        build_default_registry(),
+        ToolScope(allowed_tools=frozenset({"file_read"})),
+    )
+
+    result = await executor.execute(call("file_write"))
+
+    assert result.success is False
+    assert result.content == "unknown or out-of-scope tool 'file_write'; available: ['file_read']"
+    assert "enter_workflow" not in result.content
+    assert "general_workspace_task" not in result.content
+
+
 def test_sealed_run_scope_excludes_router_and_ask_tools() -> None:
     compiled = compile_workflow_scope(_definition(tools=("file_read",)), frozenset())
     base = ToolScope(
@@ -541,6 +624,7 @@ async def test_seeded_general_workspace_task_lists_and_enters_bounded_scope(
     assert len(workflows) == 1
     assert workflows[0]["instance_id"] == GENERAL_WORKSPACE_TASK_INSTANCE_ID
     assert workflows[0]["name"] == "General Workspace Task"
+    assert "default workflow for small file/workspace tasks" in workflows[0]["card"]
     assert workflows[0]["enabled"] is True
     assert workflows[0]["approved"] is True
 

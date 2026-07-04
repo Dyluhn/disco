@@ -29,6 +29,15 @@ WORKFLOW_ROUTER_ALLOWED_TOOLS: frozenset[str] = (
     WORKFLOW_ROUTER_TOOLS | WORKFLOW_ROUTER_CONTEXT_TOOLS
 )
 
+_GENERAL_WORKSPACE_TASK_INSTANCE_ID = "general_workspace_task"
+_FILE_WORKSPACE_TOOL_PREFIXES: tuple[str, ...] = ("file_",)
+_FILE_WORKSPACE_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "exact_replace",
+        "safe_write_file",
+    }
+)
+
 
 class WorkflowPhase(str, Enum):
     """The workflow lifecycle phase for a single conversation."""
@@ -79,11 +88,35 @@ def workflow_effective_scope(
     )
 
 
+def workflow_router_denial_message(tool_name: str, available: list[str]) -> str:
+    """Model-facing recovery hint for registered tools withheld in ROUTER phase."""
+
+    message = (
+        f"unknown or out-of-scope tool {tool_name!r}; available: {available}. "
+        "This conversation routes work through workflows. In ROUTER phase you have no "
+        "build/workspace tools until you enter a workflow. Call list_workflows, then "
+        f"enter_workflow(instance_id) to get a scope that includes {tool_name!r}."
+    )
+    if _is_file_workspace_tool(tool_name):
+        message += (
+            " For small file/workspace tasks, use "
+            f"{_GENERAL_WORKSPACE_TASK_INSTANCE_ID} if it is listed."
+        )
+    return message
+
+
+def _is_file_workspace_tool(tool_name: str) -> bool:
+    return tool_name in _FILE_WORKSPACE_TOOL_NAMES or tool_name.startswith(
+        _FILE_WORKSPACE_TOOL_PREFIXES
+    )
+
+
 __all__ = [
     "WORKFLOW_ROUTER_ALLOWED_TOOLS",
     "WORKFLOW_ROUTER_CONTEXT_TOOLS",
     "WORKFLOW_ROUTER_TOOLS",
     "WorkflowPhase",
     "WorkflowPhaseState",
+    "workflow_router_denial_message",
     "workflow_effective_scope",
 ]

@@ -468,13 +468,17 @@ class Driver:
         return list(tools) + virtuals
 
     def known_tool_names_for_requery(self) -> set[str]:
-        _cn = getattr(self._loop.executor, "callable_tool_names", None)
-        if callable(_cn):
-            # Duck-typed: executors exposing callable_tool_names return an
-            # iterable of tool-name strings (frozenset[str] on the real backend).
-            known_tool_names = set(cast("Iterable[str]", _cn()))
+        _kn = getattr(self._loop.executor, "known_tool_names_for_requery", None)
+        if callable(_kn):
+            known_tool_names = set(cast("Iterable[str]", _kn()))
         else:
-            known_tool_names = {t.name for t in self._loop.executor.available_tools()}
+            _cn = getattr(self._loop.executor, "callable_tool_names", None)
+            if callable(_cn):
+                # Duck-typed: executors exposing callable_tool_names return an
+                # iterable of tool-name strings (frozenset[str] on the real backend).
+                known_tool_names = set(cast("Iterable[str]", _cn()))
+            else:
+                known_tool_names = {t.name for t in self._loop.executor.available_tools()}
         virtual_names = {
             "ask_user",
             "questions_v2",

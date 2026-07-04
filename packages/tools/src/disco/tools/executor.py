@@ -361,6 +361,11 @@ class DefaultToolExecutor:
         not available_tools(), or they will bounce withheld-but-callable tools."""
         return frozenset(t.definition.name for t in self._registry.in_scope(self._scope))
 
+    def known_tool_names_for_requery(self) -> frozenset[str]:
+        """Tool names the loop should treat as real before issuing unknown-tool hints."""
+
+        return self.callable_tool_names()
+
     def readonly_tool_names(self) -> frozenset[str]:
         """Names of in-scope tools that only OBSERVE (ToolDef.read_only). The loop
         consults this to scope the PLANNING agent to read-only tools — a
@@ -383,7 +388,7 @@ class DefaultToolExecutor:
             return self._fail(
                 call,
                 "unknown_tool",
-                f"unknown or out-of-scope tool {call.tool_name!r}; available: {available}",
+                self._unknown_tool_message(call.tool_name, available),
             )
 
         # 1.4 CONTRACT-ENFORCE — per-phase contract scope. When a BuildContract governs
@@ -567,6 +572,9 @@ class DefaultToolExecutor:
             structured=err.model_dump(mode="json"),
             error=message,
         )
+
+    def _unknown_tool_message(self, tool_name: str, available: list[str]) -> str:
+        return f"unknown or out-of-scope tool {tool_name!r}; available: {available}"
 
 
 def validate_args(tool_def: ToolDef, arguments: dict[str, Any]) -> BaseModel:

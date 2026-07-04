@@ -1054,6 +1054,11 @@ class ConversationRuntime:
             return None
         return self._secret_store.get_secret(name) or os.environ.get(name)
 
+    def _workflow_router_prompt_active(self, conversation_id: str) -> bool:
+        executor = self._executors.get(conversation_id)
+        scope = getattr(executor, "_scope", None)
+        return getattr(scope, "preset", None) == "workflow_router"
+
     def _router_now(
         self,
         pick: str | None = None,
@@ -1100,6 +1105,11 @@ class ConversationRuntime:
         # The "agent" surface gets the task-agent prompt flavor (an identity reframe);
         # build + every other surface keep the build driver prompts unchanged.
         flavor = "agent" if surface == "agent" else "build"
+        workflow_router_active: Callable[[], bool] | None = None
+        if workflow_router_enabled() and surface == "agent" and conversation_id:
+            cid = conversation_id
+            workflow_router_active = lambda: self._workflow_router_prompt_active(cid)
+
         # DISCO_INSPECT: when on, bind a per-conversation routing sink so every
         # RoutingDecision this (per-conversation) router emits lands in the trace.
         # Off → None → the router's NullRoutingSink, i.e. zero overhead.
@@ -1112,6 +1122,7 @@ class ConversationRuntime:
                 flavor=flavor,
                 autonomous=autonomous,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
+                workflow_router_active=workflow_router_active,
             ),
             sink=sink,
         )

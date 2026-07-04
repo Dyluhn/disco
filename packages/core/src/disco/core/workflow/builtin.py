@@ -44,8 +44,9 @@ assert not any(
 GENERAL_WORKSPACE_TASK_DEFINITION = WorkflowDefinition(
     name="General Workspace Task",
     card=(
-        "A bounded file task with a contracted output: inspect and update workspace "
-        "files using only the bounded file tools, then produce reports/task-summary.md."
+        "The default workflow for small file/workspace tasks. Inspect and update "
+        "workspace files using only bounded file tools, then produce "
+        "reports/task-summary.md."
     ),
     params_model_schema={
         "type": "object",

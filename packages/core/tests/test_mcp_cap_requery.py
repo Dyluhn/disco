@@ -41,6 +41,30 @@ class _SplitExecutor:
         )
 
 
+class _KnownDeniedExecutor(_SplitExecutor):
+    def __init__(self, *, advertised, callable_names, known_names):
+        super().__init__(advertised=advertised, callable_names=callable_names)
+        self._known = frozenset(known_names)
+
+    def known_tool_names_for_requery(self):
+        return self._known
+
+    async def execute(self, call):
+        self.calls.append(call)
+        message = (
+            "This conversation routes work through workflows. Call list_workflows, "
+            "then enter_workflow(instance_id) to get a scope that includes "
+            f"{call.tool_name!r}."
+        )
+        return ToolResult(
+            call_id=call.call_id,
+            tool_name=call.tool_name,
+            success=False,
+            content=message,
+            error=message,
+        )
+
+
 _TOOL_SEARCH = ToolSpec(name="tool_search", description="discover tools", parameters_schema={})
 _HIDDEN_MCP = "mcp__srv__tool_5"
 
@@ -109,6 +133,26 @@ async def test_genuinely_unknown_tool_still_requeried():
         f"Expected ≥3 agent calls (initial + 2 requery bounces); got {agent.calls}. "
         "The requery gate no longer catches genuinely unknown tool names."
     )
+
+
+@pytest.mark.asyncio
+async def test_known_but_scope_denied_tool_reaches_executor_without_unknown_requery():
+    executor = _KnownDeniedExecutor(
+        advertised=[ToolSpec(name="list_workflows", description="list", parameters_schema={})],
+        callable_names={"list_workflows", "enter_workflow"},
+        known_names={"list_workflows", "enter_workflow", "file_write"},
+    )
+    agent = ScriptedAgent([action_step("file_write"), finish_step()])
+    loop, _ = build_loop(agent, executor=executor)
+
+    await loop.send_message("go")
+    await asyncio.wait_for(loop.run(), timeout=5.0)
+
+    executed_names = [c.tool_name for c in executor.calls]
+    assert executed_names == ["file_write"]
+    assert agent.calls == 2
+    for view in agent.seen_views:
+        assert not _requery_hint_contents(view)
 
 
 # ---------------------------------------------------------------------------

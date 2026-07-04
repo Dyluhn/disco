@@ -12,6 +12,7 @@ from .executor import DefaultToolExecutor
 from .registry import ToolRegistry, ToolScope
 from .sandbox.base import SandboxInstance
 from .secrets import CapabilityBroker
+from .workflow_scope import workflow_router_denial_message
 
 _STANDARD_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
 
@@ -81,3 +82,15 @@ class ScopedPhaseExecutor(DefaultToolExecutor):
         """Run the deferred widening callback, if one is registered."""
         if self._widen_callback is not None:
             self._widen_callback()
+
+    def known_tool_names_for_requery(self) -> frozenset[str]:
+        """Treat router-withheld registry tools as real so the executor can deny them."""
+
+        if self._scope.preset == "workflow_router":
+            return self.callable_tool_names() | self._registry.names()
+        return super().known_tool_names_for_requery()
+
+    def _unknown_tool_message(self, tool_name: str, available: list[str]) -> str:
+        if self._scope.preset == "workflow_router" and tool_name in self._registry.names():
+            return workflow_router_denial_message(tool_name, available)
+        return super()._unknown_tool_message(tool_name, available)

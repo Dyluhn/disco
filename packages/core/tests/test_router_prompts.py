@@ -111,3 +111,43 @@ def test_driver_prompts_inject_enabled_skills_block():
         model_family="qwen", mode=OperatingMode.PLANNING, role=ModelRole.AGENT_DRIVER
     )
     assert "Skill:" not in bare_planning
+
+
+def test_driver_prompts_workflow_router_prefix_is_dynamic():
+    from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
+
+    router_active = False
+    dp = DriverPrompts(
+        flavor="agent",
+        workflow_router_active=lambda: router_active,
+    )
+
+    off = dp.system_prompt(
+        model_family="qwen",
+        mode=OperatingMode.PLANNING,
+        role=ModelRole.AGENT_DRIVER,
+    )
+    assert "WORKFLOW ROUTER PHASE" not in off
+
+    router_active = True
+    on = dp.system_prompt(
+        model_family="qwen",
+        mode=OperatingMode.PLANNING,
+        role=ModelRole.AGENT_DRIVER,
+    )
+    assert "WORKFLOW ROUTER PHASE" in on
+    assert "NO build tools" in on
+    assert "FIRST action" in on
+    assert "list_workflows" in on
+    assert "enter_workflow(instance_id)" in on
+    assert "not because tools are missing in ROUTER phase" in on
+    assert "TALK TO THE USER FIRST" not in on
+    assert "EXECUTION TOOLS" not in on
+
+    router_active = False
+    run = dp.system_prompt(
+        model_family="qwen",
+        mode=OperatingMode.LONG_HORIZON,
+        role=ModelRole.AGENT_DRIVER,
+    )
+    assert "WORKFLOW ROUTER PHASE" not in run

@@ -8,6 +8,7 @@ templates ([INTERIOR] engine/layout).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from .types import ModelRole, OperatingMode, Requirement
@@ -470,6 +471,14 @@ _HOST_VERIFY_MANDATE_SMALL = (
     "while debugging, but do not loop on self-verification just to finish."
 )
 
+_MENTIONED_ELEMENT_GUIDANCE = (
+    "\n\nUSER MESSAGE CONVENTION: If a user message starts with a "
+    "`<mentioned-element>` block, treat it as the exact DOM node the user pointed at "
+    "in the preview. Use its dom/react path, data screen label, text, and rect to "
+    "locate the corresponding element in the source files, read those files, and "
+    "scope the requested change to that element instead of guessing from nearby copy."
+)
+
 
 def _soften_self_verify_mandate(prompt: str) -> str:
     return (
@@ -522,6 +531,21 @@ _AGENT_PLANNING_CAPABILITY_BLOCK = (
     "tool becomes callable — approval unlocks all of the above at once."
 )
 
+_WORKFLOW_ROUTER_DRIVER_PROMPT = (
+    "You are an autonomous task agent in WORKFLOW ROUTER PHASE.\n"
+    "This agent conversation routes actionable work through workflows. You have NO "
+    "build tools, workspace write tools, shell, browser, or code execution until you "
+    "enter a workflow.\n\n"
+    "For any actionable user request, your FIRST action is to call list_workflows, "
+    "choose the matching enabled and approved workflow, then call "
+    "enter_workflow(instance_id). Use read_workflow_card when you need to compare "
+    "workflow cards. Use draft_workflow only when no suitable workflow exists and a "
+    "new reviewed workflow is needed.\n\n"
+    "Do not call submit_plan in ROUTER phase. Ask the user only when the task itself "
+    "is ambiguous or missing required task information, not because tools are missing "
+    "in ROUTER phase."
+)
+
 # [runthru-v2 #3] `plan_step` is RETIRED from the advertised tool surface for ALL
 # tiers (it caused plan-state drift; the declarative `update_plan_progress` replaced
 # it for capable models).  It is therefore named in NO planning block — the single
@@ -555,6 +579,7 @@ class DriverPrompts:
         flavor: str = "build",
         autonomous: bool = False,
         host_verify_authoritative: bool = False,
+        workflow_router_active: Callable[[], bool] | None = None,
     ) -> None:
         self._base = base or StaticPromptProvider()
         # Autonomous mode (issue A): reinforce the tool-level suppression of ask_user
@@ -595,13 +620,16 @@ class DriverPrompts:
         # from the advertised tool surface for ALL tiers, so it is named in NO planning
         # prompt (no per-tier variant needed — prompting a tool that isn't in the tool
         # list causes the model to call a tool it can't).
-        self._planning = planning_prompt + _AGENT_PLANNING_CAPABILITY_BLOCK
-        self._execution = execution_prompt
+        self._planning = (
+            planning_prompt + _MENTIONED_ELEMENT_GUIDANCE + _AGENT_PLANNING_CAPABILITY_BLOCK
+        )
+        self._execution = execution_prompt + _MENTIONED_ELEMENT_GUIDANCE
         # [C21] Tightened execution prompt for small open models. Selected ONLY
         # when the assist gate is ON (req.assist=True) at prompt-injection time.
         # Capable-model (assist OFF) path keeps using self._execution verbatim.
-        self._execution_small = execution_prompt_small
+        self._execution_small = execution_prompt_small + _MENTIONED_ELEMENT_GUIDANCE
         self._skills_block = skills_block.strip()
+        self._workflow_router_active = workflow_router_active
 
     def _with_skills(self, prompt: str, capabilities: frozenset[Requirement] | None = None) -> str:
         # [BP-00] Vision bullet: rendered ONLY when the driver has VISION.
@@ -632,6 +660,9 @@ class DriverPrompts:
             return f"{self._skills_block}\n\n---\n\n{bullets}\n{prompt}"
         return f"{self._skills_block}\n\n---\n\n{prompt}"
 
+    def _workflow_router_is_active(self) -> bool:
+        return self._workflow_router_active is not None and self._workflow_router_active()
+
     def system_prompt(
         self,
         *,
@@ -642,6 +673,8 @@ class DriverPrompts:
         assist: bool = False,
     ) -> str:
         if role == ModelRole.AGENT_DRIVER:
+            if self._workflow_router_is_active():
+                return self._with_skills(_WORKFLOW_ROUTER_DRIVER_PROMPT, capabilities)
             if mode == OperatingMode.PLANNING:
                 # [runthru-v2 #3] `plan_step` is retired from the advertised tool
                 # surface for ALL tiers, so the single planning prompt names it for
