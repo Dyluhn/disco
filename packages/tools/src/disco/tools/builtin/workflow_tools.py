@@ -10,6 +10,7 @@ a draft definition.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections.abc import Callable
@@ -73,7 +74,12 @@ class JsonDirWorkflowStore:
             try:
                 raw = path.read_text(encoding="utf-8")
                 instance = WorkflowInstance.model_validate_json(raw)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
+                # A stale digest (definition schema evolved) or corrupt row must be
+                # visible, not silently absent from every listing surface.
+                logging.getLogger(__name__).warning(
+                    "skipping invalid workflow instance %s: %s", path.name, exc
+                )
                 continue
             rows.append(StoredWorkflowInstance(instance_id=instance_id, instance=instance))
         return rows
