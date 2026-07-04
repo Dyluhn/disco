@@ -219,6 +219,18 @@ class BrowserArgs(BaseModel):
     )
     text: str = Field(default="", description="Text for fill action.")
     full_page: bool = Field(default=False, description="Whether to take a full page screenshot.")
+    viewport_width: int | None = Field(
+        default=None,
+        ge=240,
+        le=4096,
+        description="Optional viewport width for this browser action.",
+    )
+    viewport_height: int | None = Field(
+        default=None,
+        ge=240,
+        le=4096,
+        description="Optional viewport height for this browser action.",
+    )
 
 
 class BrowserTool:
@@ -253,6 +265,8 @@ class BrowserTool:
                 "click_text": args.click_text,
                 "text": args.text,
                 "full_page": args.full_page,
+                "viewport_width": args.viewport_width,
+                "viewport_height": args.viewport_height,
                 # W6 V5: include b64 screenshot when vision is enabled (local
                 # driver OR escalation model configured), not just DRIVER_VISION.
                 "include_screenshot_b64": _vision_mode(),

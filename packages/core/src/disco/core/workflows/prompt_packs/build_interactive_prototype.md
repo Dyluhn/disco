@@ -37,6 +37,18 @@ ready_for_prototype_verification confirms the interactions actually WORK — eac
 step fires, validation triggers, state persists across the flow. A page that loads but
 whose handlers don't fire is a fail (a clean console is not proof an onclick fired).
 
+## Charts
+When the prototype needs charts, use Chart.js. Bind series colors to the artifact
+tokens by index; avoid RGB primaries. Defaults: rounded bar tops with maxBarThickness
+40, vertical dark-to-light gradients with a meaningful bottom stop, x-gridlines off,
+y-gridlines at 5-8% opacity, axis borders off, global font via Chart.defaults,
+styled tooltips with padding 12/radius 8/locale formatting, circle legend swatches,
+400ms re-render animation (1000ms first paint only), and dark mode rebuilt from CSS
+custom properties rather than recoloring baked canvas gradients. Pick archetypes by
+data shape: comparison bar, trend line, composition ranked stacked bar or donut at
+five slices or fewer, distribution histogram, relationship scatter, KPI big-number
+composite.
+
 ## Export rule
 No dedicated export pipeline yet; the prototype is delivered as its workspace files. Do
 not hand-zip — a delivery pipeline lands with P10.

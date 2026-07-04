@@ -936,7 +936,13 @@ async def generate_deck(
 
     # Stage 4: Lower to C1 Deck (carry generated image bytes so they embed — C7)
     try:
-        deck = lower_deck(filled, image_assets=image_assets)
+        from disco.tools.builtin._direction_brand import direction_brand_override
+
+        deck = lower_deck(
+            filled,
+            image_assets=image_assets,
+            brand_override=await direction_brand_override(ctx),
+        )
     except Exception as e:  # noqa: BLE001
         _LOG.warning("lower_deck failed: %s — falling back to Marp", e)
         fallback_md = _outline_to_markdown(filled, goal)

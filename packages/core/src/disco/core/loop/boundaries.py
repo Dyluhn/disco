@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..events import ActionEvent, Event, SecurityRisk, ToolCall, ToolResult
 from ..llm import OperatingMode, OverflowSignal, StreamChunk, ToolSpec
 from ..state import ConversationState
+from ..verify_medium import VerifierMediumHint
 from ..view import View
 
 # A watch-it-write hook: awaited with each streamed tool-call argument fragment
@@ -103,6 +104,7 @@ class VerifierContextSeed(BaseModel):
     deliverable_paths: list[str] = Field(default_factory=list)
     check_results: dict[str, Any] = Field(default_factory=dict)
     screenshot: VerifierScreenshot = Field(default_factory=VerifierScreenshot)
+    medium: VerifierMediumHint | None = None
 
 
 class TypedVerifierVerdict(BaseModel):

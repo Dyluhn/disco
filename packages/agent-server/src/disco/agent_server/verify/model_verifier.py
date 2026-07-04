@@ -35,8 +35,17 @@ _SYSTEM_PROMPT = (
 )
 
 
+def _system_prompt_for_seed(seed: VerifierContextSeed) -> str:
+    guidance = seed.medium.review_guidance if seed.medium is not None else ""
+    if not guidance:
+        return _SYSTEM_PROMPT
+    return f"{_SYSTEM_PROMPT}\n\n{guidance}"
+
+
 def _json_payload(seed: VerifierContextSeed) -> dict[str, Any]:
     payload = seed.model_dump(mode="json")
+    if payload.get("medium") is None:
+        payload.pop("medium", None)
     screenshot = dict(payload.get("screenshot") or {})
     if screenshot.get("image_data_url"):
         screenshot["image_attached"] = True
@@ -109,7 +118,7 @@ class ModelVerifier:
                 mode=OperatingMode.INTERACTIVE,
             ),
             messages=[
-                LLMMessage(role="system", content=_SYSTEM_PROMPT),
+                LLMMessage(role="system", content=_system_prompt_for_seed(seed)),
                 LLMMessage(
                     role="user",
                     content=json.dumps(payload, sort_keys=True),

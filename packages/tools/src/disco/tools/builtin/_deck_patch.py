@@ -355,6 +355,7 @@ class DeckPatchTool:
     async def run(self, args: DeckPatchArgs, ctx: ToolContext) -> ToolOutcome:
         """Execute the deck_patch: read → patch → validate → render → write."""
         # C1 imports — use lower_deck (Deck) directly; no MinimalDeck shim
+        from disco.tools.builtin._direction_brand import direction_brand_override
         from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
         from disco.tools.builtin._pptx_render import render_html, render_pptx
 
@@ -433,7 +434,11 @@ class DeckPatchTool:
 
         # ── 4c. Re-render deterministically via C1 path ───────────────────────
         try:
-            deck = lower_deck(authored_deck, image_assets=image_assets)  # AuthoredDeck → C1
+            deck = lower_deck(
+                authored_deck,
+                image_assets=image_assets,
+                brand_override=await direction_brand_override(ctx),
+            )  # AuthoredDeck → C1
             html_str = render_html(deck)           # Deck → HTML string
             pptx_bytes = render_pptx(deck)         # Deck → PPTX bytes
         except Exception as exc:

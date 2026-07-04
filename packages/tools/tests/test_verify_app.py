@@ -240,6 +240,25 @@ async def test_run_pass_with_stubbed_browser(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_mobile_medium_uses_mobile_viewport(monkeypatch):
+    seen = {}
+
+    async def fake_browser_run(self, args, ctx):
+        seen["viewport"] = (args.viewport_width, args.viewport_height)
+        return ToolOutcome(success=True, content="b", structured=_structured(console=[]))
+
+    monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/", medium="mobile"),
+        _ctx(FakeSandbox("200")),
+    )
+
+    assert out.success is True
+    assert out.structured["medium"] == "mobile"
+    assert seen["viewport"] == (390, 844)
+
+
+@pytest.mark.asyncio
 async def test_run_fail_console_error_with_stubbed_browser(monkeypatch):
     console = [{"level": "error", "text": "Uncaught TypeError"}]
 

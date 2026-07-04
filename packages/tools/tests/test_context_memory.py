@@ -49,7 +49,7 @@ async def test_list_returns_sorted_durable_kinds() -> None:
     assert out.success
     kinds = out.structured["kinds"]
     assert kinds == sorted(kinds)
-    assert len(kinds) == 9
+    assert len(kinds) == 10  # + design_direction (W2-DIRECTION)
     assert "current_goal" in kinds and "verifier_failures" in kinds
     # SUMMARY is multi-instance → not a durable singleton kind
     assert "summary" not in kinds

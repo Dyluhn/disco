@@ -26,7 +26,7 @@ fingerprint and the gate can mark the run STUCK instead of reloading forever.
 from __future__ import annotations
 
 import shlex
-from typing import Any
+from typing import Any, Literal
 
 from disco.core import SecurityRisk
 from disco.core.loop.finish import _PREVIEW_PORTS
@@ -87,6 +87,13 @@ class VerifyWebAppArgs(BaseModel):
             "auto-detect the running preview server."
         ),
     )
+    medium: Literal["web", "deck", "mobile"] = Field(
+        default="web",
+        description=(
+            "Artifact medium hint from the finish gate. Defaults to web; mobile uses "
+            "a 390x844 viewport for browser evidence."
+        ),
+    )
 
 
 class VerifyWebAppTool:
@@ -133,8 +140,18 @@ class VerifyWebAppTool:
             if reachable:
                 # Server is up — drive the headless browser for the render/console/
                 # network evidence (REUSE the browser tool + its daemon capture).
+                browser_args = (
+                    BrowserArgs(
+                        action="navigate",
+                        url=url,
+                        viewport_width=390,
+                        viewport_height=844,
+                    )
+                    if args.medium == "mobile"
+                    else BrowserArgs(action="navigate", url=url)
+                )
                 browser_outcome = await BrowserTool().run(
-                    BrowserArgs(action="navigate", url=url), ctx
+                    browser_args, ctx
                 )
                 if browser_outcome.success and browser_outcome.structured:
                     structured = browser_outcome.structured
@@ -174,6 +191,8 @@ class VerifyWebAppTool:
                 structured=structured,
                 meaningful=meaningful,
             )
+            if args.medium != "web":
+                verdict["medium"] = args.medium
             return ToolOutcome(
                 success=True,  # the verdict ran; pass/fail lives in structured
                 content=_render(verdict),

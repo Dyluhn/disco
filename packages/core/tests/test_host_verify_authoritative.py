@@ -266,11 +266,13 @@ async def test_model_verifier_gets_bounded_seed_and_builder_gets_summary_only() 
         "deliverable_paths",
         "check_results",
         "screenshot",
+        "medium",
     }
     assert seed.contract["verify"]["finalizer"] == "ready_for_static_site_verification"
     assert seed.deliverable_paths == ["index.html"]
     assert seed.check_results["summary"] == "RAW_CHECK_SECRET"
     assert seed.screenshot.path == ".pmx/screenshots/0001-navigate.png"
+    assert seed.medium is None
 
     events = await store.get_events("conv")
     verdicts = [e for e in events if isinstance(e, VerifierVerdictEvent)]

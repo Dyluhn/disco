@@ -1167,6 +1167,7 @@ def lower_deck(
     authored: AuthoredDeck,
     *,
     theme_override: str | None = None,
+    brand_override: Theme | None = None,
     image_assets: dict[int, bytes] | None = None,
 ) -> Deck:
     """Lower an AuthoredDeck to a Deck of precisely-positioned Elements.
@@ -1178,6 +1179,10 @@ def lower_deck(
     ``theme_override`` ("{name}-{mode}" template id) re-themes the deck at render
     time WITHOUT mutating the authored sidecar — this is the slide-deck template
     selector's render-on-demand path. None → use the deck's authored theme.
+
+    ``brand_override`` is an already-resolved Theme snapshot (for example from a
+    committed design direction). When supplied it wins over registry lookup while
+    preserving the rest of the lowering/rendering path.
 
     ``image_assets`` (C7 wire) maps an AUTHORED-slide index → generated image bytes.
     The image element lowered from that slide carries the bytes so the renderer
@@ -1194,8 +1199,11 @@ def lower_deck(
         (they do not appear on the visible slide face).
       - Maximum continuation depth: 3 (prevents catastrophic infinite split).
     """
-    theme_name, theme_mode = _parse_theme(theme_override or authored.theme)
-    theme = resolve_theme(theme_name, theme_mode)
+    if brand_override is None:
+        theme_name, theme_mode = _parse_theme(theme_override or authored.theme)
+        theme = resolve_theme(theme_name, theme_mode)
+    else:
+        theme = brand_override
 
     # Shared overflow expansion — identical to the editor's, so counts match (BW-13).
     image_alt: list[int] = [0]  # alternating image side counter

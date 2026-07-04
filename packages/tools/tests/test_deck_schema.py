@@ -759,3 +759,19 @@ def test_lower_deck_theme_override_rethemes_without_mutating_authored() -> None:
     assert authored.theme == "disco-light"  # authored sidecar NOT mutated
     with pytest.raises(ValueError):
         lower_deck(authored, theme_override="bogus-template")
+
+
+def test_lower_deck_brand_override_uses_direction_tokens() -> None:
+    from disco.core.design import DIRECTION_BY_ID, to_brand_tokens
+    from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+
+    authored = AuthoredDeck(
+        title="T", theme="disco-light",
+        slides=[AuthoredSlide(type="title", title="Hi", body=["x"])],
+    )
+    theme = to_brand_tokens(DIRECTION_BY_ID["brutalist"])
+    deck = lower_deck(authored, brand_override=theme)
+
+    assert deck.theme == theme
+    assert deck.theme.accent == "#c23616"
+    assert authored.theme == "disco-light"

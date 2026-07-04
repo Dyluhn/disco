@@ -11,6 +11,7 @@ import hashlib
 import re
 from typing import Final, Literal, Self
 
+from disco.core.brand.tokens import Theme
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DirectionId = Literal[
@@ -30,6 +31,10 @@ Density = Literal["spacious", "balanced", "dense", "compact", "editorial"]
 
 BANNED_PRIMARY_FONTS: Final[frozenset[str]] = frozenset({"inter", "roboto", "arial"})
 _HEX_PATTERN: Final[str] = r"^#[0-9A-Fa-f]{6}$"
+_GENERIC_FONT_FAMILIES: Final[frozenset[str]] = frozenset(
+    {"serif", "sans-serif", "monospace", "system-ui", "ui-monospace", "-apple-system"}
+)
+_DARK_DIRECTION_IDS: Final[frozenset[str]] = frozenset({"dark-glass", "terminal-mono"})
 
 
 class FontStack(BaseModel):
@@ -611,6 +616,113 @@ def pick_direction(brief_text: str, seed: str | int) -> DesignDirection:
             _keyword_score(brief_text, direction),
             _tie_break(direction.id, seed),
         ),
+    )
+
+
+def direction_from_markdown(markdown: str) -> DesignDirection | None:
+    """Resolve a rendered design-direction contract back to its library record."""
+
+    match = re.search(r"(?m)^-\s*ID:\s*([a-z0-9-]+)\s*$", markdown or "")
+    if not match:
+        return None
+    return DIRECTION_BY_ID.get(match.group(1))
+
+
+def _rgb(hex_color: str) -> tuple[int, int, int]:
+    h = hex_color.strip().lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _hex(rgb: tuple[int, int, int]) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*(max(0, min(255, c)) for c in rgb))
+
+
+def _mix(left: str, right: str, right_weight: float) -> str:
+    lr, lg, lb = _rgb(left)
+    rr, rg, rb = _rgb(right)
+    w = max(0.0, min(1.0, right_weight))
+    return _hex(
+        (
+            round(lr * (1.0 - w) + rr * w),
+            round(lg * (1.0 - w) + rg * w),
+            round(lb * (1.0 - w) + rb * w),
+        )
+    )
+
+
+def _font_part(family: str) -> str:
+    clean = family.strip()
+    if not clean:
+        return clean
+    if clean.lower() in _GENERIC_FONT_FAMILIES or clean.startswith(("'", '"')):
+        return clean
+    return f"'{clean}'" if re.search(r"\s", clean) else clean
+
+
+def _font_stack_css(stack: FontStack) -> str:
+    parts = (stack.family, *stack.fallbacks)
+    return ",".join(part for part in (_font_part(p) for p in parts) if part)
+
+
+def to_brand_tokens(direction: DesignDirection) -> Theme:
+    """Map a committed design direction into the brand Theme registry shape.
+
+    This is a pure bridge: direction tokens in, the same Theme dataclass consumed by
+    ``core.brand.css`` and the PPTX/HTML deck renderers out.
+    """
+
+    seed = direction.palette_seed
+    primary = direction.accents[0].hex
+    support = direction.accents[1].hex
+    warm = direction.accents[2].hex
+    dark = direction.id in _DARK_DIRECTION_IDS
+
+    if dark:
+        bg = _mix("#050607", seed, 0.24)
+        surface_1 = _mix("#0d0f13", seed, 0.26)
+        surface_2 = _mix("#151922", seed, 0.30)
+        hairline = _mix(surface_2, "#ffffff", 0.16)
+        hairline_strong = _mix(surface_2, "#ffffff", 0.28)
+        text = _mix("#f6f4ee", seed, 0.04)
+        text_muted = _mix(text, bg, 0.42)
+        text_faint = _mix(text, bg, 0.62)
+        link = _mix(primary, "#ffffff", 0.18)
+        verify_unsupported = _mix("#f07f77", primary, 0.16)
+    else:
+        bg = _mix("#ffffff", seed, 0.04)
+        surface_1 = _mix("#ffffff", seed, 0.08)
+        surface_2 = _mix("#ffffff", seed, 0.14)
+        hairline = _mix("#e5e1da", seed, 0.18)
+        hairline_strong = _mix("#ccc6bd", seed, 0.18)
+        text = _mix("#15140f", seed, 0.08)
+        text_muted = _mix(text, bg, 0.38)
+        text_faint = _mix(text, bg, 0.58)
+        link = _mix(primary, "#111111", 0.12)
+        verify_unsupported = _mix("#b14e49", primary, 0.12)
+
+    fonts = direction.font_pairing
+    return Theme(
+        name=f"direction-{direction.id}",
+        mode="dark" if dark else "light",
+        bg=bg,
+        surface_1=surface_1,
+        surface_2=surface_2,
+        hairline=hairline,
+        hairline_strong=hairline_strong,
+        text=text,
+        text_muted=text_muted,
+        text_faint=text_faint,
+        accent=primary.lower(),
+        link=link,
+        verify_supported=support.lower(),
+        verify_weak=warm.lower(),
+        verify_unsupported=verify_unsupported,
+        warn=warm.lower(),
+        font_display=_font_stack_css(fonts.heading),
+        font_ui=_font_stack_css(fonts.body),
+        font_reading=_font_stack_css(fonts.body),
+        font_mono=_font_stack_css(fonts.mono),
+        branded=True,
     )
 
 

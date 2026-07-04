@@ -17,8 +17,10 @@ from .directions import (
     MotionTokens,
     SurfaceTokens,
     SurfaceTreatment,
+    direction_from_markdown,
     pick_direction,
     render_design_direction,
+    to_brand_tokens,
 )
 
 __all__ = [
@@ -36,6 +38,8 @@ __all__ = [
     "MotionTokens",
     "SurfaceTokens",
     "SurfaceTreatment",
+    "direction_from_markdown",
     "pick_direction",
     "render_design_direction",
+    "to_brand_tokens",
 ]

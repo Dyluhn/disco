@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import cast
 
+from ...verify_medium import VerifierMediumHint, detect_html_medium, html_manifest_hrefs
 from .common import *
 from .common import (
     _FINISH_VERIFY_CAP,
@@ -554,17 +555,82 @@ class _HostVerifyGateMixin(_FinishGateProto):
             out.append(safe)
         return out
 
+    async def _read_workspace_bytes(self, path: str) -> bytes | None:
+        sbx = getattr(getattr(self._loop, "executor", None), "sandbox", None)
+        if sbx is None:
+            return None
+        try:
+            data = await sbx.read_file(path)
+        except Exception:
+            return None
+        if isinstance(data, bytes):
+            return data
+        if isinstance(data, str):
+            return data.encode("utf-8")
+        return None
+
+    async def _manifest_present_for_html(
+        self, html_path: str, html_text: str, deliverable_paths: list[str]
+    ) -> bool:
+        base_dir = posixpath.dirname(html_path)
+        candidates: list[str] = []
+        for href in html_manifest_hrefs(html_text):
+            clean = href.split("#", 1)[0].split("?", 1)[0].strip()
+            if not clean or "://" in clean or clean.startswith("//"):
+                continue
+            safe = _safe_deliverable_file_path(posixpath.normpath(posixpath.join(base_dir, clean)))
+            if safe is not None:
+                candidates.append(safe)
+        if not candidates:
+            safe_default = _safe_deliverable_file_path(
+                posixpath.normpath(posixpath.join(base_dir, "manifest.json"))
+            )
+            if safe_default is not None:
+                candidates.append(safe_default)
+        candidates.extend(
+            p for p in deliverable_paths if posixpath.basename(p).lower() == "manifest.json"
+        )
+        seen: set[str] = set()
+        for path in candidates:
+            if path in seen:
+                continue
+            seen.add(path)
+            if await self._read_workspace_bytes(path) is not None:
+                return True
+        return False
+
+    async def _verifier_medium_hint(
+        self,
+        deliverable_paths: list[str],
+    ) -> VerifierMediumHint | None:
+        for path in deliverable_paths:
+            if not path.lower().endswith((".html", ".htm")):
+                continue
+            raw = await self._read_workspace_bytes(path)
+            if raw is None:
+                continue
+            text = raw.decode("utf-8", errors="replace")
+            manifest_present = await self._manifest_present_for_html(
+                path, text, deliverable_paths
+            )
+            hint = detect_html_medium(text, manifest_present=manifest_present)
+            if hint is not None:
+                return hint
+        return None
+
     async def _verifier_context_seed(
         self,
         deliverable: HostVerificationDeliverable,
         events: list[Event],
         check_verdict: dict[str, Any],
     ) -> VerifierContextSeed:
+        deliverable_paths = await self._verifier_deliverable_paths(deliverable, events)
         return VerifierContextSeed(
             contract=self._verifier_contract_payload(),
-            deliverable_paths=await self._verifier_deliverable_paths(deliverable, events),
+            deliverable_paths=deliverable_paths,
             check_results=_bounded_verifier_check_results(check_verdict),
             screenshot=_screenshot_from_verdict(check_verdict),
+            medium=await self._verifier_medium_hint(deliverable_paths),
         )
 
     @staticmethod
@@ -923,7 +989,11 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         return None
 
     async def _drive_verify_web_app(
-        self, target_url: str | None = None, tool_name: str = "verify_web_app"
+        self,
+        target_url: str | None = None,
+        tool_name: str = "verify_web_app",
+        *,
+        medium: str = "web",
     ) -> bool:
         """W-45 ACTIVE verify: DRIVE one structured verifier call when the agent
         declares done without a fresh verdict. Mirrors `_drive_finish_browser_probe`
@@ -935,7 +1005,12 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         passed EXPLICITLY so the tool verifies the build's actual served port instead
         of repeating its own auto-detect (Bug 7). None ⇒ `{}` ⇒ the tool auto-detects
         (which itself uses the same backend-aware resolver)."""
-        call = ToolCall(tool_name=tool_name, arguments={"url": target_url} if target_url else {})
+        arguments: dict[str, str] = {}
+        if target_url:
+            arguments["url"] = target_url
+        if medium != "web" and tool_name == "verify_web_app":
+            arguments["medium"] = medium
+        call = ToolCall(tool_name=tool_name, arguments=arguments)
         action = ActionEvent(
             thought=f"Verifying the app: running {tool_name} on the running preview.",
             tool_call=call,
@@ -953,7 +1028,11 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         return isinstance(obs, ObservationEvent) and obs.tool_result.success
 
     async def _gate_verify_web_app(
-        self, events: list[Event], tool_name: str = "verify_web_app"
+        self,
+        events: list[Event],
+        tool_name: str = "verify_web_app",
+        *,
+        step: AgentStep | None = None,
     ) -> Disp:
         """W-45 — the verdict-consuming finish gate (the loop-killer).
 
@@ -978,13 +1057,25 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         # must NOT satisfy the gate — it drives a fresh verify against the real
         # preview instead. target_url=None (preview undetectable) disables binding.
         target_url = await self._detect_preview_url()
+        medium = "web"
+        if step is not None:
+            try:
+                deliverable = await self._host_verify_deliverable(step, events)
+                if deliverable is not None:
+                    host_verifier = cast(_HostVerifyGateMixin, self)
+                    paths = await host_verifier._verifier_deliverable_paths(deliverable, events)
+                    hint = await host_verifier._verifier_medium_hint(paths)
+                    if hint is not None:
+                        medium = hint.kind
+            except Exception:
+                medium = "web"
         verdict = _latest_verify_verdict(events, since_seq, target_url, tool_name)
         if verdict is None:
             # No fresh verdict bound to the current preview — the agent may have
             # overclaimed, or only a stale/foreign-url verdict exists. Drive ONE
             # against the resolved real preview (target_url is backend-aware — never
             # the agent-server's 8000 on the process backend, Bug 7).
-            if await self._drive_verify_web_app(target_url, tool_name):
+            if await self._drive_verify_web_app(target_url, tool_name, medium=medium):
                 events = await self._loop._events()
                 # The freshly driven verify auto-detected + tested the CURRENT
                 # preview, so its verdict IS bound by construction — read it
@@ -1392,7 +1483,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             if await self._browser_verify_delegated_to_host(step, events):
                 return Disp.FALLTHROUGH
             if verify_tool is not None:
-                return await self._gate_verify_web_app(events, verify_tool)
+                return await self._gate_verify_web_app(events, verify_tool, step=step)
             since_seq = _last_productive_seq(events)
             # The preview platform assigns a RANDOM port — there is NO fixed :8000
             # inside the sandbox (a curl there 404s). Resolve the live preview the

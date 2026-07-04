@@ -23,6 +23,8 @@ import posixpath
 from typing import Any
 
 from disco.core import DEFAULT_OWNER_ID, ObservationEvent
+from disco.core.brand.tokens import Theme
+from disco.core.design import direction_from_markdown, to_brand_tokens
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -89,6 +91,18 @@ async def _reload_deck_image_assets(
         if data and (data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"):
             assets[i] = data
     return assets
+
+
+async def _direction_brand_override(
+    runtime: ConversationRuntime, conversation_id: str
+) -> Theme | None:
+    raw = await _read_artifact_bytes(
+        runtime, conversation_id, ".disco/context/design_direction.md"
+    )
+    if raw is None:
+        return None
+    direction = direction_from_markdown(raw.decode("utf-8", errors="replace"))
+    return to_brand_tokens(direction) if direction is not None else None
 
 
 # [W-22] Deck PDF export renders the .pptx → .pdf with LibreOffice, which ships ONLY
@@ -310,8 +324,15 @@ def make_deck_editor_router(
             raise HTTPException(status_code=404) from exc
 
         image_assets = await _reload_deck_image_assets(runtime, conversation_id, base, authored)
+        brand = await _direction_brand_override(runtime, conversation_id)
+        brand_override = brand if template is None or template == "disco-light" else None
         try:
-            deck = lower_deck(authored, theme_override=template, image_assets=image_assets)
+            deck = lower_deck(
+                authored,
+                theme_override=template,
+                brand_override=brand_override,
+                image_assets=image_assets,
+            )
             html_str = render_html(deck)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(
@@ -395,8 +416,15 @@ def make_deck_editor_router(
             raise HTTPException(status_code=404) from exc
 
         image_assets = await _reload_deck_image_assets(runtime, conversation_id, base, authored)
+        brand = await _direction_brand_override(runtime, conversation_id)
+        brand_override = brand if template == "disco-light" else None
         try:
-            deck = lower_deck(authored, theme_override=template, image_assets=image_assets)
+            deck = lower_deck(
+                authored,
+                theme_override=template,
+                brand_override=brand_override,
+                image_assets=image_assets,
+            )
             if fmt == "html":
                 body: bytes = render_html(deck).encode("utf-8")
                 media = "text/html; charset=utf-8"
@@ -521,8 +549,13 @@ def make_deck_editor_router(
         image_assets = await _reload_deck_image_assets(
             runtime, conversation_id, base, authored_deck
         )
+        brand = await _direction_brand_override(runtime, conversation_id)
         try:
-            deck = lower_deck(authored_deck, image_assets=image_assets)
+            deck = lower_deck(
+                authored_deck,
+                brand_override=brand,
+                image_assets=image_assets,
+            )
             html_str = render_html(deck)
             pptx_bytes = render_pptx(deck)
         except Exception as exc:  # noqa: BLE001

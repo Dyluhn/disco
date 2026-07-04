@@ -47,7 +47,10 @@ class _MemFS:
 
 
 def _submit_plan_step():
-    return action_step("submit_plan", {"summary": "ship a landing page", "steps": [{"title": "hero"}]})
+    return action_step(
+        "submit_plan",
+        {"summary": "ship a landing page", "steps": [{"title": "hero"}]},
+    )
 
 
 # --- 1. fresh build creates context (goal + todo) via LIVE approval ------------
@@ -63,6 +66,30 @@ async def test_fresh_build_creates_goal_and_todo() -> None:
     assert await store.read_goal() == "ship a landing page"
     todo = await store.read_todo()
     assert todo is not None and "- [ ] 1. hero" in todo
+    direction = await store.read_design_direction()
+    assert direction is not None
+    assert direction.count("## Design Direction:") == 1
+    assert "DO:" in direction and "DON'T:" in direction
+
+
+@pytest.mark.asyncio
+async def test_plan_approval_skips_design_direction_for_decks() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {"summary": "ship a slide deck", "steps": [{"title": "cover"}]},
+            )
+        ]
+    )
+    loop, _store = build_plan_loop(agent, conversation_id="cxt7-deck")
+    loop.executor.sandbox = _MemFS()  # type: ignore[attr-defined]
+    await loop.send_message("build me a presentation deck")
+    await loop.run()
+    await loop.approve_plan()
+    store = ArtifactMemoryStore(loop.executor.sandbox)  # type: ignore[arg-type]
+    assert await store.read_goal() == "ship a slide deck"
+    assert await store.read_design_direction() is None
 
 
 # --- 2. resume reconstructs the ContextPack from durable files -----------------
@@ -74,10 +101,18 @@ async def test_resume_reconstructs_context_pack() -> None:
     await store.write_goal("ship a landing page")
     await store.seed_todo("- [ ] 1. hero")
     await store.write_markdown(ArtifactMemoryKind.DECISIONS, "static site, no backend")
-    failures = (VerifierFailureRef(kind="verify_web_app", message="blank render", severity=Severity.BLOCKER),)
+    failures = (
+        VerifierFailureRef(
+            kind="verify_web_app",
+            message="blank render",
+            severity=Severity.BLOCKER,
+        ),
+    )
     await store.record_verifier_failures(failures)
     await store.record_resources((ResourceRef(rel_path="logo.svg", source="u://x"),))
-    await store.record_direct_edits((DirectEditRef(target_id="hero", rel_path="index.html", kind=DirectEditKind.TEXT),))
+    await store.record_direct_edits(
+        (DirectEditRef(target_id="hero", rel_path="index.html", kind=DirectEditKind.TEXT),)
+    )
 
     # resume: rebuild the ledger from files (no chat replay)
     res = await store.reconstruct("cxt7-resume", "/ws")
@@ -89,7 +124,10 @@ async def test_resume_reconstructs_context_pack() -> None:
     assert any(d.target_id == "hero" for d in led.direct_edits)
 
     # assemble the model-facing pack from the reconstructed ledger
-    pack = build_context_pack([PlanEvent(summary="ship a landing page", steps=[PlanStep(title="hero")])], base_ledger=led)
+    pack = build_context_pack(
+        [PlanEvent(summary="ship a landing page", steps=[PlanStep(title="hero")])],
+        base_ledger=led,
+    )
     assert pack.active_goal == "ship a landing page"
     assert {f.message for f in pack.latest_failures} == {"blank render"}
     assert any(r.rel_path == "logo.svg" for r in pack.resource_refs)

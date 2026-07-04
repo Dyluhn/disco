@@ -203,6 +203,11 @@ class BrowserHandler(BaseHTTPRequestHandler):
         if not page:
             return {"ok": False, "error": "Browser not initialized"}
 
+        vw = params.get("viewport_width")
+        vh = params.get("viewport_height")
+        if isinstance(vw, int) and isinstance(vh, int):
+            page.set_viewport_size({"width": vw, "height": vh})
+
         screenshot_path = None
 
         if action == "navigate":

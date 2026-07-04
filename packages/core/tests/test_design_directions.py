@@ -9,8 +9,10 @@ from disco.core.design import (
     DIRECTION_BY_ID,
     DIRECTION_IDS,
     DIRECTIONS,
+    direction_from_markdown,
     pick_direction,
     render_design_direction,
+    to_brand_tokens,
 )
 
 EXPECTED_IDS = {
@@ -100,3 +102,21 @@ def test_render_design_direction_is_stable_and_carries_anti_slop_bans() -> None:
         "five-column footer soup",
     ):
         assert banned in first
+
+
+def test_direction_contract_roundtrips_to_brand_theme_shape() -> None:
+    direction = DIRECTION_BY_ID["playful-geometric"]
+    markdown = render_design_direction(direction)
+
+    assert direction_from_markdown(markdown) == direction
+
+    theme = to_brand_tokens(direction)
+    assert theme.name == "direction-playful-geometric"
+    assert theme.mode == "light"
+    assert theme.accent == direction.accents[0].hex.lower()
+    assert theme.verify_supported == direction.accents[1].hex.lower()
+    assert theme.verify_weak == direction.accents[2].hex.lower()
+    assert theme.font_display.startswith("'Space Grotesk'")
+    assert theme.font_ui.startswith("'Nunito Sans'")
+    assert theme.font_mono.startswith("'Fira Code'")
+    assert theme.branded is True
