@@ -50,6 +50,7 @@ from .sandbox import (
     SandboxSession,
     SandboxSpec,
 )
+from .scoped_exec import ScopedPhaseExecutor
 from .secrets import (
     CapabilityBroker,
     CapabilityDenied,
@@ -85,6 +86,7 @@ __all__ = [
     "SandboxSession",
     "SandboxSpec",
     "SecretsStore",
+    "ScopedPhaseExecutor",
     "Tool",
     "ToolContext",
     "ToolDef",

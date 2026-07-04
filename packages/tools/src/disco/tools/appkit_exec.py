@@ -22,6 +22,7 @@ an edit to the app tools or the engine):
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Unpack
 
 from disco.core import ToolCall, ToolResult
 from disco.core.llm import OperatingMode
@@ -32,11 +33,11 @@ from .appkit_scope import (
     AppKitPhaseState,
     appkit_effective_scope,
 )
-from .executor import DefaultToolExecutor
 from .registry import ToolRegistry, ToolScope
+from .scoped_exec import ExecutorKwargs, ScopedPhaseExecutor
 
 
-class AppKitToolExecutor(DefaultToolExecutor):
+class AppKitToolExecutor(ScopedPhaseExecutor):
     """A DefaultToolExecutor whose scope is the phase-aware AppKit allowlist."""
 
     def __init__(
@@ -49,10 +50,8 @@ class AppKitToolExecutor(DefaultToolExecutor):
         autonomous: bool,
         mode_getter: Callable[[], OperatingMode | None] | None = None,
         on_widen: Callable[[], None] | None = None,
-        **kwargs: object,
+        **kwargs: Unpack[ExecutorKwargs],
     ) -> None:
-        # These MUST exist before super().__init__ runs, because the base __init__
-        # does `self._scope = scope`, which routes through our property setter below.
         self._appkit_phase = appkit_phase
         # Public marker the core finish gate duck-types (getattr) to detect
         # strict AppKit mode even while the phase allowlist hides the verify
@@ -62,36 +61,38 @@ class AppKitToolExecutor(DefaultToolExecutor):
         self._appkit_autonomous = autonomous
         self._appkit_mode_getter = mode_getter
         self._appkit_on_widen = on_widen
-        # Holds the widened (custom_build) scope; the base __init__'s assignment and
-        # any later MCP-delta model_copy land here via the setter.
-        self._appkit_widened: ToolScope = base_scope
-        super().__init__(registry, scope, **kwargs)  # type: ignore[arg-type]
 
-    # ---- the dynamic, phase-aware scope -------------------------------------
+        def _scope_resolver() -> ToolScope:
+            loop_mode = self._appkit_mode_getter() if self._appkit_mode_getter else None
+            return appkit_effective_scope(
+                loop_mode=loop_mode,
+                phase=self._appkit_phase.phase,
+                base_scope=self.widened_scope,
+                autonomous=self._appkit_autonomous,
+            )
 
-    @property  # type: ignore[override]
-    def _scope(self) -> ToolScope:  # type: ignore[override]
-        if self._appkit_phase.phase == AppKitPhase.CUSTOM_BUILD:
-            # Widened: the base agent_scope (+ any applied MCP delta), held in _widened.
-            return self._appkit_widened
-        loop_mode = self._appkit_mode_getter() if self._appkit_mode_getter else None
-        return appkit_effective_scope(
-            loop_mode=loop_mode,
-            phase=self._appkit_phase.phase,
-            base_scope=self._appkit_base_scope,
-            autonomous=self._appkit_autonomous,
+        super().__init__(
+            registry,
+            scope,
+            scope_resolver=_scope_resolver,
+            **kwargs,
         )
-
-    @_scope.setter
-    def _scope(self, value: ToolScope) -> None:
-        # The custom_build / MCP path mutates scope via `self._scope = ...model_copy()`;
-        # store it as the widened scope (only consulted once phase == CUSTOM_BUILD).
-        self._appkit_widened = value
+        self.set_widen_callback(on_widen)
 
     def set_widen_callback(self, on_widen: Callable[[], None] | None) -> None:
         """Wire the deferred MCP-delta application (P0). Called by the runtime after
         the MCP tool snapshot is known — applied only when scope widens to custom_build."""
         self._appkit_on_widen = on_widen
+        super().set_widen_callback(on_widen)
+
+    @property
+    def _appkit_widened(self) -> ToolScope:
+        """Backward-compatible alias for the widened AppKit scope storage."""
+        return self.widened_scope
+
+    @_appkit_widened.setter
+    def _appkit_widened(self, value: ToolScope) -> None:
+        self._scope = value
 
     # ---- phase transitions (wrapper around the base executor) ----------------
 
@@ -112,7 +113,6 @@ class AppKitToolExecutor(DefaultToolExecutor):
             # Widen to the normal agent_scope, then apply the deferred MCP delta so
             # MCP names become callable for the first time (P0: no earlier bypass).
             self._appkit_phase.phase = AppKitPhase.CUSTOM_BUILD
-            self._appkit_widened = self._appkit_base_scope
-            if self._appkit_on_widen is not None:
-                self._appkit_on_widen()
+            self._scope = self._appkit_base_scope
+            self._notify_widened()
         return result
