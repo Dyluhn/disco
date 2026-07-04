@@ -396,7 +396,12 @@ def test_builtin_workflow_definition_digests_are_stable(
         BUILTIN_WORKFLOW_TOOLS | WORKFLOW_CONTROL_TOOLS,
         available_mcp_names,
     )
-    assert findings == []
+    if "browser" in definition.tools and not definition.policies.egress_allow:
+        assert [(finding.severity, finding.code) for finding in findings] == [
+            ("warning", "browser_without_egress")
+        ]
+    else:
+        assert findings == []
     digest = definition.digest()
     round_tripped = WorkflowDefinition.model_validate(definition.model_dump(mode="json"))
     assert definition.digest() == digest

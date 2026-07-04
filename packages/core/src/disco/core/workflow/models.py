@@ -35,6 +35,7 @@ _ALGO = "sha256"
 _SERVER_RE = re.compile(r"^[a-z0-9_]+$")
 _DOUBLE_UNDER_RE = re.compile(r"__")
 _MCP_PREFIX = "mcp__"
+_HOST_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 _NameStr = Annotated[str, StringConstraints(min_length=1, max_length=120)]
 _CardStr = Annotated[str, StringConstraints(min_length=1, max_length=1200)]
@@ -240,6 +241,33 @@ def _dedupe(values: tuple[str, ...], *, field: str) -> tuple[str, ...]:
     return values
 
 
+def _normalize_egress_allow_entry(value: str) -> str:
+    if not value:
+        raise ValueError("egress_allow entries must be non-empty")
+    if any(ch.isspace() for ch in value):
+        raise ValueError("egress_allow entries must not contain spaces")
+    if "://" in value:
+        raise ValueError("egress_allow entries must not include scheme://")
+    if "/" in value:
+        raise ValueError("egress_allow entries must not include /path")
+
+    normalized = value.lower()
+    if normalized.startswith("*."):
+        normalized = f".{normalized[2:]}"
+    suffix = normalized.startswith(".")
+    host = normalized[1:] if suffix else normalized
+    if not host or host.startswith(".") or host.endswith("."):
+        raise ValueError(
+            "egress_allow entries must be bare hostnames or *.suffix patterns"
+        )
+    labels = host.split(".")
+    if not all(_HOST_LABEL_RE.match(label) for label in labels):
+        raise ValueError(
+            "egress_allow entries must be bare hostnames or *.suffix patterns"
+        )
+    return normalized
+
+
 class McpMount(BaseModel):
     """Explicit workflow mount for a single MCP server.
 
@@ -299,6 +327,13 @@ class WorkflowPolicies(BaseModel):
 
     untrusted_content: bool = True
     allows_writes: bool = False
+    egress_allow: tuple[str, ...] = ()
+
+    @field_validator("egress_allow")
+    @classmethod
+    def _egress_allow_entries(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(_normalize_egress_allow_entry(entry) for entry in value)
+        return _dedupe(normalized, field="egress_allow")
 
 
 class WorkflowOutputContract(BaseModel):
@@ -566,6 +601,15 @@ def _compile_findings(
 
 def _policy_findings(defn: WorkflowDefinition) -> list[WorkflowValidationFinding]:
     findings: list[WorkflowValidationFinding] = []
+    if "browser" in defn.tools and not defn.policies.egress_allow:
+        findings.append(
+            _finding(
+                "warning",
+                "browser_without_egress",
+                "policies.egress_allow",
+                "workflow uses browser but policies.egress_allow is empty; sealed runs cannot reach the network",
+            )
+        )
     writable_mounts = sorted(m.server for m in defn.mcp_mounts if not m.read_only)
     if writable_mounts and not defn.policies.allows_writes:
         servers = ", ".join(writable_mounts)

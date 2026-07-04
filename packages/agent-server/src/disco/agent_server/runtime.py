@@ -2017,7 +2017,9 @@ class ConversationRuntime:
                 sandbox_spec = sandbox_spec.model_copy(
                     update={
                         "permitted": sandbox_spec.permitted - {Capability.NETWORK},
-                        "egress_allow": frozenset(),
+                        "egress_allow": frozenset(
+                            sealed_workflow_run.definition.policies.egress_allow
+                        ),
                     }
                 )
             session = SandboxSession(
@@ -4319,7 +4321,13 @@ class ConversationRuntime:
                         f"Definition digest: {spec.instance_digest}\n"
                         f"Output path: {fallback_output_path}\n"
                         "Parameters:\n"
-                        f"{json.dumps(instance.params, sort_keys=True)}"
+                        f"{json.dumps(instance.params, sort_keys=True)}\n\n"
+                        "Outcome rules:\n"
+                        "If the task cannot be completed with the provided tools/params "
+                        "(missing information, unreachable target, impossible request): "
+                        "call needs_input with the question, or skip with the reason. "
+                        "NEVER fabricate results and NEVER finish with a failure narrative "
+                        "as if the task succeeded."
                     ),
                 ),
             ),

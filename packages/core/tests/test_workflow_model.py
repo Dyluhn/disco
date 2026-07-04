@@ -6,8 +6,10 @@ import re
 
 import pytest
 from disco.core.workflow import (
+    BUILTIN_WORKFLOW_TOOLS,
     McpMount,
     ScheduleSpec,
+    WORKFLOW_CONTROL_TOOLS,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
@@ -16,6 +18,7 @@ from disco.core.workflow import (
     WorkflowVerify,
     compile_workflow_scope,
     render_workflow_output_path,
+    validate_definition,
 )
 from pydantic import ValidationError
 
@@ -128,6 +131,70 @@ def test_writable_mcp_mount_requires_write_policy() -> None:
         policies=WorkflowPolicies(allows_writes=True),
     )
     assert defn.policies.allows_writes is True
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    (
+        ("example.com", "example.com"),
+        ("*.example.com", ".example.com"),
+        (".example.com", ".example.com"),
+        ("localhost", "localhost"),
+    ),
+)
+def test_workflow_policies_accept_declared_egress_hosts(
+    entry: str,
+    expected: str,
+) -> None:
+    policies = WorkflowPolicies(egress_allow=(entry,))
+
+    assert policies.egress_allow == (expected,)
+
+
+@pytest.mark.parametrize(
+    "entry",
+    (
+        "",
+        "https://example.com",
+        "example.com/path",
+        "exa mple.com",
+        "example.com:443",
+        "*.",
+    ),
+)
+def test_workflow_policies_reject_invalid_egress_hosts(entry: str) -> None:
+    with pytest.raises(ValidationError):
+        WorkflowPolicies(egress_allow=(entry,))
+
+
+def test_validate_definition_warns_browser_without_declared_egress() -> None:
+    defn = _defn(tools=("browser",), policies=WorkflowPolicies())
+
+    findings = validate_definition(
+        defn,
+        BUILTIN_WORKFLOW_TOOLS | WORKFLOW_CONTROL_TOOLS,
+        frozenset(),
+        available_skill_names=frozenset({"research-notes"}),
+    )
+
+    browser_findings = [
+        finding for finding in findings if finding.code == "browser_without_egress"
+    ]
+    assert [(finding.severity, finding.path) for finding in browser_findings] == [
+        ("warning", "policies.egress_allow")
+    ]
+
+    declared = _defn(
+        tools=("browser",),
+        policies=WorkflowPolicies(egress_allow=("example.com",)),
+    )
+    declared_findings = validate_definition(
+        declared,
+        BUILTIN_WORKFLOW_TOOLS | WORKFLOW_CONTROL_TOOLS,
+        frozenset(),
+        available_skill_names=frozenset({"research-notes"}),
+    )
+    assert all(finding.code != "browser_without_egress" for finding in declared_findings)
 
 
 def test_params_schema_rejects_bare_object_and_untyped_array_nodes() -> None:

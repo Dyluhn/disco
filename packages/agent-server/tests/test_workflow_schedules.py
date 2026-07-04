@@ -6,6 +6,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import Awaitable, Callable
+from typing import cast
 from urllib.parse import urlsplit
 
 import httpx
@@ -42,6 +43,7 @@ from disco.core.workflow import (
     WorkflowVerify,
 )
 from disco.tools import (
+    Capability,
     ExecResult,
     SandboxError,
     SandboxInstance,
@@ -278,7 +280,11 @@ def _runtime(steps: list[tuple[str, list[ProposedToolCall]]]) -> tuple[Conversat
     return runtime, store
 
 
-def _workflow_definition(*, tools: tuple[str, ...]) -> WorkflowDefinition:
+def _workflow_definition(
+    *,
+    tools: tuple[str, ...],
+    policies: WorkflowPolicies | None = None,
+) -> WorkflowDefinition:
     return WorkflowDefinition(
         name="scheduled_workflow",
         card="Produce the scheduled workflow output in the workspace.",
@@ -288,7 +294,7 @@ def _workflow_definition(*, tools: tuple[str, ...]) -> WorkflowDefinition:
             "properties": {},
         },
         tools=tools,
-        policies=WorkflowPolicies(allows_writes=True),
+        policies=policies or WorkflowPolicies(allows_writes=True),
         output_contract=WorkflowOutputContract(
             path_template="outputs/result.md",
             format="markdown",
@@ -305,8 +311,9 @@ def _save_instance(
     *,
     instance_id: str,
     tools: tuple[str, ...],
+    policies: WorkflowPolicies | None = None,
 ) -> WorkflowInstance:
-    defn = _workflow_definition(tools=tools)
+    defn = _workflow_definition(tools=tools, policies=policies)
     digest = defn.digest()
     instance = WorkflowInstance(
         definition_digest=digest,
@@ -328,6 +335,17 @@ def _save_instance(
         encoding="utf-8",
     )
     return instance
+
+
+def _sandbox_spec_for_run(runtime: ConversationRuntime, run_cid: str) -> SandboxSpec:
+    service = cast(_MemorySandboxService, runtime._injected_sandbox)
+    specs = [
+        instance.spec
+        for instance in service.instances.values()
+        if instance.conversation_id == run_cid
+    ]
+    assert specs
+    return specs[-1]
 
 
 def _spec(instance_id: str, instance: WorkflowInstance) -> ScheduleSpec:
@@ -406,6 +424,94 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
             {"list_workflows", "read_workflow_card", "enter_workflow", "draft_workflow"}
         )
         assert callable_names.isdisjoint({"ask_user", "clarify", "questions_v2"})
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_workflow_schedule_uses_declared_egress_allow() -> None:
+    runtime, _store = _runtime(
+        [
+            ("writing output", [_file_write()]),
+            ("done", [_finish()]),
+        ]
+    )
+    try:
+        instance = _save_instance(
+            runtime,
+            instance_id="wf_declared_egress",
+            tools=("file_write",),
+            policies=WorkflowPolicies(
+                allows_writes=True,
+                egress_allow=("example.com",),
+            ),
+        )
+        manager = WorkflowScheduleManager(runtime)
+        row = manager.create_schedule(_spec("wf_declared_egress", instance))
+
+        record = await manager.fire_now(row.schedule_id)
+
+        assert record is not None
+        spec = _sandbox_spec_for_run(runtime, record.run_cid)
+        assert spec.egress_allow == frozenset({"example.com"})
+        assert Capability.NETWORK not in spec.permitted
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_workflow_schedule_empty_egress_stays_fully_denied() -> None:
+    runtime, _store = _runtime(
+        [
+            ("writing output", [_file_write()]),
+            ("done", [_finish()]),
+        ]
+    )
+    try:
+        instance = _save_instance(runtime, instance_id="wf_empty_egress", tools=("file_write",))
+        manager = WorkflowScheduleManager(runtime)
+        row = manager.create_schedule(_spec("wf_empty_egress", instance))
+
+        record = await manager.fire_now(row.schedule_id)
+
+        assert record is not None
+        spec = _sandbox_spec_for_run(runtime, record.run_cid)
+        assert spec.egress_allow == frozenset()
+        assert Capability.NETWORK not in spec.permitted
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_workflow_schedule_kick_message_has_honest_outcome_rules() -> None:
+    runtime, _store = _runtime(
+        [
+            ("writing output", [_file_write()]),
+            ("done", [_finish()]),
+        ]
+    )
+    try:
+        instance = _save_instance(runtime, instance_id="wf_kick_rules", tools=("file_write",))
+        manager = WorkflowScheduleManager(runtime)
+        row = manager.create_schedule(_spec("wf_kick_rules", instance))
+
+        record = await manager.fire_now(row.schedule_id)
+
+        assert record is not None
+        events = await runtime._store.get_events(record.run_cid)
+        user_messages = [
+            event.message.content
+            for event in events
+            if isinstance(event, MessageEvent) and event.source == EventSource.USER
+        ]
+        kick_message = next(
+            message
+            for message in user_messages
+            if message.startswith("Run this sealed workflow schedule.")
+        )
+        assert "call needs_input with the question, or skip with the reason" in kick_message
+        assert "NEVER fabricate results" in kick_message
+        assert "NEVER finish with a failure narrative as if the task succeeded" in kick_message
     finally:
         await runtime.aclose()
 
