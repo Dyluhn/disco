@@ -421,6 +421,7 @@ def _emit_styles_css(design: DesignSpec) -> str:
         "  transition: opacity 120ms ease;\n"
         "}\n"
         ".btn:hover { opacity: 0.9; }\n"
+        ".btn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }\n"
         ".btn-secondary {\n"
         "  background: transparent; color: var(--color-primary);\n"
         "  border-radius: var(--radius);\n"

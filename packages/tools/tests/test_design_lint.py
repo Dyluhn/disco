@@ -495,6 +495,107 @@ def test_deck_glass_flags_flat_single_color_parent_and_gradient_parent_passes():
     assert clean_v["ok"] is True
 
 
+# --- W2 static-site rule pack -------------------------------------------------
+
+
+def test_web_banned_default_font_flags_first_family_and_clean_pairing_passes():
+    bad = """
+body { font-family: Inter, ui-sans-serif, system-ui; }
+h1 { font-family: Roboto, sans-serif; }
+"""
+    clean = """
+body { font-family: "Source Serif 4", Georgia, serif; }
+h1 { font-family: "Fraunces", Arial, sans-serif; }
+"""
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "web_banned_default_font" in _fired(bad_v)
+    assert "web_banned_default_font" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_web_reflexive_hover_scale_flags_more_than_three_selectors():
+    bad = """
+.card:hover { transform: scale(1.05); }
+.tile:hover { transform: scale(1.03); }
+.plan:hover { transform: scale(1.04); }
+.quote:hover { transform: scale(1.02); }
+"""
+    clean = """
+.card:hover { transform: scale(1.03); }
+.tile:hover { transform: scale(1.02); }
+.plan:hover { transform: translateY(-2px); }
+"""
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "web_reflexive_hover_scale" in _fired(bad_v)
+    assert "web_reflexive_hover_scale" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_web_hover_only_interactivity_flags_missing_focus_visible_and_clean_passes():
+    bad = "button:hover { color: #123456; }\n"
+    clean = """
+button:hover { color: #123456; }
+button:focus-visible { outline: 2px solid #123456; outline-offset: 3px; }
+"""
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "web_hover_only_interactivity" in _fired(bad_v)
+    assert "web_hover_only_interactivity" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_web_text_over_image_no_scrim_flags_background_media_and_clean_passes():
+    bad = """
+<section class="hero" style="background-image:url(hero.jpg)">
+  <h1>Build with intent</h1>
+</section>
+"""
+    clean = """
+<section class="hero"
+  style="background-image:linear-gradient(rgba(0,0,0,.48),rgba(0,0,0,.28)),url(hero.jpg)">
+  <h1>Build with intent</h1>
+</section>
+"""
+
+    bad_v = lint_design({"index.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"index.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "web_text_over_image_no_scrim" in _fired(bad_v)
+    assert "web_text_over_image_no_scrim" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_web_glass_reuses_saturate_and_backdrop_rules_for_sites():
+    bad = """
+<main style="background:#f8fafc">
+  <div style="backdrop-filter:blur(14px);background:rgba(255,255,255,.16)">Glass</div>
+</main>
+"""
+    clean = """
+<main style="background:linear-gradient(135deg,#0f766e,#f59e0b)">
+  <div style="backdrop-filter:blur(14px) saturate(160%);
+  background:rgba(255,255,255,.16)">Glass</div>
+</main>
+"""
+
+    bad_v = lint_design({"index.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"index.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "web_glass_missing_saturate" in _fired(bad_v)
+    assert "web_glass_flat_backdrop" in _fired(bad_v)
+    assert "web_glass_missing_saturate" not in _fired(clean_v)
+    assert "web_glass_flat_backdrop" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
 # --- P1-2: single source of truth for canonical keys --------------------------
 
 

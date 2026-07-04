@@ -59,6 +59,34 @@ def test_build_deck_pack_contains_wave1_craft_rules() -> None:
     assert "36pt = 48px" in raw
 
 
+def test_build_static_site_pack_contains_wave2_site_pack_rules() -> None:
+    pack = PromptPackRegistry().require("build_static_site")
+    raw = pack.raw
+    assert not pack.missing_required()
+    assert set(REQUIRED_SECTIONS) <= set(pack.sections)
+    for phrase in (
+        "Design-direction commitment FIRST",
+        ".disco/context/design_direction.md",
+        "--type-display",
+        "one seed",
+        "ONE surface treatment",
+        "30-50% scrim",
+        "hairline border-white/10",
+        "Cursor-tracked radial spotlight",
+        "blur(8-20px)",
+        "saturate(140-180%)",
+        "hero choreography totals 900ms-1.4s",
+        "at least 1/3 of sections static",
+        "Text-over-image requires a protection layer",
+        "purple-blue gradient default, three identical feature cards, Inter-everything",
+        "indigo-600 CTA + reflexive hover:scale-105",
+        "container queries",
+        "color-mix()",
+        "light-dark()",
+    ):
+        assert phrase in raw
+
+
 def test_render_returns_full_text() -> None:
     reg = PromptPackRegistry()
     pack = reg.require("build_static_site")
