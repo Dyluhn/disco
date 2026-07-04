@@ -49,6 +49,7 @@ from disco.core import ReportEvent
 # binds the name in our namespace at import time).
 from disco.tools.builtin import audio_overview
 from disco.tools.builtin._audio_mixer import encode_mp3, mix_pcm
+from disco.tools.builtin._tts_normalize import normalize_tts_text as _normalize_for_tts
 
 from .audio_config import LLM_API_KEY_ENV, LLM_URL, SILENCE_MS_DEFAULT
 
@@ -146,55 +147,11 @@ def report_audio_cache_dir() -> Path:
     return root
 
 
-# ---- C1: markdown normalizer for TTS ----------------------------------------
+# ---- C1: provider-agnostic normalizer for TTS -------------------------------
 
-_CITATION_RE = re.compile(r"\[\[[\w-]+\]\]")  # [[id]] citation chips
-_HEADING_RE = re.compile(r"^#{1,6}\s+", re.MULTILINE)
-_BOLD_ITALIC_RE = re.compile(r"\*{1,3}([^*]+)\*{1,3}")
-_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
-_BULLET_RE = re.compile(r"^[ \t]*[-*•]\s+", re.MULTILINE)
-_CODE_FENCE_RE = re.compile(r"```[^\n]*\n.*?```", re.DOTALL)
-_INLINE_CODE_RE = re.compile(r"`[^`]+`")
-
-
-def _normalize_for_tts(text: str) -> str:
-    """Strip markdown formatting from *text* so TTS engines receive clean prose.
-
-    Removed: headings (``#``), bold/italic (``**``/``*``/``***``), markdown
-    links (keeping the anchor text), list bullets, fenced code-blocks, inline
-    code, and citation chips (``[[id]]``).  The result is plain ASCII/Unicode
-    prose — no markup characters that would be read letter-by-letter by TTS.
-
-    The on-screen TRANSCRIPT is built from the raw ``Turn.text`` BEFORE this
-    normalizer runs — only the bytes passed to the TTS synth are cleaned.
-    """
-    # Drop fenced code blocks entirely (they carry no speakable information).
-    text = _CODE_FENCE_RE.sub("", text)
-    # Strip inline code backticks (keep the word, drop the ticks).
-    text = _INLINE_CODE_RE.sub(lambda m: m.group(0)[1:-1], text)
-    # Drop citation chips — ``[[p0]]`` adds nothing to speech.
-    text = _CITATION_RE.sub("", text)
-    # Strip heading markers but keep the heading text.
-    text = _HEADING_RE.sub("", text)
-    # Keep link anchor text, drop the URL.
-    text = _LINK_RE.sub(r"\1", text)
-    # Strip bold/italic markers, keep the text.
-    text = _BOLD_ITALIC_RE.sub(r"\1", text)
-    # Strip list bullets.
-    text = _BULLET_RE.sub("", text)
-    # Collapse blank lines.
-    lines = [ln.rstrip() for ln in text.splitlines()]
-    cleaned: list[str] = []
-    prev_blank = False
-    for ln in lines:
-        if not ln:
-            if not prev_blank:
-                cleaned.append("")
-            prev_blank = True
-        else:
-            cleaned.append(ln)
-            prev_blank = False
-    return "\n".join(cleaned).strip()
+# Compatibility alias: older report-audio tests and callers import this private
+# name, but the implementation lives in the tools package so every TTS tier uses
+# the same pre-synthesis cleanup.
 
 
 # ---- Report → input text ---------------------------------------------------

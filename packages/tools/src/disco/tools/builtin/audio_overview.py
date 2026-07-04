@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ._audio_mixer import encode_mp3, mix_pcm
+from ._tts_normalize import normalize_tts_text
 
 # Kokoro v1.0 (and Speaches-Kokoro) output 24 kHz mono. Both backends produce PCM
 # at this rate, so the overview is mixed in PCM and encoded to MP3 once.
@@ -223,6 +224,7 @@ async def _synthesize_local(text: str, voice: str) -> Any:
     imports the agent-server TTS module (loads the model on first use)."""
     from disco.agent_server.tts_local import synthesize
 
+    text = _text_for_synthesis(text)
     return await synthesize(text, voice)
 
 
@@ -245,6 +247,7 @@ async def _synthesize_remote(
     both emit 24 kHz mono; we assert it rather than trust the docstring."""
     import numpy as np
 
+    text = _text_for_synthesis(text)
     payload: dict[str, Any] = {"input": text, "voice": voice, "response_format": "wav"}
     if model:  # OpenAI requires a model id; Speaches ignores/defaults it
         payload["model"] = model
@@ -271,6 +274,16 @@ async def _synthesize_remote(
     if width == 4:
         return np.frombuffer(frames, dtype="<f4").astype(np.float32)
     raise RuntimeError(f"unsupported WAV sample width {width} from the TTS endpoint")
+
+
+def _text_for_synthesis(text: str) -> str:
+    """Normalize text at the provider-agnostic TTS choke point.
+
+    If normalization removes everything, fall back to the original stripped text
+    so providers still receive a non-empty prompt when the caller supplied one.
+    """
+    normalized = normalize_tts_text(text)
+    return normalized or text.strip()
 
 
 # ---- tool implementation ----------------------------------------------------
