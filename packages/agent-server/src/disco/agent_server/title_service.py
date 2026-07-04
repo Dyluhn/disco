@@ -20,6 +20,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from disco.core.events import Event, EventSource, MessageEvent
+from disco.core.think import strip_think_spans
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
@@ -82,9 +83,7 @@ def sanitize_title(raw: str) -> str:
     # 0. A reasoning model can leak <think>… into the summary; reasoning is never a
     #    title. Closed spans are cut; an unclosed leading think consumes everything
     #    (returns "" → caller falls back to the first-message heuristic).
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<think>.*", "", text, flags=re.IGNORECASE | re.DOTALL)
-    text = text.strip()
+    text = strip_think_spans(text)
     if not text:
         return ""
     # 1. First non-empty line — a chatty model puts the title on line 1, prose after.

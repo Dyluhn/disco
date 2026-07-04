@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast
 
 from disco.core import LLMMessage
+from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CallContext,
     CapabilityProfile,
@@ -187,8 +188,7 @@ async def _gap_reason(
         resp = await cast(_RouterWithCtx, router).complete(req, context=call_context)
     except Exception:  # noqa: BLE001 — gap-reason failure is recoverable
         return True, [], "gap reasoner failed; stopping further rounds"
-    gap_text = re.sub(r"<think>.*?</think>", "", resp.text, flags=re.IGNORECASE | re.DOTALL)
-    gap_text = re.sub(r"<think>.*", "", gap_text, flags=re.IGNORECASE | re.DOTALL)
+    gap_text = strip_think_spans(resp.text)
     lines = [ln.strip() for ln in gap_text.splitlines() if ln.strip()]
     if not lines:
         return True, [], "empty gap-reason response; stopping"

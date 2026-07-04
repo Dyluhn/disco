@@ -14,6 +14,7 @@ from typing import Protocol, runtime_checkable
 
 from disco.core import LLMMessage
 from disco.core.llm import CapabilityProfile, CompletionRequest, LLMRouter, ModelRole
+from disco.core.think import strip_think_spans
 
 from .models import Passage, SearchHit
 
@@ -123,5 +124,9 @@ class RouterQueryRewriter:
             temperature=0.0,
         )
         resp = await self._router.complete(req)
-        lines = [ln.strip(" -•\t") for ln in resp.text.splitlines() if ln.strip()]
+        # A leaked <think> preamble here is catastrophic: its first line becomes
+        # the literal engine query (live-caught: DDG returned "rewrite a title"
+        # SEO junk for a telegraph-history question). Strip before parsing.
+        text = strip_think_spans(resp.text)
+        lines = [ln.strip(" -•\t") for ln in text.splitlines() if ln.strip()]
         return lines[:n] or [query]

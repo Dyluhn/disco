@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass
 
 from disco.core import LLMMessage
+from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
@@ -123,8 +124,7 @@ async def decompose_query(
         temperature=0.0,
     )
     resp = await router.complete(req)
-    text = re.sub(r"<think>.*?</think>", "", resp.text, flags=re.IGNORECASE | re.DOTALL)
-    text = re.sub(r"<think>.*", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = strip_think_spans(resp.text)
     lines = [_clean(ln) for ln in text.splitlines() if ln.strip()]
     # dedup while preserving order — some models repeat near-paraphrases
     seen: set[str] = set()

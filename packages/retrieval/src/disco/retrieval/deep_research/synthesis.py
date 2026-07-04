@@ -28,6 +28,7 @@ from typing import Any, Literal, Protocol, cast
 
 import jsonschema
 from disco.core import LLMMessage, ReportSection
+from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CallContext,
     CapabilityProfile,
@@ -557,8 +558,9 @@ async def synthesize_section(
         # `markdown[-1:].isspace()` permanently False, so every continuation
         # glues directly and merges adjacent rows/words ("| a | 10 |" + "| b |"
         # -> "| a | 10 || b |", losing the row break). The final strip happens
-        # once, after the loop.
-        markdown = resp.text
+        # once, after the loop. (Think spans are stripped span-only here so the
+        # trailing cut boundary survives.)
+        markdown = strip_think_spans(resp.text, keep_edge_whitespace=True)
         _cont = 0
         while resp.finish_reason == "length" and _cont < 2:
             _cont += 1
@@ -586,7 +588,7 @@ async def synthesize_section(
                 )
             except Exception:  # noqa: BLE001 — keep the partial section
                 break
-            extra = resp.text
+            extra = strip_think_spans(resp.text, keep_edge_whitespace=True)
             if not extra.strip():
                 break
             stripped_extra = extra.lstrip()
@@ -651,7 +653,7 @@ async def synthesize_section(
                         ),
                         context=leg_context.call_context,
                     )
-                    markdown = resp.text.strip()
+                    markdown = strip_think_spans(resp.text)
                 except Exception:  # noqa: BLE001
                     pass  # Keep the first version if retry fails
 
@@ -784,6 +786,6 @@ async def coherence_pass(
                 max_tokens=400,
             )
         )
-        return resp.text.strip() or f"This report investigates: {query}"
+        return strip_think_spans(resp.text) or f"This report investigates: {query}"
     except Exception:  # noqa: BLE001 — degrade to a generic frame
         return f"This report investigates: {query}"

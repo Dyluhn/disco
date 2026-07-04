@@ -65,5 +65,20 @@ async def test_router_query_rewriter_parses_lines():
     assert one == ["first paraphrase"]
 
 
+async def test_router_query_rewriter_strips_leaked_think():
+    """A leaked <think> preamble must never become the engine query (live-caught:
+    its first line went to the search engine verbatim and poisoned the corpus)."""
+    router = FakeRouter(
+        rewriter_text="<think>Okay, the user wants me to rewrite\na title following a spec"
+        "</think>\ntransatlantic cable 1866 finance"
+    )
+    rw = RouterQueryRewriter(router)
+    assert await rw.rewrite("q", n=1) == ["transatlantic cable 1866 finance"]
+    # unclosed trailing think (budget ran out) → nothing usable → original query
+    router = FakeRouter(rewriter_text="<think>hmm, let me consider what")
+    rw = RouterQueryRewriter(router)
+    assert await rw.rewrite("q", n=2) == ["q"]
+
+
 def test_nli_empty_hypothesis_scores_zero():
     assert CrossEncoderNLIVerifier().score("anything", "") == 0.0

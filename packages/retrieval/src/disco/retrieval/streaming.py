@@ -19,6 +19,7 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any, Protocol
 
 from disco.core.events import LLMMessage
+from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
@@ -108,19 +109,8 @@ def _answer_prompt(query: str, passages: Sequence[Passage]) -> list[LLMMessage]:
 
 
 
-_THINK_SPAN_RE = re.compile(r"<think>.*?</think>\s*", re.IGNORECASE | re.DOTALL)
-_THINK_OPEN_RE = re.compile(r"<think>.*\Z", re.IGNORECASE | re.DOTALL)
-
-
-def _strip_think_spans(text: str) -> str:
-    """Remove inline <think>…</think> reasoning a driver leaks into content.
-
-    Reasoning is never part of the grounded answer: closed spans are cut, and an
-    UNCLOSED trailing <think> (budget ran out mid-thought) drops to the end —
-    better an honest short answer than reasoning rendered as prose."""
-    out = _THINK_SPAN_RE.sub("", text)
-    out = _THINK_OPEN_RE.sub("", out)
-    return out.strip()
+# Canonical strip lives in disco.core.think — one rule, no per-site regexes.
+_strip_think_spans = strip_think_spans
 
 
 def _to_blocks(text: str) -> list[dict]:

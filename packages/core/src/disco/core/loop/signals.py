@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
+from ..think import strip_think_spans
 from ..events import (
     ActionEvent,
     AgentErrorEvent,
@@ -797,7 +798,6 @@ def prose_plan_harvested(events: list[Event]) -> bool:
     return False
 
 
-_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.IGNORECASE | re.DOTALL)
 _PROSE_PLAN_STEP_RE = re.compile(
     r"^\s*(?:[-*+]\s+|(?:\d{1,2}|[A-Za-z])[\.)]\s+)(.+?)\s*$"
 )
@@ -806,7 +806,7 @@ _MD_EMPH_RE = re.compile(r"(\*\*|__|\*|_)([^*_].*?)\1")
 
 
 def _strip_think_blocks(text: str) -> str:
-    return _THINK_BLOCK_RE.sub("", text)
+    return strip_think_spans(text)
 
 
 def _strip_prose_step_markdown(text: str) -> str:
