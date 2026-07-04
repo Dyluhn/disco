@@ -6057,3 +6057,20 @@ FIRST live firings** (previously unit-proven only) + 1 blocked-landing marker.
 In-line metrics extraction worked 20/20 (driver v2). 489 relay calls, 0
 OpenRouter. The pause/stuck failure mode is now empirically dead on this
 workload: every degradation self-recovered to FINISHED.
+
+## AGENT→WORKFLOW: WF-1..5 COMPLETE, FIRST LIVE RUN PROVEN (2026-07-04)
+
+Dylan's workflow-router architecture, first spine: WF-1 `febb11c7` (pure
+core/workflow models + digest-pinned instances + validation-is-compilation
+scope compiler) · WF-2 `668ff8fe` (ScopedPhaseExecutor extracted; appkit
+re-based byte-identically) · WF-3 `5795f776` (router phase: bare agent =
+route-only allowlist, flag-gated) · WF-4 `f4afedb3` (skip/needs_input on the
+shared landing machinery; output-contract finish gate on the shared verify
+spine) · WF-5 `ab145031` (General Workspace Task + seed). LIVE PROOF
+(MiniMax, 0 OpenRouter): agent-surface conversation → list_workflows →
+read_workflow_card → enter_workflow ("Compiled 7 tools") → plan → approved →
+contracted reports/task-summary.md written (the report itself enumerates the
+bounded toolset it saw) → output-contract gate → FINISHED in 24s. Screenshot
+sent to Dylan. Remaining: WF-6 sealed schedules · WF-7 MCP mounts + Daily
+Email Brief · WF-8 draft→validate→simulate→approve. Also this window:
+soak #2 = 20/20 w/ RC-P valve's first live firings (see prior entry).
