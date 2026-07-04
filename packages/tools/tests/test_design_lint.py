@@ -324,6 +324,177 @@ def test_justified_roboto_heading_does_not_suppress_inter():
     )
 
 
+# --- C3 deck artifact rule pack ----------------------------------------------
+
+
+def _deck_slide(
+    n: int,
+    body: str,
+    *,
+    layout: str = "image_right",
+    style: str = "background:linear-gradient(135deg,#0f766e,#f59e0b)",
+) -> str:
+    return (
+        f'<section class="slide" id="slide-{n}" data-slide-id="slide-{n}" '
+        f'data-layout="{layout}" style="{style}">{body}</section>'
+    )
+
+
+def _deck_html(*slides: str, head_style: str = "") -> str:
+    return (
+        "<!doctype html><html><head>"
+        f"<style>{head_style}</style>"
+        "</head><body><div class=\"deck\">"
+        + "\n".join(slides)
+        + "</div></body></html>"
+    )
+
+
+def _fired(verdict: dict[str, object]) -> set[str]:
+    return {str(f["rule_id"]) for f in verdict["findings"]}  # type: ignore[index]
+
+
+def test_deck_type_floor_flags_inline_font_size_under_24px():
+    bad = _deck_html(
+        _deck_slide(0, '<p style="font-size:23px">Too small</p><img src="cover.png">')
+    )
+    clean = _deck_html(
+        _deck_slide(0, '<p style="font-size:24px">Large enough</p><img src="cover.png">')
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert any(f["rule_id"] == "deck_type_floor" and f["severity"] == "error" for f in bad_v["findings"])
+    assert "deck_type_floor" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_deck_text_budget_flags_overlong_slide_and_clean_slide_passes():
+    long_text = " ".join(f"word{i}" for i in range(91))
+    bad = _deck_html(_deck_slide(0, f"<p>{long_text}</p><img src=\"cover.png\">"))
+    clean = _deck_html(
+        _deck_slide(
+            0,
+            "<ul><li>One</li><li>Two</li><li>Three</li><li>Four</li>"
+            "<li>Five</li><li>Six</li></ul><img src=\"cover.png\">",
+        )
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    budget = [f for f in bad_v["findings"] if f["rule_id"] == "deck_text_budget"]
+    assert budget and "too much text on slide 1" in budget[0]["message"]
+    assert "deck_text_budget" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_deck_text_budget_flags_more_than_six_bullet_lines():
+    bullets = "".join(f"<li>Point {i}</li>" for i in range(7))
+    bad = _deck_html(_deck_slide(0, f"<ul>{bullets}</ul><img src=\"cover.png\">"))
+    clean = _deck_html(
+        _deck_slide(
+            0,
+            "<ul><li>One</li><li>Two</li><li>Three</li><li>Four</li>"
+            "<li>Five</li><li>Six</li></ul><img src=\"cover.png\">",
+        )
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "deck_text_budget" in _fired(bad_v)
+    assert "deck_text_budget" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_deck_bullet_monotony_flags_three_slide_run_and_clean_mix_passes():
+    bullet_body = "<h2>Topic</h2><ul><li>A</li><li>B</li></ul>"
+    bad = _deck_html(
+        _deck_slide(0, bullet_body, layout="bullets"),
+        _deck_slide(1, bullet_body, layout="bullets"),
+        _deck_slide(2, bullet_body, layout="bullets"),
+        _deck_slide(3, '<h2>Visual break</h2><img src="cover.png">', layout="image_right"),
+    )
+    clean = _deck_html(
+        _deck_slide(0, bullet_body, layout="bullets"),
+        _deck_slide(1, '<h2>Visual break</h2><img src="cover.png">', layout="image_right"),
+        _deck_slide(2, bullet_body, layout="bullets"),
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    monotony = [f for f in bad_v["findings"] if f["rule_id"] == "deck_bullet_monotony"]
+    assert monotony and "slides 1-3" in monotony[0]["message"]
+    assert "deck_bullet_monotony" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_deck_missing_imagery_flags_zero_images_and_image_deck_passes():
+    bad = _deck_html(_deck_slide(0, "<h1>Cover</h1><p>A designed opening.</p>"))
+    clean = _deck_html(_deck_slide(0, '<h1>Cover</h1><img src="cover.png">'))
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    imagery = [f for f in bad_v["findings"] if f["rule_id"] == "deck_missing_imagery"]
+    assert imagery and imagery[0]["message"] == "no imagery: cover/divider slides should carry generated art"
+    assert "deck_missing_imagery" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_deck_glass_flags_backdrop_filter_without_saturate_and_clean_glass_passes():
+    bad = _deck_html(
+        _deck_slide(
+            0,
+            '<div style="backdrop-filter:blur(14px);background:rgba(255,255,255,.16)">Glass</div>'
+            '<img src="cover.png">',
+        )
+    )
+    clean = _deck_html(
+        _deck_slide(
+            0,
+            '<div style="backdrop-filter:blur(14px) saturate(160%);'
+            'background:rgba(255,255,255,.16)">Glass</div><img src="cover.png">',
+        )
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "deck_glass_missing_saturate" in _fired(bad_v)
+    assert "deck_glass_missing_saturate" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_deck_glass_flags_flat_single_color_parent_and_gradient_parent_passes():
+    bad = _deck_html(
+        _deck_slide(
+            0,
+            '<div style="backdrop-filter:blur(14px) saturate(160%);'
+            'background:rgba(255,255,255,.16)">Glass</div>',
+            style="background:#f8fafc",
+        ),
+        _deck_slide(1, '<h2>Image slide</h2><img src="cover.png">'),
+    )
+    clean = _deck_html(
+        _deck_slide(
+            0,
+            '<div style="backdrop-filter:blur(14px) saturate(160%);'
+            'background:rgba(255,255,255,.16)">Glass</div><img src="cover.png">',
+        )
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "deck_glass_flat_backdrop" in _fired(bad_v)
+    assert "deck_glass_flat_backdrop" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
 # --- P1-2: single source of truth for canonical keys --------------------------
 
 

@@ -35,9 +35,11 @@ choice keys from `disco.core.appkit` (the single source of truth recipes write).
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 import shlex
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from disco.core import SecurityRisk
@@ -195,9 +197,37 @@ _EMOJI_RE = re.compile(
 _CSS_BLOCK_RE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
 _HEX_RE = re.compile(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?\b")
 _FONT_CONTEXT_RE = re.compile(r"font-family|font\s*:|--font|family=|googleapis\.com/css", re.I)
+_SECTION_OPEN_RE = re.compile(r"<section\b(?P<attrs>[^>]*)>", re.I | re.DOTALL)
+_STYLE_ATTR_RE = re.compile(r"\bstyle\s*=\s*(['\"])(?P<style>.*?)\1", re.I | re.DOTALL)
+_CLASS_ATTR_RE = re.compile(r"\bclass\s*=\s*(['\"])(?P<class>.*?)\1", re.I | re.DOTALL)
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style|template)\b[^>]*>.*?</\1\s*>", re.I | re.DOTALL)
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?")
+_FONT_SIZE_DECL_RE = re.compile(
+    r"font-size\s*:\s*(?P<value>[0-9]*\.?[0-9]+)\s*(?P<unit>px|pt|vw|rem|em)?\b",
+    re.I,
+)
+_BACKDROP_DECL_RE = re.compile(
+    r"(?:-webkit-)?backdrop-filter\s*:\s*(?P<value>[^;{}]+)",
+    re.I,
+)
+_BACKGROUND_DECL_RE = re.compile(
+    r"(?:background|background-color|background-image)\s*:\s*(?P<value>[^;{}]+)",
+    re.I,
+)
 
 _ANIMATION_THRESHOLD = 12  # transition/animation declarations over this = soup
 _EMOJI_THRESHOLD = 3  # this many emoji glyphs in markup = emoji-as-icons
+_DECK_TEXT_WORD_LIMIT = 90
+_DECK_BULLET_LIMIT = 6
+_DECK_TYPE_FLOOR_PX = 24.0
+_DECK_BASE_WIDTH_PX = 1920.0
+_CHOICE_DECK_TYPE_FLOOR = "deck.type_floor"
+_CHOICE_DECK_TEXT_BUDGET = "deck.text_budget"
+_CHOICE_DECK_ARCHETYPE_MONOTONY = "deck.archetype_monotony"
+_CHOICE_DECK_IMAGERY = "deck.imagery"
+_CHOICE_DECK_GLASS = "deck.glass"
 
 # Extensions split by how we scan them.
 _CSS_EXTS: frozenset[str] = frozenset({".css", ".scss", ".sass", ".less"})
@@ -292,10 +322,16 @@ class DesignFinding(BaseModel):
 # rule_id -> (severity, rank-priority). Lower priority sorts first within a
 # severity. Severity dominates the sort (error < warning < info).
 _RULE_META: dict[str, tuple[str, int]] = {
+    "deck_type_floor": ("error", 5),
     "ai_purple": ("error", 10),
     "generic_font": ("warning", 20),
     "gradient_hero_text": ("warning", 30),
     "dark_neon_glow": ("warning", 40),
+    "deck_text_budget": ("warning", 45),
+    "deck_bullet_monotony": ("warning", 46),
+    "deck_missing_imagery": ("warning", 47),
+    "deck_glass_missing_saturate": ("warning", 48),
+    "deck_glass_flat_backdrop": ("warning", 49),
     "centered_hero_3_cards_cta": ("warning", 50),
     "too_many_animations": ("info", 60),
     "pill_button_monoculture": ("info", 70),
@@ -362,6 +398,200 @@ def _resolve_rgb(raw: str) -> tuple[int, int, int] | None:
         except ValueError:
             return None
     return None
+
+
+@dataclass(frozen=True)
+class _DeckSlide:
+    """One slide section found in a generated HTML deck."""
+
+    number: int
+    line: int
+    attrs: str
+    html: str
+    open_start: int
+    html_start: int
+
+
+def _attr_value(attrs: str, name: str) -> str | None:
+    m = re.search(
+        rf"\b{re.escape(name)}\s*=\s*(['\"])(?P<value>.*?)\1",
+        attrs,
+        re.I | re.DOTALL,
+    )
+    return m.group("value") if m is not None else None
+
+
+def _has_attr(attrs: str, name: str) -> bool:
+    return re.search(rf"\b{re.escape(name)}\s*=", attrs, re.I) is not None
+
+
+def _class_tokens(raw: str) -> set[str]:
+    return {token.strip().lower() for token in re.split(r"\s+", raw) if token.strip()}
+
+
+def _has_class(attrs: str, token: str) -> bool:
+    classes = _attr_value(attrs, "class")
+    return classes is not None and token.lower() in _class_tokens(classes)
+
+
+def _has_deck_wrapper(text: str) -> bool:
+    return any("deck" in _class_tokens(m.group("class")) for m in _CLASS_ATTR_RE.finditer(text))
+
+
+def _is_deck_section_candidate(attrs: str) -> bool:
+    return _has_attr(attrs, "data-slide-id") or _has_attr(attrs, "data-label") or _has_class(
+        attrs, "slide"
+    )
+
+
+def _extract_deck_slides(text: str) -> list[_DeckSlide]:
+    """Return slide sections only when the markup looks like a deck artifact.
+
+    The actual deck renderer stamps `<div class="deck">` and
+    `<section class="slide" data-slide-id=... data-layout=...>`. Some artifact
+    paths use `<section data-label=...>` instead, so repeated data-label sections
+    are also accepted as deck-like. Ordinary web pages with a single labelled
+    section stay out of the deck rule pack.
+    """
+    candidates: list[tuple[re.Match[str], str, int, int]] = []
+    strong_markers = 0
+    data_label_markers = 0
+    for m in _SECTION_OPEN_RE.finditer(text):
+        attrs = m.group("attrs") or ""
+        if not _is_deck_section_candidate(attrs):
+            continue
+        close = re.search(r"</section\s*>", text[m.end() :], re.I)
+        if close is None:
+            continue
+        body_start = m.end()
+        body_end = m.end() + close.start()
+        candidates.append((m, attrs, body_start, body_end))
+        if _has_attr(attrs, "data-slide-id") or _has_class(attrs, "slide"):
+            strong_markers += 1
+        if _has_attr(attrs, "data-label"):
+            data_label_markers += 1
+
+    if not candidates:
+        return []
+    if not (_has_deck_wrapper(text) or strong_markers > 0 or data_label_markers >= 2):
+        return []
+
+    slides: list[_DeckSlide] = []
+    for i, (m, attrs, body_start, body_end) in enumerate(candidates, 1):
+        slides.append(
+            _DeckSlide(
+                number=i,
+                line=_line_of(text, m.start()),
+                attrs=attrs,
+                html=text[body_start:body_end],
+                open_start=m.start(),
+                html_start=body_start,
+            )
+        )
+    return slides
+
+
+def _visible_text(fragment: str) -> str:
+    without_invisible = _SCRIPT_STYLE_RE.sub(" ", fragment)
+    without_comments = _COMMENT_RE.sub(" ", without_invisible)
+    without_tags = _TAG_RE.sub(" ", without_comments)
+    return re.sub(r"\s+", " ", html_lib.unescape(without_tags)).strip()
+
+
+def _word_count(fragment: str) -> int:
+    return len(_WORD_RE.findall(_visible_text(fragment)))
+
+
+def _bullet_count(fragment: str) -> int:
+    return len(re.findall(r"<li\b", fragment, re.I))
+
+
+def _font_size_px(value: str, unit: str | None) -> float | None:
+    try:
+        number = float(value)
+    except ValueError:
+        return None
+    u = (unit or "px").lower()
+    if u == "px":
+        return number
+    if u == "pt":
+        return number * (96.0 / 72.0)
+    if u == "vw":
+        return number * (_DECK_BASE_WIDTH_PX / 100.0)
+    if u in {"rem", "em"}:
+        return number * 16.0
+    return None
+
+
+def _style_attrs(slide: _DeckSlide) -> list[tuple[str, int]]:
+    styles: list[tuple[str, int]] = []
+    for m in _STYLE_ATTR_RE.finditer(slide.attrs):
+        styles.append((m.group("style"), slide.open_start + m.start()))
+    for m in _STYLE_ATTR_RE.finditer(slide.html):
+        styles.append((m.group("style"), slide.html_start + m.start()))
+    return styles
+
+
+def _deck_image_count(slides: list[_DeckSlide]) -> int:
+    count = 0
+    for slide in slides:
+        raw = f"{slide.attrs}\n{slide.html}"
+        count += len(re.findall(r"<\s*(?:img|picture|source)\b", raw, re.I))
+        count += len(re.findall(r"\bbackground(?:-image)?\s*:[^;{}]*url\(", raw, re.I))
+    return count
+
+
+def _has_colorful_backdrop(raw: str) -> bool:
+    return re.search(
+        r"(?:linear|radial|conic)-gradient|url\(|<\s*(?:img|picture|video)\b",
+        raw,
+        re.I,
+    ) is not None
+
+
+def _is_flat_background_value(value: str) -> bool:
+    low = value.strip().lower()
+    if not low or any(tok in low for tok in ("gradient(", "url(", "image-set(")):
+        return False
+    if low.startswith("var("):
+        return False
+    if re.search(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?\b|rgba?\(|hsla?\(|oklch\(|oklab\(", low):
+        return True
+    named = re.fullmatch(r"[a-z]+", low)
+    return named is not None and low not in {"none", "transparent", "inherit", "initial"}
+
+
+def _style_has_flat_background(style: str) -> bool:
+    return any(_is_flat_background_value(m.group("value")) for m in _BACKGROUND_DECL_RE.finditer(style))
+
+
+def _slide_has_flat_backdrop(slide: _DeckSlide) -> bool:
+    return any(_style_has_flat_background(m.group("style")) for m in _STYLE_ATTR_RE.finditer(slide.attrs))
+
+
+def _global_deck_backdrop_is_flat(text: str) -> bool:
+    for m in _CSS_BLOCK_RE.finditer(text):
+        selector = m.group(1).lower()
+        if not any(tok in selector for tok in (".slide", ".deck", "body")):
+            continue
+        body = m.group(2)
+        if _has_colorful_backdrop(body):
+            return False
+        if _style_has_flat_background(body):
+            return True
+    return False
+
+
+def _backdrop_without_saturate(style: str) -> str | None:
+    for m in _BACKDROP_DECL_RE.finditer(style):
+        value = m.group("value")
+        if "saturate(" not in value.lower():
+            return m.group(0).strip()
+    return None
+
+
+def _style_has_backdrop_filter(style: str) -> bool:
+    return _BACKDROP_DECL_RE.search(style) is not None
 
 
 # ---- suppression --------------------------------------------------------------
@@ -764,6 +994,230 @@ def _rule_centered_hero_3_cards_cta(
     return []
 
 
+def _rule_deck_type_floor(
+    path: str, text: str, slides: list[_DeckSlide]
+) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    for slide in slides:
+        for style, offset in _style_attrs(slide):
+            for m in _FONT_SIZE_DECL_RE.finditer(style):
+                px = _font_size_px(m.group("value"), m.group("unit"))
+                if px is None or px >= _DECK_TYPE_FLOOR_PX:
+                    continue
+                evidence = m.group(0).strip()
+                findings.append(
+                    DesignFinding(
+                        rule_id="deck_type_floor",
+                        severity="error",
+                        path=path,
+                        line=_line_of(text, offset + m.start()),
+                        evidence=evidence,
+                        choice_key=_CHOICE_DECK_TYPE_FLOOR,
+                        message=(
+                            f"Deck slide type floor violation on slide {slide.number}: "
+                            f"inline {evidence} resolves below 24px."
+                        ),
+                    )
+                )
+    return findings
+
+
+def _rule_deck_text_budget(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    for slide in slides:
+        words = _word_count(slide.html)
+        bullets = _bullet_count(slide.html)
+        if words <= _DECK_TEXT_WORD_LIMIT and bullets <= _DECK_BULLET_LIMIT:
+            continue
+        findings.append(
+            DesignFinding(
+                rule_id="deck_text_budget",
+                severity="warning",
+                path=path,
+                line=slide.line,
+                evidence=f"{words} words, {bullets} bullet lines",
+                choice_key=_CHOICE_DECK_TEXT_BUDGET,
+                message=(
+                    f"too much text on slide {slide.number}: {words} words and "
+                    f"{bullets} bullet lines. Keep slides under about 90 words "
+                    "and no more than 6 bullet lines."
+                ),
+            )
+        )
+    return findings
+
+
+def _slide_is_pure_bullet_list(slide: _DeckSlide) -> bool:
+    layout = (_attr_value(slide.attrs, "data-layout") or "").strip().lower()
+    if layout in {"image_right", "image_left", "full_image", "section_header", "title", "closing"}:
+        return False
+    if layout in {"bullets", "bullet", "bullet_list"}:
+        return _bullet_count(slide.html) > 0
+    if _bullet_count(slide.html) == 0:
+        return False
+    if re.search(r"<\s*(?:img|picture|svg|canvas|video|table|figure)\b", slide.html, re.I):
+        return False
+    non_bullet_blocks = re.findall(r"<\s*(?:p|blockquote|pre|table|figure)\b", slide.html, re.I)
+    return len(non_bullet_blocks) == 0
+
+
+def _rule_deck_bullet_monotony(
+    path: str, slides: list[_DeckSlide]
+) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    run_start: int | None = None
+    for idx, slide in enumerate(slides):
+        if _slide_is_pure_bullet_list(slide):
+            if run_start is None:
+                run_start = idx
+            continue
+        if run_start is not None and idx - run_start >= 3:
+            first = slides[run_start]
+            last = slides[idx - 1]
+            findings.append(
+                DesignFinding(
+                    rule_id="deck_bullet_monotony",
+                    severity="warning",
+                    path=path,
+                    line=first.line,
+                    evidence=f"slides {first.number}-{last.number} are pure bullet lists",
+                    choice_key=_CHOICE_DECK_ARCHETYPE_MONOTONY,
+                    message=(
+                        f"Pure bullet-list monotony across slides {first.number}-{last.number}. "
+                        "Vary the run with imagery, section, quote, chart, or comparison slides."
+                    ),
+                )
+            )
+        run_start = None
+    if run_start is not None and len(slides) - run_start >= 3:
+        first = slides[run_start]
+        last = slides[-1]
+        findings.append(
+            DesignFinding(
+                rule_id="deck_bullet_monotony",
+                severity="warning",
+                path=path,
+                line=first.line,
+                evidence=f"slides {first.number}-{last.number} are pure bullet lists",
+                choice_key=_CHOICE_DECK_ARCHETYPE_MONOTONY,
+                message=(
+                    f"Pure bullet-list monotony across slides {first.number}-{last.number}. "
+                    "Vary the run with imagery, section, quote, chart, or comparison slides."
+                ),
+            )
+        )
+    return findings
+
+
+def _rule_deck_missing_imagery(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
+    if _deck_image_count(slides) > 0:
+        return []
+    return [
+        DesignFinding(
+            rule_id="deck_missing_imagery",
+            severity="warning",
+            path=path,
+            line=slides[0].line if slides else 1,
+            evidence="0 images across deck slides",
+            choice_key=_CHOICE_DECK_IMAGERY,
+            message="no imagery: cover/divider slides should carry generated art",
+        )
+    ]
+
+
+def _rule_deck_glass(path: str, text: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    glass_uses: list[tuple[_DeckSlide | None, int, str]] = []
+
+    for m in _CSS_BLOCK_RE.finditer(text):
+        body = m.group(2)
+        if not _style_has_backdrop_filter(body):
+            continue
+        evidence = _backdrop_without_saturate(body)
+        if evidence is not None:
+            findings.append(
+                DesignFinding(
+                    rule_id="deck_glass_missing_saturate",
+                    severity="warning",
+                    path=path,
+                    line=_line_of(text, m.start()),
+                    evidence=evidence,
+                    choice_key=_CHOICE_DECK_GLASS,
+                    message="backdrop-filter without saturate() makes deck glass read as gray mud",
+                )
+            )
+        glass_uses.append((None, m.start(), evidence or "backdrop-filter"))
+
+    for slide in slides:
+        for style, offset in _style_attrs(slide):
+            if not _style_has_backdrop_filter(style):
+                continue
+            evidence = _backdrop_without_saturate(style)
+            if evidence is not None:
+                findings.append(
+                    DesignFinding(
+                        rule_id="deck_glass_missing_saturate",
+                        severity="warning",
+                        path=path,
+                        line=_line_of(text, offset),
+                        evidence=evidence,
+                        choice_key=_CHOICE_DECK_GLASS,
+                        message=(
+                            "backdrop-filter without saturate() makes deck glass "
+                            "read as gray mud"
+                        ),
+                    )
+                )
+            glass_uses.append((slide, offset, evidence or "backdrop-filter"))
+
+    if not glass_uses:
+        return findings
+
+    global_flat = _global_deck_backdrop_is_flat(text)
+    deck_has_colorful_backdrop = any(
+        _has_colorful_backdrop(f"{slide.attrs}\n{slide.html}") for slide in slides
+    )
+    for slide, offset, evidence in glass_uses:
+        if slide is not None:
+            raw = f"{slide.attrs}\n{slide.html}"
+            if _has_colorful_backdrop(raw):
+                continue
+            if _slide_has_flat_backdrop(slide) or global_flat:
+                findings.append(
+                    DesignFinding(
+                        rule_id="deck_glass_flat_backdrop",
+                        severity="warning",
+                        path=path,
+                        line=_line_of(text, offset),
+                        evidence=evidence,
+                        choice_key=_CHOICE_DECK_GLASS,
+                        message=(
+                            f"glass on slide {slide.number} sits over a flat single-color "
+                            "backdrop; glass needs a colorful or image backdrop"
+                        ),
+                    )
+                )
+                break
+            continue
+        if global_flat and not deck_has_colorful_backdrop:
+            findings.append(
+                DesignFinding(
+                    rule_id="deck_glass_flat_backdrop",
+                    severity="warning",
+                    path=path,
+                    line=_line_of(text, offset),
+                    evidence=evidence,
+                    choice_key=_CHOICE_DECK_GLASS,
+                    message=(
+                        "glass sits over a flat single-color deck backdrop; glass needs a "
+                        "colorful or image backdrop"
+                    ),
+                )
+            )
+            break
+    return findings
+
+
 # ---- the pure engine ----------------------------------------------------------
 
 
@@ -801,6 +1255,13 @@ def lint_design(
         findings += _rule_pill_buttons(path, text, justified)
         if is_markup:
             findings += _rule_emoji_icons(path, text, justified)
+            deck_slides = _extract_deck_slides(text)
+            if deck_slides:
+                findings += _rule_deck_type_floor(path, text, deck_slides)
+                findings += _rule_deck_text_budget(path, deck_slides)
+                findings += _rule_deck_bullet_monotony(path, deck_slides)
+                findings += _rule_deck_missing_imagery(path, deck_slides)
+                findings += _rule_deck_glass(path, text, deck_slides)
 
     findings += _rule_centered_hero_3_cards_cta(markup, justified)
 
@@ -879,11 +1340,12 @@ class DesignLintTool:
             "Scan the generated web app for design SLOP (the LLM-median tells: Inter/Geist "
             "fonts, AI-purple primary, gradient-clipped hero text, dark-neon-glow, pill-button "
             "monoculture, emoji-as-icons, animation soup, centered-hero/3-cards/CTA) and return "
-            "a STRUCTURED verdict — a ranked list of findings, each with rule_id, severity, path, "
-            "line, evidence, the canonical choice_key, and a fix message. An off-default value is "
-            "flagged ONLY if UNJUSTIFIED: a finding is suppressed when .disco/designspec.json "
-            "carries a substantive justification for its choice_key. Read-only — run it to CHECK a "
-            "build, not to change it. Scans the workspace root unless `root` is given."
+            "a STRUCTURED verdict. For HTML deck artifacts, also checks the slide type floor, "
+            "text budget, bullet-list monotony, missing imagery, and glass sanity. Findings are "
+            "ranked rows with rule_id, severity, path, line, evidence, choice_key, and a fix "
+            "message. Web off-default values are suppressed only when .disco/designspec.json "
+            "carries a substantive justification for the choice_key. Read-only — run it to CHECK "
+            "a build, not to change it. Scans the workspace root unless `root` is given."
         ),
         args_model=DesignLintArgs,
         needs=frozenset({Capability.FILESYSTEM}),
