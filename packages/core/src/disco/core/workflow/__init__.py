@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .builtin import GENERAL_WORKSPACE_TASK_DEFINITION, GENERAL_WORKSPACE_TASK_TOOLS
 from .models import (
     BUILTIN_WORKFLOW_TOOLS,
     WORKFLOW_CONTROL_TOOLS,
@@ -19,6 +20,8 @@ from .models import (
 
 __all__ = [
     "BUILTIN_WORKFLOW_TOOLS",
+    "GENERAL_WORKSPACE_TASK_DEFINITION",
+    "GENERAL_WORKSPACE_TASK_TOOLS",
     "McpMount",
     "WORKFLOW_CONTROL_TOOLS",
     "WorkflowApproval",

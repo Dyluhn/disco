@@ -7,6 +7,8 @@ import json
 import pytest
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.workflow import (
+    GENERAL_WORKSPACE_TASK_TOOLS,
+    WORKFLOW_CONTROL_TOOLS,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
@@ -32,8 +34,13 @@ from disco.tools.builtin.workflow_tools import (
     DraftWorkflowTool,
     EnterWorkflowTool,
     JsonDirWorkflowStore,
+    ListWorkflowsTool,
     StoredWorkflowInstance,
     WorkflowStore,
+)
+from disco.tools.workflow_seed import (
+    GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+    seed_general_workspace_task,
 )
 from tool_fakes import call
 
@@ -203,6 +210,64 @@ async def test_enter_workflow_requires_enabled_and_approved() -> None:
     assert state.instance_id == "approved"
     assert state.compiled_run_scope is not None
     assert "file_read" in state.compiled_run_scope.allowed_tools
+
+
+@pytest.mark.asyncio
+async def test_seeded_general_workspace_task_lists_and_enters_bounded_scope(
+    tmp_path,
+) -> None:
+    seed_general_workspace_task(tmp_path)
+    store = JsonDirWorkflowStore(tmp_path)
+    state = WorkflowPhaseState()
+    registry = build_default_registry()
+    for tool in (
+        ListWorkflowsTool(store),
+        EnterWorkflowTool(store, state, lambda: frozenset()),
+    ):
+        registry.register(tool)
+    executor_ref: dict[str, ScopedPhaseExecutor] = {}
+
+    def _resolver() -> ToolScope:
+        executor = executor_ref["executor"]
+        return workflow_effective_scope(
+            phase=state.phase,
+            compiled_run_scope=state.compiled_run_scope,
+            base_scope=executor.widened_scope,
+        )
+
+    executor = ScopedPhaseExecutor(
+        registry,
+        agent_scope(model_policy=_STANDARD),
+        scope_resolver=_resolver,
+    )
+    executor_ref["executor"] = executor
+
+    listed = await executor.execute(call("list_workflows"))
+
+    assert listed.success is True
+    assert listed.structured is not None
+    workflows = listed.structured["workflows"]
+    assert len(workflows) == 1
+    assert workflows[0]["instance_id"] == GENERAL_WORKSPACE_TASK_INSTANCE_ID
+    assert workflows[0]["name"] == "General Workspace Task"
+    assert workflows[0]["enabled"] is True
+    assert workflows[0]["approved"] is True
+
+    entered = await executor.execute(
+        call("enter_workflow", instance_id=GENERAL_WORKSPACE_TASK_INSTANCE_ID)
+    )
+
+    expected = frozenset(GENERAL_WORKSPACE_TASK_TOOLS) | WORKFLOW_CONTROL_TOOLS
+    assert entered.success is True
+    assert state.phase == WorkflowPhase.RUN
+    assert state.compiled_run_scope is not None
+    assert state.compiled_run_scope.allowed_tools == expected
+    assert executor._scope.allowed_tools == expected
+    for forbidden in ("browser", "shell"):
+        rejected = await executor.execute(call(forbidden))
+        assert rejected.success is False
+        assert rejected.structured is not None
+        assert rejected.structured["kind"] == "unknown_tool"
 
 
 @pytest.mark.asyncio
