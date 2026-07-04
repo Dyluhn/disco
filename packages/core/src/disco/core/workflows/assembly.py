@@ -44,3 +44,13 @@ def assemble_workflow_prompt(
         msgs.append(LLMMessage(role="user", content=context_pack_block))
     msgs.extend(recent_turns)
     return msgs
+
+
+def render_messages_as_text(msgs: Sequence[LLMMessage]) -> str:
+    """Render assembled messages for text-only drivers/sidecars.
+
+    The message order is preserved exactly, with role-labeled separators so a
+    text-only consumer can still see the same section boundaries as the structured
+    message list.
+    """
+    return "\n\n".join(f"--- {msg.role} ---\n{msg.content}" for msg in msgs)

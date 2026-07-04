@@ -11,7 +11,7 @@ over the bundled ``prompt_packs/*.md`` files. Pure; no runtime imports.
 
 from __future__ import annotations
 
-from .assembly import assemble_workflow_prompt
+from .assembly import assemble_workflow_prompt, render_messages_as_text
 from .prompt_pack import (
     REQUIRED_SECTIONS,
     PromptPack,
@@ -27,5 +27,6 @@ __all__ = [
     "assemble_workflow_prompt",
     "is_skill_mountable",
     "parse_prompt_pack",
+    "render_messages_as_text",
     "resolve_mounted_skills",
 ]

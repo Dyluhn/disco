@@ -10,6 +10,7 @@ from disco.core.workflows import (
     PromptPackRegistry,
     assemble_workflow_prompt,
     parse_prompt_pack,
+    render_messages_as_text,
 )
 
 _PREFIX = "You are Disco Build. Operate inside the rails."
@@ -72,6 +73,23 @@ def test_optional_parts_omitted_cleanly() -> None:
     # an empty context block is omitted (falsy)
     msgs2 = assemble_workflow_prompt(system_prefix=_PREFIX, context_pack_block="", recent_turns=())
     assert len(msgs2) == 1 and msgs2[0].role == "system"
+
+
+def test_render_messages_as_text_preserves_order_with_role_sections() -> None:
+    msgs = [
+        LLMMessage(role="system", content="prefix"),
+        LLMMessage(role="user", content="<context-pack>\n</context-pack>"),
+        LLMMessage(role="user", content="build it"),
+    ]
+    assert render_messages_as_text(msgs) == (
+        "--- system ---\n"
+        "prefix\n\n"
+        "--- user ---\n"
+        "<context-pack>\n"
+        "</context-pack>\n\n"
+        "--- user ---\n"
+        "build it"
+    )
 
 
 def test_end_to_end_pack_plus_contextpack() -> None:

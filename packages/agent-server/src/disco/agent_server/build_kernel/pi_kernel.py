@@ -60,10 +60,18 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.appkit import BuildBrief
+from disco.core.context import ArtifactMemoryStore, ContextLedger
 from disco.core.env import disco_env
 from disco.core.inspect import inspect_enabled
 from disco.core.llm import ModelRole
+from disco.core.loop.context_builder import build_context_pack, render_context_pack
 from disco.core.obs import log_event
+from disco.core.workflows import (
+    PromptPack,
+    PromptPackRegistry,
+    assemble_workflow_prompt,
+    render_messages_as_text,
+)
 
 from ..build_messages import _build_brief_message, _context_message, _user_message
 from .base import KernelEvent
@@ -113,10 +121,16 @@ _GATE_VIRTUALS: frozenset[str] = frozenset({"submit_plan", "ask_user", "clarify"
 # run token, ignoring this value — it is purely cosmetic on the wire (campaign §4.2).
 _GATEWAY_MODEL_ALIAS = "disco-selected"
 
+_TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on"})
+_CONTEXT_PACK_FLAG = "CONTEXT_PACK"
+_PI_BOOTSTRAP_SYSTEM_PREFIX = ""
+_PI_RESUME_PROMPT = "Continue the build from where you left off."
+
 # Run-token lifetime + budget. Short-lived (the store also caps TTL to its own
 # ceiling) and capped so a runaway sidecar cannot spend unbounded tokens.
 _RUN_TOKEN_TTL_S = 2 * 3600.0
 _RUN_TOKEN_BUDGET = 4_000_000
+
 
 @dataclass
 class _PiSession:
@@ -240,6 +254,112 @@ class PiKernel:
         }
         return cast("KernelInitConfig", init)
 
+    def _context_pack_enabled(self) -> bool:
+        """Flag gate for the CXT/WPP live prompt path. Default OFF."""
+        return str(disco_env(_CONTEXT_PACK_FLAG) or "").strip().lower() in _TRUTHY
+
+    def _prompt_pack_for(self, conversation_id: str) -> PromptPack | None:
+        """Resolve this run's WorkflowPromptPack from the runtime's contract seam.
+
+        The seam is intentionally optional so tests/lightweight hosts can omit it; in
+        that case Pi still gets the ContextPack and live user turn without crashing.
+        """
+        resolver = getattr(self._rt, "_build_contract_for", None)
+        if not callable(resolver):
+            return None
+        try:
+            contract = resolver(conversation_id, classify_default=True)
+        except TypeError:
+            try:
+                contract = resolver(conversation_id)
+            except Exception:  # noqa: BLE001 — prompt-pack lookup is additive
+                _LOG.warning(
+                    "Pi kernel prompt-pack contract lookup failed for %s",
+                    conversation_id,
+                    exc_info=True,
+                )
+                return None
+        except Exception:  # noqa: BLE001 — prompt-pack lookup is additive
+            _LOG.warning(
+                "Pi kernel prompt-pack contract lookup failed for %s",
+                conversation_id,
+                exc_info=True,
+            )
+            return None
+        pack_id = getattr(contract, "prompt_pack", None)
+        if not isinstance(pack_id, str) or not pack_id.strip():
+            return None
+        try:
+            return PromptPackRegistry().get(pack_id)
+        except Exception:  # noqa: BLE001 — a bad pack must not strand Pi bootstrap
+            _LOG.warning(
+                "Pi kernel prompt-pack load failed for %s: %s",
+                conversation_id,
+                pack_id,
+                exc_info=True,
+            )
+            return None
+
+    def _existing_sandbox(self, conversation_id: str) -> Any | None:
+        """Return an already-live sandbox, if the runtime has one.
+
+        Do not create a loop/executor just to read context memory; Pi bootstrap is the
+        sidecar's startup path and context-memory access is best-effort.
+        """
+        executors = getattr(self._rt, "_executors", None)
+        executor = executors.get(conversation_id) if isinstance(executors, Mapping) else None
+        if executor is None:
+            return None
+        return getattr(executor, "sandbox", None) or getattr(executor, "_sandbox", None)
+
+    async def _context_memory_inputs(
+        self, conversation_id: str
+    ) -> tuple[ContextLedger | None, str | None]:
+        sbx = self._existing_sandbox(conversation_id)
+        if sbx is None:
+            return None, None
+        try:
+            store = ArtifactMemoryStore(sbx)
+            workspace_root = getattr(sbx, "workspace_path", None)
+            reconstructed = await store.reconstruct(
+                conversation_id,
+                str(workspace_root) if workspace_root else None,
+            )
+            return reconstructed.ledger, await store.read_todo()
+        except Exception:  # noqa: BLE001 — durable context is additive, not required
+            _LOG.warning(
+                "Pi kernel context memory read failed for %s",
+                conversation_id,
+                exc_info=True,
+            )
+            return None, None
+
+    async def _context_pack_block(self, conversation_id: str) -> str:
+        try:
+            events = list(await self._rt._store.get_events(conversation_id))
+        except Exception:  # noqa: BLE001 — emit an empty pack rather than fail bootstrap
+            _LOG.warning(
+                "Pi kernel context-pack event read failed for %s",
+                conversation_id,
+                exc_info=True,
+            )
+            events = []
+        base_ledger, todo_text = await self._context_memory_inputs(conversation_id)
+        return render_context_pack(
+            build_context_pack(events, base_ledger=base_ledger, todo_text=todo_text)
+        )
+
+    async def _render_prompt_text(self, conversation_id: str, user_text: str) -> str:
+        if not self._context_pack_enabled():
+            return user_text
+        msgs = assemble_workflow_prompt(
+            system_prefix=_PI_BOOTSTRAP_SYSTEM_PREFIX,
+            prompt_pack=self._prompt_pack_for(conversation_id),
+            context_pack_block=await self._context_pack_block(conversation_id),
+            recent_turns=[LLMMessage(role="user", content=user_text)],
+        )
+        return render_messages_as_text(msgs)
+
     # -- lifecycle ------------------------------------------------------------
 
     def start(self, conversation_id: str) -> None:
@@ -333,7 +453,7 @@ class PiKernel:
                 conversation_id
             )
             if text:
-                await proc.prompt(text)
+                await proc.prompt(await self._render_prompt_text(conversation_id, text))
         except Exception as exc:  # noqa: BLE001 — surface as an event, never crash the caller
             _LOG.warning("Pi kernel bootstrap failed for %s: %s", conversation_id, exc)
             await self._fail_session(conversation_id, exc)
@@ -1102,7 +1222,9 @@ class PiKernel:
         session = self._sessions.get(conversation_id)
         if session is not None and session.proc is not None and not session.finished:
             with contextlib.suppress(Exception):
-                await session.proc.prompt("Continue the build from where you left off.")
+                await session.proc.prompt(
+                    await self._render_prompt_text(conversation_id, _PI_RESUME_PROMPT)
+                )
             return
         await self._bootstrap(conversation_id, prompt_text=None)
 

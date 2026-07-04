@@ -15,7 +15,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from disco.agent_server import ConversationRuntime
@@ -123,6 +125,158 @@ def _pgid_alive(pgid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+class _MemoryPiProcess:
+    instances: list["_MemoryPiProcess"] = []
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+        self.init: dict[str, Any] | None = None
+        self.prompts: list[str] = []
+        self.followups: list[str] = []
+        self.closed = False
+        _MemoryPiProcess.instances.append(self)
+
+    async def start(self, init: dict[str, Any]) -> None:
+        self.init = init
+
+    async def prompt(self, text: str) -> None:
+        self.prompts.append(text)
+
+    async def followup(self, text: str) -> None:
+        self.followups.append(text)
+
+    async def cancel(self) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+    async def events(self) -> AsyncIterator[dict[str, Any]]:
+        if False:
+            yield {}
+
+
+def _use_memory_pi_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    _MemoryPiProcess.instances.clear()
+    monkeypatch.setattr(
+        "disco.agent_server.build_kernel.pi_kernel.PiProcess",
+        _MemoryPiProcess,
+    )
+
+
+async def _memory_prompt_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    text: str,
+    context_pack: bool,
+    build_kind: str | None = None,
+    contract_seam: bool = True,
+) -> tuple[PiKernel, _MemoryPiProcess]:
+    if context_pack:
+        monkeypatch.setenv("DISCO_CONTEXT_PACK", "1")
+    else:
+        monkeypatch.delenv("DISCO_CONTEXT_PACK", raising=False)
+        monkeypatch.delenv("PMX_CONTEXT_PACK", raising=False)
+    _use_memory_pi_process(monkeypatch)
+    store = SqliteEventStore(path=str(tmp_path / "events.db"))
+    store.create_conversation(CID, owner_id="local")
+    rt, _token_store = _runtime(store)
+    rt.set_surface(CID, "build")
+    if build_kind is not None:
+        rt.set_build_kind(CID, build_kind)
+    if not contract_seam:
+        monkeypatch.setattr(rt, "_build_contract_for", None)
+    kernel = PiKernel(
+        rt,
+        entry=str(tmp_path / "fake_sidecar.js"),
+        cwd=str(tmp_path),
+        artifact_base=str(tmp_path / "evidence"),
+    )
+    await kernel.send_user_turn(CID, text)
+    assert _MemoryPiProcess.instances
+    return kernel, _MemoryPiProcess.instances[-1]
+
+
+async def test_context_pack_flag_off_bootstrap_prompt_is_byte_identical(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _kernel, proc = await _memory_prompt_run(
+        tmp_path,
+        monkeypatch,
+        text="Build a static launch page.",
+        context_pack=False,
+        build_kind="static.site",
+    )
+
+    assert proc.prompts == ["Build a static launch page."]
+
+
+async def test_context_pack_flag_on_bootstrap_prompt_uses_assembly_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _kernel, proc = await _memory_prompt_run(
+        tmp_path,
+        monkeypatch,
+        text="Build a static launch page.",
+        context_pack=True,
+        build_kind="static.site",
+    )
+
+    assert len(proc.prompts) == 1
+    prompt = proc.prompts[0]
+    assert prompt.count("<context-pack>") == 1
+    assert prompt.count("</context-pack>") == 1
+    assert prompt.count("--- system ---") == 2
+    assert prompt.count("--- user ---") == 2
+    final_turn = "--- user ---\nBuild a static launch page."
+    assert "ready_for_static_site_verification" in prompt
+    assert prompt.index("--- system ---") < prompt.index("## Role")
+    assert prompt.index("## Role") < prompt.index("<context-pack>")
+    assert prompt.index("</context-pack>") < prompt.index(final_turn)
+
+
+async def test_context_pack_flag_on_resume_prompt_uses_same_assembly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kernel, proc = await _memory_prompt_run(
+        tmp_path,
+        monkeypatch,
+        text="Build a static launch page.",
+        context_pack=True,
+        build_kind="static.site",
+    )
+
+    await kernel.resume(CID)
+
+    assert len(proc.prompts) == 2
+    prompt = proc.prompts[1]
+    final_turn = "--- user ---\nContinue the build from where you left off."
+    assert prompt.count("<context-pack>") == 1
+    assert "ready_for_static_site_verification" in prompt
+    assert prompt.index("## Role") < prompt.index("<context-pack>")
+    assert prompt.index("</context-pack>") < prompt.index(final_turn)
+
+
+async def test_context_pack_flag_on_absent_contract_omits_prompt_pack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _kernel, proc = await _memory_prompt_run(
+        tmp_path,
+        monkeypatch,
+        text="Build a custom artifact.",
+        context_pack=True,
+        contract_seam=False,
+    )
+
+    assert len(proc.prompts) == 1
+    prompt = proc.prompts[0]
+    assert prompt.count("<context-pack>") == 1
+    assert "## Role" not in prompt
+    assert prompt.count("--- system ---") == 1
+    assert prompt.index("</context-pack>") < prompt.index("--- user ---\nBuild a custom artifact.")
 
 
 async def test_start_drains_frames_into_store_then_cancel_revokes_and_kills(
