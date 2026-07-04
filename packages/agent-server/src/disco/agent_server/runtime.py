@@ -36,6 +36,7 @@ from disco.core import (
     DEFAULT_OWNER_ID,
     ActionEvent,
     AgentErrorEvent,
+    ConversationState,
     ConversationStatus,
     EventSource,
     LLMMessage,
@@ -4132,20 +4133,19 @@ class ConversationRuntime:
             StatusEvent(status=ConversationStatus.ERROR, detail=detail),
         )
 
-    async def run_sealed_workflow_schedule(
+    async def _sealed_run_conversation_setup(
         self,
         *,
         schedule_id: str,
         spec: ScheduleSpec,
-        coalesced: bool = False,
-    ) -> WorkflowScheduleRunRecord:
-        """Fire a workflow schedule as a fresh sealed agent conversation.
-
-        The schedule pins an instance id + definition digest. Any mismatch fails
-        closed before tools are exposed. Successful fires compose the normal agent
-        build loop in workflow RUN phase with the compiled workflow scope, so router
-        tools are never registered and autonomous mode withholds ask/clarify tools.
-        """
+        coalesced: bool,
+    ) -> tuple[
+        str,
+        datetime,
+        WorkflowRun | None,
+        str,
+        WorkflowScheduleRunRecord | None,
+    ]:
         conversation_id = f"conv_{uuid.uuid4().hex}"
         self._store.create_conversation(
             conversation_id,
@@ -4160,7 +4160,6 @@ class ConversationRuntime:
         project_root = self._project_store_now().root
         workflow_store = JsonDirWorkflowStore(project_root or "")
         fallback_output_path = ""
-        workflow_run: WorkflowRun | None = None
 
         try:
             instance = workflow_store.get_instance(spec.instance_id)
@@ -4170,15 +4169,21 @@ class ConversationRuntime:
                 detail="workflow_instance_invalid_id",
                 explanation=f"Workflow schedule {schedule_id} could not run: {exc}",
             )
-            return WorkflowScheduleRunRecord(
-                schedule_id=schedule_id,
-                run_cid=conversation_id,
-                fired_at=fired_at,
-                terminal_state=ConversationStatus.ERROR.value,
-                output_path="",
-                verify_verdict="error",
-                coalesced=coalesced,
-                error=str(exc),
+            return (
+                conversation_id,
+                fired_at,
+                None,
+                fallback_output_path,
+                WorkflowScheduleRunRecord(
+                    schedule_id=schedule_id,
+                    run_cid=conversation_id,
+                    fired_at=fired_at,
+                    terminal_state=ConversationStatus.ERROR.value,
+                    output_path="",
+                    verify_verdict="error",
+                    coalesced=coalesced,
+                    error=str(exc),
+                ),
             )
 
         if instance is None:
@@ -4191,15 +4196,21 @@ class ConversationRuntime:
                 detail="workflow_instance_not_found",
                 explanation=message,
             )
-            return WorkflowScheduleRunRecord(
-                schedule_id=schedule_id,
-                run_cid=conversation_id,
-                fired_at=fired_at,
-                terminal_state=ConversationStatus.ERROR.value,
-                output_path="",
-                verify_verdict="error",
-                coalesced=coalesced,
-                error=message,
+            return (
+                conversation_id,
+                fired_at,
+                None,
+                fallback_output_path,
+                WorkflowScheduleRunRecord(
+                    schedule_id=schedule_id,
+                    run_cid=conversation_id,
+                    fired_at=fired_at,
+                    terminal_state=ConversationStatus.ERROR.value,
+                    output_path="",
+                    verify_verdict="error",
+                    coalesced=coalesced,
+                    error=message,
+                ),
             )
 
         if instance.definition_digest != spec.instance_digest:
@@ -4213,19 +4224,29 @@ class ConversationRuntime:
                 detail="workflow_instance_digest_mismatch",
                 explanation=message,
             )
-            return WorkflowScheduleRunRecord(
-                schedule_id=schedule_id,
-                run_cid=conversation_id,
-                fired_at=fired_at,
-                terminal_state=ConversationStatus.ERROR.value,
-                output_path="",
-                verify_verdict="error",
-                coalesced=coalesced,
-                error=message,
+            return (
+                conversation_id,
+                fired_at,
+                None,
+                fallback_output_path,
+                WorkflowScheduleRunRecord(
+                    schedule_id=schedule_id,
+                    run_cid=conversation_id,
+                    fired_at=fired_at,
+                    terminal_state=ConversationStatus.ERROR.value,
+                    output_path="",
+                    verify_verdict="error",
+                    coalesced=coalesced,
+                    error=message,
+                ),
             )
 
         if not instance.enabled or instance.approval is None:
-            reason = "workflow_instance_not_enabled" if not instance.enabled else "workflow_instance_not_approved"
+            reason = (
+                "workflow_instance_not_enabled"
+                if not instance.enabled
+                else "workflow_instance_not_approved"
+            )
             message = (
                 f"Workflow schedule {schedule_id} could not run: instance "
                 f"{spec.instance_id!r} is not enabled and approved."
@@ -4235,15 +4256,21 @@ class ConversationRuntime:
                 detail=reason,
                 explanation=message,
             )
-            return WorkflowScheduleRunRecord(
-                schedule_id=schedule_id,
-                run_cid=conversation_id,
-                fired_at=fired_at,
-                terminal_state=ConversationStatus.ERROR.value,
-                output_path="",
-                verify_verdict="error",
-                coalesced=coalesced,
-                error=message,
+            return (
+                conversation_id,
+                fired_at,
+                None,
+                fallback_output_path,
+                WorkflowScheduleRunRecord(
+                    schedule_id=schedule_id,
+                    run_cid=conversation_id,
+                    fired_at=fired_at,
+                    terminal_state=ConversationStatus.ERROR.value,
+                    output_path="",
+                    verify_verdict="error",
+                    coalesced=coalesced,
+                    error=message,
+                ),
             )
 
         workflow_run = WorkflowRun(
@@ -4274,7 +4301,19 @@ class ConversationRuntime:
                 ),
             ),
         )
+        return conversation_id, fired_at, workflow_run, fallback_output_path, None
 
+    async def _sealed_run_execute(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        conversation_id: str,
+        fired_at: datetime,
+        workflow_run: WorkflowRun,
+        fallback_output_path: str,
+        coalesced: bool,
+    ) -> ConversationState | WorkflowScheduleRunRecord:
         override = self._model_override.get(conversation_id)
         router = self._router_now(
             pick=override,
@@ -4316,7 +4355,7 @@ class ConversationRuntime:
         self._loops[conversation_id] = loop
 
         try:
-            state = await self._run_with_persistence(conversation_id, loop)
+            state = cast(ConversationState, await self._run_with_persistence(conversation_id, loop))
         except Exception as exc:
             await self._record_workflow_schedule_error(
                 conversation_id,
@@ -4335,6 +4374,18 @@ class ConversationRuntime:
                 coalesced=coalesced,
                 error=str(exc),
             )
+        return state
+
+    async def _sealed_run_record_history(
+        self,
+        *,
+        schedule_id: str,
+        conversation_id: str,
+        fired_at: datetime,
+        state: ConversationState,
+        fallback_output_path: str,
+        coalesced: bool,
+    ) -> WorkflowScheduleRunRecord:
         authoritative = await self._store.get_state(conversation_id)
         events = await self._store.get_events(conversation_id)
         output_path, verify_verdict = _workflow_history_fields(
@@ -4349,6 +4400,55 @@ class ConversationRuntime:
             terminal_state=terminal_state.value,
             output_path=output_path,
             verify_verdict=verify_verdict,
+            coalesced=coalesced,
+        )
+
+    async def run_sealed_workflow_schedule(
+        self,
+        *,
+        schedule_id: str,
+        spec: ScheduleSpec,
+        coalesced: bool = False,
+    ) -> WorkflowScheduleRunRecord:
+        """Fire a workflow schedule as a fresh sealed agent conversation.
+
+        The schedule pins an instance id + definition digest. Any mismatch fails
+        closed before tools are exposed. Successful fires compose the normal agent
+        build loop in workflow RUN phase with the compiled workflow scope, so router
+        tools are never registered and autonomous mode withholds ask/clarify tools.
+        """
+        (
+            conversation_id,
+            fired_at,
+            workflow_run,
+            fallback_output_path,
+            setup_record,
+        ) = await self._sealed_run_conversation_setup(
+            schedule_id=schedule_id,
+            spec=spec,
+            coalesced=coalesced,
+        )
+        if setup_record is not None:
+            return setup_record
+
+        execute_result = await self._sealed_run_execute(
+            schedule_id=schedule_id,
+            spec=spec,
+            conversation_id=conversation_id,
+            fired_at=fired_at,
+            workflow_run=cast(WorkflowRun, workflow_run),
+            fallback_output_path=fallback_output_path,
+            coalesced=coalesced,
+        )
+        if isinstance(execute_result, WorkflowScheduleRunRecord):
+            return execute_result
+
+        return await self._sealed_run_record_history(
+            schedule_id=schedule_id,
+            conversation_id=conversation_id,
+            fired_at=fired_at,
+            state=execute_result,
+            fallback_output_path=fallback_output_path,
             coalesced=coalesced,
         )
 
