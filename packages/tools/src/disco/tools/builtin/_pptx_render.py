@@ -962,6 +962,19 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
   margin-bottom:1%;}}
 .slide-section-title{{font-family:var(--display);font-size:4.5vw;
   color:var(--text);line-height:1.1;}}
+.slide-full-image-wrap{{position:relative;width:100%;height:100%;overflow:hidden;}}
+.slide-full-image-bg{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}}
+.slide-full-image-placeholder{{position:absolute;inset:0;background:var(--surface-2);
+  border:1px solid var(--hairline);display:flex;align-items:center;justify-content:center;
+  color:var(--text-faint);font-family:var(--ui);font-size:1.2vw;}}
+.slide-image-scrim{{position:absolute;inset:0;background:
+  linear-gradient(90deg,rgba(0,0,0,.72) 0%,rgba(0,0,0,.52) 38%,rgba(0,0,0,.12) 72%,rgba(0,0,0,0) 100%);}}
+.slide-full-image-copy{{position:absolute;left:5%;bottom:8%;max-width:68%;z-index:1;}}
+.slide-full-image-copy .slide-heading,
+.slide-full-image-copy .slide-title{{color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.35);}}
+.slide-full-image-copy .slide-subtitle{{color:rgba(255,255,255,.86);}}
+.slide-full-image-copy .slide-bullets li{{color:#fff;border-left-color:rgba(255,255,255,.72);
+  text-shadow:0 1px 2px rgba(0,0,0,.35);}}
 /* nav controls */
 .nav{{position:fixed;bottom:1%;right:1%;display:flex;gap:.5em;z-index:10;}}
 .nav button{{background:var(--surface-2);border:1px solid var(--hairline);
@@ -1163,6 +1176,22 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
         bullet_items = "".join(_bullet_li(el, j) for j, el in enumerate(body_els))
         bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
 
+        if layout == "full_image":
+            img_html = (
+                '<div class="slide-full-image-placeholder">[image]</div>'
+            )
+            if images:
+                img_src = _img_src(images[0])
+                if img_src:
+                    img_html = f'<img class="slide-full-image-bg" src="{img_src}" alt="">'
+            return (
+                '<div class="slide-full-image-wrap">'
+                f'{img_html}'
+                '<div class="slide-image-scrim" aria-hidden="true"></div>'
+                f'<div class="slide-full-image-copy">{title_html}{bullets_html}</div>'
+                '</div>'
+            )
+
         img_html = ""
         if images:
             img_el = images[0]
@@ -1176,14 +1205,6 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
                     'justify-content:center;color:var(--text-faint);'
                     'font-family:var(--ui);font-size:1.2vw;">[image]</div>'
                 )
-
-        if layout == "full_image":
-            return (
-                f'<div style="position:relative;width:100%;height:100%;">'
-                f'{img_html}'
-                f'<div style="position:absolute;bottom:5%;left:5%;">{title_html}</div>'
-                f'</div>'
-            )
 
         text_div = (
             f'<div style="flex:1;display:flex;flex-direction:column;">'

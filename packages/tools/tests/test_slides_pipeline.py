@@ -24,7 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from disco.tools.anatomy import ToolContext
-from disco.tools.builtin._deck_schema import AuthoredDeck
+from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
 from disco.tools.builtin._slides_pipeline import (
     _CAPABLE_SYSTEM,
     _VALID_THEMES,
@@ -33,10 +33,12 @@ from disco.tools.builtin._slides_pipeline import (
     _extract_json_object,
     _parse_authored_deck,
     _retry_msg,
+    _stage_assets,
     _stage_fill,
     _stage_outline,
     generate_deck,
 )
+from disco.tools.builtin._pptx_render import render_html
 from disco.tools.builtin.slides import SlidesGenerateArgs, SlidesTool
 from disco.tools.sandbox.base import SandboxSpec
 from disco.tools.sandbox.process import ProcessSandboxInstance
@@ -82,9 +84,23 @@ def _ctx(sandbox, *, assist: bool = False) -> ToolContext:
 _SAMPLE_DECK_JSON = {
     "title": "EV Battery Startup Pitch",
     "theme": "disco-light",
+    "accent_palette": [
+        {"name": "cerulean", "value": "#4077a3", "role": "primary emphasis"},
+        {"name": "moss", "value": "#397852", "role": "supportive proof"},
+        {"name": "paper", "value": "#d8b26e", "role": "warm section contrast"},
+    ],
+    "font_pairing": {"display": "Fraunces", "body": "Newsreader", "ui": "Schibsted Grotesk"},
+    "token_pair": {
+        "light_bg": "#fcfcfa",
+        "light_text": "#1a1813",
+        "dark_bg": "#0d1017",
+        "dark_text": "#e9e6df",
+    },
+    "art_direction": "grainy editorial risograph, cerulean and warm paper palette, soft grain, no text",
     "slides": [
         {
             "type": "title",
+            "archetype": "title",
             "title": "PowerCell AI",
             "body": ["Next-generation solid-state battery technology"],
             "layout_hint": None,
@@ -95,6 +111,7 @@ _SAMPLE_DECK_JSON = {
         },
         {
             "type": "bullets",
+            "archetype": "bullets",
             "title": "The Problem",
             "body": [
                 "EV batteries degrade 30% in 5 years",
@@ -110,6 +127,7 @@ _SAMPLE_DECK_JSON = {
         },
         {
             "type": "section_header",
+            "archetype": "section_divider",
             "title": "Our Solution",
             "body": ["Solid-state cells with 10× cycle life"],
             "layout_hint": None,
@@ -120,6 +138,7 @@ _SAMPLE_DECK_JSON = {
         },
         {
             "type": "image_right",
+            "archetype": "diagram",
             "title": "Technology",
             "body": ["Patented anode design", "Zero liquid electrolyte"],
             "layout_hint": None,
@@ -130,6 +149,7 @@ _SAMPLE_DECK_JSON = {
         },
         {
             "type": "closing",
+            "archetype": "closing",
             "title": "Join Us",
             "body": ["Series A: $12M | investors@powercell.ai"],
             "layout_hint": None,
@@ -144,10 +164,23 @@ _SAMPLE_DECK_JSON = {
 _SAMPLE_OUTLINE_JSON = {
     "title": "EV Battery Startup Pitch",
     "theme": "disco-light",
+    "accent_palette": [
+        {"name": "cerulean", "value": "#4077a3", "role": "primary emphasis"},
+        {"name": "moss", "value": "#397852", "role": "supportive proof"},
+        {"name": "paper", "value": "#d8b26e", "role": "warm section contrast"},
+    ],
+    "font_pairing": {"display": "Fraunces", "body": "Newsreader", "ui": "Schibsted Grotesk"},
+    "token_pair": {
+        "light_bg": "#fcfcfa",
+        "light_text": "#1a1813",
+        "dark_bg": "#0d1017",
+        "dark_text": "#e9e6df",
+    },
+    "art_direction": "grainy editorial risograph, cerulean and warm paper palette, soft grain, no text",
     "slides": [
-        {"type": "title", "title": "PowerCell AI", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
-        {"type": "bullets", "title": "The Problem", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
-        {"type": "closing", "title": "Join Us", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
+        {"type": "title", "archetype": "title", "title": "PowerCell AI", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
+        {"type": "bullets", "archetype": "bullets", "title": "The Problem", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
+        {"type": "closing", "archetype": "closing", "title": "Join Us", "body": [], "layout_hint": None, "image_prompt": None, "chart": None, "table": None, "notes": None},
     ],
 }
 
@@ -229,6 +262,11 @@ async def test_stage_outline_success():
     assert deck is not None
     assert err == ""
     assert len(deck.slides) == 3
+    assert deck.art_direction
+    assert len(deck.accent_palette) >= 3
+    assert deck.font_pairing is not None
+    assert deck.token_pair is not None
+    assert [s.archetype for s in deck.slides] == ["title", "bullets", "closing"]
     mock_llm.assert_called_once()
 
 
@@ -281,6 +319,82 @@ async def test_stage_fill_success():
     assert filled is not None
     assert err == ""
     assert len(filled.slides) == 5
+    assert filled.art_direction
+    assert filled.slides[0].image_prompt
+    assert "full-bleed background" in filled.slides[0].image_prompt
+    assert filled.slides[2].image_prompt
+    assert "divider art" in filled.slides[2].image_prompt
+    assert "no words, no lettering" in filled.slides[2].image_prompt
+    assert filled.slides[1].image_prompt is None
+
+
+@pytest.mark.asyncio
+async def test_stage_fill_enforces_density_and_visual_image_slots():
+    """Fill post-processing caps overfull fake LLM output and composes required A8 slots."""
+    outline = AuthoredDeck.model_validate(_SAMPLE_OUTLINE_JSON)
+    overfull = {
+        "title": "Deck",
+        "theme": "disco-light",
+        "art_direction": "grainy risograph, teal and sand, soft grain, no text",
+        "slides": [
+            {
+                "type": "title",
+                "archetype": "title",
+                "title": "It's not process. It's leverage.",
+                "body": ["A subtitle that should stay short"],
+                "layout_hint": None,
+                "image_prompt": None,
+                "chart": None,
+                "table": None,
+                "notes": None,
+            },
+            {
+                "type": "bullets",
+                "archetype": "bullets",
+                "title": "Operating Model",
+                "body": [
+                    "This line has far too many words for a proper slide bullet budget",
+                    "Second line also carries too many words for this format",
+                    "Third line also carries too many words for this format",
+                    "Fourth line also carries too many words for this format",
+                    "Fifth line also carries too many words for this format",
+                    "Sixth line should be removed by the budget",
+                ],
+                "layout_hint": None,
+                "image_prompt": None,
+                "chart": None,
+                "table": None,
+                "notes": None,
+            },
+            {
+                "type": "full_image",
+                "archetype": "full_bleed_image",
+                "title": "Future State",
+                "body": ["One concise caption", "Second concise caption", "Third line drops"],
+                "layout_hint": None,
+                "image_prompt": None,
+                "chart": None,
+                "table": None,
+                "notes": None,
+            },
+        ],
+    }
+
+    with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
+        mock_llm.return_value = json.dumps(overfull)
+        filled, err = await _stage_fill(
+            outline, _CAPABLE_SYSTEM, "http://localhost/v1", "test-model"
+        )
+
+    assert filled is not None
+    assert err == ""
+    assert filled.slides[0].title == "leverage"
+    assert filled.slides[0].image_prompt and "full-bleed background" in filled.slides[0].image_prompt
+    assert len(filled.slides[1].body) == 5
+    assert all(len(line.split()) <= 9 for line in filled.slides[1].body)
+    assert len(filled.slides[2].body) == 2
+    assert filled.slides[2].image_prompt and "no words, no lettering" in filled.slides[2].image_prompt
+    assert filled.slides[2].layout_hint == "full_image"
 
 
 @pytest.mark.asyncio
@@ -411,9 +525,12 @@ async def test_generate_deck_image_backend_called_for_image_prompts(tmp_workspac
             "EV battery startup pitch", "test-deck", ctx, mock_backend
         )
 
-    # _SAMPLE_DECK_JSON has 1 slide with image_prompt
-    image_slides = [s for s in _SAMPLE_DECK_JSON["slides"] if s.get("image_prompt")]
-    assert mock_backend.generate.call_count == len(image_slides)
+    # Fill post-processing adds required A8 slots: cover + section divider + explicit visual.
+    assert mock_backend.generate.call_count == 3
+    prompts = [call.kwargs["prompt"] for call in mock_backend.generate.call_args_list]
+    assert any("full-bleed background" in prompt for prompt in prompts)
+    assert any("divider art" in prompt for prompt in prompts)
+    assert all("no words, no lettering" in prompt for prompt in prompts)
 
 
 @pytest.mark.asyncio
@@ -440,8 +557,90 @@ async def test_generate_deck_degrades_image_less_when_backend_none(tmp_workspace
     assert deck is not None, f"deck must still render image-less; err={err}"
     assert fallback_md is None
     assert err is None
-    # No slide carries an embedded image (the image_prompt slides degrade to text-only).
-    assert not any(getattr(s, "image_url", None) for s in deck.slides)
+    # Image slots remain present, but no generated bytes are embedded.
+    assert not any(
+        el.image_bytes
+        for slide in deck.slides
+        for el in slide.elements
+        if el.kind == "image"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stage_assets_invokes_backend_without_sandbox():
+    """The asset stage returns C7 bytes even when there is no sandbox to write files."""
+    ctx = ToolContext.model_construct(sandbox=None)
+    deck = AuthoredDeck(
+        title="Visual Deck",
+        slides=[
+            AuthoredSlide(
+                type="full_image",
+                archetype="full_bleed_image",
+                title="Hero",
+                body=[],
+                image_prompt="grainy risograph; subject: Hero; slot: full-bleed background; no words, no lettering",
+            )
+        ],
+    )
+    backend = MagicMock()
+    backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+
+    assets = await _stage_assets(deck, ctx, backend, "visual")
+
+    assert assets[0].startswith(b"\x89PNG")
+    backend.generate.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_stage_assets_reuses_cached_prompt_hash(tmp_workspace):
+    """A matching sidecar hash reuses the cached raster instead of regenerating."""
+    sbx = _jailed_sandbox(tmp_workspace)
+    ctx = _ctx(sbx)
+    deck = AuthoredDeck(
+        title="Visual Deck",
+        slides=[
+            AuthoredSlide(
+                type="full_image",
+                archetype="full_bleed_image",
+                title="Hero",
+                body=[],
+                image_prompt="grainy risograph; subject: Hero; slot: full-bleed background; no words, no lettering",
+            )
+        ],
+    )
+    backend = MagicMock()
+    backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"0" * 16
+
+    first = await _stage_assets(deck, ctx, backend, "visual")
+    second = await _stage_assets(deck, ctx, backend, "visual")
+
+    assert first == second
+    backend.generate.assert_called_once()
+    assert (tmp_workspace / "visual_img_0.png").exists()
+    assert (tmp_workspace / "visual_img_0.sha256").exists()
+
+
+def test_full_image_html_uses_scrim_for_text_over_image():
+    """Full-bleed image slides protect text with a gradient scrim in HTML."""
+    authored = AuthoredDeck(
+        title="Visual Deck",
+        slides=[
+            AuthoredSlide(
+                type="full_image",
+                archetype="full_bleed_image",
+                title="Hero",
+                body=["Short caption"],
+                layout_hint="full_image",
+                image_prompt="grainy risograph; subject: Hero; slot: full-bleed background; no words, no lettering",
+            )
+        ],
+    )
+    deck = lower_deck(authored, image_assets={0: b"\x89PNG\r\n\x1a\n" + b"0" * 16})
+    html = render_html(deck)
+
+    assert "slide-image-scrim" in html
+    assert "slide-full-image-bg" in html
+    assert "data:image/png;base64" in html
 
 
 @pytest.mark.asyncio
@@ -668,11 +867,16 @@ def test_capable_system_has_schema_hint():
     assert "AuthoredDeck" in _CAPABLE_SYSTEM
     assert "body" in _CAPABLE_SYSTEM
     assert "image_prompt" in _CAPABLE_SYSTEM
+    assert "archetype" in _CAPABLE_SYSTEM
+    assert "accent_palette" in _CAPABLE_SYSTEM
+    assert "art_direction" in _CAPABLE_SYSTEM
+    assert "no words, no lettering" in _CAPABLE_SYSTEM
 
 
 def test_weak_system_has_worked_example():
     """Weak-model prompt has a concrete worked-example JSON."""
     assert '"type": "title"' in _WEAK_SYSTEM
+    assert '"archetype": "title"' in _WEAK_SYSTEM
     assert '"body":' in _WEAK_SYSTEM
     assert "DECK TITLE HERE" in _WEAK_SYSTEM
 

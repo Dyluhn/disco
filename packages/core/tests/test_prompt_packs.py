@@ -47,6 +47,18 @@ def test_every_bundled_pack_has_all_required_sections() -> None:
         assert not missing, f"{pid} missing required sections: {missing}"
 
 
+def test_build_deck_pack_contains_wave1_craft_rules() -> None:
+    pack = PromptPackRegistry().require("build_deck")
+    raw = pack.raw
+    assert not pack.missing_required()
+    assert "full title sequence" in raw
+    assert "archetype" in raw
+    assert "accent palette" in raw
+    assert "art direction" in raw
+    assert "no words, no lettering" in raw
+    assert "36pt = 48px" in raw
+
+
 def test_render_returns_full_text() -> None:
     reg = PromptPackRegistry()
     pack = reg.require("build_static_site")

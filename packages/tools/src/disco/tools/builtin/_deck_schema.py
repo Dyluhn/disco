@@ -83,6 +83,21 @@ LayoutHint = Literal[
     "closing",
 ]
 
+SlideArchetype = Literal[
+    "title",
+    "section_divider",
+    "big_number",
+    "full_bleed_image",
+    "quote",
+    "comparison_table",
+    "timeline",
+    "diagram",
+    "two_by_two",
+    "photo_grid",
+    "bullets",
+    "closing",
+]
+
 
 # ---------------------------------------------------------------------------
 # Layer 1 — authoring schema (frozen by C4 verdict)
@@ -111,6 +126,31 @@ class TableSpec(BaseModel):
 
     headers: list[str] = Field(default_factory=list)
     rows: list[list[str]] = Field(default_factory=list)
+
+
+class AccentSpec(BaseModel):
+    """One named accent in the deck's authoring-time palette."""
+
+    name: str = Field(description="Short semantic name, e.g. 'teal' or 'signal'.")
+    value: str = Field(description="CSS color token, preferably OKLCH-friendly hex/oklch.")
+    role: str = Field(default="", description="Where this accent should be used.")
+
+
+class FontPairingSpec(BaseModel):
+    """The deck's committed font pairing for title/body/UI decisions."""
+
+    display: str = Field(description="Display/title face; avoid Inter/Roboto/Arial defaults.")
+    body: str = Field(description="Reading/body face; avoid Inter/Roboto/Arial defaults.")
+    ui: str = Field(default="", description="Optional UI/label face.")
+
+
+class LightDarkTokenPair(BaseModel):
+    """Light and dark token pair committed by the deck author."""
+
+    light_bg: str = Field(description="Light-mode background token.")
+    light_text: str = Field(description="Light-mode text token.")
+    dark_bg: str = Field(description="Dark-mode background token.")
+    dark_text: str = Field(description="Dark-mode text token.")
 
 
 class AuthoredSlide(BaseModel):
@@ -169,6 +209,15 @@ class AuthoredSlide(BaseModel):
             "NEVER counted in overflow calculations."
         ),
     )
+    archetype: SlideArchetype | None = Field(
+        default=None,
+        description=(
+            "Presentation archetype chosen in the outline stage: title, "
+            "section_divider, big_number, full_bleed_image, quote, "
+            "comparison_table, timeline, diagram, two_by_two, photo_grid, "
+            "bullets, or closing."
+        ),
+    )
 
 
 class AuthoredDeck(BaseModel):
@@ -187,6 +236,25 @@ class AuthoredDeck(BaseModel):
         "neutral",
         "neutral-light",
     ] = "disco-light"
+    accent_palette: list[AccentSpec] = Field(
+        default_factory=list,
+        description="Three or four named accents for per-section derivation.",
+    )
+    font_pairing: FontPairingSpec | None = Field(
+        default=None,
+        description="Committed non-default display/body/UI font pairing.",
+    )
+    token_pair: LightDarkTokenPair | None = Field(
+        default=None,
+        description="Committed light/dark background and text token pair.",
+    )
+    art_direction: str | None = Field(
+        default=None,
+        description=(
+            "Project-wide image style contract: style keywords, palette-locked "
+            "descriptors, medium, lighting, and 'no text' instruction."
+        ),
+    )
     slides: list[AuthoredSlide]
 
 
