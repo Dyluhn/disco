@@ -65,6 +65,14 @@ def _schema_allows_string_array(schema: dict) -> bool:
     )
 
 
+def _non_null_branch(schema: dict) -> dict:
+    branches = schema.get("anyOf") or [schema]
+    for branch in branches:
+        if branch.get("type") != "null":
+            return branch
+    raise AssertionError(f"no non-null schema branch found in {schema!r}")
+
+
 # ---- app_create ---------------------------------------------------------------
 
 
@@ -124,6 +132,19 @@ async def test_app_create_rejects_invalid_app_spec():
     assert "invalid app_spec" in out.content.lower()
 
 
+def test_app_create_advertises_typed_app_spec_schema():
+    schema = AppCreateTool.definition.to_spec().parameters_schema
+    app_spec_schema = _non_null_branch(schema["properties"]["app_spec"])
+
+    assert app_spec_schema["additionalProperties"] is False
+    assert {"schema_version", "app_kind", "name", "pages"}.issubset(
+        app_spec_schema["properties"]
+    )
+    page_schema = app_spec_schema["properties"]["pages"]["items"]
+    section_schema = page_schema["properties"]["sections"]["items"]
+    assert {"id", "kind", "variant_id", "content"}.issubset(section_schema["properties"])
+
+
 # ---- app_add_section ----------------------------------------------------------
 
 
@@ -181,6 +202,29 @@ async def test_app_add_section_rejects_duplicate_id():
     )
     assert not out.success
     assert "invalid" in out.content.lower() or "duplicate" in out.content.lower()
+
+
+def test_app_add_section_advertises_typed_section_schema():
+    schema = AppAddSectionTool.definition.to_spec().parameters_schema
+    section_schema = schema["properties"]["section"]
+
+    assert section_schema["additionalProperties"] is False
+    assert section_schema["properties"]["kind"]["enum"] == [
+        "hero",
+        "features",
+        "cta",
+        "list",
+        "form",
+        "table",
+        "gallery",
+        "testimonials",
+        "pricing",
+        "faq",
+        "footer",
+        "custom",
+    ]
+    content_schema = _non_null_branch(section_schema["properties"]["content"])
+    assert _schema_allows_string_array(content_schema["properties"]["items"])
 
 
 # ---- app_update_content -------------------------------------------------------
@@ -417,6 +461,22 @@ async def test_app_set_design_recipe_policy_reassigns_variants():
     hero = spec["pages"][0]["sections"][0]
     # atelier-commerce prefers hero.full-bleed-image for the hero kind
     assert hero["variant_id"] == "hero.full-bleed-image"
+
+
+def test_app_set_design_advertises_typed_design_spec_schema():
+    schema = AppSetDesignTool.definition.to_spec().parameters_schema
+    design_schema = _non_null_branch(schema["properties"]["design_spec"])
+
+    assert design_schema["additionalProperties"] is False
+    assert {"typography", "palette", "layout_family", "component_style", "density"}.issubset(
+        design_schema["properties"]
+    )
+    assert {"heading_font", "body_font"}.issubset(
+        design_schema["properties"]["typography"]["properties"]
+    )
+    assert {"primary", "surface", "text"}.issubset(
+        design_schema["properties"]["palette"]["properties"]
+    )
 
 
 # ---- app_snapshot_version (EPIC H3) -------------------------------------------

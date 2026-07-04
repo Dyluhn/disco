@@ -119,6 +119,7 @@ for UI work — see "Visual evidence" below.
 | Gate | File | Enforces |
 |------|------|----------|
 | Size budget | `scripts/check_arch_budget.py` | No class > 800 / function > 200 LOC, except a small whitelist of capped coordinators + dispatchers (`ALLOW_CLASSES`/`ALLOW_FUNCS`). Adding LOC to a capped item past its cap fails. |
+| Tool schemas | `scripts/check_tool_schemas.py` | Built-in tool args must not advertise blind object params or arrays with untyped items; genuinely free-form JSON requires a justified allow entry. |
 | Layering | `.importlinter` (`uv run lint-imports`) | The downward-only layering above + no package cycles + app/agent independence. |
 | Diagram freshness | `scripts/gen_arch_diagram.py --check` | `docs/architecture.generated.md` matches the code's real (AST-parsed) imports. Re-run without `--check` to refresh after changing cross-package imports. |
 | Types | `uv run basedpyright` | Zero type errors tree-wide. |

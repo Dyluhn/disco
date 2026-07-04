@@ -182,6 +182,8 @@ def _validate_formula(formula: str, *, cell_ref: str) -> None:
 
 # ---- args model --------------------------------------------------------------
 
+SheetCell = str | float | int | bool | None
+
 
 class SheetSpec(BaseModel):
     """One sheet in the workbook."""
@@ -190,10 +192,10 @@ class SheetSpec(BaseModel):
     columns: list[str] = Field(
         description="Column header labels (e.g. ['Item', 'Price', 'Qty', 'Total'])."
     )
-    rows: list[list[str | int | float]] = Field(
+    rows: list[list[SheetCell]] = Field(
         description=(
             "Row data. Each row is a list of cell values. Values can be strings, "
-            "numbers, or Excel formulas (strings starting with '='). Example: "
+            "numbers, booleans, nulls, or Excel formulas (strings starting with '='). Example: "
             "[['Widget', 10, 5, '=B2*C2'], ['Gadget', 15, 3, '=B3*C3']]"
         )
     )

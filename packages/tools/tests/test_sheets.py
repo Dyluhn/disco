@@ -117,6 +117,46 @@ async def test_round_trip_formulas_preserved_as_strings(tmp_workspace):
     wb.close()
 
 
+def test_sheet_rows_schema_advertises_scalar_cell_types():
+    schema = SheetsTool.definition.to_spec().parameters_schema
+    cell_schema = (
+        schema["properties"]["sheets"]["items"]["properties"]["rows"]["items"]["items"]
+    )
+    advertised_types = {branch["type"] for branch in cell_schema["anyOf"]}
+
+    assert advertised_types == {"string", "number", "integer", "boolean", "null"}
+
+
+async def test_boolean_and_null_cells_round_trip(tmp_workspace):
+    tool = SheetsTool()
+    ctx = _ctx(_jailed_sandbox(tmp_workspace))
+
+    args = SheetGenerateArgs(
+        title="Flags",
+        filename="flags.xlsx",
+        sheets=[
+            dict(
+                name="Flags",
+                columns=["Name", "Enabled", "Notes"],
+                rows=[
+                    ["Alpha", True, None],
+                    ["Beta", False, "paused"],
+                ],
+            )
+        ],
+    )
+
+    outcome = await tool.run(args, ctx)
+    assert outcome.success, f"Tool failed: {outcome.error}"
+
+    wb = openpyxl.load_workbook(tmp_workspace / "flags.xlsx")
+    ws = wb["Flags"]
+    assert ws.cell(row=2, column=2).value is True
+    assert ws.cell(row=2, column=3).value is None
+    assert ws.cell(row=3, column=2).value is False
+    wb.close()
+
+
 async def test_formula_whitelist_rejected_importxml(tmp_workspace):
     """IMPORTXML is explicitly rejected with a clear error message."""
     tool = SheetsTool()

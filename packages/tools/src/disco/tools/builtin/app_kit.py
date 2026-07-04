@@ -60,7 +60,14 @@ from disco.core.appkit import (
     tree_file_hashes,
 )
 from disco.core.appkit.spec import AppSpec, DesignSpec, Section, SectionContent
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SkipValidation,
+    field_validator,
+    model_validator,
+)
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from .design_lint import lint_design
@@ -102,6 +109,14 @@ def _normalize_section_content_for_weak_fc(section: dict[str, Any]) -> dict[str,
     if normalized_content is content:
         return section
     return {**section, "content": normalized_content}
+
+
+def _section_validation_input(section: object) -> object:
+    if isinstance(section, Section):
+        return section.model_dump(mode="json")
+    if isinstance(section, dict):
+        return _normalize_section_content_for_weak_fc(section)
+    return section
 
 
 # ---- shared sandbox spec IO + tree application --------------------------------
@@ -245,7 +260,7 @@ class AppCreateArgs(BaseModel):
         "hero heading seed. The scaffold seeds PLACEHOLDER copy — replace it with "
         "app_update_content after creating.",
     )
-    app_spec: dict[str, Any] | None = Field(
+    app_spec: SkipValidation[AppSpec] | None = Field(
         default=None,
         description="Optional explicit AppSpec (JSON). When omitted, a sensible default "
         "AppSpec for the chosen primitive is derived from the brief + recipe.",
@@ -383,7 +398,7 @@ class AppCreateTool:
 
 class AppAddSectionArgs(BaseModel):
     page_id: str = Field(description="The page to insert the section into.")
-    section: dict[str, Any] = Field(
+    section: SkipValidation[Section] = Field(
         description="The Section JSON to insert "
         "(id, kind, optional variant_id/content/content_ref)."
     )
@@ -420,9 +435,7 @@ class AppAddSectionTool:
             app = await _load_app_spec(ctx)
             design = await _load_design_spec(ctx)
             try:
-                section = Section.model_validate(
-                    _normalize_section_content_for_weak_fc(args.section)
-                )
+                section = Section.model_validate(_section_validation_input(args.section))
             except Exception as exc:  # noqa: BLE001
                 raise _AppKitError(f"invalid section: {exc}") from exc
             _validate_variant(section)
@@ -605,7 +618,7 @@ class AppSetDesignArgs(BaseModel):
         description="Swap to this SiteRecipe's DesignSpec (the P0 path). "
         "Mutually exclusive with design_spec.",
     )
-    design_spec: dict[str, Any] | None = Field(
+    design_spec: SkipValidation[DesignSpec] | None = Field(
         default=None,
         description="A raw DesignSpec JSON (P1). Accepted only if the regenerated output "
         "passes design_lint (no unjustified slop).",

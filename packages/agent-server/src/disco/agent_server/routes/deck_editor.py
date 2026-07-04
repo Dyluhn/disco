@@ -219,6 +219,23 @@ class DeckPatchBody(BaseModel):
     patch: list[dict[str, Any]]
 
 
+def _coerce_patch_ops(patch: object) -> "list[dict[str, Any]]":
+    """apply_patch's engine consumes plain dicts; the route body may carry
+    typed JsonPatchOperation models (advertised-schema typing) or raw dicts."""
+    out: list[dict[str, Any]] = []
+    items: list[object] = list(patch) if isinstance(patch, list) else []
+    for op in items:
+        if isinstance(op, dict):
+            out.append(op)
+            continue
+        dump = getattr(op, "model_dump", None)
+        if callable(dump):
+            dumped = dump(exclude_none=True)
+            if isinstance(dumped, dict):
+                out.append(dumped)
+    return out
+
+
 def make_deck_editor_router(
     store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> APIRouter:
@@ -479,7 +496,10 @@ def make_deck_editor_router(
         # Apply + validate (schema-or-revert). A bad patch / invalid result → 422
         # and the workspace is NEVER touched (no writes happen below).
         try:
-            patched_json = apply_patch(authored_json, body.patch)
+            patched_json = apply_patch(
+                authored_json,
+                list(_coerce_patch_ops(body.patch)),
+            )
         except (PatchError, KeyError, IndexError, ValueError, TypeError) as exc:
             # apply_patch's move/copy paths can raise raw KeyError/IndexError/ValueError
             # on a missing/invalid `from` pointer — all are rejected patches, so they

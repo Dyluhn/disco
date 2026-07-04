@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any
+from typing import Annotated, Any, Literal, TypeAlias
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..registry import Tool
@@ -193,22 +193,95 @@ def _apply_op(doc: Any, op: dict[str, Any]) -> Any:
     raise PatchError(f"Unknown RFC-6902 operation: {operation!r}")
 
 
-def apply_patch(doc: Any, patch: list[dict[str, Any]]) -> Any:
+def _patch_operation_name(op: object) -> object:
+    if isinstance(op, dict):
+        return op.get("op")
+    if isinstance(op, BaseModel):
+        return getattr(op, "op", None)
+    return None
+
+
+def _patch_operation_dict(op: object) -> dict[str, Any]:
+    if isinstance(op, BaseModel):
+        return op.model_dump(mode="json", by_alias=True, exclude_none=True)
+    if isinstance(op, dict):
+        return op
+    raise PatchError(f"operation must be an object, got {type(op).__name__}")
+
+
+PatchInput: TypeAlias = dict[str, Any] | BaseModel
+
+
+def apply_patch(doc: Any, patch: list[PatchInput]) -> Any:
     """Apply an RFC-6902 patch list to *doc*.
 
     Operates on a deep copy — the original is never mutated.
     Raises `PatchError` on the first failing operation.
     """
     result = copy.deepcopy(doc)
-    for i, op in enumerate(patch):
+    for i, raw_op in enumerate(patch):
         try:
+            op = _patch_operation_dict(raw_op)
             result = _apply_op(result, op)
         except PatchError as exc:
-            raise PatchError(f"Operation {i} ({op.get('op')!r}) failed: {exc}") from exc
+            op_name = _patch_operation_name(raw_op)
+            raise PatchError(f"Operation {i} ({op_name!r}) failed: {exc}") from exc
     return result
 
 
 # ─── Tool args model ──────────────────────────────────────────────────────────
+
+class _JsonPatchOpBase(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    path: str = Field(description="RFC-6901 JSON Pointer path to the target location.")
+
+
+class JsonPatchAddOp(_JsonPatchOpBase):
+    op: Literal["add"]
+    value: Any = Field(description="Required RFC-6902 value. May be any JSON value.")
+
+
+class JsonPatchRemoveOp(_JsonPatchOpBase):
+    op: Literal["remove"]
+
+
+class JsonPatchReplaceOp(_JsonPatchOpBase):
+    op: Literal["replace"]
+    value: Any = Field(description="Required RFC-6902 replacement value.")
+
+
+class JsonPatchMoveOp(_JsonPatchOpBase):
+    op: Literal["move"]
+    from_: str = Field(
+        alias="from",
+        description="RFC-6901 JSON Pointer path to move the value from.",
+    )
+
+
+class JsonPatchCopyOp(_JsonPatchOpBase):
+    op: Literal["copy"]
+    from_: str = Field(
+        alias="from",
+        description="RFC-6901 JSON Pointer path to copy the value from.",
+    )
+
+
+class JsonPatchTestOp(_JsonPatchOpBase):
+    op: Literal["test"]
+    value: Any = Field(description="Required RFC-6902 comparison value.")
+
+
+JsonPatchOpModel: TypeAlias = (
+    JsonPatchAddOp
+    | JsonPatchRemoveOp
+    | JsonPatchReplaceOp
+    | JsonPatchMoveOp
+    | JsonPatchCopyOp
+    | JsonPatchTestOp
+)
+JsonPatchOperation: TypeAlias = Annotated[JsonPatchOpModel, Field(discriminator="op")]
+
 
 class DeckPatchArgs(BaseModel):
     """Arguments for the deck_patch tool (§4.4 C-EDIT-4)."""
@@ -220,7 +293,7 @@ class DeckPatchArgs(BaseModel):
             "slides_generate or deck_patch itself."
         )
     )
-    patch: list[dict] = Field(
+    patch: list[SkipValidation[JsonPatchOperation]] = Field(
         description=(
             "RFC-6902 JSON Patch array.  Supported operations: replace, add, "
             "remove, test, move, copy.  Paths must be RFC-6901 JSON Pointers "
@@ -308,7 +381,12 @@ class DeckPatchTool:
 
         # ── 2. Apply the RFC-6902 patch (in memory only) ─────────────────────
         try:
-            patched_json = apply_patch(authored_json, args.patch)
+            # The typed JsonPatchOperation models exist for the ADVERTISED schema;
+            # apply_patch's engine consumes plain dicts.
+            patched_json = apply_patch(
+                authored_json,
+                [op.model_dump(exclude_none=True) if hasattr(op, "model_dump") else op for op in args.patch],
+            )
         except PatchError as exc:
             return ToolOutcome(
                 success=False,

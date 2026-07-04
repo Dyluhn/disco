@@ -614,6 +614,21 @@ class TestRegistryMembership:
         assert tool is not None
         assert tool.definition.name == "deck_patch"
 
+    def test_deck_patch_schema_advertises_rfc6902_operation_items(self):
+        schema = DeckPatchTool.definition.to_spec().parameters_schema
+        item_schema = schema["properties"]["patch"]["items"]
+        branches = item_schema["oneOf"]
+        by_op = {branch["properties"]["op"]["const"]: branch for branch in branches}
+
+        assert set(by_op) == {"add", "remove", "replace", "move", "copy", "test"}
+        for op in ("add", "replace", "test"):
+            assert "value" in by_op[op]["properties"]
+            assert "value" in by_op[op]["required"]
+        for op in ("move", "copy"):
+            assert "from" in by_op[op]["properties"]
+            assert "from" in by_op[op]["required"]
+        assert "value" not in by_op["remove"]["properties"]
+
 
 # ─── 15–16: deck_schema lower functions ───────────────────────────────────────
 
