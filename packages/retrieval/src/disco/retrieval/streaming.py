@@ -107,6 +107,22 @@ def _answer_prompt(query: str, passages: Sequence[Passage]) -> list[LLMMessage]:
     return [LLMMessage(role="system", content=system), LLMMessage(role="user", content=user)]
 
 
+
+_THINK_SPAN_RE = re.compile(r"<think>.*?</think>\s*", re.IGNORECASE | re.DOTALL)
+_THINK_OPEN_RE = re.compile(r"<think>.*\Z", re.IGNORECASE | re.DOTALL)
+
+
+def _strip_think_spans(text: str) -> str:
+    """Remove inline <think>…</think> reasoning a driver leaks into content.
+
+    Reasoning is never part of the grounded answer: closed spans are cut, and an
+    UNCLOSED trailing <think> (budget ran out mid-thought) drops to the end —
+    better an honest short answer than reasoning rendered as prose."""
+    out = _THINK_SPAN_RE.sub("", text)
+    out = _THINK_OPEN_RE.sub("", out)
+    return out.strip()
+
+
 def _to_blocks(text: str) -> list[dict]:
     """Split the generated markdown into the frontend's AnswerBlock shape. Minimal:
     headings (#..), fenced code, else prose; prose keeps its [[id]] markers and the
@@ -447,6 +463,8 @@ async def stream_research_answer(
             # accepted answer stream token-by-token to the frontend.
             token_frames: list[dict[str, Any]] = []
             answer_text = ""
+            in_think = False
+            carry = ""
             async for chunk in router.stream_complete(
                 CompletionRequest(
                     profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
@@ -465,13 +483,38 @@ async def stream_research_answer(
             ):
                 if chunk.delta_text:
                     answer_text += chunk.delta_text
-                    token_frames.append(
-                        {"type": "token", "token": chunk.delta_text, "block_id": "answer"}
-                    )
+                    # Streaming think-guard: withhold <think>…</think> spans from the
+                    # wire (a leaked reasoning preamble must never paint as answer).
+                    carry += chunk.delta_text
+                    emit = ""
+                    while carry:
+                        if in_think:
+                            end = carry.lower().find("</think>")
+                            if end == -1:
+                                carry = carry[-16:]  # keep a tail in case the tag splits
+                                break
+                            carry = carry[end + len("</think>"):]
+                            in_think = False
+                            continue
+                        start = carry.lower().find("<think>")
+                        if start == -1:
+                            # hold back a small tail in case "<think>" straddles chunks
+                            keep = max(0, len(carry) - 8)
+                            emit += carry[:keep]
+                            carry = carry[keep:]
+                            break
+                        emit += carry[:start]
+                        carry = carry[start + len("<think>"):]
+                        in_think = True
+                    if emit:
+                        token_frames.append(
+                            {"type": "token", "token": emit, "block_id": "answer"}
+                        )
 
             # 5. structure + verify. The NLI verifier is SYNC (blocking httpx), so run
             # it in a thread — otherwise its many calls freeze the event loop and the
             # WebSocket's keepalive pings time out, dropping the connection mid-answer.
+            answer_text = _strip_think_spans(answer_text)
             blocks = _to_blocks(answer_text)
             claims = await asyncio.to_thread(_verify_claims, answer_text, by_id, nli)
 
