@@ -1094,7 +1094,9 @@ class VerifyAppKitAppTool:
             "real secret shipped), every page route renders 2xx with no console/network "
             "errors, and every section's data-appkit-section marker is in the DOM. Embeds a "
             "verify_web_app verdict for the render part. Call ONCE when the app is built and "
-            "the preview is running to decide if the structure is sound."
+            "the preview is running to decide if the structure is sound. When the verdict "
+            "PASSES all checks, the build is DONE — call finish immediately; do not keep "
+            "editing (further edits invalidate the verified state)."
         ),
         args_model=VerifyAppKitAppArgs,
         needs=frozenset(
