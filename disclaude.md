@@ -6005,3 +6005,21 @@ bounded, visible, exactly the valve convention. Honest residual: the
 count==2→synthetic-finish conversion has still never fired live (requires a
 no-progress second pause inside one window; hasn't occurred naturally — unit-
 proven only). Metrics now expose all of this per run.
+
+## MINIMAX SITUATION — CLOSED: 9/9 LIVE, MODEL EXONERATED (2026-07-03)
+
+Dylan asked "what is the model actually doing" — the thoughts+args trail + a
+controlled wire experiment (typed array schema → MiniMax emits perfect flat
+arrays natively) flipped the verdict: SEVEN engine-side defects across 10
+attempts, zero model walls. The chain: delegate_explore stub `8b2f1681` ·
+brief poisoning `9dfe8208` · silent mutator no-ops `4cb59586` · fail-open vite
+probe `576a9ecf` · UNDER-SPECIFIED updates schema (the core repeat-loop cause)
+`f9c7dbf7` · npm-ci lockfile assumption `df41c0af` · missing browser-daemon
+section markers (port-scope miss; unit FAKES emitted the key prod lacked — the
+recurring test blind spot) `a943c2e9`. Attempt 10: verify_appkit_app
+**passed=True on ALL NINE checks** (incl. drizzle_schema_valid +
+route/section coverage on the COMPILED app); site screenshot (real dist/
+build) sent to Dylan; 0 OpenRouter. Honest residuals: the run went STUCK
+after the passing verdict instead of finishing (stop-discipline prompt
+guidance: "verify passes → finish" — small pack tune) + appkit_live_golden
+through the verify runner still pending.
