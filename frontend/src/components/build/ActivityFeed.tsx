@@ -23,6 +23,7 @@ import {
   Loader2,
   MessageSquare,
   MonitorPlay,
+  MousePointerClick,
   Paperclip,
   User,
   X,
@@ -292,6 +293,11 @@ function ExpandableDetail({ item }: { item: ActivityItem }) {
               >
                 {e.error ? "Error" : "Output"}
               </span>
+              {item.status === "failed" && e.plainError && (
+                <p className="mt-px whitespace-pre-wrap break-words font-ui text-[0.8rem] leading-snug text-text">
+                  {e.plainError}
+                </p>
+              )}
               <pre
                 className={cn(
                   "mt-px max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.74rem] leading-snug",
@@ -406,6 +412,18 @@ export function ActivityFeed({
               {item.kind === "system_note" && (
                 <span className="font-ui text-[0.7rem] uppercase tracking-wide text-text-muted">
                   Note
+                </span>
+              )}
+              {item.mention && (
+                <span className="inline-flex max-w-full items-center gap-hair self-start rounded-full border border-hairline bg-surface-2 px-inline py-px font-ui text-[0.72rem] text-text-muted">
+                  <MousePointerClick className="size-3 shrink-0" aria-hidden />
+                  <span className="shrink-0 font-mono">{`<${item.mention.tag}>`}</span>
+                  {item.mention.text && (
+                    <>
+                      <span className="shrink-0">·</span>
+                      <span className="max-w-[40ch] truncate">{`"${item.mention.text}"`}</span>
+                    </>
+                  )}
                 </span>
               )}
               <span

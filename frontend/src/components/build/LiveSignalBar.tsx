@@ -13,6 +13,63 @@
 import { Loader2, MessageSquare, Sparkles, Terminal, User } from "lucide-react";
 import type { LiveSignal } from "@/lib/buildTrace";
 
+const TOOL_PROGRESS: Record<string, string> = {
+  file_write: "Writing file",
+  file_edit: "Editing file",
+  file_read: "Reading file",
+  file_list: "Listing files",
+  file_append: "Extending file",
+  file_insert_lines: "Editing file",
+  file_replace_lines: "Editing file",
+  file_str_replace: "Editing file",
+  exact_replace: "Editing file",
+  safe_write_file: "Writing file",
+  preview_start: "Starting the preview server",
+  preview_stop: "Stopping the preview server",
+  preview_status: "Checking the preview server",
+  preview_logs: "Reading the preview logs",
+  server_status: "Checking the app server",
+  shell: "Running command",
+  shell_exec: "Running command",
+  shell_view: "Watching a running command",
+  shell_wait: "Waiting on a command",
+  shell_kill_process: "Stopping a process",
+  shell_write_to_process: "Sending input to a process",
+  run_project_script: "Running a project script",
+  code_exec: "Running code",
+  search: "Searching the web",
+  extract: "Reading a web page",
+  slides_generate: "Generating slides",
+  deck_patch: "Editing slides",
+  sheet_generate: "Generating a spreadsheet",
+  doc_set_section: "Drafting a document section",
+  doc_export: "Exporting the document",
+  audio_overview: "Generating an audio overview",
+  image_generate: "Generating an image",
+  scaffold_starter: "Setting up the project starter",
+  app_create: "Creating the app scaffold",
+  app_add_section: "Adding an app section",
+  app_update_content: "Updating app content",
+  app_set_design: "Applying the design",
+  app_snapshot_version: "Saving a version snapshot",
+  design_lint: "Checking the design",
+  verify_web_app: "Verifying the app in a browser",
+  verify_appkit_app: "Verifying the app",
+  plan_step: "Updating the plan",
+  update_plan_progress: "Checking off plan progress",
+  submit_plan: "Proposing a plan",
+  think: "Thinking it through",
+  skip: "Skipping a step",
+  context_memory: "Saving working notes",
+  delegate_explore: "Exploring the codebase",
+  draft_workflow: "Drafting a workflow",
+  enter_workflow: "Starting a workflow",
+  list_workflows: "Listing workflows",
+  read_workflow_card: "Reading a workflow card",
+  request_custom_build: "Requesting a custom build",
+  needs_input: "Asking for input",
+};
+
 export function LiveSignalBar({ signal }: { signal: LiveSignal }) {
   if (signal.kind === "idle") return null;
 
@@ -52,23 +109,12 @@ function describe(signal: LiveSignal): {
         detail: signal.preview,
       };
     case "tool_executing": {
-      const verb =
-        signal.tool_name === "shell"
-          ? "Running command"
-          : signal.tool_name.startsWith("file_")
-            ? signal.tool_name === "file_read"
-              ? "Reading file"
-              : signal.tool_name === "file_write"
-                ? "Writing file"
-                : signal.tool_name === "file_edit"
-                  ? "Editing file"
-                  : `Using ${signal.tool_name}`
-            : signal.tool_name === "search"
-              ? "Searching the web"
-              : signal.tool_name === "extract"
-                ? "Reading a web page"
-                : `Calling ${signal.tool_name}`;
-      return { Icon: Terminal, label: `${verb}…`, detail: signal.detail };
+      const verb = TOOL_PROGRESS[signal.tool_name];
+      return {
+        Icon: Terminal,
+        label: verb ? `${verb}…` : `Working (${signal.tool_name})`,
+        detail: signal.detail,
+      };
     }
     case "composing_next_step":
       return { Icon: MessageSquare, label: "Composing the next step…" };

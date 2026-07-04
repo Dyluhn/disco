@@ -23,6 +23,12 @@ export interface ElementMentionMessage {
   payload: ElementMentionPayload;
 }
 
+export interface ParsedElementMention {
+  tag: string;
+  text: string;
+  screen: string | null;
+}
+
 export interface ElementMentionArmCommand {
   type: "disco-element-mention:arm";
   nonce: string;
@@ -145,6 +151,45 @@ export function serializeElementMention(payload: ElementMentionPayload): string 
   if (payload.src) lines.push(`src: ${blockValue(payload.src)}`);
   lines.push("</mentioned-element>");
   return lines.join("\n");
+}
+
+function parseBlockValue(value: string): string {
+  return value.trim().replace(/‹/g, "<").replace(/›/g, ">");
+}
+
+function parseMentionBlock(block: string): ParsedElementMention {
+  const lines = block.replace(/^\r?\n/, "").split(/\r?\n/);
+  const dom = parseBlockValue(
+    lines.find((line) => line.startsWith("dom:"))?.slice("dom:".length) ?? "",
+  );
+  const firstPath = dom.split(" > ", 1)[0] ?? "";
+  const tag = firstPath.split(/[.#]/, 1)[0] || "element";
+  const text = parseBlockValue(
+    lines.find((line) => line.startsWith("text:"))?.slice("text:".length) ?? "",
+  );
+  const screenValue = parseBlockValue(
+    lines.find((line) => line.startsWith("screen:"))?.slice("screen:".length) ?? "null",
+  );
+  return { tag, text, screen: screenValue === "null" ? null : screenValue };
+}
+
+export function stripElementMention(message: string): {
+  clean: string;
+  mention: ParsedElementMention | null;
+} {
+  const open = "<mentioned-element>";
+  const close = "</mentioned-element>";
+  const start = message.indexOf(open);
+  if (start < 0) return { clean: message.trim(), mention: null };
+  const bodyStart = start + open.length;
+  const end = message.indexOf(close, bodyStart);
+  if (end < 0) {
+    return { clean: "", mention: parseMentionBlock(message.slice(bodyStart)) };
+  }
+  const body = message.slice(bodyStart, end);
+  const afterStart = end + close.length;
+  const clean = `${message.slice(0, start)}${message.slice(afterStart)}`.trim();
+  return { clean, mention: parseMentionBlock(body) };
 }
 
 export function prependElementMention(

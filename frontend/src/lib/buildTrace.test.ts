@@ -12,9 +12,13 @@ import {
   deriveBuildProgress,
   deriveDeliverable,
   deriveFiles,
+  deriveLiveSignal,
   derivePlan,
   firstUserTask,
+  plainError,
 } from "@/lib/buildTrace";
+import { serializeElementMention, stripElementMention } from "@/lib/elementMention";
+import type { ElementMentionPayload } from "@/lib/elementMention";
 import type { AgentEvent } from "@/types/agent";
 
 function messageEvent(
@@ -49,6 +53,23 @@ function actionEvent(
   } as AgentEvent;
 }
 
+function actionEventWithArgs(
+  id: string,
+  toolName: string,
+  args: Record<string, unknown>,
+): AgentEvent {
+  return {
+    kind: "action",
+    id,
+    thought: "doing something",
+    tool_call: {
+      tool_name: toolName,
+      arguments: args,
+      call_id: id,
+    },
+  } as AgentEvent;
+}
+
 function planCardEvent(
   id: string,
   summary: string,
@@ -57,6 +78,13 @@ function planCardEvent(
 ): AgentEvent {
   return { kind: "plan", id, source: "agent", summary, steps, revision, context: "" } as AgentEvent;
 }
+
+const MENTION_PAYLOAD: ElementMentionPayload = {
+  domPath: ["h1#hero-title", "section.hero"],
+  screenLabel: "Hero",
+  text: "Harborline Studio",
+  rect: { x: 24, y: 199.75, w: 470.399, h: 52 },
+};
 
 describe("derivePlan — legacy no-steps placeholder is dropped", () => {
   it("filters the '(the planner returned no concrete steps)' sentinel so the card renders summary-only", () => {
@@ -187,6 +215,129 @@ describe("W-01: firstUserTask recovers the real task from the stream", () => {
     ];
     expect(firstUserTask(events)).toBeNull();
     expect(firstUserTask([])).toBeNull();
+  });
+});
+
+describe("element mentions — strip machine payloads from display text", () => {
+  it("round-trips a serialized mention and returns the clean user text", () => {
+    const message = `${serializeElementMention(MENTION_PAYLOAD)}\nMake the headline brighter`;
+    expect(stripElementMention(message)).toEqual({
+      clean: "Make the headline brighter",
+      mention: { tag: "h1", text: "Harborline Studio", screen: "Hero" },
+    });
+  });
+
+  it("treats a malformed unclosed mention as a consumed block", () => {
+    const parsed = stripElementMention("<mentioned-element>\ndom: button.cta\ntext: Buy now");
+    expect(parsed.clean).toBe("");
+    expect(parsed.mention).toEqual({ tag: "button", text: "Buy now", screen: null });
+  });
+
+  it("labels user activity with clean text and keeps the mention chip data", () => {
+    const items = deriveActivity(
+      [messageEvent("u1", "user", `${serializeElementMention(MENTION_PAYLOAD)}\nChange this copy`)],
+      null,
+      "RUNNING",
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0].label).toBe("Change this copy");
+    expect(items[0].mention).toEqual({ tag: "h1", text: "Harborline Studio" });
+  });
+
+  it("falls back to a plain pointed-at label when no user words follow", () => {
+    const items = deriveActivity(
+      [messageEvent("u1", "user", serializeElementMention(MENTION_PAYLOAD))],
+      null,
+      "RUNNING",
+    );
+    expect(items[0].label).toBe("Pointed at <h1>");
+    expect(items[0].mention).toEqual({ tag: "h1", text: "Harborline Studio" });
+  });
+
+  it("uses cleaned user text in the live reading preview", () => {
+    const signal = deriveLiveSignal(
+      [messageEvent("u1", "user", `${serializeElementMention(MENTION_PAYLOAD)}\nChange this copy`)],
+      "RUNNING",
+    );
+    expect(signal).toEqual({ kind: "thinking_about_user_message", preview: "Change this copy" });
+  });
+
+  it("uses cleaned user text for the resumed task fallback", () => {
+    expect(
+      firstUserTask([
+        messageEvent("u1", "user", `${serializeElementMention(MENTION_PAYLOAD)}\nChange this copy`),
+      ]),
+    ).toBe("Change this copy");
+  });
+});
+
+describe("deriveActivity — plain tool labels", () => {
+  it("covers common build tools without falling back to raw tool names", () => {
+    const items = deriveActivity(
+      [
+        actionEventWithArgs("preview", "preview_start", {}),
+        actionEventWithArgs("slides", "slides_generate", {}),
+        actionEventWithArgs("image", "image_generate", { prompt: "short prompt" }),
+        actionEventWithArgs("safe-new", "safe_write_file", { path: "new.tsx" }),
+        actionEventWithArgs("safe-edit", "safe_write_file", {
+          path: "app.tsx",
+          expected_sha256: "abc",
+        }),
+      ],
+      null,
+      "RUNNING",
+    );
+    expect(items.map((i) => i.label)).toEqual([
+      "Started the preview server",
+      "Generated a slide deck",
+      'Generated an image: "short prompt"',
+      "Wrote new.tsx",
+      "Edited app.tsx",
+    ]);
+  });
+
+  it("ellipsizes image prompts only when the prompt is actually truncated", () => {
+    const longPrompt = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";
+    const items = deriveActivity(
+      [actionEventWithArgs("image", "image_generate", { prompt: longPrompt })],
+      null,
+      "RUNNING",
+    );
+    expect(items[0].label).toBe(`Generated an image: "${longPrompt.slice(0, 48)}…"`);
+  });
+
+  it("attaches a plain first line for known failed action codes", () => {
+    const events: AgentEvent[] = [
+      actionEventWithArgs("edit", "file_edit", { path: "index.html" }),
+      {
+        kind: "agent_error",
+        id: "err",
+        action_id: "edit",
+        error: "old_text_not_found",
+      } as AgentEvent,
+    ];
+    const items = deriveActivity(events, null, "RUNNING");
+    expect(items[0].status).toBe("failed");
+    expect(items[0].expandable?.plainError).toBe(
+      "An edit missed — retrying with fresh file contents",
+    );
+    expect(items[0].expandable?.error).toBe("old_text_not_found");
+  });
+});
+
+describe("plainError", () => {
+  it("maps known codes and backend phrase forms to plain language", () => {
+    expect(plainError("old_text_not_found")).toBe(
+      "An edit missed — retrying with fresh file contents",
+    );
+    expect(plainError("unknown or out-of-scope tool 'foo'; available: []")).toBe(
+      "That tool wasn't available here",
+    );
+    expect(plainError("SandboxFileNotFoundError: missing.txt")).toBe("That file wasn't there");
+  });
+
+  it("returns null for unknown errors", () => {
+    expect(plainError("something surprising happened")).toBeNull();
   });
 });
 
