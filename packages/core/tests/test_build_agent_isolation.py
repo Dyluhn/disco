@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
 from disco.core.llm.prompts import (
+    _MENTIONED_ELEMENT_GUIDANCE,
     _AGENT_PLANNING_CAPABILITY_BLOCK,
     _EXECUTION_DRIVER_PROMPT,
     _PLANNING_DRIVER_PROMPT,
@@ -34,7 +35,9 @@ from disco.tools.registry import AGENT_TOOLS
 # [R6] The capability block now applies to BOTH flavors' PLANNING prompt (the build
 # planner hides write tools too). So build PLANNING = base constant + this block;
 # build EXECUTION is still the bare constant (the block is planning-only).
-_BUILD_PLANNING = _PLANNING_DRIVER_PROMPT + _AGENT_PLANNING_CAPABILITY_BLOCK
+_BUILD_PLANNING = (
+    _PLANNING_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE + _AGENT_PLANNING_CAPABILITY_BLOCK
+)
 
 # ---------------------------------------------------------------------------
 # 1. Build-flavor PLANNING prompt is byte-stable
@@ -71,7 +74,7 @@ def test_default_planning_prompt_equals_constant():
 
 
 def test_build_execution_prompt_equals_constant():
-    """flavor='build', assist=False execution output == _EXECUTION_DRIVER_PROMPT."""
+    """flavor='build', assist=False execution output == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE."""
     dp = DriverPrompts(flavor="build")
     got = dp.system_prompt(
         model_family="qwen",
@@ -79,18 +82,18 @@ def test_build_execution_prompt_equals_constant():
         role=ModelRole.AGENT_DRIVER,
         assist=False,
     )
-    assert got == _EXECUTION_DRIVER_PROMPT
+    assert got == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 def test_default_execution_prompt_equals_constant():
-    """No-arg DriverPrompts(), no assist kwarg == _EXECUTION_DRIVER_PROMPT."""
+    """No-arg DriverPrompts(), no assist kwarg == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE."""
     dp = DriverPrompts()
     got = dp.system_prompt(
         model_family="qwen",
         mode=OperatingMode.LONG_HORIZON,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert got == _EXECUTION_DRIVER_PROMPT
+    assert got == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +156,7 @@ def test_agent_flavor_diverges_from_build_in_both_phases():
     assert "autonomous build agent" in build_exec
     assert "autonomous task agent" in agent_exec
     # Build path is still the constant.
-    assert build_exec == _EXECUTION_DRIVER_PROMPT
+    assert build_exec == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 def test_constructing_agent_flavor_does_not_mutate_module_constants():
@@ -182,7 +185,7 @@ def test_constructing_agent_flavor_does_not_mutate_module_constants():
             mode=OperatingMode.LONG_HORIZON,
             role=ModelRole.AGENT_DRIVER,
         )
-        == _EXECUTION_DRIVER_PROMPT
+        == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
     )
 
 

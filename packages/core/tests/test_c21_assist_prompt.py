@@ -34,6 +34,7 @@ from disco.core.llm import (
     OperatingMode,
 )
 from disco.core.llm.prompts import (
+    _MENTIONED_ELEMENT_GUIDANCE,
     _EXECUTION_DRIVER_PROMPT,
     _EXECUTION_DRIVER_PROMPT_SMALL,
 )
@@ -116,7 +117,7 @@ def test_assist_off_byte_identical_to_capable_prompt():
     )
     # Byte-identical — not just "contains", not just "starts with". The exact
     # string the constant holds is what must reach the wire for capable models.
-    assert off == _EXECUTION_DRIVER_PROMPT
+    assert off == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 def test_assist_off_default_kwarg_byte_identical_to_capable_prompt():
@@ -128,7 +129,7 @@ def test_assist_off_default_kwarg_byte_identical_to_capable_prompt():
         mode=OperatingMode.LONG_HORIZON,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert p == _EXECUTION_DRIVER_PROMPT
+    assert p == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 def test_assist_off_byte_identical_under_autonomous_prefix():
@@ -156,7 +157,7 @@ def test_assist_off_byte_identical_under_autonomous_prefix():
         "to `finish` yourself; if something is genuinely impossible, call `finish` "
         "and explain what is blocked in the summary.\n\n"
     )
-    assert off[len(autonomous_prefix):] == _EXECUTION_DRIVER_PROMPT
+    assert off[len(autonomous_prefix):] == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 def test_assist_off_byte_identical_under_skills_block():
@@ -171,7 +172,10 @@ def test_assist_off_byte_identical_under_skills_block():
         role=ModelRole.AGENT_DRIVER,
         assist=False,
     )
-    assert off == f"{skills_block}\n\n---\n\n{_EXECUTION_DRIVER_PROMPT}"
+    assert off == (
+        f"{skills_block}\n\n---\n\n"
+        f"{_EXECUTION_DRIVER_PROMPT}{_MENTIONED_ELEMENT_GUIDANCE}"
+    )
 
 
 def test_assist_off_byte_identical_under_agent_flavor():
@@ -300,7 +304,7 @@ async def test_router_injects_original_prompt_when_assist_false():
     seen = local.seen_requests[0]
     system = seen.messages[0].content
     # The wire prompt is the original capable-model prompt, byte-identical.
-    assert system == _EXECUTION_DRIVER_PROMPT
+    assert system == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE
 
 
 async def test_router_injects_original_prompt_when_assist_default():
@@ -326,4 +330,4 @@ async def test_router_injects_original_prompt_when_assist_default():
     await router.complete(req)
     seen = local.seen_requests[0]
     system = seen.messages[0].content
-    assert system == _EXECUTION_DRIVER_PROMPT
+    assert system == _EXECUTION_DRIVER_PROMPT + _MENTIONED_ELEMENT_GUIDANCE

@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ExternalLink, History, MonitorPlay, Pencil, RotateCw, Undo2 } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, History, MonitorPlay, MousePointer2, Pencil, RotateCw, Undo2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
 import { agentHttpBase, ApiError, previewHostUrl } from "@/api/client";
@@ -9,12 +9,15 @@ import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
 import { useElementSelect } from "@/hooks/useElementSelect";
+import { useElementMention } from "@/hooks/useElementMention";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { EditAffordance } from "@/components/build/canvas/EditAffordance";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useToast } from "@/components/Toast";
 import { SELECTION_AGENT_SCRIPT } from "@/lib/selectionAgent";
+import { ELEMENT_MENTION_PICKER_SCRIPT } from "@/lib/elementMentionPicker";
 import { formatSelectionContext } from "@/lib/resolvers/appResolver";
+import type { ElementMentionPayload } from "@/lib/elementMention";
 import type { SelectionRef } from "@/lib/selectionBridge";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
@@ -53,6 +56,44 @@ function triggerBadgeClass(trigger: string): string {
   if (trigger === "restore") return "border-warn/30 bg-warn/10 text-warn";
   return "border-hairline bg-surface-1 text-text-faint";
 }
+
+function originOf(src: string | null): string | null {
+  if (!src) return null;
+  try {
+    return new URL(src).origin;
+  } catch {
+    return null;
+  }
+}
+
+function PointButton({
+  armed,
+  onArm,
+  onDisarm,
+}: {
+  armed: boolean;
+  onArm: () => void;
+  onDisarm: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={armed ? onDisarm : onArm}
+      aria-pressed={armed}
+      aria-label={armed ? "Cancel element mention" : "Point at element"}
+      data-disco-control="build.element-mention"
+      className={cn(
+        "flex items-center gap-hair font-ui text-[0.74rem] transition-colors",
+        armed ? "text-accent" : "text-text-muted hover:text-text",
+      )}
+    >
+      <MousePointer2 className="size-3" aria-hidden />
+      {armed ? "Cancel" : "Point"}
+    </button>
+  );
+}
+
+const TRUSTED_SRCDOC_SCRIPT = `${SELECTION_AGENT_SCRIPT}\n${ELEMENT_MENTION_PICKER_SCRIPT}`;
 
 function parseErrorReason(message: string): string | null {
   try {
@@ -150,6 +191,7 @@ export function PreviewPane({
   untrusted = false,
   onSteer,
   onSelectionEdit,
+  onElementMention,
 }: {
   status: ConversationStatus;
   cid: string | null;
@@ -164,6 +206,8 @@ export function PreviewPane({
    * the host builds the scoped-edit directive. When undefined, the Edit toggle is
    * hidden (no false affordance: nothing to edit through). */
   onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void;
+  /** Attach the next clicked preview element to the next chat message. */
+  onElementMention?: (payload: ElementMentionPayload) => void;
 }) {
   // Keep the backend preview active through FINISHED/STUCK too (UI 2.2): the
   // pane shouldn't go MORE dead at the moment of completion.
@@ -253,7 +297,7 @@ export function PreviewPane({
     () =>
       srcdocStaleAfterRestore
         ? null
-        : deriveSrcDoc(files, untrusted ? undefined : SELECTION_AGENT_SCRIPT),
+        : deriveSrcDoc(files, untrusted ? undefined : TRUSTED_SRCDOC_SCRIPT),
     [files, untrusted, srcdocStaleAfterRestore],
   );
 
@@ -397,6 +441,7 @@ export function PreviewPane({
     </div>
   ) : null;
   const proxySrc = cid ? `${previewHostUrl(cid, previewPort)}/?r=${reloadKey}` : null;
+  const liveIframeRef = useRef<HTMLIFrameElement | null>(null);
   // E3 — Firefox-safe path-based route. The origin-true `{cid8}-{port}.localhost`
   // URL above is the most correct (separate origin, dev-server assets resolve
   // relative to the same host) but Firefox won't resolve `.localhost` subdomains
@@ -412,6 +457,25 @@ export function PreviewPane({
     cid && selectedVersionSeq !== null
       ? `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/preview-app/?version=${selectedVersionSeq}&r=${reloadKey}`
       : null;
+  const mentionable = Boolean(onElementMention && !untrusted);
+  const handleElementMention = useCallback(
+    (payload: ElementMentionPayload) => {
+      onElementMention?.(payload);
+    },
+    [onElementMention],
+  );
+  const liveMention = useElementMention(
+    liveIframeRef,
+    originOf(proxySrc),
+    handleElementMention,
+    mentionable && proxySrc !== null,
+  );
+  const srcdocMention = useElementMention(
+    srcdocIframeRef,
+    "null",
+    handleElementMention,
+    mentionable && srcDoc !== null,
+  );
 
   // PRIORITY (the fix): default to the RENDERED view, because the backend's bare
   // `python -m http.server` shows a useless directory LISTING (file paths) when
@@ -532,6 +596,13 @@ export function PreviewPane({
           <div className="flex items-center gap-inline">
             {VersionControl}
             {RefreshButton}
+            {mentionable && proxySrc && (
+              <PointButton
+                armed={liveMention.armed}
+                onArm={liveMention.arm}
+                onDisarm={liveMention.disarm}
+              />
+            )}
             {srcDoc != null && (
               <button
                 type="button"
@@ -574,6 +645,7 @@ export function PreviewPane({
         </div>
         <iframe
           key={reloadKey}
+          ref={liveIframeRef}
           title="Live preview"
           src={proxySrc}
           sandbox="allow-scripts allow-forms allow-same-origin allow-popups"
@@ -598,6 +670,13 @@ export function PreviewPane({
           <div className="flex items-center gap-inline">
             {VersionControl}
             {RefreshButton}
+            {mentionable && !showEdit && (
+              <PointButton
+                armed={srcdocMention.armed}
+                onArm={srcdocMention.arm}
+                onDisarm={srcdocMention.disarm}
+              />
+            )}
             {/* A1.4 — Edit toggle (only when steering + a stampable entry exist). */}
             {canEdit && (
               <button

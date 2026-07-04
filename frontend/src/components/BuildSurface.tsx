@@ -27,6 +27,8 @@ import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
 import { publishRunStatus } from "@/lib/runStatusBridge";
 import { ChevronDown, Download, Loader2 } from "lucide-react";
+import { prependElementMention } from "@/lib/elementMention";
+import type { ElementMentionPayload } from "@/lib/elementMention";
 import { useDownloadProject, useExportManifest } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStageCard } from "@/components/build/AgentStageCard";
@@ -41,6 +43,7 @@ import { AgentCanvas } from "@/components/build/AgentCanvas";
 import { ConnectionsStrip } from "@/components/build/ConnectionsStrip";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { DeliverablePanel } from "@/components/build/DeliverablePanel";
+import { ElementMentionChip } from "@/components/build/ElementMentionChip";
 import { SteerInput } from "@/components/build/SteerInput";
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
@@ -129,6 +132,7 @@ export function BuildSurface({
   );
   const finalMessage = useMemo(() => latestAgentMessage(visibleEvents), [visibleEvents]);
   const deliverable = useMemo(() => deriveDeliverable(visibleEvents), [visibleEvents]);
+  const [elementMention, setElementMention] = useState<ElementMentionPayload | null>(null);
   // W-01: on resume, useBuild seeds the task with the internal "(resumed)"
   // sentinel. The H1 must read the PROJECT, never the literal sentinel — and
   // never the giant raw first prompt (firstUserTask returns the whole first user
@@ -271,6 +275,26 @@ export function BuildSurface({
   // never reads as frozen between submit and the plan-approval gate.
   const draftingPlan = b.status === "RUNNING" && !b.plan;
   const terminalIncomplete = b.status === "STUCK" || b.status === "ERROR";
+
+  const consumeElementMention = useCallback(
+    (text: string) => {
+      const content = prependElementMention(text, elementMention);
+      if (elementMention) setElementMention(null);
+      return content;
+    },
+    [elementMention],
+  );
+  const steerWithMention = useCallback(
+    (text: string) => b.steer(consumeElementMention(text)),
+    [b.steer, consumeElementMention],
+  );
+  const requestPlanWithMention = useCallback(
+    (text: string) => b.requestPlan(consumeElementMention(text)),
+    [b.requestPlan, consumeElementMention],
+  );
+  const elementMentionChip = (
+    <ElementMentionChip mention={elementMention} onRemove={() => setElementMention(null)} />
+  );
 
   if (!b.started) {
     return (
@@ -612,8 +636,9 @@ export function BuildSurface({
                 </p>
               )}
               <SteerInput
-                onSteer={b.steer}
+                onSteer={steerWithMention}
                 disabled={b.status === "WAITING_FOR_CONFIRMATION"}
+                attachment={elementMentionChip}
               />
             </div>
           )}
@@ -622,9 +647,10 @@ export function BuildSurface({
               <BuildModelPicker value={b.modelId} onChange={b.setModelId} />
               {/* re-enter plan mode: a focused, diff-style change is planned + re-approved */}
               <QueryInput
-                onSubmit={b.requestPlan}
+                onSubmit={requestPlanWithMention}
                 placeholder={copy.replanPlaceholder}
                 controlId="replan-send"
+                footer={!steerable ? elementMentionChip : undefined}
               />
             </div>
           )}
@@ -652,7 +678,7 @@ export function BuildSurface({
             cid={b.cid}
             // W-26 — steer the agent from the artifact-preview "Discuss with agent"
             // action. Same wire as the steer composer; only when steering is available.
-            onSteer={steerable ? b.steer : undefined}
+            onSteer={steerable ? steerWithMention : undefined}
           />
         ) : (
           <ExecutionCanvas
@@ -661,10 +687,11 @@ export function BuildSurface({
             cid={b.cid}
             streamingFile={b.streamingFile}
             // Discuss affordance → free-form steer. Same wire as the steer composer.
-            onSteer={steerable ? b.steer : undefined}
+            onSteer={steerable ? steerWithMention : undefined}
             // P8 click-to-edit: the preview-pane edit box submits the selected
             // element's typed ref + change; the host scopes the targeted edit.
             onSelectionEdit={steerable ? b.selectionEdit : undefined}
+            onElementMention={setElementMention}
           />
         )
       }

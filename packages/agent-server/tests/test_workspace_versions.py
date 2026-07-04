@@ -215,7 +215,7 @@ async def test_preview_version_query_serves_version_bytes(tmp_path: Path) -> Non
         resp = await client.get(f"/conversations/{CID}/preview-app/?version={version.seq}")
 
     assert resp.status_code == 200
-    assert resp.content == b"historical"
+    assert resp.content.startswith(b"historical")
 
 
 async def test_preview_version_query_404_for_unknown_version(tmp_path: Path) -> None:
@@ -257,6 +257,7 @@ async def test_preview_version_query_bypasses_live_proxy(tmp_path: Path) -> None
         missing = await client.get(f"/conversations/{CID}/preview-app/?version=99")
 
     assert versioned.status_code == 200
-    assert versioned.content == b"historical"
+    assert versioned.content.startswith(b"historical")
+    assert b"disco-element-mention-picker:v1" in versioned.content
     # Unknown version with a LIVE sandbox: 404, never a silent live-proxy answer.
     assert missing.status_code == 404

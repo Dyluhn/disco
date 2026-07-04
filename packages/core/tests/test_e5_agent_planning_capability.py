@@ -19,6 +19,7 @@ from __future__ import annotations
 from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
 from disco.core.llm.prompts import (
     _AGENT_PLANNING_CAPABILITY_BLOCK,
+    _MENTIONED_ELEMENT_GUIDANCE,
     _PLANNING_DRIVER_PROMPT,
 )
 
@@ -128,8 +129,12 @@ def test_build_planning_prompt_is_constant_plus_block():
         mode=OperatingMode.PLANNING,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert got == _PLANNING_DRIVER_PROMPT + _AGENT_PLANNING_CAPABILITY_BLOCK, (
-        "[R6] build planning must be the base constant + the capability block"
+    assert got == (
+        _PLANNING_DRIVER_PROMPT
+        + _MENTIONED_ELEMENT_GUIDANCE
+        + _AGENT_PLANNING_CAPABILITY_BLOCK
+    ), (
+        "[R6] build planning must be the base constant + mention guidance + capability block"
     )
 
 

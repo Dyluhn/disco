@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 import websockets
+from disco.agent_server.preview_inject import inject_element_mention_picker
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 _LOG = logging.getLogger(__name__)
@@ -200,12 +201,16 @@ class HostPreviewProxyMiddleware:
         if got is None:
             return False
         status, body, ctype = got
+        media_type = ctype or "application/octet-stream"
         await send({
             "type": "http.response.start",
             "status": status,
-            "headers": [(b"content-type", (ctype or "application/octet-stream").encode("latin1"))],
+            "headers": [(b"content-type", media_type.encode("latin1"))],
         })
-        await send({"type": "http.response.body", "body": body})
+        await send({
+            "type": "http.response.body",
+            "body": inject_element_mention_picker(body, media_type),
+        })
         return True
 
     async def _proxy_http(self, scope: Scope, receive: Receive, send: Send, upstream: str) -> None:
@@ -257,6 +262,44 @@ class HostPreviewProxyMiddleware:
         res = await self._send_with_connect_retry(client, req, send)
         if res is None:
             # All connect attempts failed; 502 already sent.
+            return
+
+        content_type = res.headers.get("content-type")
+        buffer_html = (
+            content_type is not None
+            and content_type.split(";", 1)[0].strip().lower() == "text/html"
+        )
+        if buffer_html:
+            body = await res.aread()
+            injected = inject_element_mention_picker(body, content_type)
+            changed = injected != body
+            res_headers = []
+            for k, v in res.headers.multi_items():
+                k_lower = k.lower()
+                if k_lower in hop_by_hop or k_lower.startswith("proxy-"):
+                    continue
+                if k_lower in {"content-length", "content-encoding", "etag"}:
+                    continue
+                if changed and k_lower in {
+                    "content-security-policy",
+                    "content-security-policy-report-only",
+                }:
+                    continue
+                res_headers.append((k.encode("latin1"), v.encode("latin1")))
+            res_headers.append((b"content-length", str(len(injected)).encode("latin1")))
+            try:
+                await send({
+                    "type": "http.response.start",
+                    "status": res.status_code,
+                    "headers": res_headers,
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": injected,
+                    "more_body": False,
+                })
+            finally:
+                await res.aclose()
             return
 
         res_headers = []

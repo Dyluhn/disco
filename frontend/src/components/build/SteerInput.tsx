@@ -8,7 +8,15 @@ import { useState } from "react";
 import { CornerDownLeft, Navigation } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-export function SteerInput({ onSteer, disabled }: { onSteer: (text: string) => void; disabled?: boolean }) {
+export function SteerInput({
+  onSteer,
+  disabled,
+  attachment,
+}: {
+  onSteer: (text: string) => void;
+  disabled?: boolean;
+  attachment?: React.ReactNode;
+}) {
   const [text, setText] = useState("");
   const submit = () => {
     if (!text.trim() || disabled) return;
@@ -16,37 +24,40 @@ export function SteerInput({ onSteer, disabled }: { onSteer: (text: string) => v
     setText("");
   };
   return (
-    <div
-      className={cn(
-        "flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair transition-colors focus-within:border-hairline-strong",
-        disabled && "opacity-50",
-      )}
-    >
-      <Navigation className="size-3.5 shrink-0 text-text-faint" aria-hidden />
-      <input
-        value={text}
-        disabled={disabled}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        placeholder="Steer the agent — e.g. “skip the cleanup, keep the file”"
-        aria-label="Steer the agent"
-        className="min-w-0 flex-1 bg-transparent font-ui text-[0.82rem] text-text outline-none placeholder:text-text-faint"
-      />
-      <button
-        type="button"
-        onClick={submit}
-        disabled={disabled || !text.trim()}
-        aria-label="Send steer"
-        data-disco-control="steer"
-        className="shrink-0 text-text-faint transition-colors hover:text-text disabled:opacity-40"
+    <div className="flex flex-col gap-hair">
+      {attachment}
+      <div
+        className={cn(
+          "flex items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair transition-colors focus-within:border-hairline-strong",
+          disabled && "opacity-50",
+        )}
       >
-        <CornerDownLeft className="size-3.5" aria-hidden />
-      </button>
+        <Navigation className="size-3.5 shrink-0 text-text-faint" aria-hidden />
+        <input
+          value={text}
+          disabled={disabled}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="Steer the agent - e.g. 'skip the cleanup, keep the file'"
+          aria-label="Steer the agent"
+          className="min-w-0 flex-1 bg-transparent font-ui text-[0.82rem] text-text outline-none placeholder:text-text-faint"
+        />
+        <button
+          type="button"
+          onClick={submit}
+          disabled={disabled || !text.trim()}
+          aria-label="Send steer"
+          data-disco-control="steer"
+          className="shrink-0 text-text-faint transition-colors hover:text-text disabled:opacity-40"
+        >
+          <CornerDownLeft className="size-3.5" aria-hidden />
+        </button>
+      </div>
     </div>
   );
 }

@@ -19,6 +19,7 @@ import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useSessions } from "@/hooks/useSessions";
 import type { StreamingFile } from "@/hooks/useBuildStream";
+import type { ElementMentionPayload } from "@/lib/elementMention";
 import type { SelectionRef } from "@/lib/selectionBridge";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 import { FilesPane } from "./canvas/FilesPane";
@@ -43,6 +44,7 @@ export function ExecutionCanvas({
   untrusted = false,
   onSteer,
   onSelectionEdit,
+  onElementMention,
 }: {
   events: AgentEvent[];
   status: ConversationStatus;
@@ -55,6 +57,8 @@ export function ExecutionCanvas({
   onSteer?: (text: string) => void;
   /** P8 click-to-edit — submit a selected element's ref + change to the host. */
   onSelectionEdit?: (ref: SelectionRef, instruction: string, humanLabel?: string) => void;
+  /** Element mention — attach the next clicked preview element to the next chat message. */
+  onElementMention?: (payload: ElementMentionPayload) => void;
 }) {
   // C5: detect any previewable HTML — either a client-side artifact (srcDoc) or
   // a server-side .html from slides_generate / deliverable (empty content, served
@@ -189,6 +193,7 @@ export function ExecutionCanvas({
             untrusted={untrusted}
             onSteer={onSteer}
             onSelectionEdit={onSelectionEdit}
+            onElementMention={onElementMention}
           />
         </Tabs.Content>
         <Tabs.Content value="cockpit" className="h-full focus:outline-none">

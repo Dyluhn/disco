@@ -18,6 +18,7 @@ from disco.tools.sandbox.base import strip_redundant_workspace_prefix
 from fastapi import APIRouter, Query, Response, WebSocket
 from fastapi.responses import JSONResponse
 
+from ..preview_inject import inject_element_mention_picker
 from ..runtime import ConversationRuntime
 
 _LOG = logging.getLogger(__name__)
@@ -57,7 +58,8 @@ def _serve_static_from_snapshot(
     if not (target.is_relative_to(ws) and target.is_file()):
         return None
     ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-    return Response(content=target.read_bytes(), media_type=ctype)
+    body = inject_element_mention_picker(target.read_bytes(), ctype)
+    return Response(content=body, media_type=ctype)
 
 
 async def _fetch_inside_response(
@@ -86,8 +88,11 @@ async def _fetch_inside_response(
     if got is None:
         return None
     status, body, ctype = got
+    media_type = ctype or "application/octet-stream"
     return Response(
-        content=body, status_code=status, media_type=ctype or "application/octet-stream"
+        content=inject_element_mention_picker(body, media_type),
+        status_code=status,
+        media_type=media_type,
     )
 
 
@@ -482,10 +487,11 @@ def make_preview_router(
             if served is not None:
                 return served
             return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+        media_type = r.headers.get("content-type", "text/html")
         return Response(
-            content=r.content,
+            content=inject_element_mention_picker(r.content, media_type),
             status_code=r.status_code,
-            media_type=r.headers.get("content-type", "text/html"),
+            media_type=media_type,
         )
 
     @router.websocket("/conversations/{conversation_id}/preview-app/{path:path}")
@@ -542,10 +548,11 @@ def make_preview_router(
             if served is not None:
                 return served
             return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+        media_type = r.headers.get("content-type", "text/html")
         return Response(
-            content=r.content,
+            content=inject_element_mention_picker(r.content, media_type),
             status_code=r.status_code,
-            media_type=r.headers.get("content-type", "text/html"),
+            media_type=media_type,
         )
 
     @router.websocket("/conversations/{conversation_id}/port/{port}/{path:path}")

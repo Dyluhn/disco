@@ -13,6 +13,10 @@ const SELECTION_AGENT_JS = resolve(
   __dirname,
   "../packages/agent-server/src/disco/agent_server/selection_agent.js",
 );
+const ELEMENT_MENTION_PICKER_JS = resolve(
+  __dirname,
+  "../packages/agent-server/src/disco/agent_server/element_mention_picker.js",
+);
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -24,6 +28,10 @@ export default defineConfig({
       {
         find: /^@selection-agent-script(\?.*)?$/,
         replacement: `${SELECTION_AGENT_JS}$1`,
+      },
+      {
+        find: /^@element-mention-picker-script(\?.*)?$/,
+        replacement: `${ELEMENT_MENTION_PICKER_JS}$1`,
       },
       { find: "@", replacement: resolve(__dirname, "src") },
     ],

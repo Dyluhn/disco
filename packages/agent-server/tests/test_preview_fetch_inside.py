@@ -71,7 +71,11 @@ def test_preview_app_serves_live_body_via_fetch_inside() -> None:
     rt = _FakeRuntime(session)
     resp = _client(rt).get("/conversations/conv_abc12345/preview-app/")
     assert resp.status_code == 200
-    assert resp.content == body
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        assert resp.content.startswith(body.split(b"</body>")[0])
+        assert b"disco-element-mention-picker:v1" in resp.content
+    else:
+        assert resp.content == body
     assert resp.headers["content-type"].startswith("text/html")
     # liveness probe hit the live session on the preview port
     assert session.calls and session.calls[0][0] == 8000
@@ -83,7 +87,11 @@ def test_port_app_serves_live_body_via_fetch_inside() -> None:
     rt = _FakeRuntime(session)
     resp = _client(rt).get("/conversations/conv_porttest1/port/3000/health")
     assert resp.status_code == 200
-    assert resp.content == body
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        assert resp.content.startswith(body.split(b"</body>")[0])
+        assert b"disco-element-mention-picker:v1" in resp.content
+    else:
+        assert resp.content == body
     assert session.calls[0] == (3000, "health")
 
 
@@ -145,7 +153,11 @@ def test_hostname_proxy_falls_back_to_fetch_inside_when_no_upstream() -> None:
     client = _host_proxy_client(upstream=None, session=session)
     resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
     assert resp.status_code == 200
-    assert resp.content == body
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        assert resp.content.startswith(body.split(b"</body>")[0])
+        assert b"disco-element-mention-picker:v1" in resp.content
+    else:
+        assert resp.content == body
     assert session.calls and session.calls[0][0] == 8000
 
 
@@ -198,7 +210,11 @@ def test_port_app_still_fetches_inside_normal_port() -> None:
     rt = _FakeRuntime(session)
     resp = _client(rt).get("/conversations/conv_devport0/port/8000/")
     assert resp.status_code == 200
-    assert resp.content == body
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        assert resp.content.startswith(body.split(b"</body>")[0])
+        assert b"disco-element-mention-picker:v1" in resp.content
+    else:
+        assert resp.content == body
     assert session.calls and session.calls[0][0] == 8000
 
 
@@ -223,5 +239,9 @@ def test_hostname_proxy_still_fetches_inside_normal_port() -> None:
     client = _host_proxy_client(upstream=None, session=session)
     resp = client.get("/", headers={"host": "abc12345-8000.localhost"})
     assert resp.status_code == 200
-    assert resp.content == body
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        assert resp.content.startswith(body.split(b"</body>")[0])
+        assert b"disco-element-mention-picker:v1" in resp.content
+    else:
+        assert resp.content == body
     assert session.calls and session.calls[0][0] == 8000
