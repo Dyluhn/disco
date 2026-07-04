@@ -39,6 +39,14 @@ def test_from_ledger_passes_through_anchors() -> None:
     assert pack.allowed_next_actions == ("edit", "verify")
 
 
+def test_from_ledger_passes_design_direction_text() -> None:
+    pack = ContextPack.from_ledger(
+        ContextLedger.empty("c"),
+        design_direction="## Design Direction: Dark Glass",
+    )
+    assert pack.design_direction == "## Design Direction: Dark Glass"
+
+
 def test_from_ledger_excludes_resolved_failures() -> None:
     led = ContextLedger.empty("c").model_copy(
         update={

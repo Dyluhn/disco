@@ -91,6 +91,7 @@ def test_source_priority_default_order_semantics() -> None:
     # live todo, raw history last.
     assert sp.order[0] is SourceKind.GOAL
     assert sp.order[1] is SourceKind.CONTRACT
+    assert sp.rank(SourceKind.DESIGN_DIRECTION) < sp.rank(SourceKind.TODO)
     assert sp.rank(SourceKind.VERIFIER_FAILURE) < sp.rank(SourceKind.TODO)
     assert sp.order[-1] is SourceKind.HISTORY
 
@@ -98,7 +99,13 @@ def test_source_priority_default_order_semantics() -> None:
 def test_compaction_policy_limit_for_by_kind() -> None:
     pol = CompactionPolicy.default()
     # never-compact kinds are unbounded
-    for kind in (SourceKind.GOAL, SourceKind.CONTRACT, SourceKind.VERIFIER_FAILURE, SourceKind.DIRECT_EDIT):
+    for kind in (
+        SourceKind.GOAL,
+        SourceKind.CONTRACT,
+        SourceKind.DESIGN_DIRECTION,
+        SourceKind.VERIFIER_FAILURE,
+        SourceKind.DIRECT_EDIT,
+    ):
         assert pol.limit_for(kind) is None
     # omittable kinds carry their configured caps
     assert pol.limit_for(SourceKind.RESOURCE) == pol.max_resource_refs

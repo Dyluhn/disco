@@ -510,6 +510,7 @@ class ViewBuilder:
         """Build the live ContextPack message, with durable store inputs best-effort."""
         base_ledger: ContextLedger | None = None
         todo_text: str | None = None
+        design_direction: str | None = None
         failures: tuple[VerifierFailureRef, ...] | None = None
         sbx = getattr(getattr(self._loop, "executor", None), "sandbox", None)
         if sbx is not None:
@@ -536,12 +537,21 @@ class ViewBuilder:
                     getattr(self._loop, "conversation_id", ""),
                     exc_info=True,
                 )
+            try:
+                design_direction = await store.read_design_direction()
+            except Exception:  # noqa: BLE001 - absent/corrupt design direction omits it
+                _LOG.warning(
+                    "CXT live context-pack design direction read failed for %s",
+                    getattr(self._loop, "conversation_id", ""),
+                    exc_info=True,
+                )
 
         pack = build_context_pack(
             events,
             base_ledger=base_ledger,
             policy=self._context_compaction_policy(),
             todo_text=todo_text,
+            design_direction=design_direction,
             failures=failures,
         )
         return LLMMessage(role="user", content=render_context_pack(pack))

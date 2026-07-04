@@ -31,13 +31,14 @@ from .ledger import (
 from .source_priority import SourcePriority
 
 # --- Durable kind matrix (codified so it cannot silently drift) ----------------
-# 9 durable SINGLETONS (exactly one canonical file each). SUMMARY is intentionally
+# 11 durable SINGLETONS (exactly one canonical file each). SUMMARY is intentionally
 # NOT here: it is a multi-instance, on-demand kind (per-resolved-range summaries
 # created in CXT-3, referenced by ArtifactMemoryRef.rel_path).
 _MD_KINDS: frozenset[ArtifactMemoryKind] = frozenset(
     {
         ArtifactMemoryKind.GOAL,
         ArtifactMemoryKind.TODO,
+        ArtifactMemoryKind.DESIGN_DIRECTION,
         ArtifactMemoryKind.DECISIONS,
         ArtifactMemoryKind.ASSUMPTIONS,
     }
@@ -190,6 +191,12 @@ class ArtifactMemoryStore:
     async def read_todo(self) -> str | None:
         return await self.read_markdown(ArtifactMemoryKind.TODO)
 
+    async def write_design_direction(self, markdown: str) -> ArtifactMemoryRef:
+        return await self.write_markdown(ArtifactMemoryKind.DESIGN_DIRECTION, markdown)
+
+    async def read_design_direction(self) -> str | None:
+        return await self.read_markdown(ArtifactMemoryKind.DESIGN_DIRECTION)
+
     async def write_summary(self, range_id: str, summary: str) -> ArtifactMemoryRef:
         """Write a per-range durable summary under ``.disco/context/summary``."""
         safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", range_id).strip("._")
@@ -329,7 +336,7 @@ class ArtifactMemoryStore:
 
     # --- lifecycle -------------------------------------------------------------
     async def ensure_initialized(self) -> None:
-        """Create any of the 10 durable singleton files that are absent, with safe
+        """Create any of the 11 durable singleton files that are absent, with safe
         defaults. Existing files are left untouched."""
         for kind in sorted(_MD_KINDS, key=lambda k: k.value):
             if await self._read_opt(self.path_for(kind)) is None:
@@ -396,7 +403,11 @@ class ArtifactMemoryStore:
             if await self.read_markdown(kind) is not None:
                 retained.append(self._ref(kind, self.path_for(kind)))
 
-        todo_ref = self._ref(ArtifactMemoryKind.TODO, self.path_for(ArtifactMemoryKind.TODO)) if todo is not None else None
+        todo_ref = (
+            self._ref(ArtifactMemoryKind.TODO, self.path_for(ArtifactMemoryKind.TODO))
+            if todo is not None
+            else None
+        )
 
         ledger = ContextLedger(
             conversation_id=conversation_id,

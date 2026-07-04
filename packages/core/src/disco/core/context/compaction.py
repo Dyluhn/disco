@@ -29,6 +29,7 @@ from .source_priority import SourceKind
 _NEVER_COMPACT: tuple[SourceKind, ...] = (
     SourceKind.GOAL,
     SourceKind.CONTRACT,
+    SourceKind.DESIGN_DIRECTION,
     SourceKind.VERIFIER_FAILURE,
     SourceKind.DIRECT_EDIT,
 )

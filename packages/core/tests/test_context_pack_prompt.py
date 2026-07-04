@@ -83,13 +83,18 @@ def test_base_ledger_resources_preserved() -> None:
 # --- render_context_pack ------------------------------------------------------
 def test_render_included_once_and_no_history() -> None:
     events = [_user("ignored raw history"), _plan("ship the page", revision=1)]
-    out = render_context_pack(build_context_pack(events, todo_text="- [ ] hero"))
+    design = "## Design Direction: Dark Glass\n- ID: dark-glass"
+    out = render_context_pack(
+        build_context_pack(events, todo_text="- [ ] hero", design_direction=design)
+    )
     assert out.count("<context-pack>") == 1
     assert out.count("</context-pack>") == 1
     assert out.startswith("<context-pack>") and out.endswith("</context-pack>")
     # the pack carries the GOAL, not the raw user-history line
     assert "ship the page" in out
     assert "ignored raw history" not in out
+    assert out.count("## Design Direction: Dark Glass") == 1
+    assert out.count("- ID: dark-glass") == 1
 
 
 def test_render_is_byte_stable() -> None:
@@ -116,6 +121,7 @@ def test_render_omits_empty_sections() -> None:
     assert "Unresolved verifier failures" not in out
     assert "Resources:" not in out
     assert "Todo:" not in out
+    assert "Design Direction:" not in out
 
 
 def test_render_caps_via_policy() -> None:

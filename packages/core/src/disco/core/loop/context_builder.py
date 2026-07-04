@@ -48,6 +48,7 @@ def build_context_pack(
     base_ledger: ContextLedger | None = None,
     policy: CompactionPolicy | None = None,
     todo_text: str | None = None,
+    design_direction: str | None = None,
     failures: tuple[VerifierFailureRef, ...] | None = None,
     allowed_next_actions: tuple[str, ...] = (),
 ) -> ContextPack:
@@ -81,7 +82,11 @@ def build_context_pack(
         }
     )
     return ContextPack.from_ledger(
-        merged, policy=policy, todo_text=todo_text, allowed_next_actions=allowed_next_actions
+        merged,
+        policy=policy,
+        todo_text=todo_text,
+        design_direction=design_direction,
+        allowed_next_actions=allowed_next_actions,
     )
 
 
@@ -121,6 +126,8 @@ def render_context_pack(pack: ContextPack, *, priority: SourcePriority | None = 
         sections[SourceKind.GOAL] = [head]
     if pack.active_contract:
         sections[SourceKind.CONTRACT] = [f"Contract: {pack.active_contract}"]
+    if pack.design_direction:
+        sections[SourceKind.DESIGN_DIRECTION] = pack.design_direction.splitlines()
     if pack.current_todo:
         sections[SourceKind.TODO] = ["Todo:", pack.current_todo]
     if pack.latest_failures:

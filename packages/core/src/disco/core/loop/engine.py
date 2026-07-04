@@ -141,6 +141,44 @@ _DEFAULT_VETO_FEEDBACK = (
 # default). The policy is a frozen dataclass — safe to share as a singleton.
 _DEFAULT_MODEL_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
 
+_DESIGN_DIRECTION_SITE_APP_HINTS: tuple[str, ...] = (
+    "site",
+    "website",
+    "web site",
+    "landing page",
+    "homepage",
+    "web page",
+    "static page",
+    "app",
+    "web app",
+    "application",
+    "dashboard",
+    "portal",
+    "prototype",
+    "pwa",
+    "mobile",
+    "ios",
+    "android",
+    "saas",
+    "e commerce",
+    "store",
+    "shop",
+    "portfolio",
+    "restaurant",
+    "event page",
+    "form",
+)
+_DESIGN_DIRECTION_DECK_HINTS: tuple[str, ...] = (
+    "deck",
+    "slide",
+    "slides",
+    "slide deck",
+    "presentation",
+    "powerpoint",
+    "pptx",
+    "keynote",
+)
+
 # C6 — recitation cadence (Manus telemetry: re-emitting the plan/objective
 # tail-recap on every iteration wastes ~1/3 of actions with no behavior
 # change). Borrow the cadence math from smolagents' `planning_interval` ONLY:
@@ -268,6 +306,37 @@ def _planning_tool_refusal_message(
             "\nThe next turn will offer only `submit_plan` + `file_read`."
         )
     return f"<system-reminder>\n{detail}\n</system-reminder>"
+
+
+def _hint_text(text: str) -> str:
+    return " " + " ".join(
+        "".join(ch.lower() if ch.isalnum() else " " for ch in text).split()
+    ) + " "
+
+
+def _has_any_hint(text: str, hints: tuple[str, ...]) -> bool:
+    haystack = _hint_text(text)
+    return any(_hint_text(hint) in haystack for hint in hints)
+
+
+def _design_direction_brief_text(plan: PlanEvent, events: list[Event]) -> str | None:
+    parts: list[str] = [plan.summary, plan.context or ""]
+    for step in plan.steps:
+        parts.append(step.title)
+        detail = (getattr(step, "detail", "") or "").strip()
+        if detail:
+            parts.append(detail)
+    for event in events:
+        if isinstance(event, MessageEvent) and event.source == EventSource.USER:
+            content = event.message.content
+            if isinstance(content, str):
+                parts.append(content)
+    brief = "\n".join(part for part in parts if part.strip())
+    if not brief or _has_any_hint(brief, _DESIGN_DIRECTION_DECK_HINTS):
+        return None
+    if _has_any_hint(brief, _DESIGN_DIRECTION_SITE_APP_HINTS):
+        return brief
+    return None
 
 # _EXECUTION_NUDGE moved to loop/finish.py (with the execution-nudge gate).
 
@@ -2072,16 +2141,22 @@ class AgentLoop:
             return
         try:
             from ..context import ArtifactMemoryStore
+            from ..design import pick_direction, render_design_direction
             from ..view import _latest_plan
             from .context_builder import render_plan_as_todo_markdown
 
-            plan = _latest_plan(await self._events())
+            events = await self._events()
+            plan = _latest_plan(events)
             if plan is None or not getattr(plan, "steps", None):
                 return
             store = ArtifactMemoryStore(sbx)
             if plan.summary:
                 await store.write_goal(plan.summary)
             await store.seed_todo(render_plan_as_todo_markdown(plan))
+            brief = _design_direction_brief_text(plan, events)
+            if brief:
+                direction = pick_direction(brief, self.conversation_id)
+                await store.write_design_direction(render_design_direction(direction))
         except Exception:
             _LOG.warning(
                 "CXT-7 context seed from plan failed for %s", self.conversation_id, exc_info=True

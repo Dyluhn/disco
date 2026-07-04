@@ -17,6 +17,7 @@ class SourceKind(str, Enum):
 
     GOAL = "goal"
     CONTRACT = "contract"
+    DESIGN_DIRECTION = "design_direction"
     TODO = "todo"
     VERIFIER_FAILURE = "verifier_failure"
     DIRECT_EDIT = "direct_edit"
@@ -27,12 +28,13 @@ class SourceKind(str, Enum):
     HISTORY = "history"
 
 
-# The documented default precedence, most-important first. Goal/contract anchor
-# the run; an unresolved verifier failure is the most actionable thing the model
-# can do next, so it ranks above the live todo. Raw history is last.
+# The documented default precedence, most-important first. Goal/contract/design
+# anchor the run; an unresolved verifier failure is the most actionable thing
+# the model can do next, so it ranks above the live todo. Raw history is last.
 _DEFAULT_ORDER: tuple[SourceKind, ...] = (
     SourceKind.GOAL,
     SourceKind.CONTRACT,
+    SourceKind.DESIGN_DIRECTION,
     SourceKind.VERIFIER_FAILURE,
     SourceKind.TODO,
     SourceKind.DIRECT_EDIT,

@@ -103,6 +103,7 @@ async def test_context_pack_flag_on_prefix_and_narrow_recitation(monkeypatch) ->
     fs = _MemFS()
     store = ArtifactMemoryStore(fs)
     await store.seed_todo("- [ ] 1. Add auth")
+    await store.write_design_direction("## Design Direction: Dark Glass\n- ID: dark-glass")
     await store.record_verifier_failures(
         (
             VerifierFailureRef(
@@ -123,6 +124,7 @@ async def test_context_pack_flag_on_prefix_and_narrow_recitation(monkeypatch) ->
     pack_idx = next(i for i, c in enumerate(contents) if c.startswith("<context-pack>"))
     assert pack_idx == 1
     assert "Goal (v2): Ship newest" in contents[pack_idx]
+    assert contents[pack_idx].count("## Design Direction: Dark Glass") == 1
     assert "Todo:" in contents[pack_idx]
     assert "blank render" in contents[pack_idx]
     assert blob.count("Ship newest") == 1

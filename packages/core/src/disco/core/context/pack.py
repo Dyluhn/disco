@@ -40,6 +40,7 @@ class ContextPack(BaseModel):
     active_contract: str | None = None
     current_version: int = 0
     current_todo: str | None = None
+    design_direction: str | None = None
     todo_ref: ArtifactMemoryRef | None = None
     latest_failures: tuple[VerifierFailureRef, ...] = ()
     unresolved_comments: tuple[str, ...] = ()
@@ -56,8 +57,14 @@ class ContextPack(BaseModel):
         policy: CompactionPolicy | None = None,
         allowed_next_actions: tuple[str, ...] = (),
         todo_text: str | None = None,
+        design_direction: str | None = None,
     ) -> ContextPack:
         policy = policy or CompactionPolicy.default()
+        direction_text = (
+            design_direction.strip()
+            if design_direction is not None and design_direction.strip()
+            else None
+        )
 
         # Only UNRESOLVED failures reach the model; never-compact keeps them all.
         unresolved_failures = tuple(
@@ -68,6 +75,7 @@ class ContextPack(BaseModel):
             active_contract=ledger.active_contract,
             current_version=ledger.current_version,
             current_todo=todo_text,
+            design_direction=direction_text,
             todo_ref=ledger.todo_ref,
             latest_failures=_cap(unresolved_failures, SourceKind.VERIFIER_FAILURE, policy),
             unresolved_comments=_cap(ledger.unresolved_comments, SourceKind.COMMENT, policy),

@@ -1790,6 +1790,7 @@ class MetaToolHandlers:
             # C1c: arm the DoD gate (write-once → a mid-run revision's re-arm is swallowed;
             # this is the hook point where the monotonic steer-scope extension will land).
             await self._loop._arm_dod_from_plan()
+            await self._loop._seed_context_from_plan()
             return Disp.CONTINUE
         await self._loop._emit(
             StatusEvent(

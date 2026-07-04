@@ -44,9 +44,9 @@ def _store() -> tuple[ArtifactMemoryStore, MemFS]:
 
 
 # --- matrix guard -------------------------------------------------------------
-def test_durable_kind_matrix_is_ten_singletons() -> None:
+def test_durable_kind_matrix_is_eleven_singletons() -> None:
     assert _MD_KINDS | _JSON_KINDS == _SINGLETON_KINDS
-    assert len(_SINGLETON_KINDS) == 10  # [REL-2a] +artifact_manifest
+    assert len(_SINGLETON_KINDS) == 11  # [REL-2a] +artifact_manifest +design_direction
     assert not (_MD_KINDS & _JSON_KINDS)  # disjoint
     # SUMMARY is intentionally excluded (multi-instance, on-demand)
     assert ArtifactMemoryKind.SUMMARY not in _SINGLETON_KINDS
@@ -65,12 +65,12 @@ async def test_writes_create_files_with_correct_paths() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ensure_initialized_creates_all_ten() -> None:
+async def test_ensure_initialized_creates_all_eleven() -> None:
     store, fs = _store()
     await store.ensure_initialized()
     paths = {store.path_for(k) for k in _SINGLETON_KINDS}
     assert paths <= set(fs.files)
-    assert len(paths) == 10  # [REL-2a] +artifact_manifest
+    assert len(paths) == 11  # [REL-2a] +artifact_manifest +design_direction
 
 
 @pytest.mark.asyncio
@@ -87,6 +87,7 @@ async def test_missing_files_return_safe_defaults() -> None:
     store, _ = _store()
     assert await store.read_goal() is None
     assert await store.read_todo() is None
+    assert await store.read_design_direction() is None
     assert await store.read_resources() == ()
     assert await store.read_direct_edits() == ()
     assert await store.read_verifier_failures() == ()
@@ -123,7 +124,10 @@ async def test_full_roundtrip_reconstruct() -> None:
     await store.seed_todo("- [ ] do it")
     await store.write_markdown(ArtifactMemoryKind.DECISIONS, "chose static site")
     await store.write_markdown(ArtifactMemoryKind.ASSUMPTIONS, "no backend needed")
-    failures = (VerifierFailureRef(kind="console_error", message="boom", severity=Severity.BLOCKER),)
+    await store.write_design_direction("## Design Direction: Dark Glass")
+    failures = (
+        VerifierFailureRef(kind="console_error", message="boom", severity=Severity.BLOCKER),
+    )
     resources = (ResourceRef(rel_path="logo.svg", source="gh://o/r/logo.svg", license="MIT"),)
     edits = (DirectEditRef(target_id="hero", rel_path="index.html", kind=DirectEditKind.TEXT),)
     comments = ("needs real testimonials",)
@@ -140,6 +144,7 @@ async def test_full_roundtrip_reconstruct() -> None:
     assert led.workspace_root == "/ws/conv_1"
     assert led.active_goal == "goal text"
     assert led.todo_ref is not None and led.todo_ref.rel_path.endswith("todo.md")
+    assert await store.read_design_direction() == "## Design Direction: Dark Glass"
     assert led.latest_verifier_failures == failures
     assert led.resource_manifest == resources
     assert led.direct_edits == edits

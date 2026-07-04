@@ -19,6 +19,7 @@ class ArtifactMemoryKind(str, Enum):
 
     GOAL = "current_goal"
     TODO = "todo"
+    DESIGN_DIRECTION = "design_direction"
     DECISIONS = "decisions"
     ASSUMPTIONS = "assumptions"
     VERIFIER_FAILURES = "verifier_failures"
