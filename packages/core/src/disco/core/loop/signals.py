@@ -170,6 +170,16 @@ _SYNTHETIC_FINISH_RESET_STATUSES = frozenset(
 )
 
 
+def successful_action_ids(events: list[Event]) -> set[str]:
+    """Public alias for the paired-success scan (runtime ladder guards use it)."""
+    return _successful_action_ids(events)
+
+
+def is_successful_productive_action(event: Event, successful: set[str]) -> bool:
+    """Public alias — True iff `event` is a successful PRODUCTIVE action."""
+    return _is_successful_productive_action(event, successful)
+
+
 def actionless_pause_count_current_execution_segment(events: list[Event]) -> int:
     """REL-RC-P: consecutive actionless PAUSE landings in the current execution
     segment.

@@ -625,3 +625,68 @@ async def test_http_resume_finished_returns_409():
     detail = body.get("detail", body)
     assert detail["ok"] is False
     assert detail["reason"] == "conversation_finished"
+
+
+async def _append_productive_work(store: SqliteEventStore, cid: str) -> None:
+    tool_call = ToolCall(tool_name="file_append", arguments={"path": "index.html", "content": "x"})
+    action = await store.append(
+        cid, ActionEvent(thought="progress", tool_call=tool_call)
+    )
+    await store.append(
+        cid,
+        ObservationEvent(
+            action_id=action.id,
+            tool_result=ToolResult(
+                call_id=tool_call.call_id,
+                tool_name="file_append",
+                success=True,
+                content="ok",
+            ),
+        ),
+    )
+
+
+async def test_auto_resume_fires_again_after_productive_work_between_pauses(monkeypatch):
+    """Live-caught (20-build soak): pause -> nudge -> SUCCESSFUL work -> pause
+    again died PAUSED — the attempted-guard scanned the whole segment while the
+    pause counter reset on productive work. Progress opens a NEW window: the
+    nudge must fire again (bounded by the segment cap)."""
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = f"{CID}-rewindow"
+    await _seed_first_actionless_pause(store, cid)
+    rt.set_surface(cid, "build")
+    rt.set_autonomous(cid, True)
+    resume = AsyncMock(return_value={"ok": True, "status": "RUNNING"})
+    monkeypatch.setattr(rt, "resume_conversation", resume)
+
+    await rt._finalize_clean_return(cid)  # pause #1 -> nudge #1
+    assert resume.await_count == 1
+
+    # the model resumes, does REAL work, then pauses again (the live trail)
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"))
+    await _append_productive_work(store, cid)
+    await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
+
+    await rt._finalize_clean_return(cid)  # NEW window -> nudge #2 must fire
+    assert resume.await_count == 2
+
+    events = await store.get_events(cid)
+    nudges = [
+        e for e in events
+        if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
+        and e.message is not None and "AUTO-RESUME-ONCE(actionless)" in (e.message.content or "")
+    ]
+    assert len(nudges) == 2
+
+    # cap: after 3 total nudges, a 4th window gets nothing
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"))
+    await _append_productive_work(store, cid)
+    await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
+    await rt._finalize_clean_return(cid)  # nudge #3
+    assert resume.await_count == 3
+    await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING, detail="resumed"))
+    await _append_productive_work(store, cid)
+    await store.append(cid, StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
+    await rt._finalize_clean_return(cid)  # capped — no 4th
+    assert resume.await_count == 3

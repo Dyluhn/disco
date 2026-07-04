@@ -2419,14 +2419,43 @@ class ConversationRuntime:
                 return event
         return None
 
+    # Live-caught (20-build soak, 2026-07-03): two builds paused, got the nudge,
+    # did REAL work (successful file_append), paused again — and died PAUSED.
+    # The pause COUNT resets on productive work (progress ⇒ a fresh window), but
+    # this guard scanned the WHOLE segment, saw the old marker, and refused a
+    # second nudge while the count==2 synthetic-finish branch saw count==1.
+    # Window semantics must MATCH the counter: a successful productive action
+    # consumes the marker (progress proves nudging works on this build). A hard
+    # per-segment cap keeps the ladder bounded (the cap-3 valve convention).
+    _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP = 3
+
     @staticmethod
     def _actionless_auto_resume_attempted(events: list[Event]) -> bool:
-        return any(
-            isinstance(event, MessageEvent)
+        """True iff the nudge marker exists in the CURRENT pause window — i.e.
+        after the latest successful productive action (mirrors
+        signals.actionless_pause_count_current_execution_segment)."""
+        successful = signals.successful_action_ids(events)
+        for event in reversed(events):
+            if signals.is_successful_productive_action(event, successful):
+                return False
+            if (
+                isinstance(event, MessageEvent)
+                and event.source == EventSource.ENVIRONMENT
+                and event.message is not None
+                and _ACTIONLESS_AUTO_RESUME_MARKER in (event.message.content or "")
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _actionless_auto_resume_total(events: list[Event]) -> int:
+        return sum(
+            1
+            for event in events
+            if isinstance(event, MessageEvent)
             and event.source == EventSource.ENVIRONMENT
             and event.message is not None
             and _ACTIONLESS_AUTO_RESUME_MARKER in (event.message.content or "")
-            for event in events
         )
 
     async def _maybe_auto_resume_actionless_pause(
@@ -2472,6 +2501,11 @@ class ConversationRuntime:
         pause_count = signals.actionless_pause_count_current_execution_segment(events)
         if pause_count == 1:
             if self._actionless_auto_resume_attempted(events):
+                return False
+            if (
+                self._actionless_auto_resume_total(events)
+                >= self._ACTIONLESS_AUTO_RESUME_SEGMENT_CAP
+            ):
                 return False
             await self._store.append(
                 conversation_id,
