@@ -1046,7 +1046,7 @@ class _FinishGateProto:
 
 
 
-__all__ = [
+__all__ = [  # pyright: ignore[reportUnsupportedDunderAll]
     name
     for name in globals()
     if not name.startswith("__") and name not in {"annotations"}

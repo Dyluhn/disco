@@ -52,6 +52,7 @@ from ..llm import (
 from ..state import ConversationState
 from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View
+from ..workflow import WorkflowRun
 from . import signals, view_render
 from .boundaries import (
     Agent,
@@ -591,6 +592,7 @@ class AgentLoop:
         host_verify_authoritative: bool | None = None,
         verifier_judge: VerifierJudge | None = None,
         verifier_judge_timeout_s: float = 30.0,
+        workflow_run: WorkflowRun | None = None,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -601,6 +603,7 @@ class AgentLoop:
         self._autonomous = autonomous
         # P6 — the contract finalizer alias for `finish` (None when no contract governs).
         self._finish_alias = finish_alias
+        self._workflow_run = workflow_run
         # Execution policy (T1): the SINGLE source of truth for model-tier execution.
         # `_assist` is a read-only property delegating to `_model_policy.assist`.
         self._model_policy = model_policy
@@ -639,6 +642,7 @@ class AgentLoop:
                                             # at module-level so tests can pin it.
         self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
         self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
+        self._workflow_output_contract_refusals = 0
         # C20 — `delegate_explore` count, per run segment. Reset in run() so a
         # resume/steer gets a fresh budget (mirror `_finish_verify_refusals`).
         # The cap is module-level so tests can pin it. The cap bounds the
@@ -1034,6 +1038,12 @@ class AgentLoop:
         # The plan tool itself is NEVER executed.
         if self.mode == OperatingMode.PLANNING:
             tc = step.tool_call
+            if (
+                tc is not None
+                and self._workflow_run is not None
+                and tc.tool_name in ("skip", "needs_input")
+            ):
+                return Disp.FALLTHROUGH
             if tc is not None and tc.tool_name == self._plan_tool:
                 self._plan_explore_reads = 0  # (B2/B6) a plan was proposed
                 plan = self._plan_from_args(tc.arguments, events)
@@ -1360,6 +1370,7 @@ class AgentLoop:
         self._invisible_steps = 0
         self._finish_verify_refusals = 0  # fresh segment → fresh verify-cap streak
         self._finish_verify_strips = 0
+        self._workflow_output_contract_refusals = 0
         # C1c — fresh segment → fresh DoD-refusal streak (telemetry; the gate
         # has no cap, but a resume/steer should not carry a streak across).
         self._dod_refusals = 0
@@ -1651,6 +1662,15 @@ class AgentLoop:
                     if await self._meta.handle_serve(step, events) is Disp.HALT:
                         return await self.get_state()
                     continue
+                if (
+                    step.tool_call is not None
+                    and step.tool_call.tool_name in ("skip", "needs_input")
+                ):
+                    disp = await self._meta.handle_workflow_control(step, events)
+                    if disp is Disp.CONTINUE:
+                        continue
+                    if disp is Disp.HALT:
+                        return await self.get_state()
                 if (
                     step.tool_call is not None
                     and step.tool_call.tool_name == "delegate_explore"

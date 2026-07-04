@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import cast
+
 from .common import *
 from .common import (
+    _FINISH_VERIFY_CAP,
+    _LOG,
     _PREVIEW_PORTS,
     _VERIFY_MARKER_PREFIX,
-    _FinishGateProto,
-    _LOG,
     _artifact_record_kind,
     _bounded_verifier_check_results,
     _browser_content_meaningful,
     _browser_unavailable_observed,
     _browser_verified,
     _deliverable_event_paths,
+    _FinishGateProto,
     _is_web_deliverable,
     _last_productive_seq,
     _latest_app_deliverable_event,
@@ -33,6 +37,21 @@ from .common import (
     _screenshot_from_verdict,
     _vision_mode,
 )
+
+
+class _WorkflowPathParams(dict[str, object]):
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _render_workflow_output_path(template: str, params: dict[str, object]) -> str:
+    values = _WorkflowPathParams(
+        {key: "" if value is None else value for key, value in params.items()}
+    )
+    try:
+        return template.format_map(values)
+    except (IndexError, KeyError, ValueError):
+        return template
 
 
 class _FinishVerifyMixin(_FinishGateProto):
@@ -1586,6 +1605,134 @@ class _ExportRenderGateMixin(_FinishGateProto):
 
 
 class _RenderVerifyGateMixin(_FinishGateProto):
+    async def _workflow_output_path_exists(self, path: str) -> tuple[bool, str]:
+        safe = _safe_deliverable_file_path(path)
+        if safe is None:
+            return False, path
+
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        file_exists = getattr(sbx, "file_exists", None) if sbx is not None else None
+        if callable(file_exists):
+            file_exists_fn = cast(Callable[[str], Awaitable[object]], file_exists)
+            try:
+                return bool(await file_exists_fn(safe)), safe
+            except Exception as exc:  # noqa: BLE001 — cannot confirm output existence
+                _LOG.warning(
+                    "workflow output existence check failed for %s:%s: %s",
+                    self._loop.conversation_id,
+                    safe,
+                    exc,
+                )
+                return False, safe
+
+        workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
+        if not workspace:
+            return False, safe
+
+        from pathlib import Path
+
+        try:
+            root = Path(workspace).resolve()
+            candidate = (root / safe).resolve()
+            root_s = str(root)
+            cand_s = str(candidate)
+            if not (cand_s == root_s or cand_s.startswith(root_s.rstrip("/") + "/")):
+                return False, safe
+            return candidate.is_file(), safe
+        except OSError as exc:
+            _LOG.warning(
+                "workflow output existence check failed for %s:%s from workspace: %s",
+                self._loop.conversation_id,
+                safe,
+                exc,
+            )
+            return False, safe
+
+    async def gate_workflow_output_contract(
+        self, step: AgentStep, events: list[Event]  # noqa: ARG002
+    ) -> Disp:
+        workflow_run = getattr(self._loop, "_workflow_run", None)
+        if workflow_run is None:
+            return Disp.FALLTHROUGH
+        contract = getattr(getattr(workflow_run, "definition", None), "output_contract", None)
+        if contract is None:
+            return Disp.FALLTHROUGH
+
+        params = getattr(workflow_run, "params", {})
+        if not isinstance(params, dict):
+            params = {}
+        output_path = _render_workflow_output_path(contract.path_template, params)
+        exists, checked_path = await self._workflow_output_path_exists(output_path)
+        meta = {
+            "workflow_run_id": str(getattr(workflow_run, "run_id", "")),
+            "workflow_output_path": checked_path,
+            "workflow_output_format": contract.format,
+        }
+        if exists:
+            self._loop._workflow_output_contract_refusals = 0
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="workflow_output_contract_passed",
+                    meta={**meta, "verdict": "pass"},
+                )
+            )
+            return Disp.FALLTHROUGH
+
+        if self._loop._workflow_output_contract_refusals >= _FINISH_VERIFY_CAP:
+            await self._loop._emit(
+                StatusEvent(
+                    status=ConversationStatus.RUNNING,
+                    detail="workflow_output_contract_release",
+                    meta={**meta, "verdict": "release"},
+                )
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "⚠ Finished despite the workflow output contract not being "
+                            f"satisfied after {self._loop._workflow_output_contract_refusals} "
+                            f"refusals. Expected `{checked_path}` ({contract.format}) in the "
+                            "workspace. The workflow output is missing; note this clearly in "
+                            "the summary."
+                        ),
+                    ),
+                )
+            )
+            self._loop._workflow_output_contract_refusals = 0
+            return Disp.FALLTHROUGH
+
+        self._loop._workflow_output_contract_refusals += 1
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.RUNNING,
+                detail="workflow_output_contract_refused",
+                meta={**meta, "verdict": "fail"},
+            )
+        )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=(
+                        "<system-reminder>\n"
+                        "You called finish, but this workflow definition has an "
+                        "output_contract and the contracted output path does not exist "
+                        f"in the workspace: `{checked_path}` ({contract.format}). "
+                        "Create that file at exactly that workspace-relative path, then "
+                        "finish again. If the workflow should not produce output, use "
+                        "`skip` with a reason instead of `finish`.\n"
+                        "</system-reminder>"
+                    ),
+                ),
+            )
+        )
+        return Disp.CONTINUE
+
     async def run_finish_verify_gates(self, step: AgentStep, events: list[Event]) -> Disp:
         """The render-verify gate sequence shared by EVERY finish path: host+browser
         app-verify (order depends on the authoritative flag) THEN the P10 export-render
@@ -1600,6 +1747,11 @@ class _RenderVerifyGateMixin(_FinishGateProto):
         the P10 check). Returns CONTINUE (a gate refused — caller must not finish),
         HALT (a gate landed the terminal status / loop-breaker), or FALLTHROUGH (all
         render-verify gates clear)."""
+        disp = await self.gate_workflow_output_contract(step, events)
+        if disp is Disp.CONTINUE or disp is Disp.HALT:
+            return disp
+        events = await self._loop._events()
+
         if self._host_verify_authoritative():
             disp = await self.gate_host_verify(step, events)
             if disp is Disp.CONTINUE or disp is Disp.HALT:

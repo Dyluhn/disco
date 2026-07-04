@@ -365,6 +365,7 @@ class Valve:
         guidance: str = "",
         legacy_status: ConversationStatus = ConversationStatus.STUCK,
         legacy_detail: str | None = None,
+        required_explanation: str = "",
     ) -> None:
         """Explain a breaker halt and park at the free-form user-question gate.
 
@@ -409,6 +410,9 @@ class Valve:
             reason=clean_reason,
             guidance=guidance,
         )
+        required = required_explanation.strip()
+        if required and required not in content:
+            content = f"{content.strip()}\n\nRequired action: {required}"
         q_event = MessageEvent(
             source=EventSource.AGENT,
             message=LLMMessage(role="assistant", content=content),
@@ -434,6 +438,61 @@ class Valve:
                 detail=q_event.id,
                 meta=meta,
             )
+        )
+
+    async def land_terminal_with_explanation(
+        self,
+        *,
+        reason: str,
+        guidance: str = "",
+        status: ConversationStatus,
+        detail: str,
+        meta: dict[str, str | bool] | None = None,
+        required_explanation: str = "",
+    ) -> None:
+        """Emit the same explanation shape as a blocked landing, then conclude.
+
+        This is the terminal half of the two-flavor blocked lander factored as a
+        hook for workflow controls that must not park on an open question.
+        """
+
+        clean_reason = (reason or detail or status.value).strip()
+        landing_meta = self._blocked_meta(
+            reason=clean_reason,
+            legacy_status=status,
+            legacy_detail=detail,
+        )
+        if meta:
+            landing_meta.update(meta)
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=self._blocked_prompt(
+                        reason=clean_reason,
+                        guidance=guidance,
+                    ),
+                ),
+                meta=landing_meta,
+            )
+        )
+        content = await self._blocked_model_message(
+            reason=clean_reason,
+            guidance=guidance,
+        )
+        required = required_explanation.strip()
+        if required and required not in content:
+            content = f"{content.strip()}\n\nRequired action: {required}"
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.AGENT,
+                message=LLMMessage(role="assistant", content=content),
+                meta=landing_meta,
+            )
+        )
+        await self._loop._emit(
+            StatusEvent(status=status, detail=detail, meta=landing_meta)
         )
 
     @staticmethod
@@ -1498,6 +1557,49 @@ class MetaToolHandlers:
         if await self._loop._post_noop_valve() is Disp.HALT:
             return Disp.HALT
         return Disp.CONTINUE
+
+    async def handle_workflow_control(self, step: AgentStep, events: list[Event]) -> Disp:
+        assert step.tool_call is not None  # caller dispatches by workflow-control name
+        workflow_run = getattr(self._loop, "_workflow_run", None)
+        if workflow_run is None:
+            return Disp.FALLTHROUGH
+
+        name = step.tool_call.tool_name
+        args = step.tool_call.arguments or {}
+        meta = {
+            "workflow_control": name,
+            "workflow_run_id": getattr(workflow_run, "run_id", ""),
+        }
+        if name == "skip":
+            reason = str(args.get("reason") or "").strip() or "workflow skipped"
+            await self._loop._valve.land_terminal_with_explanation(
+                reason=reason,
+                guidance=(
+                    "The workflow control tool `skip` was called. The run is "
+                    "ending honestly without producing the contracted output."
+                ),
+                status=ConversationStatus.FINISHED,
+                detail="workflow_skipped",
+                meta=meta,
+            )
+            return Disp.HALT
+
+        if name == "needs_input":
+            reason = str(args.get("reason") or "").strip() or "workflow needs input"
+            required_action = str(args.get("required_action") or "").strip()
+            if not required_action:
+                required_action = "Provide the missing workflow input or approval."
+            guidance = f"{reason}\nRequired action: {required_action}"
+            await self._loop._valve.land_blocked(
+                reason=reason,
+                guidance=guidance,
+                legacy_status=ConversationStatus.PAUSED,
+                legacy_detail="workflow_needs_input",
+                required_explanation=required_action,
+            )
+            return Disp.HALT
+
+        return Disp.FALLTHROUGH
 
     async def handle_noop_step(self, step: AgentStep, events: list[Event]) -> Disp:
         if step.thought.strip():
