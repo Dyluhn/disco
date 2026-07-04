@@ -250,6 +250,313 @@ def _coerce_patch_ops(patch: object) -> "list[dict[str, Any]]":
     return out
 
 
+async def _editable_sidecar(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    path: str,
+) -> tuple[str, str, ConversationRuntime]:
+    base = _jail_base(path)
+    authored_rel = f"{base}.authored.json"
+    if runtime is None:
+        raise HTTPException(status_code=404)
+    if authored_rel not in await _declared_artifacts(store, conversation_id):
+        raise HTTPException(status_code=404)
+    if not await _sidecar_is_current(store, conversation_id, base):
+        raise HTTPException(status_code=404)
+    return base, authored_rel, runtime
+
+
+async def _read_authored_json(
+    runtime: ConversationRuntime, conversation_id: str, authored_rel: str
+) -> Any:
+    raw = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
+    if raw is None:
+        raise HTTPException(status_code=404)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=404) from exc
+
+
+async def _read_authored_deck(
+    runtime: ConversationRuntime, conversation_id: str, authored_rel: str
+) -> Any:
+    from disco.tools.builtin._deck_schema import AuthoredDeck
+
+    authored_json = await _read_authored_json(runtime, conversation_id, authored_rel)
+    try:
+        return AuthoredDeck.model_validate(authored_json)
+    except Exception as exc:  # noqa: BLE001 — malformed sidecar → 404 (not editable)
+        raise HTTPException(status_code=404) from exc
+
+
+async def _lower_deck_with_direction_brand(
+    runtime: ConversationRuntime,
+    conversation_id: str,
+    base: str,
+    authored: Any,
+    *,
+    template: str | None,
+    brand_enabled: bool,
+) -> Any:
+    from disco.tools.builtin._deck_schema import lower_deck
+
+    image_assets = await _reload_deck_image_assets(runtime, conversation_id, base, authored)
+    brand = await _direction_brand_override(runtime, conversation_id)
+    brand_override = brand if brand_enabled else None
+    if template is None:
+        return lower_deck(
+            authored,
+            brand_override=brand_override,
+            image_assets=image_assets,
+        )
+    return lower_deck(
+        authored,
+        theme_override=template,
+        brand_override=brand_override,
+        image_assets=image_assets,
+    )
+
+
+async def _get_deck_for_editor_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    path: str,
+) -> dict[str, Any]:
+    from disco.tools.builtin._deck_schema import lower_deck_for_editor
+
+    _base, authored_rel, live_runtime = await _editable_sidecar(
+        store, runtime, conversation_id, path
+    )
+    authored = await _read_authored_deck(live_runtime, conversation_id, authored_rel)
+    lowered = lower_deck_for_editor(authored)
+    return dataclasses.asdict(lowered)
+
+
+async def _get_deck_render_inline_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    path: str,
+    template: str | None,
+) -> Any:
+    from disco.core.brand import is_valid_template
+    from disco.tools.builtin._pptx_render import render_html
+    from fastapi import Response
+
+    base, authored_rel, live_runtime = await _editable_sidecar(
+        store, runtime, conversation_id, path
+    )
+    if template is not None and not is_valid_template(template):
+        raise HTTPException(status_code=400, detail=f"Unknown template {template!r}")
+    authored = await _read_authored_deck(live_runtime, conversation_id, authored_rel)
+    brand_enabled = template is None or template == "disco-light"
+    try:
+        deck = await _lower_deck_with_direction_brand(
+            live_runtime,
+            conversation_id,
+            base,
+            authored,
+            template=template,
+            brand_enabled=brand_enabled,
+        )
+        html_str = render_html(deck)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422, detail={"reason": "render_failed", "message": str(exc)}
+        ) from exc
+
+    return Response(
+        content=html_str.encode("utf-8"),
+        media_type="text/html; charset=utf-8",
+    )
+
+
+async def _export_deck_with_template_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    path: str,
+    template: str,
+    fmt: str,
+) -> Any:
+    from disco.core.brand import is_valid_template
+    from disco.tools.builtin._pptx_render import render_html, render_pptx
+    from fastapi import Response
+
+    base, authored_rel, live_runtime = await _editable_sidecar(
+        store, runtime, conversation_id, path
+    )
+    if not is_valid_template(template):
+        raise HTTPException(status_code=400, detail=f"Unknown template {template!r}")
+    if fmt not in ("pptx", "html", "pdf"):
+        raise HTTPException(status_code=400, detail="fmt must be 'pptx', 'html', or 'pdf'")
+    if fmt == "pdf" and not _deck_pdf_capable(live_runtime):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "no_container_backend",
+                "message": (
+                    "Deck PDF export needs a container sandbox backend "
+                    "(gVisor / local / podman) — LibreOffice ships in the sandbox "
+                    "image, not on the host. The active backend is "
+                    f"{live_runtime.sandbox_backend_name() or 'none'}."
+                ),
+            },
+        )
+
+    authored = await _read_authored_deck(live_runtime, conversation_id, authored_rel)
+    try:
+        deck = await _lower_deck_with_direction_brand(
+            live_runtime,
+            conversation_id,
+            base,
+            authored,
+            template=template,
+            brand_enabled=template == "disco-light",
+        )
+        if fmt == "html":
+            body: bytes = render_html(deck).encode("utf-8")
+            media = "text/html; charset=utf-8"
+            ext = "html"
+        elif fmt == "pdf":
+            pptx_bytes = render_pptx(deck)
+            body = await _render_deck_pdf_in_sandbox(
+                live_runtime, pptx_bytes, owner_id=DEFAULT_OWNER_ID
+            )
+            media = "application/pdf"
+            ext = "pdf"
+        else:
+            body = render_pptx(deck)
+            media = (
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            )
+            ext = "pptx"
+    except HTTPException:
+        raise
+    except _SofficeUnavailable as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "pdf_unavailable", "message": str(exc)},
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422, detail={"reason": "render_failed", "message": str(exc)}
+        ) from exc
+
+    return Response(
+        content=body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{base}.{ext}"'},
+    )
+
+
+async def _deck_export_capabilities_response(
+    runtime: ConversationRuntime | None,
+) -> dict[str, Any]:
+    if runtime is None:
+        return {"pptx": True, "html": True, "pdf": False, "pdf_reason": "no_runtime"}
+    available, reason = await _deck_pdf_available(runtime, owner_id=DEFAULT_OWNER_ID)
+    return {"pptx": True, "html": True, "pdf": available, "pdf_reason": reason}
+
+
+async def _patch_deck_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+    body: DeckPatchBody,
+    path: str,
+) -> dict[str, Any]:
+    from disco.tools.builtin._deck_patch import PatchError, apply_patch
+    from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck_for_editor
+    from disco.tools.builtin._pptx_render import render_html, render_pptx
+
+    base, authored_rel, live_runtime = await _editable_sidecar(
+        store, runtime, conversation_id, path
+    )
+    html_rel = f"{base}.html"
+    pptx_rel = f"{base}.pptx"
+    authored_json = await _read_authored_json(live_runtime, conversation_id, authored_rel)
+
+    try:
+        patched_json = apply_patch(
+            authored_json,
+            list(_coerce_patch_ops(body.patch)),
+        )
+    except (PatchError, KeyError, IndexError, ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "patch_failed", "message": str(exc)},
+        ) from exc
+    try:
+        authored_deck = AuthoredDeck.model_validate(patched_json)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422,
+            detail={"reason": "schema_invalid", "message": str(exc)},
+        ) from exc
+
+    try:
+        deck = await _lower_deck_with_direction_brand(
+            live_runtime,
+            conversation_id,
+            base,
+            authored_deck,
+            template=None,
+            brand_enabled=True,
+        )
+        html_str = render_html(deck)
+        pptx_bytes = render_pptx(deck)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=422, detail={"reason": "render_failed", "message": str(exc)}
+        ) from exc
+
+    session = live_runtime.live_session(conversation_id)
+    if session is None:
+        raise HTTPException(status_code=409, detail={"reason": "no_live_sandbox"})
+
+    targets: list[tuple[str, bytes]] = [
+        (authored_rel, json.dumps(patched_json, indent=2).encode()),
+        (html_rel, html_str.encode()),
+        (pptx_rel, pptx_bytes),
+    ]
+    prior: dict[str, bytes | None] = {
+        rel: await _read_artifact_bytes(live_runtime, conversation_id, rel)
+        for rel, _ in targets
+    }
+    try:
+        for rel, data in targets:
+            await session.write_file(rel, data)
+    except Exception as exc:  # noqa: BLE001 — roll back, then surface a clean 500
+        for rel, _ in targets:
+            restore = prior[rel]
+            if restore is not None:
+                try:
+                    await session.write_file(rel, restore)
+                except Exception:  # noqa: BLE001 — best-effort restore
+                    pass
+        raise HTTPException(
+            status_code=500,
+            detail={"reason": "write_failed", "message": str(exc)},
+        ) from exc
+
+    pdf_rel = f"{base}.pdf"
+    pdf_stale = (
+        await _read_artifact_bytes(live_runtime, conversation_id, pdf_rel)
+    ) is not None
+    lowered = lower_deck_for_editor(authored_deck)
+    return {
+        "ok": True,
+        "lowered": dataclasses.asdict(lowered),
+        "html_file": html_rel,
+        "pptx_file": pptx_rel,
+        "pdf_stale": pdf_stale,
+    }
+
+
 def make_deck_editor_router(
     store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> APIRouter:
@@ -261,30 +568,7 @@ def make_deck_editor_router(
         path: str = Query(..., description="Deck base name (no extension)."),
     ) -> dict[str, Any]:
         """Return the LoweredDeck for `{path}.authored.json` (editor geometry)."""
-        from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck_for_editor
-
-        base = _jail_base(path)
-        authored_rel = f"{base}.authored.json"
-        if runtime is None:
-            raise HTTPException(status_code=404)
-        if authored_rel not in await _declared_artifacts(store, conversation_id):
-            raise HTTPException(status_code=404)
-        # The sidecar must be the CURRENT render of this base — not superseded by a
-        # later non-editable (Marp/fallback) regeneration. Else editing it would
-        # overwrite the newer deck behind a false affordance.
-        if not await _sidecar_is_current(store, conversation_id, base):
-            raise HTTPException(status_code=404)
-
-        data = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
-        if data is None:
-            raise HTTPException(status_code=404)
-        try:
-            authored = AuthoredDeck.model_validate(json.loads(data))
-        except Exception as exc:  # noqa: BLE001 — malformed sidecar → 404 (not editable)
-            raise HTTPException(status_code=404) from exc
-
-        lowered = lower_deck_for_editor(authored)
-        return dataclasses.asdict(lowered)
+        return await _get_deck_for_editor_response(store, runtime, conversation_id, path)
 
     @router.get("/conversations/{conversation_id}/deck/editor/render")
     async def get_deck_render_inline(
@@ -299,50 +583,8 @@ def make_deck_editor_router(
         inject it as an iframe ``srcDoc``. The live render reads the stored authored
         sidecar + optional theme override — same jailing and staleness guards as the
         export and PUT routes. Template defaults to the deck's own theme when omitted."""
-        from disco.core.brand import is_valid_template
-        from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
-        from disco.tools.builtin._pptx_render import render_html
-        from fastapi import Response
-
-        base = _jail_base(path)
-        authored_rel = f"{base}.authored.json"
-        if runtime is None:
-            raise HTTPException(status_code=404)
-        if authored_rel not in await _declared_artifacts(store, conversation_id):
-            raise HTTPException(status_code=404)
-        if not await _sidecar_is_current(store, conversation_id, base):
-            raise HTTPException(status_code=404)
-        if template is not None and not is_valid_template(template):
-            raise HTTPException(status_code=400, detail=f"Unknown template {template!r}")
-
-        raw = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
-        if raw is None:
-            raise HTTPException(status_code=404)
-        try:
-            authored = AuthoredDeck.model_validate(json.loads(raw))
-        except Exception as exc:  # noqa: BLE001 — malformed sidecar → 404
-            raise HTTPException(status_code=404) from exc
-
-        image_assets = await _reload_deck_image_assets(runtime, conversation_id, base, authored)
-        brand = await _direction_brand_override(runtime, conversation_id)
-        brand_override = brand if template is None or template == "disco-light" else None
-        try:
-            deck = lower_deck(
-                authored,
-                theme_override=template,
-                brand_override=brand_override,
-                image_assets=image_assets,
-            )
-            html_str = render_html(deck)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=422, detail={"reason": "render_failed", "message": str(exc)}
-            ) from exc
-
-        # Return as inline text/html — NO Content-Disposition: attachment.
-        return Response(
-            content=html_str.encode("utf-8"),
-            media_type="text/html; charset=utf-8",
+        return await _get_deck_render_inline_response(
+            store, runtime, conversation_id, path, template
         )
 
     @router.get("/conversations/{conversation_id}/deck/export")
@@ -367,101 +609,8 @@ def make_deck_editor_router(
         the ``process`` (no-container) backend the route returns 409
         {"reason": "no_container_backend"} and the UI hides the PDF button (no false
         affordance)."""
-        from disco.core.brand import is_valid_template
-        from disco.tools.builtin._deck_schema import AuthoredDeck, lower_deck
-        from disco.tools.builtin._pptx_render import render_html, render_pptx
-        from fastapi import Response
-
-        base = _jail_base(path)
-        authored_rel = f"{base}.authored.json"
-        if runtime is None:
-            raise HTTPException(status_code=404)
-        if authored_rel not in await _declared_artifacts(store, conversation_id):
-            raise HTTPException(status_code=404)
-        # The sidecar must be the CURRENT render of this base — declared artifacts
-        # accumulate forever, so a later non-editable (Marp/fallback) regeneration
-        # of the same base supersedes the editable one. Rendering the stale sidecar
-        # would export a deck the user already replaced. (Mirrors GET/PUT.)
-        if not await _sidecar_is_current(store, conversation_id, base):
-            raise HTTPException(status_code=404)
-        # STRICT template validation against the gallery catalogue (400 on an id
-        # outside it — e.g. "ink-dark", which resolve_theme would silently light-fall-back).
-        if not is_valid_template(template):
-            raise HTTPException(status_code=400, detail=f"Unknown template {template!r}")
-        if fmt not in ("pptx", "html", "pdf"):
-            raise HTTPException(status_code=400, detail="fmt must be 'pptx', 'html', or 'pdf'")
-        # W-22 capability gate: deck PDF needs a container backend (LibreOffice ships in
-        # the sandbox image, not on the host). Fail BEFORE any render work so the cost is
-        # only paid when it can succeed. The UI hides the PDF button on the same gate.
-        if fmt == "pdf" and not _deck_pdf_capable(runtime):
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "reason": "no_container_backend",
-                    "message": (
-                        "Deck PDF export needs a container sandbox backend "
-                        "(gVisor / local / podman) — LibreOffice ships in the sandbox "
-                        "image, not on the host. The active backend is "
-                        f"{runtime.sandbox_backend_name() or 'none'}."
-                    ),
-                },
-            )
-
-        raw = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
-        if raw is None:
-            raise HTTPException(status_code=404)
-        try:
-            authored = AuthoredDeck.model_validate(json.loads(raw))
-        except Exception as exc:  # noqa: BLE001 — malformed sidecar → 404
-            raise HTTPException(status_code=404) from exc
-
-        image_assets = await _reload_deck_image_assets(runtime, conversation_id, base, authored)
-        brand = await _direction_brand_override(runtime, conversation_id)
-        brand_override = brand if template == "disco-light" else None
-        try:
-            deck = lower_deck(
-                authored,
-                theme_override=template,
-                brand_override=brand_override,
-                image_assets=image_assets,
-            )
-            if fmt == "html":
-                body: bytes = render_html(deck).encode("utf-8")
-                media = "text/html; charset=utf-8"
-                ext = "html"
-            elif fmt == "pdf":
-                # Same render_pptx path as pptx export → convert to PDF in a throwaway
-                # sandbox (W-22 / W-23 hardened the pptx renderer; we call it unchanged).
-                pptx_bytes = render_pptx(deck)
-                body = await _render_deck_pdf_in_sandbox(
-                    runtime, pptx_bytes, owner_id=DEFAULT_OWNER_ID
-                )
-                media = "application/pdf"
-                ext = "pdf"
-            else:
-                body = render_pptx(deck)
-                media = (
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-                )
-                ext = "pptx"
-        except HTTPException:
-            raise
-        except _SofficeUnavailable as exc:
-            # BW-10: stale image has no LibreOffice — honest, specific 409 (not a
-            # generic 422 render failure). The UI surfaces this in-app (BW-11).
-            raise HTTPException(
-                status_code=409,
-                detail={"reason": "pdf_unavailable", "message": str(exc)},
-            ) from exc
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=422, detail={"reason": "render_failed", "message": str(exc)}
-            ) from exc
-
-        return Response(
-            content=body,
-            media_type=media,
-            headers={"Content-Disposition": f'attachment; filename="{base}.{ext}"'},
+        return await _export_deck_with_template_response(
+            store, runtime, conversation_id, path, template, fmt
         )
 
     @router.get("/conversations/{conversation_id}/deck/export/capabilities")
@@ -473,10 +622,7 @@ def make_deck_editor_router(
         ``command -v soffice`` in a throwaway box so the PDF button is hidden HONESTLY
         when the deployed image lacks it. ``pptx``/``html`` render in-process → always
         available."""
-        if runtime is None:
-            return {"pptx": True, "html": True, "pdf": False, "pdf_reason": "no_runtime"}
-        available, reason = await _deck_pdf_available(runtime, owner_id=DEFAULT_OWNER_ID)
-        return {"pptx": True, "html": True, "pdf": available, "pdf_reason": reason}
+        return await _deck_export_capabilities_response(runtime)
 
     @router.put("/conversations/{conversation_id}/deck/editor")
     async def patch_deck(
@@ -489,137 +635,6 @@ def make_deck_editor_router(
         Mirrors DeckPatchTool.run: read → apply_patch → validate (422 on failure,
         workspace untouched) → lower_deck → render. Write-back requires a live
         sandbox session (409 otherwise — no writes)."""
-        from disco.tools.builtin._deck_patch import PatchError, apply_patch
-        from disco.tools.builtin._deck_schema import (
-            AuthoredDeck,
-            lower_deck,
-            lower_deck_for_editor,
-        )
-        from disco.tools.builtin._pptx_render import render_html, render_pptx
-
-        base = _jail_base(path)
-        authored_rel = f"{base}.authored.json"
-        html_rel = f"{base}.html"
-        pptx_rel = f"{base}.pptx"
-        if runtime is None:
-            raise HTTPException(status_code=404)
-
-        declared = await _declared_artifacts(store, conversation_id)
-        if authored_rel not in declared:
-            raise HTTPException(status_code=404)
-        # Refuse to patch a sidecar superseded by a later non-editable render of the
-        # same base — saving would overwrite the newer deck (data loss).
-        if not await _sidecar_is_current(store, conversation_id, base):
-            raise HTTPException(status_code=404)
-
-        # Read the current authored JSON (live session → host snapshot fallback).
-        raw = await _read_artifact_bytes(runtime, conversation_id, authored_rel)
-        if raw is None:
-            raise HTTPException(status_code=404)
-        try:
-            authored_json = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=404) from exc
-
-        # Apply + validate (schema-or-revert). A bad patch / invalid result → 422
-        # and the workspace is NEVER touched (no writes happen below).
-        try:
-            patched_json = apply_patch(
-                authored_json,
-                list(_coerce_patch_ops(body.patch)),
-            )
-        except (PatchError, KeyError, IndexError, ValueError, TypeError) as exc:
-            # apply_patch's move/copy paths can raise raw KeyError/IndexError/ValueError
-            # on a missing/invalid `from` pointer — all are rejected patches, so they
-            # must surface as a clean 422 (never a 500). No writes have happened.
-            raise HTTPException(
-                status_code=422,
-                detail={"reason": "patch_failed", "message": str(exc)},
-            ) from exc
-        try:
-            authored_deck = AuthoredDeck.model_validate(patched_json)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=422,
-                detail={"reason": "schema_invalid", "message": str(exc)},
-            ) from exc
-
-        # Re-render deterministically via the C1 path. Reload the generated images
-        # (C7) so an edit preserves them instead of reverting image slides to [image].
-        image_assets = await _reload_deck_image_assets(
-            runtime, conversation_id, base, authored_deck
-        )
-        brand = await _direction_brand_override(runtime, conversation_id)
-        try:
-            deck = lower_deck(
-                authored_deck,
-                brand_override=brand,
-                image_assets=image_assets,
-            )
-            html_str = render_html(deck)
-            pptx_bytes = render_pptx(deck)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(
-                status_code=422,
-                detail={"reason": "render_failed", "message": str(exc)},
-            ) from exc
-
-        # Write-back is LIVE-SESSION-ONLY: a finished+reaped build (no live session)
-        # cannot be edited. 409 with a clear reason; NO writes occur.
-        session = runtime.live_session(conversation_id)
-        if session is None:
-            raise HTTPException(status_code=409, detail={"reason": "no_live_sandbox"})
-
-        # Atomic-ish write-back: the route's contract is all-or-nothing — never a
-        # partially-updated workspace where the authored JSON and its renders disagree.
-        # Capture each target's prior bytes, write all three, and on ANY mid-sequence
-        # failure roll the already-written files back to their prior content.
-        targets: list[tuple[str, bytes]] = [
-            (authored_rel, json.dumps(patched_json, indent=2).encode()),
-            (html_rel, html_str.encode()),
-            (pptx_rel, pptx_bytes),
-        ]
-        prior: dict[str, bytes | None] = {
-            rel: await _read_artifact_bytes(runtime, conversation_id, rel)
-            for rel, _ in targets
-        }
-        try:
-            for rel, data in targets:
-                await session.write_file(rel, data)
-        except Exception as exc:  # noqa: BLE001 — roll back, then surface a clean 500
-            # Restore EVERY pre-existing target — including the one whose write just
-            # failed (it may be truncated/partial) — to its prior content. A target
-            # that did not pre-exist cannot be un-created (no delete primitive), but in
-            # the deck-edit flow all three always pre-exist (the deck was generated
-            # before it can be edited), so the workspace is restored intact.
-            for rel, _ in targets:
-                restore = prior[rel]
-                if restore is not None:
-                    try:
-                        await session.write_file(rel, restore)
-                    except Exception:  # noqa: BLE001 — best-effort restore
-                        pass
-            raise HTTPException(
-                status_code=500,
-                detail={"reason": "write_failed", "message": str(exc)},
-            ) from exc
-
-        # PDF re-render needs a ToolContext (convert_to_pdf(ctx, ...)) which the route
-        # layer has no clean way to construct, so a {base}.pdf is left STALE rather than
-        # silently desynced — surfaced honestly to the caller. Detect it by ACTUAL
-        # existence: the PDF is never in `declared` (the executor drops ToolOutcome.
-        # artifacts; _declared_artifacts only sees structured), so a `pdf_rel in declared`
-        # check would always be False even when a stale PDF exists.
-        pdf_rel = f"{base}.pdf"
-        pdf_stale = (await _read_artifact_bytes(runtime, conversation_id, pdf_rel)) is not None
-
-        lowered = lower_deck_for_editor(authored_deck)
-        return {
-            "ok": True,
-            "lowered": dataclasses.asdict(lowered),
-            "html_file": html_rel,
-            "pptx_file": pptx_rel,
-            "pdf_stale": pdf_stale,
-        }
+        return await _patch_deck_response(store, runtime, conversation_id, body, path)
 
     return router

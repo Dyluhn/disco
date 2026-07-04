@@ -29,6 +29,7 @@ import re
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal
 
 from disco.core.brand.tokens import Theme
@@ -1441,6 +1442,130 @@ def strip_element_ids(html_str: str) -> str:
     return _TAG_RE.sub(_clean_tag, html_str)
 
 
+BodyEidFn = Callable[[int], str]
+
+
+def _html_body_text(el: Element) -> str:
+    return html.escape(_plain_element_text(el))
+
+
+def _html_big_number(
+    sid: str,
+    title_html: str,
+    title_el: Element | None,
+    body: list[Element],
+    body_eid: BodyEidFn,
+) -> str:
+    figure_el = body[0] if body else title_el
+    support_el = body[1] if len(body) > 1 else None
+    figure = (
+        f'<div class="slide-big-number-figure" data-element-id="{body_eid(0)}" '
+        f'data-slide-id="{sid}">{_html_body_text(figure_el)}</div>'
+        if figure_el is not None else ""
+    )
+    support = (
+        f'<p class="slide-big-number-support" data-element-id="{body_eid(1)}" '
+        f'data-slide-id="{sid}">{_html_body_text(support_el)}</p>'
+        if support_el is not None else ""
+    )
+    return (
+        '<div class="slide-big-number-layout">'
+        f'{title_html}{figure}{support}'
+        '</div>'
+    )
+
+
+def _html_quote(
+    sid: str,
+    title_el: Element | None,
+    body: list[Element],
+    body_eid: BodyEidFn,
+) -> str:
+    quote_el = body[0] if body else title_el
+    attr_el = body[1] if len(body) > 1 else None
+    quote = (
+        f'<blockquote class="slide-quote-text" data-element-id="{body_eid(0)}" '
+        f'data-slide-id="{sid}">{_html_body_text(quote_el)}</blockquote>'
+        if quote_el is not None else ""
+    )
+    attribution = (
+        f'<figcaption class="slide-quote-attribution" data-element-id="{body_eid(1)}" '
+        f'data-slide-id="{sid}">{_html_body_text(attr_el)}</figcaption>'
+        if attr_el is not None else ""
+    )
+    return (
+        '<figure class="slide-quote-layout">'
+        '<div class="slide-quote-mark" aria-hidden="true">“</div>'
+        f'{quote}{attribution}'
+        '</figure>'
+    )
+
+
+def _html_timeline(
+    sid: str,
+    title_html: str,
+    title_el: Element | None,
+    body: list[Element],
+    body_eid: BodyEidFn,
+) -> str:
+    nodes: list[str] = []
+    labels: list[str] = []
+    items = body or ([title_el] if title_el is not None else [])
+    denom = max(1, len(items) - 1)
+    for j, el in enumerate(items):
+        x = 8.0 + (j * (100.0 - 16.0) / denom if len(items) > 1 else 42.0)
+        head, detail = _split_timeline_label(_plain_element_text(el))
+        label_cls = "above" if j % 2 == 0 else "below"
+        nodes.append(
+            f'<div class="slide-timeline-node" style="left:{x:.2f}%"></div>'
+        )
+        labels.append(
+            f'<div class="slide-timeline-label {label_cls}" style="left:{x:.2f}%" '
+            f'data-element-id="{body_eid(j)}" data-slide-id="{sid}">'
+            f'<strong>{html.escape(head)}</strong>{html.escape(detail)}</div>'
+        )
+    return (
+        '<div class="slide-timeline-layout">'
+        f'{title_html}<div class="slide-rule"></div>'
+        '<div class="slide-timeline">'
+        '<div class="slide-timeline-spine"></div>'
+        f'{"".join(nodes)}{"".join(labels)}'
+        '</div></div>'
+    )
+
+
+def _html_two_by_two(
+    sid: str,
+    title_html: str,
+    body: list[Element],
+    body_eid: BodyEidFn,
+) -> str:
+    axis_x = "Higher impact"
+    axis_y = "Higher certainty"
+    cells = body[:4]
+    if len(body) >= 6:
+        axis_x = _plain_element_text(body[0])
+        axis_y = _plain_element_text(body[1])
+        cells = body[2:6]
+    cell_html: list[str] = []
+    for j in range(4):
+        text = _html_body_text(cells[j]) if j < len(cells) else ""
+        body_pos = j + (2 if len(body) >= 6 else 0)
+        cell_html.append(
+            f'<div class="slide-two-by-two-cell" data-quadrant="{j + 1}" '
+            f'data-element-id="{body_eid(body_pos)}" data-slide-id="{sid}">{text}</div>'
+        )
+    return (
+        '<div class="slide-two-by-two-layout">'
+        f'{title_html}<div class="slide-rule"></div>'
+        '<div class="slide-two-by-two-grid">'
+        f'<div class="slide-two-by-two-axis x-end">{html.escape(axis_x)}</div>'
+        f'<div class="slide-two-by-two-axis y-end">{html.escape(axis_y)}</div>'
+        f'{"".join(cell_html)}'
+        '</div></div>'
+    )
+
+
 def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str:
     """Return inner HTML for a C1 Slide by extracting its text Elements.
 
@@ -1507,13 +1632,10 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
     def _body_eid(render_pos: int) -> str:
         return f'{sid}:body:{_orig_bidx(render_pos)}'
 
-    def _body_text(el: Element) -> str:
-        return html.escape(_plain_element_text(el))
-
     def _bullet_li(el: Element, render_pos: int) -> str:
         return (
             f'<li data-element-id="{_body_eid(render_pos)}" data-slide-id="{sid}">'
-            f'{_body_text(el)}</li>'
+            f'{_html_body_text(el)}</li>'
         )
 
     def _archetype_body_els(title_el: Element | None) -> list[Element]:
@@ -1528,97 +1650,18 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
 
     if archetype == "big_number":
         title_html = _title_tag(archetype_title, "slide-kicker", "p") if archetype_title else ""
-        figure_el = archetype_body[0] if archetype_body else archetype_title
-        support_el = archetype_body[1] if len(archetype_body) > 1 else None
-        figure = (
-            f'<div class="slide-big-number-figure" data-element-id="{_body_eid(0)}" '
-            f'data-slide-id="{sid}">{_body_text(figure_el)}</div>'
-            if figure_el is not None else ""
-        )
-        support = (
-            f'<p class="slide-big-number-support" data-element-id="{_body_eid(1)}" '
-            f'data-slide-id="{sid}">{_body_text(support_el)}</p>'
-            if support_el is not None else ""
-        )
-        return (
-            '<div class="slide-big-number-layout">'
-            f'{title_html}{figure}{support}'
-            '</div>'
-        )
+        return _html_big_number(sid, title_html, archetype_title, archetype_body, _body_eid)
 
     if archetype == "quote":
-        quote_el = archetype_body[0] if archetype_body else archetype_title
-        attr_el = archetype_body[1] if len(archetype_body) > 1 else None
-        quote = (
-            f'<blockquote class="slide-quote-text" data-element-id="{_body_eid(0)}" '
-            f'data-slide-id="{sid}">{_body_text(quote_el)}</blockquote>'
-            if quote_el is not None else ""
-        )
-        attribution = (
-            f'<figcaption class="slide-quote-attribution" data-element-id="{_body_eid(1)}" '
-            f'data-slide-id="{sid}">{_body_text(attr_el)}</figcaption>'
-            if attr_el is not None else ""
-        )
-        return (
-            '<figure class="slide-quote-layout">'
-            '<div class="slide-quote-mark" aria-hidden="true">“</div>'
-            f'{quote}{attribution}'
-            '</figure>'
-        )
+        return _html_quote(sid, archetype_title, archetype_body, _body_eid)
 
     if archetype == "timeline":
         title_html = _title_tag(archetype_title, "slide-heading") if archetype_title else ""
-        nodes: list[str] = []
-        labels: list[str] = []
-        items = archetype_body or ([archetype_title] if archetype_title is not None else [])
-        denom = max(1, len(items) - 1)
-        for j, el in enumerate(items):
-            x = 8.0 + (j * (100.0 - 16.0) / denom if len(items) > 1 else 42.0)
-            head, detail = _split_timeline_label(_plain_element_text(el))
-            label_cls = "above" if j % 2 == 0 else "below"
-            nodes.append(
-                f'<div class="slide-timeline-node" style="left:{x:.2f}%"></div>'
-            )
-            labels.append(
-                f'<div class="slide-timeline-label {label_cls}" style="left:{x:.2f}%" '
-                f'data-element-id="{_body_eid(j)}" data-slide-id="{sid}">'
-                f'<strong>{html.escape(head)}</strong>{html.escape(detail)}</div>'
-            )
-        return (
-            '<div class="slide-timeline-layout">'
-            f'{title_html}<div class="slide-rule"></div>'
-            '<div class="slide-timeline">'
-            '<div class="slide-timeline-spine"></div>'
-            f'{"".join(nodes)}{"".join(labels)}'
-            '</div></div>'
-        )
+        return _html_timeline(sid, title_html, archetype_title, archetype_body, _body_eid)
 
     if archetype == "two_by_two":
         title_html = _title_tag(archetype_title, "slide-heading") if archetype_title else ""
-        axis_x = "Higher impact"
-        axis_y = "Higher certainty"
-        cells = archetype_body[:4]
-        if len(archetype_body) >= 6:
-            axis_x = _plain_element_text(archetype_body[0])
-            axis_y = _plain_element_text(archetype_body[1])
-            cells = archetype_body[2:6]
-        cell_html: list[str] = []
-        for j in range(4):
-            text = _body_text(cells[j]) if j < len(cells) else ""
-            body_pos = j + (2 if len(archetype_body) >= 6 else 0)
-            cell_html.append(
-                f'<div class="slide-two-by-two-cell" data-quadrant="{j + 1}" '
-                f'data-element-id="{_body_eid(body_pos)}" data-slide-id="{sid}">{text}</div>'
-            )
-        return (
-            '<div class="slide-two-by-two-layout">'
-            f'{title_html}<div class="slide-rule"></div>'
-            '<div class="slide-two-by-two-grid">'
-            f'<div class="slide-two-by-two-axis x-end">{html.escape(axis_x)}</div>'
-            f'<div class="slide-two-by-two-axis y-end">{html.escape(axis_y)}</div>'
-            f'{"".join(cell_html)}'
-            '</div></div>'
-        )
+        return _html_two_by_two(sid, title_html, archetype_body, _body_eid)
 
     if layout == "title":
         primary = texts_sorted[0] if texts_sorted else None
