@@ -5980,3 +5980,28 @@ point the auto-resume path bypasses). The metrics surface now makes this class
 visible permanently. Also honest: the soak driver's in-run metrics import was
 wrong (event_from_json_dict doesn't exist); re-extracted post-hoc via the raw-
 dict path run_reliability_metrics natively supports.
+
+## THREAD-PULL: THE SOAK'S 2 DEAD-PAUSED BUILDS — TWO ROOT CAUSES, BOTH FIXED (2026-07-03)
+
+Finding 1 (`cb29ba1d`): the pause COUNTER resets on successful productive work
+(fresh window) but the auto-resume ATTEMPTED-guard scanned the whole segment —
+after pause→nudge→real-work→pause the guard refused nudge #2 while the
+synthetic-finish branch saw count==1: neither fired, dead PAUSED. Fix: the
+guard now shares the counter's window semantics (a successful productive action
+consumes the marker) bounded by cap-3 per segment. Regression test replicates
+the live event trail.
+
+Finding 2 (`6113f972`, BIGGER than the ladder): B0 sidecar persistence
+(overrides/surfaces/AUTONOMOUS) derived its base from DISCO_DB env while the
+store used its own default file — env unset ⇒ ALL sidecars silently disabled ⇒
+every restart stripped autonomy (and model picks) from existing conversations;
+the bare-except hid it. Fix: sidecars anchor to the store's REAL db path, loud
+warning when genuinely disabled, save failures logged.
+
+LIVE RE-PROOF (autonomy restored via the now-working sidecar, both builds
+resumed): s1 → FINISHED (ladder recovered it); s2 → nudges 1→3 (window fix
+firing live), then parked at the designed cap-3 bound after repeated pauses —
+bounded, visible, exactly the valve convention. Honest residual: the
+count==2→synthetic-finish conversion has still never fired live (requires a
+no-progress second pause inside one window; hasn't occurred naturally — unit-
+proven only). Metrics now expose all of this per run.
