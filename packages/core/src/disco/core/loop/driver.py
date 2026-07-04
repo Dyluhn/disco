@@ -200,26 +200,17 @@ class Driver:
         return _hook
 
     async def _pause_driver_unavailable(self) -> tuple[None, Disp]:
-        """Emit the standard PAUSED/driver-unavailable event pair and HALT.
+        """Explain a driver outage and HALT at the user-question gate.
         Called from both the LLMProviderUnavailable and LLMTransientError
         exhaustion paths to keep drive_step within its LOC budget."""
-        await self._loop._emit(
-            MessageEvent(
-                source=EventSource.ENVIRONMENT,
-                message=LLMMessage(
-                    role="user",
-                    content=(
-                        "model driver unavailable — conversation"
-                        " paused, resume when the model is back"
-                    ),
-                ),
-            )
-        )
-        await self._loop._emit(
-            StatusEvent(
-                status=ConversationStatus.PAUSED,
-                detail="driver-unavailable",
-            )
+        await self._loop._land_blocked(
+            reason="driver-unavailable",
+            guidance=(
+                "The model driver stayed unavailable after the bounded provider "
+                "retry path was exhausted."
+            ),
+            legacy_status=ConversationStatus.PAUSED,
+            legacy_detail="driver-unavailable",
         )
         return None, Disp.HALT
 

@@ -18,6 +18,7 @@ STUCK_ESCAPE_DETAIL = "stuck_escape"
 PROBE_SPIN_DETAIL = "probe_spin"
 EXPORT_RELEASE_DETAIL = "unverified_export"
 HOST_VERIFY_REFUSAL_MARKER = "Host verification did not pass"
+BLOCKED_LANDING_META_KEY = "blocked_landing"
 
 _ENVIRONMENT_SOURCE = "environment"
 _MESSAGE_KIND = "message"
@@ -33,6 +34,7 @@ _COUNTER_KEYS = (
     "export_refusals",
     "export_releases",
     "host_verify_refusals",
+    "blocked_landings",
 )
 
 
@@ -45,6 +47,7 @@ class ReliabilityMetrics(TypedDict):
     export_refusals: int
     export_releases: int
     host_verify_refusals: int
+    blocked_landings: int
     terminal_status: str
     stalled: bool
 
@@ -89,6 +92,11 @@ def _message_content(event: object) -> str:
     return fallback if isinstance(fallback, str) else ""
 
 
+def _meta(event: object) -> Mapping[str, Any]:
+    meta = _field(event, "meta")
+    return meta if isinstance(meta, Mapping) else {}
+
+
 def _is_environment_message(event: object) -> bool:
     return _kind(event) == _MESSAGE_KIND and _source(event) == _ENVIRONMENT_SOURCE
 
@@ -108,6 +116,7 @@ def run_reliability_metrics(events: Iterable[object]) -> ReliabilityMetrics:
     export_refusals = 0
     export_releases = 0
     host_verify_refusals = 0
+    blocked_landings = 0
     terminal_status = "UNKNOWN"
 
     for event in events:
@@ -125,6 +134,8 @@ def run_reliability_metrics(events: Iterable[object]) -> ReliabilityMetrics:
                 probe_spin_trips += 1
             if detail == EXPORT_RELEASE_DETAIL:
                 export_releases += 1
+            if _meta(event).get(BLOCKED_LANDING_META_KEY) is True:
+                blocked_landings += 1
             continue
 
         if not _is_environment_message(event):
@@ -146,6 +157,7 @@ def run_reliability_metrics(events: Iterable[object]) -> ReliabilityMetrics:
         "export_refusals": export_refusals,
         "export_releases": export_releases,
         "host_verify_refusals": host_verify_refusals,
+        "blocked_landings": blocked_landings,
         "terminal_status": terminal_status,
         "stalled": terminal_status not in _NON_STALLED_STATUSES,
     }

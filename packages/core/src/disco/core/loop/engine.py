@@ -954,6 +954,22 @@ class AgentLoop:
         and the planning-mode gate."""
         return await self._valve.post_noop_valve()
 
+    async def _land_blocked(
+        self,
+        *,
+        reason: str,
+        guidance: str = "",
+        legacy_status: ConversationStatus = ConversationStatus.STUCK,
+        legacy_detail: str | None = None,
+    ) -> None:
+        """Delegate all breaker dead-ends to the shared explain+ask lander."""
+        await self._valve.land_blocked(
+            reason=reason,
+            guidance=guidance,
+            legacy_status=legacy_status,
+            legacy_detail=legacy_detail,
+        )
+
     async def _maybe_synthesize_finish_after_actionless_pauses(
         self, state: ConversationState, events: list[Event]
     ) -> Disp:
@@ -1079,11 +1095,15 @@ class AgentLoop:
                         await self._emit(synth)
                         plan = synth  # fall through to the approve path with the 1-step plan
                     else:
-                        await self._emit(
-                            StatusEvent(
-                                status=ConversationStatus.STUCK,
-                                detail="revision_no_concrete_steps",
-                            )
+                        await self._land_blocked(
+                            reason="revision_no_concrete_steps",
+                            guidance=(
+                                "The planner submitted an empty revision plan after "
+                                "the force-submit recovery, and there was no current "
+                                "revision instruction to synthesize a concrete step from."
+                            ),
+                            legacy_status=ConversationStatus.STUCK,
+                            legacy_detail="revision_no_concrete_steps",
                         )
                         return Disp.HALT
                 return await self._route_plan_approval_gate(plan)
@@ -1457,11 +1477,14 @@ class AgentLoop:
                 "marking STUCK (in-loop exit invariant)",
                 self.conversation_id,
             )
-            await self._emit(
-                StatusEvent(
-                    status=ConversationStatus.STUCK,
-                    detail="loop ended without reaching a terminal state",
-                )
+            await self._land_blocked(
+                reason="loop ended without reaching a terminal state",
+                guidance=(
+                    "The drive loop returned cleanly while the conversation was "
+                    "still RUNNING, so the host could not prove what should happen next."
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail="loop ended without reaching a terminal state",
             )
             return await self.get_state()
         return result

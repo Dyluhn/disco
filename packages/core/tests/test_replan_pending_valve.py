@@ -26,6 +26,7 @@ from disco.core.loop import AgentStep, signals
 from loop_fakes import (
     ScriptedAgent,
     action_step,
+    assert_blocked_question_landing,
     build_loop,
     finish_step,
 )
@@ -126,7 +127,7 @@ async def _build_rev1_then_enter_planning(**loop_kwargs):
 # --------------------------------------------------------------------------- #
 # 2. RE-PLAN PENDING → the valve never FINISHES off the stale plan: at 3       #
 #    (completed_via_notify) it falls through to the nudge; at the 6-no-op       #
-#    CEILING it HALTS via PAUSED(actionless) — NOT FINISHED, and NOT an         #
+#    CEILING it HALTS via AWAITING_USER — NOT FINISHED, and NOT an             #
 #    infinite nudge (the BW-01 follow-up: never finish, but never hang).        #
 # --------------------------------------------------------------------------- #
 
@@ -150,7 +151,7 @@ async def test_pending_revision_suppresses_finish_and_halts_at_ceiling():
     assert _last_status_detail(mid) == "planning"
 
     # 6 no-ops (the CEILING): the stale-plan FINISH stays suppressed, but the run
-    # must HALT rather than hang — a NON-FINISH PAUSED(actionless).
+    # must HALT rather than hang — a NON-FINISH user-question landing.
     landed_at_6 = await loop._valve.actionless_valve(events, 6)
     assert landed_at_6 is True  # landed a terminal/halt — did NOT hang
 
@@ -162,20 +163,13 @@ async def test_pending_revision_suppresses_finish_and_halts_at_ceiling():
         and e.detail in ("completed_via_notify", "noop_limit")
         for e in after
     )
-    # The halt is a PAUSED(actionless) — the user can resume/redirect.
-    assert _last_status_detail(after) == "actionless"
-    assert any(
-        isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.PAUSED
-        and e.detail == "actionless"
-        for e in after
-    )
+    assert_blocked_question_landing(after, legacy_detail="actionless")
 
 
 # --------------------------------------------------------------------------- #
 # 2b. NEVER-HANG — a re-plan where the model NEVER submits a revised plan and   #
 #     keeps producing no-ops: it must NOT spin forever. Below the ceiling it    #
-#     nudges (False); AT the ceiling it HALTS (PAUSED), never FINISHES.         #
+#     nudges (False); AT the ceiling it explains/asks, never FINISHES.          #
 # --------------------------------------------------------------------------- #
 
 
@@ -193,10 +187,10 @@ async def test_pending_revision_never_submitting_halts_not_hangs():
     mid = await store.get_events(CID)
     assert _last_status_detail(mid) == "planning"
 
-    # AT the ceiling it HALTS — PAUSED(actionless), never returns-False-forever.
+    # AT the ceiling it HALTS — AWAITING_USER, never returns-False-forever.
     assert await loop._valve.actionless_valve(events, 6) is True
     after = await store.get_events(CID)
-    assert _last_status_detail(after) == "actionless"
+    assert_blocked_question_landing(after, legacy_detail="actionless")
     # No valve-emitted FINISH off the stale plan (the rev-1 build FINISHED in the
     # log is the prior, legitimately-completed revision — not a new terminal).
     assert not any(
@@ -228,10 +222,10 @@ async def test_pending_first_plan_never_submitting_halts_at_ceiling():
     assert signals.in_planning_for_revision(events) is True
     assert signals.plan_steps_complete(events) is False
 
-    # At the ceiling: HALT via PAUSED(actionless), not FINISHED, not hang.
+    # At the ceiling: HALT via AWAITING_USER, not FINISHED, not hang.
     assert await loop._valve.actionless_valve(events, 6) is True
     after = await store.get_events(CID)
-    assert _last_status_detail(after) == "actionless"
+    assert_blocked_question_landing(after, legacy_detail="actionless")
     assert not any(
         isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
         for e in after
@@ -243,7 +237,7 @@ async def test_pending_first_plan_never_submitting_halts_at_ceiling():
 #     BLANK tool-less turns. consecutive_noops sees no AGENT message and the    #
 #     planning gate never bumps _invisible_steps, so the noop counters stay 0   #
 #     forever and the noop CEILING can NEVER trip. The stateless turns-since-    #
-#     replan bound HALTS it anyway — PAUSED(actionless), no hang, no FINISH.     #
+#     replan bound HALTS it anyway — AWAITING_USER, no hang, no FINISH.         #
 # --------------------------------------------------------------------------- #
 
 

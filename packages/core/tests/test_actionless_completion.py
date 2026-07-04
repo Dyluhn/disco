@@ -21,7 +21,13 @@ from disco.core import (
 )
 from disco.core.llm import OperatingMode
 from disco.core.loop.stuck import StuckThresholds
-from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
+from loop_fakes import (
+    ScriptedAgent,
+    action_step,
+    assert_blocked_question_landing,
+    build_loop,
+    finish_step,
+)
 
 CID = "conv"
 
@@ -166,7 +172,7 @@ async def test_plan_marked_done_with_no_work_does_not_falsely_complete():
 
 
 async def test_notify_user_with_plan_remaining_still_pauses():
-    """3× notify_user with plan steps REMAINING → still PAUSED/actionless.
+    """3× notify_user with plan steps REMAINING → explains and asks.
     Regression guard: the thrash protection must survive — an unfinished plan
     that goes silent is a genuine stall, not a completed build."""
     agent = ScriptedAgent([
@@ -179,8 +185,8 @@ async def test_notify_user_with_plan_remaining_still_pauses():
     ])
     state, events = await _approve_and_run(agent)
 
-    assert state.execution_status == ConversationStatus.PAUSED
-    assert _last_status_detail(events) == "actionless"
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert_blocked_question_landing(events, legacy_detail="actionless")
     # The completion path must NOT have hijacked a genuine stall.
     assert not any(
         isinstance(e, StatusEvent) and e.detail == "completed_via_notify"

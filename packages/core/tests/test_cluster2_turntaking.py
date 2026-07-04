@@ -349,8 +349,10 @@ async def test_second_zero_action_actionless_pause_persists_another_pause():
     emitted = await store.get_events(CID)
     statuses = [e for e in emitted if isinstance(e, StatusEvent)]
     assert statuses, "the valve must land a pause"
-    assert statuses[-1].status == ConversationStatus.PAUSED
-    assert statuses[-1].detail == "actionless"
+    # terminal-collapse: ask landing supersedes the actionless marker
+    assert statuses[-1].status == ConversationStatus.AWAITING_USER_QUESTION
+    assert statuses[-2].status == ConversationStatus.PAUSED
+    assert statuses[-2].detail == "actionless"
     assert not any(s.status == ConversationStatus.STUCK for s in statuses)
 
 
@@ -370,8 +372,10 @@ async def test_action_between_pauses_does_not_escalate():
     landed = await loop._valve.actionless_valve(events, loop._ACTIONLESS_BREAK_CAP)
     assert landed is True
     statuses = [e for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
-    assert statuses[-1].status == ConversationStatus.PAUSED
-    assert statuses[-1].detail == "actionless"
+    # terminal-collapse: ask landing supersedes the actionless marker
+    assert statuses[-1].status == ConversationStatus.AWAITING_USER_QUESTION
+    assert statuses[-2].status == ConversationStatus.PAUSED
+    assert statuses[-2].detail == "actionless"
     assert not any(s.status == ConversationStatus.STUCK for s in statuses)
 
 
@@ -399,8 +403,10 @@ async def test_bare_running_resume_after_prior_work_still_persists_second_pause(
     assert landed is True
     statuses = [e for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
     assert statuses, "the valve must land a pause"
-    assert statuses[-1].status == ConversationStatus.PAUSED
-    assert statuses[-1].detail == "actionless"
+    # terminal-collapse: the ask landing supersedes the actionless marker
+    assert statuses[-1].status == ConversationStatus.AWAITING_USER_QUESTION
+    assert statuses[-2].status == ConversationStatus.PAUSED
+    assert statuses[-2].detail == "actionless"
     assert not any(s.status == ConversationStatus.STUCK for s in statuses)
 
 
@@ -423,6 +429,9 @@ async def test_real_action_after_bare_running_resume_does_not_escalate():
     landed = await loop._valve.actionless_valve(events, loop._ACTIONLESS_BREAK_CAP)
     assert landed is True
     statuses = [e for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
-    assert statuses[-1].status == ConversationStatus.PAUSED
-    assert statuses[-1].detail == "actionless"
+    # terminal-collapse: the landing supersedes the actionless marker; the
+    # marker (counter bookkeeping) directly precedes it.
+    assert statuses[-1].status == ConversationStatus.AWAITING_USER_QUESTION
+    assert statuses[-2].status == ConversationStatus.PAUSED
+    assert statuses[-2].detail == "actionless"
     assert not any(s.status == ConversationStatus.STUCK for s in statuses)

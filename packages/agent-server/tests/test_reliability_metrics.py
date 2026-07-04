@@ -4,6 +4,7 @@ from typing import Any
 
 from disco.agent_server.verify.reliability import (
     ACTIONLESS_AUTO_RESUME_MARKER,
+    BLOCKED_LANDING_META_KEY,
     EXPORT_GATE_TOKEN,
     EXPORT_RELEASE_DETAIL,
     HOST_VERIFY_REFUSAL_MARKER,
@@ -22,6 +23,12 @@ def _status(status: str, detail: str | None = None) -> dict[str, Any]:
         "status": status,
         "detail": detail,
     }
+
+
+def _blocked_status(detail: str = "evt_question") -> dict[str, Any]:
+    event = _status("AWAITING_USER_QUESTION", detail)
+    event["meta"] = {BLOCKED_LANDING_META_KEY: True, "legacy_detail": "no_progress"}
+    return event
 
 
 def _env_message(content: str) -> dict[str, Any]:
@@ -53,6 +60,7 @@ def test_run_reliability_metrics_counts_every_marker() -> None:
         _status("RUNNING", EXPORT_RELEASE_DETAIL),
         _env_message(f"{HOST_VERIFY_REFUSAL_MARKER} for app artifact 'site'. Broken."),
         _user_message(HOST_VERIFY_REFUSAL_MARKER),
+        _blocked_status(),
         _status("FINISHED", None),
     ]
 
@@ -65,6 +73,7 @@ def test_run_reliability_metrics_counts_every_marker() -> None:
         "export_refusals": 1,
         "export_releases": 1,
         "host_verify_refusals": 1,
+        "blocked_landings": 1,
         "terminal_status": "FINISHED",
         "stalled": False,
     }
@@ -79,10 +88,11 @@ def test_run_reliability_metrics_marks_stalled_terminal_statuses() -> None:
         "stuck_escapes": 0,
         "probe_spin_trips": 0,
         "export_refusals": 0,
-        "export_releases": 0,
-        "host_verify_refusals": 0,
-        "terminal_status": "STUCK",
-        "stalled": True,
+            "export_releases": 0,
+            "host_verify_refusals": 0,
+            "blocked_landings": 0,
+            "terminal_status": "STUCK",
+            "stalled": True,
     }
     assert run_reliability_metrics([_status("ERROR", None)])["stalled"] is False
 
@@ -99,6 +109,7 @@ def test_aggregate_reliability_metrics_sums_totals_and_stall_rate() -> None:
                 "export_refusals": 0,
                 "export_releases": 0,
                 "host_verify_refusals": 1,
+                "blocked_landings": 2,
                 "terminal_status": "STUCK",
                 "stalled": True,
             }
@@ -114,6 +125,7 @@ def test_aggregate_reliability_metrics_sums_totals_and_stall_rate() -> None:
                     "export_refusals": 2,
                     "export_releases": 1,
                     "host_verify_refusals": 0,
+                    "blocked_landings": 1,
                     "terminal_status": "FINISHED",
                     "stalled": False,
                 }
@@ -132,6 +144,7 @@ def test_aggregate_reliability_metrics_sums_totals_and_stall_rate() -> None:
             "export_refusals": 2,
             "export_releases": 1,
             "host_verify_refusals": 1,
+            "blocked_landings": 3,
             "stalled": 1,
             "runs": 2,
         },

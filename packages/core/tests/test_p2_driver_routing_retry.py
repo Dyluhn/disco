@@ -4,7 +4,7 @@ Tests:
 1. Agent raises LLMProviderUnavailable once → driver retries with escalated
    provider_prefs; no "check your JSON" hint; run completes.
 2. A plain LLMError still takes the L447 requery-with-hint path (regression).
-3. LLMProviderUnavailable cap → PAUSED (not ERROR).
+3. LLMProviderUnavailable cap → explained user question (not ERROR).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from disco.core.llm import LLMAuthError, LLMError
 from disco.core.llm.errors import LLMProviderUnavailable
 from disco.core.loop.boundaries import AgentStep
 from disco.core.loop.control import Disp
-from loop_fakes import build_loop
+from loop_fakes import assert_blocked_question_landing, build_loop
 
 CID = "conv"
 
@@ -191,10 +191,11 @@ async def test_provider_unavailable_cap_leads_to_pause():
     await loop.send_message("do something")
     state = await loop.run()
 
-    # Cap exhausted → PAUSED (not ERROR)
-    assert state.execution_status == ConversationStatus.PAUSED
+    # Cap exhausted → explained user question (not ERROR)
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     # No ErrorEvent (it's a provider outage, not a model error)
     events = await store.get_events(CID)
+    assert_blocked_question_landing(events, legacy_detail="driver-unavailable")
     assert not any(isinstance(e, ErrorEvent) for e in events)
 
 

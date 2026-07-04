@@ -14,7 +14,13 @@ from disco.core import (
 )
 from disco.core.llm import LLMTransientError, OperatingMode
 from disco.core.loop import signals
-from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
+from loop_fakes import (
+    ScriptedAgent,
+    action_step,
+    assert_blocked_question_landing,
+    build_loop,
+    finish_step,
+)
 
 CID = "conv"
 
@@ -37,7 +43,7 @@ def _last_status_detail(events):
 
 @pytest.mark.asyncio
 async def test_actionless_breaker_halts():
-    """3 no-tool-call steps with an incomplete plan → PAUSED actionless."""
+    """3 no-tool-call steps with an incomplete plan explains and asks the user."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
         noop_step("a"),
@@ -53,9 +59,9 @@ async def test_actionless_breaker_halts():
     await loop.approve_plan()
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "actionless"
+    assert_blocked_question_landing(events, legacy_detail="actionless")
     msgs = [
         e for e in events
         if isinstance(e, MessageEvent) and e.source == EventSource.ENVIRONMENT
@@ -253,7 +259,7 @@ async def test_transient_error_retry_succeeds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_transient_error_persistent_pauses(monkeypatch):
-    """Persistent LLMTransientError → PAUSED driver-unavailable, 4 attempts, no ErrorEvent."""
+    """Persistent LLMTransientError → explained driver-unavailable, no ErrorEvent."""
     import disco.core.loop.driver as driver_module
 
     async def mock_sleep(_d):
@@ -267,10 +273,10 @@ async def test_transient_error_persistent_pauses(monkeypatch):
     await loop.send_message("go")
     state = await loop.run()
 
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "driver-unavailable"
-    assert agent.calls == 4   # 1 initial + 3 retries
+    assert_blocked_question_landing(events, legacy_detail="driver-unavailable")
+    assert agent.calls == 5   # 1 initial + 3 retries + 1 bounded lander turn
 
     errors = [e for e in events if getattr(e, "kind", None) == "error"]
     assert len(errors) == 0
@@ -322,7 +328,7 @@ async def _approved_plan_loop(agent):
 
 @pytest.mark.asyncio
 async def test_serve_spam_trips_valve():
-    """Distinct serve calls with no real action in between → PAUSED actionless
+    """Distinct serve calls with no real action in between → asks with actionless
     at the cap (3 DeliverableEvents max), not a 50-event spam run."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
@@ -336,9 +342,9 @@ async def test_serve_spam_trips_valve():
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "actionless"
+    assert_blocked_question_landing(events, legacy_detail="actionless")
     deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
     assert len(deliverables) == 3
 
@@ -358,9 +364,9 @@ async def test_duplicate_serve_suppressed_and_trips_valve():
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "actionless"
+    assert_blocked_question_landing(events, legacy_detail="actionless")
     deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
     assert len(deliverables) == 1
 
@@ -379,9 +385,9 @@ async def test_empty_serve_spam_trips_valve():
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "actionless"
+    assert_blocked_question_landing(events, legacy_detail="actionless")
     assert not any(isinstance(e, DeliverableEvent) for e in events)
 
 
@@ -402,16 +408,16 @@ async def test_duplicate_remember_spam_trips_valve():
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "actionless"
+    assert_blocked_question_landing(events, legacy_detail="actionless")
     knowledges = [e for e in events if isinstance(e, KnowledgeEvent)]
     assert len(knowledges) == 1
 
 
 @pytest.mark.asyncio
 async def test_notify_user_spam_trips_valve():
-    """notify_user prose spam (the 'I'm back!' degeneration) → PAUSED
+    """notify_user prose spam (the 'I'm back!' degeneration) → AWAITING_USER
     actionless at the cap — the intercept no longer bypasses the valve."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
@@ -423,9 +429,9 @@ async def test_notify_user_spam_trips_valve():
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "actionless"
+    assert_blocked_question_landing(events, legacy_detail="actionless")
 
 
 @pytest.mark.asyncio
@@ -506,9 +512,9 @@ async def test_serve_before_work_spam_trips_valve():
     loop, store = await _approved_plan_loop(agent)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == "actionless"
+    assert_blocked_question_landing(events, legacy_detail="actionless")
     assert not any(isinstance(e, DeliverableEvent) for e in events)
 
 
@@ -684,8 +690,8 @@ _STUCK_DETAIL = "loop ended without reaching a terminal state"
 @pytest.mark.asyncio
 async def test_exit_invariant_terminalizes_running_return():
     """A drive loop that returns while status is still RUNNING (a dropped /
-    no-event step on a HALT path) must become STUCK in-turn with the canonical
-    detail — the conversation never carries RUNNING out of run()."""
+    no-event step on a HALT path) must explain and ask in-turn with the canonical
+    detail in metadata — the conversation never carries RUNNING out of run()."""
     agent = ScriptedAgent([finish_step()])
     loop, store = build_loop(agent)
     await loop.send_message("go")
@@ -700,16 +706,9 @@ async def test_exit_invariant_terminalizes_running_return():
 
     state = await loop.run()
 
-    assert state.execution_status == ConversationStatus.STUCK
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    assert _last_status_detail(events) == _STUCK_DETAIL
-    # Exactly one STUCK-with-canonical-detail event was synthesized.
-    assert sum(
-        isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.STUCK
-        and e.detail == _STUCK_DETAIL
-        for e in events
-    ) == 1
+    assert_blocked_question_landing(events, legacy_detail=_STUCK_DETAIL)
 
 
 @pytest.mark.asyncio
@@ -730,8 +729,7 @@ async def test_exit_invariant_no_spurious_stuck_on_finished():
 
 @pytest.mark.asyncio
 async def test_exit_invariant_no_spurious_stuck_on_parked():
-    """The invariant must NOT fire on a legitimate PARKED exit (actionless →
-    PAUSED): a parked status is terminal-for-now, not a silent RUNNING stall."""
+    """The invariant must NOT add its own block on a legitimate actionless park."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
         noop_step("a"),
@@ -748,7 +746,7 @@ async def test_exit_invariant_no_spurious_stuck_on_parked():
 
     state = await loop.run()
 
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
     assert not any(
         isinstance(e, StatusEvent) and e.detail == _STUCK_DETAIL for e in events

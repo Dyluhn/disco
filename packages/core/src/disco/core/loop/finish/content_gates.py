@@ -496,26 +496,15 @@ class _ContentGateMixin(_FinishGateProto):
                     _EXECUTION_NUDGE_CAP,
                     self._loop.conversation_id,
                 )
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "<system-reminder>\n"
-                                "Plan approved but no execution action was taken after "
-                                f"{self._loop._execution_nudges} execution reminders. "
-                                "The plan was not executed.\n"
-                                "</system-reminder>"
-                            ),
-                        ),
-                    )
-                )
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.STUCK,
-                        detail="approve_plan_no_execution",
-                    )
+                await self._loop._land_blocked(
+                    reason="approve_plan_no_execution",
+                    guidance=(
+                        "Plan approved but no execution action was taken after "
+                        f"{self._loop._execution_nudges} execution reminders. "
+                        "The plan was not executed."
+                    ),
+                    legacy_status=ConversationStatus.STUCK,
+                    legacy_detail="approve_plan_no_execution",
                 )
                 return Disp.HALT
 

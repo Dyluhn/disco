@@ -2,10 +2,10 @@
 (guidelines §11.2, §20.4).
 
 The idempotency / mode-flip / no-task-duplication contracts hold and pass. The
-"runtime kick after approval produces an action or a terminal failure" contract
+    "runtime kick after approval produces an action or an explained user handoff" contract
 is now SATISFIED (Build Soak repair #2): finish.py gate_execution_nudge caps at
-3 nudges then terminalizes the run STUCK with detail `approve_plan_no_execution`
-(a terminal explicit failure per §11.2) instead of a false FINISHED. See
+    3 nudges then parks at AWAITING_USER_QUESTION with legacy detail
+    `approve_plan_no_execution` instead of a false FINISHED. See
 docs/build-soak-surfaced-bugs.md.
 """
 
@@ -23,7 +23,12 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.llm import OperatingMode
-from loop_fakes import ScriptedAgent, action_step, finish_step
+from loop_fakes import (
+    ScriptedAgent,
+    action_step,
+    assert_blocked_question_landing,
+    finish_step,
+)
 
 
 def _submit_plan_step():
@@ -75,9 +80,7 @@ async def test_execution_does_not_duplicate_user_task():
 
 async def test_kick_after_approval_produces_action_or_terminal_failure():
     """After approval, running the loop must produce a real execution action OR a
-    terminal explicit failure — never a silent FINISHED with no work. A plan
-    approved but never executed terminalizes STUCK:approve_plan_no_execution
-    (the §11.2 terminal-failure case; Build Soak repair #2)."""
+    user-visible blocked handoff — never a silent FINISHED with no work."""
     loop, store = await _planned("appr-exec")
     await loop.approve_plan()
     # An agent that immediately tries to finish without doing any work.
@@ -88,8 +91,8 @@ async def test_kick_after_approval_produces_action_or_terminal_failure():
     has_action = any(isinstance(e, ActionEvent) for e in events)
     terminal_failure = any(
         isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.STUCK
-        and e.detail == "approve_plan_no_execution"
+        and e.status == ConversationStatus.AWAITING_USER_QUESTION
+        and e.meta.get("legacy_detail") == "approve_plan_no_execution"
         for e in events
     )
     # The terminal must NOT be a false FINISHED.
@@ -104,7 +107,7 @@ async def test_kick_after_approval_produces_action_or_terminal_failure():
 async def test_approval_then_no_action_is_bounded_stuck_not_finished():
     """REGRESSION (Build Soak repair #2, negative): submit_plan → approve →
     repeated no-action finish turns drive the W-5 execution-nudge gate to its cap
-    (3) → the run terminalizes STUCK:approve_plan_no_execution, bounded (well
+    (3) → the run explains/asks with approve_plan_no_execution, bounded (well
     before max_iterations) and NEVER a false FINISHED. Driven against the REAL
     loop the way the RCA specifies (the finish-path nudge gate, not the actionless
     valve)."""
@@ -118,14 +121,9 @@ async def test_approval_then_no_action_is_bounded_stuck_not_finished():
 
     state = await store.get_state("appr-noexec-stuck")
     events = await store.get_events("appr-noexec-stuck")
-    # Terminalized STUCK with the named detail — NOT FINISHED.
-    assert state.execution_status == ConversationStatus.STUCK
-    terminal = next(
-        e
-        for e in reversed(events)
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
-    )
-    assert terminal.detail == "approve_plan_no_execution"
+    # Landed at a user question with the named legacy detail — NOT FINISHED.
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")
     assert not any(
         isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
         for e in events

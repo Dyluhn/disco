@@ -14,8 +14,8 @@ REAL `DefaultToolExecutor` wired into the agent loop:
    then produces a SUCCESS `ObservationEvent` — proving the actionable error makes
    a formatting failure recoverable in one turn.
 2. (must-not-regress) the SAME malformed call repeated past the stuck threshold
-   still trips the stuck breaker (escape-then-halt → terminal STUCK); the richer
-   message is deterministic, so stuck detection is unaffected.
+   still trips the breaker (escape-then-halt → user-facing blocked question);
+   the richer message is deterministic, so stuck detection is unaffected.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from loop_fakes import (
     FakeSummarizer,
     ScriptedAgent,
     action_step,
+    assert_blocked_question_landing,
     build_loop,
     finish_step,
 )
@@ -124,7 +125,8 @@ async def test_first_error_is_actionable_and_corrected_call_succeeds():
 async def test_ignored_actionable_error_still_stucks():
     """MUST-NOT-REGRESS — if the model IGNORES the actionable error and keeps
     sending the identical malformed call (and does NOTHING else productive), the run
-    still halts STUCK (no infinite loop). NOTE: update_plan_progress is a NONCRITICAL
+    still halts with an explained question (no infinite loop). NOTE:
+    update_plan_progress is a NONCRITICAL
     cosmetic bookkeeping tool, so its malformed loop is intentionally EXEMPT from the
     fatal `repeated_action_error` pattern (signals._NONCRITICAL_FAILURE_TOOLS, mirrored
     into stuck.py) — a cosmetic hiccup must not kill an otherwise-productive build.
@@ -143,19 +145,12 @@ async def test_ignored_actionable_error_still_stucks():
     await loop.send_message("update the plan progress")
     state = await loop.run()
 
-    assert state.execution_status == ConversationStatus.STUCK
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
 
     events = await store.get_events(CID)
     # the cosmetic-tool loop halts via the BOOKKEEPING gate (not the fatal
     # repeated_action_error escape) — update_plan_progress is exempt from pattern 2.
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "bookkeeping_only" for e in events
-    )
-    # a STUCK StatusEvent was emitted (terminal halt, not an infinite loop).
-    assert any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
-        for e in events
-    )
+    assert_blocked_question_landing(events, legacy_detail="bookkeeping_only")
     # and the malformed calls were genuinely rejected (never coerced into success).
     upp_obs = [
         e

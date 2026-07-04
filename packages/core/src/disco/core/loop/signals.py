@@ -218,6 +218,12 @@ def actionless_pause_count_current_execution_segment(events: list[Event]) -> int
             if event.status == ConversationStatus.RUNNING:
                 continue
             if event.status in _SYNTHETIC_FINISH_RESET_STATUSES:
+                # Terminal-collapse: a blocked-breaker LANDING (explain+ask) is
+                # bookkeeping over the pause it supersedes, not a fresh user
+                # interaction — it must not reset the actionless count or the
+                # REL-RC-P valve goes blind (the marker precedes it).
+                if (getattr(event, "meta", None) or {}).get("blocked_landing"):
+                    continue
                 break
             if event.status == ConversationStatus.PAUSED:
                 break

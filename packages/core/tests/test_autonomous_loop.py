@@ -17,7 +17,13 @@ from __future__ import annotations
 import pytest
 from disco.core import ConversationStatus, SqliteEventStore, StatusEvent
 from disco.core.llm import OperatingMode
-from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
+from loop_fakes import (
+    ScriptedAgent,
+    action_step,
+    assert_blocked_question_landing,
+    build_loop,
+    finish_step,
+)
 
 CID = "conv"
 
@@ -198,9 +204,8 @@ async def test_autonomous_propose_plan_update_halts_on_repeat_identical_steps():
     """C8 (T11): when the loop auto-approves a `propose_plan_update` in
     autonomous mode and the proposed plan's steps are byte-identical to the
     immediately-prior plan for >=3 consecutive times, the repeated re-proposal
-    MUST feed the existing bookkeeping-stuck valve so the run halts (STUCK)
-    rather than looping forever. The bookkeeping_only detail is the exact
-    signal the existing (c.3) valve uses — we reuse it, not invent a new one."""
+    MUST feed the existing bookkeeping breaker so the run explains and asks
+    rather than looping forever. The bookkeeping_only legacy detail is retained."""
     from disco.core import SqliteEventStore as Store
 
     store = Store(":memory:")
@@ -214,22 +219,12 @@ async def test_autonomous_propose_plan_update_halts_on_repeat_identical_steps():
 
     events = await store.get_events(CID)
     # The bound fired: the run halted, and with the same bookkeeping_only
-    # signal the existing (c.3) valve emits. The model did NOT get to keep
+    # legacy detail the existing (c.3) valve emits. The model did NOT get to keep
     # proposing the same plan forever.
-    assert state.execution_status == ConversationStatus.STUCK, (
-        f"expected STUCK on repeat-identical-steps loop, got {state.execution_status}"
-    )
-    stuck_statuses = [
-        e
-        for e in events
-        if isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.STUCK
-        and e.detail == "bookkeeping_only"
-    ]
-    assert stuck_statuses, (
-        "expected the existing bookkeeping_only STUCK signal (C8 reuses the "
-        "valve, does not invent a new one)"
-    )
+    # Two-flavor landing: AUTONOMOUS runs conclude terminally (STUCK carrying
+    # the explanation) — headless has nobody to answer an open question.
+    assert state.execution_status == ConversationStatus.STUCK
+    assert_blocked_question_landing(events, legacy_detail="bookkeeping_only", flavor="terminal")
     # The AWAITING_PLAN_APPROVAL gate was never reached — autonomous was
     # respected for the first revisions, then the cap fired.
     assert not _awaiting_plan(events), (

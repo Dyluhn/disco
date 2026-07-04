@@ -154,7 +154,7 @@ async def test_dawdle_after_two_actionless_pauses_synthesizes_finish() -> None:
     await _approve(loop)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse landing
 
     loop.agent = ScriptedAgent(
         [
@@ -166,7 +166,7 @@ async def test_dawdle_after_two_actionless_pauses_synthesizes_finish() -> None:
         ]
     )
     state = await loop.resume()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse landing
 
     pre_finish_events = await store.get_events(CID)
     assert signals.actionless_pause_count_current_execution_segment(pre_finish_events) == 2
@@ -218,7 +218,9 @@ async def test_synthetic_finish_refusal_continues_with_dictated_content_blocker(
     )
     await _approve(loop, 'Build the artifact with button text "Get Started".')
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.PAUSED
+    # Terminal-collapse: interactive actionless landings explain + ask instead
+    # of parking bare PAUSED (the legacy detail rides in event meta).
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
 
     loop.agent = ScriptedAgent(
         [
@@ -230,7 +232,7 @@ async def test_synthetic_finish_refusal_continues_with_dictated_content_blocker(
         ]
     )
     state = await loop.resume()
-    assert state.execution_status == ConversationStatus.PAUSED
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
 
     loop.agent = ScriptedAgent(
         [

@@ -2,14 +2,13 @@
 
 The spec (§10.9 W5 / §11.2): give the one UNcapped gate an explicit cap-3 +
 visible-warning terminal. After _EXECUTION_NUDGE_CAP consecutive nudges without
-productive action, the gate TERMINALIZES the run as a FAILURE — STUCK with
-detail `approve_plan_no_execution` (a plan approved but never executed is a
-terminal failure per §11.2, NOT a false FINISHED) — rather than spinning until
-max_iterations.
+productive action, the gate parks the run at AWAITING_USER_QUESTION with legacy
+detail `approve_plan_no_execution` (a plan approved but never executed is NOT a
+false FINISHED) — rather than spinning until max_iterations.
 
 Tests:
-  1. After exactly 3 nudges the gate terminalizes STUCK (not FINISHED/PAUSED).
-  2. The terminal emits a visible warning that the plan was not executed.
+  1. After exactly 3 nudges the gate explains and asks (not FINISHED/PAUSED).
+  2. The landing emits a visible warning that the plan was not executed.
 """
 
 from __future__ import annotations
@@ -27,6 +26,7 @@ from loop_fakes import (
     FakeExecutor,
     ScriptedAgent,
     action_step,
+    assert_blocked_question_landing,
     build_loop,
     finish_step,
 )
@@ -66,7 +66,7 @@ def _env_messages(events) -> list[str]:
 @pytest.mark.asyncio
 async def test_execution_nudge_releases_after_cap():
     """After exactly _EXECUTION_NUDGE_CAP (3) nudges without productive action
-    the gate terminalizes the run STUCK (approve_plan_no_execution) with a
+    the gate explains and asks (approve_plan_no_execution) with a
     visible "plan was not executed" warning in the trace — NOT a false
     FINISHED (§11.2)."""
     # 1. Plan phase: agent submits a plan then stops (AWAITING_PLAN_APPROVAL).
@@ -112,17 +112,12 @@ async def test_execution_nudge_releases_after_cap():
     # The terminal warning is present and says the plan was not executed.
     warnings = [m for m in env if "no execution action was taken" in m]
     assert len(warnings) == 1, f"expected one terminal warning, got: {env}"
-    assert "The plan was not executed" in warnings[0], warnings[0]
+    assert "Plan approved but no execution action was taken" in warnings[0], warnings[0]
 
-    # Run terminalizes STUCK/approve_plan_no_execution — NOT FINISHED.
+    # Run lands AWAITING_USER/approve_plan_no_execution — NOT FINISHED.
     statuses = [e.status.value for e in events if isinstance(e, StatusEvent)]
     assert "FINISHED" not in statuses, f"must not FINISH, got {statuses}"
-    terminal = next(
-        e
-        for e in reversed(events)
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
-    )
-    assert terminal.detail == "approve_plan_no_execution", terminal.detail
+    assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")
 
 
 @pytest.mark.asyncio
@@ -160,10 +155,5 @@ async def test_execution_nudge_release_is_loud():
     assert "3" in warnings[0], (
         f"terminal warning should mention count 3: {warnings[0]!r}"
     )
-    # And it terminalizes STUCK/approve_plan_no_execution, not FINISHED.
-    terminal = next(
-        e
-        for e in reversed(events)
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
-    )
-    assert terminal.detail == "approve_plan_no_execution", terminal.detail
+    # And it lands AWAITING_USER/approve_plan_no_execution, not FINISHED.
+    assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")

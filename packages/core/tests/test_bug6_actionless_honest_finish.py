@@ -320,7 +320,7 @@ async def test_negative_zero_work_after_approval_stucks_not_honest_finish():
 
     sts = _statuses(events)
     assert not _has_honest_marker(events), sts
-    assert state.execution_status == ConversationStatus.STUCK, sts
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse landing, sts
     assert any(d == "approve_plan_no_execution" for _, d in sts), sts
 
 

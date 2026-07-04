@@ -9,7 +9,14 @@ from disco.core import (
     ToolResult,
 )
 from disco.core.loop import signals
-from loop_fakes import FakeExecutor, ScriptedAgent, action_step, build_loop, finish_step
+from loop_fakes import (
+    FakeExecutor,
+    ScriptedAgent,
+    action_step,
+    assert_blocked_question_landing,
+    build_loop,
+    finish_step,
+)
 
 CID = "conv"
 
@@ -138,12 +145,16 @@ async def test_failures_do_not_trigger_automatic_reminders():
     await loop.run()
     events = await store.get_events(CID)
     all_reminders = await _reminders(events)
-    # Filter to reminders that are NOT the c97c1b3-bounded C7 escape
-    # reminder. Any other <system-reminder> from the harness is a
-    # regression of the no-automatic-nudge invariant.
+    # Filter to reminders that are NOT one of the TWO sanctioned host
+    # reminders: (1) the c97c1b3-bounded C7 escape reminder, and (2) the
+    # terminal-collapse blocked-landing prompt ("You are blocked because…"),
+    # which is host-initiated, breaker-bounded, and BY DESIGN the mechanism
+    # that converts a dead-end into an explain+ask landing. Any other
+    # <system-reminder> is a regression of the no-automatic-nudge invariant.
     non_escape_reminders = [
         e for e in all_reminders
         if "disco:escape-attempt=" not in (e.message.content or "")
+        and "You are blocked because" not in (e.message.content or "")
     ]
     assert non_escape_reminders == [], (
         "the loop must NOT emit automatic failure-recovery reminders "
@@ -1278,16 +1289,11 @@ async def test_execution_nudge_without_action_lands_instead_of_livelocking():
     state = await store.get_state(CID)
     events = await store.get_events(CID)
     # Landed cleanly via the W5 execution-nudge cap — NOT spun to the LLMError cap.
-    # The cap terminalizes STUCK:approve_plan_no_execution directly (bypassing the
+    # The cap explains/asks with approve_plan_no_execution directly (bypassing the
     # noop valve) so the run lands in bounded turns — a false FINISHED here would
     # be the APPROVE_PLAN_NO_EXECUTION bug.
-    assert state.execution_status == ConversationStatus.STUCK
-    terminal = next(
-        e
-        for e in reversed(events)
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
-    )
-    assert terminal.detail == "approve_plan_no_execution"
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")
     # The execution gate actually fired (the path under test ran)...
     assert loop._execution_nudges >= _EXECUTION_NUDGE_CAP
     # ...and it terminated promptly — well short of the 20-finish LLMError cap.

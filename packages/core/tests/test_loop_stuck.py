@@ -12,7 +12,13 @@ from disco.core.loop import StuckDetector, StuckThresholds, signals
 from disco.core.loop.control import Disp
 from disco.core.loop.stuck import repeated_verify_no_progress
 from event_fakes import action, agent_error, agent_msg, observation, user_msg
-from loop_fakes import ScriptedAgent, action_step, build_loop, finish_step
+from loop_fakes import (
+    ScriptedAgent,
+    action_step,
+    assert_blocked_question_landing,
+    build_loop,
+    finish_step,
+)
 
 CID = "conv"
 
@@ -251,7 +257,7 @@ async def test_loop_tries_a_temp_escape_before_going_stuck():
         f"first escape reminder must use attempt=0, got: {escape_reminders[0].message.content!r}"
     )
     # …and it still ended STUCK because the model kept repeating after the retry.
-    assert state.execution_status == ConversationStatus.STUCK
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse: interactive stuck lands explain+ask
 
 
 # ---- C7 — escape reminder rotation + serialization seed --------------------
@@ -301,7 +307,10 @@ async def test_c7_escape_reminders_rotate_deterministically_by_attempt_count():
     # Each user turn: 3 actions to trigger stuck, then 1 retry action that
     # fails (so the run halts STUCK). 4 actions per turn. Three turns = 12
     # actions, plus a final finish to cleanly drain the queue.
-    agent = ScriptedAgent([action_step()] * 12 + [finish_step()])
+    # terminal-collapse: each blocked landing consumes one scripted turn for the
+    # model-authored explanation — supply 3 extra identical actions so turn 3
+    # still repeats into the breaker instead of draining to finish_step.
+    agent = ScriptedAgent([action_step()] * 15 + [finish_step()])
     loop, store = build_loop(
         agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3)
     )
@@ -309,8 +318,9 @@ async def test_c7_escape_reminders_rotate_deterministically_by_attempt_count():
     # Turn 1: triggers escape 0 (pool[0]).
     await loop.send_message("turn 1: repeat please")
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.STUCK, (
-        f"turn 1 should end STUCK (escape spent), got {state.execution_status}"
+    # terminal-collapse: interactive stuck lands explain+ask
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION, (
+        f"turn 1 should land the blocked ask (escape spent), got {state.execution_status}"
     )
 
     # Turn 2: triggers escape 1 (pool[1]). The script's next 4 actions fire
@@ -318,14 +328,16 @@ async def test_c7_escape_reminders_rotate_deterministically_by_attempt_count():
     # within the conversation, so the second escape gets index 1, not 0.
     await loop.send_message("turn 2: try again")
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.STUCK, (
+    # terminal-collapse: interactive stuck lands explain+ask
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION, (
         f"turn 2 should end STUCK, got {state.execution_status}"
     )
 
     # Turn 3: triggers escape 2 (pool[2]).
     await loop.send_message("turn 3: one more")
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.STUCK, (
+    # terminal-collapse: interactive stuck lands explain+ask
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION, (
         f"turn 3 should end STUCK, got {state.execution_status}"
     )
 
@@ -521,52 +533,35 @@ def test_stuck_result_names_the_breaker_per_pattern():
 
 
 async def test_stuck_status_event_names_the_breaker():
-    """W-31 — when gate_stuck halts the run, the STUCK StatusEvent must carry a
-    NON-EMPTY `detail` naming the breaker (here pattern 1 = repeated reads),
-    instead of an undifferentiated STUCK the operator has to infer. Every sibling
-    gate (stuck_escape / recovery_requested / bookkeeping_only / no_progress)
-    already stamps a detail — this matches that convention."""
+    """When gate_stuck halts, it explains and asks with the old breaker detail
+    retained as landing metadata."""
     agent = ScriptedAgent([action_step()] * 6 + [finish_step()])
     loop, store = build_loop(
         agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3)
     )
     await loop.send_message("repeat please")
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.STUCK
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
 
     events = await store.get_events(CID)
-    stuck_events = [
-        e
-        for e in events
-        if isinstance(e, StatusEvent) and e.status == ConversationStatus.STUCK
-    ]
-    assert stuck_events, "expected a STUCK StatusEvent on the log"
-    # The breaker is NAMED — detail is non-empty and identifies the pattern.
-    assert all(e.detail for e in stuck_events), (
-        f"every STUCK emit must carry a non-empty detail; "
-        f"got {[e.detail for e in stuck_events]}"
-    )
-    assert any(e.detail == "repeated_action_observation" for e in stuck_events), (
-        f"the gate_stuck STUCK halt must NAME pattern 1 (repeated reads); "
-        f"got details {[e.detail for e in stuck_events]}"
-    )
+    assert_blocked_question_landing(events, legacy_detail="repeated_action_observation")
 
 
 async def test_loop_goes_stuck_then_resumes_on_new_message():
-    # Same action forever → identical action→obs cycles → STUCK (after the reframe
+    # Same action forever → identical action→obs cycles → AWAITING_USER (after the reframe
     # escape is spent: 3 to trigger + ≥1 retry that's still stuck).
     agent = ScriptedAgent([action_step()] * 6 + [finish_step()])
     loop, store = build_loop(agent, stuck_thresholds=StuckThresholds(repeat_action_observation=3))
     await loop.send_message("repeat please")
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.STUCK
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
 
     # A new message resets and the loop resumes; the next step finishes.
     await loop.send_message("ok stop, finish")
     resumed = await loop.run()
     assert resumed.execution_status == ConversationStatus.FINISHED
     statuses = [e.status for e in await store.get_events(CID) if isinstance(e, StatusEvent)]
-    assert ConversationStatus.STUCK in statuses
+    assert ConversationStatus.AWAITING_USER_QUESTION in statuses
     assert statuses[-1] == ConversationStatus.FINISHED
 
 
@@ -627,19 +622,10 @@ async def test_bookkeeping_halt_caps_genuine_spam_on_tiny_plan():
     loop, _ = build_loop(agent, store=store, mode=OperatingMode.LONG_HORIZON)
     state = await loop.run()
 
-    # bookkeeping halt fired with the right detail
-    assert state.execution_status == ConversationStatus.STUCK, (
-        f"expected STUCK bookkeeping_only, got {state.execution_status}"
-    )
+    # bookkeeping halt explained and asked with the right legacy detail
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
-    stuck_statuses = [
-        e
-        for e in events
-        if isinstance(e, CoreStatusEvent) and e.status == ConversationStatus.STUCK
-    ]
-    assert any(e.detail == "bookkeeping_only" for e in stuck_statuses), (
-        f"expected detail='bookkeeping_only' in {[e.detail for e in stuck_statuses]}"
-    )
+    assert_blocked_question_landing(events, legacy_detail="bookkeeping_only")
     # And the model wasn't allowed to keep going — no FINISHED, no plan_step count > 6.
     assert state.execution_status != ConversationStatus.FINISHED
 
@@ -1072,7 +1058,7 @@ def test_no_progress_resets_on_user_message():
 async def test_no_progress_gate_nudges_then_halts():
     """Loop integration via the real Valve gate + store: first trip emits a
     corrective nudge (CONTINUE); a second trip after the model made MORE varied
-    edits with the SAME symptom halts STUCK (instead of grinding to the ceiling)."""
+    edits with the SAME symptom explains and asks (instead of grinding to the ceiling)."""
     loop, store = build_loop(ScriptedAgent([finish_step()]))
     await store.append(CID, user_msg("build the app"))
     for i in range(4):
@@ -1102,12 +1088,7 @@ async def test_no_progress_gate_nudges_then_halts():
     disp = await loop._valve.gate_no_progress(events)
     assert disp is Disp.HALT
     events = await store.get_events(CID)
-    assert any(
-        isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.STUCK
-        and e.detail == "no_progress"
-        for e in events
-    ), "second trip after acting must halt STUCK with detail=no_progress"
+    assert_blocked_question_landing(events, legacy_detail="no_progress")
 
 
 async def test_no_progress_gate_silent_on_genuine_progress():

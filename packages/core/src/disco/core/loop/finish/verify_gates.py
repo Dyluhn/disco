@@ -1040,24 +1040,16 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             # LOOP BREAKER: the SAME failure verdict has recurred since the last
             # productive edit and the gate already nudged for it — no new
             # information. Halt STUCK (named) instead of re-loading forever.
-            blocked = (
-                f"⚠ Stopped: {tool_name} keeps returning the SAME failure with no "
-                "progress since the last edit — re-loading won't help.\n"
-                f"{summary}\n"
-                + (f"error: {first_error}\n" if first_error else "")
-                + (f"next: {next_action}" if next_action else "")
-            )
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(role="user", content=blocked),
-                )
-            )
-            await self._loop._emit(
-                StatusEvent(
-                    status=ConversationStatus.STUCK,
-                    detail=f"{_VERIFY_MARKER_PREFIX}{fp}",
-                )
+            await self._loop._land_blocked(
+                reason=f"{_VERIFY_MARKER_PREFIX}{fp}",
+                guidance=(
+                    f"{tool_name} kept returning the same failure with no "
+                    f"progress since the last edit. {summary}"
+                    + (f" Error: {first_error}" if first_error else "")
+                    + (f" Next: {next_action}" if next_action else "")
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail=f"{_VERIFY_MARKER_PREFIX}{fp}",
             )
             return Disp.HALT
 

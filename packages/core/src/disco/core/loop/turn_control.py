@@ -42,13 +42,14 @@ from ..events import (
     ToolResult,
 )
 from ..llm import OperatingMode
-from . import signals
+from . import signals, view_render
 from .bootstrap import _detect_project_bootstrap
 from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS
 from .stuck import F6_FILE_MUTATING_TOOLS, repeated_verify_no_progress
+from .tool_specs import _ask_user_tool_singleton
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
@@ -211,6 +212,11 @@ _NO_PROGRESS_REMINDER = (
     "</system-reminder>"
 )
 
+_BLOCKED_LANDING_META_KEY = "blocked_landing"
+_BLOCKED_DETAIL_PREFIX = "blocked:"
+_ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
+_ACTIONLESS_AUTO_RESUME_SEGMENT_CAP = 3
+
 
 def _no_progress_marker_seq(events: list[Event]) -> int | None:
     """Seq of the most recent `no_progress` marker since the last USER message,
@@ -271,8 +277,220 @@ class Valve:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
 
+    def _blocked_meta(
+        self,
+        *,
+        reason: str,
+        legacy_status: ConversationStatus,
+        legacy_detail: str | None,
+    ) -> dict[str, str | bool]:
+        meta: dict[str, str | bool] = {
+            _BLOCKED_LANDING_META_KEY: True,
+            "blocked_reason": reason,
+            "legacy_status": legacy_status.value,
+        }
+        if legacy_detail:
+            meta["legacy_detail"] = legacy_detail
+        return meta
+
+    def _blocked_prompt(self, *, reason: str, guidance: str) -> str:
+        guidance_line = f"\nContext: {guidance.strip()}" if guidance.strip() else ""
+        return (
+            "<system-reminder>\n"
+            f"You are blocked because {reason}.\n"
+            "Produce a SHORT user-facing message explaining: where the build "
+            "stands, what you tried, what is blocking progress, and ONE concrete "
+            "question or decision you need from the user. Do not continue the "
+            "task. Do not call work tools. If you call a tool, call only "
+            "`ask_user` with one free-form `question` and no options."
+            f"{guidance_line}\n"
+            "</system-reminder>"
+        )
+
+    def _fallback_blocked_message(self, *, reason: str, guidance: str) -> str:
+        where = (
+            guidance.strip()
+            or "the run stopped before it could safely complete the current task."
+        )
+        return (
+            f"I'm blocked because {reason}. Where it stands: {where} "
+            "What I tried: I continued the current plan until the loop breaker "
+            "stopped the run. What should I do next?"
+        )
+
+    @staticmethod
+    def _ensure_question(content: str, fallback: str) -> str:
+        text = content.strip()
+        if not text:
+            return fallback
+        if "?" in text:
+            return text
+        if len(text.split()) < 8:
+            return fallback
+        question = "What should I do next?"
+        return f"{text}\n\n{question}"
+
+    async def _blocked_model_message(self, *, reason: str, guidance: str) -> str:
+        fallback = self._fallback_blocked_message(reason=reason, guidance=guidance)
+        try:
+            events = await self._loop._events()
+            view = await self._loop._materialize_view(events)
+            step = await self._loop.agent.step(
+                view,
+                [_ask_user_tool_singleton()],
+                mode=self._loop.mode,
+                overflow_signal=view_render.overflow_signal(events),
+                on_stream=None,
+                temperature=None,
+                assist=self._loop._assist,
+                attempt=1,
+            )
+        except Exception as exc:  # noqa: BLE001 - fallback must always explain the block
+            _LOG.warning("blocked lander model turn failed: %s", exc)
+            return fallback
+
+        if step.finished or step.truncated:
+            return fallback
+        if step.tool_call is not None:
+            if step.tool_call.tool_name != "ask_user":
+                return fallback
+            question = str(step.tool_call.arguments.get("question") or "").strip()
+            return self._ensure_question(question or step.thought, fallback)
+        return self._ensure_question(step.thought, fallback)
+
+    async def land_blocked(
+        self,
+        *,
+        reason: str,
+        guidance: str = "",
+        legacy_status: ConversationStatus = ConversationStatus.STUCK,
+        legacy_detail: str | None = None,
+    ) -> None:
+        """Explain a breaker halt and park at the free-form user-question gate.
+
+        The old PAUSED/STUCK detail is retained in event metadata for analytics,
+        while StatusEvent.detail stays the pending question id required by the
+        existing AskPanel reconstruction path.
+        """
+        clean_reason = (reason or legacy_detail or legacy_status.value).strip()
+        meta = self._blocked_meta(
+            reason=clean_reason,
+            legacy_status=legacy_status,
+            legacy_detail=legacy_detail,
+        )
+        # COUNTER MARKER: the ladder/valve signals (actionless pause counts,
+        # stuck-escape scans, REL-RC-P) key on the legacy status events. Emit the
+        # legacy status FIRST so every counter keeps working, then supersede it
+        # with the explanation + landing below (latest-status readers see the
+        # landing; counters see the marker). Autonomous flavor re-lands the
+        # legacy status at the END as its terminal state — skip the duplicate.
+        if not getattr(self._loop, "_autonomous", False):
+            await self._loop._emit(
+                StatusEvent(
+                    status=legacy_status,
+                    detail=legacy_detail,
+                    meta={**meta, "superseded_by_landing": True},
+                )
+            )
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(
+                    role="user",
+                    content=self._blocked_prompt(
+                        reason=clean_reason,
+                        guidance=guidance,
+                    ),
+                ),
+                meta=meta,
+            )
+        )
+        content = await self._blocked_model_message(
+            reason=clean_reason,
+            guidance=guidance,
+        )
+        q_event = MessageEvent(
+            source=EventSource.AGENT,
+            message=LLMMessage(role="assistant", content=content),
+            meta=meta,
+        )
+        await self._loop._emit(q_event)
+        if getattr(self._loop, "_autonomous", False):
+            # Two-flavor landing (Dylan, 2026-07-03): headless runs have nobody to
+            # answer an open question — after the ladder, the run must CONCLUDE,
+            # not hang. Land the legacy terminal status but never bare: the
+            # explanation message above always precedes it.
+            await self._loop._emit(
+                StatusEvent(
+                    status=legacy_status,
+                    detail=legacy_detail or clean_reason,
+                    meta=meta,
+                )
+            )
+            return
+        await self._loop._emit(
+            StatusEvent(
+                status=ConversationStatus.AWAITING_USER_QUESTION,
+                detail=q_event.id,
+                meta=meta,
+            )
+        )
+
+    @staticmethod
+    def _actionless_auto_resume_total(events: list[Event]) -> int:
+        return sum(
+            1
+            for event in events
+            if isinstance(event, MessageEvent)
+            and event.source == EventSource.ENVIRONMENT
+            and event.message is not None
+            and _ACTIONLESS_AUTO_RESUME_MARKER in (event.message.content or "")
+        )
+
+    @staticmethod
+    def _has_plan_approval(events: list[Event]) -> bool:
+        return any(
+            isinstance(event, StatusEvent) and event.detail == "plan_approved"
+            for event in events
+        )
+
+    def _actionless_ladder_still_front(self, events: list[Event]) -> bool:
+        """True when autonomous supervision can still consume PAUSED(actionless)."""
+        if not self._loop._autonomous or self._loop.mode == OperatingMode.PLANNING:
+            return False
+        if not self._has_plan_approval(events):
+            return False
+        if (
+            self._actionless_auto_resume_total(events)
+            >= _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP
+        ):
+            return False
+        pause_count = signals.actionless_pause_count_current_execution_segment(events)
+        if pause_count == 0:
+            return True
+        return (
+            pause_count == 1
+            and signals.productive_action_since_approval(events)
+            and not signals.synthetic_finish_attempted_for_current_pause(events)
+        )
+
     async def _pause_actionless(self, content: str) -> bool:
-        """Emit the actionless PAUSE as a durable REL-RC-P counter event."""
+        """Land an actionless breaker.
+
+        Autonomous build runs keep the historical PAUSED(actionless) marker only
+        while the external auto-resume/synthetic-finish ladder can still consume
+        it. Interactive runs, and autonomous runs after that ladder is exhausted,
+        explain the block and park at AWAITING_USER_QUESTION.
+        """
+        events = await self._loop._events()
+        if not self._actionless_ladder_still_front(events):
+            await self.land_blocked(
+                reason="actionless",
+                guidance=content,
+                legacy_status=ConversationStatus.PAUSED,
+                legacy_detail="actionless",
+            )
+            return True
         await self._loop._emit(
             MessageEvent(
                 source=EventSource.ENVIRONMENT,
@@ -328,22 +546,14 @@ class Valve:
             and signals.planning_turns_since_replan(events)
             >= self._loop._max_consecutive_noops
         ):
-            await self._loop._emit(
-                MessageEvent(
-                    source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=(
-                            "The agent stayed in planning for several turns without"
-                            " submitting a revised plan while a re-plan is pending —"
-                            " pausing instead of burning tokens. Resume to continue,"
-                            " or send a new instruction."
-                        ),
-                    ),
-                )
-            )
-            await self._loop._emit(
-                StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+            await self.land_blocked(
+                reason="actionless",
+                guidance=(
+                    "The agent stayed in planning for several turns without "
+                    "submitting a revised plan while a re-plan is pending."
+                ),
+                legacy_status=ConversationStatus.PAUSED,
+                legacy_detail="actionless",
             )
             return True
         if noops >= self._loop._ACTIONLESS_BREAK_CAP:
@@ -423,22 +633,14 @@ class Valve:
                 # PAUSED(actionless), matching the 3-no-op actionless pause, so the
                 # user can resume/redirect. Releases automatically once the revised
                 # plan is approved (then this is False again and finish is allowed).
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "The agent produced repeated responses without"
-                                " submitting a revised plan while a re-plan is"
-                                " pending — pausing instead of burning tokens."
-                                " Resume to continue, or send a new instruction."
-                            ),
-                        ),
-                    )
-                )
-                await self._loop._emit(
-                    StatusEvent(status=ConversationStatus.PAUSED, detail="actionless")
+                await self.land_blocked(
+                    reason="actionless",
+                    guidance=(
+                        "The agent produced repeated responses without submitting "
+                        "a revised plan while a re-plan is pending."
+                    ),
+                    legacy_status=ConversationStatus.PAUSED,
+                    legacy_detail="actionless",
                 )
                 return True
             # The model is spinning without acting and won't stop — end
@@ -446,22 +648,14 @@ class Valve:
             # the prompt steers toward finish/act.)
             actions_since = signals.actions_since_last_resume(events)
             if incomplete and actions_since == 0:
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "<system-reminder>\n⚠ finishing was"
-                                " blocked: plan steps remain undone and"
-                                " no work happened in this run segment."
-                                "\n</system-reminder>"
-                            ),
-                        ),
-                    )
-                )
-                await self._loop._emit(
-                    StatusEvent(status=ConversationStatus.PAUSED, detail="noop_limit")
+                await self.land_blocked(
+                    reason="noop_limit",
+                    guidance=(
+                        "Plan steps remain undone and no real work happened in "
+                        "this run segment."
+                    ),
+                    legacy_status=ConversationStatus.PAUSED,
+                    legacy_detail="noop_limit",
                 )
             else:
                 await self._loop._emit(
@@ -729,11 +923,15 @@ class Valve:
                 # W-31: NAME the breaker that fired (`detail`) so logs/UI don't
                 # surface an undifferentiated STUCK — every sibling gate stamps a
                 # detail (stuck_escape / recovery_requested / …); match that.
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.STUCK,
-                        detail=stuck_result.reason or "stuck",
-                    )
+                detail = stuck_result.reason or "stuck"
+                await self.land_blocked(
+                    reason=detail,
+                    guidance=(
+                        "The stuck detector fired again after the one allowed "
+                        "stuck-escape retry."
+                    ),
+                    legacy_status=ConversationStatus.STUCK,
+                    legacy_detail=detail,
                 )
                 return Disp.HALT
             # else: escape just marked, model hasn't retried yet → fall through
@@ -840,21 +1038,16 @@ class Valve:
                 # reach here after the threshold + a failed recovery attempt,
                 # so this is NOT an infinite-continue token burn. The failure
                 # stays visible (STUCK + the error note) for a later human.
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                f"⚠ Autonomous run forfeited after {fails} consecutive "
-                                "failures (recovery attempted, still failing). "
-                                "Recent errors:\n"
-                                + "\n".join(f"  • {err[:200]}" for err in recent_errors[:4])
-                            ),
-                        ),
-                    )
+                await self.land_blocked(
+                    reason="circuit_breaker",
+                    guidance=(
+                        f"Autonomous run hit {fails} consecutive failures after "
+                        "a recovery attempt. Recent errors:\n"
+                        + "\n".join(f"  - {err[:200]}" for err in recent_errors[:4])
+                    ),
+                    legacy_status=ConversationStatus.STUCK,
+                    legacy_detail="circuit_breaker",
                 )
-                await self._loop._emit(StatusEvent(status=ConversationStatus.STUCK))
                 return Disp.HALT
             # Recovery was already requested AND it failed again → hand off. The
             # model never volunteered clickable options, so the HARNESS now
@@ -926,8 +1119,14 @@ class Valve:
         if acted_since:
             # Nudged, the model made MORE varied edits, still the same symptom →
             # halt visibly (STUCK) instead of looping to the iteration ceiling.
-            await self._loop._emit(
-                StatusEvent(status=ConversationStatus.STUCK, detail="no_progress")
+            await self.land_blocked(
+                reason="no_progress",
+                guidance=(
+                    "The verifier outcome stayed the same after the corrective "
+                    "no-progress nudge and another edit attempt."
+                ),
+                legacy_status=ConversationStatus.STUCK,
+                legacy_detail="no_progress",
             )
             return Disp.HALT
         # Marker present but the model hasn't acted on the nudge yet → let it act.
@@ -974,23 +1173,15 @@ class Valve:
                 _plan_steps + _BOOKKEEPING_PLAN_SLACK,
             )
             if _bk_streak >= _bk_halt_cap:
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "⚠ Stopped: the agent kept updating the plan checklist "
-                                "without doing any real work. Re-run or steer it toward a "
-                                "concrete action."
-                            ),
-                        ),
-                    )
-                )
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.STUCK, detail="bookkeeping_only"
-                    )
+                await self.land_blocked(
+                    reason="bookkeeping_only",
+                    guidance=(
+                        "The agent kept updating the plan checklist without doing "
+                        "real work such as editing files, running commands, or "
+                        "otherwise changing state."
+                    ),
+                    legacy_status=ConversationStatus.STUCK,
+                    legacy_detail="bookkeeping_only",
                 )
                 return Disp.HALT, events
         return Disp.FALLTHROUGH, events
@@ -1477,26 +1668,15 @@ class MetaToolHandlers:
                 >= _PROPOSE_PLAN_UPDATE_REPEAT_CAP
             ):
                 # Reuse the existing bookkeeping-stuck valve: same
-                # message + STUCK/detail pair (c.3) emits.
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                "⚠ Stopped: the agent kept updating the "
-                                "plan checklist without doing any real "
-                                "work. Re-run or steer it toward a "
-                                "concrete action."
-                            ),
-                        ),
-                    )
-                )
-                await self._loop._emit(
-                    StatusEvent(
-                        status=ConversationStatus.STUCK,
-                        detail="bookkeeping_only",
-                    )
+                # bookkeeping breaker reason through the shared blocked lander.
+                await self._loop._valve.land_blocked(
+                    reason="bookkeeping_only",
+                    guidance=(
+                        "Autonomous mode proposed the same plan revision repeatedly "
+                        "without doing real work."
+                    ),
+                    legacy_status=ConversationStatus.STUCK,
+                    legacy_detail="bookkeeping_only",
                 )
                 return Disp.HALT
             self._loop.mode = self._loop._execution_mode

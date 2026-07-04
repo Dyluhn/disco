@@ -9,9 +9,13 @@ from __future__ import annotations
 import asyncio
 
 from disco.core import (
+    ConversationStatus,
+    EventSource,
+    MessageEvent,
     NoOpCondenser,
     SecurityRisk,
     SqliteEventStore,
+    StatusEvent,
     ToolResult,
 )
 from disco.core.llm import (
@@ -292,3 +296,52 @@ def action_step(tool: str = "shell", args: dict | None = None, thought: str = "d
 
 def finish_step(thought: str = "done"):
     return AgentStep(thought=thought, tool_call=None, finished=True)
+
+
+def assert_blocked_question_landing(
+    events, *, legacy_detail: str | None = None, flavor: str = "ask"
+):
+    """Two-flavor landing assertion: interactive breakers land the ASK state;
+    autonomous breakers conclude terminally (legacy status) — BOTH must carry
+    the explanation message + blocked_landing meta (never a bare status)."""
+    statuses = [e for e in events if isinstance(e, StatusEvent)]
+    assert statuses, "expected at least one status event"
+    terminal = statuses[-1]
+    if flavor == "terminal":
+        assert terminal.status in (
+            ConversationStatus.STUCK,
+            ConversationStatus.PAUSED,
+        ), terminal.status
+    else:
+        assert terminal.status == ConversationStatus.AWAITING_USER_QUESTION
+        assert terminal.detail, "blocked landing must point at the question message"
+    assert terminal.meta.get("blocked_landing") is True
+    if legacy_detail is not None:
+        assert terminal.meta.get("legacy_detail") == legacy_detail
+
+    if flavor == "terminal":
+        # Autonomous flavor: the explanation is the last AGENT message carrying
+        # the blocked meta (no open question required — the run CONCLUDED).
+        explanations = [
+            e
+            for e in events
+            if isinstance(e, MessageEvent)
+            and e.source == EventSource.AGENT
+            and (e.meta or {}).get("blocked_landing") is True
+        ]
+        assert explanations, "terminal landing must carry an explanation message"
+        content = explanations[-1].message.content if explanations[-1].message else ""
+        assert content and content.strip()
+        return content
+    questions = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.id == terminal.detail
+    ]
+    assert questions, f"missing question message {terminal.detail}"
+    content = questions[-1].message.content if questions[-1].message else ""
+    assert content and content.strip()
+    assert "?" in content, content
+    return content

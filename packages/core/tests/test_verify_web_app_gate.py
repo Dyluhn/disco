@@ -11,8 +11,8 @@ Covered:
   (d/f) FAIL with CHANGING fingerprint across real edits → 3 next_action refusals
         then a NARROWED release that finishes only with an explicit INCOMPLETE
         summary (never a silent 'done')
-  (e) FAIL with CONSTANT fingerprint + a navigate in between → STUCK/no_progress
-      (the loop breaker); the navigate does NOT reset it
+  (e) FAIL with CONSTANT fingerprint + a navigate in between → AWAITING_USER
+      with verify_no_progress legacy detail; the navigate does NOT reset it
   (g) non-web deliverable → the verify gate is inert (never drives verify_web_app)
 """
 
@@ -38,6 +38,7 @@ from loop_fakes import (
     FakeSummarizer,
     ScriptedAgent,
     action_step,
+    assert_blocked_question_landing,
     finish_step,
 )
 
@@ -297,7 +298,7 @@ async def test_fail_changing_fp_refuses_then_releases_with_incomplete_summary():
 async def test_fail_same_fp_with_navigate_between_halts_stuck():
     # FAIL verdict with a CONSTANT fingerprint. After the first refusal the agent
     # only NAVIGATES (non-productive) and re-finishes: the cached verdict's same
-    # fingerprint, with no productive edit, must HALT the run STUCK — not reload.
+    # fingerprint, with no productive edit, must HALT and ask — not reload.
     agent = ScriptedAgent(
         [
             action_step(tool="file_write", args={"path": "index.html", "content": "broken"}),
@@ -317,14 +318,16 @@ async def test_fail_same_fp_with_navigate_between_halts_stuck():
 
     events = await store.get_events("conv")
     sts = _statuses(events)
-    assert any(s == "STUCK" and (d or "").startswith("verify_no_progress:") for s, d in sts), sts
+    assert_blocked_question_landing(events)
+    terminal = [e for e in events if isinstance(e, StatusEvent)][-1]
+    assert str(terminal.meta.get("legacy_detail", "")).startswith("verify_no_progress:")
     assert not any(s == "FINISHED" for s, _ in sts), sts
     # the cached verdict was reused — verify was driven once, not re-run on the 2nd finish
     assert execu.verify_calls == 1, (
         f"expected ONE driven verify (cache hit), got {execu.verify_calls}"
     )
     env = _env(events)
-    assert any("keeps returning the SAME failure" in m for m in env), env
+    assert any("same failure" in m.lower() for m in env), env
 
 
 # ---- (g) non-web deliverable: gate inert ------------------------------------
