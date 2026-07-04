@@ -420,3 +420,126 @@ Distortion (velocity-injected displacement field), Fluid Glass
 backdrop ships a static gradient fallback; flicker effects capped <3Hz;
 cursor-replacement effects never sole affordance, disabled on touch;
 full-viewport shader motion pauses off-screen + respects reduced-motion.
+
+## H8. Heroes + landing composition (round-2 sweep)
+
+13 hero archetypes with composition rules (split product-shot, full-bleed
+video/shader w/ 30-50% scrim, kinetic typography [animate ONCE, reduced-motion
+off switch], bento-hero [container queries per tile; +23% scroll depth],
+terminal/code, centered manifesto [text-wrap:balance earns its keep], editorial
+magazine [serif display + overlap grid], 3D object, anti-grid brutalist,
+marquee band, data-viz/live-metric, cursor-parallax, illustrated blob
+[OVERUSED — vary palette or avoid]). Narrative orders per business type (SaaS
+baseline hero→proof-band-HIGH→problem-narrative features→how-it-works→
+testimonials→pricing→FAQ→distinct closing CTA; deviations for portfolio/
+restaurant/event/personal/e-commerce). CSS-only compendium: scroll-driven
+animations, :has() mode-switching heroes, container queries, text-wrap
+balance/pretty, subgrid, clamp(), accent-color, color-mix(), light-dark(),
+view()-timeline. BAN LIST (the template tells): purple-blue gradient default,
+three identical feature cards, Inter-everything, indigo-600 CTA + reflexive
+hover:scale-105, same-treatment elevated middle pricing tier, isometric-people
+art, flat feature lists, kinetic type with CLS, padded logo strips, generic
+FAQs, five-column footer soup, verbatim identical section skeletons.
+
+## H9. Data-viz (round-2 sweep)
+
+Chart.js stays the standard (MIT, best codegen reliability); PREMIUM DEFAULTS
+now mandatory: token palette bound by series index (desaturated, never RGB
+primaries), rounded bar tops + maxBarThickness 40, vertical dark→light
+gradients (≥15% bottom stop), x-gridlines OFF + y at 5-8% opacity + axis
+border off, global font via Chart.defaults, styled tooltip (padding 12,
+radius 8, leading-space labels, locale formatter), 400ms re-render animation
+(1000ms first-paint only), circle legend swatches, dark mode from CSS custom
+props (rebuild not recolor — gradients bake canvas colors). Archetype table:
+comparison→bar (horizontal when >7 cats), trend→line (area only when
+magnitude matters; NEVER dual-axis by default), composition→ranked stacked
+bar (donut ≤5 slices, labeled on-slice), distribution→histogram
+(Freedman-Diaconis bins), relationship→scatter (alpha .5 past 200 pts),
+KPI→big-number composite. SLIDE CHART RULES (structural, not advisory): max
+3 series, ≥14-16px ticks, labels on marks, near-zero gridlines, ONE takeaway
+per chart, annotate the point (plugin-annotation), titles state the FINDING
+not the axis. Numbers: tabular-nums everywhere, delta badges are
+DIRECTION-AWARE (lower-is-better metrics flip green/red; neutral gray for
+sub-noise deltas), sparklines = shape not chart (last-point dot only).
+Reliable SVG diagram math for generators: timelines (alternate labels
+above/below), flowcharts (grid layering + Manhattan routing + one <marker>
+def), 2×2 (label axis ENDS), funnels (trapezoid widths on shared scale +
+conversion %), org charts (parent-bus-child routing). Flags: Recharts 3.x
+got heavy (Redux/Immer inside); TradingView lightweight-charts needs live
+attribution (keep attributionLogo or footer credit); frappe-charts +
+chartjs-plugin-datalabels stale; uPlot = zero-dep escape hatch for large-N.
+
+## H10. Forms + onboarding (round-2 sweep)
+
+Stack verdict for the ui_kit starter: Radix Primitives or Base UI (MIT) as
+unstyled base + react-hook-form + zod (valibot when bundle-critical:
+1.4kB vs 17.7kB) + react-aria-components (Apache-2.0) fallback for
+date/complex widgets + input-otp for segmented OTP. Formik = legacy, skip.
+Craft: TOP-ALIGNED labels win (floating only when space-scarce, never
+placeholder-as-label); 8 input states incl read-only ≠ disabled; validate
+on-blur first then on-change after first error; error text instructive +
+aria-describedby + top error summary on long forms; 40-44px input height,
+~440px max width; steppers linear 3-6 steps w/ back+persist; autosave =
+"Saving…→Saved 1m ago" AND keep the explicit button; type+inputmode+
+autocomplete triad (one-time-code for OTP). Micro: 120-200ms state
+animations, APG combobox keyboard contract, drag handles not draggable rows
+(+ keyboard pickup/move/drop + live region), skeletons for content
+spinners for actions nothing under 1s, optimistic UI w/ request identity.
+A11y floor: real labels, aria-invalid only post-validation, placeholder
+contrast 4.5:1.
+
+## H11. App shells + dashboards (round-2 sweep)
+
+Shell archetypes w/ dimensions: sidebar-rail 56-64px collapsed / 240-272px
+expanded (shadcn sidebar-07 = reference impl; ⌘B toggle; tinted-pill active
+state; <1024px auto-rail, <768px overlay drawer), topbar 56px dense/64px
+roomy (breadcrumb left, fake-input ⌘K trigger right-center, bell+avatar
+right), double-drawer inspector 320-420px resizable (opens on explicit
+selection; nav-left ≠ detail-right, never conflate), mobile tab shell (56-64px
++ safe-area), palette-first minimal chrome (power-user opt-in only, keep a
+4-6-item fallback sidebar). DENSITY TOKEN TABLE (compact mode as a token
+swap, user-preference not hardcode): 13-14px base, 32px rows (40 comfortable/
+48 spacious), 8px inline gaps, 12-16px card padding, 5-8% opacity dividers,
+1.2-1.3 data line-height, 16-18px inline icons, 4-6px radii, tint-not-shadow
+hover, tabular-nums. Tables: sticky header w/ explicit bg, dividers default
+(zebra only for wide sparse-border tables), numeric right-align, hover-reveal
+inline actions (max 3, keyboard-reachable), paginate for shareable position
+vs virtualize for exploration (never both), skeleton rows not spinner
+overlay, keep stale data on refetch error. cmdk (MIT, Radix-based) = the
+palette primitive: ⌘K, fuzzy scored, grouped results, Recent-on-empty,
+inline shortcut hints, nested actions. react-resizable-panels (MIT, Vaughn)
+for splits — PERSIST pane sizes; 8-12px grab targets. Inspector conventions
+for generated apps: identity header + close, actions → grouped collapsible
+metadata → danger zone pinned bottom, Escape closes. TRAPS: AG Grid
+Enterprise features hard-paywall at runtime (stay Community-scoped);
+Tremor = Apache-2.0 w/ NOTICE (not MIT); dnd-kit stable-but-unsupported.
+
+## H12. Mobile + PWA (round-2 sweep)
+
+vaul EXPLICITLY UNMAINTAINED → vendor its snap/rubber-band physics (MIT,
+small) or use Base UI drawer; `motion` package (NOT frozen framer-motion) =
+one dep covering drag/spring/layout; embla (headless) vs swiper (batteries);
+Konsta = instant native-look Tailwind chrome; Capacitor = the native handoff
+(wraps the PWA, near-zero rework). Sheets: snap fractions [.25,.6,.95] +
+velocity-weighted release (>0.5-0.7 px/ms flick dismisses), 1:1 finger
+tracking on transform only, iOS rubber-band resistance curve, backdrop
+opacity COUPLED to sheet position (the tell of real physics), touch-action:
+none on handles; iOS card-stack peek vs Material edge-to-edge. Nav: tab bar
+49px + env(safe-area-inset-bottom) on the BAR, filled/outline icon swap,
+16-18px badges w/ bg ring, max 5 tabs; swipe-back = 20px edge zone +
+two-layer transform (outgoing 0→100%, incoming -30%→0) + 35%/velocity
+commit; pull-to-refresh only where pull-down means nothing else. TOUCH
+CRAFT: 44px floor (pad hit area not icon), thumb-zone = primary CTAs
+BOTTOM (top-right CTA = the desktop-web tell), :active states instantly
+(scale .96-.98) + hover gated behind (hover:hover), touch-action:
+manipulation global, overscroll-behavior-y: contain on inner scrollers,
+haptics = enhancement-only (iOS Safari has none). PWA: display standalone,
+theme_color mirrored in meta, SEPARATE any + maskable icons (content in
+central 65-70%), 192+512; iOS STILL needs generated apple-touch-startup-image
+per device (bake into export) + apple-mobile-web-app metas; SW = precache
+shell + cache-first hashed assets + network-first HTML/API, Workbox
+(Apache-2.0) fine; install prompts deferred until value-proof, iOS =
+coach-mark (no beforeinstallprompt). WEBPAGE-PRETENDING tells+fixes:
+visible scrollbars, hover-dependent UI, desktop density, missing safe
+areas, no :active feedback, centered-fade modals instead of sheets,
+pinch-zoomable text (maximum-scale=1 + viewport-fit=cover).
