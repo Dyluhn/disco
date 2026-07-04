@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import ClassVar, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
@@ -188,6 +189,16 @@ class ArtifactMemoryStore:
 
     async def read_todo(self) -> str | None:
         return await self.read_markdown(ArtifactMemoryKind.TODO)
+
+    async def write_summary(self, range_id: str, summary: str) -> ArtifactMemoryRef:
+        """Write a per-range durable summary under ``.disco/context/summary``."""
+        safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", range_id).strip("._")
+        if not safe_id:
+            raise ValueError("range_id must contain at least one safe path character")
+        path = f"{self._base}/summary/{safe_id}.md"
+        body = summary if summary.endswith("\n") else summary + "\n"
+        await self._fs.write_file(path, body.encode("utf-8"))
+        return self._ref(ArtifactMemoryKind.SUMMARY, path)
 
     # --- json (structured) kinds ----------------------------------------------
     async def _write_json(self, kind: ArtifactMemoryKind, payload: object) -> ArtifactMemoryRef:

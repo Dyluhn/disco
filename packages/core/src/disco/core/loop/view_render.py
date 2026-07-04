@@ -14,6 +14,13 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
+from ..context import (
+    ArtifactMemoryStore,
+    CompactionPolicy,
+    ContextLedger,
+    VerifierFailureRef,
+    context_compact_if_needed,
+)
 from ..events import (
     WORKSPACE_SNAPSHOT_SENTINEL,
     ActionEvent,
@@ -25,10 +32,14 @@ from ..events import (
     obs_snip_override,
     retarget_elided_arg_markers,
 )
+from ..inspect import inspect_enabled
 from ..llm import Difficulty, OverflowSignal
+from ..obs import log_event
 from ..view import View, microcompact
 from . import signals
+from .context_builder import build_context_pack, render_context_pack
 from .context_budget import ContextCaps, derive_context_caps
+from .context_live import context_pack_enabled, protected_context_compaction_seqs
 from .dedup import (
     _F8_PREFIX_CHARS,
     _F8_TRUNCATION_MARKER_TEMPLATE,
@@ -75,6 +86,15 @@ def overflow_signal(events: list[Event]) -> OverflowSignal:
         elif isinstance(e, ActionEvent | ObservationEvent | MessageEvent):
             break
     return OverflowSignal(difficulty=Difficulty.ROUTINE, consecutive_tool_errors=consecutive)
+
+
+def _drop_context_pack_owned_history(messages: list[LLMMessage]) -> list[LLMMessage]:
+    """Drop raw PlanEvent renders when the ContextPack owns goal/version/todo."""
+    return [
+        msg
+        for msg in messages
+        if not (msg.role == "assistant" and msg.content.startswith("Plan (revision "))
+    ]
 
 
 class _SnapshotHalt:
@@ -480,6 +500,82 @@ class ViewBuilder:
                 window = None
         return derive_context_caps(assist=bool(self._loop._assist), context_window=window)
 
+    def _context_compaction_policy(self) -> CompactionPolicy:
+        policy = getattr(self._loop, "_context_compaction_policy", None)
+        if isinstance(policy, CompactionPolicy):
+            return policy
+        return CompactionPolicy.default()
+
+    async def _context_pack_message(self, events: list[Event]) -> LLMMessage:
+        """Build the live ContextPack message, with durable store inputs best-effort."""
+        base_ledger: ContextLedger | None = None
+        todo_text: str | None = None
+        failures: tuple[VerifierFailureRef, ...] | None = None
+        sbx = getattr(getattr(self._loop, "executor", None), "sandbox", None)
+        if sbx is not None:
+            store = ArtifactMemoryStore(sbx)
+            try:
+                workspace_root = getattr(sbx, "workspace_root", None)
+                reconstructed = await store.reconstruct(
+                    str(getattr(self._loop, "conversation_id", "") or ""),
+                    str(workspace_root) if workspace_root is not None else None,
+                )
+                base_ledger = reconstructed.ledger
+                failures = reconstructed.ledger.latest_verifier_failures
+            except Exception:  # noqa: BLE001 - context files are best-effort
+                _LOG.warning(
+                    "CXT live context-pack ledger read failed for %s",
+                    getattr(self._loop, "conversation_id", ""),
+                    exc_info=True,
+                )
+            try:
+                todo_text = await store.read_todo()
+            except Exception:  # noqa: BLE001 - absent/corrupt todo omits the section
+                _LOG.warning(
+                    "CXT live context-pack todo read failed for %s",
+                    getattr(self._loop, "conversation_id", ""),
+                    exc_info=True,
+                )
+
+        pack = build_context_pack(
+            events,
+            base_ledger=base_ledger,
+            policy=self._context_compaction_policy(),
+            todo_text=todo_text,
+            failures=failures,
+        )
+        return LLMMessage(role="user", content=render_context_pack(pack))
+
+    async def _project_view(
+        self, events: list[Event], *, include_context_pack: bool
+    ) -> View:
+        view = View.of(events)
+        if not include_context_pack:
+            return view
+        msg = await self._context_pack_message(events)
+        messages = _drop_context_pack_owned_history(view.messages)
+        insert_at = 1 if messages else 0
+        if inspect_enabled():
+            try:
+                log_event(
+                    "context_pack",
+                    cid=str(getattr(self._loop, "conversation_id", "") or ""),
+                    included=True,
+                    message_index=insert_at,
+                    chars=len(msg.content),
+                )
+            except Exception:  # noqa: BLE001 - inspect must never affect prompts
+                pass
+        return view.model_copy(
+            update={
+                "messages": [
+                    *messages[:insert_at],
+                    msg,
+                    *messages[insert_at:],
+                ]
+            }
+        )
+
     async def build(self, events: list[Event]) -> View:
         # CW-2/CW-6 — derive the per-turn caps once and thread them into the
         # snapshot (pin breadth/size) + the observation snip. assist-ON → the
@@ -504,7 +600,10 @@ class ViewBuilder:
             for tomb in micro:
                 await self._loop._emit(tomb)
             events = await self._loop._events()
-        view = View.of(events)
+        context_pack_active = context_pack_enabled()
+        view = await self._project_view(
+            events, include_context_pack=context_pack_active
+        )
         # W2 — stale check before snapshot: identify files whose disk SHA
         # diverged from what the snapshot last showed (externally changed).
         # This runs first so the snapshot can mark those files as full-body
@@ -560,13 +659,32 @@ class ViewBuilder:
         # bloat was invisible because nothing measured it). DEBUG-level; cheap.
         _LOG.debug("driver view: ~%d input tokens, %d messages", est, len(view.messages))
         req = self._loop.condenser.should_condense(view, token_count=est)
+        if req is not None and context_pack_active:
+            snips = context_compact_if_needed(
+                events,
+                self._context_compaction_policy(),
+                protected_seqs=protected_context_compaction_seqs(events),
+                pressure_chars=est * 4,
+            )
+            if snips:
+                for snip in snips:
+                    await self._loop._emit(snip)
+                events = await self._loop._events()
+                view = await self._project_view(
+                    events, include_context_pack=context_pack_active
+                )
+                est = signals.estimate_tokens(view) + snap_tokens
+                req = self._loop.condenser.should_condense(view, token_count=est)
         if req is not None:
             tombstone = await self._loop.condenser.condense(
                 events, view, summarizer=self._loop.summarizer
             )
             if tombstone is not None:
                 await self._loop._emit(tombstone)
-                view = View.of(await self._loop._events())
+                events = await self._loop._events()
+                view = await self._project_view(
+                    events, include_context_pack=context_pack_active
+                )
             # Soft trigger with no tombstone this step: proceed uncondensed and
             # retry next iteration (§8). Non-fatal.
         # Append the snapshot AFTER any condensation (so it is never rebuilt away by
@@ -578,7 +696,9 @@ class ViewBuilder:
         # snapshot. The gate never touches the snapshot; the snapshot
         # is appended AFTER the gate regardless of the gate's verdict
         # (it's authoritative on-disk content the model needs).
-        view = self._loop._gate_recitation(view, events)
+        view = self._loop._gate_recitation(
+            view, events, context_pack_active=context_pack_active
+        )
         # W2 — collapse superseded reads (ALL tiers, NOT assist-gated).
         # Rewrite every earlier file_read tool-result for a path to a short
         # "[superseded...]" stub; keep only the most-recent result in full.

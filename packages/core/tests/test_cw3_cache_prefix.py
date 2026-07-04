@@ -76,7 +76,9 @@ class _FakeLoop:
     def _driver_context_window(self) -> int:
         return self._window
 
-    def _gate_recitation(self, view: View, events: list) -> View:
+    def _gate_recitation(
+        self, view: View, events: list, *, context_pack_active: bool = False
+    ) -> View:
         return view  # no recap gate in the test
 
     def _f8_shrink_file_write_args(self, messages: list, events: list) -> list:

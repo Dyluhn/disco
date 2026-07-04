@@ -317,7 +317,9 @@ def _pinned_seqs(events: list[Event]) -> set[int]:
     return pinned
 
 
-def _recitation_message(events: list[Event]) -> LLMMessage | None:
+def _recitation_message(
+    events: list[Event], *, context_pack_active: bool = False
+) -> LLMMessage | None:
     """GAP D recency recitation: an EPHEMERAL objective + step checklist appended
     at the View TAIL so the goal stays in the high-attention recent window even
     after dozens of tool calls drift the plan toward the forgettable middle.
@@ -345,6 +347,23 @@ def _recitation_message(events: list[Event]) -> LLMMessage | None:
             if next_pending is None:
                 next_pending = i
         lines.append(f"  {mark} {i}. {step.title}")
+    if context_pack_active:
+        current_idx = min(active) if active else next_pending
+        if current_idx is not None:
+            current = f"Current step: {current_idx}. {plan.steps[current_idx - 1].title}"
+            drift_gate = (
+                "Drift gate: if this is stale, update plan progress before continuing."
+            )
+        else:
+            current = "Current step: all plan steps are marked done."
+            drift_gate = "Drift gate: verify the result, then finish."
+        body = (
+            "<current-objective>\n"
+            f"{current}\n"
+            f"{drift_gate}\n"
+            "</current-objective>"
+        )
+        return LLMMessage(role="user", content=body)
     nxt = (
         f"\nNext incomplete step: {next_pending}. {plan.steps[next_pending - 1].title}"
         if next_pending is not None

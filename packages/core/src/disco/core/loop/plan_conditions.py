@@ -9,6 +9,7 @@ byte-identical to the former AgentLoop methods.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shlex
@@ -21,20 +22,28 @@ from ..dod import (
     FileExistsPredicate,
     HTTPOkPredicate,
 )
+from ..context import ArtifactMemoryStore, context_mark_resolved, context_write_summary
 from ..events import (
     ActionEvent,
+    AgentErrorEvent,
+    ContextResolvedEvent,
     Event,
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     PlanEvent,
     StatusEvent,
 )
 from ..selection_edit import is_scoped_edit_directive
 from ..view import effective_plan_progress
+from .context_live import context_pack_enabled, unresolved_failure_seqs
 
 if TYPE_CHECKING:
     from .engine import AgentLoop
+
+_LOG = logging.getLogger("disco.loop")
+_PROGRESS_TOOLS = frozenset({"plan_step", "update_plan_progress"})
 
 
 @dataclass(frozen=True)
@@ -320,6 +329,10 @@ class PlanStepConditions:
             _, prev = effective_plan_progress([e for e in events if e.id != action.id])
             newly_done = [i for i, st in cur.items() if st == "done" and prev.get(i) != "done"]
 
+        await self._maybe_emit_context_step_done_marks(
+            events, latest_plan, newly_done, action
+        )
+
         for idx in newly_done:
             # 1-based step index. Out-of-range = nothing to look up.
             if idx < 1 or idx > len(latest_plan.steps):
@@ -348,6 +361,212 @@ class PlanStepConditions:
                     meta={"advisory": "plan_step_done_condition", "passed": passed},
                 )
             )
+
+    async def _maybe_emit_context_step_done_marks(
+        self,
+        events: list[Event],
+        latest_plan: PlanEvent,
+        newly_done: list[int],
+        action: ActionEvent,
+    ) -> None:
+        if not context_pack_enabled() or not newly_done:
+            return
+        sbx = getattr(self._loop.executor, "sandbox", None)
+        if sbx is None:
+            return
+        store = ArtifactMemoryStore(sbx)
+        failures = unresolved_failure_seqs(events)
+        for idx in newly_done:
+            if idx < 1 or idx > len(latest_plan.steps):
+                continue
+            event_range = self._context_step_done_range(events, latest_plan, idx, action)
+            if event_range is None:
+                continue
+            start_seq, end_seq = event_range
+            if any(start_seq <= seq <= end_seq for seq in failures):
+                continue
+            range_id = (
+                f"cxr_plan_step_{latest_plan.revision}_{idx}_{start_seq}_{end_seq}"
+            )
+            if any(
+                isinstance(e, ContextResolvedEvent) and e.range_id == range_id
+                for e in events
+            ):
+                continue
+            summary = self._context_step_summary(
+                events, latest_plan, idx, start_seq, end_seq
+            )
+            try:
+                ref = await store.write_summary(range_id, summary)
+            except Exception:  # noqa: BLE001 - context marks are best-effort
+                _LOG.warning(
+                    "CXT context summary write failed for %s",
+                    self._loop.conversation_id,
+                    exc_info=True,
+                )
+                continue
+            mark = context_mark_resolved(
+                start_seq,
+                end_seq,
+                reason="plan_step_done",
+                range_id=range_id,
+            ).model_copy(
+                update={
+                    "source": EventSource.SYSTEM,
+                    "summary_ref_path": ref.rel_path,
+                    "meta": {
+                        "plan_revision": latest_plan.revision,
+                        "step_index": idx,
+                    },
+                }
+            )
+            await self._loop._emit(mark)
+            await self._loop._emit(
+                context_write_summary(range_id, ref.rel_path, summary)
+            )
+
+    def _context_step_done_range(
+        self,
+        events: list[Event],
+        latest_plan: PlanEvent,
+        idx: int,
+        action: ActionEvent,
+    ) -> tuple[int, int] | None:
+        end_seq = self._action_pair_end_seq(events, action)
+        if end_seq is None:
+            return None
+        start_seq = self._step_start_seq(events, latest_plan, idx, action)
+        if start_seq is None:
+            return None
+        return (min(start_seq, end_seq), end_seq)
+
+    @staticmethod
+    def _action_pair_end_seq(events: list[Event], action: ActionEvent) -> int | None:
+        end_seq = action.seq
+        call_id = action.tool_call.call_id if action.tool_call is not None else None
+        for e in events:
+            if isinstance(e, ObservationEvent):
+                if e.action_id == action.id or e.tool_result.call_id == call_id:
+                    if e.seq is not None:
+                        end_seq = max(end_seq or e.seq, e.seq)
+            elif isinstance(e, AgentErrorEvent):
+                if e.action_id == action.id or e.tool_call_id == call_id:
+                    if e.seq is not None:
+                        end_seq = max(end_seq or e.seq, e.seq)
+        return end_seq
+
+    def _step_start_seq(
+        self,
+        events: list[Event],
+        latest_plan: PlanEvent,
+        idx: int,
+        action: ActionEvent,
+    ) -> int | None:
+        action_seq = action.seq
+        if action_seq is None:
+            return None
+        boundary_seq = self._step_boundary_seq(events, latest_plan, idx, action)
+        after_seq = boundary_seq if boundary_seq is not None else latest_plan.seq
+        for e in events:
+            if not isinstance(e, ActionEvent) or e.seq is None:
+                continue
+            if e.seq > action_seq:
+                break
+            if after_seq is not None and e.seq <= after_seq:
+                continue
+            if e.tool_call.tool_name not in _PROGRESS_TOOLS:
+                return e.seq
+        if boundary_seq is not None:
+            return boundary_seq
+        return action_seq
+
+    def _step_boundary_seq(
+        self,
+        events: list[Event],
+        latest_plan: PlanEvent,
+        idx: int,
+        action: ActionEvent,
+    ) -> int | None:
+        boundary_seq: int | None = None
+        for e in events:
+            if e.id == action.id:
+                break
+            if not isinstance(e, ActionEvent):
+                continue
+            if latest_plan.seq is not None and e.seq is not None and e.seq < latest_plan.seq:
+                continue
+            for mark_idx, state in self._progress_updates(e, len(latest_plan.steps)):
+                if e.seq is None:
+                    continue
+                if mark_idx == idx and state == "active":
+                    boundary_seq = e.seq
+                elif mark_idx == idx - 1 and state == "done" and boundary_seq is None:
+                    boundary_seq = e.seq
+        return boundary_seq
+
+    @staticmethod
+    def _progress_updates(action: ActionEvent, total_steps: int) -> list[tuple[int, str]]:
+        name = action.tool_call.tool_name
+        args = action.tool_call.arguments or {}
+        updates: list[tuple[int, str]] = []
+        if name == "plan_step":
+            raw = [(args.get("index"), args.get("state"))]
+        elif name == "update_plan_progress":
+            raw = [
+                (s.get("index"), s.get("state"))
+                for s in args.get("steps") or []
+                if isinstance(s, dict)
+            ]
+        else:
+            return []
+        for raw_idx, raw_state in raw:
+            try:
+                idx = int(raw_idx)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if 1 <= idx <= total_steps:
+                updates.append((idx, str(raw_state)))
+        return updates
+
+    def _context_step_summary(
+        self,
+        events: list[Event],
+        latest_plan: PlanEvent,
+        idx: int,
+        start_seq: int,
+        end_seq: int,
+    ) -> str:
+        actions = [
+            e
+            for e in events
+            if isinstance(e, ActionEvent)
+            and e.seq is not None
+            and start_seq <= e.seq <= end_seq
+            and e.tool_call.tool_name not in _PROGRESS_TOOLS
+        ]
+        last = actions[-1] if actions else None
+        last_desc = self._tool_summary(last) if last is not None else "none"
+        n = len(actions)
+        plural = "" if n == 1 else "s"
+        title = latest_plan.steps[idx - 1].title
+        return f"Step '{title}' completed; {n} tool call{plural}, last: {last_desc}."
+
+    @staticmethod
+    def _tool_summary(action: ActionEvent) -> str:
+        name = action.tool_call.tool_name
+        args = action.tool_call.arguments or {}
+        for key in ("path", "rel_path", "file"):
+            value = args.get(key)
+            if isinstance(value, str) and value:
+                return f"{name} {value[:120]}"
+        command = args.get("command")
+        if isinstance(command, str) and command:
+            try:
+                head = shlex.join(shlex.split(command)[:3])
+            except ValueError:
+                head = command
+            return f"{name} {head[:120]}"
+        return name
 
     async def evaluate_plan_step_predicate(
         self, predicate: DoDPredicate

@@ -229,7 +229,7 @@ class _SnapLoop:
     def _driver_context_window(self) -> int:
         return 192_000
 
-    def _gate_recitation(self, view, events):
+    def _gate_recitation(self, view, events, *, context_pack_active=False):
         return view
 
     def _f8_shrink_file_write_args(self, messages, events):

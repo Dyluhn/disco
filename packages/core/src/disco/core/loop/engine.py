@@ -878,8 +878,12 @@ class AgentLoop:
     def _should_emit_recitation(self, events: list[Event]) -> bool:
         return self._recit.should_emit_recitation(events)
 
-    def _gate_recitation(self, view: View, events: list[Event]) -> View:
-        return self._recit.gate_recitation(view, events)
+    def _gate_recitation(
+        self, view: View, events: list[Event], *, context_pack_active: bool = False
+    ) -> View:
+        return self._recit.gate_recitation(
+            view, events, context_pack_active=context_pack_active
+        )
 
     def _should_emit_reground(self, events: list[Event]) -> bool:
         return self._recit.should_emit_reground(events)

@@ -18,7 +18,7 @@ from ..events import (
     MessageEvent,
 )
 from ..llm import OperatingMode
-from ..view import View, effective_plan_progress
+from ..view import View, _recitation_message, effective_plan_progress
 from . import signals
 from .messages import _hs03_reground_message, _latest_user_instruction
 
@@ -96,7 +96,9 @@ class RecitationRegrounder:
         drift = sig != self._loop._recitation_last_signature
         return on_cadence or drift
 
-    def gate_recitation(self, view: View, events: list[Event]) -> View:
+    def gate_recitation(
+        self, view: View, events: list[Event], *, context_pack_active: bool = False
+    ) -> View:
         """C6 — drop the tail-recap message unless this step is a cadence
         boundary or the plan/checklist has drifted. The recap CONTENT is
         unchanged (the underlying PlanEvent + plan_step actions remain
@@ -117,6 +119,12 @@ class RecitationRegrounder:
             # to gate. Don't touch the signature: the next step with a
             # plan will drift on signature != None.
             return view
+        if context_pack_active:
+            narrowed = _recitation_message(events, context_pack_active=True)
+            if narrowed is not None:
+                view = view.model_copy(
+                    update={"messages": [*view.messages[:-1], narrowed]}
+                )
         if self._loop._should_emit_recitation(events):
             # The View already has a tail-recap; the gate fired (cadence
             # boundary or drift). Record the signature so the NEXT step
