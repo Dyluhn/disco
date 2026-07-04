@@ -6074,3 +6074,46 @@ bounded toolset it saw) → output-contract gate → FINISHED in 24s. Screenshot
 sent to Dylan. Remaining: WF-6 sealed schedules · WF-7 MCP mounts + Daily
 Email Brief · WF-8 draft→validate→simulate→approve. Also this window:
 soak #2 = 20/20 w/ RC-P valve's first live firings (see prior entry).
+
+## AGENT→WORKFLOW: WF-6..8 COMPLETE — FULL SPINE LIVE-PROVEN (2026-07-04)
+
+Campaign closed. WF-6 `324d79a8`+`ac721f9f` (sealed schedules: ScheduleSpec +
+cronsim, WorkflowScheduleManager, fresh sealed autonomous conversations,
+durable history rows, /api/workflows/schedules routes). The FIRST live sealed
+fire found a real seam bug — the run died mid-run "sandbox session is closed"
+but landed HONESTLY (ERROR/workflow_schedule_run_failed + history
+verdict=error: the failure chain worked on its first exercise). Root cause:
+the sealed path awaited the loop without registering `_tasks[cid]`, and the
+suspend/idle sweepers use `_tasks` as the in-flight source of truth → the
+sandbox was torn down under the run. WF-6c `21dece35`: extracted normal
+kick's registration into `_create_run_task()` (register-before-loop,
+identity-guarded pop, same clean-return finalizer) and put sealed fires on
+it; sealed scopes containing submit_plan now enter PLANNING autonomous=True
+(plan auto-approves — never AWAITING_PLAN_APPROVAL). REFIRE LIVE PROOF:
+wfsrun_931d4d80 FINISHED, verdict=pass, contracted reports/task-summary.md
+on disk; run events show ONLY file_list×2 + file_write + finish — zero
+router tools, zero ask tools, output-contract gate passed. Sealed semantics
+proven end-to-end.
+
+WF-8 `fa747269` (draft→validate→simulate→approve): validate_definition
+collects ALL findings; simulate_definition dry-runs scope + output-contract
+against a fixture write; /api/workflows list/draft/approve — approval records
+surface_shown_digest = sha256 over the EXACT compiled-surface payload shown
+(client mismatch = 409; error findings re-validated server-side block the
+flip; approval is HTTP-only, never a model tool). WorkflowReviewPanel
+(Workflows nav entry) renders the real compiled surface (allowed+advertised
+tools, MCP mounts, skills, policies, findings) — Firefox screenshot sent.
+
+WF-7 `714cda25` (Daily Email Brief + MCP mounts): explicit
+McpMount(gmail,[search_threads,get_thread]) read-only names; compiled
+surface exactly {file_write, finish, mcp__gmail__search_threads,
+mcp__gmail__get_thread, needs_input, skip}; a fake env ALSO offering
+create_draft/send/label does NOT leak into scope (asserted);
+mounted-but-unconnected server = loud validation error finding. Seeded
+DISABLED+UNAPPROVED. Live proof honestly deferred: NO Gmail MCP connector
+configured in dev — needs Dylan to connect one, then approve the instance.
+
+Status ledger: WF-1..5 live-proven (router run) · WF-6+6c live-proven
+(sealed refire) · WF-8 live-proven (panel screenshot; approve/findings paths
+unit+route-tested) · WF-7 code-complete, pending-connector. All under the 5
+gates + suites; DISCO_WORKFLOW_ROUTER default OFF (on in dev).
