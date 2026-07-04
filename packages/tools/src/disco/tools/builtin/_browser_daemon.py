@@ -332,6 +332,19 @@ class BrowserHandler(BaseHTTPRequestHandler):
             page.screenshot(path=screenshot_full_path, full_page=params.get("full_page", False))
             screenshot_path = screenshot_rel_path
 
+            # AppKit EPIC G: surface the data-appkit-section markers present in the
+            # RENDERED DOM so verify_appkit_app's section_coverage check can prove each
+            # AppSpec section actually mounted. Additive + harmless to normal builds
+            # (an app with no markers returns []). Port-scope miss found live 2026-07-03:
+            # the verifier read `appkit_sections` but nothing ever emitted it here.
+            try:
+                appkit_sections = page.evaluate(
+                    "() => Array.from(document.querySelectorAll('[data-appkit-section]'))"
+                    ".map(e => e.getAttribute('data-appkit-section'))"
+                )
+            except Exception:
+                appkit_sections = []
+
             res = {
                 "ok": True,
                 "url": page.url,
@@ -340,6 +353,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "network": state.network_fails,
                 "elements": elements,
                 "text": text,
+                "appkit_sections": appkit_sections,
                 "screenshot_path": screenshot_path,
             }
 
