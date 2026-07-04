@@ -5958,3 +5958,25 @@ parity. SELF-HOST VERIFIED: fresh LXC 199 (8GB Debian), README-only — uv sync
 + secret + FULL core suite green + agent-server boots HTTP 200, first try.
 v0.1.0 tagged LOCALLY (publication = Dylan's decision). Gap-close campaign
 COMPLETE: all 15 tasks, 2026-07-03.
+
+## 20-BUILD RELIABILITY BASELINE — M-LADDER LIVE-PROVEN + ONE FINDING (2026-07-03)
+
+Fixes 1-3 landed (`d222d525` pin-on-restore · `3da896d6` P8 metadata in the v2
+generator + legacy app_* hard-replace COMPLETED, v2 owns the names, contract
+aligned · `04c33177` emitter-verified reliability metrics on the verify surface).
+Then the first metrics-instrumented soak: 20 sequential autonomous MiniMax TODO
+builds, NO manual intervention, 453 relay calls, 0 OpenRouter.
+
+**Baseline:** finish rate 18/20 (stall rate 0.10) · actionless_pauses 5 ·
+**auto_resumes 3 — AUTO-RESUME-ONCE FIRED LIVE and recovered builds to FINISHED**
+· synthetic_finishes 0 · stuck_escapes 0 · probe_spin_trips 0 · export/host
+refusals 0 (no occasions — clean builds).
+
+**Honest finding:** the 2 non-finished builds ended PAUSED after a SECOND
+actionless pause — the second-pause→REL-RC-P synthetic-finish conversion did
+NOT fire live (unit-proven, live-missed). Follow-up bug: trace why the valve
+didn't convert (suspect: the conversion checks the event-derived count at a
+point the auto-resume path bypasses). The metrics surface now makes this class
+visible permanently. Also honest: the soak driver's in-run metrics import was
+wrong (event_from_json_dict doesn't exist); re-extracted post-hoc via the raw-
+dict path run_reliability_metrics natively supports.
