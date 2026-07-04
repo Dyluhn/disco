@@ -1,5 +1,6 @@
 import type { AnswerBlock, GroundedAnswer } from "@/types/grounded";
 import { Markdown } from "@/components/Markdown";
+import { splitThink } from "@/lib/think";
 import { BlockView } from "./blocks";
 
 interface Props {
@@ -40,7 +41,7 @@ export function AnswerDocument({
         ))}
         {streamingText !== undefined && (
           <div className="prose-reading">
-            <Markdown>{streamingText}</Markdown>
+            <Markdown>{splitThink(streamingText).answer}</Markdown>
             <span className="ml-px inline-block h-[1.1em] w-[2px] translate-y-[0.15em] animate-pulse bg-accent align-middle" />
           </div>
         )}

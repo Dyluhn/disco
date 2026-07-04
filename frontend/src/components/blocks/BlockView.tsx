@@ -1,4 +1,5 @@
 import { cn } from "@/lib/cn";
+import { splitThink } from "@/lib/think";
 import type { AnswerBlock, GroundedAnswer } from "@/types/grounded";
 import { CitedText } from "./CitedText";
 import { CodeBlock } from "./CodeBlock";
@@ -34,12 +35,16 @@ export function BlockView({
           {block.text}
         </h2>
       );
-    case "prose":
+    case "prose": {
+      // MiniMax-class drivers can leak an inline <think>…</think> preamble into
+      // the answer text; reasoning is never part of the rendered document.
+      const prose = splitThink(block.text).answer || block.text;
       return (
         <p className="prose-reading">
-          <CitedText text={block.text} answer={answer} />
+          <CitedText text={prose} answer={answer} />
         </p>
       );
+    }
     case "code":
       return <CodeBlock language={block.language} code={block.code} />;
     case "callout":
