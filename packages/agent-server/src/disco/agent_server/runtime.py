@@ -2256,6 +2256,14 @@ class ConversationRuntime:
         if callable(_set_alias):
             _set_alias(_finish_alias)
         if sealed_workflow_run is not None:
+            assert _workflow_phase is not None
+            assert _workflow_phase.compiled_run_scope is not None
+            _sealed_plan_gated = (
+                "submit_plan" in _workflow_phase.compiled_run_scope.allowed_tools
+            )
+            _sealed_planning_tools = frozenset(
+                {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
+            ) & _workflow_phase.compiled_run_scope.allowed_tools
             return AgentLoop(
                 conversation_id,
                 self._store,
@@ -2266,7 +2274,10 @@ class ConversationRuntime:
                 NeverConfirm(),
                 LLMSummarizingCondenser(context_window=self._driver_context_window()),
                 RouterSummarizer(router),
-                mode=OperatingMode.INTERACTIVE,
+                mode=OperatingMode.PLANNING
+                if _sealed_plan_gated
+                else OperatingMode.INTERACTIVE,
+                planning_tools=_sealed_planning_tools if _sealed_plan_gated else frozenset(),
                 autonomous=True,
                 model_policy=model_policy,
                 workflow_run=sealed_workflow_run,
@@ -2424,12 +2435,7 @@ class ConversationRuntime:
         # fresh sandbox on the new backend (best-effort destroy of the old box).
         self._evict_stale_backend(conversation_id)
         loop = self._loop_for(conversation_id)
-        # finding #3: this is a NEW run task → bump the conversation's run-generation
-        # and bind it into the done-callback, so the finalizer for THIS run can tell
-        # whether a newer run has since reused the pin (and must not clear it).
-        generation = self._run_generation.get(conversation_id, 0) + 1
-        self._run_generation[conversation_id] = generation
-        task = asyncio.create_task(self._run_with_persistence(conversation_id, loop))
+        task, generation = self._create_run_task(conversation_id, loop)
         # W2 supervision: the run task ALWAYS resolves to a terminal status. Without this
         # callback an exception escaping loop.run() killed the task silently and left the
         # conversation at RUNNING forever (the silent hang Dylan hit).
@@ -2438,7 +2444,24 @@ class ConversationRuntime:
                 _cid, t, _gen
             )
         )
+
+    def _create_run_task(
+        self, conversation_id: str, loop: AgentLoop
+    ) -> tuple[asyncio.Task[Any], int]:
+        """Create and synchronously register a loop run task.
+
+        This is the normal conversation lifecycle primitive: the task is present in
+        ``_tasks`` before the loop can reach tool/file operations, so suspend/idle
+        sweepers see active work and cannot tear down the sandbox mid-run.
+        """
+        # finding #3: this is a NEW run task → bump the conversation's run-generation
+        # and bind it into the done-callback/finalizer, so the finalizer for THIS run
+        # can tell whether a newer run has since reused the pin.
+        generation = self._run_generation.get(conversation_id, 0) + 1
+        self._run_generation[conversation_id] = generation
+        task = asyncio.create_task(self._run_with_persistence(conversation_id, loop))
         self._tasks[conversation_id] = task
+        return task, generation
 
     # W2: statuses that mean "the run already concluded" — terminalization must not clobber.
     _CONCLUDED_STATUSES = frozenset(
@@ -4354,8 +4377,9 @@ class ConversationRuntime:
         )
         self._loops[conversation_id] = loop
 
+        task, generation = self._create_run_task(conversation_id, loop)
         try:
-            state = cast(ConversationState, await self._run_with_persistence(conversation_id, loop))
+            state = cast(ConversationState, await task)
         except Exception as exc:
             await self._record_workflow_schedule_error(
                 conversation_id,
@@ -4374,6 +4398,10 @@ class ConversationRuntime:
                 coalesced=coalesced,
                 error=str(exc),
             )
+        finally:
+            if self._tasks.get(conversation_id) is task:
+                self._tasks.pop(conversation_id, None)
+        await self._finalize_clean_return(conversation_id, generation)
         return state
 
     async def _sealed_run_record_history(

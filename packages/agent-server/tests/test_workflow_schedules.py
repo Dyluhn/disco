@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 import httpx
 import pytest
+import disco.agent_server.runtime as runtime_mod
 from disco.agent_server import ConversationRuntime
 from disco.agent_server.routes.schedules import make_schedules_router
 from disco.agent_server.workflow_schedule import WorkflowScheduleManager
@@ -39,7 +41,14 @@ from disco.core.workflow import (
     WorkflowPolicies,
     WorkflowVerify,
 )
-from disco.tools import ProcessSandboxService
+from disco.tools import (
+    ExecResult,
+    SandboxError,
+    SandboxInstance,
+    SandboxService,
+    SandboxSession as RealSandboxSession,
+    SandboxSpec,
+)
 from fastapi import FastAPI
 
 
@@ -134,6 +143,122 @@ class _ScriptedProvider:
         return True
 
 
+class _MemorySandboxInstance:
+    owner_id: str
+    conversation_id: str
+    spec: SandboxSpec
+    workspace_path: None = None
+
+    def __init__(
+        self,
+        instance_id: str,
+        *,
+        owner_id: str,
+        conversation_id: str,
+        spec: SandboxSpec,
+    ) -> None:
+        self.id = instance_id
+        self.owner_id = owner_id
+        self.conversation_id = conversation_id
+        self.spec = spec
+        self.files: dict[str, bytes] = {}
+        self.destroyed = False
+
+    def _check_live(self) -> None:
+        if self.destroyed:
+            raise SandboxError("memory sandbox is destroyed")
+
+    @staticmethod
+    def _clean(path: str) -> str:
+        value = path.strip()
+        for prefix in ("/workspace/", "workspace/"):
+            if value.startswith(prefix):
+                value = value[len(prefix):]
+        if value in {"", ".", "/workspace", "workspace"}:
+            return ""
+        return value.strip("/")
+
+    async def exec_shell(self, cmd: str, *, timeout_s: int) -> ExecResult:  # noqa: ARG002
+        self._check_live()
+        return ExecResult(exit_code=0, stdout="", stderr="")
+
+    async def read_file(self, path: str) -> bytes:
+        self._check_live()
+        rel = self._clean(path)
+        if rel not in self.files:
+            raise FileNotFoundError(rel)
+        return self.files[rel]
+
+    async def write_file(self, path: str, data: bytes) -> None:
+        self._check_live()
+        self.files[self._clean(path)] = data
+
+    async def list_dir(self, path: str) -> list[str]:
+        self._check_live()
+        rel = self._clean(path)
+        if rel in self.files:
+            raise NotADirectoryError(rel)
+        prefix = f"{rel}/" if rel else ""
+        children: set[str] = set()
+        for file_path in self.files:
+            if prefix and not file_path.startswith(prefix):
+                continue
+            rest = file_path[len(prefix):] if prefix else file_path
+            name = rest.split("/", 1)[0]
+            if name:
+                children.add(name)
+        return sorted(children)
+
+    async def file_exists(self, path: str) -> bool:
+        self._check_live()
+        return self._clean(path) in self.files
+
+    def display_url(self) -> str | None:
+        return None
+
+    def expose_port(self, port: int) -> str | None:  # noqa: ARG002
+        return None
+
+    async def destroy(self) -> None:
+        self.destroyed = True
+
+
+class _MemorySandboxService:
+    name = "memory"
+    is_production_valid = False
+
+    def __init__(self) -> None:
+        self.created = 0
+        self.instances: dict[str, _MemorySandboxInstance] = {}
+
+    async def create(
+        self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
+    ) -> SandboxInstance:
+        self.created += 1
+        instance = _MemorySandboxInstance(
+            f"mem_{self.created}",
+            owner_id=owner_id,
+            conversation_id=conversation_id,
+            spec=spec,
+        )
+        self.instances[instance.id] = instance
+        return instance
+
+    async def get(self, instance_id: str) -> SandboxInstance | None:
+        return self.instances.get(instance_id)
+
+    async def healthcheck(self) -> None:
+        return None
+
+    async def list_live_instances(self) -> list[str]:
+        return []
+
+    async def destroy_by_conversation(self, conversation_id: str) -> None:
+        for instance in self.instances.values():
+            if instance.conversation_id == conversation_id:
+                await instance.destroy()
+
+
 def _runtime(steps: list[tuple[str, list[ProposedToolCall]]]) -> tuple[ConversationRuntime, SqliteEventStore]:
     store = SqliteEventStore(":memory:")
     cfg = RouterConfig(
@@ -148,7 +273,7 @@ def _runtime(steps: list[tuple[str, list[ProposedToolCall]]]) -> tuple[Conversat
             base_factory=lambda: cfg,
         ),
         router=router,
-        sandbox_service=ProcessSandboxService(),
+        sandbox_service=_MemorySandboxService(),
     )
     return runtime, store
 
@@ -220,6 +345,24 @@ def _file_write() -> ProposedToolCall:
     )
 
 
+def _submit_plan() -> ProposedToolCall:
+    return ProposedToolCall(
+        tool_name="submit_plan",
+        arguments={
+            "summary": "Produce the scheduled output.",
+            "steps": [
+                {
+                    "title": "Write the result file",
+                    "done_condition": {
+                        "kind": "file_exists",
+                        "path": "outputs/result.md",
+                    },
+                }
+            ],
+        },
+    )
+
+
 def _finish() -> ProposedToolCall:
     return ProposedToolCall(tool_name="finish", arguments={"summary": "done"})
 
@@ -263,6 +406,119 @@ async def test_sealed_workflow_schedule_fire_finishes_records_history_and_snapsh
             {"list_workflows", "read_workflow_card", "enter_workflow", "draft_workflow"}
         )
         assert callable_names.isdisjoint({"ask_user", "clarify", "questions_v2"})
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_returns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, store = _runtime(
+        [
+            ("writing output", [_file_write()]),
+            ("done", [_finish()]),
+        ]
+    )
+    write_started = asyncio.Event()
+    release_write = asyncio.Event()
+
+    class RecordingSandboxSession(RealSandboxSession):
+        instances: list["RecordingSandboxSession"] = []
+
+        def __init__(
+            self,
+            service: SandboxService,
+            spec: SandboxSpec | None = None,
+            *,
+            owner_id: str = "local",
+            conversation_id: str = "conv",
+            on_recreate: Callable[[], Awaitable[None]] | None = None,
+            kernel_idle_timeout_s: float | None = None,
+        ) -> None:
+            super().__init__(
+                service,
+                spec,
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                on_recreate=on_recreate,
+                kernel_idle_timeout_s=kernel_idle_timeout_s,
+            )
+            self.destroy_calls = 0
+            RecordingSandboxSession.instances.append(self)
+
+        async def write_file(self, path: str, data: bytes) -> None:
+            if not write_started.is_set():
+                write_started.set()
+                await asyncio.wait_for(release_write.wait(), timeout=10)
+            await super().write_file(path, data)
+
+        async def destroy(self) -> None:
+            self.destroy_calls += 1
+            await super().destroy()
+
+    monkeypatch.setattr(runtime_mod, "SandboxSession", RecordingSandboxSession)
+    monkeypatch.setenv("DISCO_IDLE_SUSPEND_S", "0")
+    fire_task: asyncio.Task[object] | None = None
+    try:
+        instance = _save_instance(runtime, instance_id="wf_lifecycle", tools=("file_write",))
+        manager = WorkflowScheduleManager(runtime)
+        row = manager.create_schedule(_spec("wf_lifecycle", instance))
+
+        fire_task = asyncio.create_task(manager.fire_now(row.schedule_id))
+        await asyncio.wait_for(write_started.wait(), timeout=10)
+        session = RecordingSandboxSession.instances[-1]
+
+        await store.append(
+            session.conversation_id,
+            StatusEvent(status=ConversationStatus.IDLE, detail="test idle race"),
+        )
+        assert await runtime.sweep_idle_once() == 0
+        assert session.destroy_calls == 0
+
+        release_write.set()
+        record = await asyncio.wait_for(fire_task, timeout=10)
+
+        assert record is not None
+        assert session.destroy_calls == 0
+    finally:
+        release_write.set()
+        if fire_task is not None and not fire_task.done():
+            fire_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await fire_task
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_sealed_workflow_schedule_autonomous_plan_auto_approves() -> None:
+    runtime, _store = _runtime(
+        [
+            ("planning", [_submit_plan()]),
+            ("writing output", [_file_write()]),
+            ("done", [_finish()]),
+        ]
+    )
+    try:
+        instance = _save_instance(
+            runtime,
+            instance_id="wf_auto_plan",
+            tools=("submit_plan", "file_write"),
+        )
+        manager = WorkflowScheduleManager(runtime)
+        row = manager.create_schedule(_spec("wf_auto_plan", instance))
+
+        record = await manager.fire_now(row.schedule_id)
+
+        assert record is not None
+        assert record.terminal_state == ConversationStatus.FINISHED.value
+        events = await runtime._store.get_events(record.run_cid)
+        statuses = [event for event in events if isinstance(event, StatusEvent)]
+        assert any(status.detail == "plan_approved" for status in statuses)
+        assert all(
+            status.status != ConversationStatus.AWAITING_PLAN_APPROVAL
+            for status in statuses
+        )
     finally:
         await runtime.aclose()
 
