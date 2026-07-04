@@ -6117,3 +6117,55 @@ Status ledger: WF-1..5 live-proven (router run) · WF-6+6c live-proven
 (sealed refire) · WF-8 live-proven (panel screenshot; approve/findings paths
 unit+route-tested) · WF-7 code-complete, pending-connector. All under the 5
 gates + suites; DISCO_WORKFLOW_ROUTER default OFF (on in dev).
+
+## WORKFLOW CATALOG VARIANCE: WF-9..12 — THREE NEW TASK AXES LIVE-PROVEN (2026-07-04)
+
+Dylan: "we also need more variance in the agentic tasks." Added the unbuilt
+remainder of the minimum set as built-ins (`5fc2df8b`): browser_automation
+(browser+file_write+think over untrusted page content) · form_fill (typed
+fields array, NEVER submits unless params.submit, needs_input on missing
+values) · skill_authoring (authors a skill artifact; enabling stays human).
+Exact-surface tests pin each compiled scope disjoint from shell/code_exec/
+file_edit. Live proofs ran the FULL WF-8 chain (draft with real params →
+digest-bound approve → schedule → sealed fire) — and the variance immediately
+paid for itself, surfacing four real defects fixed same-session:
+
+1. `422dbe0a` [WF-8b] output-path renderer eagerly stringified ALL params —
+   form_fill's typed fields array failed simulation (and would have failed the
+   finish gate) under a literal template that never referenced it. Now only
+   referenced template fields are substituted.
+2. `d0b0f5ba` [WF-12] sealed runs hard-stripped NETWORK + emptied egress_allow
+   (runtime.py sealed branch) so browser workflows could reach nothing.
+   Now WorkflowPolicies.egress_allow declares hosts (validated, digest-pinned
+   → approval covers the grant; browser_without_egress warning otherwise) and
+   the sealed spec passes exactly those hosts, NETWORK still stripped (egress
+   proxy handles it — live-confirmed). Empty list = today's full seal.
+   Plus sealed kick outcome rules: unreachable/impossible → needs_input/skip,
+   never fabricate (round-1 live finding: model invented a plausible git-log
+   summary for an impossible task; round 2 after the fix authored an
+   explicitly input-driven skill instead).
+3. `ed6beaab` [WF-12b] the egress schema evolution invalidated every stored
+   instance's pinned digest (by design) — and list_instances SILENTLY
+   swallowed the ValidationError: all workflows vanished from every surface.
+   Loud warning now names the file + error.
+4. Round-1 evidence also live-proved the two-flavor blocked landing in a
+   sealed context: browser run landed terminal STUCK WITH model-authored
+   explanation ("browser can't reach example.com — sandbox has no outbound
+   network"), the designed autonomous flavor.
+
+ROUND-2 LIVE PROOFS (all FINISHED, verdict=pass, sealed events clean):
+browser_automation wfsrun_2b749da6 — report contains the REAL page ("Example
+Domain", iana.org link) through the declared-egress proxy · form_fill
+wfsrun_daadeb1f — events show navigate/click/fill×2/screenshot and NO submit
+action (submit=false honored); report "Form filled; submission skipped per
+parameter" · skill_authoring wfsrun_d1c36dd2 — complete grounded
+Conventional-Commits skill at the contracted path.
+
+Honest residuals: (a) file_exists+non_empty verify is syntactic — a FINISHED
+run whose report narrates failure still gets verdict=pass (round-1 form_fill);
+the outcome-rules instruction mitigates (skip → honest terminal) but a
+semantic outcome channel (model-declared task_outcome on finish, surfaced in
+history rows) is the real fix. (b) output-contract path templating can't
+slug-ify params (skills/{slug}/SKILL.md), so skill artifacts land at literal
+contract paths. (c) fire-now does not coalesce with an in-flight run of the
+same schedule (two concurrent skill_authoring runs both completed).
