@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from disco.tools.anatomy import ToolContext
@@ -33,6 +35,121 @@ async def test_scaffolds_lead_form_files() -> None:
     out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Roof Co"), _ctx(sbx, "lead_form"))
     assert out.success
     assert ".disco/appspec.json" in sbx._fs and "index.html" in sbx._fs
+
+
+def _text(sbx: FakeSandboxInstance, path: str) -> str:
+    return sbx._fs[path].decode("utf-8")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("starter", "paths"),
+    [
+        ("game_loop_vanilla", {"index.html", "game.js", "README.md", "NOTES.md"}),
+        (
+            "pwa_shell",
+            {
+                "index.html",
+                "styles.4fd8.css",
+                "app.68ca.js",
+                "sw.js",
+                "manifest.webmanifest",
+                "icons/icon-192-any.svg",
+                "icons/icon-512-any.svg",
+                "icons/icon-192-maskable.svg",
+                "icons/icon-512-maskable.svg",
+                "NOTES.md",
+            },
+        ),
+        ("device_frames", {"index.html", "device-frames.css", "NOTES.md"}),
+        ("ui_kit_dense", {"index.html", "styles.css", "app.js", "NOTES.md"}),
+    ],
+)
+async def test_new_starters_materialize_files_and_return_notes(starter: str, paths: set[str]) -> None:
+    sbx = FakeSandboxInstance()
+    out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Wave Three"), _ctx(sbx, starter))
+    assert out.success
+    assert paths <= set(sbx._fs)
+    assert out.structured is not None
+    assert out.structured["notes_path"] == "NOTES.md"
+    assert out.structured["notes"] == _text(sbx, "NOTES.md")
+    assert "NOTES.md" in out.content and starter in out.content
+
+
+@pytest.mark.asyncio
+async def test_game_loop_vanilla_contains_clean_room_juice_primitives() -> None:
+    sbx = FakeSandboxInstance()
+    await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Game"), _ctx(sbx, "game_loop_vanilla"))
+    game_js = _text(sbx, "game.js")
+    assert "const FIXED_DT = 1 / 60" in game_js
+    assert "const sceneStack = []" in game_js
+    assert "function loadSpriteSheet" in game_js
+    assert "Self-authored clean-room one-shot synth" in game_js
+    assert "function oneShotSynth" in game_js
+    assert "vendored ZzFX code" in _text(sbx, "NOTES.md")
+    assert "function hitStop" in game_js and "function squash" in game_js
+    assert "function burst" in game_js and "shake.kick" in game_js
+    assert "zzfx(" not in game_js.lower()
+
+
+@pytest.mark.asyncio
+async def test_pwa_shell_manifest_safe_area_and_sw_strategies() -> None:
+    sbx = FakeSandboxInstance()
+    await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Phone App"), _ctx(sbx, "pwa_shell"))
+    manifest = json.loads(_text(sbx, "manifest.webmanifest"))
+    assert manifest["display"] == "standalone"
+    assert manifest["theme_color"] == "#0f766e"
+    icon_slots = {(icon["sizes"], icon["purpose"]) for icon in manifest["icons"]}
+    assert {
+        ("192x192", "any"),
+        ("512x512", "any"),
+        ("192x192", "maskable"),
+        ("512x512", "maskable"),
+    } <= icon_slots
+    css = _text(sbx, "styles.4fd8.css")
+    assert "env(safe-area-inset-top)" in css
+    assert "env(safe-area-inset-bottom)" in css
+    assert "touch-action:manipulation" in css
+    assert ":focus-visible" in css
+    assert ":active" in css
+    app_js = _text(sbx, "app.68ca.js")
+    assert "beforeinstallprompt" in app_js and "iosCoach" in app_js
+    sw_js = _text(sbx, "sw.js")
+    assert "HASHED_SHELL_ASSETS" in sw_js
+    assert "cacheFirst" in sw_js and "networkFirst" in sw_js
+
+
+@pytest.mark.asyncio
+async def test_device_frames_contains_clean_room_phone_and_window_chrome() -> None:
+    sbx = FakeSandboxInstance()
+    await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Frames"), _ctx(sbx, "device_frames"))
+    css = _text(sbx, "device-frames.css")
+    assert "Clean-room frame CSS" in css
+    assert "--frame-screen-width" in css
+    assert ".iphone-ish::before" in css
+    assert ".android-ish::before" in css
+    assert ".side-button" in css
+    assert ".macos-window" in css and ".browser-window" in css
+    assert ".traffic-lights" in css and ".address-bar" in css
+    assert ":focus-visible" in css
+    assert "devices.css" not in css.replace("not copied from devices.css", "")
+
+
+@pytest.mark.asyncio
+async def test_ui_kit_dense_tokens_focus_and_font_defaults() -> None:
+    sbx = FakeSandboxInstance()
+    await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="Ops"), _ctx(sbx, "ui_kit_dense"))
+    css = _text(sbx, "styles.css")
+    assert "--font-base:13px" in css
+    assert "--row-height:32px" in css
+    assert "--topbar-height:56px" in css
+    assert "--rail-collapsed:64px" in css
+    assert "--rail-expanded:256px" in css
+    assert "font-variant-numeric:tabular-nums" in css
+    assert "position:sticky" in css
+    assert ":focus-visible" in css
+    assert "Inter" not in css
+    assert "Roboto" not in css
 
 
 @pytest.mark.asyncio

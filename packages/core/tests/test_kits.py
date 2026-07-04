@@ -21,9 +21,22 @@ from disco.core.kits import (
 # --- starter registry ---------------------------------------------------------
 def test_registry_resolves_builtins() -> None:
     reg = StarterKitRegistry.default()
-    assert reg.ids() == frozenset({"app_shell", "lead_form"})
+    expected = frozenset({
+        "app_shell",
+        "lead_form",
+        "game_loop_vanilla",
+        "pwa_shell",
+        "device_frames",
+        "ui_kit_dense",
+    })
+    assert reg.ids() == expected
+    assert len(reg.ids()) == 6
     assert reg.get("app_shell") is not None
     assert reg.get("lead_form") is not None
+    assert reg.get("game_loop_vanilla") is not None
+    assert reg.get("pwa_shell") is not None
+    assert reg.get("device_frames") is not None
+    assert reg.get("ui_kit_dense") is not None
     assert reg.get("nope") is None
 
 

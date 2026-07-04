@@ -1,11 +1,11 @@
 """scaffold_starter (P7) — materialize this build's host-owned starter frame.
 
-A contract declares a starter_kit (app_shell / lead_form); the prompt pack tells the
-model to "scaffold from the <name> starter". This tool makes that real: it writes the
-ACTIVE contract's starter files (from ctx.starter_kit, threaded by the runtime — so it's
-active-contract-bound, not a free-for-all) into the workspace, so the model edits a real
-frame instead of hand-drawing common chrome. Never clobbers existing work (skips files
-that already exist).
+A contract declares a starter_kit; the prompt pack tells the model to "scaffold from the
+<name> starter". This tool makes that real: it writes the ACTIVE contract's starter
+files (from ctx.starter_kit, threaded by the runtime — so it's active-contract-bound,
+not a free-for-all) into the workspace, so the model edits a real frame instead of
+hand-drawing common chrome. Never clobbers existing work (skips files that already
+exist).
 """
 
 from __future__ import annotations
@@ -66,7 +66,13 @@ class ScaffoldStarterTool:
         msg = f"scaffolded '{starter_id}' starter — wrote {written or '(nothing new)'}"
         if skipped:
             msg += f"; left existing {skipped} untouched"
+        structured = {"starter": starter_id, "written": written, "skipped": skipped}
+        notes = files.get("NOTES.md")
+        if notes is not None:
+            msg += f"\n\nNOTES.md\n{notes.strip()}"
+            structured["notes_path"] = "NOTES.md"
+            structured["notes"] = notes
         return ToolOutcome(
             success=True, content=msg,
-            structured={"starter": starter_id, "written": written, "skipped": skipped},
+            structured=structured,
         )

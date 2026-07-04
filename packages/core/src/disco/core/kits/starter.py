@@ -1,10 +1,10 @@
 """Starter kits (P7) — host-owned scaffolds the contracts/packs name.
 
-A contract declares ``artifact.starter_kit`` (app_shell / lead_form) and the prompt packs
-tell the model to "scaffold from the <name> starter" — but the names were bare strings
-with nothing behind them (a false affordance; the model hand-drew frames). A StarterKit
-resolves a name to a host-owned file scaffold (path → text), parameterized by the build's
-title, so the model EDITS a real frame instead of hand-drawing common chrome.
+A contract declares ``artifact.starter_kit`` and the prompt packs tell the model to
+"scaffold from the <name> starter" — but the names were bare strings with nothing behind
+them (a false affordance; the model hand-drew frames). A StarterKit resolves a name to a
+host-owned file scaffold (path → text), parameterized by the build's title, so the model
+EDITS a real frame instead of hand-drawing common chrome.
 
 Pure: AppSpec/render reuse from disco.core.appkit; no runtime/tool imports. The lead_form
 starter IS the AppKit default (single source — app_create scaffolds from it).
@@ -17,6 +17,7 @@ from collections.abc import Callable
 from pathlib import PurePosixPath
 
 from ..appkit import AppSection, AppSpec, render_html
+from .starter_assets import device_frames, game_loop_vanilla, pwa_shell, ui_kit_dense
 
 
 def _safe_rel(path: str) -> str:
@@ -98,6 +99,10 @@ class StarterKitRegistry:
     _BUILTINS: dict[str, Callable[[str], dict[str, str]]] = {
         "app_shell": _app_shell,  # static.site / interactive.prototype
         "lead_form": _lead_form,  # appkit.leadgen — the AppKit default
+        "game_loop_vanilla": game_loop_vanilla,  # zero-dep Canvas2D game loop
+        "pwa_shell": pwa_shell,  # installable mobile-first PWA shell
+        "device_frames": device_frames,  # clean-room phone/window preview frames
+        "ui_kit_dense": ui_kit_dense,  # dense dashboard shell primitives
     }
 
     def get(self, kit_id: str) -> StarterKit | None:
