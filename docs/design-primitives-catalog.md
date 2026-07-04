@@ -256,3 +256,167 @@ already exists for decks — feed it).
 
 Proof standard throughout (house rules): every wave ends with live MiniMax
 builds + Firefox screenshots sent to Dylan; no green-test-only claims.
+
+---
+
+# HARVEST APPENDIX — 5-agent research sweep, 2026-07-04
+
+License discipline: every entry below verified against the actual repository
+LICENSE. **Vendor-safe** = code may be adapted/vendored. **Techniques-only** =
+study and clean-room reimplement; never copy files.
+
+## H1. License verdicts (the table that governs everything)
+
+VENDOR-SAFE (MIT/Apache/BSD, verified):
+- Magic UI (magicuidesign/magicui, MIT) — THE workhorse: marquee, border-beam,
+  shine-border, bento-grid, dot/grid patterns, particles, meteors, warp/retro
+  backgrounds, noise-texture. Source read + verified.
+- shadcn/ui (MIT), vaul (MIT), sonner (MIT), number-flow (MIT), cult-ui (MIT),
+  HyperUI (MIT), daisyUI (MIT), eldoraui (MIT), ibelick/motion-primitives (MIT
+  — the strong "new find"), tw-animate-css (successor to deprecated
+  tailwindcss-animate).
+- Motion/motion.dev (MIT), anime.js v4 (MIT), Lenis (MIT), tsParticles (MIT),
+  three.js (MIT), OGL (MIT), @formkit/auto-animate (MIT), Barba.js (MIT).
+- GSAP — proprietary but 100% free for commercial use incl. all plugins since
+  Apr 2025 (Webflow); AI-GENERATED GSAP CODE EXPLICITLY PERMITTED. Sole
+  prohibition: building a visual no-code animation-builder UI competing with
+  Webflow. Disco's surfaces do not do this; re-review only if we ever ship a
+  drag-timeline editor.
+- Games: Phaser (MIT, v4.1 2026), KAPLAY (MIT, active), Excalibur (BSD-2),
+  PixiJS (MIT), melonJS (MIT), litecanvas (MIT), ZzFX (MIT).
+- Frames: picturepan2/devices.css (MIT, modern device set). Deck engines
+  (study): reveal.js/impress.js/Slidev/Spectacle/Swiper all MIT.
+- Glass: liquidGL (MIT), rizroze/liquid-glass (MIT), glasscn-ui (MIT),
+  artyhoo/shadcn-glass-ui-library (Apache-2.0).
+
+TECHNIQUES-ONLY (no/none-OSI/restrictive license — clean-room reimplement):
+- react-bits (MIT + COMMONS CLAUSE — cannot redistribute/port the components
+  themselves; consuming-in-an-app OK, but for a builder that emits components
+  treat as inspiration only).
+- Aceternity UI free tier (NO LICENSE FILE — implied-free is not a grant),
+  ibelick/background-snippets (NO LICENSE FILE), css.glass + themesberg
+  glass-ui (license unresolvable — re-verify before any use).
+- hover.dev (paid + anti-competing-component-library clause), Preline (MIT +
+  fair-use overlay: never repackage as a kit/generator), Preline Pro +
+  Tailwind Plus + shadcnblocks (PAID — never copy).
+- jsfxr (license varies per fork; pin + verify a fork before use; prefer ZzFX).
+- callmenick/CSS-Device-Mockups (no license — avoid).
+
+STALE/DEAD (don't adopt): AOS (unmaintained), split-type + Splitting.js (stale
+— hand-roll our ~30-line splitter), vanta.js (dead), marvelapp/devices.css
+(iPhone-8-era devices).
+
+## H2. Glassmorphism — the A5 "glass" treatment set + generation rulebook
+
+Canonical recipe (tested ranges): backdrop-filter blur(8-20px, default 14)
+saturate(140-180%, default 160 — saturate IS the premium ingredient; its
+absence = "gray mud", the #1 bad-glass tell) + fill lanes (light glass
+rgba(255,255,255,.08-.20) on dark/colorful; dark glass rgba(17,25,40,.45-.65)
+on light/colorful) + MANDATORY 1px border highlight (bright on light glass
+.25-.35, dim on dark .10-.15 — the refractive-edge fake that separates glass
+from blurred-div) + soft large shadow (0 8px 32px rgba(0,0,0,.15-.30)) +
+radius 12-24px + @supports fallback to near-opaque fills + optional
+feTurbulence grain (baseFrequency .6-.9, opacity .03-.06, hero surfaces only)
++ specular gradient edge via mask-composite ring.
+
+THE 12 GENERATION RULES (enforce in packs + lint): (1) backdrop gate — glass
+only over colorful/imagery backdrops, never flat color; (2) never blur
+without saturate; (3) one fill lane per view; (4) border highlight mandatory;
+(5) soft shadow mandatory; (6) max 3 glass layers/screen, content surfaces
+(tables/forms/code) NEVER glass; (7) no glass-on-glass nesting; (8) fallback
++ prefers-reduced-transparency always emitted; (9) scrim under text over
+unpredictable imagery, verify worst-case contrast; (10) SVG-displacement
+"liquid glass" (feDisplacementMap, Chromium-only) at most ONE hero element
+with blur fallback — never WebGL by default; (11) grain on marketing
+surfaces only; (12) mobile ≤3-5 blurred layers, never animate
+backdrop-filter itself.
+
+Nav variant: 200%-height element + linear-gradient mask so the blur samples
+scrolling content. Modal variant: blur 18-24px + separate darkening scrim.
+
+## H3. Motion — A9 decisions + taste defaults
+
+ARCHITECTURE (C2): adopt Motion (MIT) as the tween/spring substrate + a thin
+FIRST-PARTY policy layer (taste presets, reduced-motion gating, deck
+build-in state machine, text splitter). GSAP = opt-in high-power tier
+(ScrollTrigger/SplitText). NATIVE-FIRST default: scroll-driven animations API
++ @starting-style + view-transitions for the 80% case; a library must earn
+its bytes (choreographed timelines, spring physics, scroll-scrubbed JS
+state). Lenis (MIT) when "premium scroll feel" is asked.
+
+TASTE DEFAULTS (the anti-AI-slop table): hero choreography 900ms-1.4s total,
+easing cubic-bezier(.16,1,.3,1), per-element travel VARIES (24/16/8px — the
+uniform-40px-fade-up is THE AI tell), stagger 60-100ms; scroll reveals =
+small travel (12-20px), fire once, ≥1/3 of sections get NO animation;
+word-level (not char) splitting, 30-50ms/word, cap total <800ms; marquee =
+constant px/sec + pause-on-hover; parallax subtle (60-80% speed) max 2
+layers; magnetic hover ≤8-12px pointer-fine only; counters ease-out scaled
+to magnitude. Reduced-motion: gate INIT (not just duration), disable
+parallax/marquee/ambient entirely; remove motion never outcomes.
+
+DECKS: click-advance build-in state machine (imperative step index, not
+scroll); startViewTransition for slide swaps + crossfade fallback; PPTX/video
+export REQUIRES a deterministic seekable JS timeline (native APIs don't
+survive export) — keep one.
+
+## H4. Decks (B2 harvest — feeds Wave 1)
+
+From Slidev/reveal/impress (all MIT, study-safe): (1) click-indexed atomic
+reveal units — multiple elements share a click index, composable modifiers
+(fade+direction+scale via data attrs); (2) named-layout-as-frontmatter —
+cover/quote/statement/two-cols/image-left/image-right/full are LAYOUT
+variants built around the content (the real "image-first" mechanism), not
+decorations on a generic slide; (3) decoupled speaker-notes channel (second
+surface, postMessage-synced — also fixes notes-leak-into-export class);
+(4) theme = accent PALETTE (several named accents for per-section
+derivation) + font triplet + light/dark token pairs — one hardcoded blue +
+one mode = the generic-deck tell; (5) fragment-flattening print/export
+architecture (expand all builds statically, re-linearize, then paginate);
+stretch: impress-style 3D camera zoom-to-detail as ONE optional transition.
+
+## H5. Sites (B1/A6 harvest)
+
+Premium-craft checklist (apply per direction): hairline border-white/10 on
+dark (never solid gray) or inset glow shadow; cursor-tracked radial
+spotlight on cards (CSS custom props + mousemove — highest feel-per-line);
+noise/grain overlay on gradients (kills banding); gradient text via
+bg-clip; subtle 3D tilt clamped ±6-10°; staggered entrances (50-100ms);
+edge-fade masks on all marquees; GROUP-hover choreography (icon shrinks
+while CTA slides up); near-black #0a0a0a never #000, muted text = fg at
+60-70% opacity never hardcoded gray; transform-gpu on continuous animation;
+border-radius must match mask radius on glow borders (clipped corners = the
+sloppy-clone tell). Section archetype references: Magic UI bento (pure CSS
+grid, trivial), HyperUI static sections (zero-JS), marquee-composite
+testimonial walls, Aceternity-style hero backgrounds reimplemented
+(aurora/threads/silk shader family — MUST ship static CSS-gradient
+fallbacks; the sources don't).
+
+## H6. Games + frames + audio (B5/B6 verdicts)
+
+Games: tier-1 = vanilla canvas + rAF fixed-timestep + ZzFX (MIT, ~1KB
+synthesized SFX, no assets) for single-screen games; tier-2 DEFAULT =
+KAPLAY (MIT — flattest API, fewest lines to playable+juicy, ideal codegen
+target); tier-2 FALLBACK = Phaser (MIT — deepest doc corpus = fewest
+hallucinated APIs, built-in tilemap/physics for platformer/top-down).
+NEVER default PixiJS (renderer-only). Juice helpers (~30 lines, both
+tiers): decaying-random screen shake, squash/stretch tween, 40-80ms
+hit-stop, particle bursts, lerp camera follow.
+
+Frames: picturepan2/devices.css (MIT) for modern iPhone/iPad/Watch/MacBook
+bezels; window chrome (traffic lights, address bar) hand-rolled first-party
+(~25 lines CSS, no maintained lib exists).
+
+## H7. reactbits technique index (Commons Clause — reimplement only)
+
+Trivial-easy reimplements: Star Border (pure CSS orbiting gradient), Click
+Spark (~80-line canvas emitter), Gooey Nav (blur+contrast filter trick),
+Letter Glitch (Canvas2D fillText grid), Decrypted Text (interval scramble —
+NEEDS aria-hidden + visually-hidden real text), Tilted Card (center-offset
+rotate + ~20-line spring). Moderate: Aurora/Threads/Silk (OGL-style
+fragment shaders ~150 lines w/ simplex noise — palette-lockable to A3
+seeds), Magic-Bento glow grid, Dither. Hard (skip or three.js-only): Grid
+Distortion (velocity-injected displacement field), Fluid Glass
+(MeshTransmissionMaterial refraction). A11y binding rules: every WebGL
+backdrop ships a static gradient fallback; flicker effects capped <3Hz;
+cursor-replacement effects never sole affordance, disabled on touch;
+full-viewport shader motion pauses off-screen + respects reduced-motion.
