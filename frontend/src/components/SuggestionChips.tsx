@@ -1,15 +1,5 @@
-import { Bot, Code, FileSearch, Search } from "lucide-react";
-import { useMemo, type ComponentType } from "react";
+import { useMemo } from "react";
 import { getSuggestions, type SuggestionSurface } from "@/data/suggestions";
-
-type IconComponent = ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
-
-const ICON_BY_SURFACE: Record<SuggestionSurface, IconComponent> = {
-  search: Search,
-  deep_research: FileSearch,
-  build: Code,
-  agent: Bot,
-};
 
 const CONTROL_BY_SURFACE: Record<SuggestionSurface, string> = {
   search: "search.suggestion",
@@ -18,6 +8,9 @@ const CONTROL_BY_SURFACE: Record<SuggestionSurface, string> = {
   agent: "agent.suggestion",
 };
 
+/** Quiet, uniform prompt pills under the composer. No icons, no heavy borders —
+ * a single centered row (wrapping to a second at narrow widths) of ghost pills
+ * that read as whispers, not buttons competing with the composer. Capped at 4. */
 export function SuggestionChips({
   surface,
   onPick,
@@ -25,14 +18,13 @@ export function SuggestionChips({
   surface: SuggestionSurface;
   onPick: (text: string) => void;
 }) {
-  const suggestions = useMemo(() => getSuggestions(surface), [surface]);
-  const Icon = ICON_BY_SURFACE[surface];
+  const suggestions = useMemo(() => getSuggestions(surface).slice(0, 4), [surface]);
 
   if (suggestions.length === 0) return null;
 
   return (
     <div
-      className="flex w-full max-w-measure flex-wrap justify-center gap-inline"
+      className="mx-auto flex w-full max-w-[46rem] flex-wrap items-center justify-center gap-x-2 gap-y-2"
       data-suggestion-surface={surface}
     >
       {suggestions.map((suggestion, index) => (
@@ -43,10 +35,10 @@ export function SuggestionChips({
           data-disco-control={CONTROL_BY_SURFACE[surface]}
           data-suggestion-id={suggestion.id}
           data-suggestion-index={index}
-          className="flex max-w-full items-start gap-hair rounded-control border border-hairline px-body py-inline text-left font-ui text-[0.82rem] leading-snug text-text-muted transition-colors hover:border-hairline-strong hover:text-text sm:max-w-[34rem]"
+          title={suggestion.text}
+          className="max-w-[21rem] truncate rounded-full border border-hairline bg-transparent px-4 py-1.5 font-ui text-[0.8rem] text-text-faint transition-colors hover:bg-surface-1 hover:text-text-muted"
         >
-          <Icon className="mt-px size-3.5 shrink-0 text-text-faint" aria-hidden />
-          <span className="min-w-0 whitespace-normal">{suggestion.text}</span>
+          {suggestion.text}
         </button>
       ))}
     </div>

@@ -30,22 +30,23 @@ describe("Main surface — empty state + reactive provider errors", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    expect(screen.getByRole("heading", { level: 1, name: "Research" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
     expect(screen.getByText("Sourced answers on anything.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: "build" }));
-    expect(screen.getByRole("heading", { level: 1, name: "Build" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
     expect(screen.getByText("Real software, live preview.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: "agent" }));
-    expect(screen.getByRole("heading", { level: 1, name: "Agent" })).toBeInTheDocument();
     expect(screen.getByText("Hands-on tasks and workflows.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("radio", { name: "search" }));
     await user.click(screen.getByRole("button", { name: /Scope: Standard/i }));
     await user.click(screen.getByRole("menuitem", { name: /Deep Research/i }));
-    expect(screen.getByRole("heading", { level: 1, name: "Deep Research" })).toBeInTheDocument();
-    expect(screen.getByText("Multi-step reports with cited evidence.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Disco" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Deep Research — Multi-step reports with cited evidence."),
+    ).toBeInTheDocument();
   });
 
   it("surfaces a provider error with its REAL content, not a generic failure", async () => {

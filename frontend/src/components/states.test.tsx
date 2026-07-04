@@ -2,11 +2,19 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { EmptyState, ErrorState } from "./states";
+import { ModeProvider } from "@/shell/ModeProvider";
 
 describe("states", () => {
-  it("empty state reflects the philosophy", () => {
-    render(<EmptyState />);
-    expect(screen.getByRole("heading", { name: "Research" })).toBeInTheDocument();
+  it("empty state carries the brand + Latin entry with surface subchips", () => {
+    render(
+      <ModeProvider>
+        <EmptyState />
+      </ModeProvider>,
+    );
+    expect(screen.getByRole("heading", { name: "Disco" })).toBeInTheDocument();
+    expect(screen.getByText(/I learn; I become acquainted with/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "search", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "build", pressed: false })).toBeInTheDocument();
     expect(screen.getByText(/sourced answers/i)).toBeInTheDocument();
   });
 
