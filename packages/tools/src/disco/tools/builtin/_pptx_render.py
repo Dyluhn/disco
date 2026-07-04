@@ -127,6 +127,7 @@ _SLIDE_H = 6_858_000    # 7.5 inches
 
 # Margins / safe-area (0.5 in = 457 200 EMU)
 _MARGIN = 457_200
+_PIPELINE_GENERATOR_MARKER = "disco-slides-generate:pipeline-html"
 
 # Content width / height (canvas minus symmetric margins)
 _CW = _SLIDE_W - 2 * _MARGIN            # 11 277 600
@@ -785,6 +786,319 @@ def _render_rect_element(prs_slide, el: Element) -> None:  # type: ignore[type-a
         box.line.fill.background()
 
 
+def _slide_archetype(slide: Slide) -> str:
+    return str(getattr(slide, "archetype", None) or "").strip().lower()
+
+
+def _plain_element_text(el: Element) -> str:
+    return el.text[2:] if el.text.startswith("• ") else el.text
+
+
+def _title_element(slide: Slide) -> Element | None:
+    texts = [el for el in slide.elements if el.kind == "text" and el.text.strip()]
+    if not texts:
+        return None
+    bold_heads = [el for el in texts if el.bold and el.font_size_pt >= 20]
+    return max(bold_heads or texts, key=lambda el: el.font_size_pt)
+
+
+def _body_strings(slide: Slide) -> list[str]:
+    title_el = _title_element(slide)
+    out: list[str] = []
+    for el in slide.elements:
+        if el.kind != "text" or el is title_el:
+            continue
+        text = _plain_element_text(el).strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _split_timeline_label(raw: str) -> tuple[str, str]:
+    for sep in (" — ", " - ", "|", ":"):
+        if sep in raw:
+            left, right = raw.split(sep, 1)
+            return left.strip(), right.strip()
+    return raw.strip(), ""
+
+
+def _add_pptx_text(
+    prs_slide,
+    text: str,
+    *,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    theme: Theme,
+    font_name: str,
+    size_pt: float,
+    color: str,
+    bold: bool = False,
+    italic: bool = False,
+    align: str = "LEFT",
+) -> None:
+    from pptx.enum.text import PP_ALIGN
+
+    align_map = {"LEFT": PP_ALIGN.LEFT, "CENTER": PP_ALIGN.CENTER, "RIGHT": PP_ALIGN.RIGHT}
+    tf = _add_textbox(prs_slide, left, top, width, height)
+    p = tf.paragraphs[0]
+    p.alignment = align_map.get(align, PP_ALIGN.LEFT)
+    run = p.add_run()
+    _set_run_style(run, text, font_name, size_pt, color, bold=bold, italic=italic)
+
+
+def _render_big_number_pptx(prs_slide, slide: Slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    body = _body_strings(slide)
+    figure = body[0] if body else slide.title
+    support = body[1] if len(body) > 1 else (slide.title if body else "")
+    if slide.title and slide.title != support:
+        _add_pptx_text(
+            prs_slide,
+            slide.title,
+            left=_MARGIN,
+            top=_MARGIN,
+            width=_CW,
+            height=365_760,
+            theme=theme,
+            font_name=_first_font(theme.font_ui),
+            size_pt=18.0,
+            color=theme.text_muted,
+            bold=True,
+        )
+    _add_pptx_text(
+        prs_slide,
+        figure,
+        left=_MARGIN,
+        top=1_371_600,
+        width=_CW,
+        height=2_286_000,
+        theme=theme,
+        font_name=_first_font(theme.font_display),
+        size_pt=150.0,
+        color=theme.accent,
+        bold=True,
+        align="CENTER",
+    )
+    if support:
+        _add_pptx_text(
+            prs_slide,
+            support,
+            left=int(_MARGIN * 1.5),
+            top=3_657_600,
+            width=_SLIDE_W - int(_MARGIN * 3),
+            height=731_520,
+            theme=theme,
+            font_name=_first_font(theme.font_reading),
+            size_pt=24.0,
+            color=theme.text,
+            align="CENTER",
+        )
+
+
+def _render_quote_pptx(prs_slide, slide: Slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    body = _body_strings(slide)
+    quote = body[0] if body else slide.title
+    attribution = body[1] if len(body) > 1 else ""
+    _add_pptx_text(
+        prs_slide,
+        "“",
+        left=_MARGIN,
+        top=914_400,
+        width=914_400,
+        height=1_371_600,
+        theme=theme,
+        font_name=_first_font(theme.font_display),
+        size_pt=120.0,
+        color=theme.accent,
+        bold=True,
+    )
+    _add_pptx_text(
+        prs_slide,
+        quote,
+        left=1_371_600,
+        top=1_280_160,
+        width=_SLIDE_W - 2_286_000,
+        height=2_743_200,
+        theme=theme,
+        font_name=_first_font(theme.font_reading),
+        size_pt=34.0,
+        color=theme.text,
+        italic=True,
+    )
+    if attribution:
+        _add_pptx_text(
+            prs_slide,
+            attribution,
+            left=1_371_600,
+            top=4_206_240,
+            width=_SLIDE_W - 2_286_000,
+            height=457_200,
+            theme=theme,
+            font_name=_first_font(theme.font_ui),
+            size_pt=16.0,
+            color=theme.text_muted,
+            bold=True,
+        )
+
+
+def _render_timeline_pptx(prs_slide, slide: Slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Emu
+
+    items = _body_strings(slide) or [slide.title]
+    title = slide.title
+    if title:
+        _add_pptx_text(
+            prs_slide,
+            title,
+            left=_MARGIN,
+            top=_MARGIN,
+            width=_CW,
+            height=548_640,
+            theme=theme,
+            font_name=_first_font(theme.font_ui),
+            size_pt=24.0,
+            color=theme.text,
+            bold=True,
+        )
+    margin = 914_400
+    y = 3_337_560
+    spine = prs_slide.shapes.add_shape(
+        MSO_SHAPE.RECTANGLE, Emu(margin), Emu(y), Emu(_SLIDE_W - 2 * margin), Emu(18_288)
+    )
+    spine.fill.solid()
+    spine.fill.fore_color.rgb = _rgb_from_hex(theme.accent)
+    spine.line.fill.background()
+    denom = max(1, len(items) - 1)
+    for i, item in enumerate(items):
+        x = margin + int(i * ((_SLIDE_W - 2 * margin) / denom))
+        node = prs_slide.shapes.add_shape(
+            MSO_SHAPE.OVAL, Emu(x - 54_864), Emu(y - 54_864), Emu(109_728), Emu(109_728)
+        )
+        node.fill.solid()
+        node.fill.fore_color.rgb = _rgb_from_hex(theme.accent)
+        node.line.fill.background()
+        head, detail = _split_timeline_label(item)
+        label = head if not detail else f"{head}\n{detail}"
+        label_top = y - 914_400 if i % 2 == 0 else y + 228_600
+        _add_pptx_text(
+            prs_slide,
+            label,
+            left=x - 914_400,
+            top=label_top,
+            width=1_828_800,
+            height=731_520,
+            theme=theme,
+            font_name=_first_font(theme.font_reading),
+            size_pt=14.0,
+            color=theme.text,
+            align="CENTER",
+        )
+
+
+def _render_two_by_two_pptx(prs_slide, slide: Slide, theme: Theme) -> None:  # type: ignore[type-arg]
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Emu
+
+    body = _body_strings(slide)
+    axis_x = body[0] if len(body) >= 6 else "Higher impact"
+    axis_y = body[1] if len(body) >= 6 else "Higher certainty"
+    cells = body[2:6] if len(body) >= 6 else body[:4]
+    while len(cells) < 4:
+        cells.append("")
+    _add_pptx_text(
+        prs_slide,
+        slide.title,
+        left=_MARGIN,
+        top=_MARGIN,
+        width=_CW,
+        height=548_640,
+        theme=theme,
+        font_name=_first_font(theme.font_ui),
+        size_pt=24.0,
+        color=theme.text,
+        bold=True,
+    )
+    left = 1_371_600
+    top = 1_371_600
+    grid_w = _SLIDE_W - 2_743_200
+    grid_h = 4_389_120
+    cell_w = grid_w // 2
+    cell_h = grid_h // 2
+    for idx, label in enumerate(cells):
+        col = idx % 2
+        row = idx // 2
+        box = prs_slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            Emu(left + col * cell_w),
+            Emu(top + row * cell_h),
+            Emu(cell_w),
+            Emu(cell_h),
+        )
+        box.fill.solid()
+        box.fill.fore_color.rgb = _rgb_from_hex(theme.surface_1)
+        box.line.color.rgb = _rgb_from_hex(theme.hairline)
+        _add_pptx_text(
+            prs_slide,
+            label,
+            left=left + col * cell_w + 137_160,
+            top=top + row * cell_h + 137_160,
+            width=cell_w - 274_320,
+            height=cell_h - 274_320,
+            theme=theme,
+            font_name=_first_font(theme.font_reading),
+            size_pt=18.0,
+            color=theme.text,
+            bold=True,
+        )
+    _add_pptx_text(
+        prs_slide,
+        axis_x,
+        left=left + grid_w - 1_828_800,
+        top=top + grid_h + 91_440,
+        width=1_828_800,
+        height=274_320,
+        theme=theme,
+        font_name=_first_font(theme.font_ui),
+        size_pt=10.0,
+        color=theme.accent,
+        bold=True,
+        align="RIGHT",
+    )
+    _add_pptx_text(
+        prs_slide,
+        axis_y,
+        left=left - 914_400,
+        top=top,
+        width=822_960,
+        height=274_320,
+        theme=theme,
+        font_name=_first_font(theme.font_ui),
+        size_pt=10.0,
+        color=theme.accent,
+        bold=True,
+        align="RIGHT",
+    )
+
+
+def _render_archetype_pptx(prs_slide, slide: Slide, theme: Theme) -> bool:  # type: ignore[type-arg]
+    archetype = _slide_archetype(slide)
+    if archetype == "big_number":
+        _render_big_number_pptx(prs_slide, slide, theme)
+        return True
+    if archetype == "quote":
+        _render_quote_pptx(prs_slide, slide, theme)
+        return True
+    if archetype == "timeline":
+        _render_timeline_pptx(prs_slide, slide, theme)
+        return True
+    if archetype == "two_by_two":
+        _render_two_by_two_pptx(prs_slide, slide, theme)
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # render_pptx — accepts Deck (C1) or MinimalDeck (compat)
 # ---------------------------------------------------------------------------
@@ -829,7 +1143,8 @@ def _render_pptx_c1(deck: Deck) -> bytes:
             from disco.tools.builtin._c8_chart_layouts import layout_table_slide_pptx
             layout_table_slide_pptx(prs_slide, slide, deck.theme)
         else:
-            _render_slide_elements(prs_slide, slide, deck.theme)
+            if not _render_archetype_pptx(prs_slide, slide, deck.theme):
+                _render_slide_elements(prs_slide, slide, deck.theme)
 
             if slide.notes:
                 _ntf = prs_slide.notes_slide.notes_text_frame
@@ -913,6 +1228,10 @@ def _render_html_c1(deck: Deck) -> str:  # noqa: C901
     for i, slide in enumerate(deck.slides):
         active = ' active' if i == 0 else ''
         bg = theme.surface_1 if slide.layout == "section_header" else theme.bg
+        archetype = _slide_archetype(slide)
+        archetype_attr = (
+            f'data-archetype="{html.escape(archetype)}" ' if archetype else ""
+        )
 
         inner = _html_for_c1_slide(slide, theme, slide_idx=i)
         brand = _brand_marks_html(slide, theme)
@@ -920,6 +1239,7 @@ def _render_html_c1(deck: Deck) -> str:  # noqa: C901
             f'<section class="slide{active}" id="slide-{i}" '
             f'data-slide-id="slide-{i}" '
             f'data-layout="{html.escape(slide.layout)}" '
+            f'{archetype_attr}'
             f'style="background:{html.escape(bg)}">\n{inner}\n{brand}\n</section>'
         )
 
@@ -927,6 +1247,7 @@ def _render_html_c1(deck: Deck) -> str:  # noqa: C901
 
     return f"""\
 <!DOCTYPE html>
+<!-- {_PIPELINE_GENERATOR_MARKER} v1 -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -962,6 +1283,45 @@ body{{background:#000;display:flex;align-items:center;justify-content:center;
   margin-bottom:1%;}}
 .slide-section-title{{font-family:var(--display);font-size:4.5vw;
   color:var(--text);line-height:1.1;}}
+.slide-kicker{{font-family:var(--ui);font-size:0.95vw;font-weight:700;
+  color:var(--text-muted);text-transform:uppercase;letter-spacing:0;}}
+.slide-big-number-layout{{height:100%;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;gap:2%;}}
+.slide-big-number-figure{{font-family:var(--display);font-size:200px;line-height:.85;
+  color:var(--accent);font-weight:800;}}
+.slide-big-number-support{{font-family:var(--reading);font-size:2.1vw;line-height:1.25;
+  color:var(--text);max-width:70%;}}
+.slide-quote-layout{{position:relative;height:100%;display:flex;flex-direction:column;
+  justify-content:center;padding:0 8% 0 12%;}}
+.slide-quote-mark{{position:absolute;left:4%;top:14%;font-family:var(--display);
+  font-size:12vw;line-height:1;color:var(--accent);font-weight:800;opacity:.9;}}
+.slide-quote-text{{font-family:var(--reading);font-size:3.2vw;line-height:1.18;
+  color:var(--text);font-style:italic;max-width:86%;}}
+.slide-quote-attribution{{font-family:var(--ui);font-size:1.15vw;color:var(--text-muted);
+  font-weight:700;margin-top:2%;}}
+.slide-timeline-layout{{height:100%;display:flex;flex-direction:column;justify-content:center;}}
+.slide-timeline{{position:relative;height:56%;margin:3% 5% 0;}}
+.slide-timeline-spine{{position:absolute;left:8%;right:8%;top:50%;height:3px;
+  background:var(--accent);}}
+.slide-timeline-node{{position:absolute;top:50%;width:14px;height:14px;border-radius:50%;
+  background:var(--accent);transform:translate(-50%,-50%);box-shadow:0 0 0 6px var(--bg);}}
+.slide-timeline-label{{position:absolute;width:22%;transform:translateX(-50%);
+  font-family:var(--reading);font-size:1.1vw;line-height:1.25;color:var(--text);text-align:center;}}
+.slide-timeline-label.above{{bottom:55%;}}
+.slide-timeline-label.below{{top:58%;}}
+.slide-timeline-label strong{{display:block;font-family:var(--ui);font-size:.9vw;
+  color:var(--accent);margin-bottom:.25em;}}
+.slide-two-by-two-layout{{height:100%;display:flex;flex-direction:column;justify-content:center;}}
+.slide-two-by-two-grid{{position:relative;display:grid;grid-template-columns:1fr 1fr;
+  grid-template-rows:1fr 1fr;gap:0;border:1px solid var(--hairline);height:66%;
+  margin:2% 8% 0;background:var(--surface-1);}}
+.slide-two-by-two-cell{{display:flex;align-items:center;justify-content:center;
+  padding:6%;border:1px solid var(--hairline);font-family:var(--reading);
+  font-size:1.45vw;line-height:1.25;color:var(--text);text-align:center;font-weight:700;}}
+.slide-two-by-two-axis{{position:absolute;font-family:var(--ui);font-size:.85vw;
+  color:var(--accent);font-weight:800;text-transform:uppercase;letter-spacing:0;}}
+.slide-two-by-two-axis.x-end{{right:0;bottom:-7%;}}
+.slide-two-by-two-axis.y-end{{left:-8%;top:0;transform:rotate(-90deg);transform-origin:left top;}}
 .slide-full-image-wrap{{position:relative;width:100%;height:100%;overflow:hidden;}}
 .slide-full-image-bg{{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;}}
 .slide-full-image-placeholder{{position:absolute;inset:0;background:var(--surface-2);
@@ -1144,18 +1504,127 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
     def _orig_bidx(render_pos: int) -> int:
         return body_index_map[render_pos] if render_pos < len(body_index_map) else render_pos
 
+    def _body_eid(render_pos: int) -> str:
+        return f'{sid}:body:{_orig_bidx(render_pos)}'
+
+    def _body_text(el: Element) -> str:
+        return html.escape(_plain_element_text(el))
+
     def _bullet_li(el: Element, render_pos: int) -> str:
-        eid = f'{sid}:body:{_orig_bidx(render_pos)}'
         return (
-            f'<li data-element-id="{eid}" data-slide-id="{sid}">'
-            f'{html.escape(el.text.lstrip("• "))}</li>'
+            f'<li data-element-id="{_body_eid(render_pos)}" data-slide-id="{sid}">'
+            f'{_body_text(el)}</li>'
+        )
+
+    def _archetype_body_els(title_el: Element | None) -> list[Element]:
+        return [
+            el for el in texts
+            if el is not title_el and el.text.strip()
+        ]
+
+    archetype = _slide_archetype(slide)
+    archetype_title = _title_element(slide)
+    archetype_body = _archetype_body_els(archetype_title)
+
+    if archetype == "big_number":
+        title_html = _title_tag(archetype_title, "slide-kicker", "p") if archetype_title else ""
+        figure_el = archetype_body[0] if archetype_body else archetype_title
+        support_el = archetype_body[1] if len(archetype_body) > 1 else None
+        figure = (
+            f'<div class="slide-big-number-figure" data-element-id="{_body_eid(0)}" '
+            f'data-slide-id="{sid}">{_body_text(figure_el)}</div>'
+            if figure_el is not None else ""
+        )
+        support = (
+            f'<p class="slide-big-number-support" data-element-id="{_body_eid(1)}" '
+            f'data-slide-id="{sid}">{_body_text(support_el)}</p>'
+            if support_el is not None else ""
+        )
+        return (
+            '<div class="slide-big-number-layout">'
+            f'{title_html}{figure}{support}'
+            '</div>'
+        )
+
+    if archetype == "quote":
+        quote_el = archetype_body[0] if archetype_body else archetype_title
+        attr_el = archetype_body[1] if len(archetype_body) > 1 else None
+        quote = (
+            f'<blockquote class="slide-quote-text" data-element-id="{_body_eid(0)}" '
+            f'data-slide-id="{sid}">{_body_text(quote_el)}</blockquote>'
+            if quote_el is not None else ""
+        )
+        attribution = (
+            f'<figcaption class="slide-quote-attribution" data-element-id="{_body_eid(1)}" '
+            f'data-slide-id="{sid}">{_body_text(attr_el)}</figcaption>'
+            if attr_el is not None else ""
+        )
+        return (
+            '<figure class="slide-quote-layout">'
+            '<div class="slide-quote-mark" aria-hidden="true">“</div>'
+            f'{quote}{attribution}'
+            '</figure>'
+        )
+
+    if archetype == "timeline":
+        title_html = _title_tag(archetype_title, "slide-heading") if archetype_title else ""
+        nodes: list[str] = []
+        labels: list[str] = []
+        items = archetype_body or ([archetype_title] if archetype_title is not None else [])
+        denom = max(1, len(items) - 1)
+        for j, el in enumerate(items):
+            x = 8.0 + (j * (100.0 - 16.0) / denom if len(items) > 1 else 42.0)
+            head, detail = _split_timeline_label(_plain_element_text(el))
+            label_cls = "above" if j % 2 == 0 else "below"
+            nodes.append(
+                f'<div class="slide-timeline-node" style="left:{x:.2f}%"></div>'
+            )
+            labels.append(
+                f'<div class="slide-timeline-label {label_cls}" style="left:{x:.2f}%" '
+                f'data-element-id="{_body_eid(j)}" data-slide-id="{sid}">'
+                f'<strong>{html.escape(head)}</strong>{html.escape(detail)}</div>'
+            )
+        return (
+            '<div class="slide-timeline-layout">'
+            f'{title_html}<div class="slide-rule"></div>'
+            '<div class="slide-timeline">'
+            '<div class="slide-timeline-spine"></div>'
+            f'{"".join(nodes)}{"".join(labels)}'
+            '</div></div>'
+        )
+
+    if archetype == "two_by_two":
+        title_html = _title_tag(archetype_title, "slide-heading") if archetype_title else ""
+        axis_x = "Higher impact"
+        axis_y = "Higher certainty"
+        cells = archetype_body[:4]
+        if len(archetype_body) >= 6:
+            axis_x = _plain_element_text(archetype_body[0])
+            axis_y = _plain_element_text(archetype_body[1])
+            cells = archetype_body[2:6]
+        cell_html: list[str] = []
+        for j in range(4):
+            text = _body_text(cells[j]) if j < len(cells) else ""
+            body_pos = j + (2 if len(archetype_body) >= 6 else 0)
+            cell_html.append(
+                f'<div class="slide-two-by-two-cell" data-quadrant="{j + 1}" '
+                f'data-element-id="{_body_eid(body_pos)}" data-slide-id="{sid}">{text}</div>'
+            )
+        return (
+            '<div class="slide-two-by-two-layout">'
+            f'{title_html}<div class="slide-rule"></div>'
+            '<div class="slide-two-by-two-grid">'
+            f'<div class="slide-two-by-two-axis x-end">{html.escape(axis_x)}</div>'
+            f'<div class="slide-two-by-two-axis y-end">{html.escape(axis_y)}</div>'
+            f'{"".join(cell_html)}'
+            '</div></div>'
         )
 
     if layout == "title":
         primary = texts_sorted[0] if texts_sorted else None
         rest = texts_sorted[1:]
         title_html = _title_tag(primary, "slide-title", "h1") if primary else ""
-        sub_html = _sub_tag(rest[0], "slide-subtitle") if rest else ""
+        sub_html = "\n".join(_sub_tag(el, "slide-subtitle") for el in rest)
         return f'<div class="slide-title-bar"></div>\n{title_html}\n{sub_html}'
 
     if layout == "section_header":
@@ -1165,7 +1634,7 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
         head_sorted = sorted(head_texts, key=lambda e: e.font_size_pt, reverse=True)
         kicker = f'<p class="slide-section-kicker">{html.escape(kicker_sorted[0].text)}</p>' if kicker_sorted else ""
         title = _title_tag(head_sorted[0], "slide-section-title", "h2") if head_sorted else ""
-        sub = _sub_tag(head_sorted[1], "slide-subtitle") if len(head_sorted) > 1 else ""
+        sub = "\n".join(_sub_tag(el, "slide-subtitle") for el in head_sorted[1:])
         return f'{kicker}<div class="slide-title-bar"></div>\n{title}\n{sub}'
 
     if layout in ("image_right", "image_left", "full_image"):
@@ -1219,7 +1688,7 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
         primary = texts_sorted[0] if texts_sorted else None
         rest = texts_sorted[1:]
         title_html = _title_tag(primary, "slide-title", "h1") if primary else ""
-        sub_html = _sub_tag(rest[0], "slide-subtitle") if rest else ""
+        sub_html = "\n".join(_sub_tag(el, "slide-subtitle") for el in rest)
         return f'<div class="slide-title-bar"></div>\n{title_html}\n{sub_html}'
 
     if layout in ("two_column", "comparison"):

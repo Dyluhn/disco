@@ -235,6 +235,36 @@ def test_continuation_slide_has_cont_type():
     assert len(cont_slides) >= 1, "No continuation slide found after overflow"
 
 
+def test_photo_grid_two_line_slide_does_not_create_orphan_continuation():
+    """A two-line image/photo-grid slide must not split one line into a bare cont slide."""
+    authored = AuthoredDeck(
+        title="Photo Grid Orphan",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="photo_grid",
+                archetype="photo_grid",
+                title="Field Evidence",
+                body=["Line one caption", "Line two caption"],
+                layout_hint="full_image",
+                image_prompt="documentary grid of field evidence",
+            )
+        ],
+    )
+
+    deck = lower_deck(authored)
+    editor = lower_deck_for_editor(authored)
+    all_text = " ".join(
+        el.text for slide in deck.slides for el in slide.elements if el.kind == "text"
+    )
+
+    assert len(deck.slides) == 1
+    assert len(editor.slides) == 1
+    assert not any(slide.title.endswith("(cont.)") for slide in deck.slides)
+    assert "Line one caption" in all_text
+    assert "Line two caption" in all_text
+
+
 # ---------------------------------------------------------------------------
 # BW-12 / BW-13 — editor and export agree; no duplicate title pages
 # ---------------------------------------------------------------------------
@@ -735,9 +765,53 @@ def test_lower_deck_renders_to_valid_html():
     html_str = render_html(deck)
 
     assert "<!DOCTYPE html>" in html_str
+    assert "disco-slides-generate:pipeline-html" in html_str
     assert "56.25vw" in html_str  # 16:9 ratio
     assert "ArrowRight" in html_str  # keyboard nav
     assert html_str.count('<section class="slide') == len(deck.slides)
+
+
+def test_archetype_html_has_distinctive_layout_structures():
+    from disco.tools.builtin._pptx_render import render_html
+
+    authored = AuthoredDeck(
+        title="Archetype Render",
+        theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="bullets",
+                archetype="big_number",
+                title="Adoption",
+                body=["73%", "of teams ship the pilot within one week"],
+            ),
+            AuthoredSlide(
+                type="bullets",
+                archetype="quote",
+                title="Customer Voice",
+                body=["The new flow removed the review bottleneck.", "Avery Lee, Ops"],
+            ),
+            AuthoredSlide(
+                type="bullets",
+                archetype="timeline",
+                title="Rollout",
+                body=["Q1: Pilot", "Q2: Integrate", "Q3: Scale"],
+            ),
+            AuthoredSlide(
+                type="bullets",
+                archetype="two_by_two",
+                title="Decision Map",
+                body=["Fast wins", "Strategic bets", "Maintenance", "Avoid"],
+            ),
+        ],
+    )
+
+    html_str = render_html(lower_deck(authored))
+
+    assert 'data-archetype="big_number"' in html_str
+    assert 'class="slide-big-number-figure"' in html_str
+    assert 'class="slide-quote-mark"' in html_str
+    assert html_str.count('class="slide-timeline-node"') == 3
+    assert html_str.count('class="slide-two-by-two-cell"') == 4
 
 
 def test_lower_deck_theme_override_rethemes_without_mutating_authored() -> None:

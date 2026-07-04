@@ -311,6 +311,7 @@ class Slide:
     id: str
     type: str                   # from AuthoredSlide.type (e.g. "bullets_cont")
     layout: LayoutHint          # resolved, never None
+    archetype: SlideArchetype | None = None
     title: str = ""             # propagated from AuthoredSlide.title (for c8 duck-typing)
     elements: list[Element] = field(default_factory=list)
     notes: str | None = None
@@ -433,7 +434,24 @@ def _fit_text(
             break  # this line triggers overflow; rest goes to continuation
 
     overflow = lines[len(fitted):]
+    if 0 < len(overflow) < 2:
+        return font, lines, []
     return font, fitted, overflow
+
+
+def _visible_body_count_without_orphan(total: int, preferred: int) -> int:
+    """Return the number of body lines to show before splitting.
+
+    Sparse one-line continuations read as accidental orphan slides. If the normal
+    split would leave exactly one tail line, keep that tail on the current slide
+    and let the rendered density relax.
+    """
+    if total <= preferred:
+        return total
+    overflow = total - preferred
+    if overflow < 2:
+        return total
+    return preferred
 
 
 # ---------------------------------------------------------------------------
@@ -540,19 +558,21 @@ def _layout_title(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element], li
 
     # Subtitle (first body line only; image_prompt excluded per verdict)
     overflow: list[str] = []
-    if slide.body:
-        sub_top = title_top + title_h
+    shown = _visible_body_count_without_orphan(len(slide.body), 1)
+    for i, line in enumerate(slide.body[:shown]):
+        sub_top = title_top + title_h + int(i * 365_760)
         els.append(Element(
             id=_uid(), kind="text",
             left=_MARGIN, top=sub_top,
-            width=_CW, height=914_400,
-            text=slide.body[0],
+            width=_CW, height=365_760,
+            text=line,
             font_name=_first_font(theme.font_reading),
             font_size_pt=24.0,
             hex_color=theme.text_muted,
             italic=True,
         ))
-        overflow = slide.body[1:]
+    if slide.body:
+        overflow = slide.body[shown:]
 
     return els, overflow
 
@@ -599,19 +619,21 @@ def _layout_section_header(slide: AuthoredSlide, theme: Theme) -> tuple[list[Ele
     ))
 
     overflow: list[str] = []
-    if slide.body:
-        sub_top = title_top + title_h
+    shown = _visible_body_count_without_orphan(len(slide.body), 1)
+    for i, line in enumerate(slide.body[:shown]):
+        sub_top = title_top + title_h + int(i * 320_040)
         els.append(Element(
             id=_uid(), kind="text",
             left=_MARGIN, top=sub_top,
-            width=_CW, height=914_400,
-            text=slide.body[0],
+            width=_CW, height=320_040,
+            text=line,
             font_name=_first_font(theme.font_reading),
             font_size_pt=18.0,
             hex_color=theme.text_muted,
             italic=True,
         ))
-        overflow = slide.body[1:]
+    if slide.body:
+        overflow = slide.body[shown:]
 
     return els, overflow
 
@@ -694,19 +716,21 @@ def _layout_closing(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element], 
     ))
 
     overflow: list[str] = []
-    if slide.body:
-        sub_top = v_center + 1_371_600 + _GAP
+    shown = _visible_body_count_without_orphan(len(slide.body), 1)
+    for i, line in enumerate(slide.body[:shown]):
+        sub_top = v_center + 1_371_600 + _GAP + int(i * 342_900)
         els.append(Element(
             id=_uid(), kind="text",
             left=_MARGIN, top=sub_top,
-            width=_CW, height=914_400,
-            text=slide.body[0],
+            width=_CW, height=342_900,
+            text=line,
             font_name=_first_font(theme.font_reading),
             font_size_pt=22.0,
             hex_color=theme.text_muted,
             italic=True,
         ))
-        overflow = slide.body[1:]
+    if slide.body:
+        overflow = slide.body[shown:]
 
     return els, overflow
 
@@ -815,18 +839,23 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
 
     # Optional caption (single body line, no overflow)
     overflow: list[str] = []
-    if slide.body:
+    shown = _visible_body_count_without_orphan(len(slide.body), 1)
+    caption_h = 274_320
+    caption_block_h = caption_h * max(1, shown)
+    caption_top = _SLIDE_H - caption_block_h - _MARGIN
+    for i, line in enumerate(slide.body[:shown]):
         els.append(Element(
             id=_uid(), kind="text",
-            left=_MARGIN, top=_SLIDE_H - 457_200 - _MARGIN,
-            width=_CW, height=457_200,
-            text=slide.body[0],
+            left=_MARGIN, top=caption_top + i * caption_h,
+            width=_CW, height=caption_h,
+            text=line,
             font_name=_first_font(theme.font_reading),
             font_size_pt=14.0,
             hex_color="#e0e0e0",
             italic=True,
         ))
-        overflow = slide.body[1:]
+    if slide.body:
+        overflow = slide.body[shown:]
 
     return els, overflow
 
@@ -1229,8 +1258,9 @@ def lower_deck(
         deck_slides.append(Slide(
             id=_uid(),
             type=aslide.type,
-            title=aslide.title,
             layout=layout,
+            archetype=aslide.archetype,
+            title=aslide.title,
             elements=elements,
             notes=aslide.notes,
             chart=aslide.chart,

@@ -160,6 +160,7 @@ The artifact must include:
    - hero choreography totals 900ms-1.4s with cubic-bezier(.16,1,.3,1).
    - Per-element travel varies (24/16/8px); uniform 40px fade-up is a template tell.
    - Scroll reveals use 12-20px travel, fire once, and at least 1/3 of sections static.
+   - Scroll-reveal initial-hidden styles must be gated behind a JS-added class (for example `html.js`) so content is visible without JS.
    - Word-level splits beat character-level splits; use 30-50ms per word and cap the
      total under 800ms.
    - Marquee speed is constant px/sec with pause-on-hover.

@@ -228,10 +228,14 @@ _CHOICE_DECK_TEXT_BUDGET = "deck.text_budget"
 _CHOICE_DECK_ARCHETYPE_MONOTONY = "deck.archetype_monotony"
 _CHOICE_DECK_IMAGERY = "deck.imagery"
 _CHOICE_DECK_GLASS = "deck.glass"
+_CHOICE_DECK_ORPHAN_SLIDE = "deck.orphan_slide"
+_CHOICE_DECK_HANDWRITTEN_HTML = "deck.handwritten_html"
 _CHOICE_WEB_TEXT_OVER_IMAGE = "web.text_over_image"
 _CHOICE_WEB_HOVER_A11Y = "web.hover_a11y"
 _CHOICE_WEB_HOVER_SCALE = "web.hover_scale"
 _CHOICE_WEB_GLASS = "web.glass"
+_CHOICE_WEB_DEFAULT_HIDDEN_CONTENT = "web.default_hidden_content"
+_DECK_PIPELINE_GENERATOR_MARKER = "disco-slides-generate:pipeline-html"
 
 _WEB_BANNED_DEFAULT_FONTS: frozenset[str] = frozenset({"inter", "roboto", "arial"})
 _WEB_HEADING_SELECTOR_RE = re.compile(
@@ -251,6 +255,22 @@ _WEB_MEDIA_CONTAINER_RE = re.compile(
 )
 _WEB_TEXT_TAG_RE = re.compile(r"<\s*(?:h[1-6]|p|a|span|strong|em)\b", re.I)
 _WEB_HEROISH_RE = re.compile(r"\b(?:hero|masthead|banner|cover|full-bleed|relative|absolute)\b", re.I)
+_WEB_HIDDEN_DECL_RE = re.compile(
+    r"(?:opacity\s*:\s*(?:0|0\.0+)\s*(?:!important\s*)?(?:;|$)|"
+    r"visibility\s*:\s*hidden\s*(?:!important\s*)?(?:;|$))",
+    re.I,
+)
+_WEB_JS_GATED_SELECTOR_RE = re.compile(
+    r"(^|[,\s>+~])(?:html\.js|\.js(?:[\s>+~.]|$)|\.js-enabled\b|"
+    r"\.js-gated\b|\.has-js\b)",
+    re.I,
+)
+_WEB_CONTENT_SELECTOR_RE = re.compile(
+    r"(^|[,\s>+~])(?:section|div)(?:$|[\s>+~.#:\[])|"
+    r"\.(?:section|content|copy|text|hero|panel|card|feature|tile|block|"
+    r"reveal|scroll-reveal|fade|fade-up|split|stack|grid)\b",
+    re.I,
+)
 
 # Extensions split by how we scan them.
 _CSS_EXTS: frozenset[str] = frozenset({".css", ".scss", ".sass", ".less"})
@@ -355,12 +375,15 @@ _RULE_META: dict[str, tuple[str, int]] = {
     "deck_missing_imagery": ("warning", 47),
     "deck_glass_missing_saturate": ("warning", 48),
     "deck_glass_flat_backdrop": ("warning", 49),
+    "deck_orphan_slide": ("warning", 50),
+    "deck_handwritten_html": ("warning", 51),
     "web_banned_default_font": ("warning", 50),
     "web_reflexive_hover_scale": ("warning", 51),
     "web_hover_only_interactivity": ("warning", 52),
     "web_text_over_image_no_scrim": ("warning", 53),
     "web_glass_missing_saturate": ("warning", 54),
     "web_glass_flat_backdrop": ("warning", 55),
+    "web_default_hidden_content": ("warning", 56),
     "centered_hero_3_cards_cta": ("warning", 50),
     "too_many_animations": ("info", 60),
     "pill_button_monoculture": ("info", 70),
@@ -1552,6 +1575,154 @@ def _rule_deck_glass(path: str, text: str, slides: list[_DeckSlide]) -> list[Des
     return findings
 
 
+def _slide_text_blocks(slide: _DeckSlide) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    for m in re.finditer(
+        r"<(?P<tag>h[1-6]|p|li|blockquote|figcaption)\b[^>]*>"
+        r"(?P<body>.*?)</(?P=tag)\s*>",
+        slide.html,
+        re.I | re.DOTALL,
+    ):
+        text = _visible_text(m.group("body"))
+        if text:
+            blocks.append((m.group("tag").lower(), text))
+    return blocks
+
+
+def _slide_has_media(slide: _DeckSlide) -> bool:
+    return re.search(
+        r"<\s*(?:img|picture|svg|canvas|video|table)\b",
+        slide.html,
+        re.I,
+    ) is not None
+
+
+def _rule_deck_orphan_slide(path: str, slides: list[_DeckSlide]) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    skip_layouts = {"title", "section_header", "section", "closing", "full_image"}
+    skip_archetypes = {
+        "title",
+        "section_divider",
+        "closing",
+        "full_bleed_image",
+        "photo_grid",
+    }
+    for slide in slides:
+        layout = (_attr_value(slide.attrs, "data-layout") or "").strip().lower()
+        archetype = (_attr_value(slide.attrs, "data-archetype") or "").strip().lower()
+        if layout in skip_layouts or archetype in skip_archetypes or _slide_has_media(slide):
+            continue
+        blocks = _slide_text_blocks(slide)
+        headings = [text for tag, text in blocks if tag.startswith("h")]
+        content = [text for tag, text in blocks if not tag.startswith("h")]
+        if not headings or len(content) > 1:
+            continue
+        if content and len(_WORD_RE.findall(content[0])) > 12:
+            continue
+        findings.append(
+            DesignFinding(
+                rule_id="deck_orphan_slide",
+                severity="warning",
+                path=path,
+                line=slide.line,
+                evidence=(
+                    f"slide {slide.number}: title plus {len(content)} short content line(s)"
+                ),
+                choice_key=_CHOICE_DECK_ORPHAN_SLIDE,
+                message=(
+                    f"Slide {slide.number} reads like an orphan: a non-divider slide has "
+                    "a title and at most one short content line. Merge it, add substance, "
+                    "or use a real quote/metric/visual archetype."
+                ),
+            )
+        )
+    return findings
+
+
+def _has_slide_nav_markers(text: str) -> bool:
+    return re.search(
+        r"\b(?:slide-nav|btn-prev|btn-next|currentSlide|goToSlide|nextSlide|prevSlide|"
+        r"ArrowRight|ArrowLeft)\b",
+        text,
+        re.I,
+    ) is not None
+
+
+def _rule_deck_handwritten_html(path: str, text: str) -> list[DesignFinding]:
+    if _DECK_PIPELINE_GENERATOR_MARKER in text:
+        return []
+    data_label_sections = list(
+        re.finditer(r"<section\b[^>]*\bdata-label\s*=", text, re.I | re.DOTALL)
+    )
+    if len(data_label_sections) < 2 or not _has_slide_nav_markers(text):
+        return []
+    first = data_label_sections[0]
+    return [
+        DesignFinding(
+            rule_id="deck_handwritten_html",
+            severity="warning",
+            path=path,
+            line=_line_of(text, first.start()),
+            evidence="<section data-label> slide deck without pipeline generator marker",
+            choice_key=_CHOICE_DECK_HANDWRITTEN_HTML,
+            message=(
+                "Handwritten deck-shaped HTML detected; use slides_generate — the host "
+                "renderer prevents overlap/spill."
+            ),
+        )
+    ]
+
+
+def _inside_css_guard(text: str, offset: int) -> bool:
+    prefix = text[:offset]
+    starts = [prefix.rfind("@media"), prefix.rfind("@supports")]
+    last = max(starts)
+    if last < 0:
+        return False
+    segment = text[last:offset]
+    return segment.count("{") > segment.count("}")
+
+
+def _rule_web_default_hidden_content(path: str, text: str) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    seen: set[str] = set()
+    for m in _CSS_BLOCK_RE.finditer(text):
+        selector = m.group(1).strip()
+        selector_low = selector.lower()
+        if _inside_css_guard(text, m.start()):
+            continue
+        if "@media" in selector_low or "@supports" in selector_low:
+            continue
+        if _WEB_JS_GATED_SELECTOR_RE.search(selector) is not None:
+            continue
+        if _WEB_CONTENT_SELECTOR_RE.search(selector) is None:
+            continue
+        body = m.group(2)
+        hidden = _WEB_HIDDEN_DECL_RE.search(body)
+        if hidden is None:
+            continue
+        key = selector_low
+        if key in seen:
+            continue
+        seen.add(key)
+        findings.append(
+            DesignFinding(
+                rule_id="web_default_hidden_content",
+                severity="warning",
+                path=path,
+                line=_line_of(text, m.start(2) + hidden.start()),
+                evidence=f"{selector} {{ {hidden.group(0).strip()} }}",
+                choice_key=_CHOICE_WEB_DEFAULT_HIDDEN_CONTENT,
+                message=(
+                    "Content is hidden by default without a JS-gated ancestor or media guard. "
+                    "Gate scroll-reveal initial-hidden styles behind html.js (or equivalent) "
+                    "so the page fails visible when JavaScript is unavailable."
+                ),
+            )
+        )
+    return findings
+
+
 # ---- the pure engine ----------------------------------------------------------
 
 
@@ -1584,6 +1755,7 @@ def lint_design(
             continue
         if is_markup:
             markup.append((path, text))
+            findings += _rule_deck_handwritten_html(path, text)
         deck_slides = _extract_deck_slides(text) if is_markup else []
         # rules that apply to any styled text (css + markup w/ inline styles)
         findings += _rule_generic_font(path, text, design_spec, justified)
@@ -1595,6 +1767,7 @@ def lint_design(
             )
             findings += _rule_web_text_over_image_no_scrim(path, text)
             findings += _rule_web_glass(path, text)
+            findings += _rule_web_default_hidden_content(path, text)
         findings += _rule_ai_purple(path, text, design_spec, justified)
         findings += _rule_gradient_hero_text(path, text, justified)
         findings += _rule_dark_neon_glow(path, text, justified)
@@ -1608,6 +1781,7 @@ def lint_design(
                 findings += _rule_deck_bullet_monotony(path, deck_slides)
                 findings += _rule_deck_missing_imagery(path, deck_slides)
                 findings += _rule_deck_glass(path, text, deck_slides)
+                findings += _rule_deck_orphan_slide(path, deck_slides)
 
     findings += _rule_centered_hero_3_cards_cta(markup, justified)
 

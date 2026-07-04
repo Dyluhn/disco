@@ -495,6 +495,49 @@ def test_deck_glass_flags_flat_single_color_parent_and_gradient_parent_passes():
     assert clean_v["ok"] is True
 
 
+def test_deck_orphan_slide_flags_title_plus_one_short_line_and_clean_passes():
+    bad = _deck_html(
+        _deck_slide(0, "<h2>Thin Slide</h2><p>One short line.</p>", layout="bullets")
+    )
+    clean = _deck_html(
+        _deck_slide(
+            0,
+            '<h2>Substantive Slide</h2><p>First supporting line.</p>'
+            '<p>Second supporting line.</p><img src="cover.png">',
+            layout="bullets",
+        )
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "deck_orphan_slide" in _fired(bad_v)
+    assert "deck_orphan_slide" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_deck_handwritten_html_flags_data_label_nav_without_marker_and_clean_passes():
+    body = """
+<div class="deck">
+  <section data-label="One"><h2>One</h2><p>First line.</p><img src="a.png"></section>
+  <section data-label="Two"><h2>Two</h2><p>Second line.</p><img src="b.png"></section>
+</div>
+<nav class="slide-nav"><button id="btn-next">Next</button></nav>
+"""
+    bad = f"<!doctype html><html><body>{body}</body></html>"
+    clean = (
+        "<!doctype html><!-- disco-slides-generate:pipeline-html v1 -->"
+        f"<html><body>{body}</body></html>"
+    )
+
+    bad_v = lint_design({"deck.html": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"deck.html": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "deck_handwritten_html" in _fired(bad_v)
+    assert "deck_handwritten_html" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
 # --- W2 static-site rule pack -------------------------------------------------
 
 
@@ -593,6 +636,26 @@ def test_web_glass_reuses_saturate_and_backdrop_rules_for_sites():
     assert "web_glass_flat_backdrop" in _fired(bad_v)
     assert "web_glass_missing_saturate" not in _fired(clean_v)
     assert "web_glass_flat_backdrop" not in _fired(clean_v)
+    assert clean_v["ok"] is True
+
+
+def test_web_default_hidden_content_flags_fail_hidden_and_clean_gates_pass():
+    bad = """
+.reveal { opacity: 0; transform: translateY(16px); }
+section.fade-up { visibility: hidden; }
+"""
+    clean = """
+html.js .reveal { opacity: 0; transform: translateY(16px); }
+@media (prefers-reduced-motion: no-preference) {
+  .fade-up { opacity: 0; }
+}
+"""
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    assert "web_default_hidden_content" in _fired(bad_v)
+    assert "web_default_hidden_content" not in _fired(clean_v)
     assert clean_v["ok"] is True
 
 
