@@ -6023,3 +6023,26 @@ build) sent to Dylan; 0 OpenRouter. Honest residuals: the run went STUCK
 after the passing verdict instead of finishing (stop-discipline prompt
 guidance: "verify passes → finish" — small pack tune) + appkit_live_golden
 through the verify runner still pending.
+
+## MODEL-SURFACE AUDIT — CLOSED (2026-07-03)
+
+Dylan: "audit everything we hand the model" + "pause/stuck shouldn't exist."
+(1) SCHEMA AUDIT `0915cbe0`: mechanical scan of all 53 advertised tool schemas
+found the MiniMax defect class 5 MORE times (app_add_section.section,
+app_create.app_spec, app_set_design.design_spec, deck_patch ops, sheet rows) —
+all now typed against the real core models; scripts/check_tool_schemas.py is
+the permanent FIFTH fitness gate (CI + CLAUDE.md) so bare-object/untyped-array
+params can never re-enter. Why REL-6 missed the class: generic-toolset
+scenarios only, unit fakes emitting what prod lacked, and nothing validating
+advertised schemas as artifacts — the gate closes the third forever.
+(2) TERMINAL COLLAPSE `e10610e6`: all 12 PAUSED/STUCK breaker dead-ends route
+through one lander — the model explains where the build stands + asks ONE
+question (host-synthesized fallback = the user ALWAYS gets words). Two
+flavors: interactive lands the ask state (AskPanel); autonomous concludes
+terminally WITH the explanation after the M-ladder (headless never hangs
+waiting for nobody). Legacy markers kept (counter-transparent) so every
+valve stays sighted; no-automatic-nudge invariant gains its second sanctioned
+exception. Live probes: the impossible-ask build landed "Pick a recovery
+path" with three honest options NATIVELY (screenshot sent) — the lander is
+the proven deterministic floor beneath that behavior (all 12 classes
+unit-asserted with explanations).
