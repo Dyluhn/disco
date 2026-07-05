@@ -19,6 +19,8 @@ from .registry import ToolScope
 WORKFLOW_ROUTER_TOOLS: frozenset[str] = frozenset(
     {"list_workflows", "read_workflow_card", "enter_workflow", "draft_workflow"}
 )
+WORKFLOW_ROUTER_CONTROL_TOOLS: frozenset[str] = frozenset({"needs_input"})
+WORKFLOW_RUN_CONTROL_TOOLS: frozenset[str] = frozenset({"workflow_abort"})
 
 # Match AppKit's strict planning context tools: safe reads/probes only. This set
 # intentionally excludes browser, shell/code execution, file writes, MCP names,
@@ -26,7 +28,9 @@ WORKFLOW_ROUTER_TOOLS: frozenset[str] = frozenset(
 WORKFLOW_ROUTER_CONTEXT_TOOLS: frozenset[str] = APPKIT_READ_TOOLS
 
 WORKFLOW_ROUTER_ALLOWED_TOOLS: frozenset[str] = (
-    WORKFLOW_ROUTER_TOOLS | WORKFLOW_ROUTER_CONTEXT_TOOLS
+    WORKFLOW_ROUTER_TOOLS
+    | WORKFLOW_ROUTER_CONTROL_TOOLS
+    | WORKFLOW_ROUTER_CONTEXT_TOOLS
 )
 
 _GENERAL_WORKSPACE_TASK_INSTANCE_ID = "general_workspace_task"
@@ -70,9 +74,11 @@ def workflow_effective_scope(
     if phase == WorkflowPhase.RUN:
         if compiled_run_scope is None:
             return ToolScope(allowed_tools=frozenset(), preset="workflow_run_uncompiled")
+        allowed_tools = compiled_run_scope.allowed_tools | WORKFLOW_RUN_CONTROL_TOOLS
+        advertised = compiled_run_scope.advertised | WORKFLOW_RUN_CONTROL_TOOLS
         return ToolScope(
-            allowed_tools=compiled_run_scope.allowed_tools,
-            advertised_tools=compiled_run_scope.advertised,
+            allowed_tools=allowed_tools,
+            advertised_tools=advertised,
             preset="workflow_run",
         )
 
@@ -82,8 +88,12 @@ def workflow_effective_scope(
     else:
         context_advertised = context_allowed & base_scope.advertised_tools
     return ToolScope(
-        allowed_tools=WORKFLOW_ROUTER_TOOLS | context_allowed,
-        advertised_tools=WORKFLOW_ROUTER_TOOLS | context_advertised,
+        allowed_tools=WORKFLOW_ROUTER_TOOLS
+        | WORKFLOW_ROUTER_CONTROL_TOOLS
+        | context_allowed,
+        advertised_tools=WORKFLOW_ROUTER_TOOLS
+        | WORKFLOW_ROUTER_CONTROL_TOOLS
+        | context_advertised,
         preset="workflow_router",
     )
 
@@ -113,8 +123,10 @@ def _is_file_workspace_tool(tool_name: str) -> bool:
 
 __all__ = [
     "WORKFLOW_ROUTER_ALLOWED_TOOLS",
+    "WORKFLOW_ROUTER_CONTROL_TOOLS",
     "WORKFLOW_ROUTER_CONTEXT_TOOLS",
     "WORKFLOW_ROUTER_TOOLS",
+    "WORKFLOW_RUN_CONTROL_TOOLS",
     "WorkflowPhase",
     "WorkflowPhaseState",
     "workflow_router_denial_message",

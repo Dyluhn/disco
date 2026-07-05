@@ -140,6 +140,12 @@ def test_driver_prompts_workflow_router_prefix_is_dynamic():
     assert "FIRST action" in on
     assert "list_workflows" in on
     assert "enter_workflow(instance_id)" in on
+    assert "card covers EVERY capability" in on
+    assert "task needs to run code or commands, the card must say it can" in on
+    assert "Never enter a workflow hoping to work around its limits" in on
+    assert "If no enabled workflow can satisfy the request, do NOT enter one" in on
+    assert "capability is missing via needs_input" in on
+    assert "workflow_abort with a short reason instead of retrying" in on
     assert "not because tools are missing in ROUTER phase" in on
     assert "TALK TO THE USER FIRST" not in on
     assert "EXECUTION TOOLS" not in on

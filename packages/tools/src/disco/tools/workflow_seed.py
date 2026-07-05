@@ -11,6 +11,7 @@ from disco.core.workflow import (
     DAILY_EMAIL_BRIEF_DEFINITION,
     FORM_FILL_DEFINITION,
     GENERAL_WORKSPACE_TASK_DEFINITION,
+    SCRIPTED_WORKSPACE_TASK_DEFINITION,
     SKILL_AUTHORING_DEFINITION,
     WorkflowApproval,
     WorkflowDefinition,
@@ -20,6 +21,7 @@ from disco.core.workflow import (
 from .projects import resolve_projects_root
 
 GENERAL_WORKSPACE_TASK_INSTANCE_ID = "general_workspace_task"
+SCRIPTED_WORKSPACE_TASK_INSTANCE_ID = "scripted_workspace_task"
 DAILY_EMAIL_BRIEF_INSTANCE_ID = "daily_email_brief"
 BROWSER_AUTOMATION_INSTANCE_ID = "browser_automation"
 FORM_FILL_INSTANCE_ID = "form_fill"
@@ -44,6 +46,10 @@ def _approved_enabled_instance(definition: WorkflowDefinition) -> WorkflowInstan
 
 def general_workspace_task_instance() -> WorkflowInstance:
     return _approved_enabled_instance(GENERAL_WORKSPACE_TASK_DEFINITION)
+
+
+def scripted_workspace_task_instance() -> WorkflowInstance:
+    return _approved_enabled_instance(SCRIPTED_WORKSPACE_TASK_DEFINITION)
 
 
 def daily_email_brief_instance() -> WorkflowInstance:
@@ -102,6 +108,14 @@ def seed_general_workspace_task(projects_root: str | Path | None = None) -> Path
     )
 
 
+def seed_scripted_workspace_task(projects_root: str | Path | None = None) -> Path:
+    return _seed_instance(
+        SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
+        scripted_workspace_task_instance(),
+        projects_root,
+    )
+
+
 def seed_daily_email_brief(projects_root: str | Path | None = None) -> Path:
     return _seed_instance(
         DAILY_EMAIL_BRIEF_INSTANCE_ID,
@@ -142,6 +156,10 @@ def seed_builtin_workflows(
             GENERAL_WORKSPACE_TASK_INSTANCE_ID,
             seed_general_workspace_task(projects_root),
         ),
+        (
+            SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
+            seed_scripted_workspace_task(projects_root),
+        ),
         (DAILY_EMAIL_BRIEF_INSTANCE_ID, seed_daily_email_brief(projects_root)),
         (BROWSER_AUTOMATION_INSTANCE_ID, seed_browser_automation(projects_root)),
         (FORM_FILL_INSTANCE_ID, seed_form_fill(projects_root)),
@@ -154,16 +172,19 @@ __all__ = [
     "DAILY_EMAIL_BRIEF_INSTANCE_ID",
     "FORM_FILL_INSTANCE_ID",
     "GENERAL_WORKSPACE_TASK_INSTANCE_ID",
+    "SCRIPTED_WORKSPACE_TASK_INSTANCE_ID",
     "SKILL_AUTHORING_INSTANCE_ID",
     "browser_automation_instance",
     "daily_email_brief_instance",
     "form_fill_instance",
     "general_workspace_task_instance",
+    "scripted_workspace_task_instance",
     "seed_browser_automation",
     "seed_builtin_workflows",
     "seed_daily_email_brief",
     "seed_form_fill",
     "seed_general_workspace_task",
+    "seed_scripted_workspace_task",
     "seed_skill_authoring",
     "skill_authoring_instance",
 ]

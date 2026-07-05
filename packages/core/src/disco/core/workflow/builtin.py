@@ -16,6 +16,15 @@ GENERAL_WORKSPACE_TASK_TOOLS: tuple[str, ...] = (
     "file_edit",
     "file_list",
 )
+SCRIPTED_WORKSPACE_TASK_TOOLS: tuple[str, ...] = (
+    "file_read",
+    "file_write",
+    "file_edit",
+    "file_list",
+    "shell",
+    "code_exec",
+    "think",
+)
 
 BROWSER_AUTOMATION_TOOLS: tuple[str, ...] = ("browser", "file_write", "think")
 FORM_FILL_TOOLS: tuple[str, ...] = ("browser", "file_write")
@@ -46,7 +55,8 @@ GENERAL_WORKSPACE_TASK_DEFINITION = WorkflowDefinition(
     card=(
         "The default workflow for small file/workspace tasks. Inspect and update "
         "workspace files using only bounded file tools, then produce "
-        "reports/task-summary.md."
+        "reports/task-summary.md. Files only — cannot run code or commands (use "
+        "Scripted Workspace Task for that)."
     ),
     params_model_schema={
         "type": "object",
@@ -58,6 +68,30 @@ GENERAL_WORKSPACE_TASK_DEFINITION = WorkflowDefinition(
     mcp_mounts=(),
     skills=(),
     policies=WorkflowPolicies(untrusted_content=True, allows_writes=False),
+    output_contract=WorkflowOutputContract(
+        path_template="reports/task-summary.md",
+        format="markdown",
+    ),
+    verify=WorkflowVerify(checks=("file_exists", "non_empty")),
+)
+
+SCRIPTED_WORKSPACE_TASK_DEFINITION = WorkflowDefinition(
+    name="Scripted Workspace Task",
+    card=(
+        "Workspace tasks that need to RUN code or commands: write scripts, execute "
+        "them in the sandbox, capture their output into the report. No browsing or "
+        "network egress. Produces reports/task-summary.md."
+    ),
+    params_model_schema={
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {},
+        "required": [],
+    },
+    tools=SCRIPTED_WORKSPACE_TASK_TOOLS,
+    mcp_mounts=(),
+    skills=(),
+    policies=WorkflowPolicies(untrusted_content=True, allows_writes=True),
     output_contract=WorkflowOutputContract(
         path_template="reports/task-summary.md",
         format="markdown",
@@ -240,6 +274,8 @@ __all__ = [
     "FORM_FILL_TOOLS",
     "GENERAL_WORKSPACE_TASK_DEFINITION",
     "GENERAL_WORKSPACE_TASK_TOOLS",
+    "SCRIPTED_WORKSPACE_TASK_DEFINITION",
+    "SCRIPTED_WORKSPACE_TASK_TOOLS",
     "SKILL_AUTHORING_DEFINITION",
     "SKILL_AUTHORING_TOOLS",
 ]

@@ -60,8 +60,10 @@ from .secrets import (
 )
 from .workflow_scope import (
     WORKFLOW_ROUTER_ALLOWED_TOOLS,
+    WORKFLOW_ROUTER_CONTROL_TOOLS,
     WORKFLOW_ROUTER_CONTEXT_TOOLS,
     WORKFLOW_ROUTER_TOOLS,
+    WORKFLOW_RUN_CONTROL_TOOLS,
     WorkflowPhase,
     WorkflowPhaseState,
     workflow_effective_scope,
@@ -103,8 +105,10 @@ __all__ = [
     "ToolRegistry",
     "ToolScope",
     "WORKFLOW_ROUTER_ALLOWED_TOOLS",
+    "WORKFLOW_ROUTER_CONTROL_TOOLS",
     "WORKFLOW_ROUTER_CONTEXT_TOOLS",
     "WORKFLOW_ROUTER_TOOLS",
+    "WORKFLOW_RUN_CONTROL_TOOLS",
     "WorkflowPhase",
     "WorkflowPhaseState",
     "agent_scope",

@@ -18,6 +18,8 @@ from disco.core.workflow import (
     FORM_FILL_TOOLS,
     GENERAL_WORKSPACE_TASK_DEFINITION,
     GENERAL_WORKSPACE_TASK_TOOLS,
+    SCRIPTED_WORKSPACE_TASK_DEFINITION,
+    SCRIPTED_WORKSPACE_TASK_TOOLS,
     SKILL_AUTHORING_DEFINITION,
     SKILL_AUTHORING_TOOLS,
     WORKFLOW_CONTROL_TOOLS,
@@ -35,7 +37,9 @@ from disco.core.workflow import (
 )
 from disco.tools import (
     AGENT_TOOLS,
+    WORKFLOW_ROUTER_CONTROL_TOOLS,
     WORKFLOW_ROUTER_TOOLS,
+    WORKFLOW_RUN_CONTROL_TOOLS,
     DefaultToolExecutor,
     ScopedPhaseExecutor,
     ToolContext,
@@ -57,16 +61,19 @@ from disco.tools.builtin.workflow_tools import (
     ListWorkflowsTool,
     StoredWorkflowInstance,
     WorkflowStore,
+    workflow_router_tools,
 )
 from disco.tools.workflow_seed import (
     BROWSER_AUTOMATION_INSTANCE_ID,
     DAILY_EMAIL_BRIEF_INSTANCE_ID,
     FORM_FILL_INSTANCE_ID,
     GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+    SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
     SKILL_AUTHORING_INSTANCE_ID,
     seed_builtin_workflows,
     seed_daily_email_brief,
     seed_general_workspace_task,
+    seed_scripted_workspace_task,
 )
 from pydantic import BaseModel, ConfigDict
 from tool_fakes import call
@@ -187,8 +194,14 @@ def test_workflow_router_allowlist_is_router_tools_plus_appkit_reads() -> None:
         base_scope=base,
     )
 
-    assert scope.allowed_tools == WORKFLOW_ROUTER_TOOLS | (APPKIT_READ_TOOLS & base.allowed_tools)
+    assert scope.allowed_tools == (
+        WORKFLOW_ROUTER_TOOLS
+        | WORKFLOW_ROUTER_CONTROL_TOOLS
+        | (APPKIT_READ_TOOLS & base.allowed_tools)
+    )
     assert WORKFLOW_ROUTER_TOOLS <= scope.allowed_tools
+    assert "needs_input" in scope.allowed_tools
+    assert "workflow_abort" not in scope.allowed_tools
     for forbidden in (
         "browser",
         "shell",
@@ -334,6 +347,7 @@ def test_sealed_run_scope_excludes_router_and_ask_tools() -> None:
     )
 
     assert {"file_read", "finish", "skip", "needs_input"} <= scope.allowed_tools
+    assert WORKFLOW_RUN_CONTROL_TOOLS <= scope.allowed_tools
     assert scope.allowed_tools.isdisjoint(WORKFLOW_ROUTER_TOOLS)
     assert scope.allowed_tools.isdisjoint({"ask_user", "clarify", "questions_v2"})
     assert scope.advertised_tools == scope.allowed_tools
@@ -416,6 +430,11 @@ def test_daily_email_brief_definition_compiles_to_exact_gmail_surface() -> None:
     ("definition", "tools", "forbidden"),
     (
         (
+            SCRIPTED_WORKSPACE_TASK_DEFINITION,
+            SCRIPTED_WORKSPACE_TASK_TOOLS,
+            {"browser", "search", "extract", "mcp__github__search_issues"},
+        ),
+        (
             BROWSER_AUTOMATION_DEFINITION,
             BROWSER_AUTOMATION_TOOLS,
             {"shell", "shell_exec", "code_exec", "file_edit"},
@@ -449,6 +468,7 @@ def test_new_builtin_definitions_compile_to_exact_first_party_surface(
     "definition",
     (
         GENERAL_WORKSPACE_TASK_TOOLS,
+        SCRIPTED_WORKSPACE_TASK_TOOLS,
         BROWSER_AUTOMATION_TOOLS,
         FORM_FILL_TOOLS,
         SKILL_AUTHORING_TOOLS,
@@ -463,6 +483,7 @@ def test_builtin_workflow_tools_are_known(definition: tuple[str, ...]) -> None:
     ("definition", "available_mcp_names"),
     (
         (GENERAL_WORKSPACE_TASK_DEFINITION, frozenset()),
+        (SCRIPTED_WORKSPACE_TASK_DEFINITION, frozenset()),
         (BROWSER_AUTOMATION_DEFINITION, frozenset()),
         (FORM_FILL_DEFINITION, frozenset()),
         (SKILL_AUTHORING_DEFINITION, frozenset()),
@@ -526,7 +547,7 @@ def test_daily_email_brief_sealed_schedule_scope_excludes_router_and_ask_tools()
         base_scope=base,
     )
 
-    expected = _daily_email_brief_expected_surface()
+    expected = _daily_email_brief_expected_surface() | WORKFLOW_RUN_CONTROL_TOOLS
     assert scope.allowed_tools == expected
     assert scope.allowed_tools.isdisjoint(WORKFLOW_ROUTER_TOOLS)
     assert scope.allowed_tools.isdisjoint({"ask_user", "clarify", "questions_v2"})
@@ -637,12 +658,119 @@ async def test_seeded_general_workspace_task_lists_and_enters_bounded_scope(
     assert state.phase == WorkflowPhase.RUN
     assert state.compiled_run_scope is not None
     assert state.compiled_run_scope.allowed_tools == expected
-    assert executor._scope.allowed_tools == expected
+    assert executor._scope.allowed_tools == expected | WORKFLOW_RUN_CONTROL_TOOLS
     for forbidden in ("browser", "shell"):
         rejected = await executor.execute(call(forbidden))
         assert rejected.success is False
         assert rejected.structured is not None
         assert rejected.structured["kind"] == "unknown_tool"
+
+
+def test_scripted_workspace_task_definition_compiles_and_seeds(tmp_path) -> None:
+    compiled = compile_workflow_scope(SCRIPTED_WORKSPACE_TASK_DEFINITION, frozenset())
+
+    expected = frozenset(SCRIPTED_WORKSPACE_TASK_TOOLS) | WORKFLOW_CONTROL_TOOLS
+    assert compiled.allowed_tools == expected
+    assert compiled.advertised == expected
+    path = seed_scripted_workspace_task(tmp_path)
+    instance = JsonDirWorkflowStore(tmp_path).get_instance(
+        SCRIPTED_WORKSPACE_TASK_INSTANCE_ID
+    )
+
+    assert path == tmp_path / "workflows" / "scripted_workspace_task.json"
+    assert instance is not None
+    assert instance.enabled is True
+    assert instance.approval is not None
+    assert instance.approval.approved_by == "disco_builtin_seed"
+    assert instance.definition == SCRIPTED_WORKSPACE_TASK_DEFINITION
+    assert instance.definition_digest == SCRIPTED_WORKSPACE_TASK_DEFINITION.digest()
+
+
+@pytest.mark.asyncio
+async def test_workflow_abort_flips_run_to_router_and_reexposes_router_scope() -> None:
+    state = WorkflowPhaseState(
+        phase=WorkflowPhase.RUN,
+        instance_id="wf_wrong",
+        compiled_run_scope=WorkflowScope(
+            allowed_tools=frozenset({"file_read", "needs_input"}),
+            advertised=frozenset({"file_read", "needs_input"}),
+        ),
+    )
+    registry = build_default_registry()
+    for tool in workflow_router_tools(
+        store=_MemoryWorkflowStore({}),
+        phase_state=state,
+        mcp_tool_names_getter=lambda: frozenset(),
+    ):
+        registry.register(tool)
+    executor_ref: dict[str, ScopedPhaseExecutor] = {}
+
+    def _resolver() -> ToolScope:
+        executor = executor_ref["executor"]
+        return workflow_effective_scope(
+            phase=state.phase,
+            compiled_run_scope=state.compiled_run_scope,
+            base_scope=executor.widened_scope,
+        )
+
+    executor = ScopedPhaseExecutor(
+        registry,
+        agent_scope(model_policy=_STANDARD),
+        scope_resolver=_resolver,
+    )
+    executor_ref["executor"] = executor
+
+    assert "workflow_abort" in executor.callable_tool_names()
+    assert "list_workflows" not in executor.callable_tool_names()
+
+    result = await executor.execute(
+        call("workflow_abort", reason="selected workflow cannot run commands")
+    )
+
+    assert result.success is True
+    assert state.phase == WorkflowPhase.ROUTER
+    assert state.instance_id is None
+    assert state.compiled_run_scope is None
+    assert "You are back at the router" in result.content
+    assert "list_workflows" in executor.callable_tool_names()
+    assert "enter_workflow" in executor.callable_tool_names()
+    assert "workflow_abort" not in executor.callable_tool_names()
+
+
+@pytest.mark.asyncio
+async def test_workflow_abort_is_out_of_scope_in_router_phase() -> None:
+    state = WorkflowPhaseState()
+    registry = build_default_registry()
+    for tool in workflow_router_tools(
+        store=_MemoryWorkflowStore({}),
+        phase_state=state,
+        mcp_tool_names_getter=lambda: frozenset(),
+    ):
+        registry.register(tool)
+    executor_ref: dict[str, ScopedPhaseExecutor] = {}
+
+    def _resolver() -> ToolScope:
+        executor = executor_ref["executor"]
+        return workflow_effective_scope(
+            phase=state.phase,
+            compiled_run_scope=state.compiled_run_scope,
+            base_scope=executor.widened_scope,
+        )
+
+    executor = ScopedPhaseExecutor(
+        registry,
+        agent_scope(model_policy=_STANDARD),
+        scope_resolver=_resolver,
+    )
+    executor_ref["executor"] = executor
+
+    result = await executor.execute(call("workflow_abort", reason="not in a run"))
+
+    assert result.success is False
+    assert result.structured is not None
+    assert result.structured["kind"] == "unknown_tool"
+    assert "workflow_abort" not in executor.callable_tool_names()
+    assert "list_workflows" in executor.callable_tool_names()
 
 
 def test_seeded_daily_email_brief_is_disabled_and_unapproved(tmp_path) -> None:
@@ -659,12 +787,13 @@ def test_seeded_daily_email_brief_is_disabled_and_unapproved(tmp_path) -> None:
     assert instance.definition.output_contract.path_template == "reports/email-brief-{date}.md"
 
 
-def test_seed_builtin_workflows_writes_all_five_instances(tmp_path) -> None:
+def test_seed_builtin_workflows_writes_all_six_instances(tmp_path) -> None:
     seeded = seed_builtin_workflows(tmp_path)
     store = JsonDirWorkflowStore(tmp_path)
 
     assert [instance_id for instance_id, _ in seeded] == [
         GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
         DAILY_EMAIL_BRIEF_INSTANCE_ID,
         BROWSER_AUTOMATION_INSTANCE_ID,
         FORM_FILL_INSTANCE_ID,
@@ -672,6 +801,7 @@ def test_seed_builtin_workflows_writes_all_five_instances(tmp_path) -> None:
     ]
     assert {path.name for _, path in seeded} == {
         "general_workspace_task.json",
+        "scripted_workspace_task.json",
         "daily_email_brief.json",
         "browser_automation.json",
         "form_fill.json",
@@ -683,6 +813,7 @@ def test_seed_builtin_workflows_writes_all_five_instances(tmp_path) -> None:
     }
     assert set(instances) == {
         GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
         DAILY_EMAIL_BRIEF_INSTANCE_ID,
         BROWSER_AUTOMATION_INSTANCE_ID,
         FORM_FILL_INSTANCE_ID,
@@ -690,6 +821,7 @@ def test_seed_builtin_workflows_writes_all_five_instances(tmp_path) -> None:
     }
     for instance_id in (
         GENERAL_WORKSPACE_TASK_INSTANCE_ID,
+        SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
         BROWSER_AUTOMATION_INSTANCE_ID,
         FORM_FILL_INSTANCE_ID,
         SKILL_AUTHORING_INSTANCE_ID,
@@ -701,6 +833,28 @@ def test_seed_builtin_workflows_writes_all_five_instances(tmp_path) -> None:
 
     assert instances[DAILY_EMAIL_BRIEF_INSTANCE_ID].enabled is False
     assert instances[DAILY_EMAIL_BRIEF_INSTANCE_ID].approval is None
+
+
+def test_seed_builtin_workflows_refreshes_stale_builtin_digest(tmp_path) -> None:
+    seed_general_workspace_task(tmp_path)
+    stale_path = tmp_path / "workflows" / "general_workspace_task.json"
+    payload = json.loads(stale_path.read_text(encoding="utf-8"))
+    payload["definition_digest"] = "sha256:stale"
+    assert isinstance(payload["approval"], dict)
+    payload["approval"]["surface_shown_digest"] = "sha256:stale"
+    stale_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    seed_builtin_workflows(tmp_path)
+    instance = JsonDirWorkflowStore(tmp_path).get_instance(
+        GENERAL_WORKSPACE_TASK_INSTANCE_ID
+    )
+
+    assert instance is not None
+    digest = GENERAL_WORKSPACE_TASK_DEFINITION.digest()
+    assert instance.definition_digest == digest
+    assert instance.approval is not None
+    assert instance.approval.approved_by == "disco_builtin_seed"
+    assert instance.approval.surface_shown_digest == digest
 
 
 @pytest.mark.asyncio

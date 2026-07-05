@@ -28,7 +28,7 @@ from disco.core.workflow import (
     WorkflowVerify,
     compile_workflow_scope,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..anatomy import Tool, ToolContext, ToolDef, ToolOutcome
 from ..workflow_scope import WorkflowPhase, WorkflowPhaseState
@@ -266,6 +266,59 @@ class EnterWorkflowTool:
         )
 
 
+class WorkflowAbortArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(
+        description="Short reason this workflow cannot satisfy the goal.",
+        min_length=1,
+    )
+
+    @field_validator("reason")
+    @classmethod
+    def _reason_non_blank(cls, value: str) -> str:
+        reason = value.strip()
+        if not reason:
+            raise ValueError("reason must be non-empty")
+        return reason
+
+
+class WorkflowAbortTool:
+    def __init__(self, phase_state: WorkflowPhaseState) -> None:
+        self._phase_state = phase_state
+
+    definition = ToolDef(
+        name="workflow_abort",
+        description=(
+            "Abort the current workflow run when its sealed tools cannot satisfy "
+            "the goal, returning the conversation to workflow router phase."
+        ),
+        args_model=WorkflowAbortArgs,
+        base_risk=SecurityRisk.LOW,
+        runs_in="in_process",
+        read_only=True,
+    )
+
+    async def run(
+        self, args: WorkflowAbortArgs, ctx: ToolContext  # noqa: ARG002
+    ) -> ToolOutcome:
+        self._phase_state.phase = WorkflowPhase.ROUTER
+        self._phase_state.instance_id = None
+        self._phase_state.compiled_run_scope = None
+        return ToolOutcome(
+            success=True,
+            content=(
+                f"Workflow aborted: {args.reason}. You are back at the router — "
+                "choose a workflow whose card covers every capability the goal needs, "
+                "or use needs_input if none can."
+            ),
+            structured={
+                "phase": self._phase_state.phase.value,
+                "reason": args.reason,
+            },
+        )
+
+
 DraftParamType = Literal[
     "string",
     "integer",
@@ -409,6 +462,7 @@ def workflow_router_tools(
         ListWorkflowsTool(store),
         ReadWorkflowCardTool(store),
         EnterWorkflowTool(store, phase_state, mcp_tool_names_getter),
+        WorkflowAbortTool(phase_state),
         DraftWorkflowTool(),
     )
 
@@ -499,6 +553,8 @@ __all__ = [
     "ReadWorkflowCardArgs",
     "ReadWorkflowCardTool",
     "StoredWorkflowInstance",
+    "WorkflowAbortArgs",
+    "WorkflowAbortTool",
     "WorkflowStore",
     "workflow_router_tools",
 ]

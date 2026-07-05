@@ -18,10 +18,17 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
+from disco.core.workflow import WorkflowInstance
 from disco.tools.anatomy import ToolDef, _inline_schema_refs
 from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
+from disco.tools.builtin.workflow_tools import (
+    StoredWorkflowInstance,
+    WorkflowStore,
+    workflow_router_tools,
+)
 from disco.tools.registry import ToolScope
+from disco.tools.workflow_scope import WorkflowPhaseState
 
 # Exact schema-location -> reason. Keep this painful: every truly free-form escape
 # must explain why a bounded object/array schema would be dishonest. Empty today
@@ -34,6 +41,14 @@ class Violation:
     location: str
     kind: str
     detail: str
+
+
+class EmptyWorkflowStore(WorkflowStore):
+    def list_instances(self) -> list[StoredWorkflowInstance]:
+        return []
+
+    def get_instance(self, instance_id: str) -> WorkflowInstance | None:
+        return None
 
 
 def _is_permissive_additional_properties(value: object) -> bool:
@@ -146,6 +161,13 @@ def _tool_defs() -> list[tuple[str, ToolDef]]:
     for tool_cls in APPKIT_V2_TOOLS:
         tool = tool_cls()
         defs.append((f"appkit_v2:{tool.definition.name}", tool.definition))
+
+    for tool in workflow_router_tools(
+        store=EmptyWorkflowStore(),
+        phase_state=WorkflowPhaseState(),
+        mcp_tool_names_getter=lambda: frozenset(),
+    ):
+        defs.append((f"workflow_router:{tool.definition.name}", tool.definition))
     return defs
 
 
