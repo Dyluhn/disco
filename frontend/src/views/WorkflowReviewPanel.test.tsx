@@ -16,6 +16,17 @@ function renderPanel() {
 }
 
 describe("WorkflowReviewPanel", () => {
+  it("describes all workflow instances, not only drafts", async () => {
+    renderPanel();
+
+    expect(await screen.findByRole("heading", { name: "Workflow Instances" })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "All workflow instances, with their sealed tool surface, validation findings, and approval state.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("blocks approval when validation findings include an error", async () => {
     renderPanel();
 

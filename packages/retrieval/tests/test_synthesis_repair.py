@@ -10,8 +10,10 @@ from disco.core.llm import (
     CompletionRequest,
     CompletionResponse,
     LLMRouter,
+    LLMTransientError,
     TokenUsage,
 )
+from disco.retrieval.deep_research import synthesis as synthesis_mod
 from disco.retrieval.deep_research.decompose import SubQuestion
 from disco.retrieval.deep_research.gather import GatherLegContext, SubQuestionResult
 from disco.retrieval.deep_research.synthesis import (
@@ -112,11 +114,14 @@ class _FakeNLI:
         return 1.0 if self.entail(premise, hypothesis) == "entail" else 0.0
 
 
+ScriptItem = tuple[str, str] | Exception
+
+
 class _ScriptedRouter(LLMRouter):
     """Replays a queue of (text, finish_reason) for the rag_answerer role so a
     test can drive synthesize_section's truncation/continuation path."""
 
-    def __init__(self, script: list[tuple[str, str]]) -> None:
+    def __init__(self, script: list[ScriptItem]) -> None:
         self._script = list(script)
         self.calls = 0
 
@@ -124,9 +129,10 @@ class _ScriptedRouter(LLMRouter):
         self, request: CompletionRequest, *, context: Any = None
     ) -> CompletionResponse:
         self.calls += 1
-        text, finish = (
-            self._script.pop(0) if self._script else ("(exhausted)", "stop")
-        )
+        item = self._script.pop(0) if self._script else ("(exhausted)", "stop")
+        if isinstance(item, Exception):
+            raise item
+        text, finish = item
         return CompletionResponse(
             text=text,
             tool_calls=[],
@@ -172,6 +178,37 @@ async def _run_synth(router: LLMRouter) -> str:
         ),
     )
     return section.markdown
+
+
+async def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+async def test_initial_synthesis_retries_one_transient_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(synthesis_mod.asyncio, "sleep", _no_sleep)
+    router = _ScriptedRouter([
+        LLMTransientError("rate limited", provider="fake"),
+        ("Recovered synthesis [[p1]].", "stop"),
+    ])
+
+    md = await _run_synth(router)
+
+    assert router.calls == 2
+    assert "Recovered synthesis" in md
+
+
+async def test_empty_retry_retries_one_transient_failure(monkeypatch: Any) -> None:
+    monkeypatch.setattr(synthesis_mod.asyncio, "sleep", _no_sleep)
+    router = _ScriptedRouter([
+        ("", "stop"),
+        LLMTransientError("connection reset", provider="fake"),
+        ("Recovered after empty retry [[p1]].", "stop"),
+    ])
+
+    md = await _run_synth(router)
+
+    assert router.calls == 3
+    assert "Recovered after empty retry" in md
 
 
 async def test_truncation_continues_mid_table_row_without_loss() -> None:

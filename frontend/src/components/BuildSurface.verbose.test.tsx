@@ -46,6 +46,13 @@ describe("Build surface — verbose chat OFF (W-43)", () => {
     expect(screen.queryByText("Wrote fizzbuzz.py")).toBeNull();
   });
 
+  it("keeps the sticky plan region opaque above scrolling feed rows", async () => {
+    await submitAndApprovePlan();
+    const stickyPlan = await screen.findByTestId("build-sticky-plan-card");
+    expect(stickyPlan).toHaveClass("sticky", "z-20", "bg-bg", "pb-section");
+    expect(stickyPlan).not.toHaveClass("mb-section");
+  });
+
   it("expanding the stage card reveals the full feed (artifact affordances reachable)", async () => {
     const user = await submitAndApprovePlan();
     const card = await waitFor(() => screen.getByTestId("agent-stage-card"), { timeout: 5000 });

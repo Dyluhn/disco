@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+from typing import Any, cast
+from unittest import mock
 
 import httpx
+from disco.agent_server.app import create_app
 from disco.agent_server.routes.workflows import make_workflows_router
 from disco.agent_server.runtime import ConversationRuntime
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings
 from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore
+from disco.tools.workflow_seed import SCRIPTED_WORKSPACE_TASK_INSTANCE_ID
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 
 def _definition(*, tools: list[str] | None = None) -> dict:
@@ -43,6 +49,61 @@ def _app(project_root: Path) -> FastAPI:
     app = FastAPI()
     app.include_router(make_workflows_router(store, runtime))
     return app
+
+
+def _quiet_startup(runtime: ConversationRuntime) -> None:
+    rt = cast(Any, runtime)
+    rt._start_mcp_pool = mock.AsyncMock()
+    rt.reconcile_orphaned_runs = mock.AsyncMock()
+    rt.prewarm_model_probe = mock.AsyncMock()
+    rt.prewarm_vision_probe = mock.AsyncMock()
+    rt._idle_sweep_loop = mock.AsyncMock()
+    rt._schedule_manager_loop = mock.AsyncMock()
+    rt._close_mcp_pool = mock.AsyncMock()
+
+
+def _runtime_for_project_root(
+    project_root: Path | str, config_path: Path
+) -> ConversationRuntime:
+    store = SqliteEventStore(":memory:")
+    cfg_store = ConfigStore(config_path)
+    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(project_root)))
+    runtime = ConversationRuntime(store, config_store=cfg_store)
+    _quiet_startup(runtime)
+    return runtime
+
+
+def test_create_app_lifespan_seeds_builtin_workflows(tmp_path: Path) -> None:
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime_for_project_root(tmp_path, tmp_path / "config.json")
+    workflow_store = JsonDirWorkflowStore(tmp_path)
+    assert workflow_store.get_instance(SCRIPTED_WORKSPACE_TASK_INSTANCE_ID) is None
+
+    with TestClient(create_app(store, runtime=runtime)) as client:
+        listed = client.get("/api/workflows")
+
+    assert listed.status_code == 200
+    instance_ids = {workflow["instance_id"] for workflow in listed.json()["workflows"]}
+    assert SCRIPTED_WORKSPACE_TASK_INSTANCE_ID in instance_ids
+    assert workflow_store.get_instance(SCRIPTED_WORKSPACE_TASK_INSTANCE_ID) is not None
+
+
+def test_create_app_lifespan_skips_builtin_seed_when_projects_root_unavailable(
+    tmp_path: Path,
+    caplog: Any,
+) -> None:
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x", encoding="utf-8")
+    unavailable_root = blocker / "projects"
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime_for_project_root(unavailable_root, tmp_path / "config.json")
+
+    with caplog.at_level(logging.WARNING):
+        with TestClient(create_app(store, runtime=runtime)) as client:
+            health = client.get("/health")
+
+    assert health.status_code == 200
+    assert "Builtin workflow seed skipped" in caplog.text
 
 
 async def test_workflow_draft_list_and_approve_records_surface_digest(
@@ -115,7 +176,10 @@ async def test_workflow_approve_refuses_error_findings(tmp_path: Path) -> None:
 
         approved = await client.post(
             "/api/workflows/wf_route_bad/approve",
-            json={"approved_by": "tester", "surface_shown_digest": workflow["surface_shown_digest"]},
+            json={
+                "approved_by": "tester",
+                "surface_shown_digest": workflow["surface_shown_digest"],
+            },
         )
 
     assert approved.status_code == 409

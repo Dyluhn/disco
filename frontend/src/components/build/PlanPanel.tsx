@@ -176,7 +176,7 @@ export function PlanPanel({
             <ChevronRight className="size-3.5 shrink-0 text-text-faint" aria-hidden />
           )}
           <ClipboardList className="size-4 shrink-0 text-accent" aria-hidden />
-          <span className="min-w-0 font-ui text-[0.9rem] font-medium text-text">
+          <span className="min-w-fit shrink-0 whitespace-nowrap font-ui text-[0.9rem] font-medium text-text">
             {gate ? "Review the plan" : "Plan"}
           </span>
           <span className="shrink-0 rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">

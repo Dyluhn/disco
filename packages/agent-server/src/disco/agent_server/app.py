@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 
 from disco.core.store.sqlite import SqliteEventStore
+from disco.tools.projects import StorageStatus
+from disco.tools.workflow_seed import seed_builtin_workflows
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -56,6 +59,26 @@ from .runtime import ConversationRuntime
 # (test_upload.py) — its definition now lives in routes/_common.py.
 __all__ = ["_sanitize_name", "create_app"]
 
+_LOG = logging.getLogger(__name__)
+
+
+def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
+    try:
+        project_store = runtime.project_store()
+        status = project_store.status()
+        root = project_store.root
+        if status != StorageStatus.OK or root is None:
+            _LOG.warning(
+                "Builtin workflow seed skipped: project storage unavailable (%s)",
+                getattr(status, "value", str(status)),
+            )
+            return
+        # Workflow routing reads this JSON store at request time, so startup must
+        # refresh builtins before the first router/list-workflows request.
+        seed_builtin_workflows(root)
+    except Exception:
+        _LOG.warning("Builtin workflow seed failed", exc_info=True)
+
 
 def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None = None) -> FastAPI:
     """Build the FastAPI app over a given store. The store is injected so tests
@@ -70,6 +93,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         idle_sweep_task: asyncio.Task | None = None
         schedule_task: asyncio.Task | None = None
         if runtime is not None:
+            _seed_builtin_workflows_for_runtime(runtime)
             try:
                 await runtime._start_mcp_pool()
             except Exception:

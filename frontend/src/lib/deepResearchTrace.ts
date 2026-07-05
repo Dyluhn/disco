@@ -288,6 +288,10 @@ function plainLabel(toolName: string, args: Record<string, unknown>): string {
   return (VERB[toolName] ?? (() => `${toolName}`))(args);
 }
 
+function truncateWithEllipsis(text: string, maxChars: number): string {
+  return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
+}
+
 function plainObservation(toolName: string, structured: Record<string, unknown>): string {
   if (toolName === "observation") {
     const added = structured.added;
@@ -302,7 +306,7 @@ function plainObservation(toolName: string, structured: Record<string, unknown>)
     const rationale = String(structured.rationale ?? "");
     return sufficient
       ? `Coverage sufficient`
-      : `Gap noted: ${(splitThink(rationale).answer || rationale).slice(0, 100)}`;
+      : `Gap noted: ${truncateWithEllipsis(splitThink(rationale).answer || rationale, 100)}`;
   }
   return "";
 }

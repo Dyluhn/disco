@@ -26,17 +26,25 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, Protocol, cast
 
+import httpx
 import jsonschema
 from disco.core import LLMMessage, ReportSection
-from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CallContext,
     CapabilityProfile,
     CompletionRequest,
     CompletionResponse,
     LLMRouter,
+    LLMTransientError,
     ModelRole,
 )
+from disco.core.think import strip_think_spans
+
+from ..models import Passage
+from ..ranking import Embedder
+from ..streaming import _verify_claims  # reuse — per-claim NLI verifier
+from ..vectorstore import VectorStore
+from .gather import GatherLegContext, SubQuestionResult
 
 
 class _RouterWithCtx(Protocol):
@@ -63,12 +71,6 @@ class _RouterWithCtx(Protocol):
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> CompletionResponse: ...
 
-from ..models import Passage
-from ..ranking import Embedder
-from ..streaming import _verify_claims  # reuse — per-claim NLI verifier
-from ..vectorstore import VectorStore
-from .gather import GatherLegContext, SubQuestionResult
-
 EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 # W-11: a SMALL temperature bump for the section-synthesis PROSE only, so every
@@ -80,6 +82,8 @@ EmitFn = Callable[[str, dict[str, Any]], Awaitable[None]]
 # regardless of temperature. The chart-fix retry stays deterministic (0.0) so a
 # malformed-JSON repair is reproducible, and the coherence summary stays at 0.0.
 _SYNTHESIS_TEMPERATURE = 0.4
+_INITIAL_TRANSIENT_BACKOFF_S = 2.0
+_EMPTY_RETRY_TRANSIENT_BACKOFF_S = 5.0
 
 CHART_SCHEMA = {
     "type": "object",
@@ -182,6 +186,39 @@ def _normalize_citations(markdown: str, valid_ids: set[str]) -> str:
 
     # (?<!\[) / (?!\]) ensure we never touch an already-doubled [[id]].
     return re.sub(r"(?<!\[)\[([\w-]+)\](?!\])", repl, markdown)
+
+
+def _is_transient_completion_error(exc: Exception) -> bool:
+    if isinstance(
+        exc,
+        (
+            LLMTransientError,
+            TimeoutError,
+            ConnectionError,
+            httpx.TimeoutException,
+            httpx.TransportError,
+        ),
+    ):
+        return True
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+    return isinstance(status, int) and (status == 429 or status >= 500)
+
+
+async def _complete_with_transient_retry(
+    router: LLMRouter,
+    request: CompletionRequest,
+    *,
+    context: CallContext,
+    transient_backoff_s: float,
+) -> CompletionResponse:
+    try:
+        return await cast(_RouterWithCtx, router).complete(request, context=context)
+    except Exception as exc:
+        if not _is_transient_completion_error(exc):
+            raise
+        await asyncio.sleep(transient_backoff_s)
+        return await cast(_RouterWithCtx, router).complete(request, context=context)
 
 
 _DELIM_CELL_RE = re.compile(r"^\s*:?-{1,}:?\s*$")
@@ -510,7 +547,8 @@ async def synthesize_section(
     # for the entire gather→synth pipeline.
     leg_messages: list[LLMMessage] = [LLMMessage(role="user", content=instruction)]
     try:
-        resp = await cast(_RouterWithCtx, router).complete(
+        resp = await _complete_with_transient_retry(
+            router,
             CompletionRequest(
                 profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                 messages=leg_messages,
@@ -518,6 +556,7 @@ async def synthesize_section(
                 max_tokens=1400,
             ),
             context=leg_context.call_context,
+            transient_backoff_s=_INITIAL_TRANSIENT_BACKOFF_S,
         )
         # EMPTY-RESPONSE RETRY. A section's `content` can come back empty even on a
         # successful call. The dominant cause in production is a REASONING model
@@ -541,7 +580,8 @@ async def synthesize_section(
         if not strip_think_spans(resp.text):
             _retry_tokens = 2800 if resp.finish_reason == "length" else 1400
             try:
-                resp = await cast(_RouterWithCtx, router).complete(
+                resp = await _complete_with_transient_retry(
+                    router,
                     CompletionRequest(
                         profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
                         messages=leg_messages,
@@ -549,6 +589,7 @@ async def synthesize_section(
                         max_tokens=_retry_tokens,
                     ),
                     context=leg_context.call_context,
+                    transient_backoff_s=_EMPTY_RETRY_TRANSIENT_BACKOFF_S,
                 )
             except Exception:  # noqa: BLE001 — handled by the empty-section guard
                 pass

@@ -52,6 +52,11 @@ describe("PlanPanel — no-steps render", () => {
 
   it("defaults expanded while awaiting approval and collapsed while running", () => {
     const { rerender } = render(<PlanPanel plan={WITH_STEPS} onApprove={() => {}} />);
+    expect(screen.getByText("Review the plan")).toHaveClass(
+      "min-w-fit",
+      "shrink-0",
+      "whitespace-nowrap",
+    );
     expect(screen.getByRole("button", { name: /collapse plan/i })).toHaveAttribute(
       "aria-expanded",
       "true",

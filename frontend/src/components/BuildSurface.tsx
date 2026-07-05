@@ -505,7 +505,10 @@ export function BuildSurface({
                     them. Sticky to the top of the scroll area so the plan + progress
                     stay visible while the activity feed scrolls beneath it. */}
                 {b.plan && (
-                  <div className="sticky top-0 z-10 mb-section bg-bg pb-inline">
+                  <div
+                    data-testid="build-sticky-plan-card"
+                    className="sticky top-0 z-20 -mx-body bg-bg px-body pb-section pt-px"
+                  >
                     {/* runthru-v2 (#3): capable models that emit declarative progress
                         snapshots get a live checklist; otherwise (small models, or none
                         yet) the honest status chip — never a lying empty checklist. */}

@@ -225,6 +225,27 @@ describe("deriveLiveTrace — user-visible operations only", () => {
     expect(items[0]?.status).toBe("done");
   });
 
+  it("adds an ellipsis only when a gap rationale is truncated", () => {
+    const longRationale = "a".repeat(120);
+    const events = asEvents([
+      PLAN_EVENT,
+      { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { query: "market size 2026" } } },
+      { kind: "observation", id: "o1", action_id: "a1", tool_result: { tool_name: "gap_reason", success: true, content: "", structured: { sufficient: false, rationale: longRationale } } },
+    ]);
+    const items = deriveLiveTrace(events, "RUNNING");
+    expect(items[0]?.detail).toBe(`Gap noted: ${"a".repeat(100)}…`);
+  });
+
+  it("does not add an ellipsis when a gap rationale fits", () => {
+    const events = asEvents([
+      PLAN_EVENT,
+      { kind: "action", id: "a1", thought: "", tool_call: { tool_name: "search", arguments: { query: "market size 2026" } } },
+      { kind: "observation", id: "o1", action_id: "a1", tool_result: { tool_name: "gap_reason", success: true, content: "", structured: { sufficient: false, rationale: "Still missing pricing data" } } },
+    ]);
+    const items = deriveLiveTrace(events, "RUNNING");
+    expect(items[0]?.detail).toBe("Gap noted: Still missing pricing data");
+  });
+
   it("section_done marks the matching synthesize row done", () => {
     const events = asEvents([
       PLAN_EVENT,

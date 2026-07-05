@@ -146,9 +146,9 @@ export function WorkflowReviewPanel() {
     <div className="mx-auto w-full max-w-doc px-body py-section">
       <div className="mx-auto flex w-full max-w-[58rem] flex-col gap-section">
         <header>
-          <h1 className="font-display text-[2rem] tracking-tight text-text">Workflows</h1>
+          <h1 className="font-display text-[2rem] tracking-tight text-text">Workflow Instances</h1>
           <p className="font-ui text-[0.88rem] text-text-muted">
-            Draft workflow instances awaiting surface review and approval.
+            All workflow instances, with their sealed tool surface, validation findings, and approval state.
           </p>
         </header>
 
@@ -179,7 +179,7 @@ export function WorkflowReviewPanel() {
 
         {!isLoading && !isError && (data?.workflows ?? []).length === 0 && (
           <div className="rounded-card border border-hairline bg-surface-1 p-major text-center font-ui text-[0.88rem] text-text-muted">
-            No workflow drafts.
+            No workflow instances.
           </div>
         )}
 
