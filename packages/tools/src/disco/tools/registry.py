@@ -30,6 +30,10 @@ class ToolScope(BaseModel):
     allowed_tools: frozenset[str]
     advertised_tools: frozenset[str] | None = None  # None = advertise all allowed
     preset: str | None = None  # "research" | "agent" | custom
+    # Workflow RUN scopes carry the human-approved output contract path so
+    # executor-level refusals can name the designed exit without importing loop
+    # state into the tools layer.
+    workflow_output_path_template: str | None = None
 
 
 class ToolRegistry:

@@ -1811,6 +1811,9 @@ class _RenderVerifyGateMixin(_FinishGateProto):
             )
             return Disp.FALLTHROUGH
 
+        # RELEASE VALVE — an uncapped refusal is the sealed done-trap wearing a
+        # new mask: a model that never lands the contract path would be refused
+        # finish forever. After the cap, release with an HONEST warning instead.
         if self._loop._workflow_output_contract_refusals >= _FINISH_VERIFY_CAP:
             await self._loop._emit(
                 StatusEvent(
@@ -1852,12 +1855,10 @@ class _RenderVerifyGateMixin(_FinishGateProto):
                     role="user",
                     content=(
                         "<system-reminder>\n"
-                        "You called finish, but this workflow definition has an "
-                        "output_contract and the contracted output path does not exist "
-                        f"in the workspace: `{checked_path}` ({contract.format}). "
-                        "Create that file at exactly that workspace-relative path, then "
-                        "finish again. If the workflow should not produce output, use "
-                        "`skip` with a reason instead of `finish`.\n"
+                        "finish refused: this workflow completes by writing "
+                        f"{checked_path}. Write it (file_write), then call finish. "
+                        "If the workflow should not produce output, use `skip` with "
+                        "a reason instead of `finish`.\n"
                         "</system-reminder>"
                     ),
                 ),

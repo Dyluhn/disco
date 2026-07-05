@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import types
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal, Union, get_args, get_origin
@@ -28,6 +29,8 @@ from .builtin.files import clear_conversation_read_state, mark_read
 from .registry import ToolRegistry, ToolScope
 from .sandbox.base import SandboxError, SandboxInstance
 from .secrets import CapabilityBroker, CapabilityDenied
+
+_LOG = logging.getLogger("disco.tools.executor")
 
 # Module-level singleton used as the default for model_policy in DefaultToolExecutor
 # (ruff B008 forbids function calls in default args; frozen dataclass is safe as a singleton).
@@ -68,6 +71,49 @@ def _valid_arg_keys(args_model: type[BaseModel]) -> set[str]:
         if finfo.validation_alias and isinstance(finfo.validation_alias, str):
             keys.add(finfo.validation_alias)
     return keys
+
+
+def _list_annotation(annotation: Any) -> bool:
+    ann = _unwrap_optional(annotation)
+    return ann is list or get_origin(ann) is list
+
+
+def _argument_keys_for_field(field_name: str, field_info: Any) -> tuple[str, ...]:
+    keys: list[str] = [field_name]
+    if isinstance(field_info.alias, str):
+        keys.append(field_info.alias)
+    if isinstance(field_info.validation_alias, str):
+        keys.append(field_info.validation_alias)
+    return tuple(dict.fromkeys(keys))
+
+
+def normalize_list_item_wrappers(
+    tool_name: str,
+    args_model: type[BaseModel],
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Repair provider dialects that encode list fields as {"item": [...]}."""
+
+    normalized: dict[str, Any] | None = None
+    unwrapped: list[str] = []
+    for field_name, field_info in args_model.model_fields.items():
+        if not _list_annotation(field_info.annotation):
+            continue
+        for key in _argument_keys_for_field(field_name, field_info):
+            value = arguments.get(key)
+            if not isinstance(value, dict) or len(value) != 1:
+                continue
+            wrapper_key, wrapper_value = next(iter(value.items()))
+            if wrapper_key not in {"item", "items"} or not isinstance(wrapper_value, list):
+                continue
+            if normalized is None:
+                normalized = dict(arguments)
+            normalized[key] = wrapper_value
+            unwrapped.append(key)
+    if normalized is None:
+        return arguments
+    _LOG.debug("unwrapped list item wrapper(s) for %s: %s", tool_name, sorted(unwrapped))
+    return normalized
 
 
 def _arg_surface(args_model: type[BaseModel]) -> str:
@@ -254,6 +300,8 @@ def describe_validation_failure(
         seen_fields.add(top)
         model, is_list = nested
         msg += " " + _nested_shape_hint(top, model, is_list)
+    if tool_name == "submit_plan":
+        msg += ' steps must be a JSON array: {"steps": [{"title": "..."}]}.'
     if arguments:
         msg += f" You provided: {sorted(arguments)}."
     return msg
@@ -437,8 +485,13 @@ class DefaultToolExecutor:
             )
 
         # 2. validate args (invalid_arguments with schema; never coerce/execute)
+        arguments = normalize_list_item_wrappers(
+            call.tool_name,
+            tool.definition.args_model,
+            call.arguments,
+        )
         try:
-            args = tool.definition.args_model.model_validate(call.arguments)
+            args = tool.definition.args_model.model_validate(arguments)
         except ValidationError as e:
             errors = [dict(err) for err in e.errors()]  # ErrorDetails -> plain dict
             return self._fail(
@@ -451,7 +504,7 @@ class DefaultToolExecutor:
                 describe_validation_failure(
                     call.tool_name,
                     tool.definition.args_model,
-                    call.arguments if isinstance(call.arguments, dict) else {},
+                    arguments if isinstance(arguments, dict) else {},
                     errors,
                 ),
                 validation_errors=errors,
@@ -550,6 +603,7 @@ class DefaultToolExecutor:
             read_char_budget=self._read_char_budget,
             starter_kit=self._starter_kit,
             workflow_events=self._workflow_events,
+            scope_allowed_tools=self._scope.allowed_tools,
         )
 
     def _fail(
@@ -583,4 +637,6 @@ class DefaultToolExecutor:
 def validate_args(tool_def: ToolDef, arguments: dict[str, Any]) -> BaseModel:
     """[CONTRACT helper] Validate raw arguments against a tool's args_model.
     Raises ValidationError; the executor catches it for the repair loop (§3)."""
-    return tool_def.args_model.model_validate(arguments)
+    return tool_def.args_model.model_validate(
+        normalize_list_item_wrappers(tool_def.name, tool_def.args_model, arguments)
+    )

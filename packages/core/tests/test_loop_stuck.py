@@ -274,6 +274,53 @@ def test_barren_streak_mutating_tool_resets_window():
     assert barren_streak_no_progress(events) is False
 
 
+def test_barren_streak_no_op_write_does_not_reset_window():
+    events = [user_msg("finish the edit")]
+    for i in range(5):
+        a = action(thought=f"think {i}", tool="think", args={})
+        events.extend([a, observation(action_id=a.id, tool="think", content="noted")])
+    for i in range(3):
+        a = action(
+            thought=f"write {i}",
+            tool="file_write",
+            args={"path": "books.json", "content": "[]"},
+        )
+        events.extend([a, agent_error("no_op_write", action_id=a.id)])
+
+    assert barren_streak_no_progress(events) is True
+
+
+def test_barren_streak_fresh_read_required_does_not_reset_window():
+    events = [user_msg("patch the file")]
+    for i in range(5):
+        a = action(thought=f"think {i}", tool="think", args={})
+        events.extend([a, observation(action_id=a.id, tool="think", content="noted")])
+    for i in range(3):
+        a = action(
+            thought=f"edit {i}",
+            tool="file_edit",
+            args={"path": "books.json", "old": "a", "new": "b"},
+        )
+        events.extend([a, agent_error("FRESH_READ_REQUIRED", action_id=a.id)])
+
+    assert barren_streak_no_progress(events) is True
+
+
+def test_barren_streak_successful_mutation_still_resets_window():
+    events = [user_msg("finish the edit")]
+    for i in range(7):
+        a = action(thought=f"think {i}", tool="think", args={})
+        events.extend([a, observation(action_id=a.id, tool="think", content="noted")])
+    mutating = action(
+        thought="write once",
+        tool="file_write",
+        args={"path": "books.json", "content": "[]"},
+    )
+    events.extend([mutating, observation(action_id=mutating.id, tool="file_write")])
+
+    assert barren_streak_no_progress(events) is False
+
+
 # ---- loop integration: STUCK then resume ------------------------------------
 
 

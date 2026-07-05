@@ -281,7 +281,7 @@ async def test_router_phase_denies_file_write_with_workflow_routing_hint() -> No
 
 
 @pytest.mark.asyncio
-async def test_workflow_run_denial_text_unchanged_for_out_of_scope_file_write() -> None:
+async def test_workflow_run_denial_text_names_workflow_exit() -> None:
     state = WorkflowPhaseState(
         phase=WorkflowPhase.RUN,
         instance_id="wf_read_only",
@@ -289,6 +289,7 @@ async def test_workflow_run_denial_text_unchanged_for_out_of_scope_file_write() 
             allowed_tools=frozenset({"file_read"}),
             advertised=frozenset({"file_read"}),
         ),
+        output_path_template="outputs/report.md",
     )
     registry = build_default_registry()
     executor_ref: dict[str, ScopedPhaseExecutor] = {}
@@ -299,6 +300,7 @@ async def test_workflow_run_denial_text_unchanged_for_out_of_scope_file_write() 
             phase=state.phase,
             compiled_run_scope=state.compiled_run_scope,
             base_scope=executor.widened_scope,
+            output_path_template=state.output_path_template,
         )
 
     executor = ScopedPhaseExecutor(
@@ -311,9 +313,56 @@ async def test_workflow_run_denial_text_unchanged_for_out_of_scope_file_write() 
     result = await executor.execute(call("file_write"))
 
     assert result.success is False
-    assert result.content == "unknown or out-of-scope tool 'file_write'; available: ['file_read']"
+    assert (
+        result.content
+        == "unknown or out-of-scope tool 'file_write'; available: ['file_read']. "
+        "This workflow completes by writing outputs/report.md and then calling finish; "
+        "workflow_abort returns to the router if the goal needs tools outside this seal."
+    )
     assert "enter_workflow" not in result.content
     assert "general_workspace_task" not in result.content
+
+
+@pytest.mark.asyncio
+async def test_workflow_run_finish_denial_is_actionable_if_it_reaches_executor() -> None:
+    state = WorkflowPhaseState(
+        phase=WorkflowPhase.RUN,
+        instance_id="wf_read_only",
+        compiled_run_scope=WorkflowScope(
+            allowed_tools=frozenset({"file_read"}),
+            advertised=frozenset({"file_read"}),
+        ),
+        output_path_template="outputs/report.md",
+    )
+    registry = build_default_registry()
+    executor_ref: dict[str, ScopedPhaseExecutor] = {}
+
+    def _resolver() -> ToolScope:
+        executor = executor_ref["executor"]
+        return workflow_effective_scope(
+            phase=state.phase,
+            compiled_run_scope=state.compiled_run_scope,
+            base_scope=executor.widened_scope,
+            output_path_template=state.output_path_template,
+        )
+
+    executor = ScopedPhaseExecutor(
+        registry,
+        agent_scope(model_policy=_STANDARD),
+        scope_resolver=_resolver,
+    )
+    executor_ref["executor"] = executor
+
+    result = await executor.execute(call("finish", summary="done"))
+
+    assert result.success is False
+    assert result.structured is not None
+    assert result.structured["kind"] == "unknown_tool"
+    assert result.content == (
+        "finish refused: this workflow completes by writing outputs/report.md. "
+        "Write it (file_write), then call finish."
+    )
+    assert "unknown or out-of-scope" not in result.content
 
 
 @pytest.mark.asyncio

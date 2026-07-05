@@ -14,6 +14,7 @@ from disco.tools import (
     agent_scope,
     build_default_registry,
     research_scope,
+    validate_args,
 )
 from disco.tools.builtin import FileReadTool
 from disco.tools.registry import ToolRegistry, ToolScope
@@ -151,6 +152,80 @@ async def test_update_plan_progress_well_formed_steps_succeeds():
     )
     assert res.success is True
     assert "1/1 done" in res.content
+
+
+async def test_list_field_item_wrapper_unwraps_for_submit_plan():
+    ex = _executor()
+    res = await ex.execute(
+        call(
+            "submit_plan",
+            summary="Ship the feature.",
+            steps={"item": [{"title": "Do the thing"}]},
+        )
+    )
+
+    assert res.success is True
+    assert "plan received" in res.content
+
+
+async def test_list_field_items_wrapper_unwraps_generically():
+    ex = _executor()
+    res = await ex.execute(
+        call(
+            "update_plan_progress",
+            steps={"items": [{"index": 1, "state": "done"}]},
+        )
+    )
+
+    assert res.success is True
+    assert "1/1 done" in res.content
+
+
+def test_validate_args_unwraps_list_field_item_wrapper() -> None:
+    tool = build_default_registry().get(
+        "submit_plan",
+        scope=ToolScope(allowed_tools=frozenset({"submit_plan"})),
+    )
+    assert tool is not None
+
+    args = validate_args(
+        tool.definition,
+        {"summary": "Ship it.", "steps": {"item": [{"title": "Do the thing"}]}},
+    )
+
+    assert args.steps[0].title == "Do the thing"
+
+
+async def test_submit_plan_wrong_steps_shape_still_refuses_with_example():
+    ex = _executor()
+    res = await ex.execute(
+        call(
+            "submit_plan",
+            summary="Ship the feature.",
+            steps={"item": {"title": "not a list"}},
+        )
+    )
+
+    assert res.success is False
+    seen = res.error or ""
+    assert "steps must be a JSON array" in seen
+    assert '{"steps": [{"title": "..."}]}' in seen
+
+
+async def test_list_wrapper_does_not_affect_non_list_fields():
+    ex = _executor()
+    res = await ex.execute(
+        call(
+            "submit_plan",
+            summary={"item": ["not", "a", "summary"]},
+            steps=[{"title": "Do the thing"}],
+        )
+    )
+
+    assert res.success is False
+    seen = res.error or ""
+    assert "argument 'summary'" in seen
+    assert "steps must be a JSON array" in seen
 
 
 async def test_malformed_nested_arg_is_rejected_never_coerced():
@@ -364,4 +439,6 @@ def test_tool_context_has_no_secret_field():
         "starter_kit",
         # WF-3: event-log callback for workflow phase transitions; no credential payload.
         "workflow_events",
+        # Current scope names, for recovery text only.
+        "scope_allowed_tools",
     }

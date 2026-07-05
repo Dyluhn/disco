@@ -259,6 +259,9 @@ class EnterWorkflowTool:
         self._phase_state.phase = WorkflowPhase.RUN
         self._phase_state.instance_id = args.instance_id
         self._phase_state.compiled_run_scope = compiled
+        self._phase_state.output_path_template = (
+            instance.definition.output_contract.path_template
+        )
         return ToolOutcome(
             success=True,
             content=(
@@ -312,6 +315,7 @@ class WorkflowAbortTool:
         self._phase_state.phase = WorkflowPhase.ROUTER
         self._phase_state.instance_id = None
         self._phase_state.compiled_run_scope = None
+        self._phase_state.output_path_template = None
         if ctx.workflow_events is not None:
             await ctx.workflow_events("workflow_abort", {"reason": args.reason})
         return ToolOutcome(

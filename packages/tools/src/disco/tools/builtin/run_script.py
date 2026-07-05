@@ -24,9 +24,9 @@ from .files import (
     _canonical,
     _clear_grounding,
     _has_elision_marker,
+    _governed_route_text,
     _is_governed_artifact,
     _read_state,
-    _route_for_governed,
     _syntax_errors,
 )
 
@@ -149,11 +149,8 @@ class RunProjectScriptTool:
             #     .disco/ namespace is routed to its semantic tool. Checked on `canon` (the same key
             #     used for the commit) so a symlink/alias can never split the check from the write.
             if mutating and _is_governed_artifact(canon):
-                tool, why = _route_for_governed(canon)
-                route = (
-                    f"Use {tool} to change it ({why})."
-                    if tool
-                    else "It is host-managed; do not edit it with a generic write tool."
+                tool, route = _governed_route_text(
+                    canon, allowed_tools=ctx.scope_allowed_tools
                 )
                 return _fail(
                     i, "GOVERNED_ARTIFACT_REJECTED",

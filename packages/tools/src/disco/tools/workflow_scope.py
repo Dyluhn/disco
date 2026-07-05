@@ -20,7 +20,7 @@ WORKFLOW_ROUTER_TOOLS: frozenset[str] = frozenset(
     {"list_workflows", "read_workflow_card", "enter_workflow", "draft_workflow"}
 )
 WORKFLOW_ROUTER_CONTROL_TOOLS: frozenset[str] = frozenset({"needs_input"})
-WORKFLOW_RUN_CONTROL_TOOLS: frozenset[str] = frozenset({"workflow_abort"})
+WORKFLOW_RUN_CONTROL_TOOLS: frozenset[str] = frozenset({"finish", "workflow_abort"})
 
 # Match AppKit's strict planning context tools: safe reads/probes only. This set
 # intentionally excludes browser, shell/code execution, file writes, MCP names,
@@ -61,6 +61,7 @@ class WorkflowPhaseState:
     phase: WorkflowPhase = WorkflowPhase.ROUTER
     instance_id: str | None = None
     compiled_run_scope: CompiledWorkflowScope | None = None
+    output_path_template: str | None = None
 
 
 def workflow_effective_scope(
@@ -68,6 +69,7 @@ def workflow_effective_scope(
     phase: WorkflowPhase,
     compiled_run_scope: CompiledWorkflowScope | None,
     base_scope: ToolScope,
+    output_path_template: str | None = None,
 ) -> ToolScope:
     """The enforced ToolScope for the workflow router right now."""
 
@@ -80,6 +82,7 @@ def workflow_effective_scope(
             allowed_tools=allowed_tools,
             advertised_tools=advertised,
             preset="workflow_run",
+            workflow_output_path_template=output_path_template,
         )
 
     context_allowed = WORKFLOW_ROUTER_CONTEXT_TOOLS & base_scope.allowed_tools
@@ -115,6 +118,27 @@ def workflow_router_denial_message(tool_name: str, available: list[str]) -> str:
     return message
 
 
+def workflow_run_denial_message(
+    tool_name: str,
+    available: list[str],
+    *,
+    output_path_template: str | None,
+) -> str:
+    """Model-facing recovery hint for registered tools withheld in RUN phase."""
+
+    output_path = output_path_template or "<workflow output path>"
+    if tool_name == "finish":
+        return (
+            "finish refused: this workflow completes by writing "
+            f"{output_path}. Write it (file_write), then call finish."
+        )
+    return (
+        f"unknown or out-of-scope tool {tool_name!r}; available: {available}. "
+        f"This workflow completes by writing {output_path} and then calling finish; "
+        "workflow_abort returns to the router if the goal needs tools outside this seal."
+    )
+
+
 def _is_file_workspace_tool(tool_name: str) -> bool:
     return tool_name in _FILE_WORKSPACE_TOOL_NAMES or tool_name.startswith(
         _FILE_WORKSPACE_TOOL_PREFIXES
@@ -130,5 +154,6 @@ __all__ = [
     "WorkflowPhase",
     "WorkflowPhaseState",
     "workflow_router_denial_message",
+    "workflow_run_denial_message",
     "workflow_effective_scope",
 ]

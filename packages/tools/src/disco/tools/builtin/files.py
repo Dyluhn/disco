@@ -1042,7 +1042,11 @@ class FileWriteTool:
 
     async def run(self, args: FileWriteArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+        if (
+            g := await _governed_guard(
+                ctx.sandbox, args.path, allowed_tools=ctx.scope_allowed_tools
+            )
+        ) is not None:
             return g
         # Read existing content once — used by both the F1 guard and the W3 syntax gate.
         old_bytes: bytes | None = None
@@ -1142,7 +1146,11 @@ class FileAppendTool:
 
     async def run(self, args: FileAppendArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+        if (
+            g := await _governed_guard(
+                ctx.sandbox, args.path, allowed_tools=ctx.scope_allowed_tools
+            )
+        ) is not None:
             return g
         old_text: str | None = None
         existing = b""
@@ -1263,7 +1271,11 @@ class FileEditTool:
 
     async def run(self, args: FileEditArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+        if (
+            g := await _governed_guard(
+                ctx.sandbox, args.path, allowed_tools=ctx.scope_allowed_tools
+            )
+        ) is not None:
             return g
         # Intent no-op: old and new are LITERALLY identical (after stripping any
         # line-number prefixes the model copied). This is distinct from a
@@ -1389,7 +1401,11 @@ class FileReplaceLinesTool:
 
     async def run(self, args: FileReplaceLinesArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+        if (
+            g := await _governed_guard(
+                ctx.sandbox, args.path, allowed_tools=ctx.scope_allowed_tools
+            )
+        ) is not None:
             return g
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
@@ -1495,7 +1511,11 @@ class FileInsertLinesTool:
 
     async def run(self, args: FileInsertLinesArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+        if (
+            g := await _governed_guard(
+                ctx.sandbox, args.path, allowed_tools=ctx.scope_allowed_tools
+            )
+        ) is not None:
             return g
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
@@ -1601,7 +1621,11 @@ class FileStrReplaceTool:
 
     async def run(self, args: FileStrReplaceArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
-        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:
+        if (
+            g := await _governed_guard(
+                ctx.sandbox, args.path, allowed_tools=ctx.scope_allowed_tools
+            )
+        ) is not None:
             return g
         _raw = await ctx.sandbox.read_file(args.path)
         text = _raw.decode("utf-8", errors="replace")
@@ -1747,8 +1771,33 @@ def _route_for_governed(relpath: str) -> tuple[str | None, str]:
     return None, ""
 
 
+_HARNESS_BOOKKEEPING_MESSAGE = (
+    ".disco/ files are harness-managed bookkeeping — you never need to edit them. "
+    "Continue with the task's own deliverables."
+)
+
+
+def _governed_route_text(
+    relpath: str,
+    *,
+    allowed_tools: frozenset[str] | None,
+) -> tuple[str | None, str]:
+    tool, why = _route_for_governed(relpath)
+    if tool is None:
+        return None, "It is host-managed; do not edit it with a generic write tool."
+    if allowed_tools is not None and tool not in allowed_tools:
+        if relpath.startswith(".disco/context/") and tool == "context_memory":
+            return None, _HARNESS_BOOKKEEPING_MESSAGE
+        return None, "It is host-managed; do not edit it with a generic write tool."
+    return tool, f"Use {tool} to change it ({why})."
+
+
 async def _governed_guard(
-    sandbox: Any, path: str, *, error: str = "GOVERNED_ARTIFACT_REJECTED"
+    sandbox: Any,
+    path: str,
+    *,
+    error: str = "GOVERNED_ARTIFACT_REJECTED",
+    allowed_tools: frozenset[str] | None = None,
 ) -> ToolOutcome | None:
     """CD-TOOLS-4 artifact-aware guard, shared by ALL generic mutators: refuse a write whose REAL
     (symlink-followed) path is in the host-governed `.disco/` namespace, ROUTING the model to the
@@ -1766,12 +1815,7 @@ async def _governed_guard(
         rel = await _governed_relpath(sandbox, path)
     if not _is_governed_artifact(rel):
         return None
-    tool, why = _route_for_governed(rel)
-    route = (
-        f"Use {tool} to change it ({why})."
-        if tool
-        else "It is host-managed; do not edit it with a generic write tool."
-    )
+    tool, route = _governed_route_text(rel, allowed_tools=allowed_tools)
     return ToolOutcome(
         success=False,
         error=error,
@@ -1839,7 +1883,11 @@ class ExactReplaceTool:
         import hashlib
 
         assert ctx.sandbox is not None
-        if (g := await _governed_guard(ctx.sandbox, args.path)) is not None:  # CD-TOOLS-4: close the bypass
+        if (
+            g := await _governed_guard(
+                ctx.sandbox, args.path, allowed_tools=ctx.scope_allowed_tools
+            )
+        ) is not None:  # CD-TOOLS-4: close the bypass
             return g
         if not args.edits:
             return ToolOutcome(
@@ -2032,7 +2080,14 @@ class SafeWriteFileTool:
             )
         # (2) governed-artifact guard (CD-TOOLS-4) — shared with all generic mutators; routes to
         # the owning semantic tool. Keeps the campaign-named code for safe_write_file.
-        if (g := await _governed_guard(ctx.sandbox, args.path, error="SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED")) is not None:
+        if (
+            g := await _governed_guard(
+                ctx.sandbox,
+                args.path,
+                error="SAFE_WRITE_GOVERNED_ARTIFACT_REJECTED",
+                allowed_tools=ctx.scope_allowed_tools,
+            )
+        ) is not None:
             return g
         # (3) inspect the existing file (None = new).
         old_text: str | None = None

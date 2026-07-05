@@ -88,6 +88,44 @@ async def test_routing_table_maps():
     assert _route_for_governed(".disco/unknown")[0] is None
 
 
+async def test_context_memory_route_suppressed_when_out_of_scope():
+    ctx, inst = await _ctx()
+    ctx = ctx.model_copy(update={"scope_allowed_tools": frozenset({"file_write"})})
+    res = await FileWriteTool().run(
+        FileWriteTool.definition.args_model(
+            path=".disco/context/todo.md",
+            content="- [x] done\n",
+        ),
+        ctx,
+    )
+
+    assert not res.success
+    assert res.error == "GOVERNED_ARTIFACT_REJECTED"
+    assert (res.structured or {}).get("route_to") is None
+    assert "context_memory" not in res.content
+    assert ".disco/ files are harness-managed bookkeeping" in res.content
+    await inst.destroy()
+
+
+async def test_context_memory_route_kept_when_in_scope():
+    ctx, inst = await _ctx()
+    ctx = ctx.model_copy(
+        update={"scope_allowed_tools": frozenset({"file_write", "context_memory"})}
+    )
+    res = await FileWriteTool().run(
+        FileWriteTool.definition.args_model(
+            path=".disco/context/todo.md",
+            content="- [x] done\n",
+        ),
+        ctx,
+    )
+
+    assert not res.success
+    assert (res.structured or {}).get("route_to") == "context_memory"
+    assert "Use context_memory" in res.content
+    await inst.destroy()
+
+
 async def test_non_governed_write_still_succeeds():
     # a path that merely CONTAINS '.disco' as a substring (not the namespace) is NOT governed.
     ctx, inst = await _ctx()

@@ -24,6 +24,7 @@ from ..events import Event, EventSource, MessageEvent, PlanEvent
 
 _BLOCK_OPEN = "<context-pack>"
 _BLOCK_CLOSE = "</context-pack>"
+_DISCO_PATH_TOKENS = (".disco/", ".disco")
 
 
 def _latest_plan(events: Sequence[Event]) -> PlanEvent | None:
@@ -94,17 +95,35 @@ def render_plan_as_todo_markdown(plan: PlanEvent) -> str:
     """CXT-6 — render an approved PlanEvent into a todo.md checklist (all steps
     pending on seed). PlanEvent stays the approved CONTRACT; todo.md is the live
     execution memory the agent reads/updates (via context_memory) as it works."""
-    lines: list[str] = [f"# {plan.summary}"]
+    lines: list[str] = [f"# {_sanitize_todo_seed_text(plan.summary)}"]
     context = (plan.context or "").strip()
     if context:
-        lines += ["", context]
+        lines += ["", _sanitize_todo_seed_text(context)]
     lines += ["", "## Steps"]
     for i, step in enumerate(plan.steps, start=1):
-        lines.append(f"- [ ] {i}. {step.title}")
+        lines.append(f"- [ ] {i}. {_sanitize_todo_seed_text(step.title)}")
         detail = (getattr(step, "detail", "") or "").strip()
         if detail:
-            lines.append(f"  {detail}")
+            lines.append(f"  {_sanitize_todo_seed_text(detail)}")
     return "\n".join(lines) + "\n"
+
+
+def _sanitize_todo_seed_text(text: object) -> str:
+    raw = "" if text is None else str(text)
+    if not any(token in raw for token in _DISCO_PATH_TOKENS):
+        return raw
+    lowered = raw.lower()
+    if "todo" in lowered and any(
+        verb in lowered for verb in ("mark", "update", "edit", "check")
+    ):
+        return "Mark progress via update_plan_progress"
+    words: list[str] = []
+    for word in raw.split():
+        if ".disco" in word:
+            words.append("harness-managed bookkeeping")
+        else:
+            words.append(word)
+    return " ".join(words)
 
 
 def _failure_line(f: VerifierFailureRef) -> str:

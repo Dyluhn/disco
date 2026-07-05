@@ -2098,6 +2098,11 @@ class ConversationRuntime:
             WorkflowPhaseState(
                 phase=WorkflowPhase.RUN,
                 instance_id=sealed_workflow_instance_id,
+                output_path_template=(
+                    sealed_workflow_run.definition.output_contract.path_template
+                    if sealed_workflow_run is not None
+                    else None
+                ),
             )
             if sealed_workflow_run is not None
             else (WorkflowPhaseState() if _workflow_router_mode else None)
@@ -2182,6 +2187,7 @@ class ConversationRuntime:
                     phase=phase_state.phase,
                     compiled_run_scope=phase_state.compiled_run_scope,
                     base_scope=workflow_executor.widened_scope,
+                    output_path_template=phase_state.output_path_template,
                 )
 
             executor = ScopedPhaseExecutor(

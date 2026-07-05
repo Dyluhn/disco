@@ -132,3 +132,15 @@ def test_real_steps_still_survive() -> None:
     assert [s.title for s in ev.steps] == ["Scaffold", "Wire it up"]
     assert ev.steps[0].detail == "make files"
     assert ev.steps[1].detail is None
+
+
+def test_steps_item_wrapper_unwraps_for_minimax_dialect() -> None:
+    ev = _planner().plan_from_args(
+        {
+            "summary": "Plan",
+            "steps": {"item": [{"title": "Scaffold"}, {"title": "Wire it up"}]},
+        },
+        events=[],
+    )
+
+    assert [s.title for s in ev.steps] == ["Scaffold", "Wire it up"]

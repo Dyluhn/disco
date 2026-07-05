@@ -12,7 +12,7 @@ from .executor import DefaultToolExecutor
 from .registry import ToolRegistry, ToolScope
 from .sandbox.base import SandboxInstance
 from .secrets import CapabilityBroker
-from .workflow_scope import workflow_router_denial_message
+from .workflow_scope import workflow_router_denial_message, workflow_run_denial_message
 
 _STANDARD_POLICY: ModelExecutionPolicy = ModelExecutionPolicy.standard()
 
@@ -89,9 +89,17 @@ class ScopedPhaseExecutor(DefaultToolExecutor):
 
         if self._scope.preset == "workflow_router":
             return self.callable_tool_names() | self._registry.names()
+        if self._scope.preset == "workflow_run":
+            return self.callable_tool_names() | frozenset({"finish"})
         return super().known_tool_names_for_requery()
 
     def _unknown_tool_message(self, tool_name: str, available: list[str]) -> str:
         if self._scope.preset == "workflow_router" and tool_name in self._registry.names():
             return workflow_router_denial_message(tool_name, available)
+        if self._scope.preset == "workflow_run":
+            return workflow_run_denial_message(
+                tool_name,
+                available,
+                output_path_template=self._scope.workflow_output_path_template,
+            )
         return super()._unknown_tool_message(tool_name, available)

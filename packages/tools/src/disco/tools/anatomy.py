@@ -76,6 +76,10 @@ class ToolContext(BaseModel):
     # callback is optional so standalone tool tests and non-workflow executors keep
     # byte-identical behavior.
     workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
+    # Names callable in the current executor scope. Guards use this only for
+    # recovery text, never for authorization; None preserves standalone tool tests
+    # that call Tool.run directly without an executor.
+    scope_allowed_tools: frozenset[str] | None = None
 
 
 class ToolOutcome(BaseModel):

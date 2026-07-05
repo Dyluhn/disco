@@ -49,6 +49,17 @@ F6_FILE_MUTATING_TOOLS = frozenset({
     "file_replace_lines",
     "file_insert_lines",
 })
+_BARREN_NO_EFFECT_MUTATING_TOOLS = F6_FILE_MUTATING_TOOLS | frozenset(
+    {
+        "exact_replace",
+        "file_str_replace",
+        "run_project_script",
+        "safe_write_file",
+    }
+)
+_BARREN_NO_EFFECT_ERROR_CODES = frozenset(
+    {"FRESH_READ_REQUIRED", "no_op_edit", "no_op_write"}
+)
 
 # WALK-19 — probe/verify tools whose ObservationEvent carries the "what does the
 # running app actually look like now" signal. When this signal is unchanged
@@ -574,6 +585,40 @@ def _failure_prefix(text: str) -> str:
     return collapsed[:_FAILURE_PREFIX_CHARS]
 
 
+def _no_effect_refusal_code_from_error(event: AgentErrorEvent) -> str | None:
+    for text in (event.error, event.detail or ""):
+        if text in _BARREN_NO_EFFECT_ERROR_CODES:
+            return text
+    combined = f"{event.error}\n{event.detail or ''}"
+    for code in _BARREN_NO_EFFECT_ERROR_CODES:
+        if code in combined:
+            return code
+    lowered = combined.lower()
+    for code in ("no_op_edit", "no_op_write"):
+        if code in lowered:
+            return code
+    return None
+
+
+def _no_effect_refusal_code_from_observation(event: ObservationEvent) -> str | None:
+    result = event.tool_result
+    structured_kind = ""
+    if isinstance(result.structured, dict):
+        structured_kind = str(result.structured.get("kind") or "")
+    for text in (result.error or "", structured_kind):
+        if text in _BARREN_NO_EFFECT_ERROR_CODES:
+            return text
+    combined = f"{result.error or ''}\n{result.content}\n{structured_kind}"
+    for code in _BARREN_NO_EFFECT_ERROR_CODES:
+        if code in combined:
+            return code
+    lowered = combined.lower()
+    for code in ("no_op_edit", "no_op_write"):
+        if code in lowered:
+            return code
+    return None
+
+
 def barren_streak_no_progress(
     events: list[Event],
     *,
@@ -596,13 +641,15 @@ def barren_streak_no_progress(
     if len(actions) < turns:
         return False
     recent_actions = actions[-turns:]
-    if any(a.tool_call.tool_name not in _BARREN_READ_ONLY_TOOLS for a in recent_actions):
-        return False
 
     recent_action_ids = {a.id for a in recent_actions}
+    no_effect_failures: dict[str, str] = {}
     prefixes: list[str] = []
     for event in window:
         if isinstance(event, AgentErrorEvent) and event.action_id in recent_action_ids:
+            code = _no_effect_refusal_code_from_error(event)
+            if code is not None:
+                no_effect_failures[event.action_id] = code
             prefix = _failure_prefix(event.detail or event.error)
             if prefix:
                 prefixes.append(prefix)
@@ -611,11 +658,25 @@ def barren_streak_no_progress(
             and event.action_id in recent_action_ids
             and not event.tool_result.success
         ):
+            code = _no_effect_refusal_code_from_observation(event)
+            if code is not None:
+                no_effect_failures[event.action_id or ""] = code
             prefix = _failure_prefix(
                 event.tool_result.error or event.tool_result.content
             )
             if prefix:
                 prefixes.append(prefix)
+    for action in recent_actions:
+        tool_name = action.tool_call.tool_name
+        if tool_name in _BARREN_READ_ONLY_TOOLS:
+            continue
+        if (
+            tool_name in _BARREN_NO_EFFECT_MUTATING_TOOLS
+            and action.id in no_effect_failures
+        ):
+            prefixes.append(no_effect_failures[action.id])
+            continue
+        return False
     if len(prefixes) < identical_failures:
         return False
     return any(count >= identical_failures for count in Counter(prefixes).values())

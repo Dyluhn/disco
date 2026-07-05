@@ -50,6 +50,23 @@ def test_render_plan_no_context_or_detail() -> None:
     assert md.endswith("\n")
 
 
+def test_render_plan_as_todo_markdown_sanitizes_disco_paths() -> None:
+    plan = PlanEvent(
+        summary="Mark both TODO items done in .disco/context/todo.md",
+        steps=[
+            PlanStep(
+                title="Mark both TODO items done in .disco/context/todo.md",
+                detail="Do not edit .disco/context/todo.md directly.",
+            )
+        ],
+        context="Progress lives in .disco/context/todo.md.",
+    )
+    md = render_plan_as_todo_markdown(plan)
+    assert ".disco" not in md
+    assert "Mark progress via update_plan_progress" in md
+    assert "harness-managed bookkeeping" in md
+
+
 # --- approval seeds todo.md ---------------------------------------------------
 def _submit_plan_step():
     return action_step("submit_plan", {"summary": "p", "steps": [{"title": "do the thing"}]})

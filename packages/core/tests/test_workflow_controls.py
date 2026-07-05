@@ -65,7 +65,16 @@ class _WorkflowSandbox:
 
 class _WorkflowExecutor(FakeExecutor):
     def __init__(self, *, files: set[str] | None = None) -> None:
-        super().__init__()
+        super().__init__(
+            tools=[
+                ToolSpec(name="skip", description="skip workflow", parameters_schema={}),
+                ToolSpec(
+                    name="needs_input",
+                    description="workflow needs input",
+                    parameters_schema={},
+                ),
+            ]
+        )
         self._sandbox = _WorkflowSandbox(files)
 
     @property
@@ -189,8 +198,16 @@ async def test_workflow_needs_input_autonomous_terminal_explanation() -> None:
     assert "Approve the GitHub connector" in content
 
 
-async def test_workflow_output_contract_refuses_then_releases_at_cap() -> None:
-    agent = ScriptedAgent([_finish_call()] * 4)
+async def test_workflow_output_contract_refuses_without_release() -> None:
+    agent = ScriptedAgent(
+        [
+            _finish_call(),
+            _finish_call(),
+            _finish_call(),
+            action_step("skip", {"reason": "output is intentionally unavailable"}),
+            AgentStep(thought="Skipped because the output is unavailable."),
+        ]
+    )
     loop, store = build_loop(
         agent,
         executor=_WorkflowExecutor(files=set()),
@@ -203,8 +220,19 @@ async def test_workflow_output_contract_refuses_then_releases_at_cap() -> None:
     statuses = [e for e in events if isinstance(e, StatusEvent)]
     details = [s.detail for s in statuses]
     assert details.count("workflow_output_contract_refused") == 3
-    assert details.count("workflow_output_contract_release") == 1
+    assert "workflow_output_contract_release" not in details
+    assert details[-1] == "workflow_skipped"
     assert statuses[-1].status == ConversationStatus.FINISHED
+    reminders = [
+        e.message.content
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.message is not None
+        and "finish refused:" in e.message.content
+    ]
+    assert reminders
+    assert "Write it (file_write), then call finish." in reminders[-1]
 
 
 async def test_workflow_output_contract_finish_passes_when_path_exists() -> None:

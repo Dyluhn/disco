@@ -170,6 +170,15 @@ def _harvest_steps(arguments: dict) -> list[PlanStep]:
     return out
 
 
+def _unwrap_steps_item_wrapper(value: object) -> object:
+    if not isinstance(value, dict) or len(value) != 1:
+        return value
+    key, wrapped = next(iter(value.items()))
+    if key in {"item", "items"} and isinstance(wrapped, list):
+        return wrapped
+    return value
+
+
 class Planner:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
@@ -256,7 +265,7 @@ class Planner:
         # step array as a STRING into the `steps` slot would otherwise char-iterate ("abc" →
         # 'a','b','c' → bogus single-char steps); that string is instead routed to _harvest_steps
         # below. done_condition is parsed ONTO each PlanStep via _coerce_step (resume-durable).
-        _raw_steps = arguments.get("steps")
+        _raw_steps = _unwrap_steps_item_wrapper(arguments.get("steps"))
         if isinstance(_raw_steps, list):
             for s in _raw_steps:
                 step = _coerce_step(s)
@@ -281,7 +290,7 @@ class Planner:
         # args (not the rebuilt `steps`) so we can preserve the 1-based
         # step index even when the title/format was leniently coerced.
         # [REL-RC A3] guard: only a real list carries indexed predicates (a string never does).
-        _rs = arguments.get("steps")
+        _rs = _unwrap_steps_item_wrapper(arguments.get("steps"))
         raw_steps = _rs if isinstance(_rs, list) else []
         for one_based, raw in enumerate(raw_steps, start=1):
             if not isinstance(raw, dict):
