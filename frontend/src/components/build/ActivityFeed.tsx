@@ -256,6 +256,9 @@ function ExpandableDetail({ item }: { item: ActivityItem }) {
     if (e.tool_name === "extract") return String(e.arguments.url ?? "");
     if (e.tool_name.startsWith("file_")) return String(e.arguments.path ?? "");
     const argText = JSON.stringify(e.arguments);
+    // "{}" as the toggle row is raw noise (UI sweep: "Listed workflows / {}") —
+    // an argless call still gets its expander, labeled in words.
+    if (argText === "{}") return "details";
     return argText.length > 80 ? argText.slice(0, 80) + "…" : argText;
   })();
 

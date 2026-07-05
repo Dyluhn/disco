@@ -1,8 +1,36 @@
 import { Bot, Search } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { listConversations } from "@/api/conversations";
 import { CodeBlocksIcon } from "@/components/icons/CodeBlocksIcon";
 import { cn } from "@/lib/cn";
 import { useMode, type Mode } from "./mode";
+
+/** Statuses that mean "this session is still going" — switching modes should
+ * drop you back INTO it, not strand you on a splash while it runs. */
+const ACTIVE_STATUSES = new Set([
+  "RUNNING",
+  "PAUSED",
+  "AWAITING_PLAN_APPROVAL",
+  "AWAITING_USER_QUESTION",
+  "AWAITING_USER_DECISION",
+]);
+
+/** Where a mode switch should land: the most recent ACTIVE session of that
+ * mode (resume), else the splash composer for it (new session on first send).
+ * Search has no per-conversation resume route — it always lands on the splash. */
+async function resumeTargetFor(mode: Mode): Promise<string> {
+  if (mode === "search") return "/";
+  try {
+    const rows = await listConversations();
+    const hit = rows.find(
+      (c) => c.surface === mode && ACTIVE_STATUSES.has(c.status ?? ""),
+    );
+    return hit ? `/${mode}/${hit.id}` : "/";
+  } catch {
+    return "/"; // list unavailable → fresh surface, never a dead click
+  }
+}
 
 /** One icon per mode. A total Record (not a ternary) so a new mode is a compile
  * error here rather than silently inheriting another mode's glyph. */
@@ -21,6 +49,19 @@ const MODE_ICON: Record<Mode, LucideIcon | typeof CodeBlocksIcon> = {
  */
 export function ModeSlider() {
   const { mode, setMode, modes } = useMode();
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const switchTo = (next: Mode) => {
+    if (next === mode && location.pathname === "/") return;
+    setMode(next);
+    // The route owns the rendered surface on /build/:cid etc. — switching the
+    // slider must NAVIGATE (resume-or-new), or the click only recolors the pill
+    // while the old conversation stays on screen.
+    void resumeTargetFor(next).then((target) => {
+      if (target !== location.pathname) navigate(target);
+    });
+  };
 
   return (
     <div
@@ -42,7 +83,7 @@ export function ModeSlider() {
             aria-label={m.label}
             disabled={m.dormant}
             title={m.dormant ? `${m.label} — coming soon` : undefined}
-            onClick={() => setMode(m.id)}
+            onClick={() => switchTo(m.id)}
             className={cn(
               // min-h-9 (36px) gives a finger-friendly touch target on phones; on
               // sm+ it collapses back to the tight desktop pill height (py-hair).

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
+import { MemoryRouter } from "react-router-dom";
 import { ModeSlider } from "@/shell/ModeSlider";
 import { ModelLeaderPill } from "./ModelLeaderPill";
 import { ScopeControl } from "./ScopeControl";
@@ -48,9 +49,11 @@ describe("Model leader pill (model-only)", () => {
 describe("Mode slider (the sole mode control)", () => {
   it("holds three live modes — Search (active), Build, and Agent — selectable, nothing else", () => {
     render(
-      <ModeProvider>
-        <ModeSlider />
-      </ModeProvider>,
+      <MemoryRouter>
+        <ModeProvider>
+          <ModeSlider />
+        </ModeProvider>
+      </MemoryRouter>,
     );
     const group = screen.getByRole("radiogroup", { name: "Mode" });
     expect(group).toBeInTheDocument();
