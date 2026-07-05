@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SuggestionChips } from "@/components/SuggestionChips";
 
@@ -44,5 +44,27 @@ describe("SuggestionChips", () => {
 
     await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
     expect(buttonTexts()).toEqual(initial);
+  });
+
+  it("display-clamps chips but sends and titles the full prompt text", async () => {
+    const fullText =
+      "Compare what policies have actually changed after repeated billion-dollar flood years";
+    const onPick = vi.fn();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      response([
+        fullText,
+        "generated build prompt 2",
+        "generated build prompt 3",
+        "generated build prompt 4",
+      ]),
+    );
+
+    render(<SuggestionChips surface="build" onPick={onPick} />);
+
+    const chip = await screen.findByRole("button", { name: fullText });
+    expect(chip).toHaveAttribute("title", fullText);
+
+    fireEvent.click(chip);
+    expect(onPick).toHaveBeenCalledWith(fullText);
   });
 });

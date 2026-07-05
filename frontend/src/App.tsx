@@ -11,6 +11,7 @@ import {
 } from "react-router-dom";
 import { installE2EBridge, type DiscoE2EState, type Surface } from "@/lib/e2eBridge";
 import { getPublishedRunStatus } from "@/lib/runStatusBridge";
+import { clearFreshMode } from "@/lib/sessionResume";
 import { BuildSurface } from "@/components/BuildSurface";
 import { AgentSurface } from "@/components/AgentSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
@@ -141,7 +142,10 @@ function ResumeProject() {
   // W-24: keep the mode slider in sync with the resumed surface so landing on
   // /build/:cid shows the Build toggle position (not whatever was last active).
   const { setMode } = useMode();
-  useEffect(() => setMode("build"), [setMode]);
+  useEffect(() => {
+    setMode("build");
+    clearFreshMode("build");
+  }, [setMode]);
   // A5: a "Build a deck from this report" handoff navigates here with the serialized
   // report in router state — BuildSurface seeds+kicks it ONCE. A plain resume (no
   // state) just reopens the existing build (view ≠ start).
@@ -190,7 +194,10 @@ function ResumeAgent() {
   // direct /agent/:cid open or reload) lands here, and the slider must reflect it
   // rather than staying on Search/Build.
   const { setMode } = useMode();
-  useEffect(() => setMode("agent"), [setMode]);
+  useEffect(() => {
+    setMode("agent");
+    clearFreshMode("agent");
+  }, [setMode]);
   const seedRef = useRef<string | null>(
     (location.state as { seedTask?: string } | null)?.seedTask ?? null,
   );

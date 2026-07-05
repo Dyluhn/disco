@@ -8,6 +8,7 @@ from disco.agent_server.routes.suggestions import make_suggestions_router
 from disco.agent_server.suggestion_service import (
     SuggestionService,
     parse_suggestions,
+    sanitize_suggestion,
 )
 from disco.core.llm.types import ModelRole
 from disco.core.store.sqlite import SqliteEventStore
@@ -50,6 +51,48 @@ def test_parse_suggestions_strips_think_before_line_parsing() -> None:
         "a tiny tower defense game with score states",
         "Build a weekly meal planner sheet",
         "a deck about grid storage tradeoffs",
+    ]
+
+
+def test_sanitize_suggestion_cleans_without_clipping() -> None:
+    long = (
+        '1. "Compare how cities changed heat, flood, and wildfire planning after '
+        'three consecutive record disaster years using public budgets and policies"'
+    )
+
+    sanitized = sanitize_suggestion(long)
+
+    assert sanitized.startswith("Compare how cities changed")
+    assert sanitized.endswith("public budgets and policies")
+    assert len(sanitized) > 90
+
+
+def test_parse_suggestions_drops_overlong_lines_instead_of_clipping() -> None:
+    overlong = (
+        "Compare what policies have actually changed across every major coastal "
+        "resilience program after repeated billion-dollar flood years, including "
+        "budgets, enforcement, insurance, retreat, zoning, and construction"
+    )
+
+    parsed = parse_suggestions(
+        "\n".join(
+            [
+                overlong,
+                "Compare sodium-ion and LFP batteries for grid storage",
+                "Trace how NASA's Artemis schedule shifted and why",
+                "Which wildfire mitigation programs have measurable results?",
+                "Map GLP-1 evidence and risks for adolescents",
+            ]
+        )
+    )
+
+    assert overlong not in parsed
+    assert not any(item.startswith("Compare what policies have actually") for item in parsed)
+    assert parsed == [
+        "Compare sodium-ion and LFP batteries for grid storage",
+        "Trace how NASA's Artemis schedule shifted and why",
+        "Which wildfire mitigation programs have measurable results?",
+        "Map GLP-1 evidence and risks for adolescents",
     ]
 
 

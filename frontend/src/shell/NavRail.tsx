@@ -13,7 +13,7 @@ import type { ComponentType } from "react";
 import { NavLink } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { useRunningCount } from "@/hooks/useActivity";
-import { useMode } from "@/shell/mode";
+import { markAllModesFresh } from "@/lib/sessionResume";
 
 interface NavItem {
   /** Stable, surface-scoped id for the test handle (independent of label copy). */
@@ -55,7 +55,6 @@ interface Props {
  */
 export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
   const running = useRunningCount();
-  const { setMode } = useMode();
   return (
     <nav
       aria-label="Primary"
@@ -114,11 +113,12 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
                 data-disco-control={`shell.nav-${item.id}`}
                 {...(item.to === "/activity" ? { "data-running-count": running } : {})}
                 onClick={() => {
-                  // "New" is the home/start affordance: reset the surface to the
-                  // default landing mode (Search) so it doesn't pin the user to the
-                  // surface they were last on (e.g. a Build). Other items navigate
-                  // without touching the mode.
-                  if (item.to === "/") setMode("search");
+                  // "New" means a fresh compose session in the current mode. Mark
+                  // every mode fresh too so a quick chip hop cannot drag an old run
+                  // back under the user before they explicitly engage again.
+                  if (item.to === "/") {
+                    markAllModesFresh();
+                  }
                   onNavigate?.();
                 }}
                 aria-label={badge > 0 ? `${item.label} (${badge} running)` : item.label}

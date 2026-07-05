@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { CommandPalette } from "./CommandPalette";
 import { BrowserRouter } from "react-router-dom";
+import { isFreshMode, resetSessionResumeStateForTests } from "@/lib/sessionResume";
 
 // Mock useTheme
 vi.mock("@/lib/useTheme", () => ({
@@ -11,8 +12,8 @@ vi.mock("@/lib/useTheme", () => ({
   }),
 }));
 
-// Mock the mode context so we can assert the surface-reset behaviour of "New"
-// without standing up a ModeProvider. setMode is a spy shared across the suite.
+// Mock the old mode context call so the new "preserve mode" behavior can assert
+// that New no longer forces Search.
 const setMode = vi.fn();
 vi.mock("@/shell/mode", () => ({
   useMode: () => ({ mode: "build", setMode, modes: [] }),
@@ -29,6 +30,7 @@ const renderPalette = () => {
 describe("CommandPalette", () => {
   beforeEach(() => {
     setMode.mockClear();
+    resetSessionResumeStateForTests();
   });
   it("should open on Ctrl+K", () => {
     renderPalette();
@@ -78,11 +80,12 @@ describe("CommandPalette", () => {
     expect(screen.getByText("No commands found.")).toBeDefined();
   });
 
-  it("resets the surface to the default search mode when 'New' is invoked", () => {
+  it("marks a fresh session without resetting the active mode when 'New' is invoked", () => {
     renderPalette();
     fireEvent.keyDown(document, { key: "k", ctrlKey: true });
-    // Click the "New" command (currently on a Build surface, mode === "build").
     fireEvent.click(screen.getByText("New"));
-    expect(setMode).toHaveBeenCalledWith("search");
+    expect(setMode).not.toHaveBeenCalled();
+    expect(isFreshMode("build")).toBe(true);
+    expect(isFreshMode("agent")).toBe(true);
   });
 });

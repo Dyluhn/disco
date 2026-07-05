@@ -25,14 +25,15 @@
  * subscription, the Build status state machine.
  */
 
-import { Ban, FilePlus, FileText, FileType, Loader2, Navigation, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
+import { Ban, Bell, FileText, FileType, Loader2, Play, RotateCcw, Settings as SettingsIcon, Square } from "lucide-react";
 import { UploadComposer } from "@/components/build/BuildSurface";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { publishRunStatus } from "@/lib/runStatusBridge";
 import { Link } from "react-router-dom";
 import { Markdown } from "@/components/Markdown";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { useDeepResearch } from "@/hooks/useDeepResearch";
+import { useDeepResearchDoneNotification } from "@/hooks/useDeepResearchDoneNotification";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { QueryInput } from "@/components/QueryInput";
 import { SuggestionChips } from "@/components/SuggestionChips";
@@ -96,18 +97,15 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId,
     publishRunStatus(r.status);
     return () => publishRunStatus(null);
   }, [r.status]);
-  // D3 mid-run steer input state. Only rendered while status === "RUNNING".
-  const [steerText, setSteerText] = useState("");
-  const steerInputRef = useRef<HTMLInputElement>(null);
-  // Gap #53: inject-source mid-run input. injectSource() was implemented in the
-  // hook (useDeepResearchStream) but had NO visible UI path — a hidden dead
-  // capability. This is a real, minimal affordance: a plaintext snippet folded
-  // into the run's corpus. Only rendered while RUNNING (same gate as steer).
-  const [injectText, setInjectText] = useState("");
   // RP-07: PDF/DOCX run in the agent-server (weasyprint / pandoc). The buttons are
   // gated on the REAL server capability — never a clickable button that 500s. MD
   // always works; PDF/DOCX enable wherever the server has the toolchain.
   const exportCaps = useExportCapabilities();
+  const doneNotify = useDeepResearchDoneNotification({
+    cid: r.cid,
+    status: r.status,
+    title: r.query,
+  });
 
   // WALK-20: include-follow-ups modal for the TOP-BAR export buttons.
   // When followUps exist, clicking MD/PDF/DOCX in the header opens this modal
@@ -224,77 +222,26 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId,
             {r.query}
           </h1>
           <div className="flex items-center gap-inline">
-            {/* While running: Stop (pause, keeps partial) + Kill (end, final) +
-                D3 mid-run steer input. The steer input is only rendered while the
-                run is in-flight and the WS is open — no false affordance. */}
+            {/* While running: Notify, Stop (pause, keeps partial), Kill (end, final). */}
             {r.status === "RUNNING" && (
               <>
-                {/* D3 steer: a compact inline input that sends a steer frame.
-                    Submitting adds a new research section to the in-flight run. */}
-                <form
-                  className="flex items-center gap-hair"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const trimmed = steerText.trim();
-                    if (!trimmed) return;
-                    r.steer(trimmed);
-                    setSteerText("");
-                  }}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={doneNotify.armed}
+                  onClick={doneNotify.toggle}
+                  disabled={!r.cid}
+                  data-disco-control="dr.notify-done"
+                  className={
+                    doneNotify.armed
+                      ? `${CTRL_BTN} border-accent/50 text-accent`
+                      : CTRL_BTN
+                  }
+                  title="Notify me when this deep research run completes"
                 >
-                  <input
-                    ref={steerInputRef}
-                    type="text"
-                    value={steerText}
-                    onChange={(e) => setSteerText(e.target.value)}
-                    placeholder="Add a research angle…"
-                    aria-label="Steer the research: add a new section topic"
-                    className="h-[1.8rem] w-48 rounded-control border border-hairline bg-surface-0 px-inline font-ui text-[0.78rem] text-text placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
-                    data-testid="dr-steer-input"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!steerText.trim()}
-                    aria-label="Send steer"
-                    data-disco-control="dr.steer"
-                    className={CTRL_BTN}
-                  >
-                    <Navigation className="size-3" aria-hidden />
-                    Steer
-                  </button>
-                </form>
-                {/* Gap #53: inject-source — a real, wired mid-run affordance.
-                    Folds a plaintext snippet into the DR corpus (r.injectSource
-                    → inject_source WS frame). Only rendered while RUNNING. */}
-                <form
-                  className="flex items-center gap-hair"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const trimmed = injectText.trim();
-                    if (!trimmed) return;
-                    r.injectSource(trimmed);
-                    setInjectText("");
-                  }}
-                >
-                  <input
-                    type="text"
-                    value={injectText}
-                    onChange={(e) => setInjectText(e.target.value)}
-                    placeholder="Add a source snippet…"
-                    aria-label="Inject a source: add a plaintext snippet to the research corpus"
-                    className="h-[1.8rem] w-44 rounded-control border border-hairline bg-surface-0 px-inline font-ui text-[0.78rem] text-text placeholder:text-text-faint focus:outline-none focus:ring-1 focus:ring-accent"
-                    data-testid="dr-inject-source-input"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!injectText.trim()}
-                    aria-label="Inject source"
-                    data-disco-control="dr.inject-source"
-                    className={CTRL_BTN}
-                  >
-                    <FilePlus className="size-3" aria-hidden />
-                    Add source
-                  </button>
-                </form>
+                  <Bell className="size-3.5" aria-hidden />
+                  Notify me when done
+                </button>
                 <button type="button" onClick={r.stop} data-disco-control="dr.stop" className={CTRL_BTN}>
                   <Square className="size-3" aria-hidden />
                   Stop

@@ -25,6 +25,7 @@ import {
 } from "@/api/deepResearch";
 import { killConversation } from "@/api/agent";
 import { agentLive } from "@/api/client";
+import { markConversationKilled } from "@/lib/sessionResume";
 import type { MessageEvent } from "@/types/agent";
 import {
   useDeepResearchStream,
@@ -217,6 +218,7 @@ export function useDeepResearch(
 
   // Kill = end the run for good (force-cancel the server task; final).
   const kill = useCallback(async () => {
+    markConversationKilled(session?.cid);
     stream.cancel();
     if (session) await killConversation(session.cid);
   }, [session, stream]);

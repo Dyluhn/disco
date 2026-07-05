@@ -12,6 +12,11 @@ import {
   patchConversationSettings,
 } from "@/api/agent";
 import { agentHttpBase, agentLive } from "@/api/client";
+import {
+  clearFreshMode,
+  markConversationKilled,
+  markFreshMode,
+} from "@/lib/sessionResume";
 import { useBuildStream, type BuildSession } from "./useBuildStream";
 
 /** Opens a build-like conversation. `surface` is "build" (software framing) or
@@ -176,6 +181,7 @@ export function useBuild(
     async (task: string) => {
       const trimmed = task.trim();
       if (!trimmed) return;
+      clearFreshMode(surface);
       // G1/DR-4: use pre-created cid if available so uploads survive.
       if (preCid) {
         // runthru-v2 ROOT-1: the preCid was created on mount with DEFAULT settings,
@@ -195,13 +201,15 @@ export function useBuild(
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
     },
-    [create, modelId, autonomousChoice, assistChoice, preCid],
+    [create, modelId, autonomousChoice, assistChoice, preCid, surface],
   );
 
   const kill = useCallback(async () => {
+    markConversationKilled(session?.cid);
+    markFreshMode(surface);
     stream.cancel(); // reflects locally + (offline) stops the replay
     if (session) await killConversation(session.cid); // live: the hard kill (POST)
-  }, [session, stream]);
+  }, [session, stream, surface]);
 
   const reset = useCallback(() => setSession(null), []);
 

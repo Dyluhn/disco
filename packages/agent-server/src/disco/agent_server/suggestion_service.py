@@ -30,7 +30,7 @@ SuggestionSurface = Literal["research", "build", "agent"]
 SuggestionSource = Literal["generated", "curated"]
 
 _TTL_S = 24 * 60 * 60
-_MAX_SUGGESTION_CHARS = 90
+_MAX_PARSED_SUGGESTION_CHARS = 140
 # A reasoning-class SUMMARIZER thinks at length before emitting the 8 lines; a
 # tight budget dies inside <think> and strips to nothing (the title-service
 # lesson). Give reasoning room to FINISH — the cache amortizes the cost.
@@ -104,9 +104,6 @@ def sanitize_suggestion(raw: str) -> str:
     text = text.replace("*", "").replace("`", "")
     text = " ".join(text.split())
     text = text.strip().strip(_QUOTE_CHARS).strip()
-    if len(text) > _MAX_SUGGESTION_CHARS:
-        clipped = text[:_MAX_SUGGESTION_CHARS].rsplit(" ", 1)[0].strip()
-        text = clipped or text[:_MAX_SUGGESTION_CHARS].strip()
     return text
 
 
@@ -117,6 +114,8 @@ def parse_suggestions(raw: str) -> list[str]:
     for line in text.splitlines():
         item = sanitize_suggestion(line)
         if not item:
+            continue
+        if len(item) > _MAX_PARSED_SUGGESTION_CHARS:
             continue
         key = item.casefold()
         if key in seen:

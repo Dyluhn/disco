@@ -23,7 +23,7 @@ interface Toast {
   tone: ToastTone;
 }
 
-interface ToastApi {
+export interface ToastApi {
   /** Show a transient toast. Returns its id (so a caller could dismiss early). */
   show: (t: { title: string; body?: string; tone?: ToastTone; ttlMs?: number }) => number;
 }

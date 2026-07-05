@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { listConversations } from "@/api/conversations";
 import { CodeBlocksIcon } from "@/components/icons/CodeBlocksIcon";
 import { cn } from "@/lib/cn";
+import { isConversationKilled, isFreshMode } from "@/lib/sessionResume";
 import { useMode, type Mode } from "./mode";
 
 /** Statuses that mean "this session is still going" — switching modes should
@@ -21,10 +22,14 @@ const ACTIVE_STATUSES = new Set([
  * Search has no per-conversation resume route — it always lands on the splash. */
 async function resumeTargetFor(mode: Mode): Promise<string> {
   if (mode === "search") return "/";
+  if (isFreshMode(mode)) return "/";
   try {
     const rows = await listConversations();
     const hit = rows.find(
-      (c) => c.surface === mode && ACTIVE_STATUSES.has(c.status ?? ""),
+      (c) =>
+        c.surface === mode &&
+        ACTIVE_STATUSES.has(c.status ?? "") &&
+        !isConversationKilled(c.id),
     );
     return hit ? `/${mode}/${hit.id}` : "/";
   } catch {
