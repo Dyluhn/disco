@@ -90,6 +90,11 @@ async def run_iterative_refinement(
             new_supported = fraction_supported(await judge_section(new_sec))
             if new_supported < orig_supported:
                 continue
+            # Zero-to-zero swaps are pure churn (a broken/harsh judge scores
+            # everything 0.0; equal-score acceptance would oscillate content
+            # for all rounds with no evidence of improvement).
+            if new_supported == orig_supported == 0.0:
+                continue
             work[i] = new_sec
             refined_any = True
         if not refined_any:

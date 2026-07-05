@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
+from disco.core.think import strip_think_spans
 from disco.core.llm.types import (
     CapabilityProfile,
     CompletionRequest,
@@ -64,7 +65,10 @@ def parse_verdict(text: str) -> Verdict:
     (the latter is a substring of the former). Unknown / unparseable → UNSUPPORTED:
     a conservative default never FALSELY stops the convergence loop (it errs toward
     "needs more work", bounded by the round cap)."""
-    t = text.strip().upper()
+    # A reasoning judge can leak <think> containing verdict WORDS ("this is
+    # not UNSUPPORTED because…") — strip before matching, never match inside
+    # reasoning (THINK-STRIP rule).
+    t = strip_think_spans(text).strip().upper()
     if "UNSUPPORTED" in t:
         return "UNSUPPORTED"
     if "PARTIAL" in t:
@@ -90,16 +94,27 @@ async def judge_claim(
     """Judge ONE claim against its cited passages. Reuses the same RAG_ANSWERER
     router path synthesis uses (temperature 0; tiny max_tokens — one word out)."""
     prompt = _JUDGE_PROMPT.format(claim=claim_text.strip(), passages=_format_passages(passage_texts))
-    resp = await router.complete(
-        CompletionRequest(
-            profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-            messages=[LLMMessage(role="user", content=prompt)],
-            temperature=0.0,
-            max_tokens=8,
-        ),
-        context=context,
-    )
-    return ClaimVerdict(claim=claim_text, verdict=parse_verdict(getattr(resp, "text", "") or ""))
+    # BUDGET TRAP (4th live instance): a reasoning model spends a tiny budget
+    # entirely inside <think>, the stripped text is empty, and the conservative
+    # default marks EVERY claim UNSUPPORTED — the judge grades maximally harsh
+    # and the refinement loop churns all rounds without converging. Try cheap,
+    # then retry ONCE with room for reasoning to finish (same shape as titles/
+    # synthesis/suggestions).
+    verdict_text = ""
+    for max_tokens in (8, 512):
+        resp = await router.complete(
+            CompletionRequest(
+                profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                messages=[LLMMessage(role="user", content=prompt)],
+                temperature=0.0,
+                max_tokens=max_tokens,
+            ),
+            context=context,
+        )
+        verdict_text = strip_think_spans(getattr(resp, "text", "") or "")
+        if verdict_text:
+            break
+    return ClaimVerdict(claim=claim_text, verdict=parse_verdict(verdict_text))
 
 
 async def judge_claims(

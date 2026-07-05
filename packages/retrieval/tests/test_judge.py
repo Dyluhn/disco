@@ -95,3 +95,24 @@ def test_fraction_supported_empty_is_vacuously_one() -> None:
     # No claims → nothing to re-search → the gate is satisfied (1.0), not a div-by-zero.
     assert fraction_supported([]) == 1.0
     assert weak_claims([]) == []
+
+
+async def test_think_only_judge_retries_with_wider_budget():
+    """BUDGET TRAP: a reasoning judge spends max_tokens=8 inside <think> — the
+    stripped-empty first reply must trigger ONE widened retry, not a blanket
+    UNSUPPORTED that turns the refinement loop maximally harsh."""
+    calls: list[int | None] = []
+
+    class _Router:
+        async def complete(self, req, *, context=None):  # noqa: ANN001
+            calls.append(req.max_tokens)
+            text = "<think>the claim seems" if len(calls) == 1 else "<think>ok</think>SUPPORTED"
+            return type("R", (), {"text": text})()
+
+    v = await judge_claim("a claim", ["a passage"], router=_Router())
+    assert v.verdict == "SUPPORTED"
+    assert calls == [8, 512]
+
+
+def test_parse_verdict_never_matches_inside_think():
+    assert parse_verdict("<think>this is not UNSUPPORTED because…</think>SUPPORTED") == "SUPPORTED"
