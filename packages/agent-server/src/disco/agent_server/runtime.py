@@ -177,6 +177,7 @@ from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
 from .verify.model_verifier import ModelVerifier
+from .workflow_events import handle_workflow_tool_event
 from .workflow_schedule import WorkflowScheduleRunRecord
 
 _HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
@@ -2101,6 +2102,15 @@ class ConversationRuntime:
             if sealed_workflow_run is not None
             else (WorkflowPhaseState() if _workflow_router_mode else None)
         )
+
+        async def _workflow_events(kind: str, payload: dict[str, Any]) -> None:
+            await handle_workflow_tool_event(
+                conversation_id=conversation_id,
+                loops=self._loops,
+                kind=kind,
+                payload=payload,
+            )
+
         _common_exec_kwargs: dict[str, Any] = dict(
             # SandboxSession is a drop-in SandboxInstance (it implements the
             # protocol at runtime); the `id` attribute differs only in being a
@@ -2123,6 +2133,7 @@ class ConversationRuntime:
             on_tool_success=_on_tool_success,
             # P7: the active contract's starter_kit for scaffold_starter.
             starter_kit=self._starter_kit_for(conversation_id),
+            workflow_events=_workflow_events if _workflow_router_mode else None,
         )
         executor: DefaultToolExecutor
         if _appkit_mode:

@@ -92,6 +92,7 @@ from .observe import (  # noqa: F401 — _FANOUT_INPUT_MAX_CHARS re-exported for
 )
 from .plan_conditions import PlanStepConditions
 from .plans import Planner
+from .planning_harvest import harvest_revision_plan_after_refusal
 from .recitation import (  # noqa: F401 — _RECITATION_SENTINEL re-exported for back-compat
     _RECITATION_SENTINEL,
     RecitationRegrounder,
@@ -1345,6 +1346,10 @@ class AgentLoop:
                         tool_call_id=tc.call_id,
                     )
                 )
+                if refusal_streak >= _PLANNING_TOOL_REFUSAL_ESCALATE_AT:
+                    harvested = await harvest_revision_plan_after_refusal(self)
+                    if harvested is not None:
+                        return harvested
                 return Disp.CONTINUE
             # An allowed planning tool. ask_user/questions_v2/clarify are virtual escape hatches
             # handled by their own halt handlers downstream — do NOT count them as

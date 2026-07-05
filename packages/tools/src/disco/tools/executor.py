@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import types
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Literal, Union, get_args, get_origin
 from uuid import uuid4
 
@@ -283,6 +283,7 @@ class DefaultToolExecutor:
         scope_guard: ContractScopeGuard | None = None,
         on_tool_success: Callable[[str], None] | None = None,
         starter_kit: str | None = None,
+        workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -299,6 +300,7 @@ class DefaultToolExecutor:
         # P7: the active contract's starter_kit name, stamped on every ToolContext so
         # scaffold_starter materializes THIS build's starter. None ⇒ no contract starter.
         self._starter_kit = starter_kit
+        self._workflow_events = workflow_events
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -547,6 +549,7 @@ class DefaultToolExecutor:
             driver_llm=self._driver_llm,
             read_char_budget=self._read_char_budget,
             starter_kit=self._starter_kit,
+            workflow_events=self._workflow_events,
         )
 
     def _fail(

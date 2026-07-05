@@ -14,6 +14,7 @@ import pytest
 from _buildsoak_fakes import BuildExecutor, build_plan_loop
 from disco.core import ActionEvent, AgentErrorEvent, ObservationEvent, PlanEvent, StatusEvent
 from disco.core.events import ConversationStatus
+from disco.core.llm import OperatingMode
 from loop_fakes import ScriptedAgent, action_step
 
 
@@ -107,6 +108,43 @@ async def test_write_during_revision_is_rejected_before_revised_approval():
     assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
 
 
+async def test_revision_refusal_escalation_harvests_one_step_plan():
+    agent = ScriptedAgent([_submit_plan_step("first")])
+    executor = BuildExecutor()
+    loop, store = build_plan_loop(
+        agent,
+        conversation_id="pw-revision-harvest",
+        executor=executor,
+    )
+    await loop.send_message("build a page")
+    await loop.run()
+    await loop.approve_plan()
+
+    followup = "Change the hero CTA to Start now"
+    loop.agent = ScriptedAgent(
+        [
+            action_step("file_write", {"path": "index.html", "content": "bad"}),
+            action_step("file_write", {"path": "index.html", "content": "still bad"}),
+        ]
+    )
+    await loop.enter_planning(followup)
+    await loop.run()
+
+    events = await store.get_events("pw-revision-harvest")
+    plans = [e for e in events if isinstance(e, PlanEvent)]
+    assert [p.revision for p in plans] == [1, 2]
+    assert [step.title for step in plans[-1].steps] == [followup]
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "harvested_revision_plan"
+        for e in events
+    )
+    assert not any(c.tool_name == "file_write" for c in executor.calls)
+    assert (await loop.get_state()).execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+    await loop.approve_plan()
+    assert loop.mode == OperatingMode.LONG_HORIZON
+
+
 # Every non-allowlist tool FAMILY — not just file_write. The meta/finish handlers
 # (notify_user/remember/serve/delegate_explore/finish) run BEFORE the planning gate
 # in the loop, so the gate must sit AHEAD of them: a scripted finish/serve/remember/
@@ -176,6 +214,10 @@ async def test_repeated_planning_shell_refusals_escalate_and_narrow_to_submit_or
     assert "Your ONLY valid next action is `submit_plan`" in refusals[1].error
     assert "Planning-mode refusal 3" in refusals[2].error
     assert "only `submit_plan` + `file_read`" in refusals[2].error
+    assert not any(
+        isinstance(e, StatusEvent) and e.detail == "harvested_revision_plan"
+        for e in events
+    )
 
     assert len(agent.seen_tools) >= 4
     assert set(agent.seen_tools[3]) == {"submit_plan", "file_read"}

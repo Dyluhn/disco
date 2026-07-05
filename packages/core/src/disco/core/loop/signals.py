@@ -679,6 +679,52 @@ def current_revision_instruction(events: list[Event]) -> str | None:
     return (best.message.content or "").strip() or None
 
 
+_MENTION_OPEN = "<mentioned-element>"
+_MENTION_CLOSE = "</mentioned-element>"
+
+
+def strip_element_mention(text: str) -> str:
+    """Remove the preview element-mention wrapper, preserving the user ask."""
+    start = text.find(_MENTION_OPEN)
+    if start < 0:
+        return text.strip()
+    body_start = start + len(_MENTION_OPEN)
+    end = text.find(_MENTION_CLOSE, body_start)
+    if end < 0:
+        return text[:start].strip()
+    return f"{text[:start]}{text[end + len(_MENTION_CLOSE):]}".strip()
+
+
+def revision_planning_has_prior_approval(events: list[Event]) -> bool:
+    """True for a re-plan after an approved plan, false for initial planning."""
+    return any(
+        isinstance(e, StatusEvent) and e.detail == "plan_approved"
+        for e in events
+    )
+
+
+def harvested_revision_plan_from_user(events: list[Event]) -> PlanEvent | None:
+    """Build the one-step forced revision plan from the triggering user text."""
+    if (
+        not in_planning_for_revision(events)
+        or not revision_planning_has_prior_approval(events)
+    ):
+        return None
+    instruction = current_revision_instruction(events) or latest_user_text(events) or ""
+    title = strip_element_mention(instruction)[:200].strip()
+    if not title:
+        return None
+    return PlanEvent(
+        summary=title[:120],
+        steps=[PlanStep(title=title)],
+        revision=next_plan_revision(events),
+        context=(
+            "Synthesized from the pending user follow-up after repeated "
+            "planning-mode edit refusals."
+        ),
+    )
+
+
 def current_planning_segment_start_seq(events: list[Event]) -> int | None:
     """Seq that bounds the currently-pending planning segment.
 

@@ -48,11 +48,7 @@ from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS
-from .stuck import (
-    F6_FILE_MUTATING_TOOLS,
-    barren_streak_no_progress,
-    repeated_verify_no_progress,
-)
+from .stuck import F6_FILE_MUTATING_TOOLS, no_progress_detected
 from .tool_specs import _ask_user_tool_singleton
 
 if TYPE_CHECKING:
@@ -1164,11 +1160,7 @@ class Valve:
         # to max_iterations. Escalate-then-halt like gate_stuck: a corrective
         # nudge first, then — if the SAME outcome persists after the model acted
         # on the nudge — halt STUCK rather than burn the rest of the budget.
-        recent = self._loop._recent(events)
-        if not (
-            repeated_verify_no_progress(recent)
-            or barren_streak_no_progress(recent)
-        ):
+        if not no_progress_detected(self._loop._recent(events)):
             return Disp.FALLTHROUGH
         marker_seq = _no_progress_marker_seq(events)
         if marker_seq is None:

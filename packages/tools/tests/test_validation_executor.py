@@ -362,4 +362,6 @@ def test_tool_context_has_no_secret_field():
         "read_char_budget",
         # P7: the active contract's starter_kit name (e.g. "app_shell") — a str, not a secret.
         "starter_kit",
+        # WF-3: event-log callback for workflow phase transitions; no credential payload.
+        "workflow_events",
     }

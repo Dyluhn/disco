@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TypedDict, Unpack
+from collections.abc import Awaitable, Callable
+from typing import Any, TypedDict, Unpack
 
 from disco.core.contract import ContractScopeGuard
 from disco.core.llm import ModelExecutionPolicy
@@ -29,6 +29,7 @@ class ExecutorKwargs(TypedDict, total=False):
     scope_guard: ContractScopeGuard | None
     on_tool_success: Callable[[str], None] | None
     starter_kit: str | None
+    workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None
 
 
 class ScopedPhaseExecutor(DefaultToolExecutor):

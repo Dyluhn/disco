@@ -247,6 +247,15 @@ class EnterWorkflowTool:
         except ValueError as exc:
             return _failure("workflow_scope_compile_failed", str(exc))
 
+        if ctx.workflow_events is not None:
+            await ctx.workflow_events(
+                "enter_workflow",
+                {
+                    "instance_id": args.instance_id,
+                    "definition": instance.definition,
+                    "params": instance.params,
+                },
+            )
         self._phase_state.phase = WorkflowPhase.RUN
         self._phase_state.instance_id = args.instance_id
         self._phase_state.compiled_run_scope = compiled
@@ -299,12 +308,12 @@ class WorkflowAbortTool:
         read_only=True,
     )
 
-    async def run(
-        self, args: WorkflowAbortArgs, ctx: ToolContext  # noqa: ARG002
-    ) -> ToolOutcome:
+    async def run(self, args: WorkflowAbortArgs, ctx: ToolContext) -> ToolOutcome:
         self._phase_state.phase = WorkflowPhase.ROUTER
         self._phase_state.instance_id = None
         self._phase_state.compiled_run_scope = None
+        if ctx.workflow_events is not None:
+            await ctx.workflow_events("workflow_abort", {"reason": args.reason})
         return ToolOutcome(
             success=True,
             content=(

@@ -10,7 +10,7 @@ from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEven
 from disco.core.llm import ModelExecutionPolicy
 from disco.core.loop import StuckDetector, StuckThresholds, signals
 from disco.core.loop.control import Disp
-from disco.core.loop.stuck import repeated_verify_no_progress
+from disco.core.loop.stuck import barren_streak_no_progress, repeated_verify_no_progress
 from event_fakes import action, agent_error, agent_msg, observation, user_msg
 from loop_fakes import (
     ScriptedAgent,
@@ -211,6 +211,67 @@ def test_probe_spin_trips_on_varying_server_status_output():
 
     assert result.is_stuck is True
     assert result.reason == "probe_spin"
+
+
+def _barren_read_events(*, error: str = "books.json: No such file or directory"):
+    events = [user_msg("inspect the project")]
+    for i in range(8):
+        tool = "file_read" if i in {1, 4, 7} else "think"
+        a = action(thought=f"read {i}", tool=tool, args={"path": "books.json"})
+        events.append(a)
+        if tool == "file_read":
+            events.append(agent_error(error, action_id=a.id))
+        else:
+            events.append(observation(action_id=a.id, tool="think", content="noted"))
+    return events
+
+
+async def test_barren_streak_identical_read_errors_marks_no_progress():
+    loop, store = build_loop(ScriptedAgent([]))
+    for event in _barren_read_events():
+        await store.append(CID, event)
+
+    events = await store.get_events(CID)
+    assert barren_streak_no_progress(events) is True
+
+    disp = await loop._valve.gate_no_progress(events)
+    assert disp is Disp.CONTINUE
+    after = await store.get_events(CID)
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "no_progress"
+        for e in after
+    )
+
+
+def test_barren_streak_varying_successful_reads_never_fires():
+    events = [user_msg("read around")]
+    for i in range(8):
+        a = action(thought=f"read {i}", tool="file_read", args={"path": f"{i}.txt"})
+        events.extend(
+            [
+                a,
+                observation(
+                    action_id=a.id,
+                    tool="file_read",
+                    content=f"unique successful content {i}",
+                ),
+            ]
+        )
+
+    assert barren_streak_no_progress(events) is False
+
+
+def test_barren_streak_mutating_tool_resets_window():
+    events = _barren_read_events()
+    mutating = action(
+        thought="write once",
+        tool="file_write",
+        args={"path": "books.json", "content": "[]"},
+    )
+    # Keep exactly eight recent actions, with a mutating action inside the window.
+    events = events[:1] + events[3:] + [mutating, observation(action_id=mutating.id)]
+
+    assert barren_streak_no_progress(events) is False
 
 
 # ---- loop integration: STUCK then resume ------------------------------------

@@ -18,6 +18,7 @@ directive is always None, and the bool facade is unchanged.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Literal, cast
 
 from pydantic import BaseModel
@@ -60,6 +61,16 @@ _NO_PROGRESS_PROBE_TOOLS = frozenset(
 # Distinct varied edits that must recur against ONE stable probe outcome before
 # the no-progress breaker trips. 4 mirrors the circuit-breaker's failure budget.
 NO_PROGRESS_DISTINCT_EDITS = 4
+
+# GAP-1 — a read/reasoning-only loop can burn turns forever without tripping the
+# mutating-tool no-progress detectors. Keep this narrow: only pure context tools
+# count as barren, and identical failing observations are required.
+BARREN_STREAK_TURNS = 8
+BARREN_STREAK_IDENTICAL_FAILURES = 3
+_BARREN_READ_ONLY_TOOLS = frozenset(
+    {"think", "file_read", "file_list", "search", "extract"}
+)
+_FAILURE_PREFIX_CHARS = 160
 
 # Live M3 probe-spin: a weak model can poll the same non-productive probe tool
 # repeatedly with slightly-changing output (server_status timestamps/counters), so
@@ -556,3 +567,59 @@ def repeated_verify_no_progress(
         elif not any(event_content_eq(cast("ActionEvent", payload), d, ignore_thought=True) for d in distinct):
             distinct.append(cast("ActionEvent", payload))
     return probe_count >= 2 and len(distinct) >= distinct_edits
+
+
+def _failure_prefix(text: str) -> str:
+    collapsed = " ".join((text or "").strip().split())
+    return collapsed[:_FAILURE_PREFIX_CHARS]
+
+
+def barren_streak_no_progress(
+    events: list[Event],
+    *,
+    turns: int = BARREN_STREAK_TURNS,
+    identical_failures: int = BARREN_STREAK_IDENTICAL_FAILURES,
+) -> bool:
+    """True for K recent read/reasoning-only turns with M identical failures.
+
+    This catches a model that loops on think/file_list/file_read/search/extract
+    without mutating anything, while repeatedly seeing the same failing result.
+    A single action outside the narrow read-only set inside the K-turn window
+    resets the streak; varying successful research/read results never trip it.
+    """
+    if turns <= 0 or identical_failures <= 0:
+        return False
+    window = _after_last_user_message(events)
+    actions = [
+        e for e in window if isinstance(e, ActionEvent) and e.tool_call is not None
+    ]
+    if len(actions) < turns:
+        return False
+    recent_actions = actions[-turns:]
+    if any(a.tool_call.tool_name not in _BARREN_READ_ONLY_TOOLS for a in recent_actions):
+        return False
+
+    recent_action_ids = {a.id for a in recent_actions}
+    prefixes: list[str] = []
+    for event in window:
+        if isinstance(event, AgentErrorEvent) and event.action_id in recent_action_ids:
+            prefix = _failure_prefix(event.detail or event.error)
+            if prefix:
+                prefixes.append(prefix)
+        elif (
+            isinstance(event, ObservationEvent)
+            and event.action_id in recent_action_ids
+            and not event.tool_result.success
+        ):
+            prefix = _failure_prefix(
+                event.tool_result.error or event.tool_result.content
+            )
+            if prefix:
+                prefixes.append(prefix)
+    if len(prefixes) < identical_failures:
+        return False
+    return any(count >= identical_failures for count in Counter(prefixes).values())
+
+
+def no_progress_detected(events: list[Event]) -> bool:
+    return repeated_verify_no_progress(events) or barren_streak_no_progress(events)

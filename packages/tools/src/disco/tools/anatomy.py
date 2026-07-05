@@ -17,6 +17,7 @@ patched to reference `Capability`.
 from __future__ import annotations
 
 import copy
+from collections.abc import Awaitable, Callable
 from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -71,6 +72,10 @@ class ToolContext(BaseModel):
     # from the runtime so scaffold_starter materializes THIS build's host-owned starter —
     # active-contract-bound, not a free-for-all. None ⇒ no contract starter for this run.
     starter_kit: str | None = None
+    # Workflow router tools append loop state transitions through the event log. The
+    # callback is optional so standalone tool tests and non-workflow executors keep
+    # byte-identical behavior.
+    workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
 
 class ToolOutcome(BaseModel):
