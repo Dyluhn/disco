@@ -47,6 +47,7 @@ import { ElementMentionChip } from "@/components/build/ElementMentionChip";
 import { SuggestionChips } from "@/components/SuggestionChips";
 import { SteerInput } from "@/components/build/SteerInput";
 import { UploadComposer } from "@/components/build/BuildSurface";
+import { ImportProjectDialog } from "@/components/build/ImportProjectDialog";
 import { AlternativesGate } from "@/components/build/AlternativesGate";
 import { AskPanel } from "@/components/build/AskPanel";
 import { ClarifyPanel } from "@/components/build/ClarifyPanel";
@@ -364,6 +365,7 @@ export function BuildSurface({
                    creating the build conversation the first message will run. */
                 <div className="flex items-center gap-inline">
                   <UploadComposer cid={b.preCid} ensureCid={b.ensurePreCid} />
+                  {framing === "build" && <ImportProjectDialog />}
                 </div>
               }
             />

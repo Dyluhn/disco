@@ -22,6 +22,8 @@ import {
 import type {
   BrowseResult,
   Project,
+  ProjectImportInput,
+  ProjectImportResult,
   ProjectsList,
   ProjectStorageConfig,
   ProjectStorageSaveInput,
@@ -159,6 +161,57 @@ export async function deleteProject(cid: string): Promise<{ id: string }> {
   }
   await agentSend("DELETE", `/api/projects/${encodeURIComponent(cid)}`);
   return { id: cid };
+}
+
+function importErrorMessage(body: unknown, fallback: string): string {
+  if (typeof body !== "object" || body === null) return fallback;
+  const detail = (body as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (typeof detail !== "object" || detail === null) return fallback;
+  const reason = (detail as { reason?: unknown }).reason;
+  const message = (detail as { message?: unknown }).message;
+  if (typeof message === "string" && typeof reason === "string") return `${reason}: ${message}`;
+  if (typeof message === "string") return message;
+  if (typeof reason === "string") return reason;
+  return fallback;
+}
+
+async function parseImportResponse(res: Response): Promise<ProjectImportResult> {
+  let body: unknown = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  if (!res.ok) {
+    throw new Error(importErrorMessage(body, `Import failed (${res.status})`));
+  }
+  return body as ProjectImportResult;
+}
+
+export async function importProject(input: ProjectImportInput): Promise<ProjectImportResult> {
+  if (!agentLive()) {
+    await fixtureDelay();
+    throw new Error("Project import requires a live agent server.");
+  }
+  const params = new URLSearchParams({ owner_id: OWNER_ID });
+  const url = `${agentHttpBase()}/api/projects/import?${params.toString()}`;
+  if (input.kind === "zip") {
+    const fd = new FormData();
+    fd.append("file", input.file);
+    return parseImportResponse(await fetch(url, { method: "POST", body: fd }));
+  }
+  const body =
+    input.kind === "path"
+      ? { path: input.path }
+      : { git_url: input.gitUrl };
+  return parseImportResponse(
+    await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  );
 }
 
 // ---- storage path config (APP server) --------------------------------------

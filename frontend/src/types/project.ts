@@ -39,6 +39,18 @@ export interface ProjectsList {
   root?: string;
 }
 
+export interface ProjectImportResult {
+  conversation_id: string;
+  files: number;
+  bytes: number;
+  title: string;
+}
+
+export type ProjectImportInput =
+  | { kind: "zip"; file: File }
+  | { kind: "path"; path: string }
+  | { kind: "git"; gitUrl: string };
+
 /** The wire shape for the Settings → Project Storage section. `status` is
  * derived server-side on GET (so the UI shows live validity, not last-saved).
  *

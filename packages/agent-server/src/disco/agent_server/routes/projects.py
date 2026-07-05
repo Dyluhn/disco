@@ -2,15 +2,403 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import io
+import posixpath
+import shutil
+import tempfile
+import uuid
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any, NoReturn
 
-from disco.core import DEFAULT_OWNER_ID, DeliverableEvent
+from disco.core import DEFAULT_OWNER_ID, DeliverableEvent, EventSource, LLMMessage, MessageEvent
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus, aiter_zip_workspace
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from starlette.datastructures import UploadFile
 
 from ..runtime import ConversationRuntime
+from ..title_service import fallback_title
+
+_MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024
+_MAX_IMPORT_TREE_BYTES = 200 * 1024 * 1024
+_MAX_IMPORT_FILES = 2000
+_GIT_CLONE_TIMEOUT_S = 120
+
+
+@dataclass(frozen=True)
+class _ImportFile:
+    src: Path
+    rel: str
+    size: int
+
+
+@dataclass(frozen=True)
+class _ImportStats:
+    files: int
+    bytes: int
+    largest_path: str | None
+    largest_bytes: int
+
+
+@dataclass(frozen=True)
+class _ImportSource:
+    kind: str
+    label: str
+    title_seed: str
+    root: Path | None = None
+    zip_bytes: bytes | None = None
+    skip_git_dir: bool = False
+
+
+class _ImportRejected(ValueError):
+    def __init__(self, status_code: int, reason: str, message: str | None = None) -> None:
+        super().__init__(message or reason)
+        self.status_code = status_code
+        self.reason = reason
+        self.message = message or reason
+
+
+def _reject_import(status_code: int, reason: str, message: str | None = None) -> NoReturn:
+    raise _ImportRejected(status_code, reason, message)
+
+
+def _cap_check(files: int, total_bytes: int) -> None:
+    if files > _MAX_IMPORT_FILES:
+        _reject_import(
+            413,
+            "too_many_files",
+            f"import has {files} files; max is {_MAX_IMPORT_FILES}",
+        )
+    if total_bytes > _MAX_IMPORT_TREE_BYTES:
+        _reject_import(
+            413,
+            "tree_too_large",
+            f"import has {total_bytes} bytes; max is {_MAX_IMPORT_TREE_BYTES}",
+        )
+
+
+def _safe_zip_rel(raw_name: str) -> str:
+    raw = raw_name.replace("\\", "/")
+    norm = posixpath.normpath(raw)
+    if norm in {"", ".", ".."} or posixpath.isabs(norm) or norm.startswith("../"):
+        _reject_import(400, "zip_slip", f"zip entry escapes the project root: {raw_name!r}")
+    parts = PurePosixPath(norm).parts
+    if any(part in {"", ".", ".."} for part in parts):
+        _reject_import(400, "zip_slip", f"zip entry escapes the project root: {raw_name!r}")
+    return norm
+
+
+def _repo_name_from_url(git_url: str) -> str:
+    trimmed = git_url.rstrip("/").split("/")[-1] or "imported project"
+    if trimmed.endswith(".git"):
+        trimmed = trimmed[:-4]
+    return trimmed or "imported project"
+
+
+def _title_from_seed(seed: str) -> str:
+    return fallback_title(seed) or "Imported project"
+
+
+def _scan_import_tree(src: Path, *, skip_git_dir: bool) -> tuple[list[_ImportFile], _ImportStats]:
+    root = src.resolve()
+    files: list[_ImportFile] = []
+    total_bytes = 0
+    largest_path: str | None = None
+    largest_bytes = 0
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        if path.is_symlink():
+            continue
+        rel = path.relative_to(root).as_posix()
+        if skip_git_dir and ".git" in PurePosixPath(rel).parts:
+            continue
+        size = path.stat().st_size
+        files.append(_ImportFile(src=path, rel=rel, size=size))
+        total_bytes += size
+        if size > largest_bytes:
+            largest_path = rel
+            largest_bytes = size
+        _cap_check(len(files), total_bytes)
+    if not files:
+        _reject_import(400, "no_files", "import source did not contain any files")
+    return files, _ImportStats(
+        files=len(files),
+        bytes=total_bytes,
+        largest_path=largest_path,
+        largest_bytes=largest_bytes,
+    )
+
+
+def _copy_scanned_tree(files: list[_ImportFile], workspace: Path) -> None:
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    for item in files:
+        dest = workspace / item.rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(item.src, dest)
+
+
+def _materialize_zip(zip_bytes: bytes, workspace: Path) -> _ImportStats:
+    if len(zip_bytes) > _MAX_IMPORT_ZIP_BYTES:
+        _reject_import(
+            413,
+            "zip_too_large",
+            f"zip upload has {len(zip_bytes)} bytes; max is {_MAX_IMPORT_ZIP_BYTES}",
+        )
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile as exc:
+        _reject_import(400, "invalid_zip", str(exc))
+    with zf:
+        entries: list[tuple[zipfile.ZipInfo, str]] = []
+        total_bytes = 0
+        largest_path: str | None = None
+        largest_bytes = 0
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            rel = _safe_zip_rel(info.filename)
+            total_bytes += int(info.file_size)
+            entries.append((info, rel))
+            if info.file_size > largest_bytes:
+                largest_path = rel
+                largest_bytes = int(info.file_size)
+            _cap_check(len(entries), total_bytes)
+        if not entries:
+            _reject_import(400, "no_files", "zip did not contain any files")
+
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        workspace.mkdir(parents=True, exist_ok=True)
+        actual_total = 0
+        for info, rel in entries:
+            data = zf.read(info)
+            actual_total += len(data)
+            _cap_check(len(entries), actual_total)
+            dest = workspace / rel
+            resolved = dest.resolve()
+            root = workspace.resolve()
+            if not resolved.is_relative_to(root):
+                _reject_import(400, "zip_slip", f"zip entry escapes the project root: {rel!r}")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+        return _ImportStats(
+            files=len(entries),
+            bytes=actual_total,
+            largest_path=largest_path,
+            largest_bytes=largest_bytes,
+        )
+
+
+async def _clone_git_url(git_url: str, dest: Path) -> None:
+    git = shutil.which("git")
+    if git is None:
+        _reject_import(400, "git_missing", "git is not installed on the agent-server host")
+    assert git is not None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            git,
+            "clone",
+            "--depth",
+            "1",
+            git_url,
+            str(dest),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        _reject_import(400, "git_clone_failed", f"failed to launch git: {exc}")
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=_GIT_CLONE_TIMEOUT_S
+        )
+    except TimeoutError as exc:
+        proc.kill()
+        await proc.communicate()
+        raise _ImportRejected(400, "git_clone_failed", "git clone timed out") from exc
+    if proc.returncode != 0:
+        detail = (stderr or stdout).decode(errors="replace").strip() or "git clone failed"
+        _reject_import(400, "git_clone_failed", detail[:1000])
+
+
+async def _parse_import_source(request: Request) -> _ImportSource:
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("multipart/form-data"):
+        form = await request.form()
+        uploads = [
+            value for _key, value in form.multi_items() if isinstance(value, UploadFile)
+        ]
+        if len(uploads) != 1:
+            _reject_import(400, "invalid_request", "multipart import requires exactly one zip file")
+        upload = uploads[0]
+        filename = upload.filename or "project.zip"
+        if not filename.lower().endswith(".zip"):
+            _reject_import(400, "invalid_zip", "uploaded project must be a .zip file")
+        data = await upload.read()
+        return _ImportSource(
+            kind="zip",
+            label=filename,
+            title_seed=Path(filename).stem or filename,
+            zip_bytes=data,
+        )
+
+    try:
+        body: Any = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        _reject_import(400, "invalid_request", f"request body must be JSON or multipart: {exc}")
+    if not isinstance(body, dict):
+        _reject_import(400, "invalid_request", "JSON body must be an object")
+    path_value = body.get("path")
+    git_url_value = body.get("git_url")
+    supplied = [v for v in (path_value, git_url_value) if isinstance(v, str) and v.strip()]
+    if len(supplied) != 1:
+        _reject_import(400, "invalid_request", "supply exactly one of path or git_url")
+    if isinstance(path_value, str) and path_value.strip():
+        root = Path(path_value).expanduser()
+        if not root.exists():
+            _reject_import(400, "path_not_found", f"path does not exist: {path_value}")
+        if not root.is_dir():
+            _reject_import(400, "path_not_directory", f"path is not a directory: {path_value}")
+        return _ImportSource(
+            kind="path",
+            label=str(root),
+            title_seed=root.name or str(root),
+            root=root,
+        )
+    assert isinstance(git_url_value, str)
+    git_url = git_url_value.strip()
+    return _ImportSource(
+        kind="git",
+        label=git_url,
+        title_seed=_repo_name_from_url(git_url),
+        root=None,
+        skip_git_dir=True,
+    )
+
+
+async def _created_at_for(
+    store: SqliteEventStore, conversation_id: str, owner_id: str
+) -> str | None:
+    with contextlib.suppress(Exception):
+        summaries = await store.list_conversation_summaries(
+            owner_id=owner_id, limit=500, cursor=None
+        )
+        row = next((s for s in summaries if s.conversation_id == conversation_id), None)
+        if row is not None:
+            return row.created_at
+    return None
+
+
+def _import_message(stats: _ImportStats, source_label: str) -> str:
+    largest = (
+        f"{stats.largest_path} ({stats.largest_bytes:,} bytes)"
+        if stats.largest_path is not None
+        else "n/a"
+    )
+    return (
+        f"Imported {stats.files} files from {source_label}; "
+        f"largest: {largest}. The workspace is already pre-populated."
+    )
+
+
+async def _handle_import_project(
+    request: Request,
+    *,
+    owner_id: str,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> dict:
+    ps = runtime.project_store() if runtime is not None else None
+    if ps is None or ps.status() != StorageStatus.OK:
+        raise HTTPException(
+            status_code=503,
+            detail={"reason": "storage_unavailable"},
+        )
+    assert runtime is not None
+
+    try:
+        source = await _parse_import_source(request)
+    except _ImportRejected as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+
+    title = _title_from_seed(source.title_seed)
+    conversation_id = f"conv_{uuid.uuid4().hex}"
+    workspace = ps.path_for(conversation_id)
+
+    try:
+        if source.kind == "zip":
+            assert source.zip_bytes is not None
+            stats = _materialize_zip(source.zip_bytes, workspace)
+        elif source.kind == "git":
+            with tempfile.TemporaryDirectory(prefix="disco-import-") as tmp:
+                clone_root = Path(tmp) / "repo"
+                await _clone_git_url(source.label, clone_root)
+                files, stats = _scan_import_tree(clone_root, skip_git_dir=True)
+                _copy_scanned_tree(files, workspace)
+        else:
+            assert source.root is not None
+            files, stats = _scan_import_tree(
+                source.root, skip_git_dir=source.skip_git_dir
+            )
+            _copy_scanned_tree(files, workspace)
+    except _ImportRejected as exc:
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"reason": exc.reason, "message": exc.message},
+        ) from exc
+    except Exception as exc:
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        raise HTTPException(
+            status_code=500,
+            detail={"reason": "import_failed", "message": str(exc)},
+        ) from exc
+
+    store.create_conversation(
+        conversation_id,
+        owner_id=owner_id,
+        title=title,
+        surface="build",
+    )
+    runtime.set_surface(conversation_id, "build")
+    created_at = await _created_at_for(store, conversation_id, owner_id)
+    ps.write_manifest(
+        conversation_id,
+        title=title,
+        owner_id=owner_id,
+        created_at=created_at,
+        file_count=stats.files,
+        total_bytes=stats.bytes,
+    )
+    with contextlib.suppress(Exception):
+        ps.cut_version(conversation_id, trigger="import")
+    await store.append(
+        conversation_id,
+        MessageEvent(
+            source=EventSource.ENVIRONMENT,
+            message=LLMMessage(
+                role="user",
+                content=_import_message(stats, source.label),
+            ),
+        ),
+    )
+    return {
+        "conversation_id": conversation_id,
+        "files": stats.files,
+        "bytes": stats.bytes,
+        "title": title,
+    }
 
 
 def make_projects_router(
@@ -86,6 +474,17 @@ def make_projects_router(
             candidates, retitle_fallbacks=retitle_fallbacks
         )
         return {"titled": titled, "count": len(titled), "scanned": len(candidates)}
+
+    @router.post("/api/projects/import")
+    async def import_project(
+        request: Request,
+        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+    ) -> dict:
+        """Create a new Build conversation whose ProjectStore workspace is seeded
+        from a zip upload, local directory, or shallow git clone."""
+        return await _handle_import_project(
+            request, owner_id=owner_id, store=store, runtime=runtime
+        )
 
     @router.get("/api/projects/{conversation_id}/download")
     async def download_project(conversation_id: str) -> StreamingResponse:

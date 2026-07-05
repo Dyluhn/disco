@@ -5,13 +5,15 @@ are exactly what the tests exercise."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import zipfile
 from pathlib import Path
 
 import pytest
 from disco.agent_server import ConversationRuntime, create_app
-from disco.core import SqliteEventStore
+from disco.agent_server.routes import projects as projects_routes
+from disco.core import EventSource, MessageEvent, SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
 from disco.tools.projects import ProjectStore
 from fastapi.testclient import TestClient
@@ -175,6 +177,144 @@ def test_download_files_missing_returns_404_with_reason(store, tmp_path):
     res = client.get(f"/api/projects/{cid}/download")
     assert res.status_code == 404
     assert res.json()["detail"]["reason"] == "files_missing"
+
+
+def _zip_bytes(entries: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_import_zip_creates_build_project_and_seed_message(store, tmp_path):
+    runtime = _runtime(store, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    payload = _zip_bytes(
+        {
+            "package.json": b'{"scripts":{"dev":"vite"}}',
+            "src/App.tsx": b"export function App() { return null }",
+        }
+    )
+
+    res = client.post(
+        "/api/projects/import",
+        files={"file": ("sample-app.zip", payload, "application/zip")},
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    cid = body["conversation_id"]
+    assert body["files"] == 2
+    assert body["bytes"] == len(b'{"scripts":{"dev":"vite"}}') + len(
+        b"export function App() { return null }"
+    )
+    assert body["title"] == "sample-app"
+    assert runtime._surface_of(cid) == "build"
+
+    ps = ProjectStore(str(tmp_path))
+    workspace = ps.path_for(cid)
+    assert (workspace / "package.json").read_bytes() == b'{"scripts":{"dev":"vite"}}'
+    assert (workspace / "src" / "App.tsx").read_bytes() == b"export function App() { return null }"
+    record = ps.get(cid)
+    assert record is not None
+    assert record.file_count == 2
+    assert record.files_missing is False
+
+    events = asyncio.run(store.get_events(cid))
+    env = [e for e in events if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT]
+    assert len(env) == 1
+    assert "Imported 2 files from sample-app.zip" in env[0].message.content
+    assert "largest: src/App.tsx" in env[0].message.content
+
+    rows = {p["id"]: p for p in client.get("/api/projects").json()["projects"]}
+    assert rows[cid]["surface"] == "build"
+    assert rows[cid]["file_count"] == 2
+
+
+def test_import_zip_rejects_zip_slip(store, tmp_path):
+    runtime = _runtime(store, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    payload = _zip_bytes({"../evil.txt": b"nope"})
+
+    res = client.post(
+        "/api/projects/import",
+        files={"file": ("evil.zip", payload, "application/zip")},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"]["reason"] == "zip_slip"
+    assert client.get("/api/projects").json()["projects"] == []
+
+
+def test_import_zip_enforces_file_count_cap(store, tmp_path, monkeypatch):
+    monkeypatch.setattr(projects_routes, "_MAX_IMPORT_FILES", 1)
+    runtime = _runtime(store, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    payload = _zip_bytes({"a.txt": b"a", "b.txt": b"b"})
+
+    res = client.post(
+        "/api/projects/import",
+        files={"file": ("too-many.zip", payload, "application/zip")},
+    )
+
+    assert res.status_code == 413
+    assert res.json()["detail"]["reason"] == "too_many_files"
+    assert client.get("/api/projects").json()["projects"] == []
+
+
+def test_import_zip_enforces_tree_size_cap(store, tmp_path, monkeypatch):
+    monkeypatch.setattr(projects_routes, "_MAX_IMPORT_TREE_BYTES", 3)
+    runtime = _runtime(store, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    payload = _zip_bytes({"a.txt": b"abcd"})
+
+    res = client.post(
+        "/api/projects/import",
+        files={"file": ("too-big.zip", payload, "application/zip")},
+    )
+
+    assert res.status_code == 413
+    assert res.json()["detail"]["reason"] == "tree_too_large"
+    assert client.get("/api/projects").json()["projects"] == []
+
+
+def test_import_local_path_requires_directory(store, tmp_path):
+    runtime = _runtime(store, root=str(tmp_path / "projects"))
+    client = TestClient(create_app(store, runtime=runtime))
+    source_file = tmp_path / "not-a-dir.txt"
+    source_file.write_text("x")
+
+    res = client.post("/api/projects/import", json={"path": str(source_file)})
+
+    assert res.status_code == 400
+    assert res.json()["detail"]["reason"] == "path_not_directory"
+
+
+def test_import_git_clones_shallow_and_skips_git_dir(store, tmp_path, monkeypatch):
+    async def fake_clone(git_url: str, dest: Path) -> None:
+        assert git_url == "https://example.com/acme/widgets.git"
+        (dest / ".git").mkdir(parents=True)
+        (dest / ".git" / "config").write_text("secretish")
+        (dest / "README.md").write_text("# Widgets")
+
+    monkeypatch.setattr(projects_routes, "_clone_git_url", fake_clone)
+    runtime = _runtime(store, root=str(tmp_path / "projects"))
+    client = TestClient(create_app(store, runtime=runtime))
+
+    res = client.post(
+        "/api/projects/import",
+        json={"git_url": "https://example.com/acme/widgets.git"},
+    )
+
+    assert res.status_code == 200
+    cid = res.json()["conversation_id"]
+    workspace = ProjectStore(str(tmp_path / "projects")).path_for(cid)
+    assert (workspace / "README.md").read_text() == "# Widgets"
+    assert not (workspace / ".git").exists()
+    events = asyncio.run(store.get_events(cid))
+    env = [e for e in events if isinstance(e, MessageEvent) and e.source is EventSource.ENVIRONMENT]
+    assert "https://example.com/acme/widgets.git" in env[0].message.content
 
 
 def test_delete_removes_project_from_disk(store, tmp_path):
