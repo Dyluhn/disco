@@ -48,6 +48,7 @@ from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS
+from .planning_harvest import harvest_revision_plan_after_refusal
 from .stuck import F6_FILE_MUTATING_TOOLS, no_progress_detected
 from .tool_specs import _ask_user_tool_singleton
 
@@ -1041,6 +1042,21 @@ class Valve:
                 )
                 return Disp.CONTINUE
             if acted_since_escape:
+                # ALREADY-SATISFIED REVISION (dt4 edit-5 autopsy): a follow-up
+                # whose request is already met gives the model nothing to plan —
+                # it read-loops in planning-for-revision without ever submitting,
+                # and the repeated-reads detector lands a terminal STUCK on a
+                # conversation that only needs a "verify + finish" plan. Route
+                # that ONE case into the existing REL-RC A1 force-submit
+                # recovery (submit_plan-only narrowed turn) instead of halting;
+                # a model that still won't submit halts via that path's own
+                # controlled terminal.
+                if signals.in_planning_for_revision(
+                    events
+                ) and not signals.revision_force_submit(events):
+                    harvested = await harvest_revision_plan_after_refusal(self._loop)
+                    if harvested is not None:
+                        return harvested
                 # The high-temp retry happened and it's STILL stuck → halt now.
                 # W-31: NAME the breaker that fired (`detail`) so logs/UI don't
                 # surface an undifferentiated STUCK — every sibling gate stamps a
