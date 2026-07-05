@@ -138,9 +138,9 @@ async def test_unclosed_think_wedge_injects_continue_reminder_and_continues():
     was mis-read as a clean no-op: the loop silently re-stepped another 2-minute
     reasoning dump that never reached a tool call, so the build looked WEDGED (the
     user had to kill it). WITH the fix the unclosed `<think>` is detected as a
-    structural truncation: the loop records the partial, injects the 'cut off —
-    take the action now with a tool call' reminder, and re-steps to real work —
-    never a silent spin."""
+    structural truncation from the raw response, strips the user-visible
+    reasoning span, injects the 'cut off — take the action now with a tool call'
+    reminder, and re-steps to real work — never a silent spin."""
     provider = SequenceProvider(
         [
             # turn 1: the wedge — an unclosed `<think>` dump, finish_reason "stop".
@@ -172,13 +172,14 @@ async def test_unclosed_think_wedge_injects_continue_reminder_and_continues():
     assert any(c.tool_name == "shell" for c in executor.calls)
 
     events = await store.get_events(CID)
-    # The partial reasoning was recorded, not dropped.
-    assert any(
+    # The raw response still drove truncation detection, but the user-visible
+    # assistant message no longer leaks the inline chain-of-thought.
+    assert not any(
         isinstance(e, MessageEvent)
         and e.source == EventSource.AGENT
         and "Let me design the deck" in (e.message.content or "")
         for e in events
-    ), "the unclosed-think fragment must be persisted as the assistant's partial turn"
+    ), "the unclosed-think fragment must not be persisted as assistant-visible text"
     # The W-31 continue/take-action reminder was injected (NOT a silent no-op).
     assert any(
         isinstance(e, MessageEvent)

@@ -1,5 +1,5 @@
-"""`agent._clean_thought` — strip leaked, stacked surface-form prefixes off a
-model thought before it is stored as the ActionEvent thought.
+"""`agent._clean_thought` — strip leaked, stacked surface-form prefixes and
+inline think spans off a model thought before it is stored or displayed.
 
 Live defect (build mode, MiniMax — conv_4a1e9405dba54aadb90e03589870630e): the
 View feeds prior thoughts back with a rotating "Reasoning:" / "Thought:" surface
@@ -53,3 +53,26 @@ def test_idempotent() -> None:
 
 def test_empty_string() -> None:
     assert _clean_thought("") == ""
+
+
+def test_closed_think_span_stripped_from_visible_thought() -> None:
+    assert _clean_thought("<think>reasoning here</think>Got it, building X.") == (
+        "Got it, building X."
+    )
+
+
+def test_think_only_thought_collapses_to_empty() -> None:
+    assert _clean_thought("<think>only reasoning</think>").strip() == ""
+
+
+def test_decorator_strip_still_collapses_repeated_reasoning() -> None:
+    assert _clean_thought("Reasoning: Reasoning: hello") == "hello"
+
+
+def test_think_span_and_decorator_both_strip() -> None:
+    assert _clean_thought("<think>x</think>Reasoning: done") == "done"
+
+
+def test_plain_thought_without_tags_or_decorators_is_unchanged() -> None:
+    text = "Got it, building X."
+    assert _clean_thought(text) == text

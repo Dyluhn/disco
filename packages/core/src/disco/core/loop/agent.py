@@ -46,6 +46,7 @@ from ..llm import (
     Requirement,
 )
 from ..obs import log_span
+from ..think import strip_think_spans
 from ..view import View
 from .boundaries import AgentStep, StreamHook, is_finish_tool_name
 
@@ -72,8 +73,12 @@ def _clean_thought(text: str) -> str:
     """Strip leaked, stacked surface-form prefixes the View added and the model
     echoed back ("Reasoning: Reasoning: …"). Only LEADING repeated decorators are
     removed — a thought that legitimately says "Reasoning: foo" mid-sentence is
-    untouched. Idempotent; a clean thought is returned unchanged."""
-    return _THOUGHT_DECOR_RE.sub("", text)
+    untouched.
+
+    Also strips inline ``<think>…</think>`` reasoning spans so inline-think
+    models (MiniMax) never leak raw chain-of-thought into the user-visible
+    thought/message. Idempotent; a clean thought is returned unchanged."""
+    return _THOUGHT_DECOR_RE.sub("", strip_think_spans(text))
 
 
 def _has_unclosed_think(text: str) -> bool:
