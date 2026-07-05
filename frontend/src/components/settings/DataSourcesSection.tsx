@@ -40,6 +40,12 @@ interface Opt<P extends string> {
   label: string;
   tier: Tier;
   help: string;
+  baseUrlLabel?: string;
+  baseUrlPlaceholder?: string;
+  baseUrlType?: "text" | "url";
+  showApiKeyEnv?: boolean;
+  apiKeyLabel?: string;
+  apiKeyPlaceholder?: string;
 }
 
 const SEARCH_OPTS: Opt<SearchProvider>[] = [
@@ -54,6 +60,30 @@ const SEARCH_OPTS: Opt<SearchProvider>[] = [
     tier: "selfhost",
     label: "Self-hosted SearXNG",
     help: "Your own SearXNG instance — set its URL below.",
+  },
+  {
+    id: "arxiv",
+    tier: "bundled",
+    label: "arXiv",
+    help: "Academic preprints (physics, CS, math). No key required.",
+  },
+  {
+    id: "semantic_scholar",
+    tier: "bundled",
+    label: "Semantic Scholar",
+    help: "Academic papers + abstracts. Optional API key raises rate limits.",
+    showApiKeyEnv: true,
+    apiKeyLabel: "Stored key name",
+    apiKeyPlaceholder: "e.g. SEMANTIC_SCHOLAR_API_KEY",
+  },
+  {
+    id: "site_scoped",
+    tier: "bundled",
+    label: "Site-scoped",
+    help: "Restrict web search to specific domains.",
+    baseUrlLabel: "Domains (comma-separated)",
+    baseUrlPlaceholder: "example.com, docs.example.org",
+    baseUrlType: "text",
   },
   {
     id: "tavily",
@@ -112,6 +142,8 @@ function ProviderGroup<P extends string>({
   onApiKeyEnv: (v: string) => void;
 }) {
   const active = opts.find((o) => o.id === value);
+  const showBaseUrl = active?.tier === "selfhost" || !!active?.baseUrlLabel;
+  const showApiKeyEnv = active?.tier === "paid" || !!active?.showApiKeyEnv;
   return (
     <div className="flex flex-col gap-inline">
       <h3 className="flex items-center gap-hair font-ui text-[0.95rem] font-medium text-text">
@@ -155,31 +187,37 @@ function ProviderGroup<P extends string>({
         })}
       </div>
       {/* contextual field for the active tier */}
-      {active?.tier === "selfhost" && (
+      {showBaseUrl && (
         <label className="flex flex-col gap-hair">
           <span className="font-ui text-[0.78rem] text-text-muted">
-            Service URL
+            {active?.baseUrlLabel ?? "Service URL"}
           </span>
           <input
-            type="url"
+            type={active?.baseUrlType ?? "url"}
             spellCheck={false}
             value={baseUrl}
             onChange={(e) => onBaseUrl(e.target.value)}
-            placeholder="http://host:port  (empty = server default)"
+            placeholder={
+              active?.baseUrlPlaceholder ??
+              "http://host:port  (empty = server default)"
+            }
             className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
           />
         </label>
       )}
-      {active?.tier === "paid" && (
+      {showApiKeyEnv && (
         <label className="flex flex-col gap-hair">
           <span className="font-ui text-[0.78rem] text-text-muted">
-            Stored key name <span className="text-text-faint">(Advanced)</span>
+            {active?.apiKeyLabel ?? "Stored key name"}{" "}
+            <span className="text-text-faint">
+              ({active?.tier === "paid" ? "Advanced" : "Optional"})
+            </span>
           </span>
           <input
             spellCheck={false}
             value={apiKeyEnv}
             onChange={(e) => onApiKeyEnv(e.target.value)}
-            placeholder="e.g. TAVILY_API_KEY"
+            placeholder={active?.apiKeyPlaceholder ?? "e.g. TAVILY_API_KEY"}
             className="rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60"
           />
         </label>
@@ -201,6 +239,20 @@ export function DataSourcesSection() {
     !!data && !!draft && JSON.stringify(draft) !== JSON.stringify(data);
   const set = (patch: Partial<DataSourcesConfig>) =>
     setDraft((d) => (d ? { ...d, ...patch } : d));
+  const pickSearchProvider = (id: SearchProvider) => {
+    const patch: Partial<DataSourcesConfig> = { search_provider: id };
+    if (id !== "searxng" && id !== "site_scoped") patch.search_base_url = "";
+    if (id !== "tavily" && id !== "brave" && id !== "semantic_scholar") {
+      patch.search_api_key_env = "";
+    }
+    if (draft?.search_provider !== id) {
+      if (id === "searxng" || id === "site_scoped") patch.search_base_url = "";
+      if (id === "tavily" || id === "brave" || id === "semantic_scholar") {
+        patch.search_api_key_env = "";
+      }
+    }
+    set(patch);
+  };
 
   return (
     <section className="flex flex-col gap-inline">
@@ -226,7 +278,7 @@ export function DataSourcesSection() {
             value={draft.search_provider}
             baseUrl={draft.search_base_url}
             apiKeyEnv={draft.search_api_key_env}
-            onPick={(id) => set({ search_provider: id })}
+            onPick={pickSearchProvider}
             onBaseUrl={(v) => set({ search_base_url: v })}
             onApiKeyEnv={(v) => set({ search_api_key_env: v })}
           />

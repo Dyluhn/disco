@@ -122,6 +122,25 @@ def test_data_source_bundled_is_honest_not_remote_green(client):
     assert body["provider"] == "ddgs"
 
 
+def test_data_source_new_keyless_search_tiers_are_bundled(client, state):
+    from disco.app_server.config.dtos import DataSourcesConfigDTO
+
+    for provider in ("arxiv", "semantic_scholar", "site_scoped"):
+        state.update_data_sources_config(
+            DataSourcesConfigDTO(
+                search_provider=provider,
+                search_base_url="example.com" if provider == "site_scoped" else "",
+                search_api_key_env="",
+                extraction_provider="local",
+                extraction_base_url="",
+                extraction_api_key_env="",
+            )
+        )
+        body = client.post("/api/data-sources/search/test").json()
+        assert body["ok"] is True and body["status"] == "bundled"
+        assert body["provider"] == provider
+
+
 def test_data_source_selfhost_without_url_is_misconfigured(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 

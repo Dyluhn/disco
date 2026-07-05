@@ -305,14 +305,22 @@ class TtsSettings(BaseModel):
 
 class SearchSettings(BaseModel):
     """[settings] Web DISCOVERY provider. The THREE tiers of the universal design:
-    (a) self-host `searxng` (base_url), (b) a paid API `tavily`/`brave` (BYO key
-    in secrets via api_key_env), and (c) the BUNDLED `ddgs` — DuckDuckGo scraping,
-    in-process, no key, no container — the FIRST-RUN DEFAULT so a fresh install
-    searches the moment it's downloaded."""
+    (a) self-host `searxng` (base_url), (b) paid APIs `tavily`/`brave` (BYO key),
+    and (c) BUNDLED keyless adapters (`ddgs`, `arxiv`, `semantic_scholar`,
+    `site_scoped`) — the FIRST-RUN DEFAULT so a fresh install searches the moment
+    it's downloaded."""
 
-    provider: Literal["ddgs", "searxng", "tavily", "brave"] = "ddgs"
-    base_url: str = ""  # for searxng (self-host); empty → PMX_SEARXNG_URL env
-    api_key_env: str = ""  # secrets key name for tavily/brave (never the key itself)
+    provider: Literal[
+        "ddgs",
+        "searxng",
+        "tavily",
+        "brave",
+        "arxiv",
+        "semantic_scholar",
+        "site_scoped",
+    ] = "ddgs"
+    base_url: str = ""  # searxng URL, arxiv override, or site_scoped domains
+    api_key_env: str = ""  # secrets key name for tavily/brave/semantic_scholar
 
 
 class RoleFallbackSettings(BaseModel):

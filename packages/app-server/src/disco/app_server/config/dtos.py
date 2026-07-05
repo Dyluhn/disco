@@ -259,7 +259,15 @@ class DataSourcesConfigDTO(BaseModel):
     holding a paid key (never the key itself). The wire mirror of core's
     SearchSettings + ExtractionSettings."""
 
-    search_provider: Literal["ddgs", "searxng", "tavily", "brave"] = "ddgs"
+    search_provider: Literal[
+        "ddgs",
+        "searxng",
+        "tavily",
+        "brave",
+        "arxiv",
+        "semantic_scholar",
+        "site_scoped",
+    ] = "ddgs"
     search_base_url: str = ""
     search_api_key_env: str = ""
     extraction_provider: Literal["local", "crawl4ai", "firecrawl"] = "local"

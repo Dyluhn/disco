@@ -313,23 +313,23 @@ class ConfigState:
         if kind == "search":
             s = cfg.search
             provider, base_url, key_env = s.provider, s.base_url.strip(), s.api_key_env.strip()
-            bundled = "ddgs"
+            bundled = {"ddgs", "arxiv", "semantic_scholar", "site_scoped"}
         elif kind == "extraction":
             e = cfg.extraction
             provider, base_url, key_env = e.provider, e.base_url.strip(), e.api_key_env.strip()
-            bundled = "local"
+            bundled = {"local"}
         else:
             return ProbeResult(
                 ok=False, status="error", detail=f"unknown data-source kind {kind!r}"
             )
 
-        if provider == bundled:
+        if provider in bundled:
             return ProbeResult(
                 ok=True,
                 status="bundled",
                 detail=(
-                    f"Bundled in-process tier ({provider}) — runs locally with no "
-                    "network service, so there's nothing to reach."
+                    f"Bundled/keyless tier ({provider}) — requires no configured "
+                    "service URL, so there is no self-hosted endpoint to reach."
                 ),
                 provider=provider,
             )

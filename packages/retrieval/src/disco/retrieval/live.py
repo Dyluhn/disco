@@ -511,11 +511,26 @@ def _make_search(provider: str, base_url: str, api_key: str):
     """Select the discovery provider (§B2). BUNDLED `ddgs` is the default — no key,
     no service. `searxng` self-hosts; `tavily` is a paid key."""
     from .bundled_providers import DdgsSearchProvider, TavilySearchProvider
+    from .source_adapters import (
+        ArxivSearchProvider,
+        SemanticScholarSearchProvider,
+        SiteScopedSearchProvider,
+    )
 
     if provider == "searxng":
         return SearxngSearchProvider(base_url)
     if provider == "tavily":
         return TavilySearchProvider(api_key)
+    if provider == "arxiv":
+        return ArxivSearchProvider(base_url=base_url) if base_url else ArxivSearchProvider()
+    if provider == "semantic_scholar":
+        return (
+            SemanticScholarSearchProvider(base_url=base_url, api_key=api_key)
+            if base_url
+            else SemanticScholarSearchProvider(api_key=api_key)
+        )
+    if provider == "site_scoped":
+        return SiteScopedSearchProvider(sites=base_url)
     return DdgsSearchProvider()  # default / "ddgs"
 
 

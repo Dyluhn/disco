@@ -203,7 +203,7 @@ class ConfigStore:
         return self.save(self.load().model_copy(update={"image_gen": image_gen}))
 
     def save_search(self, search: SearchSettings) -> RouterConfig:
-        """Persist the web-discovery provider (ddgs/searxng/tavily) over the config.
+        """Persist the configured web-discovery provider over the config.
 
         When the provider is the bundled in-process tier (ddgs), the persisted
         base_url is cleared so a stale self-host LAN URL (e.g. from a previous

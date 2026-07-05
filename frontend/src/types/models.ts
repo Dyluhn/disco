@@ -177,7 +177,14 @@ export interface ImageGenConfig {
 /** Universal web-data providers (§B). Each slot has three tiers; the bundled
  * defaults (ddgs / local) need no key. `*_api_key_env` is the NAME of an env var
  * holding a paid key — never the key itself. Mirror of DataSourcesConfigDTO. */
-export type SearchProvider = "ddgs" | "searxng" | "tavily" | "brave";
+export type SearchProvider =
+  | "ddgs"
+  | "searxng"
+  | "tavily"
+  | "brave"
+  | "arxiv"
+  | "semantic_scholar"
+  | "site_scoped";
 export type ExtractionProvider = "local" | "crawl4ai" | "firecrawl";
 export interface DataSourcesConfig {
   search_provider: SearchProvider;
