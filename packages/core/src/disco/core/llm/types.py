@@ -32,6 +32,15 @@ class ModelRole(str, Enum):
     VERIFIER = "verifier"  # bounded artifact-verdict judge, separate from builder
 
 
+# Quality-critical roles that must NEVER silently fall back to a weaker model:
+# the tool-calling/planning brain and the user-visible grounded answer.
+DRIVER_ROLES: frozenset[ModelRole] = frozenset({ModelRole.AGENT_DRIVER, ModelRole.RAG_ANSWERER})
+# Roles eligible for the local fallback on transient primary failure.
+FALLBACK_ELIGIBLE_ROLES: frozenset[ModelRole] = frozenset(
+    {ModelRole.SUMMARIZER, ModelRole.QUERY_REWRITER, ModelRole.VERIFIER}
+)
+
+
 class Difficulty(str, Enum):
     """A caller's hint about how hard THIS call is. Feeds the overflow policy."""
 
@@ -176,7 +185,7 @@ class RoutingDecision(BaseModel):
     # v1.2: deterministic routing uses "pinned" (settings assignment) / "manual"
     # (per-conversation model-pill override). "local"/"overflow" are retained for
     # the DORMANT intelligent-routing revival path (see config.py / policy.py).
-    path: Literal["local", "overflow", "pinned", "manual"]
+    path: Literal["local", "overflow", "pinned", "manual", "role_fallback"]
     reason: str  # human-readable: why this route (e.g. "config")
     overflow_triggers: list[str] = Field(default_factory=list)  # DORMANT: rules fired
     attempt: int = 1  # >1 if this was a transient same-model retry

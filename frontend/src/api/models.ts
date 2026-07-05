@@ -12,6 +12,7 @@ import type {
   ModelUpsert,
   OpenRouterKeyStatus,
   OpenRouterModel,
+  RoleFallbackConfig,
   TtsConfig,
 } from "@/types/models";
 import type { SandboxConfig, SandboxHealth } from "@/types/sandbox";
@@ -263,6 +264,33 @@ export async function updateDataSourcesConfig(cfg: DataSourcesConfig): Promise<D
   await fixtureDelay();
   fixtureDataSources = { ...cfg };
   return { ...fixtureDataSources };
+}
+
+// ---- role fallback (auxiliary role resilience) ----------------------------
+
+let fixtureRoleFallback: RoleFallbackConfig = {
+  enabled: false,
+  base_url: "",
+  model: "",
+  api_key_env: "",
+};
+
+export async function getRoleFallbackConfig(): Promise<RoleFallbackConfig> {
+  if (isLive()) return apiGet<RoleFallbackConfig>("/api/role-fallback/config");
+  await fixtureDelay();
+  return { ...fixtureRoleFallback };
+}
+
+export async function updateRoleFallbackConfig(
+  cfg: RoleFallbackConfig,
+): Promise<RoleFallbackConfig> {
+  if (isLive()) return apiSend<RoleFallbackConfig>("PUT", "/api/role-fallback/config", cfg);
+  await fixtureDelay();
+  if (cfg.enabled && (!cfg.base_url.trim() || !cfg.model.trim())) {
+    throw new ApiError("Role fallback needs both a base URL and model when enabled.", 400);
+  }
+  fixtureRoleFallback = { ...cfg };
+  return { ...fixtureRoleFallback };
 }
 
 // ---- T4.2/T4.3/T4.4 live provider probes -----------------------------------

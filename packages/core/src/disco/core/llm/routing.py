@@ -38,7 +38,7 @@ from typing import Literal, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict
 
 from ..events import LLMMessage
-from .config import ModelEntry, RouterConfig
+from .config import ROLE_FALLBACK_PROVIDER_KEY, ModelEntry, RouterConfig
 from .errors import (
     BudgetExceeded,
     LLMAuthError,
@@ -57,6 +57,8 @@ from .provider import ModelProvider
 from .types import (
     CompletionRequest,
     CompletionResponse,
+    DRIVER_ROLES,
+    FALLBACK_ELIGIBLE_ROLES,
     ModelRole,
     Requirement,
     RoutingDecision,
@@ -67,11 +69,12 @@ from .types import (
 # max_iterations ceiling (event contract) is the ultimate backstop. v1.2: this is
 # pure resilience (retry the SAME assigned model), never model escalation.
 _MAX_ATTEMPTS = 5
+_ROLE_FALLBACK_MAX_ATTEMPTS = 2
 
 # The routing paths. v1.2 emits "pinned"/"manual"; "local"/"overflow" are kept in
 # the Literal for the DORMANT intelligent-routing revival path and for back-compat
 # of any persisted decisions.
-Path = Literal["local", "overflow", "pinned", "manual"]
+Path = Literal["local", "overflow", "pinned", "manual", "role_fallback"]
 
 
 class CallContext(BaseModel):
@@ -356,30 +359,65 @@ class DefaultLLMRouter:
         self._enforce_hard_budget(req, entry, path, ctx)
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
         provider = self._providers[entry.provider]
+        model_id = entry.model_id
+        provider_name = entry.provider
+        active_path = path
+        active_reason = reason
+        active_triggers = list(overflow_triggers)
+        max_attempts = _MAX_ATTEMPTS
+        used_fallback = False
 
         attempt = 1
         while True:
             try:
-                resp = await provider.complete(exec_req, model=entry.model_id)
+                resp = await provider.complete(exec_req, model=model_id)
             except (LLMContextWindowExceeded, LLMAuthError, LLMContentFiltered) as exc:
                 # Terminal: no retry, no escalation. Emit one decision, propagate.
-                self._record_failure(req, entry, path, reason, exc)
+                self._record_failure(
+                    req,
+                    entry,
+                    active_path,
+                    active_reason,
+                    exc,
+                    chosen_model=model_id,
+                    provider_name=provider_name,
+                )
                 raise
             except LLMTransientError:
-                # Resilience only: retry the SAME assigned model (never switch).
-                if attempt >= _MAX_ATTEMPTS:
-                    self._record_failure(req, entry, path, reason, None)
+                if attempt >= max_attempts:
+                    fallback = (
+                        None if used_fallback else self._role_fallback_target(req.profile.role)
+                    )
+                    if fallback is not None:
+                        provider, model_id = fallback
+                        provider_name = provider.name
+                        active_path = "role_fallback"
+                        active_reason = f"role_fallback after {entry.model_id}"
+                        active_triggers = [f"original_model:{entry.model_id}"]
+                        max_attempts = _ROLE_FALLBACK_MAX_ATTEMPTS
+                        used_fallback = True
+                        attempt = 1
+                        continue
+                    self._record_failure(
+                        req,
+                        entry,
+                        active_path,
+                        active_reason,
+                        None,
+                        chosen_model=model_id,
+                        provider_name=provider_name,
+                    )
                     raise
                 attempt += 1
                 continue
             else:
                 decision = RoutingDecision(
                     profile=req.profile,
-                    chosen_model=entry.model_id,
-                    provider=entry.provider,
-                    path=path,
-                    reason=reason,
-                    overflow_triggers=list(overflow_triggers),
+                    chosen_model=model_id,
+                    provider=provider_name,
+                    path=active_path,
+                    reason=active_reason,
+                    overflow_triggers=active_triggers,
                     attempt=attempt,
                 )
                 self._sink.record(decision)
@@ -395,6 +433,13 @@ class DefaultLLMRouter:
         entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         provider = self._providers[entry.provider]
+        model_id = entry.model_id
+        provider_name = entry.provider
+        active_path = path
+        active_reason = reason
+        active_triggers = list(overflow_triggers)
+        max_attempts = _MAX_ATTEMPTS
+        used_fallback = False
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
 
         # Same-model transient retry as `complete` — but GUARDED: a stream can only
@@ -407,17 +452,17 @@ class DefaultLLMRouter:
         while True:
             decision = RoutingDecision(
                 profile=req.profile,
-                chosen_model=entry.model_id,
-                provider=entry.provider,
-                path=path,
-                reason=reason,
-                overflow_triggers=list(overflow_triggers),
+                chosen_model=model_id,
+                provider=provider_name,
+                path=active_path,
+                reason=active_reason,
+                overflow_triggers=active_triggers,
                 attempt=attempt,
             )
             yielded_any = False
             recorded = False
             try:
-                async for chunk in provider.stream_complete(exec_req, model=entry.model_id):
+                async for chunk in provider.stream_complete(exec_req, model=model_id):
                     if chunk.done and chunk.final is not None:
                         final = chunk.final.model_copy(update={"routing": decision})
                         if not recorded:
@@ -431,16 +476,67 @@ class DefaultLLMRouter:
                         yield chunk
                 return  # stream completed cleanly
             except (LLMContextWindowExceeded, LLMAuthError, LLMContentFiltered) as exc:
-                self._record_failure(req, entry, path, reason, exc)
+                self._record_failure(
+                    req,
+                    entry,
+                    active_path,
+                    active_reason,
+                    exc,
+                    chosen_model=model_id,
+                    provider_name=provider_name,
+                )
                 raise
             except LLMTransientError:
-                if yielded_any or attempt >= _MAX_ATTEMPTS:
-                    self._record_failure(req, entry, path, reason, None)
+                if yielded_any:
+                    self._record_failure(
+                        req,
+                        entry,
+                        active_path,
+                        active_reason,
+                        None,
+                        chosen_model=model_id,
+                        provider_name=provider_name,
+                    )
+                    raise
+                if attempt >= max_attempts:
+                    fallback = (
+                        None if used_fallback else self._role_fallback_target(req.profile.role)
+                    )
+                    if fallback is not None:
+                        provider, model_id = fallback
+                        provider_name = provider.name
+                        active_path = "role_fallback"
+                        active_reason = f"role_fallback after {entry.model_id}"
+                        active_triggers = [f"original_model:{entry.model_id}"]
+                        max_attempts = _ROLE_FALLBACK_MAX_ATTEMPTS
+                        used_fallback = True
+                        attempt = 1
+                        continue
+                    self._record_failure(
+                        req,
+                        entry,
+                        active_path,
+                        active_reason,
+                        None,
+                        chosen_model=model_id,
+                        provider_name=provider_name,
+                    )
                     raise
                 attempt += 1
                 continue
 
     # -- helpers --------------------------------------------------------------
+
+    def _role_fallback_target(self, role: ModelRole) -> tuple[ModelProvider, str] | None:
+        settings = self._config.role_fallback
+        if role in DRIVER_ROLES or role not in FALLBACK_ELIGIBLE_ROLES:
+            return None
+        if not settings.enabled or not settings.model.strip():
+            return None
+        provider = self._providers.get(ROLE_FALLBACK_PROVIDER_KEY)
+        if provider is None:
+            return None
+        return provider, settings.model.strip()
 
     def _record_failure(
         self,
@@ -449,13 +545,16 @@ class DefaultLLMRouter:
         path: Path,
         reason: str,
         exc: Exception | None,
+        *,
+        chosen_model: str | None = None,
+        provider_name: str | None = None,
     ) -> None:
         kind = type(exc).__name__ if exc else "retries exhausted"
         self._sink.record(
             RoutingDecision(
                 profile=req.profile,
-                chosen_model=(entry.model_id if entry else ""),
-                provider=(entry.provider if entry else ""),
+                chosen_model=chosen_model or (entry.model_id if entry else ""),
+                provider=provider_name or (entry.provider if entry else ""),
                 path=path,
                 reason=f"terminal failure: {kind} ({reason})",
                 overflow_triggers=[],

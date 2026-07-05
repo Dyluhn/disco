@@ -17,6 +17,7 @@ from ..config.dtos import (
     LiveBrowserConfigDTO,
     ProbeResult,
     ProjectStorageConfigDTO,
+    RoleFallbackConfigDTO,
     SandboxConfigDTO,
     SandboxHealthDTO,
     TtsConfigDTO,
@@ -90,6 +91,20 @@ def make_config_router(state: ConfigState) -> APIRouter:
     @router.put("/api/data-sources/config")
     async def put_data_sources_config(dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
         return state.update_data_sources_config(dto)
+
+    @router.get("/api/role-fallback/config")
+    async def get_role_fallback_config() -> RoleFallbackConfigDTO:
+        return state.role_fallback_config()
+
+    @router.put("/api/role-fallback/config")
+    async def put_role_fallback_config(dto: RoleFallbackConfigDTO) -> RoleFallbackConfigDTO:
+        try:
+            return state.update_role_fallback_config(dto)
+        except ConfigValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": exc.reason, "message": exc.detail or exc.reason},
+            ) from exc
 
     @router.post("/api/data-sources/{kind}/test")
     async def test_data_source(kind: str) -> ProbeResult:

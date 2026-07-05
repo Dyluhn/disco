@@ -33,6 +33,7 @@ class FakeModelProvider:
 
     - `raises`: an exception to raise. `raises_times`: raise only for the first
       N calls (then succeed); None = raise every call.
+      `stream_raises_after_chunks`: for streaming only, yield N chunks then raise.
     - `tool_calls`: ProposedToolCalls to return.
     - `supported`: capabilities supported (None = supports everything).
     """
@@ -47,6 +48,7 @@ class FakeModelProvider:
         cost_usd: float = 0.0,
         raises: Exception | None = None,
         raises_times: int | None = None,
+        stream_raises_after_chunks: int | None = None,
         supported: set[Requirement] | None = None,
     ) -> None:
         self.name = name
@@ -56,6 +58,7 @@ class FakeModelProvider:
         self.cost_usd = cost_usd
         self.raises = raises
         self.raises_times = raises_times
+        self.stream_raises_after_chunks = stream_raises_after_chunks
         self.supported = supported
         self.calls = 0
         self.seen_requests: list[CompletionRequest] = []
@@ -86,10 +89,16 @@ class FakeModelProvider:
     async def stream_complete(self, req: CompletionRequest, *, model: str):
         self.calls += 1
         self.seen_requests.append(req)
-        self._maybe_raise()
         final = self._make_response(req, model)
-        for piece in _chunks(final.text):
+        if self.stream_raises_after_chunks is None:
+            self._maybe_raise()
+        for index, piece in enumerate(_chunks(final.text), start=1):
             yield StreamChunk(delta_text=piece)
+            if (
+                self.stream_raises_after_chunks is not None
+                and index >= self.stream_raises_after_chunks
+            ):
+                self._maybe_raise()
         yield StreamChunk(done=True, final=final)
 
     def supports(self, requirement: Requirement, *, model: str) -> bool:

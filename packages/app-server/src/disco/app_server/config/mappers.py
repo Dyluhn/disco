@@ -26,6 +26,7 @@ from .dtos import (
     ModelUpsert,
     OpenRouterModelDTO,
     ProjectStorageConfigDTO,
+    RoleFallbackConfigDTO,
     SandboxConfigDTO,
     SandboxConnectionDTO,
     TtsConfigDTO,
@@ -254,6 +255,16 @@ def _data_sources_from(config: RouterConfig) -> DataSourcesConfigDTO:
     )
 
 
+def _role_fallback_from(config: RouterConfig) -> RoleFallbackConfigDTO:
+    fallback = config.role_fallback
+    return RoleFallbackConfigDTO(
+        enabled=fallback.enabled,
+        base_url=fallback.base_url,
+        model=fallback.model,
+        api_key_env=fallback.api_key_env,
+    )
+
+
 def _sandbox_from(config: RouterConfig) -> SandboxConfigDTO:
     from disco.core.llm import default_connection_for
 
@@ -320,15 +331,11 @@ def _live_browser_from(config: RouterConfig) -> LiveBrowserConfigDTO:
     return LiveBrowserConfigDTO(enabled=lb.enabled)
 
 
-def _build_kernel_from(
-    config: RouterConfig, *, experimental_enabled: bool
-) -> BuildKernelConfigDTO:
+def _build_kernel_from(config: RouterConfig, *, experimental_enabled: bool) -> BuildKernelConfigDTO:
     """Wire DTO for the Build kernel selector (A2). Mirrors RouterConfig.build_kernel;
     `experimental_enabled` is supplied by the caller (an env-gate read kept out of this
     pure mapper)."""
-    return BuildKernelConfigDTO(
-        kind=config.build_kernel, experimental_enabled=experimental_enabled
-    )
+    return BuildKernelConfigDTO(kind=config.build_kernel, experimental_enabled=experimental_enabled)
 
 
 def _mcp_live_status(approval: dict | None) -> str:

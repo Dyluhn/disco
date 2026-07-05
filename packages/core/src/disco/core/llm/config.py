@@ -23,13 +23,16 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ..env import disco_env
 from .types import ModelRole, Requirement
 from .vision_table import table_vision
 
 _LOG = logging.getLogger("disco.config")
+
+# Reserved provider-map key for the prebuilt auxiliary-role fallback provider.
+ROLE_FALLBACK_PROVIDER_KEY = "__role_fallback__"
 
 # Flag to emit the DRIVER_VISION env deprecation warning at most once per process.
 _DRIVER_VISION_DEPRECATION_LOGGED: bool = False
@@ -312,6 +315,15 @@ class SearchSettings(BaseModel):
     api_key_env: str = ""  # secrets key name for tavily/brave (never the key itself)
 
 
+class RoleFallbackSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    base_url: str = ""  # e.g. http://localhost:8080/v1
+    model: str = ""  # model id served there
+    api_key_env: str = ""  # optional; env var name holding the key
+
+
 class ExtractionSettings(BaseModel):
     """[settings] URL → clean content provider. Same three tiers: (a) self-host
     `crawl4ai` (base_url), (b) paid `firecrawl` (BYO key), (c) the BUNDLED `local`
@@ -429,6 +441,10 @@ class RouterConfig(BaseModel):
     # hard (raise NoEligibleModel). Swappable to any vision model in the catalogue
     # (e.g. "or-gemma-4-31b-free" for free tier, "driver-overflow" for Sonnet).
     vision_escalation_model: str | None = None
+    # Auxiliary-role resilience: on transient primary failure, eligible non-driver
+    # roles may retry against this prebuilt local OpenAI-compatible provider.
+    # Driver-class roles never use it.
+    role_fallback: RoleFallbackSettings = Field(default_factory=RoleFallbackSettings)
     # Build kernel selector (Disco Pi Build Kernel Campaign A2). Which inner Build
     # agent the agent-server runs: `disco` (the current AgentLoop, default) or
     # `pi_experimental` (the experimental Pi-SDK kernel). `pi_experimental` only
@@ -659,11 +675,7 @@ def apply_runtime_capabilities(
         if entry.vision is not None:
             # (1) Manual pin: explicit True or False — highest priority.
             target: bool = entry.vision
-        elif (
-            probe_results is not None
-            and key in probe_results
-            and probe_results[key] is not None
-        ):
+        elif probe_results is not None and key in probe_results and probe_results[key] is not None:
             # (2) Runtime probe result passed in from wiring.py.
             target = bool(probe_results[key])
         elif key == "driver-local":

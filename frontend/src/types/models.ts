@@ -188,6 +188,15 @@ export interface DataSourcesConfig {
   extraction_api_key_env: string;
 }
 
+/** Auxiliary-role model fallback. Only summarizer, query-rewriter, and verifier
+ * roles may use it after primary transient failures; driver roles never do. */
+export interface RoleFallbackConfig {
+  enabled: boolean;
+  base_url: string;
+  model: string;
+  api_key_env: string;
+}
+
 /**
  * The non-driver roles get explicit per-role selectors in Settings; AGENT_DRIVER
  * is the "default primary" (and the main-screen leader pill overrides it per

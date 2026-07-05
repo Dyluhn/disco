@@ -12,6 +12,7 @@ import { ModelCatalogue } from "@/components/settings/ModelCatalogue";
 import { ModelMatrix } from "@/components/settings/ModelMatrix";
 import { ProjectStorageSection } from "@/components/settings/ProjectStorageSection";
 import { ProvidersSection } from "@/components/settings/ProvidersSection";
+import { RoleFallbackSection } from "@/components/settings/RoleFallbackSection";
 import { SandboxSection } from "@/components/settings/SandboxSection";
 import { SkillsSection } from "@/components/settings/SkillsSection";
 import { useImageGenConfig, useOpenRouterKey } from "@/hooks/useModels";
@@ -206,6 +207,9 @@ export function SettingsView() {
               </SettingsItem>
               <SettingsItem>
                 <ProvidersSection />
+              </SettingsItem>
+              <SettingsItem id="model-resilience">
+                <RoleFallbackSection />
               </SettingsItem>
               <SettingsItem id="catalogue">
                 <ModelCatalogue />

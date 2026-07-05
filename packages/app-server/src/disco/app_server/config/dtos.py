@@ -267,6 +267,17 @@ class DataSourcesConfigDTO(BaseModel):
     extraction_api_key_env: str = ""
 
 
+class RoleFallbackConfigDTO(BaseModel):
+    """Auxiliary-role model fallback. When enabled, transient primary failures for
+    summarizer/query-rewriter/judge roles may retry against this OpenAI-compatible
+    local endpoint. Driver-class roles never use it."""
+
+    enabled: bool = False
+    base_url: str = ""
+    model: str = ""
+    api_key_env: str = ""
+
+
 class ProjectStorageConfigDTO(BaseModel):
     """Where Build projects persist on the app host — the user-chosen directory.
 

@@ -87,9 +87,7 @@ def test_provider_view_groups_subscription_as_paid_not_local():
     free = ModelEntry(model_id="x", provider="local", context_window=8192)
     assert _provider_view(free) == "local"
     # A priced metered model groups paid.
-    paid = ModelEntry(
-        model_id="y", provider="openrouter", context_window=8192, price_in_per_m=3.0
-    )
+    paid = ModelEntry(model_id="y", provider="openrouter", context_window=8192, price_in_per_m=3.0)
     assert _provider_view(paid) == "openrouter"
 
 
@@ -117,6 +115,27 @@ def test_openrouter_model_label_drops_the_or_prefix(client):
     assert dto.label == "Gpt 4 Turbo — gpt-4-turbo"
 
 
+def test_role_fallback_config_round_trips(client):
+    assert client.get("/api/role-fallback/config").json() == {
+        "enabled": False,
+        "base_url": "",
+        "model": "",
+        "api_key_env": "",
+    }
+
+    payload = {
+        "enabled": True,
+        "base_url": "http://localhost:8080/v1",
+        "model": "llama-fallback",
+        "api_key_env": "DISCO_FALLBACK_API_KEY",
+    }
+    put = client.put("/api/role-fallback/config", json=payload)
+
+    assert put.status_code == 200
+    assert put.json() == payload
+    assert client.get("/api/role-fallback/config").json() == payload
+
+
 def test_sandbox_config_get_and_put_round_trip(client):
     # default reflects the seed (SandboxSettings default)
     cfg = client.get("/api/sandbox/config").json()
@@ -135,7 +154,9 @@ def test_sandbox_config_get_and_put_round_trip(client):
     )
     assert put.status_code == 200 and put.json()["backend"] == "gvisor"
     # persisted: a fresh GET reflects the selection
-    assert client.get("/api/sandbox/config").json()["docker_socket"] == "ssh://sandbox@100.81.82.115"
+    assert (
+        client.get("/api/sandbox/config").json()["docker_socket"] == "ssh://sandbox@100.81.82.115"
+    )
 
 
 def test_projects_storage_config_round_trip(client, tmp_path):

@@ -21,9 +21,10 @@ from collections.abc import Mapping
 
 import httpx
 
-from .config import RouterConfig
+from .config import ROLE_FALLBACK_PROVIDER_KEY, RouterConfig
 from .openai_provider import OpenAIProvider
 from .provider import ModelProvider
+from .types import Requirement
 
 _LOG = logging.getLogger("disco.wiring")
 
@@ -118,6 +119,8 @@ def build_providers(
     the router resolves a provider (`self._providers[entry.provider]`)."""
     environ = os.environ if env is None else env
     providers: dict[str, ModelProvider] = {}
+    if any(entry.provider == ROLE_FALLBACK_PROVIDER_KEY for entry in config.models.values()):
+        raise ValueError(f"{ROLE_FALLBACK_PROVIDER_KEY!r} is reserved for role fallback")
     for entry in config.models.values():
         if entry.base_url is None or entry.provider in providers:
             continue
@@ -134,6 +137,19 @@ def build_providers(
             name=entry.provider,
             api_key=api_key,
             capabilities=caps,
+            enable_thinking=enable_thinking,
+        )
+    fallback = config.role_fallback
+    if fallback.enabled and fallback.base_url.strip():
+        api_key_env = fallback.api_key_env.strip()
+        api_key = environ.get(api_key_env) if api_key_env else None
+        if api_key is None and api_key_env.startswith("DISCO_"):
+            api_key = environ.get("PMX_" + api_key_env[len("DISCO_") :])
+        providers[ROLE_FALLBACK_PROVIDER_KEY] = OpenAIProvider(
+            fallback.base_url.strip(),
+            name="role_fallback",
+            api_key=api_key,
+            capabilities=frozenset({Requirement.JSON_MODE}),
             enable_thinking=enable_thinking,
         )
     return providers

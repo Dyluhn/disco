@@ -9,6 +9,7 @@ import {
   getBuildKernelConfig,
   getImageGenConfig,
   getLiveBrowserConfig,
+  getRoleFallbackConfig,
   getTtsConfig,
   getOpenRouterKeyStatus,
   getSandboxConfig,
@@ -22,6 +23,7 @@ import {
   updateBuildKernelConfig,
   updateImageGenConfig,
   updateLiveBrowserConfig,
+  updateRoleFallbackConfig,
   updateTtsConfig,
   updateModel,
   updateSandboxConfig,
@@ -40,6 +42,7 @@ import type {
   ModelUpsert,
   OpenRouterKeyStatus,
   OpenRouterModel,
+  RoleFallbackConfig,
 } from "@/types/models";
 import type { SandboxConfig, SandboxHealth } from "@/types/sandbox";
 
@@ -166,6 +169,23 @@ export function useUpdateDataSourcesConfig() {
   return useMutation({
     mutationFn: (cfg: DataSourcesConfig) => updateDataSourcesConfig(cfg),
     onSuccess: (next) => qc.setQueryData(DATA_SOURCES_KEY, next),
+  });
+}
+
+const ROLE_FALLBACK_KEY = ["role-fallback-config"] as const;
+
+export function useRoleFallbackConfig() {
+  return useQuery<RoleFallbackConfig>({
+    queryKey: ROLE_FALLBACK_KEY,
+    queryFn: getRoleFallbackConfig,
+  });
+}
+
+export function useUpdateRoleFallbackConfig() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (cfg: RoleFallbackConfig) => updateRoleFallbackConfig(cfg),
+    onSuccess: (next) => qc.setQueryData(ROLE_FALLBACK_KEY, next),
   });
 }
 

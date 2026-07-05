@@ -28,6 +28,7 @@ from .config import (
     LiveBrowserSettings,
     ModelEntry,
     ProjectStorageSettings,
+    RoleFallbackSettings,
     RouterConfig,
     SandboxSettings,
     SearchSettings,
@@ -211,6 +212,10 @@ class ConfigStore:
         if search.provider == "ddgs":
             search = search.model_copy(update={"base_url": ""})
         return self.save(self.load().model_copy(update={"search": search}))
+
+    def save_role_fallback(self, settings: RoleFallbackSettings) -> None:
+        """Persist auxiliary-role local fallback settings over the current config."""
+        self.save(self.load().model_copy(update={"role_fallback": settings}))
 
     def save_extraction(self, extraction: ExtractionSettings) -> RouterConfig:
         """Persist the extraction provider (local/crawl4ai/firecrawl) over the config.
