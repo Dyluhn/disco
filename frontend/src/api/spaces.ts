@@ -1,10 +1,10 @@
-import { agentGet, agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
+import { agentGet, agentLive, agentSend, fixtureDelay } from "./client";
 import type {
   CreateSpaceInput,
+  RenameSpaceInput,
   SpaceDetail,
   SpaceSummary,
   SpacesList,
-  SpaceUploadResult,
 } from "@/types/spaces";
 
 let fixtureSpaces: SpaceDetail[] = [];
@@ -26,15 +26,14 @@ export async function createSpace(input: CreateSpaceInput): Promise<SpaceDetail>
       name: input.name.trim(),
       description: input.description?.trim() ?? "",
       created_at: now,
-      doc_count: 0,
-      byte_count: 0,
-      documents: [],
+      member_count: 0,
+      members: [],
     };
     fixtureSpaces = [space, ...fixtureSpaces];
     return space;
   }
   const res = await agentSend<{ space: SpaceDetail }>("POST", "/api/spaces", input);
-  return res.space;
+  return normalizeDetail(res.space);
 }
 
 export async function getSpace(spaceId: string): Promise<SpaceDetail> {
@@ -45,7 +44,30 @@ export async function getSpace(spaceId: string): Promise<SpaceDetail> {
     return found;
   }
   const res = await agentGet<{ space: SpaceDetail }>(`/api/spaces/${encodeURIComponent(spaceId)}`);
-  return res.space;
+  return normalizeDetail(res.space);
+}
+
+export async function renameSpace(input: RenameSpaceInput): Promise<SpaceDetail> {
+  const { spaceId, ...body } = input;
+  if (!agentLive()) {
+    await fixtureDelay();
+    const found = fixtureSpaces.find((s) => s.space_id === spaceId);
+    if (!found) throw new Error("space not found");
+    const updated: SpaceDetail = {
+      ...found,
+      name: body.name?.trim() || found.name,
+      description:
+        body.description === undefined ? found.description : body.description.trim(),
+    };
+    fixtureSpaces = fixtureSpaces.map((s) => (s.space_id === spaceId ? updated : s));
+    return updated;
+  }
+  const res = await agentSend<{ space: SpaceDetail }>(
+    "PATCH",
+    `/api/spaces/${encodeURIComponent(spaceId)}`,
+    body,
+  );
+  return normalizeDetail(res.space);
 }
 
 export async function deleteSpace(spaceId: string): Promise<{ space_id: string }> {
@@ -58,40 +80,22 @@ export async function deleteSpace(spaceId: string): Promise<{ space_id: string }
   return { space_id: spaceId };
 }
 
-export async function uploadSpaceDocuments(
-  spaceId: string,
-  files: File[],
-): Promise<SpaceUploadResult> {
-  if (!agentLive()) {
-    await fixtureDelay();
-    throw new Error("Space document upload requires a live agent server.");
-  }
-  const fd = new FormData();
-  for (const file of files) fd.append("files", file);
-  const res = await fetch(
-    `${agentHttpBase()}/api/spaces/${encodeURIComponent(spaceId)}/documents`,
-    { method: "POST", body: fd },
-  );
-  if (!res.ok) {
-    let detail = `${res.status}`;
-    try {
-      const body = await res.json();
-      detail = body.detail?.message || body.detail?.reason || JSON.stringify(body.detail);
-    } catch {
-      // keep status
-    }
-    throw new Error(`Upload failed (${res.status}): ${detail}`);
-  }
-  return (await res.json()) as SpaceUploadResult;
-}
-
 function toSummary(space: SpaceDetail): SpaceSummary {
   return {
     space_id: space.space_id,
     name: space.name,
     description: space.description,
     created_at: space.created_at,
-    doc_count: space.doc_count,
-    byte_count: space.byte_count,
+    member_count: space.member_count,
+  };
+}
+
+function normalizeDetail(space: SpaceDetail): SpaceDetail {
+  return {
+    ...space,
+    members: space.members.map((member) => ({
+      ...member,
+      title: member.title ?? "(untitled)",
+    })),
   };
 }

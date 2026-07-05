@@ -1,10 +1,25 @@
-import { AlertTriangle, MessageSquareText, Search, Trash2, Upload } from "lucide-react";
-import { useState, useEffect, useRef } from "react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import {
+  AlertTriangle,
+  FolderInput,
+  MessageSquareText,
+  MoreHorizontal,
+  Search,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { importShareBundle } from "@/api/agent";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
-import { useConversations, useDeleteConversation } from "@/hooks/useConversations";
+import {
+  useConversations,
+  useDeleteConversation,
+  useSetConversationSpace,
+} from "@/hooks/useConversations";
+import { useSpaces } from "@/hooks/useSpaces";
+import type { ConversationSummary } from "@/types/conversation";
 
 /**
  * History (Prompt 5): the owner-scoped conversation library. Data flows through
@@ -85,14 +100,104 @@ function EmptyHistory() {
   );
 }
 
+function surfaceRoute(c: ConversationSummary): string {
+  if (c.origin === "imported") return `/imported/${c.id}`;
+  if (c.surface === "deep_research") return `/deep/${c.id}`;
+  if (c.surface === "agent") return `/agent/${c.id}`;
+  if (c.surface === "build") return `/build/${c.id}`;
+  return "/";
+}
+
+function MoveToSpaceMenu({
+  conversation,
+  spaces,
+}: {
+  conversation: ConversationSummary;
+  spaces: { space_id: string; name: string }[];
+}) {
+  const move = useSetConversationSpace();
+  const currentSpaceId = conversation.space_id ?? null;
+  const itemClass =
+    "flex w-full items-center gap-hair rounded-control px-inline py-hair text-left font-ui text-[0.78rem] text-text-muted outline-none transition-colors hover:bg-surface-2 hover:text-text data-[disabled]:cursor-not-allowed data-[disabled]:opacity-45";
+
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`Move conversation to space: ${conversation.title}`}
+          data-disco-control="history.move-space"
+          className="grid size-8 shrink-0 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text"
+        >
+          <MoreHorizontal className="size-4" aria-hidden />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="z-50 min-w-48 rounded-card border border-hairline bg-bg p-hair pmx-rise"
+        >
+          <DropdownMenu.Label className="px-inline py-hair font-ui text-[0.7rem] uppercase tracking-wide text-text-faint">
+            Move to space
+          </DropdownMenu.Label>
+          <DropdownMenu.Item
+            className={itemClass}
+            disabled={currentSpaceId === null || move.isPending}
+            onSelect={() => move.mutate({ id: conversation.id, spaceId: null })}
+          >
+            <FolderInput className="size-3.5" aria-hidden />
+            Unfiled
+          </DropdownMenu.Item>
+          {spaces.map((space) => (
+            <DropdownMenu.Item
+              key={space.space_id}
+              className={itemClass}
+              disabled={currentSpaceId === space.space_id || move.isPending}
+              onSelect={() => move.mutate({ id: conversation.id, spaceId: space.space_id })}
+            >
+              <FolderInput className="size-3.5" aria-hidden />
+              {space.name}
+            </DropdownMenu.Item>
+          ))}
+          {spaces.length === 0 && (
+            <div className="px-inline py-hair font-ui text-[0.78rem] text-text-faint">
+              No Spaces yet
+            </div>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
 export function HistoryView() {
-  const { data, isLoading, isError, refetch } = useConversations();
+  const [spaceFilter, setSpaceFilter] = useState<"all" | "unfiled" | string>("all");
+  const querySpaceId = spaceFilter === "all" ? undefined : spaceFilter === "unfiled" ? null : spaceFilter;
+  const { data, isLoading, isError, refetch } = useConversations(querySpaceId);
+  const { data: spacesData } = useSpaces();
+  const spaces = spacesData?.spaces ?? [];
+  const spaceNameById = useMemo(
+    () => new Map(spaces.map((space) => [space.space_id, space.name])),
+    [spaces],
+  );
   const del = useDeleteConversation();
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [deferredQ, setDeferredQ] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const [importErr, setImportErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (
+      spaceFilter !== "all" &&
+      spaceFilter !== "unfiled" &&
+      spacesData &&
+      !spaces.some((space) => space.space_id === spaceFilter)
+    ) {
+      setSpaceFilter("all");
+    }
+  }, [spaceFilter, spaces, spacesData]);
 
   // Import a previously-exported share bundle (a .json file) as a READ-ONLY local
   // conversation. The server validates + re-scrubs + marks it imported; we then jump
@@ -160,19 +265,36 @@ export function HistoryView() {
           </p>
         )}
 
-        {/* search is shown whenever there's a populated list to filter */}
-        {!isLoading && !isError && all.length > 0 && (
-          <div className="flex items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong">
-            <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
-            <input
-              type="search"
-              data-disco-control="history.search"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search conversations…"
-              aria-label="Search conversations"
-              className="w-full bg-transparent font-ui text-[0.88rem] text-text outline-none placeholder:text-text-faint"
-            />
+        {!isLoading && !isError && (all.length > 0 || spaceFilter !== "all") && (
+          <div className="grid gap-inline sm:grid-cols-[minmax(0,1fr)_12rem]">
+            <div className="flex items-center gap-inline rounded-control border border-hairline bg-surface-1 px-inline py-hair focus-within:border-hairline-strong">
+              <Search className="size-4 shrink-0 text-text-faint" aria-hidden />
+              <input
+                type="search"
+                data-disco-control="history.search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search conversations..."
+                aria-label="Search conversations"
+                className="w-full bg-transparent font-ui text-[0.88rem] text-text outline-none placeholder:text-text-faint"
+              />
+            </div>
+            <label className="sr-only" htmlFor="history-space-filter">Space filter</label>
+            <select
+              id="history-space-filter"
+              data-disco-control="history.space-filter"
+              value={spaceFilter}
+              onChange={(e) => setSpaceFilter(e.target.value)}
+              className="rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong"
+            >
+              <option value="all">All Spaces</option>
+              <option value="unfiled">Unfiled</option>
+              {spaces.map((space) => (
+                <option key={space.space_id} value={space.space_id}>
+                  {space.name}
+                </option>
+              ))}
+            </select>
           </div>
         )}
 
@@ -196,7 +318,13 @@ export function HistoryView() {
           </div>
         )}
 
-        {!isLoading && !isError && all.length === 0 && <EmptyHistory />}
+        {!isLoading && !isError && all.length === 0 && spaceFilter === "all" && <EmptyHistory />}
+
+        {!isLoading && !isError && all.length === 0 && spaceFilter !== "all" && (
+          <p className="py-body font-ui text-[0.85rem] text-text-muted">
+            No conversations in this Space.
+          </p>
+        )}
 
         {!isLoading && !isError && all.length > 0 && (
           <>
@@ -219,17 +347,7 @@ export function HistoryView() {
                       data-disco-control="history.open-row"
                       data-conversation-id={c.id}
                       onClick={() =>
-                        navigate(
-                          c.origin === "imported"
-                            ? `/imported/${c.id}`
-                            : c.surface === "deep_research"
-                              ? `/deep/${c.id}`
-                              : c.surface === "agent"
-                                ? `/agent/${c.id}`
-                                : c.surface === "build"
-                                  ? `/build/${c.id}`
-                                  : "/",
-                        )
+                        navigate(surfaceRoute(c))
                       }
                       className="group min-w-0 flex-1 text-left"
                     >
@@ -260,9 +378,11 @@ export function HistoryView() {
                         )}
                       </div>
                       <div className="font-ui text-[0.76rem] text-text-faint">
-                        {formatDate(c.created_at)}
+                        {formatDate(c.created_at)} /{" "}
+                        {c.space_id ? spaceNameById.get(c.space_id) ?? "Unfiled" : "Unfiled"}
                       </div>
                     </button>
+                    <MoveToSpaceMenu conversation={c} spaces={spaces} />
                     <ConfirmDialog
                       title="Delete this conversation?"
                       description="This permanently removes the conversation and its answer. This can't be undone."

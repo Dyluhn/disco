@@ -1,9 +1,9 @@
-"""Persistent named research Spaces.
+"""Persistent named Spaces for organizing conversations.
 
-Spaces are user-named, durable corpora stored under the configured projects
-root. The registry is intentionally a JSON directory, mirroring workflow
-instances, while vectors live in the retrieval package's disk-backed vector
-store under the same root.
+Spaces are user-named folders stored under the configured projects root. The
+registry is intentionally a JSON directory, mirroring workflow instances. Old
+Space vector namespaces may still exist on disk and are cleaned up on delete,
+but new Space records no longer describe a grounding corpus.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$")
 
@@ -24,27 +24,14 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-class SpaceDocument(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    document_id: str
-    name: str
-    media_type: str
-    byte_count: int
-    passage_count: int
-    created_at: str
-
-
 class SpaceRecord(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     space_id: str
     name: str
     description: str = ""
     created_at: str
-    doc_count: int = 0
-    byte_count: int = 0
-    documents: list[SpaceDocument] = Field(default_factory=list)
+    member_count: int = 0
 
     def summary(self) -> dict:
         return {
@@ -52,15 +39,11 @@ class SpaceRecord(BaseModel):
             "name": self.name,
             "description": self.description,
             "created_at": self.created_at,
-            "doc_count": self.doc_count,
-            "byte_count": self.byte_count,
+            "member_count": self.member_count,
         }
 
     def detail(self) -> dict:
-        return {
-            **self.summary(),
-            "documents": [doc.model_dump(mode="json") for doc in self.documents],
-        }
+        return self.summary()
 
 
 class JsonSpaceStore:
@@ -120,22 +103,35 @@ class JsonSpaceStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f".{path.name}.{os.getpid()}.{id(record)}.tmp")
         tmp.write_text(
-            json.dumps(record.model_dump(mode="json"), indent=2, sort_keys=True),
+            json.dumps(
+                record.model_dump(mode="json", exclude={"member_count"}),
+                indent=2,
+                sort_keys=True,
+            ),
             encoding="utf-8",
         )
         tmp.replace(path)
         return path
 
-    def add_document(self, space_id: str, document: SpaceDocument) -> SpaceRecord:
+    def rename(
+        self,
+        space_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> SpaceRecord:
         record = self.get(space_id)
         if record is None:
             raise KeyError(space_id)
-        documents = [*record.documents, document]
+        clean_name = record.name if name is None else name.strip()
+        if not clean_name:
+            raise ValueError("space name is required")
         updated = record.model_copy(
             update={
-                "documents": documents,
-                "doc_count": len(documents),
-                "byte_count": sum(doc.byte_count for doc in documents),
+                "name": clean_name[:120],
+                "description": (
+                    record.description if description is None else description.strip()[:2000]
+                ),
             }
         )
         self.save(updated)
@@ -150,4 +146,4 @@ class JsonSpaceStore:
             return False
 
 
-__all__ = ["JsonSpaceStore", "SpaceDocument", "SpaceRecord"]
+__all__ = ["JsonSpaceStore", "SpaceRecord"]

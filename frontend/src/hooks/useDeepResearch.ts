@@ -37,7 +37,6 @@ type Tier = "quick" | "standard_deep" | "exhaustive";
 export function useDeepResearch(
   resumeCid?: string | null,
   initialLeaderId?: string | null,
-  initialSpaceIds: string[] = [],
   initialSources: string[] = ["ddgs"],
 ) {
   // No localStorage auto-restore: a fresh surface starts EMPTY (compose). An
@@ -49,7 +48,6 @@ export function useDeepResearch(
   // (otherwise the leader pill reset to the default and the submit re-routed
   // the run to a different model silently).
   const [leaderId, setLeaderId] = useState<string | null>(initialLeaderId ?? null);
-  const [spaceIds, setSpaceIds] = useState<string[]>(initialSpaceIds);
   const [sources, setSources] = useState<string[]>(initialSources);
   const [depthTier, setDepthTier] = useState<Tier>("standard_deep");
   // A4: iterative grounding toggle — false = standard run, true = re-search
@@ -74,14 +72,12 @@ export function useDeepResearch(
   const preCreate = useMutation({ mutationFn: createDeepResearchConversation });
   // Track which depth/recency combo the current preCid was created for so we
   // only re-create when they actually change (not on every render).
-  const spaceIdsKey = spaceIds.join("\u0000");
   const sourcesKey = sources.join("\u0000");
   const preCidSettingsRef = useRef<{
     depthTier: Tier;
     iterative: boolean;
     recencyWindow: "month" | "week" | null;
     leaderId: string | null;
-    spaceIdsKey: string;
     sourcesKey: string;
   } | null>(null);
 
@@ -95,7 +91,6 @@ export function useDeepResearch(
       preCidSettingsRef.current.iterative === iterative &&
       preCidSettingsRef.current.recencyWindow === recencyWindow &&
       preCidSettingsRef.current.leaderId === leaderId &&
-      preCidSettingsRef.current.spaceIdsKey === spaceIdsKey &&
       preCidSettingsRef.current.sourcesKey === sourcesKey;
     if (alreadyMatchesCurrent) return;
     // R9: include leaderId so the pre-created cid carries the user's model pick.
@@ -107,7 +102,6 @@ export function useDeepResearch(
       iterative,
       recencyWindow,
       leaderId,
-      spaceIdsKey,
       sourcesKey,
     };
     preCidSettingsRef.current = requested;
@@ -120,7 +114,7 @@ export function useDeepResearch(
     preCreate.mutate(
       // query is intentionally empty — no USER message is sent at pre-create
       // time; the cid is just a lightweight conversation record for uploads.
-      { query: "", leaderId, depthTier, iterative, recencyWindow, spaceIds, sources },
+      { query: "", leaderId, depthTier, iterative, recencyWindow, sources },
       {
         // Guard against an out-of-order resolve: only adopt this cid if its
         // settings are STILL the current ones (a newer toggle hasn't superseded
@@ -133,7 +127,6 @@ export function useDeepResearch(
             cur.iterative === requested.iterative &&
             cur.recencyWindow === requested.recencyWindow &&
             cur.leaderId === requested.leaderId &&
-            cur.spaceIdsKey === requested.spaceIdsKey &&
             cur.sourcesKey === requested.sourcesKey
           ) {
             setPreCid(cid);
@@ -141,7 +134,7 @@ export function useDeepResearch(
         },
       },
     );
-  }, [resumeCid, session, depthTier, iterative, recencyWindow, leaderId, spaceIdsKey, sourcesKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [resumeCid, session, depthTier, iterative, recencyWindow, leaderId, sourcesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stream = useDeepResearchStream(session);
 
@@ -175,7 +168,7 @@ export function useDeepResearch(
   const ensurePreCid = useCallback(async () => {
     if (!agentLive()) return null;
     if (preCid) return preCid;
-    const requested = { depthTier, iterative, recencyWindow, leaderId, spaceIdsKey, sourcesKey };
+    const requested = { depthTier, iterative, recencyWindow, leaderId, sourcesKey };
     preCidSettingsRef.current = requested;
     const cid = await preCreate.mutateAsync({
       query: "",
@@ -183,7 +176,6 @@ export function useDeepResearch(
       depthTier,
       iterative,
       recencyWindow,
-      spaceIds,
       sources,
     });
     setPreCid(cid);
@@ -195,9 +187,7 @@ export function useDeepResearch(
     iterative,
     recencyWindow,
     leaderId,
-    spaceIds,
     sources,
-    spaceIdsKey,
     sourcesKey,
   ]);
 
@@ -217,7 +207,7 @@ export function useDeepResearch(
         return;
       }
       create.mutate(
-        { query: trimmed, leaderId, depthTier, iterative, recencyWindow, spaceIds, sources },
+        { query: trimmed, leaderId, depthTier, iterative, recencyWindow, sources },
         {
           // kick:true — this is the ONLY path that starts the run.
           onSuccess: (cid) =>
@@ -225,7 +215,7 @@ export function useDeepResearch(
         },
       );
     },
-    [create, leaderId, depthTier, iterative, recencyWindow, spaceIds, sources, preCid],
+    [create, leaderId, depthTier, iterative, recencyWindow, sources, preCid],
   );
 
   // fix-c #5: the bounded-by "Run on exhaustive tier" button used to call
@@ -239,14 +229,14 @@ export function useDeepResearch(
       if (!q) return;
       setDepthTier("exhaustive");
       create.mutate(
-        { query: q, leaderId, depthTier: "exhaustive", iterative, spaceIds, sources },
+        { query: q, leaderId, depthTier: "exhaustive", iterative, sources },
         {
           onSuccess: (cid) =>
             setSession({ cid, query: q, depthTier: "exhaustive", kick: true }),
         },
       );
     },
-    [create, leaderId, iterative, spaceIds, sources],
+    [create, leaderId, iterative, sources],
   );
 
   // Stop = pause (cooperative; the engine halts at the next checkpoint and keeps
@@ -389,8 +379,6 @@ export function useDeepResearch(
     submitting: create.isPending,
     leaderId,
     setLeaderId,
-    spaceIds,
-    setSpaceIds,
     selectedSources: sources,
     setSelectedSources: setSources,
     depthTier,

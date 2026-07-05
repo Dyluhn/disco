@@ -13,7 +13,7 @@ import httpx
 from disco.core import DEFAULT_OWNER_ID
 from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -43,11 +43,16 @@ class ConversationSummaryDTO(BaseModel):
 
     id: str
     owner_id: str
+    space_id: str | None = None
     title: str | None = None
     created_at: str
     status: str | None = None
     surface: str = "research"  # "research" | "build" | "agent" | "deep_research" — routing
     origin: str | None = None  # "imported" → read-only, routes to /imported/:cid
+
+
+class SetConversationSpaceBody(BaseModel):
+    space_id: str | None = None
 
 
 def make_conversations_router(store: SqliteEventStore) -> APIRouter:
@@ -58,15 +63,21 @@ def make_conversations_router(store: SqliteEventStore) -> APIRouter:
         owner_id: str = Query(default=DEFAULT_OWNER_ID),
         cursor: str | None = Query(default=None),
         limit: int = Query(default=50),
+        space_id: str | None = Query(default=None),
     ) -> list[ConversationSummaryDTO]:
         # BW-08: the History surface never shows 0-event ghost conversations.
         summaries = await store.list_conversation_summaries(
-            owner_id=owner_id, limit=limit, cursor=cursor, nonempty_only=True
+            owner_id=owner_id,
+            limit=limit,
+            cursor=cursor,
+            nonempty_only=True,
+            space_id=space_id,
         )
         return [
             ConversationSummaryDTO(
                 id=s.conversation_id,
                 owner_id=s.owner_id,
+                space_id=s.space_id,
                 title=s.title,
                 created_at=s.created_at,
                 status=s.status,
@@ -75,6 +86,21 @@ def make_conversations_router(store: SqliteEventStore) -> APIRouter:
             )
             for s in summaries
         ]
+
+    @router.post("/api/conversations/{conversation_id}/space")
+    async def set_conversation_space(
+        conversation_id: str,
+        body: SetConversationSpaceBody,
+    ) -> dict:
+        if not await store.conversation_exists(conversation_id):
+            raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+        clean_space_id = body.space_id.strip() if body.space_id else None
+        await store.set_conversation_space(conversation_id, clean_space_id)
+        return {
+            "ok": True,
+            "conversation_id": conversation_id,
+            "space_id": clean_space_id,
+        }
 
     @router.delete("/api/conversations/{conversation_id}")
     async def delete_conversation(

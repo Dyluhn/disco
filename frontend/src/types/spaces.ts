@@ -1,23 +1,15 @@
+import type { ConversationSummary } from "./conversation";
+
 export interface SpaceSummary {
   space_id: string;
   name: string;
   description: string;
   created_at: string;
-  doc_count: number;
-  byte_count: number;
-}
-
-export interface SpaceDocument {
-  document_id: string;
-  name: string;
-  media_type: string;
-  byte_count: number;
-  passage_count: number;
-  created_at: string;
+  member_count: number;
 }
 
 export interface SpaceDetail extends SpaceSummary {
-  documents: SpaceDocument[];
+  members: ConversationSummary[];
 }
 
 export interface SpacesList {
@@ -30,8 +22,8 @@ export interface CreateSpaceInput {
   description?: string;
 }
 
-export interface SpaceUploadResult {
-  saved: SpaceDocument[];
-  rejected: { name: string; reason: string }[];
-  space: SpaceDetail;
+export interface RenameSpaceInput {
+  spaceId: string;
+  name?: string;
+  description?: string;
 }

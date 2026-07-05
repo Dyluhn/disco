@@ -44,6 +44,7 @@ class ConversationSummary(BaseModel):
 
     conversation_id: str
     owner_id: str
+    space_id: str | None = None
     title: str | None = None
     created_at: str  # ISO-8601
     status: str | None = None
@@ -153,3 +154,19 @@ class EventStore(Protocol):
     async def list_conversations(
         self, *, owner_id: str, limit: int = 50, cursor: str | None = None
     ) -> list[str]: ...
+
+    async def list_conversation_summaries(
+        self,
+        *,
+        owner_id: str,
+        limit: int = 50,
+        cursor: str | None = None,
+        nonempty_only: bool = False,
+        space_id: str | None = None,
+    ) -> list[ConversationSummary]: ...
+
+    async def set_conversation_space(
+        self, conversation_id: str, space_id: str | None
+    ) -> None: ...
+
+    async def clear_space_members(self, space_id: str) -> None: ...

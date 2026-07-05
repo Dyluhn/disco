@@ -4,9 +4,9 @@ import {
   deleteSpace,
   getSpace,
   listSpaces,
-  uploadSpaceDocuments,
+  renameSpace,
 } from "@/api/spaces";
-import type { CreateSpaceInput, SpaceUploadResult } from "@/types/spaces";
+import type { CreateSpaceInput, RenameSpaceInput } from "@/types/spaces";
 
 export function useSpaces() {
   return useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
@@ -31,24 +31,25 @@ export function useCreateSpace() {
   });
 }
 
+export function useRenameSpace() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RenameSpaceInput) => renameSpace(input),
+    onSuccess: async (space) => {
+      qc.setQueryData(["space", space.space_id], space);
+      await qc.invalidateQueries({ queryKey: ["spaces"] });
+    },
+  });
+}
+
 export function useDeleteSpace() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: deleteSpace,
     onSuccess: async ({ space_id }) => {
       await qc.invalidateQueries({ queryKey: ["spaces"] });
+      await qc.invalidateQueries({ queryKey: ["conversations"] });
       qc.removeQueries({ queryKey: ["space", space_id] });
-    },
-  });
-}
-
-export function useUploadSpaceDocuments(spaceId: string | null) {
-  const qc = useQueryClient();
-  return useMutation<SpaceUploadResult, Error, File[]>({
-    mutationFn: (files) => uploadSpaceDocuments(spaceId!, files),
-    onSuccess: async (result) => {
-      qc.setQueryData(["space", result.space.space_id], result.space);
-      await qc.invalidateQueries({ queryKey: ["spaces"] });
     },
   });
 }

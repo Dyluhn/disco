@@ -12,9 +12,11 @@ from disco.core import (
     ConversationStatus,
 )
 from disco.core.appkit import classify_build_brief
+from disco.core.store.base import ConversationSummary
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
 from fastapi import APIRouter, HTTPException, Query, Response
+from pydantic import BaseModel
 
 from ..runtime import (
     ConversationRuntime,
@@ -22,6 +24,7 @@ from ..runtime import (
     WorkspaceRestoreStorageError,
     WorkspaceVersionNotFound,
 )
+from ..space_store import JsonSpaceStore
 from ..title_service import fallback_title
 from ._common import (
     _WORKSPACE_PREFIXES,
@@ -32,6 +35,23 @@ from ._common import (
     _reject_if_imported,
     _user_message,
 )
+
+
+class ConversationSummaryDTO(BaseModel):
+    """Library row the History and Spaces surfaces list."""
+
+    id: str
+    owner_id: str
+    space_id: str | None = None
+    title: str | None = None
+    created_at: str
+    status: str | None = None
+    surface: str = "research"
+    origin: str | None = None
+
+
+class SetConversationSpaceBody(BaseModel):
+    space_id: str | None = None
 
 
 def _resolve_model(body_model_override: str | None, runtime: ConversationRuntime) -> str | None:
@@ -403,3 +423,85 @@ def make_conversations_router(
         return {"id": conversation_id, "deleted": deleted}
 
     return router
+
+
+def make_conversation_library_router(
+    store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> APIRouter:
+    router = APIRouter()
+
+    @router.get("/api/conversations")
+    async def list_conversation_summaries(
+        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        cursor: str | None = Query(default=None),
+        limit: int = Query(default=50),
+        space_id: str | None = Query(default=None),
+    ) -> list[ConversationSummaryDTO]:
+        summaries = await store.list_conversation_summaries(
+            owner_id=owner_id,
+            limit=limit,
+            cursor=cursor,
+            space_id=space_id,
+        )
+        return [_conversation_summary_dto(summary) for summary in summaries]
+
+    @router.post("/api/conversations/{conversation_id}/space")
+    async def set_conversation_space(
+        conversation_id: str,
+        body: SetConversationSpaceBody,
+    ) -> dict:
+        if not await store.conversation_exists(conversation_id):
+            raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+        clean_space_id = body.space_id.strip() if body.space_id else None
+        if clean_space_id is not None:
+            _get_space_or_404(runtime, clean_space_id)
+        await store.set_conversation_space(conversation_id, clean_space_id)
+        return {
+            "ok": True,
+            "conversation_id": conversation_id,
+            "space_id": clean_space_id,
+        }
+
+    return router
+
+
+def _conversation_summary_dto(summary: ConversationSummary) -> ConversationSummaryDTO:
+    return ConversationSummaryDTO(
+        id=summary.conversation_id,
+        owner_id=summary.owner_id,
+        space_id=summary.space_id,
+        title=summary.title,
+        created_at=summary.created_at,
+        status=summary.status,
+        surface=summary.surface,
+        origin=summary.origin,
+    )
+
+
+def _get_space_or_404(runtime: ConversationRuntime | None, space_id: str) -> None:
+    if runtime is None:
+        raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+    project_store = runtime.project_store()
+    if project_store.status() != StorageStatus.OK:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason": "project_storage_unavailable",
+                "status": project_store.status().value,
+            },
+        )
+    root = project_store.root
+    if root is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "project_storage_unavailable", "status": "unset"},
+        )
+    try:
+        found = JsonSpaceStore(root).get(space_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"reason": "invalid_space_id", "message": str(exc)},
+        ) from exc
+    if found is None:
+        raise HTTPException(status_code=404, detail={"reason": "space_not_found"})

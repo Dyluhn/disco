@@ -4,6 +4,8 @@
 export interface ConversationSummary {
   id: string;
   owner_id: string;
+  /** Space folder membership; null/undefined means Unfiled. */
+  space_id?: string | null;
   /** the conversation's title / first question */
   title: string;
   /** the conversation's current status (cached library projection) */

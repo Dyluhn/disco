@@ -57,7 +57,6 @@ export function useResearch() {
       opts?: {
         model_override?: string | null;
         think?: boolean;
-        space_ids?: string[];
         sources?: string[];
       },
     ) => {

@@ -194,6 +194,10 @@ class SqliteEventStore:
         # Migration: add `surface` to pre-existing conversations tables (CREATE TABLE
         # IF NOT EXISTS won't add a new column). Idempotent — ignore "duplicate".
         try:
+            self._conn.execute("ALTER TABLE conversations ADD COLUMN space_id TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN surface TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
@@ -616,6 +620,7 @@ class SqliteEventStore:
         limit: int = 50,
         cursor: str | None = None,
         nonempty_only: bool = False,
+        space_id: str | None = None,
     ) -> list[ConversationSummary]:
         """Owner-scoped library rows (id/title/created_at), newest first — what the
         History surface lists (§6.1). Same ownership filter as `list_conversations`;
@@ -628,18 +633,25 @@ class SqliteEventStore:
         other internal readers leave it False so a freshly-kicked, mid-first-append
         running task is never dropped."""
         offset = int(cursor) if cursor else 0
-        nonempty_clause = (
-            "AND EXISTS (SELECT 1 FROM events e WHERE e.conversation_id = c.conversation_id) "
-            if nonempty_only
-            else ""
-        )
+        clauses = ["owner_id = ?"]
+        params: list[str | int] = [owner_id]
+        if space_id == "":
+            clauses.append("space_id IS NULL")
+        elif space_id is not None:
+            clauses.append("space_id = ?")
+            params.append(space_id)
+        if nonempty_only:
+            clauses.append(
+                "EXISTS (SELECT 1 FROM events e WHERE e.conversation_id = c.conversation_id)"
+            )
+        where_clause = " AND ".join(clauses)
+        params.extend([limit, offset])
         rows = self._conn.execute(
-            "SELECT conversation_id, owner_id, title, created_at, status, surface, origin "
+            "SELECT conversation_id, owner_id, space_id, title, created_at, status, surface, origin "
             "FROM conversations c "
-            "WHERE owner_id = ? "
-            f"{nonempty_clause}"
+            f"WHERE {where_clause} "
             "ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
-            (owner_id, limit, offset),
+            tuple(params),
         ).fetchall()
         summaries: list[ConversationSummary] = []
         repairs: list[tuple[str, str]] = []
@@ -656,6 +668,7 @@ class SqliteEventStore:
                 ConversationSummary(
                     conversation_id=cid,
                     owner_id=r["owner_id"],
+                    space_id=r["space_id"],
                     title=r["title"],
                     created_at=r["created_at"],
                     status=status,
@@ -672,6 +685,27 @@ class SqliteEventStore:
             self._conn.commit()
 
         return summaries
+
+    async def set_conversation_space(
+        self, conversation_id: str, space_id: str | None
+    ) -> None:
+        """Move a conversation into a Space folder, or clear it to Unfiled."""
+        clean_space_id = space_id.strip() if isinstance(space_id, str) else None
+        async with self._write_lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE conversations SET space_id = ? WHERE conversation_id = ?",
+                    (clean_space_id or None, conversation_id),
+                )
+
+    async def clear_space_members(self, space_id: str) -> None:
+        """Clear all conversations currently filed in a deleted Space."""
+        async with self._write_lock:
+            with self._conn:
+                self._conn.execute(
+                    "UPDATE conversations SET space_id = NULL WHERE space_id = ?",
+                    (space_id,),
+                )
 
     def conversation_origin(self, conversation_id: str) -> str | None:
         """The `origin` marker ("imported" or None) — the server-edge gate for

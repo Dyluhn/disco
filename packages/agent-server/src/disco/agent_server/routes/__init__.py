@@ -8,7 +8,7 @@ over those deps — a 1:1 extraction of the route closures that used to live ins
 from __future__ import annotations
 
 from .activity import make_activity_router
-from .conversations import make_conversations_router
+from .conversations import make_conversation_library_router, make_conversations_router
 from .debug import make_debug_router
 from .deck_editor import make_deck_editor_router
 from .export import make_export_router
@@ -33,6 +33,7 @@ from .ws import make_ws_router
 
 __all__ = [
     "make_activity_router",
+    "make_conversation_library_router",
     "make_conversations_router",
     "make_debug_router",
     "make_deck_editor_router",

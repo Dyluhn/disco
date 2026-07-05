@@ -38,7 +38,6 @@ import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { QueryInput } from "@/components/QueryInput";
 import { SuggestionChips } from "@/components/SuggestionChips";
 import { SourcePicker } from "@/components/SourcePicker";
-import { SpaceGroundingControl } from "@/components/SpaceGroundingControl";
 import { EmptyState, ErrorState } from "@/components/states";
 import type { ScopeId } from "@/shell/mode";
 import type { ReportExportFmt } from "@/api/deepResearch";
@@ -70,7 +69,6 @@ interface Props {
    *  path → the input falls back to uncontrolled. */
   draft?: string;
   onDraftChange?: (next: string) => void;
-  initialSpaceIds?: string[];
   initialSources?: string[];
 }
 
@@ -89,10 +87,9 @@ export function DeepResearchSurface({
   initialLeaderId,
   draft,
   onDraftChange,
-  initialSpaceIds,
   initialSources,
 }: Props) {
-  const r = useDeepResearch(resumeCid, initialLeaderId, initialSpaceIds, initialSources);
+  const r = useDeepResearch(resumeCid, initialLeaderId, initialSources);
   const started = r.started;
   const [localDraft, setLocalDraft] = useState("");
   const draftValue = onDraftChange ? (draft ?? "") : localDraft;
@@ -202,7 +199,6 @@ export function DeepResearchSurface({
                     selected={r.selectedSources}
                     onChange={r.setSelectedSources}
                   />
-                  <SpaceGroundingControl selected={r.spaceIds} onChange={r.setSpaceIds} />
                   {/* G1/DR-4 + runthru-v2 #9: UploadComposer always rendered (it
                       self-disables when cid is null) so the attach affordance does
                       NOT vanish during the brief preCid re-create window on a

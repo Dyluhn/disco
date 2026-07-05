@@ -120,7 +120,6 @@ function subscribeLive(
         // G1/DR-4: thread the pre-created cid so the server loads upload seeds.
         // null → OFF path (server-side byte-identical to pre-DR-4 code).
         conversation_id: scope.conversation_id ?? null,
-        space_ids: scope.space_ids ?? [],
         sources: scope.sources ?? [],
       }),
     );
