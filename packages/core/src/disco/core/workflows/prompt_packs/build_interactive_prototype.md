@@ -10,6 +10,14 @@ An `interactive.prototype` deliverable. Required file: `index.html`. Prefer a
 self-contained page with inline styles + JS at the end of `<body>` so it paints
 reliably; state lives in the page (and persists where the flow needs it).
 
+## Art defaults
+Use the committed design direction when present. Draw decorative and illustrative
+assets as bespoke inline `<svg>` with the artifact palette's CSS custom
+properties/tokens, responsive `viewBox` scaling, and `aria-hidden="true"` on
+decorative SVGs. If image_generate fails or is unavailable, draw an SVG instead —
+NEVER leave an empty slot or hotlink external images. Spot icons stay SVG even when a
+direction prefers generated hero photography.
+
 ## Workflow steps
 1. Scaffold the `app_shell` starter with scaffold_starter, then build out `index.html` (file_edit/file_write).
 2. Build the stateful interactions: multi-step flow, validation, persistence.

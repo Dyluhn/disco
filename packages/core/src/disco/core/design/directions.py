@@ -147,6 +147,7 @@ class DesignDirection(BaseModel):
     surface_treatment: SurfaceTreatment
     motion: MotionTokens
     image_art_direction: str
+    art_guidance: str
     density: Density
     keywords: tuple[str, ...] = ()
 
@@ -197,6 +198,19 @@ _NO_MOTION: Final[MotionTokens] = MotionTokens(
     easings=_easings(("linear", "linear")),
 )
 
+_SVG_FIRST_ART_GUIDANCE: Final[str] = (
+    "SVG-FIRST: Draw bespoke inline <svg> illustration for hero scenes, spot icons, "
+    "dividers, textures, and background fields using this direction's palette tokens. "
+    'Keep SVGs viewBox-scaled and decorative SVGs aria-hidden="true"; never use '
+    "external stock URLs."
+)
+_IMAGE_GEN_PREFERRED_ART_GUIDANCE: Final[str] = (
+    "IMAGE-GEN-PREFERRED: For hero or photographic slots, call image_generate when "
+    "configured; if it fails or is unavailable, immediately draw a bespoke inline "
+    "<svg> in this direction's palette instead. Spot icons, dividers, and texture "
+    "marks stay SVG; never use external stock URLs."
+)
+
 
 DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
     DesignDirection(
@@ -226,6 +240,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "editorial photography, halftone grain, offset print texture, dramatic crops"
         ),
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="editorial",
         keywords=(
             "editorial",
@@ -269,6 +284,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "documentary product shots, strict grid crop, neutral studio light, high clarity"
         ),
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="balanced",
         keywords=(
             "swiss",
@@ -308,6 +324,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "xerox poster, stark flash photography, raw edges, visible registration marks"
         ),
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="dense",
         keywords=(
             "brutalist",
@@ -351,6 +368,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "clean SaaS product imagery, soft shadows, quiet gradients, realistic UI detail"
         ),
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="balanced",
         keywords=(
             "saas",
@@ -395,6 +413,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "terminal captures, code fragments, monochrome grids, subtle scanline texture"
         ),
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="compact",
         keywords=(
             "terminal",
@@ -440,6 +459,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "luxury editorial photography, tactile materials, low-key light, refined grain"
         ),
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="spacious",
         keywords=(
             "luxury",
@@ -481,6 +501,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "bright geometric illustration, rounded shapes, friendly product scenes, crisp shadows"
         ),
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
         density="balanced",
         keywords=(
             "playful",
@@ -524,6 +545,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "dark cinematic glass UI, saturated backdrops, luminous edges, premium contrast"
         ),
+        art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
         density="balanced",
         keywords=(
             "dark glass",
@@ -566,6 +588,7 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
         image_art_direction=(
             "warm natural light, hand-crafted texture, tactile materials, honest documentary scenes"
         ),
+        art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
         density="spacious",
         keywords=(
             "craft",
@@ -789,6 +812,8 @@ def render_design_direction(direction: DesignDirection) -> str:
             f"- easings: {_format_easings(direction.motion.easings)}",
             f"- Density: {direction.density}",
             f"- Image art direction: {direction.image_art_direction}",
+            "- Art guidance:",
+            f"- {direction.art_guidance}",
             "",
             "DO:",
             "- Commit to this named direction before writing sections or components.",

@@ -267,6 +267,9 @@ async def test_run_returns_not_configured_when_no_backend(monkeypatch) -> None:
     assert out.error == "image_gen_not_configured"
     assert "isn't configured" in out.content
     assert "Settings" in out.content
+    assert "bespoke inline SVG" in out.content
+    assert "committed palette" in out.content
+    assert "hotlink external images" in out.content
     assert sbx.writes == [], "a not-configured run must not write any deliverable"
 
 
@@ -555,6 +558,26 @@ def test_image_generate_rejects_non_bytes_backend_output():
         assert sbx.writes == []
 
     _asyncio.run(_runner())
+
+
+@pytest.mark.asyncio
+async def test_backend_failure_includes_svg_fallback_hint():
+    class _FailingBackend:
+        name = "failing"
+        is_remote = True
+
+        def generate(self, **_):
+            raise RuntimeError("boom")
+
+    sbx = _FakeSandbox()
+    out = await _run_with(_FailingBackend(), sbx)
+    assert out.success is False
+    assert out.error == "backend_error: RuntimeError"
+    assert "image generation failed (failing): boom" in out.content
+    assert "bespoke inline SVG" in out.content
+    assert "committed palette" in out.content
+    assert "hotlink external images" in out.content
+    assert sbx.writes == []
 
 
 # ---- helpers ----------------------------------------------------------------

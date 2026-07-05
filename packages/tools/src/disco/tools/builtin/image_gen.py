@@ -75,12 +75,17 @@ from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
+_SVG_FALLBACK_HINT = (
+    "Draw a bespoke inline SVG in the committed palette instead; do not leave the "
+    "slot empty or hotlink external images."
+)
+
 # W-50: the operator-facing "no real image backend is configured" message, shared by
 # every caller (the tool's NOT-CONFIGURED outcome, the slides degrade path, probes).
 _NOT_CONFIGURED_MSG = (
     "Image generation isn't configured — set ComfyUI (base URL), an OpenAI-compatible "
     "API (base URL + key), or OpenRouter (store the OpenRouter key) in "
-    "Settings → Image generation."
+    f"Settings → Image generation. {_SVG_FALLBACK_HINT}"
 )
 
 
@@ -92,6 +97,10 @@ class ImageGenNotConfigured(RuntimeError):
 
     def __init__(self, message: str = _NOT_CONFIGURED_MSG) -> None:
         super().__init__(message)
+
+
+def _with_svg_fallback_hint(message: str) -> str:
+    return f"{message} {_SVG_FALLBACK_HINT}"
 
 
 # ---- binary formats ---------------------------------------------------------
@@ -853,7 +862,9 @@ class ImageGenTool:
         except Exception as e:  # noqa: BLE001 — tool failure surfaces as an observation
             return ToolOutcome(
                 success=False,
-                content=f"image generation failed ({backend.name}): {e}",
+                content=_with_svg_fallback_hint(
+                    f"image generation failed ({backend.name}): {e}"
+                ),
                 error=f"backend_error: {type(e).__name__}",
             )
 
@@ -863,7 +874,7 @@ class ImageGenTool:
         if not isinstance(image_bytes, bytes):
             return ToolOutcome(
                 success=False,
-                content=(
+                content=_with_svg_fallback_hint(
                     f"backend {backend.name!r} returned "
                     f"{type(image_bytes).__name__}, expected bytes. The "
                     f"binary-write path requires raw bytes — text-mode "
@@ -895,7 +906,7 @@ class ImageGenTool:
         else:
             return ToolOutcome(
                 success=False,
-                content=(
+                content=_with_svg_fallback_hint(
                     f"image_generate: backend produced bytes that are neither a PNG nor "
                     f"a JPEG — refusing to surface a corrupt image as a deliverable. "
                     f"(backend={backend.name})"

@@ -38,6 +38,7 @@ def test_all_nine_directions_are_valid_records() -> None:
         assert len(direction.accents) == 3
         assert direction.summary
         assert direction.image_art_direction
+        assert direction.art_guidance
         assert direction.density
         assert direction.surface_treatment.tokens.radius
         assert direction.surface_treatment.tokens.shadow_level
@@ -90,6 +91,10 @@ def test_render_design_direction_is_stable_and_carries_anti_slop_bans() -> None:
     assert "- ID: dark-glass" in first
     assert "blur=14px; saturate=160%" in first
     assert "border-highlight is mandatory" in first
+    assert "- Art guidance:" in first
+    assert "IMAGE-GEN-PREFERRED" in first
+    assert "bespoke inline <svg>" in first
+    assert "never use external stock URLs" in first
     assert "DO:" in first
     assert "DON'T:" in first
     for banned in (
@@ -102,6 +107,26 @@ def test_render_design_direction_is_stable_and_carries_anti_slop_bans() -> None:
         "five-column footer soup",
     ):
         assert banned in first
+
+
+def test_art_guidance_sets_svg_first_and_image_gen_fallback_postures() -> None:
+    rich_photographic = {"dark-glass", "warm-craft"}
+    svg_first = EXPECTED_IDS - rich_photographic
+
+    for direction_id in svg_first:
+        guidance = DIRECTION_BY_ID[direction_id].art_guidance
+        assert guidance.startswith("SVG-FIRST")
+        assert "inline <svg>" in guidance
+        assert 'aria-hidden="true"' in guidance
+        assert "external stock URLs" in guidance
+
+    for direction_id in rich_photographic:
+        guidance = DIRECTION_BY_ID[direction_id].art_guidance
+        assert guidance.startswith("IMAGE-GEN-PREFERRED")
+        assert "image_generate when configured" in guidance
+        assert "if it fails or is unavailable" in guidance
+        assert "bespoke inline <svg>" in guidance
+        assert "Spot icons" in guidance and "stay SVG" in guidance
 
 
 def test_direction_contract_roundtrips_to_brand_theme_shape() -> None:

@@ -78,6 +78,12 @@ def test_build_static_site_pack_contains_wave2_site_pack_rules() -> None:
         "hero choreography totals 900ms-1.4s",
         "at least 1/3 of sections static",
         "Text-over-image requires a protection layer",
+        "bespoke inline `<svg>`",
+        "`viewBox`",
+        '`aria-hidden="true"`',
+        "draw an SVG instead — NEVER leave",
+        "hotlink external images",
+        "Spot icons stay SVG",
         "purple-blue gradient default, three identical feature cards, Inter-everything",
         "indigo-600 CTA + reflexive hover:scale-105",
         "container queries",
@@ -119,7 +125,14 @@ def test_every_contract_prompt_pack_resolves_to_a_complete_pack() -> None:
 def test_interactive_prototype_now_has_its_own_pack() -> None:
     reg = PromptPackRegistry()
     assert "build_interactive_prototype" in reg.ids()
-    assert not reg.require("build_interactive_prototype").missing_required()
+    pack = reg.require("build_interactive_prototype")
+    raw = pack.raw
+    assert not pack.missing_required()
+    assert "bespoke inline `<svg>`" in raw
+    assert "`viewBox`" in raw
+    assert 'aria-hidden="true"' in raw
+    assert "draw an SVG instead —" in raw
+    assert "hotlink external images" in raw
 
 
 def test_parse_duplicate_section_raises() -> None:

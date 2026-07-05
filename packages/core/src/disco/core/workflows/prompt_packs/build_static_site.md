@@ -174,6 +174,12 @@ The artifact must include:
      palette-locked descriptors, lighting, medium, and crop behavior.
    - Use explicit slots: full-bleed hero, product/screenshot, diagram, background
      texture/gradient field, spot illustration, avatar, and section divider art.
+   - For decorative or illustrative slots, default to bespoke inline `<svg>` drawn
+     with the committed palette's CSS custom properties/tokens. Give each SVG a
+     responsive `viewBox`; set `aria-hidden="true"` on decorative SVGs.
+   - If image_generate fails or is unavailable, draw an SVG instead — NEVER leave an
+     empty slot or hotlink external images.
+   - Spot icons stay SVG even when a direction prefers generated hero photography.
    - Compose image prompts as art direction + slot type + content subject; never use a
      bare "image of X" prompt.
    - Text-over-image requires a protection layer: gradient scrim, dark/light overlay,
