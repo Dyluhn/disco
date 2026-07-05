@@ -556,6 +556,8 @@ class OpenAIProvider:
     @staticmethod
     def _coerce_args(args: dict, schema: dict | None) -> dict:
         """Rung 5: Type-coercing validation. Cast strings to expected types."""
+        if not isinstance(args, dict):
+            return args  # defense in depth — never .items() a non-dict
         if not schema or schema.get("type") != "object":
             return args
         properties = schema.get("properties", {})
@@ -619,6 +621,13 @@ class OpenAIProvider:
                         parsed = {"_raw": args_raw}
             else:
                 parsed = args_raw or {}
+            if not isinstance(parsed, dict):
+                # A provider dialect can emit arguments as a bare JSON ARRAY —
+                # _coerce_args/.items() on a list crashed the whole run task
+                # (dt5 autopsy). Route it through the same honest-failure shape
+                # as unparseable JSON: validation refuses with feedback the
+                # model can act on, the run never dies.
+                parsed = {"_raw": args_raw if isinstance(args_raw, str) else json.dumps(parsed)}
             
             # Rung 5: (c) type-coercing validation
             # Find the spec. Match original or sanitized name.

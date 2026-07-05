@@ -295,3 +295,21 @@ async def test_streaming_error_status_raises_typed_before_any_token():
     with pytest.raises(LLMAuthError):
         async for _chunk in _provider(handler).stream_complete(_req(), model="m"):
             pass
+
+
+def test_tool_calls_survive_array_shaped_arguments():
+    """dt5 crash root cause: a provider dialect emitted arguments as a bare JSON
+    ARRAY; json.loads gave a list, _coerce_args called .items() on it, and the
+    AttributeError killed the whole run task. Array args must degrade to the
+    honest {"_raw": ...} shape (validation refuses with feedback), never crash."""
+    from disco.core.llm.openai_provider import OpenAIProvider
+
+    raw = [{
+        "id": "c1",
+        "function": {"name": "update_plan_progress", "arguments": '[{"index": 1, "state": "done"}]'},
+    }]
+    calls = OpenAIProvider._tool_calls(raw)
+    assert len(calls) == 1
+    args = calls[0].arguments
+    assert isinstance(args, dict)
+    assert "_raw" in args
