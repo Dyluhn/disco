@@ -26,6 +26,7 @@ import { ImportedRunView } from "@/views/ImportedRunView";
 import { ProjectsView } from "@/views/ProjectsView";
 import { SettingsView } from "@/views/SettingsView";
 import { ShareView } from "@/views/ShareView";
+import { SpacesView } from "@/views/SpacesView";
 import { WorkflowReviewPanel } from "@/views/WorkflowReviewPanel";
 
 const queryClient = new QueryClient({
@@ -85,6 +86,7 @@ function E2EBridgeMounter() {
   else if (pathname === "/history") surface = "history";
   else if (pathname === "/projects") surface = "projects";
   else if (pathname === "/workflows") surface = "workflows";
+  else if (pathname === "/spaces") surface = "spaces";
   else if (pathname === "/settings") surface = "settings";
   else if (pathname === "/" || pathname === "")
     surface =
@@ -253,6 +255,7 @@ export default function App() {
               <Route path="history" element={<HistoryView />} />
               <Route path="projects" element={<ProjectsView />} />
               <Route path="workflows" element={<WorkflowReviewPanel />} />
+              <Route path="spaces" element={<SpacesView />} />
               <Route path="build/:cid" element={<ResumeProject />} />
               <Route path="agent/:cid" element={<ResumeAgent />} />
               <Route path="imported/:cid" element={<ImportedRunView />} />

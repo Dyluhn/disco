@@ -52,7 +52,10 @@ export function useResearch() {
   }, [preCid, preCreate]);
 
   const submit = useCallback(
-    async (query: string, opts?: { model_override?: string | null; think?: boolean }) => {
+    async (
+      query: string,
+      opts?: { model_override?: string | null; think?: boolean; space_ids?: string[] },
+    ) => {
       // The per-conversation lead-model override + Think flag ride along on the
       // request (backend hooks: CallContext.model_override + a think flag).
       // BW-08 twin: reuse an upload's preCid if present; otherwise mint the cid NOW

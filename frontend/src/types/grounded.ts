@@ -139,6 +139,9 @@ export interface ReScope {
    *  initial-box UploadComposer) and seeds them into the rerank step.
    *  null/undefined → OFF path (byte-identical to pre-DR-4 code). */
   conversation_id?: string | null;
+  /** Persistent named Spaces to merge into retrieval grounding. Empty/undefined
+   *  means live web + upload seeds only. */
+  space_ids?: string[];
 }
 
 // ---- WS frames (event-state §7.2) — what the stream delivers ----------------

@@ -8,7 +8,10 @@ store is the v1 [INTERIOR] impl ([OPEN §24-D1]: pgvector vs a dedicated engine)
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+import hashlib
+import json
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
 
 from .models import ExtractedDoc, Passage
 from .ranking import Embedder
@@ -67,6 +70,80 @@ class InMemoryVectorStore:
 
     async def delete_namespace(self, namespace: str) -> None:
         self._ns.pop(namespace, None)
+
+
+class DiskVectorStore:
+    """Simple durable namespaced vector store.
+
+    Each namespace is stored as one JSONL file under ``root``. It deliberately
+    mirrors ``InMemoryVectorStore`` semantics: upsert is append-only for unseen
+    passage ids, and query only ever reads the requested namespace.
+    """
+
+    def __init__(self, root: str | Path) -> None:
+        self._root = Path(root).expanduser()
+
+    def _path_for(self, namespace: str) -> Path:
+        digest = hashlib.sha256(namespace.encode("utf-8")).hexdigest()[:32]
+        return self._root / f"{digest}.jsonl"
+
+    def _read(self, namespace: str) -> list[tuple[Passage, list[float]]]:
+        path = self._path_for(namespace)
+        if not path.is_file():
+            return []
+        rows: list[tuple[Passage, list[float]]] = []
+        try:
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    if not line.strip():
+                        continue
+                    raw = json.loads(line)
+                    if raw.get("namespace") != namespace:
+                        continue
+                    passage = Passage.model_validate(raw["passage"])
+                    vector = [float(x) for x in raw.get("vector", [])]
+                    rows.append((passage, vector))
+        except (OSError, ValueError, TypeError, KeyError):
+            return []
+        return rows
+
+    async def upsert(
+        self, namespace: str, passages: list[Passage], vectors: list[list[float]]
+    ) -> None:
+        if not passages:
+            return
+        self._root.mkdir(parents=True, exist_ok=True)
+        path = self._path_for(namespace)
+        existing = {p.id for p, _ in self._read(namespace)}
+        rows: list[dict[str, Any]] = []
+        for passage, vector in zip(passages, vectors, strict=True):
+            if passage.id in existing:
+                continue
+            existing.add(passage.id)
+            rows.append(
+                {
+                    "namespace": namespace,
+                    "passage": passage.model_dump(mode="json"),
+                    "vector": vector,
+                }
+            )
+        if not rows:
+            return
+        with path.open("a", encoding="utf-8") as fh:
+            for row in rows:
+                fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+    async def query(self, namespace: str, vector: list[float], *, top_k: int) -> list[Passage]:
+        bucket = self._read(namespace)
+        ranked = sorted(bucket, key=lambda pv: _cosine(vector, pv[1]), reverse=True)
+        return [p for p, _ in ranked[:top_k]]
+
+    async def delete_namespace(self, namespace: str) -> None:
+        path = self._path_for(namespace)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 class DefaultCorpusService:

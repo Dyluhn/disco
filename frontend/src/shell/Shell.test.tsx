@@ -39,11 +39,9 @@ describe("Application shell", () => {
     expect(screen.getByRole("button", { name: /switch to (light|dark)/i })).toBeInTheDocument();
   });
 
-  it("shows Spaces as present-but-dormant (not a link)", () => {
+  it("shows Spaces as a live route", () => {
     renderShell();
-    expect(screen.queryByRole("link", { name: "Spaces" })).not.toBeInTheDocument();
-    const spaces = screen.getByText("Spaces");
-    expect(spaces.closest("[aria-disabled='true']")).not.toBeNull();
+    expect(screen.getByRole("link", { name: "Spaces" })).toHaveAttribute("href", "/spaces");
   });
 
   it("uses a Search/Build slider as the sole mode control (no separate indicator, no Deep Research at top)", () => {

@@ -112,6 +112,10 @@ class CreateConversationBody(BaseModel):
     # free-form tools barred; only the validated app_* mutators + reads/probes; a
     # HIGH-risk request_custom_build escape hatch). False ⇒ normal build loop.
     appkit_mode: bool = False
+    # Spaces: persistent named corpora to ground research / deep_research. The
+    # runtime pins these per conversation and the retrieval engine scopes through
+    # RetrievalRequest.corpus_ids.
+    space_ids: list[str] = []
 
 
 class SendMessageBody(BaseModel):

@@ -9,9 +9,10 @@ import {
   deleteProject,
   downloadProject,
   exportProjectManifest,
+  getProjectManifest,
   listProjects,
 } from "@/api/projects";
-import type { ProjectsList } from "@/types/project";
+import type { ProjectManifest, ProjectsList } from "@/types/project";
 
 export const PROJECTS_KEY = ["projects"] as const;
 
@@ -40,5 +41,13 @@ export function useDownloadProject() {
 export function useExportManifest() {
   return useMutation({
     mutationFn: (id: string) => exportProjectManifest(id),
+  });
+}
+
+export function useProjectManifest(conversationId: string | null) {
+  return useQuery<ProjectManifest>({
+    queryKey: ["project-manifest", conversationId],
+    queryFn: () => getProjectManifest(conversationId!),
+    enabled: !!conversationId,
   });
 }

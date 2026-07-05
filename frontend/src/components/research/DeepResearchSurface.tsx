@@ -37,6 +37,7 @@ import { useDeepResearchDoneNotification } from "@/hooks/useDeepResearchDoneNoti
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { QueryInput } from "@/components/QueryInput";
 import { SuggestionChips } from "@/components/SuggestionChips";
+import { SpaceGroundingControl } from "@/components/SpaceGroundingControl";
 import { EmptyState, ErrorState } from "@/components/states";
 import type { ScopeId } from "@/shell/mode";
 import type { ReportExportFmt } from "@/api/deepResearch";
@@ -68,6 +69,7 @@ interface Props {
    *  path → the input falls back to uncontrolled. */
   draft?: string;
   onDraftChange?: (next: string) => void;
+  initialSpaceIds?: string[];
 }
 
 const CTRL_BTN =
@@ -79,8 +81,15 @@ const KILL_BTN =
 // not-allowed cursor), never a click that silently errors. NO FALSE AFFORDANCES.
 const PENDING_BTN =
   "flex items-center gap-hair rounded-control border border-hairline border-dashed px-inline py-hair font-ui text-[0.78rem] text-text-faint opacity-50 cursor-not-allowed";
-export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId, draft, onDraftChange }: Props) {
-  const r = useDeepResearch(resumeCid, initialLeaderId);
+export function DeepResearchSurface({
+  resumeCid,
+  onScopeChange,
+  initialLeaderId,
+  draft,
+  onDraftChange,
+  initialSpaceIds,
+}: Props) {
+  const r = useDeepResearch(resumeCid, initialLeaderId, initialSpaceIds);
   const started = r.started;
   const [localDraft, setLocalDraft] = useState("");
   const draftValue = onDraftChange ? (draft ?? "") : localDraft;
@@ -186,6 +195,7 @@ export function DeepResearchSurface({ resumeCid, onScopeChange, initialLeaderId,
                   <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
                   <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
                   <IterativeToggle value={r.iterative} onChange={r.setIterative} />
+                  <SpaceGroundingControl selected={r.spaceIds} onChange={r.setSpaceIds} />
                   {/* G1/DR-4 + runthru-v2 #9: UploadComposer always rendered (it
                       self-disables when cid is null) so the attach affordance does
                       NOT vanish during the brief preCid re-create window on a

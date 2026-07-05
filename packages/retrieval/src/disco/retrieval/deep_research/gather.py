@@ -26,7 +26,6 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast
 
 from disco.core import LLMMessage
-from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CallContext,
     CapabilityProfile,
@@ -35,6 +34,14 @@ from disco.core.llm import (
     LLMRouter,
     ModelRole,
 )
+from disco.core.think import strip_think_spans
+
+from ..engine import RetrievalEngine
+from ..models import Passage, RetrievalRequest, SearchHit
+from ..ranking import Embedder
+from ..vectorstore import VectorStore
+from .decompose import SubQuestion
+from .depth import DepthBound
 
 
 class _RouterWithCtx(Protocol):
@@ -62,13 +69,6 @@ class _RouterWithCtx(Protocol):
     async def complete(
         self, req: CompletionRequest, *, context: CallContext | None = None
     ) -> CompletionResponse: ...
-
-from ..engine import RetrievalEngine
-from ..models import Passage, RetrievalRequest, SearchHit
-from ..ranking import Embedder
-from ..vectorstore import VectorStore
-from .decompose import SubQuestion
-from .depth import DepthBound
 
 # A small async hook the agent-server installs to write Action/Observation
 # events to the conversation log as the gather progresses. The engine never
@@ -217,6 +217,7 @@ async def gather_for_subquestion(
     remaining_source_budget: int,
     leg_context: GatherLegContext,
     recency_window: Literal["month", "week"] | None = None,
+    corpus_ids: frozenset[str] = frozenset(),
     extra_passages: list[Passage] = [],  # noqa: B006 — read-only default; safe
 ) -> SubQuestionResult:
     """Run the retrieve-reason-refine loop for one sub-question. Returns the
@@ -235,8 +236,9 @@ async def gather_for_subquestion(
 
     G1/DR-4 F2: ``extra_passages`` seeds this leg's working set with
     pre-attached upload passages so they are available for synthesis alongside
-    web-retrieved passages. The OFF-path (empty list, the default) is
-    byte-identical to the pre-DR-4 code."""
+    web-retrieved passages. ``corpus_ids`` scopes durable Space retrieval through
+    the engine's existing RetrievalRequest path. The OFF-path (empty list/default)
+    is byte-identical to the pre-DR-4 code."""
     # G1/DR-4 F2: seed the leg's working set with upload passages (if any).
     # Dedup by id so a passage the retrieval engine also finds isn't doubled.
     result = SubQuestionResult(subq=subq)
@@ -271,6 +273,7 @@ async def gather_for_subquestion(
                 # DR-3 E2: thread recency_window so the engine's search call
                 # applies a time filter when the user selected one.
                 recency_window=recency_window,
+                corpus_ids=corpus_ids,
             )
             retrieval = await engine.retrieve(req)
         except Exception as exc:  # noqa: BLE001 — retrieval failure is recoverable

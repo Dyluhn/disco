@@ -268,6 +268,7 @@ class DeepResearchService:
         domains_deny: frozenset[str] = frozenset(),
         think: bool = False,
         conversation_id: str | None = None,
+        space_ids: frozenset[str] = frozenset(),
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a live grounded answer as the UI's research frames (state →
         token… → final). Composes the shared router with the live retrieval
@@ -303,8 +304,13 @@ class DeepResearchService:
         if driver_reason is not None:
             yield {"type": "error", "message": driver_reason}
             return
-        # W-33: the live answer grounds on the reranker + NLI verifier.
-        enc_reason = await self._preflight_encoders(deps, required=("reranker", "nli"))
+        requested_space_ids = space_ids or self._rt.get_space_ids(conversation_id)
+        # W-33: the live answer grounds on the reranker + NLI verifier. Space
+        # grounding also needs the embedder for vector lookup.
+        required_encoders = (
+            ("reranker", "nli", "embedder") if requested_space_ids else ("reranker", "nli")
+        )
+        enc_reason = await self._preflight_encoders(deps, required=required_encoders)
         if enc_reason is not None:
             yield {"type": "error", "message": enc_reason}
             return
@@ -338,6 +344,9 @@ class DeepResearchService:
             think=think,
             # G1/DR-4 F3: seed the rerank step with any pre-attached upload passages.
             seed_passages=seed_passages,
+            corpus_ids=requested_space_ids,
+            embedder=deps.get("embedder"),
+            vector_store=self._rt.space_vector_store(),
         ):
             yield frame
 
@@ -596,6 +605,7 @@ class DeepResearchService:
         )
 
         deps = self._rt._research()
+        space_ids = self._rt.get_space_ids(conversation_id)
         # W-35/W-33: pre-flight the driver + the REQUIRED encoders BEFORE the engine
         # starts. A dead driver or a degraded/empty remote reranker/NLI would
         # otherwise run a long, expensive job that silently produces a wrong report.
@@ -605,9 +615,12 @@ class DeepResearchService:
         override = self._rt._model_override.get(conversation_id)
         # P1-3: the DR engine synthesises/judges with RAG_ANSWERER — probe THAT
         # role, not AGENT_DRIVER (which DR generation does not use).
+        required_encoders = (
+            ("reranker", "nli", "embedder") if space_ids else ("reranker", "nli")
+        )
         preflight_reason = await self._rt._preflight_driver(
             conversation_id, override=override, role=ModelRole.RAG_ANSWERER
-        ) or await self._preflight_encoders(deps, required=("reranker", "nli"))
+        ) or await self._preflight_encoders(deps, required=required_encoders)
         if preflight_reason is not None:
             await self._rt._store.append(
                 conversation_id,
@@ -633,6 +646,7 @@ class DeepResearchService:
             reranker=deps["reranker"],
             embedder=deps.get("embedder"),
             rewriter=RouterQueryRewriter(router),
+            vector_store=self._rt.space_vector_store(),
         )
         # RAM-aware peak-memory guard (OOM fix): bound how many gather legs run
         # their fetch/extract/embed/rerank body at once. Applies on EVERY tier —
@@ -667,6 +681,7 @@ class DeepResearchService:
             recency_window=recency_window,
             # G1/DR-4 F2: seed every gather leg with upload passages.
             upload_passages=upload_passages or None,
+            corpus_ids=space_ids,
             # A4.4: per-cid iterative-research toggle (default False → OFF path).
             iterative=self._iterative_for(conversation_id),
         )

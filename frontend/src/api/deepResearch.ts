@@ -33,6 +33,8 @@ export interface DeepResearchSubmit {
   iterative?: boolean;
   /** DR-3 recency filter: "month" = past 30 days, "week" = past 7 days, null = off. */
   recencyWindow?: "month" | "week" | null;
+  /** Persistent Spaces to merge into RetrievalRequest.corpus_ids. */
+  spaceIds?: string[];
 }
 
 /** Fixture cid for offline rendering — the fixture stream replays a canned
@@ -70,6 +72,7 @@ export async function createDeepResearchConversation(
       // DR-3: recency_window is optional; omit (undefined) when null/off so the
       // backend receives no field rather than explicit null (cleaner log).
       ...(opts.recencyWindow != null ? { recency_window: opts.recencyWindow } : {}),
+      ...(opts.spaceIds && opts.spaceIds.length > 0 ? { space_ids: opts.spaceIds } : {}),
     },
   );
   return res.conversation_id;

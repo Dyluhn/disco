@@ -172,10 +172,10 @@ def make_files_router(
             existing_names.add(final_name)
             running_total += len(data)
 
-            # G1/DR-4 F2: for v1 text types (.txt / .md / .csv), parse the bytes
+            # G1/DR-4 F2: for supported document types, parse the bytes
             # into Passages and add them to the per-conversation upload corpus so
             # they become citable in DR runs and basic research (F3).
-            # Non-text types (.pdf, .zip, etc.) remain in the sandbox for the
+            # Unsupported types (.zip, binaries, etc.) remain in the sandbox for the
             # agent to read but are NOT indexed as retrievable passages.
             upload_doc = parse_upload_to_doc(final_name, data, conversation_id)
             if upload_doc is not None and upload_doc.passages:

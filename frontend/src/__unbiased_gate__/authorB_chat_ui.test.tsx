@@ -23,6 +23,7 @@ vi.mock("@/hooks/useBuildNotifications", () => ({
 vi.mock("@/hooks/useProjects", () => ({
   useDownloadProject: () => ({ mutate: vi.fn(), isPending: false, error: null }),
   useExportManifest: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  useProjectManifest: () => ({ data: { files: [] } }),
 }));
 
 vi.mock("@/hooks/useModels", () => ({

@@ -44,6 +44,19 @@ describe("deriveFiles — reconstructs workspace files from the trace", () => {
     ]);
     expect(files[0].content).toBe("<title>NEW</title>");
   });
+
+  it("falls back to manifest files when the trace has no file writes", () => {
+    const files = deriveFiles([], [{ path: "imported/index.html", bytes: 42 }]);
+    expect(files).toEqual([{ path: "imported/index.html", content: "", bytes: 42 }]);
+  });
+
+  it("prefers event-derived files over manifest fallback", () => {
+    const files = deriveFiles(
+      [fileAction("1", "file_write", { path: "index.html", content: "<h1>live</h1>" })],
+      [{ path: "stale.html", bytes: 12 }],
+    );
+    expect(files).toEqual([{ path: "index.html", content: "<h1>live</h1>", bytes: 13 }]);
+  });
 });
 
 describe("deriveSrcDoc", () => {

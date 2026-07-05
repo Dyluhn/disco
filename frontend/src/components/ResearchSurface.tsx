@@ -8,6 +8,7 @@ import { AnswerDocument } from "./AnswerDocument";
 import { FollowUps } from "./FollowUps";
 import { QueryInput } from "./QueryInput";
 import { SourcePanel } from "./SourcePanel";
+import { SpaceGroundingControl } from "./SpaceGroundingControl";
 import { SuggestionChips } from "./SuggestionChips";
 import { TtftIndicator } from "./TtftIndicator";
 import { DeepResearchSurface } from "./research/DeepResearchSurface";
@@ -28,6 +29,7 @@ export function ResearchSurface() {
   const [leaderId, setLeaderId] = useState<string | null | undefined>(undefined);
   const [scope, setScope] = useState<ScopeId>("standard");
   const [think, setThink] = useState(false);
+  const [spaceIds, setSpaceIds] = useState<string[]>([]);
   // W-06: the typed draft lives in the SHARED parent so it survives the
   // standard ↔ deep-research mount swap below (the standard input unmounts when
   // we render DeepResearchSurface, and DR has its OWN QueryInput). Both inputs
@@ -38,8 +40,9 @@ export function ResearchSurface() {
   const effectiveLeaderId = leaderId === undefined ? (lastSelected ?? null) : leaderId;
 
   const submit = useCallback(
-    (query: string) => r.submit(query, { model_override: effectiveLeaderId, think }),
-    [r, effectiveLeaderId, think],
+    (query: string) =>
+      r.submit(query, { model_override: effectiveLeaderId, think, space_ids: spaceIds }),
+    [r, effectiveLeaderId, think, spaceIds],
   );
 
   // Scope dispatch: Deep Research has its own surface (own conversation model,
@@ -57,6 +60,7 @@ export function ResearchSurface() {
       <DeepResearchSurface
         onScopeChange={setScope}
         initialLeaderId={effectiveLeaderId}
+        initialSpaceIds={spaceIds}
         draft={draft}
         onDraftChange={setDraft}
       />
@@ -109,11 +113,14 @@ export function ResearchSurface() {
               onValueChange={setDraft}
               {...clusterProps}
               extraControls={
-                /* runthru-v2 #9: UploadComposer is now INLINE in the pill row (like
-                   the DR surface), not a `footer` block BELOW the cards. Always
-                   rendered (UploadComposer self-disables when cid is null) so it
-                   doesn't flicker out during the brief pre-create window. */
-                <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                <>
+                  {/* runthru-v2 #9: UploadComposer is now INLINE in the pill row (like
+                     the DR surface), not a `footer` block BELOW the cards. Always
+                     rendered (UploadComposer self-disables when cid is null) so it
+                     doesn't flicker out during the brief pre-create window. */}
+                  <UploadComposer cid={r.preCid} ensureCid={r.ensurePreCid} />
+                  <SpaceGroundingControl selected={spaceIds} onChange={setSpaceIds} />
+                </>
               }
             />
             {r.submitError && (

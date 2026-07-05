@@ -503,6 +503,11 @@ export interface WorkspaceFile {
   bytes: number;
 }
 
+export interface ManifestFile {
+  path: string;
+  bytes: number;
+}
+
 /** The files the agent has written or generated — latest content wins.
  *
  * Sources (unioned by path, no double-count):
@@ -515,8 +520,15 @@ export interface WorkspaceFile {
  * 3. `deliverable` events — the agent declared a finished served artifact via `serve`;
  *    add its path when not already captured by (1)/(2). Content is server-side only.
  *
- * WALK-16: source paths (2) and (3) are new; (1) was the only source before. */
-export function deriveFiles(events: AgentEvent[]): WorkspaceFile[] {
+ * WALK-16: source paths (2) and (3) are new; (1) was the only source before.
+ *
+ * F1b: if the event stream has no file-producing events yet, fall back to the
+ * ProjectStore manifest's file list. Imported/pre-seeded builds can have a
+ * workspace manifest before any file_write events exist. */
+export function deriveFiles(
+  events: AgentEvent[],
+  manifestFiles: ManifestFile[] = [],
+): WorkspaceFile[] {
   const byPath = new Map<string, string>();
   for (const e of events) {
     if (e.kind === "action" && e.tool_call) {
@@ -555,6 +567,9 @@ export function deriveFiles(events: AgentEvent[]): WorkspaceFile[] {
         byPath.set(e.path, ""); // content is server-side only
       }
     }
+  }
+  if (byPath.size === 0 && manifestFiles.length > 0) {
+    return manifestFiles.map((file) => ({ path: file.path, content: "", bytes: file.bytes }));
   }
   return [...byPath.entries()].map(([path, content]) => ({
     path,

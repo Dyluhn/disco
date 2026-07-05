@@ -24,6 +24,7 @@ import type {
   Project,
   ProjectImportInput,
   ProjectImportResult,
+  ProjectManifest,
   ProjectsList,
   ProjectStorageConfig,
   ProjectStorageSaveInput,
@@ -150,6 +151,23 @@ export async function exportProjectManifest(cid: string): Promise<void> {
   a.click();
   a.remove();
   URL.revokeObjectURL(objectUrl);
+}
+
+export async function getProjectManifest(cid: string): Promise<ProjectManifest> {
+  if (!agentLive()) {
+    await fixtureDelay();
+    return {
+      conversation_id: cid,
+      title: cid,
+      created_at: null,
+      last_snapshot_at: null,
+      file_count: 0,
+      total_bytes: 0,
+      files: [],
+      deliverable: null,
+    };
+  }
+  return agentGet<ProjectManifest>(`/api/projects/${encodeURIComponent(cid)}/manifest`);
 }
 
 export async function deleteProject(cid: string): Promise<{ id: string }> {

@@ -21,8 +21,6 @@ interface NavItem {
   to: string;
   label: string;
   icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
-  /** Dormant items (Spaces) are present but not yet navigable. */
-  dormant?: boolean;
   /** "New" is the home/start affordance; matches the index route exactly. */
   end?: boolean;
 }
@@ -37,7 +35,7 @@ const ITEMS: NavItem[] = [
   // Spaces (research corpora). This is for resumable Build workspaces.
   { id: "projects", to: "/projects", label: "Projects", icon: FolderGit2 },
   { id: "workflows", to: "/workflows", label: "Workflows", icon: Workflow },
-  { id: "spaces", to: "/spaces", label: "Spaces", icon: Boxes, dormant: true },
+  { id: "spaces", to: "/spaces", label: "Spaces", icon: Boxes },
   { id: "settings", to: "/settings", label: "Settings", icon: Settings },
 ];
 
@@ -51,7 +49,7 @@ interface Props {
 /**
  * The hideable left nav rail (Prompt 2). Quiet styling — hairline separation, the
  * UI grotesk, chroma ONLY on the active item. Collapsed → icon-only (labels kept
- * as accessible names); expanded → icon + label. Spaces is present-but-dormant.
+ * as accessible names); expanded → icon + label.
  */
 export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
   const running = useRunningCount();
@@ -75,33 +73,6 @@ export function NavRail({ collapsed, onToggleCollapse, onNavigate }: Props) {
       <ul className="flex flex-1 flex-col gap-hair px-inline">
         {ITEMS.map((item) => {
           const Icon = item.icon;
-          if (item.dormant) {
-            return (
-              <li key={item.to}>
-                <span
-                  data-disco-control={`shell.nav-${item.id}`}
-                  data-dormant="true"
-                  aria-disabled="true"
-                  title="Coming soon"
-                  className={cn(
-                    "flex cursor-not-allowed items-center gap-inline rounded-control px-inline py-inline font-ui text-[0.86rem] text-text-faint",
-                    collapsed && "justify-center",
-                  )}
-                >
-                  <Icon className="size-4 shrink-0" aria-hidden />
-                  {!collapsed && (
-                    <>
-                      <span className="flex-1">{item.label}</span>
-                      <span className="rounded-[0.25rem] border border-hairline px-1 py-px text-[0.58rem] uppercase tracking-wide">
-                        soon
-                      </span>
-                    </>
-                  )}
-                  {collapsed && <span className="sr-only">{item.label} (coming soon)</span>}
-                </span>
-              </li>
-            );
-          }
           // The Activity item carries the live "N running" badge — the global
           // indicator, visible from every screen (the rail is always mounted).
           const badge = item.to === "/activity" && running > 0 ? running : 0;

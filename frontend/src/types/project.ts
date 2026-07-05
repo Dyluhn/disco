@@ -46,6 +46,27 @@ export interface ProjectImportResult {
   title: string;
 }
 
+export interface ProjectManifestFile {
+  path: string;
+  bytes: number;
+}
+
+export interface ProjectManifest {
+  conversation_id: string;
+  title: string;
+  created_at: string | null;
+  last_snapshot_at: string | null;
+  file_count: number;
+  total_bytes: number;
+  files: ProjectManifestFile[];
+  deliverable: {
+    title: string;
+    path: string;
+    kind: string;
+    deployment_url?: string | null;
+  } | null;
+}
+
 export type ProjectImportInput =
   | { kind: "zip"; file: File }
   | { kind: "path"; path: string }

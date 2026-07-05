@@ -45,6 +45,7 @@ from .ranking import (
 from .vectorstore import (
     CorpusService,
     DefaultCorpusService,
+    DiskVectorStore,
     InMemoryVectorStore,
     VectorStore,
 )
@@ -56,6 +57,7 @@ __all__ = [
     "CrossEncoderNLIVerifier",
     "DefaultCorpusService",
     "DefaultRetrievalEngine",
+    "DiskVectorStore",
     "Embedder",
     "ExtractedDoc",
     "ExtractionProvider",

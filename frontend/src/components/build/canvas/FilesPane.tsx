@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FileCode2, PenLine } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles } from "@/lib/buildTrace";
+import type { ManifestFile } from "@/lib/buildTrace";
 import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { AgentEvent } from "@/types/agent";
 import { Empty } from "./Empty";
@@ -41,11 +42,13 @@ function StreamingFileView({ file }: { file: StreamingFile }) {
 export function FilesPane({
   events,
   streamingFile,
+  manifestFiles = [],
 }: {
   events: AgentEvent[];
   streamingFile: StreamingFile | null;
+  manifestFiles?: ManifestFile[];
 }) {
-  const files = useMemo(() => deriveFiles(events), [events]);
+  const files = useMemo(() => deriveFiles(events, manifestFiles), [events, manifestFiles]);
   const [active, setActive] = useState(0);
   // While a file mutation is streaming, it is the hero — show the live buffer regardless
   // of which file was selected. The final ActionEvent retires it (streamingFile →

@@ -19,18 +19,19 @@ from collections.abc import AsyncIterator, Sequence
 from typing import Any, Protocol
 
 from disco.core.events import LLMMessage
-from disco.core.think import strip_think_spans
 from disco.core.llm import (
     CapabilityProfile,
     CompletionRequest,
     LLMRouter,
     ModelRole,
 )
+from disco.core.think import strip_think_spans
 
 from .local_encoders import EncoderUnavailable
-from .models import Passage
+from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
-from .ranking import QueryRewriter, Reranker
+from .ranking import Embedder, QueryRewriter, Reranker
+from .vectorstore import VectorStore
 
 # NLI verdict (3-way) -> the UI's claim band.
 _VERDICT = {"entail": "supported", "neutral": "weak", "contradict": "unsupported"}
@@ -343,6 +344,69 @@ async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
         return []
 
 
+async def _corpus_passages(
+    req: RetrievalRequest,
+    *,
+    embedder: Embedder | None,
+    vector_store: VectorStore | None,
+) -> list[Passage]:
+    if not req.corpus_ids or embedder is None or vector_store is None:
+        return []
+    qvec = (await embedder.embed([req.query]))[0]
+    out: list[Passage] = []
+    for namespace in req.corpus_ids:
+        out.extend(await vector_store.query(namespace, qvec, top_k=req.top_k))
+    return out
+
+
+def _merge_unique_passages(
+    passages: Sequence[Passage],
+    extra: Sequence[Passage],
+) -> list[Passage]:
+    merged = list(passages)
+    seen = {p.id for p in merged}
+    for passage in extra:
+        if passage.id in seen:
+            continue
+        seen.add(passage.id)
+        merged.append(passage)
+    return merged
+
+
+async def _with_local_corpus_passages(
+    passages: Sequence[Passage],
+    *,
+    current_query: str,
+    top_k: int,
+    seed_passages: Sequence[Passage],
+    corpus_ids: frozenset[str],
+    embedder: Embedder | None,
+    vector_store: VectorStore | None,
+) -> list[Passage]:
+    merged = _merge_unique_passages(passages, seed_passages) if seed_passages else list(passages)
+    if not corpus_ids:
+        return merged
+    corpus_req = RetrievalRequest(
+        query=current_query,
+        use_web=False,
+        corpus_ids=corpus_ids,
+        top_k=top_k,
+    )
+    return _merge_unique_passages(
+        merged,
+        await _corpus_passages(corpus_req, embedder=embedder, vector_store=vector_store),
+    )
+
+
+def _unreadable_sources_message(hits: Sequence[SearchHit], docs: Sequence[ExtractedDoc]) -> str:
+    unreadable = sum(1 for d in docs if d.status in ("blocked", "paywalled", "not_found"))
+    return (
+        f"Found {len(hits)} sources but couldn't read any of them right now "
+        f"({unreadable} blocked or paywalled, the rest failed to fetch). This is "
+        "usually a temporary extraction hiccup — try the search again."
+    )
+
+
 async def stream_research_answer(
     query: str,
     *,
@@ -360,6 +424,9 @@ async def stream_research_answer(
     extract_cap: int = 6,
     top_k: int = 6,
     seed_passages: Sequence[Passage] = (),
+    corpus_ids: frozenset[str] = frozenset(),
+    embedder: Embedder | None = None,
+    vector_store: VectorStore | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Yield the frontend's research frames for a live, grounded answer. The
     re-scope controls apply here: `domains_deny` filters discovery; `drop_weak`
@@ -377,10 +444,7 @@ async def stream_research_answer(
     `max_research_rounds=1`) is byte-identical to the pre-F1 code — the retry
     block is unreachable when no extra rounds are allowed.
 
-    ``seed_passages`` — pre-attached upload passages (G1/DR-4 F3). When non-empty
-    they are prepended to the web-extracted passages BEFORE the rerank step so
-    they compete for ``top_k`` slots alongside live-web content. The OFF-path
-    (empty seeds, the default) is byte-identical to the pre-DR-4 code."""
+    ``seed_passages`` and ``corpus_ids`` add local evidence before rerank."""
     # F1: cap extra rounds at 2 regardless of the caller's value.
     bounded_extra = min(max(max_research_rounds - 1, 0), 2)
 
@@ -420,26 +484,22 @@ async def stream_research_answer(
             all_hits = [{**h.model_dump(), "status": status_by_url.get(h.url)} for h in hits]
             this_round_urls = frozenset(h.url for h in hits)
 
-            # 3a. Inject seed passages (G1/DR-4 F3) BEFORE the empty-passage
-            # early-exit so that uploaded files can answer the query even when
-            # web extraction fails. Dedup by id so a seed that was also
-            # extracted from the web doesn't get double-counted.
-            # OFF-path: empty seeds → no change.
-            if seed_passages:
-                seen_seed_ids = {p.id for p in passages}
-                passages = list(passages) + [
-                    p for p in seed_passages if p.id not in seen_seed_ids
-                ]
+            # 3a. Inject local evidence BEFORE the empty-passage early-exit so
+            # uploads and Spaces can answer even when web extraction fails.
+            passages = await _with_local_corpus_passages(
+                passages,
+                current_query=current_query,
+                top_k=top_k,
+                seed_passages=seed_passages,
+                corpus_ids=corpus_ids,
+                embedder=embedder,
+                vector_store=vector_store,
+            )
 
             if not passages:
-                unreadable = sum(1 for d in docs if d.status in ("blocked", "paywalled", "not_found"))
                 yield {
                     "type": "error",
-                    "message": (
-                        f"Found {len(hits)} sources but couldn't read any of them right now "
-                        f"({unreadable} blocked or paywalled, the rest failed to fetch). This is "
-                        "usually a temporary extraction hiccup — try the search again."
-                    ),
+                    "message": _unreadable_sources_message(hits, docs),
                 }
                 return
 

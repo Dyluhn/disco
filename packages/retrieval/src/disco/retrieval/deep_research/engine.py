@@ -115,6 +115,7 @@ class DeepResearchRun:
         gather_concurrency: int | None = None,
         recency_window: Literal["month", "week"] | None = None,
         upload_passages: list[Any] | None = None,
+        corpus_ids: frozenset[str] = frozenset(),
         iterative: bool = False,
     ) -> None:
         self._query = query
@@ -131,6 +132,8 @@ class DeepResearchRun:
         # G1/DR-4 F2: pre-attached upload passages to seed every gather leg.
         # None / [] → OFF path (byte-identical to pre-DR-4 code).
         self._upload_passages: list[Any] = upload_passages or []
+        # Spaces: durable named corpora to include in every RetrievalRequest.
+        self._corpus_ids = corpus_ids
         # A4.4: iterative-research flag. When False (the default) NOTHING new
         # runs — the judge/refine loop is never entered, so a standard run is
         # byte-identical. Gated on this flag at the single call site in `run()`.
@@ -327,6 +330,7 @@ class DeepResearchRun:
                     remaining_source_budget=subq_budget,
                     leg_context=leg_context,
                     recency_window=self._recency_window,
+                    corpus_ids=self._corpus_ids,
                     # G1/DR-4 F2: seed each leg with any pre-attached upload
                     # passages so they are available during synthesis.
                     extra_passages=list(self._upload_passages),
@@ -394,6 +398,7 @@ class DeepResearchRun:
                 remaining_source_budget=source_budget,
                 leg_context=leg_context,
                 recency_window=self._recency_window,
+                corpus_ids=self._corpus_ids,
                 # G1/DR-4 F2: seed steer legs with upload passages by default;
                 # the A4.4 refine path overrides this with a section's originals.
                 extra_passages=extra_passages,
@@ -874,5 +879,4 @@ class DeepResearchRun:
             },
         )
         return res.sections, list(fresh_passages.values()), fresh_hits
-
 

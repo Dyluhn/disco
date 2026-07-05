@@ -17,6 +17,7 @@ export type Surface =
   | "history"
   | "projects"
   | "workflows"
+  | "spaces"
   | "activity"
   | "share"
   | "imported"

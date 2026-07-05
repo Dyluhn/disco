@@ -46,6 +46,7 @@ from .routes import (
     make_schedules_router,
     make_sessions_router,
     make_share_router,
+    make_spaces_router,
     make_storage_router,
     make_suggestions_router,
     make_workflows_router,
@@ -169,6 +170,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_storage_router(store, runtime))
     app.include_router(make_suggestions_router(store, runtime))
     app.include_router(make_workflows_router(store, runtime))
+    app.include_router(make_spaces_router(store, runtime))
     app.include_router(make_schedules_router(store, runtime))
     app.include_router(make_activity_router(store, runtime))
     app.include_router(make_ws_router(store, runtime))

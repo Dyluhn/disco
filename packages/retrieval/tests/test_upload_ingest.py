@@ -1,9 +1,11 @@
-"""Unit tests for uploads_ingest — text file → Passage chunks.
+"""Unit tests for uploads_ingest — uploaded files → Passage chunks.
 
 Covers:
-  • parse_upload_to_doc returns None for non-text extensions
+  • parse_upload_to_doc returns None for unsupported extensions
   • .txt / .md parsed into prose Passages with correct source_url / id
   • .csv parsed row-by-row with key=value format
+  • .html strips markup into prose Passages
+  • .pdf best-effort extracts simple uncompressed text
   • empty file → ExtractedDoc with zero passages (no crash)
   • long paragraph sub-split at sentence boundaries
   • CSV parsing error falls back to prose chunker
@@ -25,9 +27,12 @@ from disco.agent_server.uploads_ingest import parse_upload_to_doc  # noqa: E402
 CID = "conv_test123"
 
 
-def test_pdf_returns_none() -> None:
-    result = parse_upload_to_doc("report.pdf", b"%PDF-1.4 fake", CID)
-    assert result is None
+def test_pdf_best_effort_extracts_uncompressed_text() -> None:
+    data = b"%PDF-1.4\nBT /F1 12 Tf 72 720 Td (PDF sentinel alpha.) Tj ET\n%%EOF"
+    doc = parse_upload_to_doc("report.pdf", data, CID)
+    assert doc is not None
+    assert doc.url == f"upload://{CID}/report.pdf"
+    assert any("PDF sentinel alpha" in p.text for p in doc.passages)
 
 
 def test_zip_returns_none() -> None:
@@ -64,6 +69,25 @@ def test_md_basic() -> None:
     doc = parse_upload_to_doc("readme.md", text.encode(), CID)
     assert doc is not None
     assert len(doc.passages) >= 2  # heading + paragraphs
+
+
+def test_html_strips_markup() -> None:
+    html = (
+        b"<html><head><style>.x{}</style></head>"
+        b"<body><h1>Title</h1><p>HTML sentinel.</p></body></html>"
+    )
+    doc = parse_upload_to_doc("page.html", html, CID)
+    assert doc is not None
+    assert len(doc.passages) >= 1
+    assert "HTML sentinel" in " ".join(p.text for p in doc.passages)
+    assert "<p>" not in doc.content
+
+
+def test_space_source_scheme() -> None:
+    doc = parse_upload_to_doc("notes.txt", b"Space text.", "space_1", source_scheme="space")
+    assert doc is not None
+    assert doc.url == "space://space_1/notes.txt"
+    assert doc.passages[0].source_url == "space://space_1/notes.txt"
 
 
 def test_csv_basic() -> None:

@@ -30,6 +30,7 @@ vi.mock("@/hooks/useBuild", () => ({
 vi.mock("@/hooks/useProjects", () => ({
   useDownloadProject: () => ({ mutate: vi.fn(), isPending: false, error: null }),
   useExportManifest: () => ({ mutate: vi.fn() }),
+  useProjectManifest: () => ({ data: { files: [] } }),
 }));
 vi.mock("@/api/client", async (orig) => ({
   ...(await orig<typeof import("@/api/client")>()),

@@ -97,6 +97,8 @@ def make_conversations_router(
             # DR-3 E2: recency window for time-filtered search + prompt injection.
             if body.recency_window is not None:
                 runtime.set_recency(conversation_id, body.recency_window)
+            if body.space_ids:
+                runtime.set_space_ids(conversation_id, body.space_ids)
             # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
             if body.artifact_mode:
                 runtime.set_artifact_mode(conversation_id, True)

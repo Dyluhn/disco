@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from disco.retrieval import (
     DefaultCorpusService,
+    DiskVectorStore,
     ExtractedDoc,
     HashingEmbedder,
     InMemoryVectorStore,
@@ -59,3 +60,18 @@ async def test_ingest_round_trip_and_delete():
 
     await corpora.remove("space_X")
     assert await store.query("space_X", qvec, top_k=5) == []  # gone
+
+
+async def test_disk_vector_store_persists_across_reinstantiation(tmp_path):
+    embedder = HashingEmbedder()
+    store = DiskVectorStore(tmp_path / "vectors")
+    corpora = DefaultCorpusService(store, embedder)
+    await corpora.ingest("space_durable", owner_id="local", docs=[_doc("d1", "durable alpha")])
+
+    restarted = DiskVectorStore(tmp_path / "vectors")
+    qvec = (await embedder.embed(["durable alpha"]))[0]
+    got = await restarted.query("space_durable", qvec, top_k=5)
+
+    assert len(got) == 1
+    assert got[0].source_url == "d1"
+    assert got[0].corpus_id == "space_durable"

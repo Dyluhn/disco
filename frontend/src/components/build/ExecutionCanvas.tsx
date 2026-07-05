@@ -17,6 +17,7 @@ import { FileCode2, Gauge, MonitorPlay, SquareTerminal } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc, deriveTerminal } from "@/lib/buildTrace";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
+import { useProjectManifest } from "@/hooks/useProjects";
 import { useSessions } from "@/hooks/useSessions";
 import type { StreamingFile } from "@/hooks/useBuildStream";
 import type { ElementMentionPayload } from "@/lib/elementMention";
@@ -132,6 +133,8 @@ export function ExecutionCanvas({
   // The Cockpit also surfaces bound-port data from the same useBuildPreview
   // the Preview pane uses — shared query cache, no extra fetch.
   const previewQuery = useBuildPreview(cid, active);
+  const manifestQuery = useProjectManifest(cid);
+  const manifestFiles = manifestQuery.data?.files ?? [];
   const anySessionBusy = sessions.some((s) => s.busy);
 
   return (
@@ -174,7 +177,11 @@ export function ExecutionCanvas({
       </Tabs.List>
       <div className="min-h-0 flex-1">
         <Tabs.Content value="files" className="h-full focus:outline-none">
-          <FilesPane events={events} streamingFile={streamingFile} />
+          <FilesPane
+            events={events}
+            streamingFile={streamingFile}
+            manifestFiles={manifestFiles}
+          />
         </Tabs.Content>
         <Tabs.Content value="terminal" className="h-full focus:outline-none">
           <TerminalPane

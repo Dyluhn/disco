@@ -320,6 +320,14 @@ def make_ws_router(
         conversation_id = body.get("conversation_id") or None
         if conversation_id is not None:
             conversation_id = str(conversation_id).strip() or None
+        raw_space_ids = body.get("space_ids") or []
+        if not isinstance(raw_space_ids, list):
+            raw_space_ids = []
+        space_ids = frozenset(
+            str(space_id).strip()
+            for space_id in raw_space_ids
+            if str(space_id).strip()
+        )
         try:
             async for frame in runtime.research_stream(
                 query,
@@ -328,6 +336,7 @@ def make_ws_router(
                 domains_deny=domains_deny,
                 think=think,
                 conversation_id=conversation_id,
+                space_ids=space_ids,
             ):
                 await websocket.send_json(frame)
         except WebSocketDisconnect:
