@@ -685,10 +685,16 @@ class Valve:
             # declarative update_plan_progress) + spamming notify_user must NOT
             # FINISH an empty workspace; a "done" plan with zero state-changing
             # actions is a hallucinated completion, not a build.
+            # …UNLESS independently VERIFIED (#37d): re-planned work predates
+            # the approval boundary, so plan-done + verify-PASS (which cannot
+            # be hallucinated) stands in. Empty-workspace spam still pauses.
             if (
                 not pending_revision
                 and signals.plan_steps_complete(events)
-                and signals.productive_actions_since_approval(events) > 0
+                and (
+                    signals.productive_actions_since_approval(events) > 0
+                    or _plan_done_and_verified(events)
+                )
             ):
                 # W-32 — DO NOT force-finish directly. The old code emitted
                 # StatusEvent(FINISHED) here, BYPASSING every gate a real
