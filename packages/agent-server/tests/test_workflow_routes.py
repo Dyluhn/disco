@@ -11,12 +11,19 @@ import httpx
 from disco.agent_server.app import create_app
 from disco.agent_server.routes.workflows import make_workflows_router
 from disco.agent_server.runtime import ConversationRuntime
-from disco.core import SqliteEventStore
+from disco.core import SecurityRisk, SkillStore, SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings
+from disco.core.workflow import ScheduleSpec
+from disco.tools import ToolDef
 from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore
 from disco.tools.workflow_seed import SCRIPTED_WORKSPACE_TASK_INSTANCE_ID
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
+
+
+class _EmptyArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 def _definition(*, tools: list[str] | None = None) -> dict:
@@ -155,6 +162,165 @@ async def test_workflow_draft_list_and_approve_records_surface_digest(
     assert stored.approval.surface_shown_digest == surface_digest
 
 
+async def test_workflow_authoring_context_lists_pickable_inventory(tmp_path: Path) -> None:
+    store = SqliteEventStore(":memory:")
+    cfg_store = ConfigStore(tmp_path / "config.json")
+    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+    runtime = ConversationRuntime(store, config_store=cfg_store)
+    rt = cast(Any, runtime)
+    rt._mcp_http_tools = {
+        "mcp__github__search_issues": ToolDef(
+            name="mcp__github__search_issues",
+            description="Search GitHub issues.",
+            args_model=_EmptyArgs,
+            base_risk=SecurityRisk.LOW,
+            read_only=True,
+        )
+    }
+    skill_store = SkillStore(tmp_path / "skills")
+    skill_store.create("Release Notes", description="Draft release notes.")
+    rt._skill_store = skill_store
+    app = FastAPI()
+    app.include_router(make_workflows_router(store, runtime))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/api/workflows/authoring-context")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert {"name": "file_read", "description": mock.ANY, "read_only": True} in body[
+        "builtin_tools"
+    ]
+    assert body["mcp_servers"] == [{"server": "github", "tools": ["search_issues"]}]
+    assert "Release Notes" in body["skills"]
+    assert body["param_types"] == [
+        "string",
+        "integer",
+        "number",
+        "boolean",
+        "string_array",
+        "integer_array",
+        "number_array",
+    ]
+    assert body["output_formats"] == ["markdown", "html", "json", "csv", "pptx", "pdf", "text"]
+
+
+async def test_workflow_author_happy_path_persists_unapproved_review(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/workflows/author",
+            json={
+                "name": "Author Route",
+                "card": "Workflow authored from the simplified route shape.",
+                "params": [
+                    {
+                        "name": "query",
+                        "type": "string",
+                        "required": True,
+                        "description": "Search query.",
+                    }
+                ],
+                "tools": ["file_read"],
+                "mcp_mounts": [],
+                "skills": [],
+                "allows_writes": False,
+                "untrusted_content": True,
+                "output_path_template": "outputs/{query}.md",
+                "output_format": "markdown",
+                "verify_checks": ["output_exists"],
+                "finalizer": "ready_for_workflow_output",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    workflow = body["workflow"]
+    assert workflow["name"] == "Author Route"
+    assert workflow["enabled"] is False
+    assert workflow["approved"] is False
+    assert workflow["validation_findings"] == []
+    assert body["simulation"]["ok"] is True
+    assert body["simulation"]["output_path"] == "outputs/sample.md"
+    stored = JsonDirWorkflowStore(tmp_path).get_instance(workflow["instance_id"])
+    assert stored is not None
+    assert stored.params == {"query": "sample"}
+
+
+async def test_workflow_author_invalid_definition_returns_422(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/workflows/author",
+            json={
+                "name": "Duplicate Params",
+                "card": "Workflow with duplicate simplified parameter names.",
+                "params": [
+                    {"name": "query", "type": "string", "required": True},
+                    {"name": "query", "type": "string", "required": False},
+                ],
+                "tools": ["file_read"],
+                "mcp_mounts": [],
+                "skills": [],
+                "allows_writes": False,
+                "untrusted_content": True,
+                "output_path_template": "outputs/{query}.md",
+                "output_format": "markdown",
+                "verify_checks": [],
+                "finalizer": None,
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["reason"] == "workflow_definition_invalid"
+    assert "duplicate parameter name" in response.json()["detail"]
+
+
+async def test_workflow_author_returns_error_findings_without_approving(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/workflows/author",
+            json={
+                "name": "Author Bad Tool",
+                "card": "Workflow authored with an unavailable builtin tool.",
+                "params": [{"name": "query", "type": "string", "required": True}],
+                "tools": ["missing_tool"],
+                "mcp_mounts": [],
+                "skills": [],
+                "allows_writes": False,
+                "untrusted_content": True,
+                "output_path_template": "outputs/{query}.md",
+                "output_format": "markdown",
+                "verify_checks": [],
+                "finalizer": None,
+            },
+        )
+
+    assert response.status_code == 200
+    workflow = response.json()["workflow"]
+    assert workflow["enabled"] is False
+    assert any(
+        finding["code"] == "unknown_builtin_tool"
+        for finding in workflow["validation_findings"]
+    )
+    assert any(
+        finding["code"] == "simulation_scope_compile_failed"
+        for finding in response.json()["simulation"]["findings"]
+    )
+
+
 async def test_workflow_approve_refuses_error_findings(tmp_path: Path) -> None:
     app = _app(tmp_path)
     transport = httpx.ASGITransport(app=app)
@@ -187,3 +353,95 @@ async def test_workflow_approve_refuses_error_findings(tmp_path: Path) -> None:
     stored = JsonDirWorkflowStore(tmp_path).get_instance("wf_route_bad")
     assert stored is not None
     assert stored.enabled is False
+
+
+async def test_workflow_run_rejects_unapproved_instance(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        draft = await client.post(
+            "/api/workflows/draft",
+            json={
+                "instance_id": "wf_route_pending",
+                "definition": _definition(),
+                "params": {"query": "smoke"},
+            },
+        )
+        assert draft.status_code == 200
+
+        response = await client.post("/api/workflows/wf_route_pending/run")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason"] == "workflow_not_approved"
+
+
+async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
+    store = SqliteEventStore(":memory:")
+    cfg_store = ConfigStore(tmp_path / "config.json")
+    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+
+    class RecordingRuntime(ConversationRuntime):
+        created_spec: ScheduleSpec | None = None
+        fired_schedule_id: str | None = None
+
+        def create_workflow_schedule(
+            self,
+            spec: ScheduleSpec,
+            *,
+            owner_id: str,  # noqa: ARG002
+        ) -> dict:
+            self.created_spec = spec
+            root = self.project_store().root
+            assert root is not None
+            schedules = root / "workflow_schedules" / "schedules"
+            schedules.mkdir(parents=True, exist_ok=True)
+            (schedules / "wfsched_route.json").write_text("{}", encoding="utf-8")
+            return {"schedule_id": "wfsched_route"}
+
+        async def fire_workflow_schedule_now(
+            self,
+            schedule_id: str,
+            *,
+            owner_id: str,  # noqa: ARG002
+        ) -> dict | None:
+            self.fired_schedule_id = schedule_id
+            return {"run_cid": "conv_started"}
+
+    runtime = RecordingRuntime(store, config_store=cfg_store)
+    app = FastAPI()
+    app.include_router(make_workflows_router(store, runtime))
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            draft = await client.post(
+                "/api/workflows/draft",
+                json={
+                    "instance_id": "wf_route_run",
+                    "definition": _definition(),
+                    "params": {"query": "smoke"},
+                },
+            )
+            assert draft.status_code == 200
+            workflow = draft.json()["workflow"]
+            approved = await client.post(
+                "/api/workflows/wf_route_run/approve",
+                json={
+                    "approved_by": "tester",
+                    "surface_shown_digest": workflow["surface_shown_digest"],
+                },
+            )
+            assert approved.status_code == 200
+
+            response = await client.post("/api/workflows/wf_route_run/run")
+
+        assert response.status_code == 200
+        assert response.json() == {"conversation_id": "conv_started", "status": "started"}
+        assert runtime.fired_schedule_id == "wfsched_route"
+        assert runtime.created_spec is not None
+        assert runtime.created_spec.instance_id == "wf_route_run"
+        assert runtime.created_spec.enabled is False
+        assert not (
+            tmp_path / "workflow_schedules" / "schedules" / "wfsched_route.json"
+        ).exists()
+    finally:
+        await runtime.aclose()

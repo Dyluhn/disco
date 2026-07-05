@@ -420,35 +420,7 @@ class DraftWorkflowTool:
 
     async def run(self, args: DraftWorkflowArgs, ctx: ToolContext) -> ToolOutcome:
         try:
-            params_schema = _params_schema(args.params)
-            mcp_mounts = tuple(
-                McpMount(
-                    server=mount.server,
-                    tool_names=tuple(mount.tool_names),
-                    read_only=mount.read_only,
-                )
-                for mount in args.mcp_mounts
-            )
-            defn = WorkflowDefinition(
-                name=args.name,
-                card=args.card,
-                params_model_schema=params_schema,
-                tools=tuple(args.tools),
-                mcp_mounts=mcp_mounts,
-                skills=tuple(args.skills),
-                policies=WorkflowPolicies(
-                    untrusted_content=args.untrusted_content,
-                    allows_writes=args.allows_writes,
-                ),
-                output_contract=WorkflowOutputContract(
-                    path_template=args.output_path_template,
-                    format=args.output_format,
-                ),
-                verify=WorkflowVerify(
-                    checks=tuple(args.verify_checks),
-                    finalizer=args.finalizer,
-                ),
-            )
+            defn = build_workflow_definition(args)
         except ValueError as exc:
             return _failure("workflow_draft_invalid", str(exc))
 
@@ -477,6 +449,39 @@ def workflow_router_tools(
         EnterWorkflowTool(store, phase_state, mcp_tool_names_getter),
         WorkflowAbortTool(phase_state),
         DraftWorkflowTool(),
+    )
+
+
+def build_workflow_definition(args: DraftWorkflowArgs) -> WorkflowDefinition:
+    """Build the canonical WorkflowDefinition from the friendly authoring shape."""
+    params_schema = _params_schema(args.params)
+    mcp_mounts = tuple(
+        McpMount(
+            server=mount.server,
+            tool_names=tuple(mount.tool_names),
+            read_only=mount.read_only,
+        )
+        for mount in args.mcp_mounts
+    )
+    return WorkflowDefinition(
+        name=args.name,
+        card=args.card,
+        params_model_schema=params_schema,
+        tools=tuple(args.tools),
+        mcp_mounts=mcp_mounts,
+        skills=tuple(args.skills),
+        policies=WorkflowPolicies(
+            untrusted_content=args.untrusted_content,
+            allows_writes=args.allows_writes,
+        ),
+        output_contract=WorkflowOutputContract(
+            path_template=args.output_path_template,
+            format=args.output_format,
+        ),
+        verify=WorkflowVerify(
+            checks=tuple(args.verify_checks),
+            finalizer=args.finalizer,
+        ),
     )
 
 
@@ -554,6 +559,7 @@ def _failure(reason: str, message: str) -> ToolOutcome:
 
 
 __all__ = [
+    "DraftParamType",
     "DraftWorkflowArgs",
     "DraftWorkflowMcpMount",
     "DraftWorkflowParam",
@@ -569,5 +575,6 @@ __all__ = [
     "WorkflowAbortArgs",
     "WorkflowAbortTool",
     "WorkflowStore",
+    "build_workflow_definition",
     "workflow_router_tools",
 ]

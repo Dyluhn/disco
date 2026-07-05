@@ -1,8 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { approveWorkflow, listWorkflowReviews } from "@/api/workflows";
+import {
+  approveWorkflow,
+  authorWorkflow,
+  getAuthoringContext,
+  listWorkflowReviews,
+  runWorkflow,
+  scheduleWorkflow,
+} from "@/api/workflows";
 import type { WorkflowListResponse } from "@/types/workflow";
 
 export const WORKFLOWS_KEY = ["workflows"] as const;
+export const WORKFLOW_AUTHORING_CONTEXT_KEY = ["workflows", "authoring-context"] as const;
 
 export function useWorkflowReviews() {
   return useQuery<WorkflowListResponse>({
@@ -26,5 +34,34 @@ export function useApproveWorkflow() {
         };
       });
     },
+  });
+}
+
+export function useAuthoringContext() {
+  return useQuery({
+    queryKey: WORKFLOW_AUTHORING_CONTEXT_KEY,
+    queryFn: getAuthoringContext,
+  });
+}
+
+export function useAuthorWorkflow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: authorWorkflow,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: WORKFLOWS_KEY });
+    },
+  });
+}
+
+export function useRunWorkflow() {
+  return useMutation({
+    mutationFn: runWorkflow,
+  });
+}
+
+export function useScheduleWorkflow() {
+  return useMutation({
+    mutationFn: scheduleWorkflow,
   });
 }

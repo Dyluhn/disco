@@ -1,5 +1,11 @@
 import { ApiError, agentGet, agentLive, agentSend, fixtureDelay } from "./client";
-import type { WorkflowListResponse, WorkflowReview } from "@/types/workflow";
+import type {
+  WorkflowAuthorInput,
+  WorkflowAuthoringContext,
+  WorkflowDraftResult,
+  WorkflowListResponse,
+  WorkflowReview,
+} from "@/types/workflow";
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -114,6 +120,43 @@ const fixtureWorkflows: WorkflowReview[] = [
   },
 ];
 
+const fixtureAuthoringContext: WorkflowAuthoringContext = {
+  builtin_tools: [
+    {
+      name: "file_read",
+      description: "Read a file from the workspace.",
+      read_only: true,
+    },
+    {
+      name: "file_write",
+      description: "Write a file in the workspace.",
+      read_only: false,
+    },
+    {
+      name: "browser",
+      description: "Use a browser for bounded web inspection.",
+      read_only: true,
+    },
+  ],
+  mcp_servers: [
+    {
+      server: "github",
+      tools: ["search_issues", "create_issue"],
+    },
+  ],
+  skills: ["Release Notes", "Research Brief"],
+  param_types: [
+    "string",
+    "integer",
+    "number",
+    "boolean",
+    "string_array",
+    "integer_array",
+    "number_array",
+  ],
+  output_formats: ["markdown", "html", "json", "csv", "pptx", "pdf", "text"],
+};
+
 export async function listWorkflowReviews(): Promise<WorkflowListResponse> {
   if (agentLive()) return agentGet<WorkflowListResponse>("/api/workflows");
   await fixtureDelay();
@@ -150,4 +193,118 @@ export async function approveWorkflow(input: {
     surface_shown_digest: input.surfaceShownDigest,
   };
   return clone(workflow);
+}
+
+export async function getAuthoringContext(): Promise<WorkflowAuthoringContext> {
+  if (agentLive()) return agentGet<WorkflowAuthoringContext>("/api/workflows/authoring-context");
+  await fixtureDelay();
+  return clone(fixtureAuthoringContext);
+}
+
+export async function authorWorkflow(input: WorkflowAuthorInput): Promise<WorkflowDraftResult> {
+  if (agentLive()) {
+    return agentSend<WorkflowDraftResult>("POST", "/api/workflows/author", input);
+  }
+
+  await fixtureDelay();
+  const idSlug = input.name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  const instanceId = `wf_${idSlug || "authored"}_${Date.now().toString(36)}`;
+  const hasWritableMount = input.mcp_mounts.some((mount) => !mount.read_only);
+  const findings =
+    hasWritableMount && !input.allows_writes
+      ? [
+          {
+            severity: "error" as const,
+            code: "write_policy_inconsistent",
+            path: "policies.allows_writes",
+            message: "writable MCP mounts require policies.allows_writes=True",
+          },
+        ]
+      : [];
+  const review: WorkflowReview = {
+    instance_id: instanceId,
+    name: input.name,
+    card: input.card,
+    definition_digest: `sha256:${instanceId}-definition`,
+    enabled: false,
+    approved: false,
+    approval: null,
+    params: Object.fromEntries(input.params.map((param) => [param.name, "sample"])),
+    definition: input,
+    validation_findings: findings,
+    compiled_surface: {
+      ...validSurface,
+      allowed_tools: [...input.tools, "finish", "needs_input", "skip"],
+      advertised_tools: [...input.tools, "finish", "needs_input", "skip"],
+      tool_definitions: validSurface.tool_definitions.filter((tool) =>
+        [...input.tools, "finish", "needs_input", "skip"].includes(tool.name),
+      ),
+      mcp_mounts: input.mcp_mounts,
+      skills: input.skills.map((name) => ({ requested: name, available: true })),
+      policies: {
+        untrusted_content: input.untrusted_content,
+        allows_writes: input.allows_writes,
+      },
+      output_contract: {
+        path_template: input.output_path_template,
+        format: input.output_format,
+      },
+      verify: { checks: input.verify_checks, finalizer: input.finalizer },
+    },
+    surface_shown_digest: `sha256:${instanceId}-surface`,
+  };
+  fixtureWorkflows.unshift(review);
+  return {
+    workflow: clone(review),
+    simulation: {
+      ok: findings.length === 0,
+      output_path: input.output_path_template.replace(/\{[^}]+\}/g, "sample"),
+      output_format: input.output_format,
+      fixture_bytes: 72,
+      findings,
+    },
+  };
+}
+
+export async function runWorkflow(
+  instanceId: string,
+): Promise<{ conversation_id: string; status: string }> {
+  if (agentLive()) {
+    return agentSend<{ conversation_id: string; status: string }>(
+      "POST",
+      `/api/workflows/${encodeURIComponent(instanceId)}/run`,
+    );
+  }
+  await fixtureDelay();
+  return { conversation_id: `conv_${instanceId.slice(0, 16)}`, status: "started" };
+}
+
+export async function scheduleWorkflow(input: {
+  instanceId: string;
+  instanceDigest: string;
+  cron: string;
+}): Promise<Record<string, unknown>> {
+  if (agentLive()) {
+    return agentSend<Record<string, unknown>>("POST", "/api/workflows/schedules", {
+      instance_id: input.instanceId,
+      instance_digest: input.instanceDigest,
+      cron: input.cron,
+      enabled: true,
+    });
+  }
+  await fixtureDelay();
+  return {
+    schedule_id: `wfsched_${input.instanceId}`,
+    spec: {
+      instance_id: input.instanceId,
+      instance_digest: input.instanceDigest,
+      cron: input.cron,
+      enabled: true,
+    },
+  };
 }

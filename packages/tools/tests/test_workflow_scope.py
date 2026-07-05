@@ -57,12 +57,14 @@ from disco.tools import (
 )
 from disco.tools.appkit_scope import APPKIT_READ_TOOLS
 from disco.tools.builtin.workflow_tools import (
+    DraftWorkflowArgs,
     DraftWorkflowTool,
     EnterWorkflowTool,
     JsonDirWorkflowStore,
     ListWorkflowsTool,
     StoredWorkflowInstance,
     WorkflowStore,
+    build_workflow_definition,
     workflow_router_tools,
 )
 from disco.tools.workflow_seed import (
@@ -980,3 +982,36 @@ async def test_draft_workflow_returns_unpersisted_definition_json() -> None:
     assert result.structured["persisted"] is False
     assert result.content.startswith("DRAFT WorkflowDefinition:")
     WorkflowDefinition.model_validate(result.structured["definition"])
+
+
+def test_build_workflow_definition_matches_draft_tool_shape() -> None:
+    args = DraftWorkflowArgs(
+        name="research_summary",
+        card="Summarize a bounded research query into a workflow output.",
+        params=[
+            {
+                "name": "query",
+                "type": "string",
+                "required": True,
+                "description": "Research query.",
+            }
+        ],
+        tools=["file_read", "search"],
+        output_path_template="outputs/{query}.md",
+        output_format="markdown",
+        verify_checks=["output_exists"],
+        finalizer="ready_for_workflow_output",
+    )
+
+    defn = build_workflow_definition(args)
+
+    assert defn.params_model_schema == {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "query": {"type": "string", "description": "Research query."}
+        },
+        "required": ["query"],
+    }
+    assert defn.tools == ("file_read", "search")
+    assert defn.output_contract.path_template == "outputs/{query}.md"

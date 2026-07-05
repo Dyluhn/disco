@@ -8,11 +8,12 @@ import re
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, cast, get_args
 
 from disco.core import DEFAULT_OWNER_ID, SkillStore
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.workflow import (
+    ScheduleSpec,
     WORKFLOW_CONTROL_TOOLS,
     WorkflowApproval,
     WorkflowDefinition,
@@ -23,14 +24,25 @@ from disco.core.workflow import (
     validate_definition,
 )
 from disco.tools import ToolDef, ToolScope, build_default_registry
-from disco.tools.builtin.workflow_tools import JsonDirWorkflowStore
+from disco.tools.builtin.workflow_tools import (
+    DraftParamType,
+    DraftWorkflowArgs,
+    DraftWorkflowParam,
+    JsonDirWorkflowStore,
+    build_workflow_definition,
+)
 from disco.tools.projects import StorageStatus
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..runtime import ConversationRuntime
+from ..workflow_schedule import JsonWorkflowScheduleStore
 
 _SAFE_ID_FRAGMENT = re.compile(r"[^A-Za-z0-9_.-]+")
+_MCP_NAME_RE = re.compile(r"^mcp__([^_][A-Za-z0-9_]*)__([^_].+)$")
+_AUTHORING_OUTPUT_FORMATS = ("markdown", "html", "json", "csv", "pptx", "pdf", "text")
+_ONE_SHOT_CRON = "* * * * *"
 
 _FINISH_DESCRIPTION = (
     "Declare the task COMPLETE and end the run. Call this ONLY when every plan "
@@ -94,40 +106,88 @@ def make_workflows_router(
         ]
         return {"workflows": workflows, "status": "ok"}
 
+    async def _authoring_context() -> dict:
+        if runtime is None:
+            return {
+                "builtin_tools": [],
+                "mcp_servers": [],
+                "skills": [],
+                "param_types": list(get_args(DraftParamType)),
+                "output_formats": list(_AUTHORING_OUTPUT_FORMATS),
+                "status": "no_runtime",
+            }
+        env = _surface_environment(runtime)
+        return _authoring_context_payload(env)
+
     async def _draft_workflow(body: DraftWorkflowBody) -> dict:
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         workflow_store = _workflow_store(runtime)
         env = _surface_environment(runtime)
         instance_id = body.instance_id or _generated_instance_id(body.definition)
-        findings = validate_definition(
-            body.definition,
-            env.builtin_names,
-            env.mcp_names,
-            env.skill_names,
-        )
-        with tempfile.TemporaryDirectory(prefix="disco-workflow-sim-") as tmp:
-            simulation = simulate_definition(
-                body.definition,
-                params=body.params,
-                workspace_root=tmp,
-                available_builtin_names=env.builtin_names,
-                available_mcp_names=env.mcp_names,
-            )
-        all_findings = _dedupe_findings([*findings, *simulation.findings])
-        instance = WorkflowInstance(
-            definition_digest=body.definition.digest(),
+        return _draft_definition(
+            workflow_store=workflow_store,
+            env=env,
             definition=body.definition,
             params=body.params,
-            enabled=False,
-            approval=None,
-            validation_findings=tuple(all_findings),
+            instance_id=instance_id,
         )
-        workflow_store.save_instance(instance_id, instance)
-        return {
-            "workflow": _workflow_review_payload(instance_id, instance, env),
-            "simulation": simulation.model_dump(mode="json"),
-        }
+
+    async def _author_workflow(body: DraftWorkflowArgs) -> Any:
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        try:
+            definition = build_workflow_definition(body)
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"reason": "workflow_definition_invalid", "detail": str(exc)},
+            )
+
+        workflow_store = _workflow_store(runtime)
+        env = _surface_environment(runtime)
+        return _draft_definition(
+            workflow_store=workflow_store,
+            env=env,
+            definition=definition,
+            params=_fixture_params(body.params),
+            instance_id=_generated_instance_id(definition),
+        )
+
+    async def _run_workflow(instance_id: str) -> dict:
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        workflow_store = _workflow_store(runtime)
+        try:
+            instance = workflow_store.get_instance(instance_id)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"reason": "workflow_invalid_id", "message": str(exc)},
+            ) from exc
+        if instance is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"reason": "workflow_not_found"},
+            )
+        if not instance.enabled or instance.approval is None:
+            raise HTTPException(
+                status_code=409,
+                detail={"reason": "workflow_not_approved"},
+            )
+
+        try:
+            conversation_id = await _fire_approved_workflow_once(
+                runtime,
+                instance_id=instance_id,
+                instance=instance,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"reason": "workflow_run_failed", "message": str(exc)},
+            ) from exc
+        return {"conversation_id": conversation_id, "status": "started"}
 
     async def _approve_workflow(instance_id: str, body: ApproveWorkflowBody) -> dict:
         if runtime is None:
@@ -190,8 +250,14 @@ def make_workflows_router(
 
     router.add_api_route("/api/workflows", _list_workflows, methods=["GET"])
     router.add_api_route("/workflows", _list_workflows, methods=["GET"])
+    router.add_api_route(
+        "/api/workflows/authoring-context", _authoring_context, methods=["GET"]
+    )
+    router.add_api_route("/workflows/authoring-context", _authoring_context, methods=["GET"])
     router.add_api_route("/api/workflows/draft", _draft_workflow, methods=["POST"])
     router.add_api_route("/workflows/draft", _draft_workflow, methods=["POST"])
+    router.add_api_route("/api/workflows/author", _author_workflow, methods=["POST"])
+    router.add_api_route("/workflows/author", _author_workflow, methods=["POST"])
     router.add_api_route(
         "/api/workflows/{instance_id}/approve",
         _approve_workflow,
@@ -202,7 +268,55 @@ def make_workflows_router(
         _approve_workflow,
         methods=["POST"],
     )
+    router.add_api_route(
+        "/api/workflows/{instance_id}/run",
+        _run_workflow,
+        methods=["POST"],
+    )
+    router.add_api_route(
+        "/workflows/{instance_id}/run",
+        _run_workflow,
+        methods=["POST"],
+    )
     return router
+
+
+def _draft_definition(
+    *,
+    workflow_store: JsonDirWorkflowStore,
+    env: _SurfaceEnvironment,
+    definition: WorkflowDefinition,
+    params: dict[str, Any],
+    instance_id: str,
+) -> dict:
+    findings = validate_definition(
+        definition,
+        env.builtin_names,
+        env.mcp_names,
+        env.skill_names,
+    )
+    with tempfile.TemporaryDirectory(prefix="disco-workflow-sim-") as tmp:
+        simulation = simulate_definition(
+            definition,
+            params=params,
+            workspace_root=tmp,
+            available_builtin_names=env.builtin_names,
+            available_mcp_names=env.mcp_names,
+        )
+    all_findings = _dedupe_findings([*findings, *simulation.findings])
+    instance = WorkflowInstance(
+        definition_digest=definition.digest(),
+        definition=definition,
+        params=params,
+        enabled=False,
+        approval=None,
+        validation_findings=tuple(all_findings),
+    )
+    workflow_store.save_instance(instance_id, instance)
+    return {
+        "workflow": _workflow_review_payload(instance_id, instance, env),
+        "simulation": simulation.model_dump(mode="json"),
+    }
 
 
 def _workflow_store(runtime: ConversationRuntime) -> JsonDirWorkflowStore:
@@ -374,6 +488,112 @@ def _surface_tool_payload(name: str, env: _SurfaceEnvironment) -> dict[str, obje
         "needs": sorted(capability.value for capability in tool_def.needs),
         "source": source,
     }
+
+
+def _authoring_context_payload(env: _SurfaceEnvironment) -> dict[str, object]:
+    mcp_tools_by_server: dict[str, set[str]] = {}
+    for name in env.mcp_names:
+        parsed = _split_mcp_name(name)
+        if parsed is None:
+            continue
+        server, tool = parsed
+        mcp_tools_by_server.setdefault(server, set()).add(tool)
+
+    skill_names = {
+        str(payload["name"])
+        for payload in env.skill_payloads.values()
+        if isinstance(payload.get("name"), str)
+    }
+    return {
+        "builtin_tools": [
+            {
+                "name": tool_def.name,
+                "description": tool_def.description,
+                "read_only": bool(tool_def.read_only),
+            }
+            for tool_def in sorted(env.builtin_defs.values(), key=lambda item: item.name)
+        ],
+        "mcp_servers": [
+            {"server": server, "tools": sorted(tools)}
+            for server, tools in sorted(mcp_tools_by_server.items())
+        ],
+        "skills": sorted(skill_names),
+        "param_types": list(get_args(DraftParamType)),
+        "output_formats": list(_AUTHORING_OUTPUT_FORMATS),
+    }
+
+
+def _split_mcp_name(name: str) -> tuple[str, str] | None:
+    match = _MCP_NAME_RE.match(name)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _fixture_params(params: list[DraftWorkflowParam]) -> dict[str, object]:
+    return {param.name: _fixture_param_value(param.type) for param in params}
+
+
+def _fixture_param_value(param_type: DraftParamType) -> object:
+    if param_type == "string":
+        return "sample"
+    if param_type == "integer":
+        return 1
+    if param_type == "number":
+        return 1.0
+    if param_type == "boolean":
+        return True
+    if param_type == "string_array":
+        return ["sample"]
+    if param_type == "integer_array":
+        return [1]
+    return [1.0]
+
+
+async def _fire_approved_workflow_once(
+    runtime: ConversationRuntime,
+    *,
+    instance_id: str,
+    instance: WorkflowInstance,
+) -> str:
+    spec = ScheduleSpec(
+        instance_id=instance_id,
+        instance_digest=instance.definition_digest,
+        cron=_ONE_SHOT_CRON,
+        enabled=False,
+    )
+    row = runtime.create_workflow_schedule(spec, owner_id=DEFAULT_OWNER_ID)
+    schedule_id = str(row.get("schedule_id") or "")
+    if not schedule_id:
+        raise ValueError("workflow schedule creation did not return a schedule_id")
+    try:
+        record = await runtime.fire_workflow_schedule_now(
+            schedule_id,
+            owner_id=DEFAULT_OWNER_ID,
+        )
+    finally:
+        _delete_ephemeral_workflow_schedule(runtime, schedule_id)
+    if record is None:
+        raise ValueError("workflow schedule fire-now did not return a run record")
+    conversation_id = str(record.get("run_cid") or "")
+    if not conversation_id:
+        raise ValueError(str(record.get("error") or "workflow run did not start"))
+    return conversation_id
+
+
+def _delete_ephemeral_workflow_schedule(
+    runtime: ConversationRuntime,
+    schedule_id: str,
+) -> None:
+    project_store = runtime.project_store()
+    root = project_store.root
+    if root is None:
+        return
+    path = JsonWorkflowScheduleStore(root).schedules_dir / f"{schedule_id}.json"
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return
 
 
 def _generated_instance_id(defn: WorkflowDefinition) -> str:
