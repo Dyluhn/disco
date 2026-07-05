@@ -48,7 +48,11 @@ from .boundaries import AgentStep
 from .control import Disp
 from .messages import _stuck_escape_reminder
 from .observe import _FANOUT_INPUT_MAX_CHARS
-from .stuck import F6_FILE_MUTATING_TOOLS, repeated_verify_no_progress
+from .stuck import (
+    F6_FILE_MUTATING_TOOLS,
+    barren_streak_no_progress,
+    repeated_verify_no_progress,
+)
 from .tool_specs import _ask_user_tool_singleton
 
 if TYPE_CHECKING:
@@ -204,11 +208,13 @@ _NO_PROGRESS_REMINDER = (
     "has NOT changed across several different attempts — you are likely editing "
     "code that does not affect what you're observing (wrong file, wrong layer, a "
     "cached build, or the symptom has a different root cause). STOP making more "
-    "varied edits. State a concrete hypothesis for WHY the outcome is unchanged, "
-    "then take a DIFFERENT diagnostic step (read the actual served output / "
-    "console errors, check the build is rebuilding, or inspect a different layer) "
-    "before editing again. If you cannot make the observed result change, call "
-    "`finish` and state what is blocked.\n"
+    "varied edits. In the SAME turn as your next tool call, state a one-line "
+    "hypothesis for WHY the outcome is unchanged — the call itself must be a "
+    "DIFFERENT diagnostic step (read the actual served output / console errors, "
+    "check the build is rebuilding, or inspect a different layer), not another "
+    "edit. Stating the hypothesis without a tool call does not count. If you "
+    "cannot make the observed result change, call `finish` and state what is "
+    "blocked.\n"
     "</system-reminder>"
 )
 
@@ -1059,9 +1065,10 @@ class Valve:
                     "<system-reminder>\n"
                     f"You've failed {fails} times in a row:\n{errs}\n\n"
                     "STOP repeating the same approach — no human is available to "
-                    "help. Diagnose the real blocker in one sentence, then take a "
-                    "DIFFERENT technical path (a different library, API, command, or "
-                    "algorithm). Narrate the pivot with `notify_user`. If it is "
+                    "help. Your NEXT tool call must be a DIFFERENT technical path "
+                    "(a different library, API, command, or algorithm); put your "
+                    "one-sentence diagnosis in that same turn. Diagnosing or "
+                    "narrating without the new tool call does not count. If it is "
                     "genuinely impossible, call `finish` and state clearly in the "
                     "summary what is blocked and why.\n"
                     "</system-reminder>"
@@ -1157,7 +1164,11 @@ class Valve:
         # to max_iterations. Escalate-then-halt like gate_stuck: a corrective
         # nudge first, then — if the SAME outcome persists after the model acted
         # on the nudge — halt STUCK rather than burn the rest of the budget.
-        if not repeated_verify_no_progress(self._loop._recent(events)):
+        recent = self._loop._recent(events)
+        if not (
+            repeated_verify_no_progress(recent)
+            or barren_streak_no_progress(recent)
+        ):
             return Disp.FALLTHROUGH
         marker_seq = _no_progress_marker_seq(events)
         if marker_seq is None:
