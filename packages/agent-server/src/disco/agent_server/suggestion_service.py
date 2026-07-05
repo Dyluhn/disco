@@ -31,8 +31,14 @@ SuggestionSource = Literal["generated", "curated"]
 
 _TTL_S = 24 * 60 * 60
 _MAX_SUGGESTION_CHARS = 90
-_MAX_OUTPUT_TOKENS = 384
-_GENERATION_TIMEOUT_S = 12.0
+# A reasoning-class SUMMARIZER thinks at length before emitting the 8 lines; a
+# tight budget dies inside <think> and strips to nothing (the title-service
+# lesson). Give reasoning room to FINISH — the cache amortizes the cost.
+_MAX_OUTPUT_TOKENS = 1400
+_GENERATION_TIMEOUT_S = 60.0
+# How long a REQUEST waits on generation before serving the curated pool. The
+# background task keeps running and caches, so the next view gets generated.
+_REQUEST_WAIT_S = 8.0
 _QUOTE_CHARS = "\"'`“”‘’"
 _LEADER_RE = re.compile(r"^\s*(?:[-•>*]|\d+[.)])\s+")
 
@@ -151,14 +157,19 @@ class SuggestionService:
             return cached
 
         task = self._inflight.get(surface)
-        if task is None:
+        if task is None or task.done():
             task = asyncio.create_task(self._generate_and_cache(surface))
             self._inflight[surface] = task
-        try:
-            return await task
-        finally:
-            if self._inflight.get(surface) is task:
-                self._inflight.pop(surface, None)
+            task.add_done_callback(lambda t, s=surface: self._on_done(s, t))
+        # Shielded short wait: a slow generation must not stall the splash —
+        # this request falls back to curated while the task finishes + caches.
+        return await asyncio.wait_for(asyncio.shield(task), timeout=_REQUEST_WAIT_S)
+
+    def _on_done(self, surface: SuggestionSurface, task: asyncio.Task[list[str]]) -> None:
+        if self._inflight.get(surface) is task:
+            self._inflight.pop(surface, None)
+        if not task.cancelled() and task.exception() is not None:
+            _LOG.debug("suggestion generation failed for %s", surface, exc_info=task.exception())
 
     async def _generate_and_cache(self, surface: SuggestionSurface) -> list[str]:
         suggestions = await asyncio.wait_for(
