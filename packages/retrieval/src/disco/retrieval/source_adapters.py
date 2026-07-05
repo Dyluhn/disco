@@ -6,6 +6,7 @@ parameter matching the search provider contract.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
@@ -245,3 +246,92 @@ class SiteScopedSearchProvider:
             )
             for h in hits
         ]
+
+
+class MultiSearchProvider:
+    name = "multi"
+
+    def __init__(self, providers: tuple[SearchProvider, ...]) -> None:
+        self._providers = providers
+
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> list[SearchHit]:
+        if not self._providers or limit <= 0:
+            return []
+        gathered = await asyncio.gather(
+            *[
+                provider.search(
+                    query,
+                    limit=limit,
+                    domains_allow=domains_allow,
+                    domains_deny=domains_deny,
+                    time_filter=time_filter,
+                )
+                for provider in self._providers
+            ],
+            return_exceptions=True,
+        )
+        rows_by_provider: list[list[SearchHit]] = []
+        for result in gathered:
+            if isinstance(result, BaseException) or not result:
+                continue
+            rows_by_provider.append(list(result))
+        if not rows_by_provider:
+            return []
+
+        by_url: dict[str, tuple[SearchHit, int, list[str]]] = {}
+        ordered_urls: list[str] = []
+        max_len = max(len(rows) for rows in rows_by_provider)
+        for idx in range(max_len):
+            for rows in rows_by_provider:
+                if idx >= len(rows):
+                    continue
+                hit = rows[idx]
+                if not hit.url:
+                    continue
+                labels = _source_labels(hit.source_engine)
+                current = by_url.get(hit.url)
+                if current is None:
+                    by_url[hit.url] = (hit, hit.rank, labels)
+                    ordered_urls.append(hit.url)
+                    continue
+                best_hit, best_rank, engines = current
+                for label in labels:
+                    if label not in engines:
+                        engines.append(label)
+                if hit.rank < best_rank:
+                    best_hit, best_rank = hit, hit.rank
+                by_url[hit.url] = (best_hit, best_rank, engines)
+
+        out: list[SearchHit] = []
+        for url in ordered_urls:
+            hit, _best_rank, engines = by_url[url]
+            out.append(
+                hit.model_copy(
+                    update={
+                        "source_engine": "+".join(engines),
+                        "rank": len(out),
+                    }
+                )
+            )
+            if len(out) >= limit:
+                break
+        return out
+
+
+def _source_labels(source_engine: str) -> list[str]:
+    seen: set[str] = set()
+    labels: list[str] = []
+    for raw in (source_engine or "").split("+"):
+        label = raw.strip()
+        if label and label not in seen:
+            seen.add(label)
+            labels.append(label)
+    return labels or ["unknown"]

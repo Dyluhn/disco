@@ -243,7 +243,9 @@ def _image_gen_from(config: RouterConfig) -> ImageGenConfigDTO:
     )
 
 
-def _data_sources_from(config: RouterConfig) -> DataSourcesConfigDTO:
+def _data_sources_from(
+    config: RouterConfig, *, configured_sources: list[str] | None = None
+) -> DataSourcesConfigDTO:
     s, x = config.search, config.extraction
     return DataSourcesConfigDTO(
         search_provider=s.provider,
@@ -252,6 +254,7 @@ def _data_sources_from(config: RouterConfig) -> DataSourcesConfigDTO:
         extraction_provider=x.provider,
         extraction_base_url=x.base_url,
         extraction_api_key_env=x.api_key_env,
+        configured_sources=configured_sources or [],
     )
 
 

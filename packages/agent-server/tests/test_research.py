@@ -54,8 +54,10 @@ class _FakeProvider:
 class _FakeSearch:
     def __init__(self):
         self.last_domains_deny = None
+        self.calls = 0
 
     async def search(self, query, *, limit=10, domains_allow=None, domains_deny=None):
+        self.calls += 1
         self.last_domains_deny = domains_deny  # record what the re-scope passed
         return [
             SearchHit(
@@ -169,6 +171,59 @@ def test_research_passes_domain_deny_to_search():
                 break
     # the re-scope's denied domains reached the search provider (normalized)
     assert search.last_domains_deny == frozenset({"reddit.com"})
+
+
+async def test_research_stream_sources_builds_override_and_bypasses_cached_global(
+    tmp_path, monkeypatch
+):
+    store = SqliteEventStore(":memory:")
+    cfg = RouterConfig(
+        models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
+        default_model="m",
+    )
+    router = DefaultLLMRouter(cfg, {"fake": _FakeProvider()})
+    rt = ConversationRuntime(
+        store,
+        router=router,
+        config_store=ConfigStore(tmp_path / "config.json", base_factory=lambda: cfg),
+    )
+    cached_search = _FakeSearch()
+    override_search = _FakeSearch()
+    rt._research_providers = {
+        "search": cached_search,
+        "extraction": _FakeExtraction(),
+        "reranker": _FakeReranker(),
+        "embedder": None,
+        "nli": _FakeNLI(),
+    }
+
+    seen: dict[str, object] = {}
+
+    def fake_build_multi_search(sources, **kwargs):
+        seen["sources"] = tuple(sources)
+        seen["multi_kwargs"] = kwargs
+        return override_search
+
+    def fake_build_live_retrieval(**kwargs):
+        seen["search_override"] = kwargs.get("search_override")
+        return {
+            "search": kwargs["search_override"] or cached_search,
+            "extraction": _FakeExtraction(),
+            "reranker": _FakeReranker(),
+            "embedder": None,
+            "nli": _FakeNLI(),
+        }
+
+    monkeypatch.setattr("disco.retrieval.live.build_multi_search", fake_build_multi_search)
+    monkeypatch.setattr("disco.retrieval.live.build_live_retrieval", fake_build_live_retrieval)
+
+    frames = [frame async for frame in rt.research_stream("capital?", sources=["arxiv", "ddgs"])]
+
+    assert seen["sources"] == ("arxiv", "ddgs")
+    assert seen["search_override"] is override_search
+    assert override_search.calls == 1
+    assert cached_search.calls == 0
+    assert any(frame["type"] == "final" for frame in frames)
 
 
 def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):

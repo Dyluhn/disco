@@ -54,7 +54,12 @@ export function useResearch() {
   const submit = useCallback(
     async (
       query: string,
-      opts?: { model_override?: string | null; think?: boolean; space_ids?: string[] },
+      opts?: {
+        model_override?: string | null;
+        think?: boolean;
+        space_ids?: string[];
+        sources?: string[];
+      },
     ) => {
       // The per-conversation lead-model override + Think flag ride along on the
       // request (backend hooks: CallContext.model_override + a think flag).

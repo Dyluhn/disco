@@ -99,6 +99,8 @@ def make_conversations_router(
                 runtime.set_recency(conversation_id, body.recency_window)
             if body.space_ids:
                 runtime.set_space_ids(conversation_id, body.space_ids)
+            if body.sources:
+                runtime.set_research_sources(conversation_id, body.sources)
             # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
             if body.artifact_mode:
                 runtime.set_artifact_mode(conversation_id, True)

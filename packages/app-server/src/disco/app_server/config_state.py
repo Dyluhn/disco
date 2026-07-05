@@ -582,7 +582,10 @@ class ConfigState:
     # data sources: web search + extraction provider tiers (persisted) ----------
 
     def data_sources_config(self) -> DataSourcesConfigDTO:
-        return _data_sources_from(self._store.load())
+        cfg = self._store.load()
+        return _data_sources_from(
+            cfg, configured_sources=self._configured_research_sources(cfg)
+        )
 
     def update_data_sources_config(self, dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
         """Persist the search + extraction provider choices. The agent-server rebuilds
@@ -603,7 +606,35 @@ class ConfigState:
                 api_key_env=dto.extraction_api_key_env.strip(),
             )
         )
-        return _data_sources_from(self._store.load())
+        cfg = self._store.load()
+        return _data_sources_from(
+            cfg, configured_sources=self._configured_research_sources(cfg)
+        )
+
+    def _configured_research_sources(self, cfg: RouterConfig) -> list[str]:
+        configured: set[str] = set()
+        search = cfg.search
+        if search.base_url.strip():
+            configured.add(search.provider)
+        if search.api_key_env.strip() and self._resolve_secret_value(search.api_key_env.strip()):
+            configured.add(search.provider)
+        provider_envs = {
+            "tavily": ("TAVILY_API_KEY", "DISCO_TAVILY_API_KEY"),
+            "brave": (
+                "BRAVE_SEARCH_API_KEY",
+                "DISCO_BRAVE_SEARCH_API_KEY",
+                "BRAVE_API_KEY",
+            ),
+            "semantic_scholar": (
+                "SEMANTIC_SCHOLAR_API_KEY",
+                "DISCO_SEMANTIC_SCHOLAR_API_KEY",
+                "S2_API_KEY",
+            ),
+        }
+        for provider, names in provider_envs.items():
+            if any(self._resolve_secret_value(name) for name in names):
+                configured.add(provider)
+        return sorted(configured)
 
     # auxiliary-role local fallback (persisted; agent-server reads per request) ---
 

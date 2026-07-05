@@ -116,6 +116,8 @@ class CreateConversationBody(BaseModel):
     # runtime pins these per conversation and the retrieval engine scopes through
     # RetrievalRequest.corpus_ids.
     space_ids: list[str] = []
+    # Per-query research source selection. Empty means use the Settings default.
+    sources: list[str] = []
 
 
 class SendMessageBody(BaseModel):

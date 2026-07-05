@@ -59,7 +59,9 @@ describe("useResearch — BW-08 twin lazy pre-create", () => {
     expect(createBuildConversation).not.toHaveBeenCalled();
 
     await act(async () => {
-      await result.current.submit("what is the speed of light");
+      await result.current.submit("what is the speed of light", {
+        sources: ["arxiv", "ddgs"],
+      });
     });
 
     await waitFor(() => expect(createBuildConversation).toHaveBeenCalledTimes(1));
@@ -68,7 +70,10 @@ describe("useResearch — BW-08 twin lazy pre-create", () => {
     // The minted cid is threaded onto the research request (and retained as runCid).
     await waitFor(() => expect(result.current.runCid).toBe("conv_created"));
     expect(requestResearch).toHaveBeenCalledWith(
-      expect.objectContaining({ conversation_id: "conv_created" }),
+      expect.objectContaining({
+        conversation_id: "conv_created",
+        sources: ["arxiv", "ddgs"],
+      }),
     );
   });
 

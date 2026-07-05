@@ -1424,6 +1424,12 @@ class ConversationRuntime:
     def _effective_appkit_mode(self, conversation_id: str) -> bool:
         return self._settings._effective_appkit_mode(conversation_id)
 
+    def set_research_sources(self, conversation_id: str, sources: list[str]) -> None:
+        self._settings.set_research_sources(conversation_id, sources)
+
+    def get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]:
+        return self._settings.get_research_sources(conversation_id)
+
     # ---- CONTRACT-ACTIVATE: build contract + live phase ---------------------
 
     def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
@@ -2455,8 +2461,8 @@ class ConversationRuntime:
     def set_recency(self, conversation_id: str, window: str | None) -> None:
         return self._dr.set_recency(conversation_id, window)
 
-    def _research(self) -> dict[str, Any]:
-        return self._dr._research()
+    def _research(self, search_override: Any | None = None) -> dict[str, Any]:
+        return self._dr._research(search_override=search_override)
 
     def research_stream(
         self,
@@ -2468,6 +2474,7 @@ class ConversationRuntime:
         think: bool = False,
         conversation_id: str | None = None,
         space_ids: frozenset[str] = frozenset(),
+        sources: list[str] | tuple[str, ...] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         return self._dr.research_stream(
             query,
@@ -2477,6 +2484,7 @@ class ConversationRuntime:
             think=think,
             conversation_id=conversation_id,
             space_ids=space_ids,
+            sources=sources,
         )
 
     def kick(self, conversation_id: str) -> None:

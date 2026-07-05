@@ -148,3 +148,20 @@ def test_create_conversation_applies_iterative():
         "/conversations", json={"owner_id": "local", "surface": "deep_research"}
     ).json()["conversation_id"]
     assert runtime._iterative_for(cid_def) is False
+
+
+def test_create_conversation_applies_research_sources():
+    store = SqliteEventStore(":memory:")
+    runtime = _runtime(store, "x")
+    client = TestClient(create_app(store, runtime=runtime))
+
+    cid = client.post(
+        "/conversations",
+        json={
+            "owner_id": "local",
+            "surface": "deep_research",
+            "sources": ["arxiv", "ddgs", "arxiv", "unknown"],
+        },
+    ).json()["conversation_id"]
+
+    assert runtime.get_research_sources(cid) == ("arxiv", "ddgs")

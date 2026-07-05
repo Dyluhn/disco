@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -29,6 +29,7 @@ import httpx
 from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, SearchHit
 from .nli import Entailment
+from .providers import SearchProvider
 
 # W-33: cap how long a remote-encoder connectivity probe waits. The probe only
 # needs to confirm the host ANSWERS (any HTTP status counts) — a dead endpoint
@@ -510,7 +511,7 @@ _DEFAULTS = {
 def _make_search(provider: str, base_url: str, api_key: str):
     """Select the discovery provider (§B2). BUNDLED `ddgs` is the default — no key,
     no service. `searxng` self-hosts; `tavily` is a paid key."""
-    from .bundled_providers import DdgsSearchProvider, TavilySearchProvider
+    from .bundled_providers import BraveSearchProvider, DdgsSearchProvider, TavilySearchProvider
     from .source_adapters import (
         ArxivSearchProvider,
         SemanticScholarSearchProvider,
@@ -521,6 +522,8 @@ def _make_search(provider: str, base_url: str, api_key: str):
         return SearxngSearchProvider(base_url)
     if provider == "tavily":
         return TavilySearchProvider(api_key)
+    if provider == "brave":
+        return BraveSearchProvider(api_key, base_url=base_url or "https://api.search.brave.com")
     if provider == "arxiv":
         return ArxivSearchProvider(base_url=base_url) if base_url else ArxivSearchProvider()
     if provider == "semantic_scholar":
@@ -532,6 +535,48 @@ def _make_search(provider: str, base_url: str, api_key: str):
     if provider == "site_scoped":
         return SiteScopedSearchProvider(sites=base_url)
     return DdgsSearchProvider()  # default / "ddgs"
+
+
+def build_multi_search(
+    sources: Sequence[str],
+    *,
+    searxng_url: str = "",
+    tavily_key: str = "",
+    ss_key: str = "",
+    brave_key: str = "",
+    brave_url: str = "",
+    site_scoped_sites: str = "",
+) -> SearchProvider:
+    """Compose a MultiSearchProvider from a per-query source id list."""
+    from .bundled_providers import DdgsSearchProvider
+    from .source_adapters import MultiSearchProvider
+
+    providers: list[SearchProvider] = []
+    seen: set[str] = set()
+    for raw in sources:
+        source_id = str(raw).strip().lower()
+        if not source_id or source_id in seen:
+            continue
+        seen.add(source_id)
+        if source_id == "ddgs":
+            providers.append(_make_search("ddgs", "", ""))
+        elif source_id == "arxiv":
+            providers.append(_make_search("arxiv", "", ""))
+        elif source_id == "semantic_scholar":
+            providers.append(_make_search("semantic_scholar", "", ss_key))
+        elif source_id == "searxng" and searxng_url:
+            providers.append(_make_search("searxng", searxng_url, ""))
+        elif source_id == "tavily" and tavily_key:
+            providers.append(_make_search("tavily", "", tavily_key))
+        elif source_id == "brave" and brave_key:
+            providers.append(_make_search("brave", brave_url, brave_key))
+        elif source_id == "site_scoped" and site_scoped_sites:
+            providers.append(_make_search("site_scoped", site_scoped_sites, ""))
+    if not providers:
+        return DdgsSearchProvider()
+    if len(providers) == 1:
+        return providers[0]
+    return MultiSearchProvider(tuple(providers))
 
 
 def _make_extraction(provider: str, base_url: str, api_key: str):
@@ -556,6 +601,7 @@ def build_live_retrieval(
     search_provider: str = "ddgs",
     search_base_url: str = "",
     search_api_key: str = "",
+    search_override: SearchProvider | None = None,
     extraction_provider: str = "local",
     extraction_base_url: str = "",
     extraction_api_key: str = "",
@@ -593,8 +639,12 @@ def build_live_retrieval(
     # fresh install works keyless; searxng/crawl4ai self-host (base_url, empty → env
     # default); tavily/firecrawl are paid (resolved api_key passed in by the runtime).
     providers: dict[str, Any] = {
-        "search": _make_search(
-            search_provider, search_base_url or url("DISCO_SEARXNG_URL"), search_api_key
+        "search": search_override
+        or _make_search(
+            search_provider,
+            search_base_url
+            or (url("DISCO_SEARXNG_URL") if search_provider == "searxng" else ""),
+            search_api_key,
         ),
         "extraction": _make_extraction(
             extraction_provider,

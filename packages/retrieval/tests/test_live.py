@@ -15,8 +15,10 @@ from disco.retrieval.live import (
     SearxngSearchProvider,
     SidecarNLIVerifier,
     TeiReranker,
+    build_multi_search,
 )
 from disco.retrieval.models import Passage
+from disco.retrieval.source_adapters import MultiSearchProvider
 
 
 def _async(handler) -> httpx.MockTransport:
@@ -55,6 +57,27 @@ async def test_searxng_failure_degrades_to_no_hits():
         return httpx.Response(502, text="bad gateway")
 
     assert await SearxngSearchProvider("http://x", transport=_async(handler)).search("q") == []
+
+
+def test_build_multi_search_maps_ids_and_falls_back_to_ddgs():
+    provider = build_multi_search(
+        ["arxiv", "ddgs", "semantic_scholar", "searxng", "tavily", "unknown"],
+        searxng_url="http://searx",
+        tavily_key="tv",
+        ss_key="ss",
+    )
+
+    assert isinstance(provider, MultiSearchProvider)
+    assert [type(p).__name__ for p in provider._providers] == [
+        "ArxivSearchProvider",
+        "DdgsSearchProvider",
+        "SemanticScholarSearchProvider",
+        "SearxngSearchProvider",
+        "TavilySearchProvider",
+    ]
+
+    fallback = build_multi_search([])
+    assert type(fallback).__name__ == "DdgsSearchProvider"
 
 
 # ---- Crawl4AI ---------------------------------------------------------------

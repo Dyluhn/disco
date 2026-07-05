@@ -206,6 +206,7 @@ async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
             ws.send_json({
                 "query": "test question",
                 "conversation_id": "conv_abc123",
+                "sources": ["arxiv", "ddgs"],
             })
             frames = []
             try:
@@ -220,6 +221,7 @@ async def test_ws_research_passes_conversation_id_to_research_stream() -> None:
     assert call_kwargs is not None
     kwargs = call_kwargs.kwargs
     assert kwargs.get("conversation_id") == "conv_abc123"
+    assert kwargs.get("sources") == ["arxiv", "ddgs"]
 
 
 @pytest.mark.asyncio

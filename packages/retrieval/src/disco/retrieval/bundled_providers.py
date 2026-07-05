@@ -16,6 +16,7 @@ import asyncio
 import hashlib
 import logging
 from html.parser import HTMLParser
+from urllib.parse import urlparse
 
 import httpx
 
@@ -69,6 +70,19 @@ _TIMEOUT = httpx.Timeout(20.0)
 # with linear backoff before degrading to no-results (see DdgsSearchProvider).
 _DDGS_MAX_ATTEMPTS = 3
 _DDGS_BACKOFF_S = 1.5
+
+
+def _host(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def _allowed(url: str, allow: frozenset[str] | None, deny: frozenset[str] | None) -> bool:
+    host = _host(url)
+    denied = {d.lower() for d in (deny or frozenset())}
+    allowed = {d.lower() for d in allow} if allow else None
+    if any(d in host for d in denied):
+        return False
+    return allowed is None or any(d in host for d in allowed)
 
 
 # ===== SEARCH ================================================================
@@ -167,16 +181,21 @@ class TavilySearchProvider:
         limit: int = 10,
         domains_allow: frozenset[str] | None = None,
         domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
     ) -> list[SearchHit]:
+        del time_filter
         if not self._key:
             return []
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-            r = await c.post(
-                "https://api.tavily.com/search",
-                json={"api_key": self._key, "query": query, "max_results": limit},
-            )
-            r.raise_for_status()
-            data = r.json()
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+                r = await c.post(
+                    "https://api.tavily.com/search",
+                    json={"api_key": self._key, "query": query, "max_results": limit},
+                )
+                r.raise_for_status()
+                data = r.json()
+        except (httpx.HTTPError, ValueError):
+            return []
         return [
             SearchHit(
                 url=h.get("url", ""),
@@ -186,8 +205,60 @@ class TavilySearchProvider:
                 rank=i,
             )
             for i, h in enumerate(data.get("results", []))
-            if h.get("url")
+            if h.get("url") and _allowed(h.get("url", ""), domains_allow, domains_deny)
         ]
+
+
+class BraveSearchProvider:
+    """(b) PAID search — Brave Search API (BYO key)."""
+
+    name = "brave"
+
+    def __init__(self, api_key: str, *, base_url: str = "https://api.search.brave.com"):
+        self._key = api_key
+        self._base = base_url.rstrip("/")
+
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> list[SearchHit]:
+        del time_filter
+        if not self._key:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+                r = await c.get(
+                    f"{self._base}/res/v1/web/search",
+                    params={"q": query, "count": max(1, min(limit, 20))},
+                    headers={"X-Subscription-Token": self._key},
+                )
+                r.raise_for_status()
+                data = r.json()
+        except (httpx.HTTPError, ValueError):
+            return []
+        results = (data.get("web") or {}).get("results", [])
+        hits: list[SearchHit] = []
+        for i, h in enumerate(results):
+            url = h.get("url", "")
+            if not url or not _allowed(url, domains_allow, domains_deny):
+                continue
+            hits.append(
+                SearchHit(
+                    url=url,
+                    title=h.get("title", "") or url,
+                    snippet=h.get("description", "") or h.get("snippet", ""),
+                    source_engine="brave",
+                    rank=i,
+                )
+            )
+            if len(hits) >= limit:
+                break
+        return hits
 
 
 # ===== EXTRACTION ============================================================

@@ -328,6 +328,10 @@ def make_ws_router(
             for space_id in raw_space_ids
             if str(space_id).strip()
         )
+        raw_sources = body.get("sources") or []
+        if not isinstance(raw_sources, list):
+            raw_sources = []
+        sources = [str(source).strip() for source in raw_sources if str(source).strip()]
         try:
             async for frame in runtime.research_stream(
                 query,
@@ -337,6 +341,7 @@ def make_ws_router(
                 think=think,
                 conversation_id=conversation_id,
                 space_ids=space_ids,
+                sources=sources,
             ):
                 await websocket.send_json(frame)
         except WebSocketDisconnect:

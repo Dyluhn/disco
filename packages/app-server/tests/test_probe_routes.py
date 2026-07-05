@@ -141,6 +141,26 @@ def test_data_source_new_keyless_search_tiers_are_bundled(client, state):
         assert body["provider"] == provider
 
 
+def test_data_sources_config_reports_configured_sources(client, state):
+    from disco.app_server.config.dtos import DataSourcesConfigDTO
+
+    state.set_secret("TAVILY_API_KEY", "tv-live")
+    state.update_data_sources_config(
+        DataSourcesConfigDTO(
+            search_provider="searxng",
+            search_base_url="http://searx.local:8080",
+            search_api_key_env="",
+            extraction_provider="local",
+            extraction_base_url="",
+            extraction_api_key_env="",
+        )
+    )
+
+    body = client.get("/api/data-sources/config").json()
+    assert "searxng" in body["configured_sources"]
+    assert "tavily" in body["configured_sources"]
+
+
 def test_data_source_selfhost_without_url_is_misconfigured(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 

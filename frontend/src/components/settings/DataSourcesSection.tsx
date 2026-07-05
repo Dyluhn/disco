@@ -262,8 +262,8 @@ export function DataSourcesSection() {
         </h3>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
           Where web search and content extraction run. Bundled, keyless options
-          by default — the app works the moment it's installed. Upgrade to
-          self-hosted or paid here.
+          by default — the app works the moment it's installed. Search uses this
+          default when no per-query sources are chosen.
         </p>
       </header>
 

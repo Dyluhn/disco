@@ -251,6 +251,7 @@ let fixtureDataSources: DataSourcesConfig = {
   extraction_provider: "local",
   extraction_base_url: "",
   extraction_api_key_env: "",
+  configured_sources: [],
 };
 
 export async function getDataSourcesConfig(): Promise<DataSourcesConfig> {

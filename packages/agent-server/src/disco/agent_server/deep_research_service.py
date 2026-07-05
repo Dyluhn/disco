@@ -35,7 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, Literal
 
 from disco.core import (
@@ -187,13 +187,18 @@ class DeepResearchService:
             return val  # type: ignore[return-value]
         return None
 
-    def _research(self) -> dict[str, Any]:
+    def _research(self, search_override: Any | None = None) -> dict[str, Any]:
         # A statically-injected provider set (tests) is used as-is. Otherwise build
         # from the PERSISTED encoder mode, and rebuild if the Settings toggle changed
         # it — so flipping local↔remote takes effect on the next research run without
         # a restart (rebuild is cheap: fastembed models are module-cached, not per
         # provider instance).
         if self._rt._injected_research_providers is not None:
+            if search_override is not None:
+                return {
+                    **self._rt._injected_research_providers,
+                    "search": search_override,
+                }
             return self._rt._injected_research_providers
         cfg = self._rt._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
@@ -207,6 +212,22 @@ class DeepResearchService:
             sch.provider, sch.base_url, sch.api_key_env,
             ext.provider, ext.base_url, ext.api_key_env,
         )
+        if search_override is not None:
+            from disco.retrieval.live import build_live_retrieval
+
+            return build_live_retrieval(
+                remote=enc.remote,
+                reranker_url=enc.reranker_url,
+                embedder_url=enc.embedder_url,
+                nli_url=enc.nli_url,
+                search_provider=sch.provider,
+                search_base_url=sch.base_url,
+                search_api_key=search_key,
+                search_override=search_override,
+                extraction_provider=ext.provider,
+                extraction_base_url=ext.base_url,
+                extraction_api_key=ext_key,
+            )
         if self._rt._research_providers is None or self._rt._research_encoders_key != key:
             from disco.retrieval.live import build_live_retrieval
 
@@ -224,6 +245,46 @@ class DeepResearchService:
             )
             self._rt._research_encoders_key = key
         return self._rt._research_providers
+
+    def _search_override_for_sources(self, sources: Sequence[str] | None) -> Any | None:
+        clean = tuple(str(source).strip() for source in (sources or ()) if str(source).strip())
+        if not clean:
+            return None
+        cfg = self._rt._config_store.load()
+        sch = cfg.search
+
+        def key_for(provider: str, *fallback_names: str) -> str:
+            if sch.provider == provider and sch.api_key_env:
+                key = self._rt._resolve_secret(sch.api_key_env)
+                if key:
+                    return key
+            for name in fallback_names:
+                key = self._rt._resolve_secret(name)
+                if key:
+                    return key
+            return ""
+
+        from disco.retrieval.live import build_multi_search
+
+        return build_multi_search(
+            clean,
+            searxng_url=sch.base_url if sch.provider == "searxng" else "",
+            tavily_key=key_for("tavily", "TAVILY_API_KEY", "DISCO_TAVILY_API_KEY"),
+            ss_key=key_for(
+                "semantic_scholar",
+                "SEMANTIC_SCHOLAR_API_KEY",
+                "DISCO_SEMANTIC_SCHOLAR_API_KEY",
+                "S2_API_KEY",
+            ),
+            brave_key=key_for(
+                "brave",
+                "BRAVE_SEARCH_API_KEY",
+                "DISCO_BRAVE_SEARCH_API_KEY",
+                "BRAVE_API_KEY",
+            ),
+            brave_url=sch.base_url if sch.provider == "brave" else "",
+            site_scoped_sites=sch.base_url if sch.provider == "site_scoped" else "",
+        )
 
     async def _preflight_encoders(
         self, deps: dict[str, Any], *, required: tuple[str, ...]
@@ -269,6 +330,7 @@ class DeepResearchService:
         think: bool = False,
         conversation_id: str | None = None,
         space_ids: frozenset[str] = frozenset(),
+        sources: Sequence[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a live grounded answer as the UI's research frames (state →
         token… → final). Composes the shared router with the live retrieval
@@ -291,7 +353,8 @@ class DeepResearchService:
         from disco.retrieval import RouterQueryRewriter
         from disco.retrieval.streaming import stream_research_answer
 
-        deps = self._rt._research()
+        search_override = self._search_override_for_sources(sources)
+        deps = self._rt._research(search_override=search_override)
         # W-35 + P1-3: pre-flight the model the ANSWER STREAM actually uses for
         # generation — RAG_ANSWERER (streaming.py), NOT AGENT_DRIVER. With those
         # roles assigned to different endpoints, probing AGENT_DRIVER would both
@@ -604,7 +667,9 @@ class DeepResearchService:
             RouterQueryRewriter,
         )
 
-        deps = self._rt._research()
+        research_sources = self._rt.get_research_sources(conversation_id)
+        search_override = self._search_override_for_sources(research_sources)
+        deps = self._rt._research(search_override=search_override)
         space_ids = self._rt.get_space_ids(conversation_id)
         # W-35/W-33: pre-flight the driver + the REQUIRED encoders BEFORE the engine
         # starts. A dead driver or a degraded/empty remote reranker/NLI would

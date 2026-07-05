@@ -130,6 +130,18 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
     // and it still carries the depth_tier default — proving we mirror, not replace
     expect(body.depth_tier).toBe("standard_deep");
   });
+
+  it("sends sources when per-query sources are selected", async () => {
+    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
+    const send = vi
+      .spyOn(clientModule, "agentSend")
+      .mockResolvedValue({ conversation_id: "conv_sources" } as never);
+
+    await createDeepResearchConversation({ query: "q", sources: ["arxiv", "ddgs"] });
+
+    const [, , body] = send.mock.calls[0] as [string, string, Record<string, unknown>];
+    expect(body.sources).toEqual(["arxiv", "ddgs"]);
+  });
 });
 
 // ---- WALK-03 (C1): serializeReportToMarkdown strips [[id]] from disputed_notes ----

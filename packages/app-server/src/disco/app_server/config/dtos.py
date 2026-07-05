@@ -273,6 +273,7 @@ class DataSourcesConfigDTO(BaseModel):
     extraction_provider: Literal["local", "crawl4ai", "firecrawl"] = "local"
     extraction_base_url: str = ""
     extraction_api_key_env: str = ""
+    configured_sources: list[str] = []
 
 
 class RoleFallbackConfigDTO(BaseModel):

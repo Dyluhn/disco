@@ -121,6 +121,7 @@ function subscribeLive(
         // null → OFF path (server-side byte-identical to pre-DR-4 code).
         conversation_id: scope.conversation_id ?? null,
         space_ids: scope.space_ids ?? [],
+        sources: scope.sources ?? [],
       }),
     );
   };

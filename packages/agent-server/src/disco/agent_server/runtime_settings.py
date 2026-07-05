@@ -558,3 +558,35 @@ class RuntimeSettings:
     def _effective_appkit_mode(self, conversation_id: str) -> bool:
         """True when the conversation was created with appkit_mode=True."""
         return self._rt._appkit_mode.get(conversation_id, False)
+
+    # ---- per-query research sources ---------------------------------------
+
+    _VALID_RESEARCH_SOURCES = frozenset(
+        {
+            "ddgs",
+            "arxiv",
+            "semantic_scholar",
+            "searxng",
+            "tavily",
+            "brave",
+            "site_scoped",
+        }
+    )
+
+    def set_research_sources(self, conversation_id: str, sources: list[str]) -> None:
+        if not hasattr(self._rt, "_research_sources"):
+            self._rt._research_sources = {}
+        clean: list[str] = []
+        for raw in sources:
+            source = str(raw).strip().lower()
+            if source in self._VALID_RESEARCH_SOURCES and source not in clean:
+                clean.append(source)
+        if clean:
+            self._rt._research_sources[conversation_id] = tuple(clean)
+        else:
+            self._rt._research_sources.pop(conversation_id, None)
+
+    def get_research_sources(self, conversation_id: str | None) -> tuple[str, ...]:
+        if not conversation_id or not hasattr(self._rt, "_research_sources"):
+            return ()
+        return self._rt._research_sources.get(conversation_id, ())

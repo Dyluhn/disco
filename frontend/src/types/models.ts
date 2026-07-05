@@ -193,6 +193,7 @@ export interface DataSourcesConfig {
   extraction_provider: ExtractionProvider;
   extraction_base_url: string;
   extraction_api_key_env: string;
+  configured_sources?: string[];
 }
 
 /** Auxiliary-role model fallback. Only summarizer, query-rewriter, and verifier

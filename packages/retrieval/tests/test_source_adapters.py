@@ -5,6 +5,7 @@ from disco.retrieval.models import SearchHit
 from disco.retrieval.providers import SearchProvider
 from disco.retrieval.source_adapters import (
     ArxivSearchProvider,
+    MultiSearchProvider,
     SemanticScholarSearchProvider,
     SiteScopedSearchProvider,
 )
@@ -142,6 +143,93 @@ async def test_semantic_scholar_http_error_degrades_to_empty():
     )
 
     assert await provider.search("q") == []
+
+
+class FakeMultiProvider:
+    def __init__(self, name: str, hits: list[SearchHit] | None = None, *, raises: bool = False):
+        self.name = name
+        self._hits = hits or []
+        self._raises = raises
+
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> list[SearchHit]:
+        del query, domains_allow, domains_deny, time_filter
+        if self._raises:
+            raise RuntimeError("provider down")
+        return self._hits[:limit]
+
+
+async def test_multi_search_fans_out_merges_dedupes_and_ignores_failures():
+    provider = MultiSearchProvider(
+        (
+            FakeMultiProvider(
+                "ddgs",
+                [
+                    SearchHit(
+                        url="https://example.com/a",
+                        title="A",
+                        snippet="a",
+                        source_engine="ddgs",
+                        rank=0,
+                    ),
+                    SearchHit(
+                        url="https://example.com/shared",
+                        title="Shared weak",
+                        snippet="weak",
+                        source_engine="ddgs",
+                        rank=5,
+                    ),
+                    SearchHit(
+                        url="https://example.com/c",
+                        title="C",
+                        snippet="c",
+                        source_engine="ddgs",
+                        rank=2,
+                    ),
+                ],
+            ),
+            FakeMultiProvider(
+                "arxiv",
+                [
+                    SearchHit(
+                        url="https://example.com/shared",
+                        title="Shared best",
+                        snippet="best",
+                        source_engine="arxiv",
+                        rank=0,
+                    ),
+                    SearchHit(
+                        url="https://example.com/b",
+                        title="B",
+                        snippet="b",
+                        source_engine="arxiv",
+                        rank=1,
+                    ),
+                ],
+            ),
+            FakeMultiProvider("empty", []),
+            FakeMultiProvider("broken", raises=True),
+        )
+    )
+
+    hits = await provider.search("q", limit=3)
+
+    assert [h.url for h in hits] == [
+        "https://example.com/a",
+        "https://example.com/shared",
+        "https://example.com/b",
+    ]
+    assert [h.rank for h in hits] == [0, 1, 2]
+    shared = hits[1]
+    assert shared.title == "Shared best"
+    assert shared.source_engine == "arxiv+ddgs"
 
 
 class FakeInnerSearchProvider:

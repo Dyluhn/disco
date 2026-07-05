@@ -35,6 +35,8 @@ export interface DeepResearchSubmit {
   recencyWindow?: "month" | "week" | null;
   /** Persistent Spaces to merge into RetrievalRequest.corpus_ids. */
   spaceIds?: string[];
+  /** Per-query research source ids. Empty means use the Settings default. */
+  sources?: string[];
 }
 
 /** Fixture cid for offline rendering — the fixture stream replays a canned
@@ -73,6 +75,7 @@ export async function createDeepResearchConversation(
       // backend receives no field rather than explicit null (cleaner log).
       ...(opts.recencyWindow != null ? { recency_window: opts.recencyWindow } : {}),
       ...(opts.spaceIds && opts.spaceIds.length > 0 ? { space_ids: opts.spaceIds } : {}),
+      ...(opts.sources && opts.sources.length > 0 ? { sources: opts.sources } : {}),
     },
   );
   return res.conversation_id;

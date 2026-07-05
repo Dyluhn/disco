@@ -37,6 +37,7 @@ import { useDeepResearchDoneNotification } from "@/hooks/useDeepResearchDoneNoti
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
 import { QueryInput } from "@/components/QueryInput";
 import { SuggestionChips } from "@/components/SuggestionChips";
+import { SourcePicker } from "@/components/SourcePicker";
 import { SpaceGroundingControl } from "@/components/SpaceGroundingControl";
 import { EmptyState, ErrorState } from "@/components/states";
 import type { ScopeId } from "@/shell/mode";
@@ -70,6 +71,7 @@ interface Props {
   draft?: string;
   onDraftChange?: (next: string) => void;
   initialSpaceIds?: string[];
+  initialSources?: string[];
 }
 
 const CTRL_BTN =
@@ -88,8 +90,9 @@ export function DeepResearchSurface({
   draft,
   onDraftChange,
   initialSpaceIds,
+  initialSources,
 }: Props) {
-  const r = useDeepResearch(resumeCid, initialLeaderId, initialSpaceIds);
+  const r = useDeepResearch(resumeCid, initialLeaderId, initialSpaceIds, initialSources);
   const started = r.started;
   const [localDraft, setLocalDraft] = useState("");
   const draftValue = onDraftChange ? (draft ?? "") : localDraft;
@@ -195,6 +198,10 @@ export function DeepResearchSurface({
                   <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
                   <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
                   <IterativeToggle value={r.iterative} onChange={r.setIterative} />
+                  <SourcePicker
+                    selected={r.selectedSources}
+                    onChange={r.setSelectedSources}
+                  />
                   <SpaceGroundingControl selected={r.spaceIds} onChange={r.setSpaceIds} />
                   {/* G1/DR-4 + runthru-v2 #9: UploadComposer always rendered (it
                       self-disables when cid is null) so the attach affordance does

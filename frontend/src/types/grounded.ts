@@ -142,6 +142,8 @@ export interface ReScope {
   /** Persistent named Spaces to merge into retrieval grounding. Empty/undefined
    *  means live web + upload seeds only. */
   space_ids?: string[];
+  /** Per-query source ids. Empty/undefined means use the Settings default. */
+  sources?: string[];
 }
 
 // ---- WS frames (event-state §7.2) — what the stream delivers ----------------
