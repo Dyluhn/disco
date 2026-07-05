@@ -46,6 +46,7 @@ from disco.core.brand.chart_svg import (
     render_chart_table,
 )
 from disco.core.brand.tokens import Theme
+from disco.core.think import strip_think_spans
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ def serialize_markdown(
             lines.append("")
             lines.append(f"**Q:** {question}")
             lines.append("")
-            lines.append(answer)
+            lines.append(strip_think_spans(answer))
     return "\n".join(lines)
 
 
@@ -179,6 +180,7 @@ _CITE_RE = re.compile(r"\[\[([^\]]+)\]\]")
 # ```chart fences hold a JSON chart spec the frontend lifts into a Chart.js canvas;
 # the PDF path renders them to inline SVG (or a table) instead of a raw code block.
 _CHART_FENCE_RE = re.compile(r"```chart[^\n]*\n(.*?)```", re.DOTALL)
+_TABLE_ALIGN_RE = re.compile(r"^:?-{3,}:?$")
 
 
 def _citation_map(report: ReportEvent) -> dict[str, int]:
@@ -209,8 +211,113 @@ def _render_chart_block(raw_json: str, pal: Palette | None) -> str:
     return f'<figure class="chart-figure">{inner}</figure>'
 
 
+def _split_table_row(line: str) -> list[str]:
+    """Split a pipe-table row while preserving escaped pipes inside cells."""
+    row = line.strip()
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|"):
+        row = row[:-1]
+
+    cells: list[str] = []
+    buf: list[str] = []
+    escaped = False
+    for ch in row:
+        if escaped:
+            buf.append(ch)
+            escaped = False
+        elif ch == "\\":
+            escaped = True
+        elif ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if escaped:
+        buf.append("\\")
+    cells.append("".join(buf).strip())
+    return cells
+
+
+def _is_table_separator(line: str) -> bool:
+    cells = _split_table_row(line)
+    return bool(cells) and all(_TABLE_ALIGN_RE.fullmatch(c.strip()) for c in cells)
+
+
+def _strip_wrapping_paragraph(rendered: str) -> str:
+    rendered = rendered.strip()
+    if rendered.startswith("<p>") and rendered.endswith("</p>"):
+        return rendered[3:-4]
+    return rendered
+
+
+def _render_table_cell(cell: str, cite_map: dict[str, int] | None) -> str:
+    cell = _CITE_RE.sub(lambda m: _cite_chip(m.group(1), cite_map), cell)
+    return _strip_wrapping_paragraph(
+        _md.markdown(
+            cell,
+            extensions=["sane_lists"],
+            output_format=cast("Literal['xhtml', 'html']", "html5"),
+        )
+    )
+
+
+def _render_table_html(
+    header: list[str],
+    rows: list[list[str]],
+    cite_map: dict[str, int] | None,
+) -> str:
+    max_cols = max(len(header), *(len(row) for row in rows))
+    if len(header) < max_cols:
+        # Common report-output shape: the first data column is a label column
+        # but the model omitted the leading blank header cell.
+        header = [""] * (max_cols - len(header)) + header
+    header = header[:max_cols]
+    padded_rows = [(row + [""] * max_cols)[:max_cols] for row in rows]
+
+    ths = []
+    for cell in header:
+        empty_cls = ' class="empty"' if not cell.strip() else ""
+        ths.append(f'<th scope="col"{empty_cls}>{_render_table_cell(cell, cite_map)}</th>')
+    body_rows = []
+    for row in padded_rows:
+        tds = "".join(f"<td>{_render_table_cell(cell, cite_map)}</td>" for cell in row)
+        body_rows.append(f"<tr>{tds}</tr>")
+    return (
+        '<table class="report-table">'
+        f"<thead><tr>{''.join(ths)}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody>"
+        "</table>"
+    )
+
+
+def _render_markdown_tables(text: str, cite_map: dict[str, int] | None) -> str:
+    """Normalize pipe tables before Python-Markdown can shift ragged headers."""
+    lines = text.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if i + 1 < len(lines) and "|" in lines[i] and _is_table_separator(lines[i + 1]):
+            header = _split_table_row(lines[i])
+            rows: list[list[str]] = []
+            j = i + 2
+            while j < len(lines) and lines[j].strip() and "|" in lines[j]:
+                if _is_table_separator(lines[j]):
+                    break
+                rows.append(_split_table_row(lines[j]))
+                j += 1
+            if rows:
+                out.append(_render_table_html(header, rows, cite_map))
+                i = j
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
 def _render_md_segment(text: str, cite_map: dict[str, int] | None) -> str:
     """Citation chips + markdown for a non-chart text segment."""
+    text = _render_markdown_tables(text, cite_map)
     text = _CITE_RE.sub(lambda m: _cite_chip(m.group(1), cite_map), text)
     return _md.markdown(
         text,
@@ -253,6 +360,21 @@ def _cover_subtitle_text(summary: str | None, limit: int = 240) -> str:
             return cut[: idx + 1].strip()
     sp = cut.rfind(" ")
     return (cut[:sp] if sp > 0 else cut).rstrip() + "…"
+
+
+def _cover_meta_html(report: ReportEvent, n_passages: int) -> str:
+    items = [
+        "<span><span class=\"meta-label\">Depth</span>&nbsp;"
+        f"{_html.escape(report.depth_tier or 'standard_deep')}</span>",
+        "<span><span class=\"meta-label\">Sources</span>&nbsp;"
+        f"{n_passages}</span>",
+    ]
+    if (report.bounded_by or "").strip():
+        items.append(
+            '<span><span class="meta-label">Bounded by</span>&nbsp;'
+            f"{_html.escape(report.bounded_by or '')}</span>"
+        )
+    return "".join(items)
 
 
 def _build_pdf_html(
@@ -303,9 +425,7 @@ def _build_pdf_html(
         title_html = title_escaped
 
     cover_mark = definition_mark_html("colophon") if theme.branded else ""
-    depth_label = _html.escape(report.depth_tier or "standard_deep")
-    src_count = str(n_passages)
-    bounded_label = _html.escape(report.bounded_by or "—")
+    cover_meta = _cover_meta_html(report, n_passages)
 
     cover_html = (
         '<div class="cover-page">'
@@ -313,9 +433,7 @@ def _build_pdf_html(
         f'<div class="cover-title">{title_html}</div>'
         f'<div class="cover-subtitle">{_html.escape(_cover_subtitle_text(report.summary))}</div>'
         '<div class="cover-meta">'
-        f'<span><span class="meta-label">Depth</span>&nbsp;{depth_label}</span>'
-        f'<span><span class="meta-label">Sources</span>&nbsp;{src_count}</span>'
-        f'<span><span class="meta-label">Bounded by</span>&nbsp;{bounded_label}</span>'
+        f"{cover_meta}"
         "</div>"
         f"{cover_mark}"
         "</div>"
@@ -358,8 +476,10 @@ def _build_pdf_html(
         body = _render_section_body(s.markdown, cite_map, pal)
         sections_html_parts.append(
             f'<section id="s{i}">'
+            '<header class="section-heading">'
             f'<div class="section-no">{no_label}</div>'
             f'<h2 class="section-title">{_html.escape(s.title)}</h2>'
+            "</header>"
             f"{conflict}"
             f"{body}"
             "</section>"
@@ -382,7 +502,7 @@ def _build_pdf_html(
     if follow_ups:
         items = ""
         for j, (question, answer) in enumerate(follow_ups, 1):
-            answer_html = _render_section_body(answer, cite_map, pal)
+            answer_html = _render_section_body(strip_think_spans(answer), cite_map, pal)
             items += (
                 '<div class="followup-item">'
                 f'<div class="followup-q">Q {j}: {_html.escape(question)}</div>'
@@ -391,8 +511,10 @@ def _build_pdf_html(
             )
         followup_html = (
             '<div class="followup-page">'
+            '<div class="followup-head">'
             '<div class="followup-heading">Follow-up Q&amp;A</div>'
             '<div class="followup-rule"></div>'
+            "</div>"
             f"{items}"
             "</div>"
         )
@@ -412,11 +534,15 @@ def _build_pdf_html(
             "</li>"
         )
     appendix_html = (
-        f'<div class="sources-appendix{two_col_class}">'
-        '<div class="sources-heading">'
-        f"Sources ({n_passages})</div>"
-        f'<ul class="sources-list">{src_items}</ul>'
-        "</div>"
+        (
+            f'<div class="sources-appendix{two_col_class}">'
+            '<div class="sources-heading">'
+            f"Sources ({n_passages})</div>"
+            f'<ul class="sources-list">{src_items}</ul>'
+            "</div>"
+        )
+        if n_passages
+        else ""
     )
 
     # ---- assemble ----

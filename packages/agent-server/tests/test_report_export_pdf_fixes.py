@@ -1,9 +1,9 @@
 """PDF export polish — the four Deep-Research-report PDF fixes (2026-06-18):
 
-  ① ```chart fences render to inline SVG (or a table), never a raw JSON code block
-  ② cover subtitle trims at a word/sentence boundary (no mid-word cut)
-  ③ citations show numbered chips [N] (linked to the appendix), never raw passage ids
-  ④ light/dark mode produces distinct, theme-aware output
+① ```chart fences render to inline SVG (or a table), never a raw JSON code block
+② cover subtitle trims at a word/sentence boundary (no mid-word cut)
+③ citations show numbered chips [N] (linked to the appendix), never raw passage ids
+④ light/dark mode produces distinct, theme-aware output
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from disco.agent_server.report_export import (
     _cover_subtitle_text,
     _render_section_body,
     pdf_available,
+    serialize_markdown,
     serialize_pdf,
 )
 from disco.core import EventSource, ReportEvent, ReportSection
@@ -30,6 +31,15 @@ _PAL = palette_from_theme(_LIGHT)
 _CHART = (
     '```chart\n{"chart_type":"bar","title":"T","x_label":"X","y_label":"Y",'
     '"data":[{"label":"A","value":3},{"label":"B","value":7}]}\n```'
+)
+
+_LOCAL_LLM_TABLE = (
+    "| Memory or VRAM*) | Apple Silicon suggestion |\n"
+    "|---|---|---|\n"
+    "| Qwen 3:30B (MoE), Q4 | ~19 GB | Any 24 GB+ unified-memory Mac |\n"
+    "| 70B-class dense (Llama 4, DeepSeek flagship, Kimi K2 tier) | "
+    "35-48 GB, Q4 | M4 Max 64 GB or M3 Ultra 192 GB |\n"
+    "| Nemotron / GLM-5.2 mid-tier (size not specified in cited sources) | n/a | n/a |\n"
 )
 
 
@@ -79,8 +89,39 @@ def test_chart_svg_none_on_unrenderable():
 
 
 def test_chart_table_always_html():
-    html = render_chart_table({"chart_type": "bar", "title": "T", "data": [{"label": "A", "value": 1}]})
+    html = render_chart_table(
+        {"chart_type": "bar", "title": "T", "data": [{"label": "A", "value": 1}]}
+    )
     assert "<table" in html and "chart-table" in html and "A" in html
+
+
+def test_chart_svg_uses_theme_colors_and_wrapped_labels():
+    sepia = resolve_theme("sepia", "light")
+    pal = palette_from_theme(sepia)
+    svg = render_chart_svg(
+        {
+            "chart_type": "bar",
+            "title": (
+                "BenchLM aggregate score, July 2026: open-weight leader vs "
+                "implied closed-API frontier band"
+            ),
+            "x_label": "Model tier",
+            "y_label": "BenchLM aggregate score",
+            "data": [
+                {"label": "DeepSeek V4 Pro (Max)", "value": 80},
+                {"label": "Closed-API frontier low", "value": 85},
+                {"label": "Closed-API frontier high", "value": 90},
+            ],
+        },
+        pal,
+    )
+    assert svg is not None
+    assert sepia.accent in svg
+    assert "#3b82f6" not in svg
+    assert "background:transparent" in svg
+    assert "<tspan" in svg
+    assert "Closed-API fro" not in svg
+    assert "frontier" in svg
 
 
 # ---- ① charts in section body ----------------------------------------------
@@ -98,6 +139,17 @@ def test_chart_fence_falls_back_to_table_when_unrenderable():
     bad = '```chart\n{"chart_type":"bar","data":[{"label":"only"}]}\n```'
     out = _render_section_body(bad, cite_map={}, pal=_PAL)
     assert "chart-table" in out and "<svg" not in out
+
+
+def test_report_table_preserves_ragged_three_column_header():
+    out = _render_section_body(_LOCAL_LLM_TABLE, cite_map={}, pal=_PAL)
+    assert 'class="report-table"' in out
+    assert out.count("<th ") == 3
+    assert out.count("<td>") == 9
+    assert 'scope="col" class="empty"' in out
+    assert out.index('class="empty"') < out.index("Memory or VRAM")
+    assert out.index("Memory or VRAM") < out.index("Apple Silicon")
+    assert out.index("Qwen 3:30B") < out.index("~19 GB")
 
 
 # ---- ② cover subtitle -------------------------------------------------------
@@ -119,6 +171,23 @@ def test_cover_subtitle_short_passthrough():
 
 def test_cover_subtitle_strips_citations():
     assert "[[" not in _cover_subtitle_text("Lead finding [[7a6ee0_p1]] holds.")
+
+
+def test_cover_meta_omits_empty_bounded_by():
+    rep = _report_with_chart()
+    html = _build_pdf_html(rep, None, _LIGHT)
+    cover_meta = html.split('<div class="cover-meta">', 1)[1].split("</div>", 1)[0]
+    assert "Depth" in cover_meta
+    assert "Sources" in cover_meta
+    assert "Bounded by" not in cover_meta
+
+
+def test_cover_meta_includes_nonempty_bounded_by():
+    rep = _report_with_chart().model_copy(update={"bounded_by": "sources"})
+    html = _build_pdf_html(rep, None, _LIGHT)
+    cover_meta = html.split('<div class="cover-meta">', 1)[1].split("</div>", 1)[0]
+    assert "Bounded by" in cover_meta
+    assert "sources" in cover_meta
 
 
 # ---- ③ numbered citations ---------------------------------------------------
@@ -168,6 +237,34 @@ def test_light_and_dark_html_differ():
     assert light != dark
     # the dark theme's page background token appears in dark, not light
     assert "#0e0f12" in dark and "#0e0f12" not in light
+
+
+def test_print_css_pagination_guards():
+    from disco.core.brand import print_skeleton_css
+
+    css = print_skeleton_css()
+    followup_block = css.split(".followup-page{", 1)[1].split("}", 1)[0]
+    assert "page-break-before" not in followup_block
+    assert ".section-heading" in css
+    assert "break-after:avoid" in css
+    assert "widows:3" in css
+    assert "orphans:3" in css
+
+
+def test_followup_think_spans_are_stripped_from_exports():
+    rep = _report_with_chart()
+    follow_ups = [
+        ("Which Qwen?", "<think>private reasoning</think>Use Qwen 3:30B [[7a6ee0_p1]]."),
+        ("Anything else?", "<think>only private reasoning"),
+    ]
+    html = _build_pdf_html(rep, follow_ups, _LIGHT)
+    md = serialize_markdown(rep, follow_ups)
+    assert "<think" not in html
+    assert "<think" not in md
+    assert "private reasoning" not in html
+    assert "private reasoning" not in md
+    assert "Use Qwen 3:30B" in html
+    assert "Use Qwen 3:30B" in md
 
 
 @pytest.mark.skipif(not pdf_available(), reason="weasyprint not installed")

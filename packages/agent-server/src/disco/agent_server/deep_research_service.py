@@ -66,6 +66,7 @@ from disco.core.llm import (
 )
 from disco.core.loop import AgentLoop, NeverConfirm, RouterAgent
 from disco.core.security import RuleBasedAnalyzer
+from disco.core.think import strip_think_spans
 from disco.retrieval.deep_research import (
     DeepResearchRun,
     DepthTier,
@@ -73,6 +74,10 @@ from disco.retrieval.deep_research import (
 )
 
 _LOG = logging.getLogger(__name__)
+
+
+def _clean_model_text(text: str | None) -> str:
+    return strip_think_spans(text or "")
 
 
 class DeepResearchService:
@@ -909,7 +914,10 @@ class DeepResearchService:
                     conversation_id,
                     MessageEvent(
                         source=EventSource.AGENT,
-                        message=LLMMessage(role="assistant", content=answer.text),
+                        message=LLMMessage(
+                            role="assistant",
+                            content=_clean_model_text(answer.text),
+                        ),
                     ),
                 )
             except Exception as exc:
@@ -996,7 +1004,10 @@ class DeepResearchService:
                     conversation_id,
                     MessageEvent(
                         source=EventSource.AGENT,
-                        message=LLMMessage(role="assistant", content=answer.text),
+                        message=LLMMessage(
+                            role="assistant",
+                            content=_clean_model_text(answer.text),
+                        ),
                     ),
                 )
             except Exception as exc:

@@ -302,6 +302,13 @@ h2.section-title{
   color:var(--text);
   margin:.2em 0 .5em 0;
   letter-spacing:-.012em;
+  break-after:avoid;
+  page-break-after:avoid;
+}
+.section-heading{
+  break-inside:avoid;
+  break-after:avoid;
+  page-break-after:avoid;
 }
 section{
   margin-bottom:1.4em;
@@ -314,6 +321,8 @@ p{
   line-height:1.55;
   color:var(--text);
   margin:.5em 0;
+  widows:3;
+  orphans:3;
 }
 strong{font-weight:700;}
 em{font-style:italic;}
@@ -352,18 +361,49 @@ pre{
 
 /* ---- charts (```chart fences rendered to inline SVG, table fallback) ---- */
 .chart-figure{
-  margin:1em 0;
+  margin:.75em 0 .9em 0;
   padding:0;
+  break-before:auto;
   break-inside:avoid;
   text-align:center;
 }
 .chart-figure svg{max-width:100%;height:auto;}
+table.report-table{
+  width:100%;
+  border-collapse:collapse;
+  border-spacing:0;
+  margin:.55em 0 .8em 0;
+  font-family:var(--ui);
+  font-size:8.8pt;
+  line-height:1.25;
+  color:var(--text);
+  break-inside:avoid;
+  page-break-inside:avoid;
+}
+table.report-table thead{display:table-header-group;}
+table.report-table th,
+table.report-table td{
+  padding:.18em .45em .2em 0;
+  text-align:left;
+  vertical-align:top;
+  border:0;
+  border-bottom:.5pt solid var(--hairline);
+}
+table.report-table th{
+  font-weight:700;
+  color:var(--text);
+  background:transparent;
+}
+table.report-table th.empty{color:transparent;}
+table.report-table tbody tr:last-child td{border-bottom:.5pt solid var(--hairline);}
 .chart-table{
   width:100%;
   border-collapse:collapse;
-  margin:1em 0;
+  border-spacing:0;
+  margin:.55em 0 .8em 0;
   font-family:var(--ui);
-  font-size:9.5pt;
+  font-size:8.8pt;
+  line-height:1.25;
   break-inside:avoid;
 }
 .chart-table caption{
@@ -373,11 +413,13 @@ pre{
   text-align:left;
 }
 .chart-table th,.chart-table td{
-  border:1px solid var(--hairline);
-  padding:.3em .55em;
+  border:0;
+  border-bottom:.5pt solid var(--hairline);
+  padding:.18em .45em .2em 0;
   text-align:left;
+  vertical-align:top;
 }
-.chart-table th{background:var(--surface-2);color:var(--text);font-weight:600;}
+.chart-table th{background:transparent;color:var(--text);font-weight:700;}
 .chart-raw{
   white-space:pre-wrap;
   font-family:var(--mono);
@@ -423,8 +465,12 @@ pre{
 
 /* ---- follow-up Q&A page ---- */
 .followup-page{
-  break-before:page;
-  page-break-before:always;
+  margin-top:1.2em;
+}
+.followup-head{
+  break-inside:avoid;
+  break-after:avoid;
+  page-break-after:avoid;
 }
 .followup-heading{
   font-family:var(--display);
@@ -433,16 +479,20 @@ pre{
   letter-spacing:-.012em;
   color:var(--text);
   margin-bottom:.4em;
+  break-after:avoid;
+  page-break-after:avoid;
 }
 .followup-rule{
   width:1.5in;
   height:2px;
   background:var(--accent);
   margin-bottom:.8em;
+  break-after:avoid;
+  page-break-after:avoid;
 }
 .followup-item{
   margin-bottom:1em;
-  break-inside:avoid;
+  break-inside:auto;
 }
 .followup-q{
   font-family:var(--ui);
@@ -510,6 +560,8 @@ pre{
   margin-bottom:.6em;
   border-bottom:1px solid var(--hairline);
   padding-bottom:.2em;
+  break-after:avoid;
+  page-break-after:avoid;
 }
 .sources-list{
   list-style:none;
@@ -523,6 +575,8 @@ pre{
   padding:.3em 0;
   border-bottom:1px solid var(--surface-2);
   break-inside:avoid;
+  widows:2;
+  orphans:2;
 }
 .sources-list .src-id{
   color:var(--accent);
@@ -606,6 +660,10 @@ pre{
 .s-lg{font-size:15pt;}
 .s-md{font-size:10pt;}
 .s-sm{font-size:7pt;}
+body>*:last-child{
+  break-after:auto;
+  page-break-after:auto;
+}
 """
 
 

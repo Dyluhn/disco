@@ -19,36 +19,49 @@ from __future__ import annotations
 
 import html as _html
 import math
+from dataclasses import dataclass
 from typing import Any
 
-# Series palette — byte-identical to ChartBlock.tsx COLORS so PDF matches screen.
-_SERIES = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"]
+_FALLBACK_SERIES = ("#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899")
 
-_W, _H = 640.0, 360.0
-_PAD_L, _PAD_R, _PAD_T, _PAD_B = 54.0, 24.0, 44.0, 64.0
+_W, _H = 720.0, 420.0
+_PAD_L, _PAD_R, _PAD_T, _PAD_B = 72.0, 36.0, 88.0, 96.0
 _MAX_POINTS = 24  # keep a printable density; note truncation when exceeded
 
 
+@dataclass(frozen=True)
 class Palette:
     """Colors pulled from the resolved Theme so charts honor light/dark mode."""
 
-    def __init__(self, text: str, muted: str, faint: str, accent: str, grid: str, surface: str):
-        self.text = text
-        self.muted = muted
-        self.faint = faint
-        self.accent = accent
-        self.grid = grid
-        self.surface = surface
+    text: str
+    muted: str
+    faint: str
+    accent: str
+    grid: str
+    bg: str
+    series: tuple[str, ...]
+    font_ui: str
 
 
 def palette_from_theme(theme: Any) -> Palette:
+    accent = getattr(theme, "accent", "#4077a3")
+    series = (
+        accent,
+        getattr(theme, "link", accent),
+        getattr(theme, "verify_supported", "#397852"),
+        getattr(theme, "verify_weak", "#a67f38"),
+        getattr(theme, "verify_unsupported", "#b14e49"),
+        getattr(theme, "text_muted", "#5a5853"),
+    )
     return Palette(
         text=getattr(theme, "text", "#1a1813"),
         muted=getattr(theme, "text_muted", "#5a5853"),
         faint=getattr(theme, "text_faint", "#878682"),
-        accent=getattr(theme, "accent", "#4077a3"),
+        accent=accent,
         grid=getattr(theme, "hairline", "#dfdedb"),
-        surface=getattr(theme, "surface_1", "#f7f7f4"),
+        bg=getattr(theme, "bg", "#fcfcfa"),
+        series=tuple(c for c in series if isinstance(c, str)) or _FALLBACK_SERIES,
+        font_ui=getattr(theme, "font_ui", "system-ui,sans-serif"),
     )
 
 
@@ -62,6 +75,77 @@ def _num(v: Any) -> float | None:
 
 def _esc(s: Any) -> str:
     return _html.escape(str(s if s is not None else ""))
+
+
+def _attr(s: Any) -> str:
+    return _html.escape(str(s if s is not None else ""), quote=True)
+
+
+def _ellipsize(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _wrap_words(text: str, max_chars: int, max_lines: int) -> list[str]:
+    words = str(text or "").split()
+    if not words or max_lines <= 0:
+        return []
+    lines: list[str] = []
+    cur = ""
+    consumed = 0
+    for i, word in enumerate(words):
+        candidate = word if not cur else f"{cur} {word}"
+        if len(candidate) <= max_chars:
+            cur = candidate
+            consumed = i + 1
+            continue
+        if cur:
+            lines.append(cur)
+            if len(lines) == max_lines:
+                consumed = i
+                break
+            cur = word
+            consumed = i + 1
+        else:
+            lines.append(_ellipsize(word, max_chars))
+            cur = ""
+            consumed = i + 1
+        if len(lines) == max_lines:
+            break
+    if cur and len(lines) < max_lines:
+        lines.append(_ellipsize(cur, max_chars))
+    if consumed < len(words) and lines:
+        remainder = " ".join(words[consumed:])
+        lines[-1] = _ellipsize(f"{lines[-1]} {remainder}".strip(), max_chars)
+    return lines[:max_lines]
+
+
+def _text_lines(
+    x: float,
+    y: float,
+    lines: list[str],
+    *,
+    anchor: str,
+    size: float,
+    fill: str,
+    pal: Palette,
+    weight: str | None = None,
+) -> str:
+    if not lines:
+        return ""
+    weight_attr = f' font-weight="{_attr(weight)}"' if weight else ""
+    tspans = []
+    for i, line in enumerate(lines):
+        dy = "0" if i == 0 else f"{size * 1.18:.1f}"
+        tspans.append(f'<tspan x="{x:.1f}" dy="{dy}">{_esc(line)}</tspan>')
+    return (
+        f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="{_attr(anchor)}" '
+        f'font-family="{_attr(pal.font_ui)}" font-size="{size:.1f}"'
+        f'{weight_attr} fill="{_attr(fill)}">{"".join(tspans)}</text>'
+    )
 
 
 def _label_value_pairs(data: list[dict[str, Any]]) -> list[tuple[str, float]]:
@@ -80,28 +164,35 @@ def _label_value_pairs(data: list[dict[str, Any]]) -> list[tuple[str, float]]:
 
 
 def _frame(title: str, x_label: str, y_label: str, pal: Palette, inner: str) -> str:
-    title_el = (
-        f'<text x="{_W / 2:.0f}" y="22" text-anchor="middle" '
-        f'font-family="sans-serif" font-size="15" font-weight="600" fill="{pal.text}">{_esc(title)}</text>'
-        if title
-        else ""
+    title_el = _text_lines(
+        _W / 2,
+        22,
+        _wrap_words(title, 62, 3),
+        anchor="middle",
+        size=15,
+        fill=pal.text,
+        pal=pal,
+        weight="600",
     )
-    x_el = (
-        f'<text x="{(_PAD_L + (_W - _PAD_R)) / 2:.0f}" y="{_H - 14:.0f}" text-anchor="middle" '
-        f'font-family="sans-serif" font-size="11" fill="{pal.muted}">{_esc(x_label)}</text>'
-        if x_label
-        else ""
+    x_el = _text_lines(
+        (_PAD_L + (_W - _PAD_R)) / 2,
+        _H - 18,
+        _wrap_words(x_label, 56, 2),
+        anchor="middle",
+        size=11,
+        fill=pal.muted,
+        pal=pal,
     )
     y_el = (
         f'<text transform="translate(15,{(_PAD_T + (_H - _PAD_B)) / 2:.0f}) rotate(-90)" '
-        f'text-anchor="middle" font-family="sans-serif" font-size="11" fill="{pal.muted}">{_esc(y_label)}</text>'
+        f'text-anchor="middle" font-family="{_attr(pal.font_ui)}" font-size="11" '
+        f'fill="{_attr(pal.muted)}">{_esc(y_label)}</text>'
         if y_label
         else ""
     )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {_W:.0f} {_H:.0f}" '
-        f'width="100%" role="img">'
-        f'<rect x="0" y="0" width="{_W:.0f}" height="{_H:.0f}" fill="{pal.surface}" rx="6"/>'
+        f'width="100%" role="img" style="background:transparent">'
         f"{title_el}{x_el}{y_el}{inner}</svg>"
     )
 
@@ -110,14 +201,20 @@ def _axes_grid(pal: Palette, vmax: float) -> tuple[str, float, float, float, flo
     """Y gridlines + value ticks. Returns (svg, x0, y0, plot_w, plot_h)."""
     x0, y0 = _PAD_L, _H - _PAD_B
     plot_w, plot_h = _W - _PAD_L - _PAD_R, _H - _PAD_T - _PAD_B
-    parts = [f'<line x1="{x0}" y1="{_PAD_T}" x2="{x0}" y2="{y0}" stroke="{pal.grid}" stroke-width="1"/>']
+    parts = [
+        f'<line x1="{x0}" y1="{_PAD_T}" x2="{x0}" y2="{y0}" stroke="{pal.grid}" stroke-width="1"/>'
+    ]
     for i in range(5):
         gy = y0 - plot_h * i / 4
         val = vmax * i / 4
-        parts.append(f'<line x1="{x0}" y1="{gy:.1f}" x2="{x0 + plot_w:.1f}" y2="{gy:.1f}" stroke="{pal.grid}" stroke-width="0.5"/>')
         parts.append(
-            f'<text x="{x0 - 6:.1f}" y="{gy + 3:.1f}" text-anchor="end" font-family="sans-serif" '
-            f'font-size="9" fill="{pal.faint}">{val:.0f}</text>'
+            f'<line x1="{x0}" y1="{gy:.1f}" x2="{x0 + plot_w:.1f}" '
+            f'y2="{gy:.1f}" stroke="{pal.grid}" stroke-width="0.5"/>'
+        )
+        parts.append(
+            f'<text x="{x0 - 6:.1f}" y="{gy + 3:.1f}" text-anchor="end" '
+            f'font-family="{_attr(pal.font_ui)}" font-size="9" '
+            f'fill="{_attr(pal.faint)}">{val:.0f}</text>'
         )
     return "".join(parts), x0, y0, plot_w, plot_h
 
@@ -134,10 +231,21 @@ def _render_bar(pairs: list[tuple[str, float]], title, x_label, y_label, pal: Pa
         bh = plot_h * (v / vmax)
         bx = x0 + slot * i + (slot - bw) / 2
         by = y0 - bh
-        bars.append(f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw:.1f}" height="{bh:.1f}" fill="{_SERIES[0]}" rx="2"/>')
         bars.append(
-            f'<text x="{bx + bw / 2:.1f}" y="{y0 + 12:.1f}" text-anchor="middle" font-family="sans-serif" '
-            f'font-size="8" fill="{pal.muted}">{_esc(label[:14])}</text>'
+            f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw:.1f}" height="{bh:.1f}" '
+            f'fill="{_attr(pal.series[0])}" rx="2"/>'
+        )
+        label_chars = max(8, min(18, int(slot / 6.2)))
+        bars.append(
+            _text_lines(
+                bx + bw / 2,
+                y0 + 14,
+                _wrap_words(label, label_chars, 2),
+                anchor="middle",
+                size=8,
+                fill=pal.muted,
+                pal=pal,
+            )
         )
     return _frame(title, x_label, y_label, pal, grid + "".join(bars))
 
@@ -150,22 +258,33 @@ def _render_line(pairs: list[tuple[str, float]], title, x_label, y_label, pal: P
     step = plot_w / max(n - 1, 1)
     pts = [(x0 + step * i, y0 - plot_h * (v / vmax)) for i, (_, v) in enumerate(pairs)]
     poly = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
-    dots = "".join(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="{_SERIES[0]}"/>' for x, y in pts)
+    dots = "".join(
+        f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3" fill="{_attr(pal.series[0])}"/>' for x, y in pts
+    )
     labels = "".join(
-        f'<text x="{pts[i][0]:.1f}" y="{y0 + 12:.1f}" text-anchor="middle" font-family="sans-serif" '
-        f'font-size="8" fill="{pal.muted}">{_esc(lbl[:12])}</text>'
+        _text_lines(
+            pts[i][0],
+            y0 + 14,
+            _wrap_words(lbl, max(8, min(16, int(step / 6.2) if step else 16)), 2),
+            anchor="middle",
+            size=8,
+            fill=pal.muted,
+            pal=pal,
+        )
         for i, (lbl, _) in enumerate(pairs)
     )
-    line = f'<polyline points="{poly}" fill="none" stroke="{_SERIES[0]}" stroke-width="2"/>'
+    line = (
+        f'<polyline points="{poly}" fill="none" stroke="{_attr(pal.series[0])}" stroke-width="2"/>'
+    )
     return _frame(title, x_label, y_label, pal, grid + line + dots + labels)
 
 
 def _render_pie(pairs: list[tuple[str, float]], title, x_label, y_label, pal: Palette) -> str:
-    pairs = [(lbl, v) for lbl, v in pairs if v > 0][:len(_SERIES) * 2]
+    pairs = [(lbl, v) for lbl, v in pairs if v > 0][: len(pal.series) * 2]
     total = sum(v for _, v in pairs)
     if total <= 0:
         return _frame(title, "", "", pal, "")
-    cx, cy, r = 210.0, _PAD_T + 130, 110.0
+    cx, cy, r = 240.0, _PAD_T + 130, 110.0
     a0 = -math.pi / 2
     slices, legend = [], []
     for i, (label, v) in enumerate(pairs):
@@ -174,16 +293,18 @@ def _render_pie(pairs: list[tuple[str, float]], title, x_label, y_label, pal: Pa
         large = 1 if frac > 0.5 else 0
         x1, y1 = cx + r * math.cos(a0), cy + r * math.sin(a0)
         x2, y2 = cx + r * math.cos(a1), cy + r * math.sin(a1)
-        color = _SERIES[i % len(_SERIES)]
+        color = pal.series[i % len(pal.series)]
         slices.append(
-            f'<path d="M{cx:.1f},{cy:.1f} L{x1:.1f},{y1:.1f} A{r},{r} 0 {large} 1 {x2:.1f},{y2:.1f} Z" '
-            f'fill="{color}"/>'
+            f'<path d="M{cx:.1f},{cy:.1f} L{x1:.1f},{y1:.1f} '
+            f'A{r},{r} 0 {large} 1 {x2:.1f},{y2:.1f} Z" '
+            f'fill="{_attr(color)}"/>'
         )
         ly = _PAD_T + 18 + i * 20
         legend.append(
-            f'<rect x="430" y="{ly - 9:.0f}" width="11" height="11" rx="2" fill="{color}"/>'
-            f'<text x="447" y="{ly:.0f}" font-family="sans-serif" font-size="10" fill="{pal.text}">'
-            f"{_esc(label[:20])} ({frac * 100:.0f}%)</text>"
+            f'<rect x="480" y="{ly - 9:.0f}" width="11" height="11" rx="2" fill="{_attr(color)}"/>'
+            f'<text x="497" y="{ly:.0f}" font-family="{_attr(pal.font_ui)}" '
+            f'font-size="10" fill="{_attr(pal.text)}">'
+            f"{_esc(_ellipsize(label, 24))} ({frac * 100:.0f}%)</text>"
         )
     return _frame(title, "", "", pal, "".join(slices) + "".join(legend))
 
@@ -209,11 +330,17 @@ def _render_scatter(data: list[dict[str, Any]], title, x_label, y_label, pal: Pa
     for x, y, g in pts:
         px = x0 + plot_w * (x - xmin) / xr
         py = y0 - plot_h * (y - ymin) / yr
-        c = _SERIES[groups.index(g) % len(_SERIES)]
-        dots.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4" fill="{c}" fill-opacity="0.8"/>')
+        c = pal.series[groups.index(g) % len(pal.series)]
+        dots.append(
+            f'<circle cx="{px:.1f}" cy="{py:.1f}" r="4" fill="{_attr(c)}" fill-opacity="0.8"/>'
+        )
     legend = "".join(
-        f'<rect x="{x0 + 8 + i * 90:.0f}" y="{_PAD_T - 2:.0f}" width="10" height="10" rx="2" fill="{_SERIES[i % len(_SERIES)]}"/>'
-        f'<text x="{x0 + 22 + i * 90:.0f}" y="{_PAD_T + 7:.0f}" font-family="sans-serif" font-size="9" fill="{pal.text}">{_esc(str(g)[:12])}</text>'
+        f'<rect x="{x0 + 8 + i * 90:.0f}" y="{_PAD_T - 2:.0f}" '
+        f'width="10" height="10" rx="2" '
+        f'fill="{_attr(pal.series[i % len(pal.series)])}"/>'
+        f'<text x="{x0 + 22 + i * 90:.0f}" y="{_PAD_T + 7:.0f}" '
+        f'font-family="{_attr(pal.font_ui)}" font-size="9" fill="{_attr(pal.text)}">'
+        f"{_esc(_ellipsize(str(g), 12))}</text>"
         for i, g in enumerate(groups)
     )
     return _frame(title, x_label, y_label, pal, grid + "".join(dots) + legend)
@@ -260,7 +387,11 @@ def render_chart_table(spec: dict[str, Any]) -> str:
     y_label = _esc(spec.get("y_label", "Value"))
     if ctype == "scatter":
         cols = ["Group", x_label or "X", y_label or "Y"]
-        rows = [[_esc(d.get("group", "Default")), _esc(d.get("x")), _esc(d.get("y"))] for d in data if isinstance(d, dict)]
+        rows = [
+            [_esc(d.get("group", "Default")), _esc(d.get("x")), _esc(d.get("y"))]
+            for d in data
+            if isinstance(d, dict)
+        ]
     else:
         cols = [x_label or "Label", y_label or "Value"]
         rows = [
@@ -271,4 +402,7 @@ def render_chart_table(spec: dict[str, Any]) -> str:
     thead = "".join(f"<th>{c}</th>" for c in cols)
     tbody = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
     cap = f"<caption>{title}</caption>" if title else ""
-    return f'<table class="chart-table">{cap}<thead><tr>{thead}</tr></thead><tbody>{tbody}</tbody></table>'
+    return (
+        f'<table class="chart-table">{cap}<thead><tr>{thead}</tr></thead>'
+        f"<tbody>{tbody}</tbody></table>"
+    )
