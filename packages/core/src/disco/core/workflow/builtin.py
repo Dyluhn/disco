@@ -25,6 +25,20 @@ SCRIPTED_WORKSPACE_TASK_TOOLS: tuple[str, ...] = (
     "code_exec",
     "think",
 )
+DOCUMENT_DECK_STUDIO_TOOLS: tuple[str, ...] = (
+    "slides_generate",
+    "deck_patch",
+    "sheet_generate",
+    "doc_set_section",
+    "doc_export",
+    "image_generate",
+    "file_read",
+    "file_write",
+    "file_edit",
+    "file_list",
+    "think",
+    "finish",
+)
 
 BROWSER_AUTOMATION_TOOLS: tuple[str, ...] = ("browser", "file_write", "think")
 FORM_FILL_TOOLS: tuple[str, ...] = ("browser", "file_write")
@@ -94,6 +108,30 @@ SCRIPTED_WORKSPACE_TASK_DEFINITION = WorkflowDefinition(
     policies=WorkflowPolicies(untrusted_content=True, allows_writes=True),
     output_contract=WorkflowOutputContract(
         path_template="reports/task-summary.md",
+        format="markdown",
+    ),
+    verify=WorkflowVerify(checks=("file_exists", "non_empty")),
+)
+
+DOCUMENT_DECK_STUDIO_DEFINITION = WorkflowDefinition(
+    name="Document & Deck Studio",
+    card=(
+        "Produce polished artifacts from provided content: slide decks (PPTX), "
+        "documents (PDF/MD export), spreadsheets, and generated images. Give it the "
+        "source content and the desired artifact."
+    ),
+    params_model_schema={
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {},
+        "required": [],
+    },
+    tools=DOCUMENT_DECK_STUDIO_TOOLS,
+    mcp_mounts=(),
+    skills=(),
+    policies=WorkflowPolicies(untrusted_content=True, allows_writes=True),
+    output_contract=WorkflowOutputContract(
+        path_template="reports/artifact-summary.md",
         format="markdown",
     ),
     verify=WorkflowVerify(checks=("file_exists", "non_empty")),
@@ -270,6 +308,8 @@ __all__ = [
     "DAILY_EMAIL_BRIEF_DEFINITION",
     "DAILY_EMAIL_BRIEF_MCP_TOOL_NAMES",
     "DAILY_EMAIL_BRIEF_TOOLS",
+    "DOCUMENT_DECK_STUDIO_DEFINITION",
+    "DOCUMENT_DECK_STUDIO_TOOLS",
     "FORM_FILL_DEFINITION",
     "FORM_FILL_TOOLS",
     "GENERAL_WORKSPACE_TASK_DEFINITION",

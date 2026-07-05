@@ -9,6 +9,7 @@ from disco.core.llm import ConfigStore
 from disco.core.workflow import (
     BROWSER_AUTOMATION_DEFINITION,
     DAILY_EMAIL_BRIEF_DEFINITION,
+    DOCUMENT_DECK_STUDIO_DEFINITION,
     FORM_FILL_DEFINITION,
     GENERAL_WORKSPACE_TASK_DEFINITION,
     SCRIPTED_WORKSPACE_TASK_DEFINITION,
@@ -22,6 +23,7 @@ from .projects import resolve_projects_root
 
 GENERAL_WORKSPACE_TASK_INSTANCE_ID = "general_workspace_task"
 SCRIPTED_WORKSPACE_TASK_INSTANCE_ID = "scripted_workspace_task"
+DOCUMENT_DECK_STUDIO_INSTANCE_ID = "document_deck_studio"
 DAILY_EMAIL_BRIEF_INSTANCE_ID = "daily_email_brief"
 BROWSER_AUTOMATION_INSTANCE_ID = "browser_automation"
 FORM_FILL_INSTANCE_ID = "form_fill"
@@ -50,6 +52,10 @@ def general_workspace_task_instance() -> WorkflowInstance:
 
 def scripted_workspace_task_instance() -> WorkflowInstance:
     return _approved_enabled_instance(SCRIPTED_WORKSPACE_TASK_DEFINITION)
+
+
+def document_deck_studio_instance() -> WorkflowInstance:
+    return _approved_enabled_instance(DOCUMENT_DECK_STUDIO_DEFINITION)
 
 
 def daily_email_brief_instance() -> WorkflowInstance:
@@ -116,6 +122,14 @@ def seed_scripted_workspace_task(projects_root: str | Path | None = None) -> Pat
     )
 
 
+def seed_document_deck_studio(projects_root: str | Path | None = None) -> Path:
+    return _seed_instance(
+        DOCUMENT_DECK_STUDIO_INSTANCE_ID,
+        document_deck_studio_instance(),
+        projects_root,
+    )
+
+
 def seed_daily_email_brief(projects_root: str | Path | None = None) -> Path:
     return _seed_instance(
         DAILY_EMAIL_BRIEF_INSTANCE_ID,
@@ -160,6 +174,10 @@ def seed_builtin_workflows(
             SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
             seed_scripted_workspace_task(projects_root),
         ),
+        (
+            DOCUMENT_DECK_STUDIO_INSTANCE_ID,
+            seed_document_deck_studio(projects_root),
+        ),
         (DAILY_EMAIL_BRIEF_INSTANCE_ID, seed_daily_email_brief(projects_root)),
         (BROWSER_AUTOMATION_INSTANCE_ID, seed_browser_automation(projects_root)),
         (FORM_FILL_INSTANCE_ID, seed_form_fill(projects_root)),
@@ -170,18 +188,21 @@ def seed_builtin_workflows(
 __all__ = [
     "BROWSER_AUTOMATION_INSTANCE_ID",
     "DAILY_EMAIL_BRIEF_INSTANCE_ID",
+    "DOCUMENT_DECK_STUDIO_INSTANCE_ID",
     "FORM_FILL_INSTANCE_ID",
     "GENERAL_WORKSPACE_TASK_INSTANCE_ID",
     "SCRIPTED_WORKSPACE_TASK_INSTANCE_ID",
     "SKILL_AUTHORING_INSTANCE_ID",
     "browser_automation_instance",
     "daily_email_brief_instance",
+    "document_deck_studio_instance",
     "form_fill_instance",
     "general_workspace_task_instance",
     "scripted_workspace_task_instance",
     "seed_browser_automation",
     "seed_builtin_workflows",
     "seed_daily_email_brief",
+    "seed_document_deck_studio",
     "seed_form_fill",
     "seed_general_workspace_task",
     "seed_scripted_workspace_task",

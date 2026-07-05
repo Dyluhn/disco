@@ -249,6 +249,15 @@ _PLAN_NUDGE = (
     "</system-reminder>"
 )
 
+_WORKFLOW_ROUTER_PLAN_NUDGE = (
+    "<system-reminder>\n"
+    "Still in WORKFLOW ROUTER phase. Your next response must be exactly one tool "
+    "call: `enter_workflow`, `needs_input`, or `draft_workflow`. If you are "
+    "already inside a workflow run and the selected workflow cannot satisfy the "
+    "goal, call `workflow_abort`.\n"
+    "</system-reminder>"
+)
+
 # Emitted when a REVISION re-plan has been narrated >= _REVISION_FORCE_SUBMIT_K times
 # without a submit_plan call (the soft _PLAN_NUDGE was ignored). This is paired with a
 # durable StatusEvent(detail="force_submit_plan") marker so the NEXT planning step's tool
@@ -663,6 +672,7 @@ class AgentLoop:
         verifier_judge: VerifierJudge | None = None,
         verifier_judge_timeout_s: float = 30.0,
         workflow_run: WorkflowRun | None = None,
+        quiet: bool = False,
     ) -> None:
         # Autonomous mode (issue A): no human is available to answer questions or
         # approve plans (headless / unattended runs). Default False = today's
@@ -671,6 +681,7 @@ class AgentLoop:
         # circuit-breaker's "hand off to the user" becomes a clean forfeit (STUCK)
         # instead of an indefinite AWAITING_USER_DECISION stall.
         self._autonomous = autonomous
+        self._quiet = quiet
         # P6 — the contract finalizer alias for `finish` (None when no contract governs).
         self._finish_alias = finish_alias
         self._workflow_run = workflow_run
@@ -909,6 +920,10 @@ class AgentLoop:
 
     def _recent(self, events: list[Event]) -> list[Event]:
         return events[-self._stuck.required_scan_window() :]
+
+    def _workflow_router_phase_active(self) -> bool:
+        scope = getattr(self.executor, "_scope", None)
+        return getattr(scope, "preset", None) == "workflow_router"
 
 
     # ---- plan-mode helpers (Build) ------------------------------------------
@@ -1203,7 +1218,7 @@ class AgentLoop:
                 # submit_plan. No cap, no error — the loop's
                 # max_iterations and the user's kill switch are the
                 # ultimate exits. The counter stays for telemetry.
-                if step.thought.strip():
+                if step.thought.strip() and not self._quiet:
                     await self._emit(
                         MessageEvent(
                             source=EventSource.AGENT,
@@ -1286,10 +1301,15 @@ class AgentLoop:
                     self._plan_nudges = 0  # fresh runway for the forced-submit step
                     return Disp.CONTINUE
                 self._plan_nudges += 1
+                nudge = (
+                    _WORKFLOW_ROUTER_PLAN_NUDGE
+                    if self._workflow_router_phase_active()
+                    else _PLAN_NUDGE
+                )
                 await self._emit(
                     MessageEvent(
                         source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(role="user", content=_PLAN_NUDGE),
+                        message=LLMMessage(role="user", content=nudge),
                     )
                 )
                 if await self._post_noop_valve() is Disp.HALT:

@@ -80,6 +80,8 @@ def make_conversations_router(
             )
             if body.autonomous:
                 runtime.set_autonomous(conversation_id, True)
+            if body.quiet:
+                runtime.set_quiet(conversation_id, True)
             # Weak-model assist tier: None ⇒ leave the model-derived default;
             # True/False ⇒ explicit per-conversation override.
             if body.assist is not None:
@@ -156,6 +158,8 @@ def make_conversations_router(
 
         if body.autonomous is not None:
             runtime.set_autonomous(conversation_id, body.autonomous)
+        if body.quiet is not None:
+            runtime.set_quiet(conversation_id, body.quiet)
         return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
 
     @router.post("/conversations/{conversation_id}/messages")
@@ -232,6 +236,8 @@ def make_conversations_router(
             # Surface the autonomous flag so the UI can badge the conversation.
             if runtime.is_autonomous(conversation_id):
                 state.extras["autonomous"] = True
+            if runtime.is_quiet(conversation_id):
+                state.extras["quiet"] = True
             # ALWAYS emit assist (True or False) — the badge must reflect the CURRENT
             # tier. Emitting it only-when-true let a switch to standard leave the
             # frontend's preserved-on-absent value stuck on "Assist".

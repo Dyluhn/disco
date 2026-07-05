@@ -30,6 +30,7 @@ from .messages import (
     _PLAN_EXPLORE_FORCE,
     _PLAN_EXPLORE_READ_CAP,
     _REPLAN_FRAMING,
+    _WORKFLOW_ROUTER_EXPLORE_FORCE,
     _render_replan_plan_digest,
 )
 from .turn_control import _CONTINUE_OPTION_ID
@@ -194,15 +195,15 @@ class Planner:
         forever — B2 — and it free-builds without re-planning — B6)."""
         self._loop._plan_explore_reads += 1
         if self._loop._plan_explore_reads == _PLAN_EXPLORE_READ_CAP:
+            content = (
+                _WORKFLOW_ROUTER_EXPLORE_FORCE
+                if self._loop._workflow_router_phase_active()
+                else _PLAN_EXPLORE_FORCE.format(n=self._loop._plan_explore_reads)
+            )
             await self._loop._emit(
                 MessageEvent(
                     source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user",
-                        content=_PLAN_EXPLORE_FORCE.format(
-                            n=self._loop._plan_explore_reads
-                        ),
-                    ),
+                    message=LLMMessage(role="user", content=content),
                 )
             )
 

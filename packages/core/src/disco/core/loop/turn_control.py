@@ -248,6 +248,24 @@ _ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
 _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP = 3
 
 
+def _last_verify_web_app_passed(events: list[Event]) -> bool:
+    """True iff the most recent verify_web_app observation is a PASS."""
+    for e in reversed(events):
+        if not (
+            isinstance(e, ObservationEvent)
+            and e.tool_result.tool_name == "verify_web_app"
+        ):
+            continue
+        structured = e.tool_result.structured
+        if isinstance(structured, dict) and "passed" in structured:
+            return e.tool_result.success and structured.get("passed") is True
+        content = str(e.tool_result.content or "")
+        if "VERIFY_WEB_APP:" in content:
+            return e.tool_result.success and "VERIFY_WEB_APP: PASS" in content
+        return False
+    return False
+
+
 def _plan_done_and_verified(events: list[Event]) -> bool:
     """True when every effective plan step is done AND the most recent
     verify_web_app observation PASSED — the done-not-stuck discriminator."""
@@ -258,11 +276,8 @@ def _plan_done_and_verified(events: list[Event]) -> bool:
         return False
     if any(states.get(i) != "done" for i in range(1, len(plan.steps) + 1)):
         return False
-    for e in reversed(events):
-        if isinstance(e, ObservationEvent) and "VERIFY_WEB_APP:" in str(
-            e.tool_result.content or ""
-        ):
-            return "VERIFY_WEB_APP: PASS" in str(e.tool_result.content or "")
+    if _last_verify_web_app_passed(events):
+        return True
     return False
 
 
@@ -1262,7 +1277,7 @@ class Valve:
             # halting STUCK here converts a finished build into a failure. Point
             # at the exit ONCE; the marker stays, so a model that still refuses
             # to finish halts on the next trip through.
-            if _plan_done_and_verified(events) and not _no_progress_finish_hinted(
+            if _last_verify_web_app_passed(events) and not _no_progress_finish_hinted(
                 events, marker_seq
             ):
                 await self._loop._emit(

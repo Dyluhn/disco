@@ -1021,6 +1021,125 @@ async def test_planning_mode_preserves_acknowledgment_prose():
     assert len(acks) == 1
 
 
+async def test_quiet_mode_suppresses_planning_acknowledgment_prose():
+    """Quiet mode still lets the planning nudge/plan flow happen, but it does
+    not persist the chatty pre-plan assistant prose."""
+    from disco.core import MessageEvent, ToolCall
+    from disco.core.llm import OperatingMode
+    from loop_fakes import AgentStep
+
+    ack = AgentStep(
+        thought="Got it — you want a stock ticker. Let me check the APIs first.",
+        tool_call=None,
+        finished=False,
+    )
+    plan = AgentStep(
+        thought="here's the plan",
+        tool_call=ToolCall(
+            tool_name="submit_plan",
+            arguments={"summary": "a stock ticker", "steps": [{"title": "scaffold"}]},
+        ),
+        finished=False,
+    )
+    agent = ScriptedAgent([ack, plan])
+    loop, store = build_loop(agent, mode=OperatingMode.PLANNING, quiet=True)
+    loop._planning_tools = frozenset({"submit_plan"})
+    await loop.send_message("build a stock ticker")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    assert not [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source.value == "agent"
+        and "stock ticker" in (e.message.content if e.message else "")
+    ]
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source.value == "environment"
+        and "Still in PLANNING mode" in (e.message.content if e.message else "")
+        for e in events
+    )
+
+
+async def test_workflow_router_prose_nudge_names_only_router_moves():
+    """Router-phase no-tool turns must not ask for submit_plan, which is not in
+    router scope; the nudge must be satisfiable by an available router move."""
+    from types import SimpleNamespace
+
+    from disco.core import MessageEvent
+    from disco.core.llm import OperatingMode
+    from loop_fakes import AgentStep
+
+    agent = ScriptedAgent([AgentStep(thought="I should plan this.", tool_call=None)])
+    loop, store = build_loop(agent, mode=OperatingMode.PLANNING)
+    loop.executor._scope = SimpleNamespace(preset="workflow_router")  # type: ignore[attr-defined]
+    await loop.send_message("make slides from the report")
+    await loop.run()
+
+    nudges = [
+        e.message.content
+        for e in await store.get_events(CID)
+        if isinstance(e, MessageEvent)
+        and e.source.value == "environment"
+        and "WORKFLOW ROUTER phase" in (e.message.content if e.message else "")
+    ]
+    assert nudges
+    assert "submit_plan" not in nudges[-1]
+    for move in ("enter_workflow", "needs_input", "draft_workflow", "workflow_abort"):
+        assert move in nudges[-1]
+    assert "ask_user" not in nudges[-1]
+
+
+async def test_workflow_router_read_cap_nudge_names_only_router_moves():
+    """The planning read-cap reminder is shared with normal planning; in router
+    scope it must use router moves rather than submit_plan."""
+    from types import SimpleNamespace
+
+    from disco.core import MessageEvent
+    from disco.core.llm import OperatingMode, ToolSpec
+    from loop_fakes import FakeExecutor, action_step
+
+    agent = ScriptedAgent(
+        [
+            action_step("file_read", {"path": f"notes-{i}.md"})
+            for i in range(5)
+        ]
+    )
+    executor = FakeExecutor(
+        tools=[
+            ToolSpec(
+                name="file_read",
+                description="read",
+                parameters_schema={"type": "object"},
+            )
+        ]
+    )
+    loop, store = build_loop(
+        agent,
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"file_read"}),
+        executor=executor,
+        max_iterations=5,
+    )
+    loop.executor._scope = SimpleNamespace(preset="workflow_router")  # type: ignore[attr-defined]
+    await loop.send_message("make slides from the report")
+    await loop.run()
+
+    nudges = [
+        e.message.content
+        for e in await store.get_events(CID)
+        if isinstance(e, MessageEvent)
+        and e.source.value == "environment"
+        and "WORKFLOW ROUTER phase" in (e.message.content if e.message else "")
+    ]
+    assert nudges
+    assert "submit_plan" not in nudges[-1]
+    for move in ("enter_workflow", "needs_input", "draft_workflow", "workflow_abort"):
+        assert move in nudges[-1]
+
+
 async def test_planning_mode_can_ask_user_before_proposing_a_plan():
     """An under-specified task most needs clarification BEFORE a plan is
     committed. In PLANNING mode the model can call `ask_user` (free-form) to get a

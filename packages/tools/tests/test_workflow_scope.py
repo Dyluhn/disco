@@ -14,6 +14,8 @@ from disco.core.workflow import (
     DAILY_EMAIL_BRIEF_DEFINITION,
     DAILY_EMAIL_BRIEF_MCP_TOOL_NAMES,
     DAILY_EMAIL_BRIEF_TOOLS,
+    DOCUMENT_DECK_STUDIO_DEFINITION,
+    DOCUMENT_DECK_STUDIO_TOOLS,
     FORM_FILL_DEFINITION,
     FORM_FILL_TOOLS,
     GENERAL_WORKSPACE_TASK_DEFINITION,
@@ -66,12 +68,14 @@ from disco.tools.builtin.workflow_tools import (
 from disco.tools.workflow_seed import (
     BROWSER_AUTOMATION_INSTANCE_ID,
     DAILY_EMAIL_BRIEF_INSTANCE_ID,
+    DOCUMENT_DECK_STUDIO_INSTANCE_ID,
     FORM_FILL_INSTANCE_ID,
     GENERAL_WORKSPACE_TASK_INSTANCE_ID,
     SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
     SKILL_AUTHORING_INSTANCE_ID,
     seed_builtin_workflows,
     seed_daily_email_brief,
+    seed_document_deck_studio,
     seed_general_workspace_task,
     seed_scripted_workspace_task,
 )
@@ -735,6 +739,36 @@ def test_scripted_workspace_task_definition_compiles_and_seeds(tmp_path) -> None
     assert instance.definition_digest == SCRIPTED_WORKSPACE_TASK_DEFINITION.digest()
 
 
+def test_document_deck_studio_definition_compiles_and_seeds(tmp_path) -> None:
+    compiled = compile_workflow_scope(DOCUMENT_DECK_STUDIO_DEFINITION, frozenset())
+
+    expected = frozenset(DOCUMENT_DECK_STUDIO_TOOLS) | WORKFLOW_CONTROL_TOOLS
+    assert compiled.allowed_tools == expected
+    assert compiled.advertised == expected
+    assert DOCUMENT_DECK_STUDIO_DEFINITION.policies.untrusted_content is True
+    assert DOCUMENT_DECK_STUDIO_DEFINITION.policies.allows_writes is True
+    assert DOCUMENT_DECK_STUDIO_DEFINITION.output_contract.path_template == (
+        "reports/artifact-summary.md"
+    )
+    assert DOCUMENT_DECK_STUDIO_DEFINITION.verify.checks == (
+        "file_exists",
+        "non_empty",
+    )
+
+    path = seed_document_deck_studio(tmp_path)
+    instance = JsonDirWorkflowStore(tmp_path).get_instance(
+        DOCUMENT_DECK_STUDIO_INSTANCE_ID
+    )
+
+    assert path == tmp_path / "workflows" / "document_deck_studio.json"
+    assert instance is not None
+    assert instance.enabled is True
+    assert instance.approval is not None
+    assert instance.approval.approved_by == "disco_builtin_seed"
+    assert instance.definition == DOCUMENT_DECK_STUDIO_DEFINITION
+    assert instance.definition_digest == DOCUMENT_DECK_STUDIO_DEFINITION.digest()
+
+
 @pytest.mark.asyncio
 async def test_workflow_abort_flips_run_to_router_and_reexposes_router_scope() -> None:
     state = WorkflowPhaseState(
@@ -836,13 +870,14 @@ def test_seeded_daily_email_brief_is_disabled_and_unapproved(tmp_path) -> None:
     assert instance.definition.output_contract.path_template == "reports/email-brief-{date}.md"
 
 
-def test_seed_builtin_workflows_writes_all_six_instances(tmp_path) -> None:
+def test_seed_builtin_workflows_writes_all_seven_instances(tmp_path) -> None:
     seeded = seed_builtin_workflows(tmp_path)
     store = JsonDirWorkflowStore(tmp_path)
 
     assert [instance_id for instance_id, _ in seeded] == [
         GENERAL_WORKSPACE_TASK_INSTANCE_ID,
         SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
+        DOCUMENT_DECK_STUDIO_INSTANCE_ID,
         DAILY_EMAIL_BRIEF_INSTANCE_ID,
         BROWSER_AUTOMATION_INSTANCE_ID,
         FORM_FILL_INSTANCE_ID,
@@ -851,6 +886,7 @@ def test_seed_builtin_workflows_writes_all_six_instances(tmp_path) -> None:
     assert {path.name for _, path in seeded} == {
         "general_workspace_task.json",
         "scripted_workspace_task.json",
+        "document_deck_studio.json",
         "daily_email_brief.json",
         "browser_automation.json",
         "form_fill.json",
@@ -863,6 +899,7 @@ def test_seed_builtin_workflows_writes_all_six_instances(tmp_path) -> None:
     assert set(instances) == {
         GENERAL_WORKSPACE_TASK_INSTANCE_ID,
         SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
+        DOCUMENT_DECK_STUDIO_INSTANCE_ID,
         DAILY_EMAIL_BRIEF_INSTANCE_ID,
         BROWSER_AUTOMATION_INSTANCE_ID,
         FORM_FILL_INSTANCE_ID,
@@ -871,6 +908,7 @@ def test_seed_builtin_workflows_writes_all_six_instances(tmp_path) -> None:
     for instance_id in (
         GENERAL_WORKSPACE_TASK_INSTANCE_ID,
         SCRIPTED_WORKSPACE_TASK_INSTANCE_ID,
+        DOCUMENT_DECK_STUDIO_INSTANCE_ID,
         BROWSER_AUTOMATION_INSTANCE_ID,
         FORM_FILL_INSTANCE_ID,
         SKILL_AUTHORING_INSTANCE_ID,

@@ -17,6 +17,7 @@ import {
   markConversationKilled,
   markFreshMode,
 } from "@/lib/sessionResume";
+import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 import { useBuildStream, type BuildSession } from "./useBuildStream";
 
 /** Opens a build-like conversation. `surface` is "build" (software framing) or
@@ -51,6 +52,8 @@ export function useBuild(
   // auto-enabled by hosting (a capable local model like Qwen 27B is not sandbagged).
   // Off by default; the user flips it for a genuinely weak model. Locked once work begins.
   const [assistChoice, setAssistChoice] = useState(false);
+  const { verbose: verboseChat } = useVerboseAgentChat();
+  const quietChoice = !verboseChat;
 
   // G1/DR-4: pre-created cid for the empty state UploadComposer.
   // BW-08: pre-create is LAZY — it does NOT POST /conversations on mount. The
@@ -62,8 +65,8 @@ export function useBuild(
   // same cid is reused so uploads in the pending session survive the kick.
   const [preCid, setPreCid] = useState<string | null>(null);
   const preCreate = useMutation({
-    mutationFn: (opts: { modelOverride: string | null; autonomous: boolean }) =>
-      createBuildConversation(opts.modelOverride, surface, opts.autonomous),
+    mutationFn: (opts: { modelOverride: string | null; autonomous: boolean; quiet: boolean }) =>
+      createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet),
   });
 
   const stream = useBuildStream(session);
@@ -162,7 +165,15 @@ export function useBuild(
       modelOverride: string | null;
       autonomous: boolean;
       assist: boolean;
-    }) => createBuildConversation(opts.modelOverride, surface, opts.autonomous, opts.assist),
+      quiet: boolean;
+    }) =>
+      createBuildConversation(
+        opts.modelOverride,
+        surface,
+        opts.autonomous,
+        opts.assist,
+        opts.quiet,
+      ),
   });
 
   // W-07: lazily obtain the pre-created cid for the Attach affordance so uploads
@@ -172,10 +183,14 @@ export function useBuild(
   const ensurePreCid = useCallback(async () => {
     if (!agentLive()) return null;
     if (preCid) return preCid;
-    const cid = await preCreate.mutateAsync({ modelOverride: null, autonomous: false });
+    const cid = await preCreate.mutateAsync({
+      modelOverride: null,
+      autonomous: false,
+      quiet: quietChoice,
+    });
     setPreCid(cid);
     return cid;
-  }, [preCid, preCreate]);
+  }, [preCid, preCreate, quietChoice]);
 
   const submit = useCallback(
     async (task: string) => {
@@ -190,6 +205,7 @@ export function useBuild(
         await patchConversationSettings(preCid, {
           modelOverride: modelId,
           autonomous: autonomousChoice,
+          quiet: quietChoice,
           assist: assistChoice,
         });
         setSession({ cid: preCid, task: trimmed, kick: true });
@@ -197,11 +213,16 @@ export function useBuild(
         return;
       }
       create.mutate(
-        { modelOverride: modelId, autonomous: autonomousChoice, assist: assistChoice },
+        {
+          modelOverride: modelId,
+          autonomous: autonomousChoice,
+          assist: assistChoice,
+          quiet: quietChoice,
+        },
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
     },
-    [create, modelId, autonomousChoice, assistChoice, preCid, surface],
+    [create, modelId, autonomousChoice, assistChoice, quietChoice, preCid, surface],
   );
 
   const kill = useCallback(async () => {

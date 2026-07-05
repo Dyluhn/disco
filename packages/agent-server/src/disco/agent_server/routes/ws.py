@@ -199,6 +199,8 @@ def make_ws_router(
                 state.extras["sandbox_instance_ids"] = sandbox_ids
             if runtime.is_autonomous(conversation_id):
                 state.extras["autonomous"] = True
+            if runtime.is_quiet(conversation_id):
+                state.extras["quiet"] = True
             # ALWAYS emit assist (True or False) so the badge reflects the CURRENT
             # tier (only-when-true left a switch-to-standard badge stuck on "Assist").
             state.extras["assist"] = runtime.is_assist(conversation_id)

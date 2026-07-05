@@ -1101,6 +1101,17 @@ def _probe(content: str = "HTTP 200, no console errors"):
     return [a, o]
 
 
+def _verify_pass_probe():
+    """A verify_web_app PASS probe that also participates in no-progress detection."""
+    a = action(thought="verify the app", tool="verify_web_app", args={})
+    o = observation(
+        action_id=a.id,
+        content="VERIFY_WEB_APP: PASS (app renders)",
+        tool="verify_web_app",
+    )
+    return [a, o]
+
+
 def test_no_progress_trips_on_varied_edits_same_symptom():
     """4 DISTINCT edits, each followed by the SAME probe outcome ⇒ trip."""
     events = [user_msg("build the app")]
@@ -1197,6 +1208,48 @@ async def test_no_progress_gate_nudges_then_halts():
     assert disp is Disp.HALT
     events = await store.get_events(CID)
     assert_blocked_question_landing(events, legacy_detail="no_progress")
+
+
+async def test_no_progress_gate_finish_hints_when_latest_verify_passes_despite_stale_plan():
+    """#37d live regression: a stable PASS verifier outcome means DONE, not a
+    blocked user question, even when effective plan marks are stale/incomplete."""
+    from disco.core.events import PlanEvent, PlanStep
+
+    loop, store = build_loop(ScriptedAgent([finish_step()]))
+    await store.append(CID, user_msg("build the app"))
+    await store.append(
+        CID,
+        PlanEvent(
+            source=EventSource.AGENT,
+            summary="build",
+            steps=[PlanStep(title="make app"), PlanStep(title="verify app")],
+        ),
+    )
+    for i in range(4):
+        await store.append(CID, _edit(i))
+        for e in _verify_pass_probe():
+            await store.append(CID, e)
+
+    disp = await loop._valve.gate_no_progress(await store.get_events(CID))
+    assert disp is Disp.CONTINUE
+
+    await store.append(CID, _edit(5))
+    for e in _verify_pass_probe():
+        await store.append(CID, e)
+
+    disp = await loop._valve.gate_no_progress(await store.get_events(CID))
+    assert disp is Disp.CONTINUE
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(e, StatusEvent) and e.detail == "no_progress_finish_hint"
+        for e in events
+    )
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.AWAITING_USER_QUESTION
+        and e.meta.get("legacy_detail") == "no_progress"
+        for e in events
+    )
 
 
 async def test_no_progress_gate_silent_on_genuine_progress():
@@ -1343,10 +1396,12 @@ def test_plan_done_and_verified_discriminator():
         ObservationEvent,
         PlanEvent,
         PlanStep,
-        StatusEvent,
         ToolResult,
     )
-    from disco.core.loop.turn_control import _plan_done_and_verified
+    from disco.core.loop.turn_control import (
+        _last_verify_web_app_passed,
+        _plan_done_and_verified,
+    )
 
     plan = PlanEvent(
         source=EventSource.AGENT,
@@ -1383,3 +1438,5 @@ def test_plan_done_and_verified_discriminator():
     assert not _plan_done_and_verified([plan, *done, obs("VERIFY_WEB_APP: FAIL (broken)")])
     # steps not done → False
     assert not _plan_done_and_verified([plan, obs("VERIFY_WEB_APP: PASS (pass)")])
+    # latest verify PASS is independent of stale plan bookkeeping
+    assert _last_verify_web_app_passed([plan, obs("VERIFY_WEB_APP: PASS (pass)")])

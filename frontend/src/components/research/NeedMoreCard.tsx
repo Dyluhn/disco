@@ -32,6 +32,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { readVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 // B1/B4: MD and PDF non-FSA paths now use inline fetch+blob-URL
 // so we no longer call exportReport / exportReportAsMarkdown from deepResearch.ts.
 import { agentHttpBase } from "@/api/client";
@@ -902,7 +903,13 @@ export function NeedMoreCard({
       // (autonomous=true) so the seeded slides plan auto-approves for a frictionless
       // "just build the deck" handoff — per-action risk gates still apply.
       // model_override=null → server uses the last-selected pick.
-      const newCid = await createBuildConversation(null, "agent", true);
+      const newCid = await createBuildConversation(
+        null,
+        "agent",
+        true,
+        null,
+        !readVerboseAgentChat(),
+      );
       // W-24: this handoff lands on the AGENT surface (/agent/:cid). Sync the
       // 3-way mode slider to "agent" so it reflects where we just navigated —
       // otherwise the slider stayed on Search while the Agent surface rendered.

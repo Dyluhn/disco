@@ -247,6 +247,7 @@ def build_loop(
     model_policy: ModelExecutionPolicy | None = None,
     autonomous: bool = False,
     workflow_run=None,
+    quiet: bool = False,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
     (the Agent wraps it) so a None sentinel is passed.
@@ -284,6 +285,7 @@ def build_loop(
         model_policy=model_policy or ModelExecutionPolicy.standard(),
         autonomous=autonomous,
         workflow_run=workflow_run,
+        quiet=quiet,
     )
     return loop, store
 

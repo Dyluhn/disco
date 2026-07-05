@@ -217,7 +217,7 @@ describe("NeedMoreCard", () => {
 
     await user.click(screen.getByRole("button", { name: /Build a deck/i }));
 
-    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "agent", true));
+    await waitFor(() => expect(_createBuild).toHaveBeenCalledWith(null, "agent", true, null, expect.any(Boolean)));
     await waitFor(() => expect(_navMock).toHaveBeenCalled());
     const [path, opts] = _navMock.mock.calls[0] as [
       string,

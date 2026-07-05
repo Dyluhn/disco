@@ -87,6 +87,7 @@ class CreateConversationBody(BaseModel):
     surface: Literal["research", "build", "agent", "deep_research"] = "research"
     model_override: str | None = None  # pin the driver model (catalogue key) for this convo
     autonomous: bool = False  # headless/unattended: no ask_user, auto-approve plan, clean forfeit
+    quiet: bool = False  # suppress pre-plan assistant prose; plan/actions still render
     # weak-model assist tier. None ⇒ default from the probed model (local→on, cloud→off);
     # True/False ⇒ explicit per-conversation override.
     assist: bool | None = None
@@ -131,6 +132,7 @@ class UpdateSettingsBody(BaseModel):
 
     model_override: str | None = None
     autonomous: bool | None = None
+    quiet: bool | None = None
     # Order C: weak-model assist tier toggle. None ⇒ leave unchanged; True/False
     # ⇒ explicit per-conversation override (mirrors CreateConversationBody.assist).
     assist: bool | None = None

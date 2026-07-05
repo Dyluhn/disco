@@ -144,7 +144,13 @@ describe("AuthorB unbiased gate — W-06/W-07/W-13/W-24 research UI", () => {
     await user.click(screen.getByRole("button", { name: /build/i }));
 
     await waitFor(() =>
-      expect(apiMocks.createBuildConversation).toHaveBeenCalledWith(null, "agent", true),
+      expect(apiMocks.createBuildConversation).toHaveBeenCalledWith(
+        null,
+        "agent",
+        true,
+        null,
+        false,
+      ),
     );
     expect(screen.getByTestId("mode-probe")).toHaveTextContent("agent");
   });

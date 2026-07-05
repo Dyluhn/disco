@@ -11,10 +11,12 @@ collaborator constructed once in `ConversationRuntime`:
   - assist tier:            _load_assist / _save_assist / set_assist
                             / _effective_assist / is_assist
                             / _is_small_assist_default
+  - quiet mode:             _load_quiet / _save_quiet / set_quiet
+                            / _effective_quiet / is_quiet
   - atomic settings gate:   apply_settings_change / _conversation_is_pristine
                             per-cid asyncio.Lock in _settings_locks
 
-The mutable dicts (`_model_override`, `_surface`, `_autonomous`, `_assist`)
+The mutable dicts (`_model_override`, `_surface`, `_autonomous`, `_assist`, `_quiet`)
 and their sidecar paths stay declared on `ConversationRuntime`; the service is
 stateless and reaches them — plus `_router_now`, `_surface_of`, the
 `_AUTONOMOUS_SURFACES` set — via a back-reference. `set_surface` / `_surface_of`
@@ -243,6 +245,44 @@ class RuntimeSettings:
         # The public read (UI badge via /state extras) — gated, so the badge can't
         # show "autonomous" on a surface that has no headless affordance.
         return self._effective_autonomous(conversation_id)
+
+    # ---- quiet mode --------------------------------------------------------
+
+    def _load_quiet(self) -> dict[str, bool]:
+        if self._rt._quiet_path and os.path.exists(self._rt._quiet_path):
+            try:
+                with open(self._rt._quiet_path) as f:
+                    return {str(k): bool(v) for k, v in json.load(f).items()}
+            except Exception:  # noqa: BLE001
+                return {}
+        return {}
+
+    def _save_quiet(self) -> None:
+        if not self._rt._quiet_path:
+            return
+        import tempfile
+        try:
+            dir_name = os.path.dirname(self._rt._quiet_path)
+            with tempfile.NamedTemporaryFile("w", dir=dir_name, delete=False) as f:
+                json.dump(self._rt._quiet, f)
+                tmp_name = f.name
+            os.replace(tmp_name, self._rt._quiet_path)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def set_quiet(self, conversation_id: str, value: bool = True) -> None:
+        """Mark a build-like conversation as quiet. Persisted (B0)."""
+        self._rt._quiet[conversation_id] = bool(value)
+        self._rt._save_quiet()
+
+    def _effective_quiet(self, conversation_id: str) -> bool:
+        return (
+            self._rt._quiet.get(conversation_id, False)
+            and self._rt._surface_of(conversation_id) in self._rt._BUILD_LIKE_SURFACES
+        )
+
+    def is_quiet(self, conversation_id: str) -> bool:
+        return self._effective_quiet(conversation_id)
 
     # ---- assist tier -------------------------------------------------------
 

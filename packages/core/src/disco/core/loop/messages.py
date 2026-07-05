@@ -45,6 +45,15 @@ _PLAN_EXPLORE_FORCE = (
     "</system-reminder>"
 )
 
+_WORKFLOW_ROUTER_EXPLORE_FORCE = (
+    "<system-reminder>\n"
+    "You are in WORKFLOW ROUTER phase and have enough context. Your next response "
+    "must be exactly one tool call: `enter_workflow`, `needs_input`, or "
+    "`draft_workflow`. If you are already inside a workflow run and the selected "
+    "workflow cannot satisfy the goal, call `workflow_abort`.\n"
+    "</system-reminder>"
+)
+
 # (B2/B6) Injected when RE-entering planning after a build was already approved
 # (a revision, not a first plan). Frames the turn so the model proposes a
 # revised plan instead of free-building against the old plan.

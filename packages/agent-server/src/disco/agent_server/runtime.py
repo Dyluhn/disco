@@ -748,7 +748,7 @@ class ConversationRuntime:
                 "will NOT survive a restart"
             )
         # Persisted per-conversation settings (B0): override / surface / autonomous /
-        # assist accessors. The dicts + sidecar paths stay declared below on the
+        # assist / quiet accessors. The dicts + sidecar paths stay declared below on the
         # runtime; the stateless service reaches them via a back-ref. Constructed
         # FIRST because the _load_* calls in this __init__ route through it.
         self._settings = RuntimeSettings(self)
@@ -781,6 +781,10 @@ class ConversationRuntime:
         # Per-conversation ASSIST tier flag (T1), same B0 sidecar pattern.
         self._assist_path = f"{db_path}.assist.json" if db_path else ""
         self._assist: dict[str, bool] = self._load_assist()
+        # Per-conversation quiet mode flag, same B0 sidecar pattern. True means
+        # planning no-tool assistant prose is suppressed while plan/actions still render.
+        self._quiet_path = f"{db_path}.quiet.json" if db_path else ""
+        self._quiet: dict[str, bool] = self._load_quiet()
         # C6: per-conversation artifact_mode flag. In-memory only — set at create
         # time from the body; artifact sessions are short-lived, no sidecar needed.
         self._artifact_mode: dict[str, bool] = {}
@@ -1332,6 +1336,21 @@ class ConversationRuntime:
 
     def is_autonomous(self, conversation_id: str) -> bool:
         return self._settings.is_autonomous(conversation_id)
+
+    def _load_quiet(self) -> dict[str, bool]:
+        return self._settings._load_quiet()
+
+    def _save_quiet(self) -> None:
+        self._settings._save_quiet()
+
+    def set_quiet(self, conversation_id: str, value: bool = True) -> None:
+        self._settings.set_quiet(conversation_id, value)
+
+    def _effective_quiet(self, conversation_id: str) -> bool:
+        return self._settings._effective_quiet(conversation_id)
+
+    def is_quiet(self, conversation_id: str) -> bool:
+        return self._settings.is_quiet(conversation_id)
 
     def _is_small_assist_default(self, entry: Any) -> bool:
         return self._settings._is_small_assist_default(entry)
@@ -2314,6 +2333,7 @@ class ConversationRuntime:
                 planning_tools=_sealed_planning_tools if _sealed_plan_gated else frozenset(),
                 autonomous=True,
                 model_policy=model_policy,
+                quiet=self._effective_quiet(conversation_id),
                 workflow_run=sealed_workflow_run,
                 finish_alias=_finish_alias,
                 host_verifier=host_verifier,
@@ -2346,6 +2366,7 @@ class ConversationRuntime:
                 # No planning_tools (submit_plan/plan_step not in ARTIFACT_TOOLS scope).
                 autonomous=self._effective_autonomous(conversation_id),
                 model_policy=model_policy,
+                quiet=self._effective_quiet(conversation_id),
                 finish_alias=_finish_alias,  # P6 contract finalizer alias
                 host_verifier=host_verifier,
                 verifier_judge=verifier_judge,
@@ -2396,6 +2417,7 @@ class ConversationRuntime:
             # from the prompt prefix.
             autonomous=self._effective_autonomous(conversation_id),
             model_policy=model_policy,
+            quiet=self._effective_quiet(conversation_id),
             finish_alias=_finish_alias,  # P6 contract finalizer alias
             host_verifier=host_verifier,
             verifier_judge=verifier_judge,
@@ -4140,6 +4162,7 @@ class ConversationRuntime:
             self._surface,
             self._autonomous,
             self._assist,
+            self._quiet,
             self._artifact_mode,
             self._appkit_mode,
             self._depth,
