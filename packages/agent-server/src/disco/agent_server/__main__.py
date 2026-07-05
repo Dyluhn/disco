@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import uvicorn
 from disco.core.env import disco_env
+from disco.core.llm.secrets import ensure_process_secret_key
 from disco.core.store.sqlite import SqliteEventStore
 
 from .app import create_app
@@ -70,6 +71,7 @@ def main() -> None:
         logging.basicConfig(
             level=level, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
         )
+    ensure_process_secret_key()
     db_path = disco_env("DB", "disco.db")
     assert db_path is not None  # default above is non-None
     store = SqliteEventStore(db_path)

@@ -41,19 +41,23 @@ export function LiveBrowserSection() {
   const effectiveEnabled = liveSupported && (data?.enabled ?? false);
 
   return (
-    <section className="flex flex-col gap-section border-t border-hairline pt-section">
+    <section className="flex flex-col gap-inline">
       <header>
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Live browser</h2>
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Live browser
+        </h3>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
-          Stream the agent's headed browser live via noVNC. When enabled, the Agent canvas
-          auto-streams the live view while the agent is browsing (no button — it starts when the
-          browser is up and ends when it ends). The VNC stack starts on demand — idle sessions
-          cost nothing. View-only by default; loopback-bound inside the sandbox.
+          Stream the agent's headed browser live via noVNC. When enabled, the
+          Agent canvas auto-streams the live view while the agent is browsing
+          (no button — it starts when the browser is up and ends when it ends).
+          The VNC stack starts on demand — idle sessions cost nothing. View-only
+          by default; loopback-bound inside the sandbox.
         </p>
         <p className="mt-hair font-ui text-[0.78rem] text-text-faint">
-          Requires a containerized gVisor sandbox (the image with Xvfb/x11vnc/noVNC/websockify and
-          the accepted live-jail security model). It is not available on the local or Podman
-          sandbox — switch the sandbox backend to gVisor to use it.
+          Requires a containerized gVisor sandbox (the image with
+          Xvfb/x11vnc/noVNC/websockify and the accepted live-jail security
+          model). It is not available on the local or Podman sandbox — switch
+          the sandbox backend to gVisor to use it.
         </p>
       </header>
 
@@ -69,11 +73,15 @@ export function LiveBrowserSection() {
               data-backend={backendId}
               className="flex items-start gap-hair rounded-control border border-weak/50 px-body py-inline font-ui text-[0.82rem] leading-snug text-text-muted"
             >
-              <MonitorOff className="mt-px size-4 shrink-0 text-text-faint" aria-hidden />
+              <MonitorOff
+                className="mt-px size-4 shrink-0 text-text-faint"
+                aria-hidden
+              />
               <span>
-                Live browser requires a containerized sandbox (gVisor) — it isn't available on
-                the {backendName} sandbox. The toggle is locked off; the Agent canvas shows the
-                per-action screenshot reel as usual.
+                Live browser requires a containerized sandbox (gVisor) — it
+                isn't available on the {backendName} sandbox. The toggle is
+                locked off; the Agent canvas shows the per-action screenshot
+                reel as usual.
               </span>
             </p>
           )}
@@ -133,7 +141,9 @@ export function LiveBrowserSection() {
                   aria-hidden
                 />
                 <span className="flex min-w-0 flex-col gap-hair">
-                  <span className="font-ui text-[0.9rem] font-medium text-text">{label}</span>
+                  <span className="font-ui text-[0.9rem] font-medium text-text">
+                    {label}
+                  </span>
                   <span className="font-ui text-[0.8rem] leading-relaxed text-text-faint">
                     {help}
                   </span>
@@ -144,9 +154,13 @@ export function LiveBrowserSection() {
           {/* Flagged error when the user clicks "On" on a backend that can't run noVNC —
               visible, never a silent no-op; the save call is suppressed. */}
           {blocked && !liveSupported && (
-            <p role="alert" data-live-browser-blocked="true" className="font-ui text-[0.8rem] text-warn">
-              Live browser can't be turned on for the {backendName} sandbox — switch the sandbox
-              backend to gVisor first.
+            <p
+              role="alert"
+              data-live-browser-blocked="true"
+              className="font-ui text-[0.8rem] text-warn"
+            >
+              Live browser can't be turned on for the {backendName} sandbox —
+              switch the sandbox backend to gVisor first.
             </p>
           )}
           {liveSupported && (
@@ -154,8 +168,9 @@ export function LiveBrowserSection() {
               data-live-browser-availability="runtime-checked"
               className="font-ui text-[0.76rem] text-text-faint"
             >
-              Enabling this saves a preference only — the stream auto-starts on the Agent canvas at
-              runtime when the agent is actually browsing (and the gVisor stack is up).
+              Enabling this saves a preference only — the stream auto-starts on
+              the Agent canvas at runtime when the agent is actually browsing
+              (and the gVisor stack is up).
             </p>
           )}
           {save.error && (

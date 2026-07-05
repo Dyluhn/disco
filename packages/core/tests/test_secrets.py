@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from disco.core.llm import SecretBox, SecretStore
+from disco.core.llm import SecretBox, SecretStore, ensure_process_secret_key
 from disco.core.llm.secrets import _default_secrets_path
 
 
@@ -210,3 +210,50 @@ def test_explicit_path_and_env_override_default(monkeypatch, tmp_path):
     explicit = tmp_path / "explicit.json"
     assert SecretStore(explicit)._path == explicit  # explicit wins
     assert SecretStore()._path == tmp_path / "from_env.json"  # else PMX_SECRETS
+
+
+# ---- process app secret autogeneration --------------------------------------
+
+
+def test_process_secret_autogen_persists_and_reloads_stable(monkeypatch, tmp_path):
+    monkeypatch.delenv("DISCO_SECRET_KEY", raising=False)
+    monkeypatch.delenv("PMX_SECRET_KEY", raising=False)
+    path = tmp_path / "data" / "secret-key"
+
+    first = ensure_process_secret_key(path)
+    assert first
+    assert path.read_text().strip() == first
+    assert SecretBox.from_env().available
+
+    monkeypatch.delenv("DISCO_SECRET_KEY", raising=False)
+    second = ensure_process_secret_key(path)
+    assert second == first
+    assert path.read_text().strip() == first
+
+
+def test_process_secret_env_precedence(monkeypatch, tmp_path):
+    monkeypatch.setenv("DISCO_SECRET_KEY", "env-secret-wins")
+    monkeypatch.delenv("PMX_SECRET_KEY", raising=False)
+    path = tmp_path / "secret-key"
+
+    assert ensure_process_secret_key(path) == "env-secret-wins"
+    assert not path.exists()
+
+    monkeypatch.delenv("DISCO_SECRET_KEY", raising=False)
+    monkeypatch.setenv("PMX_SECRET_KEY", "legacy-env-secret-wins")
+    assert ensure_process_secret_key(path) == "legacy-env-secret-wins"
+    assert not path.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_process_secret_file_is_owner_only(monkeypatch, tmp_path):
+    monkeypatch.delenv("DISCO_SECRET_KEY", raising=False)
+    monkeypatch.delenv("PMX_SECRET_KEY", raising=False)
+    path = tmp_path / "data" / "secret-key"
+
+    ensure_process_secret_key(path)
+
+    file_mode = stat.S_IMODE(path.stat().st_mode)
+    dir_mode = stat.S_IMODE(path.parent.stat().st_mode)
+    assert file_mode == 0o600
+    assert dir_mode == 0o700

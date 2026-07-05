@@ -3,14 +3,17 @@
  *
  * Which inner Build agent the agent-server runs: `disco` (the current AgentLoop,
  * default) or `pi_experimental` (the experimental Pi-SDK kernel). The experimental
- * option is gated behind the agent-server's PI_KERNEL_EXPERIMENTAL flag — the server
+ * option is gated by the server's experimental access flag. The server
  * reports whether it is on (`experimental_enabled`); when off, the `pi_experimental`
  * choice is locked (no false affordance) and the server refuses to persist it.
  */
 
 import { Cpu, FlaskConical } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { useBuildKernelConfig, useUpdateBuildKernelConfig } from "@/hooks/useModels";
+import {
+  useBuildKernelConfig,
+  useUpdateBuildKernelConfig,
+} from "@/hooks/useModels";
 
 export function BuildKernelSection() {
   const { data, isLoading } = useBuildKernelConfig();
@@ -20,16 +23,20 @@ export function BuildKernelSection() {
   // A stale persisted `pi_experimental` reads as `disco` when the gate is off, so the
   // shown state is never ambiguous about which kernel actually runs.
   const effectiveKind =
-    data?.kind === "pi_experimental" && experimentalEnabled ? "pi_experimental" : "disco";
+    data?.kind === "pi_experimental" && experimentalEnabled
+      ? "pi_experimental"
+      : "disco";
 
   return (
-    <section className="flex flex-col gap-section border-t border-hairline pt-section">
+    <section className="flex flex-col gap-inline">
       <header>
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Build kernel</h2>
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Build kernel
+        </h3>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
-          Which inner agent drives the Build surface. Disco is the production loop. The
-          experimental Pi kernel is a work in progress and only appears when the server has the
-          experimental flag enabled.
+          Which inner agent drives the Build surface. Disco is the production
+          loop. The experimental Pi kernel is a work in progress and only
+          appears when the server has the experimental flag enabled.
         </p>
       </header>
 
@@ -42,10 +49,14 @@ export function BuildKernelSection() {
               data-build-kernel-experimental="off"
               className="flex items-start gap-hair rounded-control border border-weak/50 px-body py-inline font-ui text-[0.82rem] leading-snug text-text-muted"
             >
-              <FlaskConical className="mt-px size-4 shrink-0 text-text-faint" aria-hidden />
+              <FlaskConical
+                className="mt-px size-4 shrink-0 text-text-faint"
+                aria-hidden
+              />
               <span>
-                The experimental Pi kernel is off on this server. Set PI_KERNEL_EXPERIMENTAL on the
-                agent-server to try it; until then only the Disco kernel can be selected.
+                The experimental Pi kernel is off on this server. Until
+                experimental access is enabled, only the Disco kernel can be
+                selected.
               </span>
             </p>
           )}
@@ -101,7 +112,9 @@ export function BuildKernelSection() {
                   aria-hidden
                 />
                 <span className="flex min-w-0 flex-col gap-hair">
-                  <span className="font-ui text-[0.9rem] font-medium text-text">{label}</span>
+                  <span className="font-ui text-[0.9rem] font-medium text-text">
+                    {label}
+                  </span>
                   <span className="font-ui text-[0.8rem] leading-relaxed text-text-faint">
                     {help}
                   </span>

@@ -35,7 +35,9 @@ function Switch({
       onClick={() => onChange(!checked)}
       className={cn(
         "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
-        checked ? "border-accent/50 bg-accent/30" : "border-hairline bg-surface-2",
+        checked
+          ? "border-accent/50 bg-accent/30"
+          : "border-hairline bg-surface-2",
       )}
     >
       <span
@@ -58,7 +60,12 @@ interface DraftState {
 
 // New skills default to both build-like surfaces (the prior "applies everywhere"
 // behavior, made explicit). Empty = everywhere (back-compat for legacy files).
-const EMPTY_DRAFT: DraftState = { name: "", description: "", body: "", surfaces: ["build", "agent"] };
+const EMPTY_DRAFT: DraftState = {
+  name: "",
+  description: "",
+  body: "",
+  surfaces: ["build", "agent"],
+};
 
 const SURFACES = [
   { id: "build", label: "Build" },
@@ -74,7 +81,8 @@ function surfaceOn(surfaces: string[], kind: string): boolean {
  *  letting the set go empty via the UI (a skill must apply to at least one surface;
  *  turning the last one off resets to both). */
 function toggleSurface(surfaces: string[], kind: string): string[] {
-  const expanded = surfaces.length === 0 ? SURFACES.map((s) => s.id) : [...surfaces];
+  const expanded =
+    surfaces.length === 0 ? SURFACES.map((s) => s.id) : [...surfaces];
   const next = expanded.includes(kind)
     ? expanded.filter((k) => k !== kind)
     : [...expanded, kind];
@@ -132,7 +140,9 @@ function SkillEditor({
       {/* Which surfaces this skill applies to — keeps a "house style" skill off the
           builder and an "hourly screenshot" skill off the agent. */}
       <div className="flex items-center gap-inline">
-        <span className="font-ui text-[0.78rem] text-text-muted">Applies to</span>
+        <span className="font-ui text-[0.78rem] text-text-muted">
+          Applies to
+        </span>
         <div className="flex gap-hair">
           {SURFACES.map((sf) => {
             const on = surfaceOn(draft.surfaces, sf.id);
@@ -143,7 +153,12 @@ function SkillEditor({
                 role="checkbox"
                 aria-checked={on}
                 aria-label={`${sf.label} surface`}
-                onClick={() => setDraft({ ...draft, surfaces: toggleSurface(draft.surfaces, sf.id) })}
+                onClick={() =>
+                  setDraft({
+                    ...draft,
+                    surfaces: toggleSurface(draft.surfaces, sf.id),
+                  })
+                }
                 className={cn(
                   "rounded-full border px-inline py-hair font-ui text-[0.76rem] transition-colors",
                   on
@@ -193,11 +208,17 @@ export function SkillsSection() {
   };
 
   return (
-    <section aria-labelledby="skills-heading" className="flex flex-col gap-inline">
+    <section
+      aria-labelledby="skills-heading"
+      className="flex flex-col gap-inline"
+    >
       <div className="flex items-center justify-between gap-inline">
-        <h2 id="skills-heading" className="font-ui text-[1.05rem] font-semibold text-text">
+        <h3
+          id="skills-heading"
+          className="font-ui text-[0.95rem] font-semibold text-text"
+        >
           Skills
-        </h2>
+        </h3>
         {!creating && editingId === null && (
           <button
             type="button"
@@ -211,16 +232,17 @@ export function SkillsSection() {
         )}
       </div>
       <p className="font-ui text-[0.84rem] text-text-muted">
-        Reusable instruction files (like Claude Code's SKILL.md) — API recipes, house
-        style, conventions — handed to the agent so it follows your standing guidance
-        without you re-explaining each run. Scope each to <strong>Build</strong>,{" "}
-        <strong>Agent</strong>, or both, so a builder skill doesn't clutter the agent
-        and vice versa. Saved across reloads.
+        Reusable instruction files (like Claude Code's SKILL.md) — API recipes,
+        house style, conventions — handed to the agent so it follows your
+        standing guidance without you re-explaining each run. Scope each to{" "}
+        <strong>Build</strong>, <strong>Agent</strong>, or both, so a builder
+        skill doesn't clutter the agent and vice versa. Saved across reloads.
       </p>
 
       {(create.error || update.error || remove.error) && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          Couldn't save that change — the server didn't respond. Your skills are unchanged.
+          Couldn't save that change — the server didn't respond. Your skills are
+          unchanged.
         </p>
       )}
 
@@ -292,7 +314,9 @@ export function SkillsSection() {
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-hair">
-                  <span className="font-ui text-[0.88rem] font-medium text-text">{s.name}</span>
+                  <span className="font-ui text-[0.88rem] font-medium text-text">
+                    {s.name}
+                  </span>
                   <span className="rounded-full border border-hairline px-hair font-ui text-[0.64rem] uppercase tracking-wide text-text-faint">
                     {surfaceLabel(s.surfaces)}
                   </span>
@@ -334,7 +358,9 @@ export function SkillsSection() {
                 </button>
                 <Switch
                   checked={s.enabled}
-                  onChange={(next) => update.mutate({ id: s.id, patch: { enabled: next } })}
+                  onChange={(next) =>
+                    update.mutate({ id: s.id, patch: { enabled: next } })
+                  }
                   label={`Enable ${s.name}`}
                 />
               </div>

@@ -1,11 +1,12 @@
 """Secrets encrypted at rest — currently the OpenRouter API key.
 
 The plaintext key NEVER touches disk. A `SecretBox` encrypts/decrypts with a Fernet
-key derived from an app secret (`PMX_SECRET_KEY` env var); the ciphertext is
-persisted by `SecretStore` to a separate file (`PMX_SECRETS`). On restart the
-stored key survives, but it is only *usable* once `PMX_SECRET_KEY` is present again
-to decrypt it — if it's missing/wrong, the store reports `locked` and callers get
-None rather than a broken key.
+key derived from an app secret (`DISCO_SECRET_KEY`, legacy `PMX_SECRET_KEY` fallback);
+the ciphertext is persisted by `SecretStore` to a separate file (`DISCO_SECRETS`,
+legacy `PMX_SECRETS` fallback). Server entrypoints auto-generate a strong app
+secret on first startup when no env value is supplied, then reuse it on later
+startups. If existing ciphertext was encrypted under a different app secret, the
+store reports `locked` and callers get None rather than a broken key.
 
 Kept separate from the config store: secrets are isolated from the catalogue, so
 the config file stays free of credentials and can be shared/inspected safely.
@@ -19,6 +20,7 @@ import hashlib
 import json
 import logging
 import os
+import secrets as _py_secrets
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -31,11 +33,64 @@ _ENV_SECRET = "DISCO_SECRET_KEY"
 _ENV_SECRET_LEGACY = "PMX_SECRET_KEY"
 _ENV_PATH = "DISCO_SECRETS"
 _ENV_PATH_LEGACY = "PMX_SECRETS"
+_APP_SECRET_FILENAME = "secret-key"
 # Legacy default: the encrypted secrets lived in the CWD, i.e. the repo root when a
 # server is launched from the checkout. That put credential ciphertext inside the
 # project tree — undesirable defense-in-depth-wise (anything granted read of the
 # working dir could copy it). New default is the user config dir, OUTSIDE the tree.
 _LEGACY_FILENAME = "disco-secrets.json"
+
+
+def _default_app_data_dir() -> Path:
+    data_dir = os.environ.get("DISCO_DATA_DIR") or os.environ.get("PMX_DATA_DIR")
+    if data_dir:
+        return Path(data_dir)
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        return Path(xdg) / "disco"
+    return Path.home() / ".local" / "share" / "disco"
+
+
+def _default_app_secret_path() -> Path:
+    return _default_app_data_dir() / _APP_SECRET_FILENAME
+
+
+def ensure_process_secret_key(path: str | os.PathLike[str] | None = None) -> str:
+    """Ensure this server process has an app secret for encrypting settings keys.
+
+    Operator-supplied env wins. When neither ``DISCO_SECRET_KEY`` nor the legacy
+    ``PMX_SECRET_KEY`` is present, a 32-byte random secret is generated once,
+    stored in the app data dir with mode 0600, then loaded into ``os.environ`` as
+    ``DISCO_SECRET_KEY`` for the rest of the process. Subsequent startups reuse
+    the same file so encrypted settings keys remain decryptable.
+    """
+    existing = os.environ.get(_ENV_SECRET) or os.environ.get(_ENV_SECRET_LEGACY)
+    if existing:
+        return existing
+
+    secret_path = Path(path) if path is not None else _default_app_secret_path()
+    try:
+        secret = secret_path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        secret = ""
+    else:
+        with contextlib.suppress(OSError):
+            os.chmod(secret_path, 0o600)
+    if not secret:
+        secret = base64.b64encode(_py_secrets.token_bytes(32)).decode("ascii")
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.suppress(OSError):
+            os.chmod(secret_path.parent, 0o700)
+        tmp = secret_path.with_suffix(secret_path.suffix + ".tmp")
+        fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, (secret + "\n").encode("ascii"))
+        finally:
+            os.close(fd)
+        os.chmod(tmp, 0o600)
+        tmp.replace(secret_path)
+    os.environ[_ENV_SECRET] = secret
+    return secret
 
 
 def _default_secrets_path() -> Path:

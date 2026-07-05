@@ -61,9 +61,18 @@ function installFetch() {
     }
     if (method === "GET" && url === "/api/image-gen/config") {
       // useExpectedKeyNames() now also reads image-gen; comfyui carries no api_key_env.
-      return jsonResponse({ provider: "comfyui", base_url: "", api_key_env: "", model: "" });
+      return jsonResponse({
+        provider: "comfyui",
+        base_url: "",
+        api_key_env: "",
+        model: "",
+      });
     }
-    if (method === "POST" && url.endsWith("/test") && url.startsWith("/api/secrets/")) {
+    if (
+      method === "POST" &&
+      url.endsWith("/test") &&
+      url.startsWith("/api/secrets/")
+    ) {
       // T4.1 probe: a real authenticated call would happen server-side; here the
       // boundary returns the honest result the section must render.
       return jsonResponse({ ok: true, status: "ok", detail: "the key works" });
@@ -71,12 +80,22 @@ function installFetch() {
     if (method === "PUT" && url.startsWith("/api/secrets/")) {
       const name = decodeURIComponent(url.split("/api/secrets/")[1]);
       names.push(name);
-      return jsonResponse({ name, configured: true, locked: false, can_store: true });
+      return jsonResponse({
+        name,
+        configured: true,
+        locked: false,
+        can_store: true,
+      });
     }
     if (method === "DELETE" && url.startsWith("/api/secrets/")) {
       const name = decodeURIComponent(url.split("/api/secrets/")[1]);
       names = names.filter((n) => n !== name);
-      return jsonResponse({ name, configured: false, locked: false, can_store: true });
+      return jsonResponse({
+        name,
+        configured: false,
+        locked: false,
+        can_store: true,
+      });
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
   });
@@ -85,7 +104,9 @@ function installFetch() {
 }
 
 function makeWrapper() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
   return ({ children }: { children: React.ReactNode }) =>
     createElement(QueryClientProvider, { client: qc }, children);
 }
@@ -113,7 +134,7 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
     await screen.findByText("Provider API keys");
 
-    fireEvent.change(screen.getByLabelText("Provider key env-var name"), {
+    fireEvent.change(screen.getByLabelText("Provider key name"), {
       target: { value: "OPENAI_API_KEY" },
     });
     fireEvent.change(screen.getByLabelText("Provider key value"), {
@@ -126,7 +147,8 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
       expect(
         fetchStub.mock.calls.some(
           ([u, i]) =>
-            (i?.method ?? "GET").toUpperCase() === "PUT" && u === "/api/secrets/OPENAI_API_KEY",
+            (i?.method ?? "GET").toUpperCase() === "PUT" &&
+            u === "/api/secrets/OPENAI_API_KEY",
         ),
       ).toBe(true),
     );
@@ -139,19 +161,25 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     expect(await screen.findByText("OPENAI_API_KEY")).toBeInTheDocument();
   });
 
-  it("rejects a non-env-var name inline without hitting the network", async () => {
+  it("rejects an invalid key name inline without hitting the network", async () => {
     render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
     await screen.findByText("Provider API keys");
 
-    fireEvent.change(screen.getByLabelText("Provider key env-var name"), {
+    fireEvent.change(screen.getByLabelText("Provider key name"), {
       target: { value: "bad name!" },
     });
-    fireEvent.change(screen.getByLabelText("Provider key value"), { target: { value: "x" } });
+    fireEvent.change(screen.getByLabelText("Provider key value"), {
+      target: { value: "x" },
+    });
     fireEvent.click(screen.getByRole("button", { name: /add key/i }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/env-var name/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /provider key name/i,
+    );
     expect(
-      fetchStub.mock.calls.some(([, i]) => (i?.method ?? "GET").toUpperCase() === "PUT"),
+      fetchStub.mock.calls.some(
+        ([, i]) => (i?.method ?? "GET").toUpperCase() === "PUT",
+      ),
     ).toBe(false);
   });
 
@@ -187,7 +215,8 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     await waitFor(() => {
       const put = fetchStub.mock.calls.find(
         ([u, i]) =>
-          (i?.method ?? "GET").toUpperCase() === "PUT" && u === "/api/secrets/OPENAI_API_KEY",
+          (i?.method ?? "GET").toUpperCase() === "PUT" &&
+          u === "/api/secrets/OPENAI_API_KEY",
       );
       expect(put).toBeTruthy();
       expect(String(put?.[1]?.body)).toContain("sk-openai-ROTATED");
@@ -200,10 +229,10 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/can't be decrypted/i);
-    // the alert names BOTH locked keys + the app secret
+    // the alert names BOTH locked keys and tells the user to re-enter them
     expect(alert).toHaveTextContent("OPENAI_API_KEY");
     expect(alert).toHaveTextContent("TAVILY_API_KEY");
-    expect(alert).toHaveTextContent(/DISCO_SECRET_KEY/);
+    expect(alert).toHaveTextContent(/re-enter/i);
     // never the vague "one or more"
     expect(alert).not.toHaveTextContent(/one or more/i);
     // each locked row is marked + offers a "Re-enter" affordance
@@ -219,17 +248,28 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     names = ["TAVILY_API_KEY"];
     render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
 
-    expect(await screen.findByText("Referenced by your providers")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Referenced by your providers"),
+    ).toBeInTheDocument();
     // the stored one shows "stored"; the missing one offers an Add-key prefill
     expect(await screen.findByText("ANTHROPIC_API_KEY")).toBeInTheDocument();
-    const addButtons = await screen.findAllByRole("button", { name: /add key/i });
+    const addButtons = await screen.findAllByRole("button", {
+      name: /add key/i,
+    });
     // there is the form's submit "Add key" PLUS the prefill "Add key" for the missing one
     expect(addButtons.length).toBeGreaterThanOrEqual(2);
 
-    // clicking the missing key's prefill puts its name in the env-var input
-    const prefill = addButtons.find((b) => b.tagName === "BUTTON" && b.textContent === "Add key" && b.className.includes("text-accent"));
+    // clicking the missing key's prefill puts its name in the key-name input
+    const prefill = addButtons.find(
+      (b) =>
+        b.tagName === "BUTTON" &&
+        b.textContent === "Add key" &&
+        b.className.includes("text-accent"),
+    );
     fireEvent.click(prefill ?? addButtons[0]);
-    const nameInput = screen.getByLabelText("Provider key env-var name") as HTMLInputElement;
+    const nameInput = screen.getByLabelText(
+      "Provider key name",
+    ) as HTMLInputElement;
     await waitFor(() => expect(nameInput.value).toBe("ANTHROPIC_API_KEY"));
   });
 
@@ -252,7 +292,9 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     );
     // ...and rendered the honest result chip.
     await waitFor(() =>
-      expect(document.querySelector("[data-probe-status='ok']")).toBeInTheDocument(),
+      expect(
+        document.querySelector("[data-probe-status='ok']"),
+      ).toBeInTheDocument(),
     );
     expect(screen.getByText(/the key works/)).toBeInTheDocument();
   });
@@ -262,6 +304,8 @@ describe("ProviderKeysSection — store any provider key encrypted by name", () 
     render(createElement(ProviderKeysSection), { wrapper: makeWrapper() });
     await screen.findByText("Provider API keys");
     // OpenRouter has its own section; it must NOT appear as a generic expected key
-    expect(screen.queryByText("Referenced by your providers")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Referenced by your providers"),
+    ).not.toBeInTheDocument();
   });
 });

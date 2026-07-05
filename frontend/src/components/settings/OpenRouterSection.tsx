@@ -1,8 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, KeyRound, Search } from "lucide-react";
 import { useMemo, useState } from "react";
-import { ApiError } from "@/api/client";
+import { ApiError, isLive } from "@/api/client";
 import { openRouterUpsert } from "@/api/models";
+import { testSecret } from "@/api/secrets";
 import { cn } from "@/lib/cn";
 import {
   useClearOpenRouterKey,
@@ -13,7 +14,7 @@ import {
   useSetOpenRouterKey,
 } from "@/hooks/useModels";
 import type { OpenRouterModel } from "@/types/models";
-import { NotWired } from "./NotWired";
+import { ProbeButton } from "./ProbeButton";
 
 const field =
   "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
@@ -31,27 +32,12 @@ function KeyManager() {
 
   if (!status) return null;
 
-  // The four UI states for the key surface, in priority order:
-  //   1. stored-but-undelible (`locked`)         — stored, but DISCO_SECRET_KEY
-  //      has changed/lost since save; keep the loud NotWired chip so the user
-  //      knows nothing here will actually work.
-  //   2. stored-and-readable (`configured`)      — show "Key configured" + Clear.
-  //   3. storable-but-empty (`!configured && can_store`) — show the entry form
-  //      (the happy path; banner hidden because storage is fine).
-  //   4. un-storable-and-empty (`!configured && !can_store`) — server has no
-  //      DISCO_SECRET_KEY, so persistence is off the table. We STILL render the
-  //      entry form (so the surface reads as "enter your key here") and prepend
-  //      a plain, non-alarming inline banner explaining that the key won't
-  //      survive a restart. Submission against the live API will surface the
-  //      server-side error inline (honest affordance), which the form already
-  //      renders via `setKey.error` below. The old NotWired chip is gone from
-  //      this branch on purpose: replacing the field with a "Not functional
-  //      yet" tag made the screen look broken to users.
   const entryForm = (
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (value.trim()) setKey.mutate(value.trim(), { onSuccess: () => setValue("") });
+        if (value.trim())
+          setKey.mutate(value.trim(), { onSuccess: () => setValue("") });
       }}
       className="flex flex-col gap-hair"
     >
@@ -60,11 +46,7 @@ function KeyManager() {
           type="password"
           className={field}
           value={value}
-          placeholder={
-            status.can_store
-              ? "sk-or-v1-…  (encrypted at rest with DISCO_SECRET_KEY)"
-              : "sk-or-v1-…  (session-only — DISCO_SECRET_KEY not set on the server)"
-          }
+          placeholder="sk-or-v1-..."
           onChange={(e) => setValue(e.target.value)}
           aria-label="OpenRouter API key"
         />
@@ -79,78 +61,113 @@ function KeyManager() {
       </div>
       {setKey.error && (
         <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-          {setKey.error instanceof ApiError ? setKey.error.message : "Couldn't save the key."}
+          {setKey.error instanceof ApiError
+            ? setKey.error.message
+            : "Couldn't save the key."}
         </p>
       )}
     </form>
   );
-  // Stored but can't be decrypted (app secret missing/wrong since it was saved).
   if (status.locked) {
     return (
-      <NotWired detail="An OpenRouter key is stored but can't be decrypted — DISCO_SECRET_KEY is missing or different from when it was saved. Restore that app secret, or clear and re-enter the key." />
-    );
-  }
-  if (status.configured) {
-    return (
-      <div className="flex items-center justify-between gap-inline rounded-control border border-hairline bg-surface-1 px-body py-inline">
-        <span className="flex items-center gap-hair font-ui text-[0.84rem] text-text">
-          <KeyRound className="size-3.5 text-supported" aria-hidden /> Key configured (encrypted at
-          rest)
-        </span>
+      <div className="flex flex-col gap-inline">
+        <div
+          role="alert"
+          className="rounded-control border border-warn/50 bg-warn/5 px-body py-inline"
+        >
+          <p className="font-ui text-[0.8rem] leading-snug text-text">
+            Stored key can't be decrypted — re-enter it.
+          </p>
+        </div>
+        {entryForm}
         <button
           type="button"
           data-disco-control="settings.openrouter-key-clear"
           onClick={() => clearKey.mutate()}
-          className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
+          className="self-start font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
         >
-          Clear
+          Clear stored key
         </button>
       </div>
     );
   }
-  // Un-storable-and-empty: render the form WITH a plain explanatory banner
-  // (kept calm, not red — this is a setup hint, not a system failure). The
-  // input still renders so the user can read the surface as "enter your key
-  // here" instead of "broken chip."
-  if (!status.can_store) {
+  if (status.configured) {
     return (
-      <div className="flex flex-col gap-inline">
-        <div
-          role="note"
-          className="rounded-control border border-hairline bg-surface-1 px-body py-inline"
-        >
-          <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
-            The server doesn't have <code className="font-mono text-[0.76rem] text-text">DISCO_SECRET_KEY</code>{" "}
-            set, so an OpenRouter key entered here will not be encrypted-at-rest and won't survive a
-            restart. Ask the operator to set the app secret to enable persistent storage; until then
-            this entry is best-effort only.
-          </p>
+      <div className="flex flex-col gap-inline rounded-control border border-hairline bg-surface-1 px-body py-inline">
+        <div className="flex items-center justify-between gap-inline">
+          <span className="flex items-center gap-hair font-ui text-[0.84rem] text-text">
+            <KeyRound className="size-3.5 text-supported" aria-hidden /> Key
+            configured
+          </span>
+          <button
+            type="button"
+            data-disco-control="settings.openrouter-key-clear"
+            onClick={() => clearKey.mutate()}
+            className="font-ui text-[0.8rem] text-text-muted hover:text-unsupported"
+          >
+            Clear
+          </button>
         </div>
-        {entryForm}
+        <ProbeButton
+          control="settings.openrouter-key-test"
+          idleLabel="Test key"
+          run={() => testSecret("DISCO_OPENROUTER_API_KEY")}
+          disabled={!isLive()}
+          disabledHint="connect a backend to test"
+        />
       </div>
     );
   }
-  // Not configured yet, but storable (the happy path).
   return entryForm;
 }
 
 /** Browse the live OpenRouter catalogue and add a model to ours. Gated on a usable
  * key: browsing hits the live OpenRouter API, so with no decryptable key the call
  * can only fail — we disable the trigger and say so rather than offer a dead button. */
-function BrowseDialog({ addedSlugs, keyReady }: { addedSlugs: Set<string>; keyReady: boolean }) {
+function BrowseDialog({
+  addedSlugs,
+  keyReady,
+}: {
+  addedSlugs: Set<string>;
+  keyReady: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const { data: models, isLoading, isError } = useOpenRouterModels(open);
   const create = useCreateModel();
   const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     const all = models ?? [];
     const matched = needle
-      ? all.filter((m) => m.id.toLowerCase().includes(needle) || m.name.toLowerCase().includes(needle))
+      ? all.filter(
+          (m) =>
+            m.id.toLowerCase().includes(needle) ||
+            m.name.toLowerCase().includes(needle),
+        )
       : all;
     return matched;
   }, [models, q]);
+  const selectedModels = useMemo(
+    () =>
+      (models ?? []).filter((m) => selected.has(m.id) && !addedSlugs.has(m.id)),
+    [addedSlugs, models, selected],
+  );
+  const toggleSelected = (id: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const addSelected = async () => {
+    for (const model of selectedModels) {
+      await create.mutateAsync(openRouterUpsert(model));
+    }
+    setSelected(new Set());
+  };
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -160,7 +177,11 @@ function BrowseDialog({ addedSlugs, keyReady }: { addedSlugs: Set<string>; keyRe
           data-disco-control="settings.openrouter-browse"
           data-key-ready={keyReady}
           disabled={!keyReady}
-          title={keyReady ? undefined : "Add a decryptable OpenRouter key first — browsing queries the live API."}
+          title={
+            keyReady
+              ? undefined
+              : "Add a decryptable OpenRouter key first — browsing queries the live API."
+          }
           className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.8rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Search className="size-3.5" aria-hidden /> Browse OpenRouter models
@@ -174,8 +195,8 @@ function BrowseDialog({ addedSlugs, keyReady }: { addedSlugs: Set<string>; keyRe
               OpenRouter models
             </Dialog.Title>
             <Dialog.Description className="font-ui text-[0.8rem] text-text-muted">
-              Adding one creates a catalogue entry pointing at OpenRouter with your shared key — then
-              it's assignable like any other model.
+              Adding one creates a catalogue entry pointing at OpenRouter with
+              your shared key — then it's assignable like any other model.
             </Dialog.Description>
             <input
               autoFocus
@@ -186,10 +207,26 @@ function BrowseDialog({ addedSlugs, keyReady }: { addedSlugs: Set<string>; keyRe
               placeholder="Search 300+ models — vendor or name…"
               onChange={(e) => setQ(e.target.value)}
             />
+            <div className="mt-inline flex items-center justify-between gap-inline">
+              <span className="font-ui text-[0.76rem] text-text-faint">
+                {selectedModels.length} selected
+              </span>
+              <button
+                type="button"
+                data-disco-control="settings.openrouter-add-selected"
+                disabled={selectedModels.length === 0 || create.isPending}
+                onClick={() => void addSelected()}
+                className="rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
+              >
+                {create.isPending ? "Adding..." : "Add selected"}
+              </button>
+            </div>
           </div>
           <div className="flex-1 overflow-y-auto">
             {isLoading && (
-              <p className="px-body py-body font-ui text-[0.84rem] text-text-muted">Loading…</p>
+              <p className="px-body py-body font-ui text-[0.84rem] text-text-muted">
+                Loading…
+              </p>
             )}
             {isError && (
               <p className="px-body py-body font-ui text-[0.84rem] text-unsupported">
@@ -204,18 +241,40 @@ function BrowseDialog({ addedSlugs, keyReady }: { addedSlugs: Set<string>; keyRe
                     key={m.id}
                     className="flex items-center justify-between gap-section border-b border-hairline px-body py-inline last:border-b-0"
                   >
-                    <div className="min-w-0">
-                      <div className="font-ui text-[0.86rem] text-text">{m.name}</div>
-                      <p className="truncate font-mono text-[0.72rem] text-text-faint">
-                        {m.id} · {Math.floor(m.context_length / 1000)}K ctx · {price(m)}
-                      </p>
+                    <div className="flex min-w-0 items-start gap-inline">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${m.name}`}
+                        checked={selected.has(m.id)}
+                        disabled={added}
+                        onChange={() => toggleSelected(m.id)}
+                        className="mt-1"
+                      />
+                      <div className="min-w-0">
+                        <div className="font-ui text-[0.86rem] text-text">
+                          {m.name}
+                        </div>
+                        <p className="truncate font-mono text-[0.72rem] text-text-faint">
+                          {m.id} · {Math.floor(m.context_length / 1000)}K ctx ·{" "}
+                          {price(m)}
+                        </p>
+                      </div>
                     </div>
                     <button
                       type="button"
                       data-disco-control="settings.openrouter-add-model"
                       data-model-id={m.id}
                       disabled={added || create.isPending}
-                      onClick={() => create.mutate(openRouterUpsert(m))}
+                      onClick={() =>
+                        create.mutate(openRouterUpsert(m), {
+                          onSuccess: () =>
+                            setSelected((current) => {
+                              const next = new Set(current);
+                              next.delete(m.id);
+                              return next;
+                            }),
+                        })
+                      }
                       className={cn(
                         "flex shrink-0 items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors",
                         added
@@ -262,30 +321,70 @@ export function OpenRouterSection() {
       ),
     [models],
   );
+  const addedModels = useMemo(
+    () =>
+      (models ?? []).filter((m) =>
+        (m.base_url ?? "").includes("openrouter.ai"),
+      ),
+    [models],
+  );
 
   return (
-    <section aria-labelledby="openrouter-heading" className="flex flex-col gap-inline">
-      <div className="flex items-center justify-between">
-        <h3 id="openrouter-heading" className="font-ui text-[0.92rem] font-semibold text-text">
+    <section
+      aria-labelledby="openrouter-heading"
+      className="flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/50 p-body"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-inline">
+        <h4
+          id="openrouter-heading"
+          className="font-ui text-[0.9rem] font-semibold text-text"
+        >
           OpenRouter
-        </h3>
+        </h4>
         <BrowseDialog addedSlugs={addedSlugs} keyReady={keyReady} />
       </div>
       <p className="font-ui text-[0.82rem] text-text-muted">
-        One API key, any model hosted on OpenRouter. The key is encrypted at rest; added models share
-        it and the OpenRouter endpoint.
+        One API key, any model hosted on OpenRouter. Added models share this key
+        and appear in the catalogue, role assignments, and the main-screen model
+        picker.
       </p>
       {!keyReady && (
         <p
           role="note"
           data-disco-flag="openrouter-key-required"
-          className="font-ui text-[0.78rem] text-text-faint"
+          className="font-ui text-[0.78rem] text-warn"
         >
-          Browsing the OpenRouter catalogue is disabled until a decryptable key is stored —
-          the browser queries the live OpenRouter API.
+          Add a decryptable OpenRouter key to browse the catalogue and use
+          OpenRouter models.
         </p>
       )}
       <KeyManager />
+      <div className="flex flex-col gap-hair">
+        <span className="font-ui text-[0.76rem] font-medium uppercase text-text-faint">
+          Models using this provider
+        </span>
+        {addedModels.length === 0 ? (
+          <p className="rounded-control border border-dashed border-hairline px-body py-inline font-ui text-[0.8rem] text-text-faint">
+            No OpenRouter models added yet.
+          </p>
+        ) : (
+          <ul className="overflow-hidden rounded-control border border-hairline bg-bg">
+            {addedModels.map((m) => (
+              <li
+                key={m.id}
+                className="flex flex-col gap-hair border-b border-hairline px-body py-hair last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:gap-inline"
+              >
+                <span className="min-w-0 truncate font-ui text-[0.82rem] text-text">
+                  {m.label}
+                </span>
+                <span className="break-all font-mono text-[0.7rem] text-text-faint sm:text-right">
+                  {m.model_id}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

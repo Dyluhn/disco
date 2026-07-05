@@ -5,7 +5,12 @@ import { ApiError } from "@/api/client";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { cn } from "@/lib/cn";
 import { costLabel } from "@/lib/cost";
-import { useCreateModel, useDeleteModel, useModels, useUpdateModel } from "@/hooks/useModels";
+import {
+  useCreateModel,
+  useDeleteModel,
+  useModels,
+  useUpdateModel,
+} from "@/hooks/useModels";
 import {
   type Capability,
   CAPABILITY_LABEL,
@@ -20,7 +25,12 @@ import {
  * model added here is immediately assignable in the matrix above and callable at
  * runtime. The form edits the raw config (endpoint, model id, context, key env).
  */
-const CAPS: Capability[] = ["tool_calling", "json_mode", "long_context", "vision"];
+const CAPS: Capability[] = [
+  "tool_calling",
+  "json_mode",
+  "long_context",
+  "vision",
+];
 const BLANK: ModelUpsert = {
   id: "",
   model_id: "",
@@ -47,13 +57,15 @@ function toUpsert(m: ModelInfo): ModelUpsert {
     price_out_per_m: m.price_out_per_m,
     // W-05: preserve the pay model on edit; derive a sensible default when unset.
     pricing_mode:
-      m.pricing_mode ?? (m.price_in_per_m > 0 || m.price_out_per_m > 0 ? "metered" : "free"),
+      m.pricing_mode ??
+      (m.price_in_per_m > 0 || m.price_out_per_m > 0 ? "metered" : "free"),
   };
 }
 
 const field =
   "w-full rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.84rem] text-text outline-none focus:border-hairline-strong";
-const labelCls = "font-ui text-[0.74rem] font-medium uppercase tracking-wide text-text-faint";
+const labelCls =
+  "font-ui text-[0.74rem] font-medium uppercase tracking-wide text-text-faint";
 
 function ModelForm({
   mode,
@@ -123,11 +135,11 @@ function ModelForm({
           />
         </label>
         <label className="flex flex-col gap-hair">
-          <span className={labelCls}>API key env var (optional)</span>
+          <span className={labelCls}>Stored key name (optional)</span>
           <input
             className={field}
             value={form.api_key_env ?? ""}
-            placeholder="PMX_OPENROUTER_API_KEY"
+            placeholder="OPENAI_API_KEY"
             onChange={(e) => set("api_key_env", e.target.value)}
           />
         </label>
@@ -157,7 +169,10 @@ function ModelForm({
         <span className={labelCls}>Capabilities (advisory)</span>
         <div className="flex flex-wrap gap-inline">
           {CAPS.map((c) => (
-            <label key={c} className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted">
+            <label
+              key={c}
+              className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted"
+            >
               <input
                 type="checkbox"
                 checked={form.capabilities.includes(c)}
@@ -185,8 +200,9 @@ function ModelForm({
             data-disco-flag="model-subscription-no-price"
             className="col-span-2 rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.8rem] text-text-muted"
           >
-            Subscription — a flat-rate plan. No per-token price; this model shows as
-            “Subscription” everywhere (never “Free”, never a $/Mtok rate).
+            Subscription — a flat-rate plan. No per-token price; this model
+            shows as “Subscription” everywhere (never “Free”, never a $/Mtok
+            rate).
           </p>
         ) : (
           <>
@@ -219,10 +235,16 @@ function ModelForm({
           <select
             className={field}
             value={form.pricing_mode ?? "metered"}
-            onChange={(e) => set("pricing_mode", e.target.value as ModelUpsert["pricing_mode"])}
+            onChange={(e) =>
+              set("pricing_mode", e.target.value as ModelUpsert["pricing_mode"])
+            }
           >
-            <option value="metered">Metered — pay per token (uses the prices above)</option>
-            <option value="subscription">Subscription — flat plan, shown as “Subscription”</option>
+            <option value="metered">
+              Metered — pay per token (uses the prices above)
+            </option>
+            <option value="subscription">
+              Subscription — flat plan, shown as “Subscription”
+            </option>
             <option value="free">Free — no charge</option>
           </select>
         </label>
@@ -275,11 +297,16 @@ function FormDialog({
             {mode === "add" ? "Add a model" : `Edit ${initial.id}`}
           </Dialog.Title>
           <Dialog.Description className="font-ui text-[0.82rem] text-text-muted">
-            Saved to the shared config the agent-server routes through — a new model is immediately
-            assignable above and callable at runtime.
+            Saved to the shared config the agent-server routes through — a new
+            model is immediately assignable above and callable at runtime.
           </Dialog.Description>
           {/* keyed so the form state resets per open/target */}
-          <ModelForm key={`${mode}:${initial.id}`} mode={mode} initial={initial} onDone={() => onOpenChange(false)} />
+          <ModelForm
+            key={`${mode}:${initial.id}`}
+            mode={mode}
+            initial={initial}
+            onDone={() => onOpenChange(false)}
+          />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
@@ -289,12 +316,21 @@ function FormDialog({
 export function ModelCatalogue() {
   const { data: models } = useModels();
   const del = useDeleteModel();
-  const [dialog, setDialog] = useState<{ mode: "add" | "edit"; initial: ModelUpsert } | null>(null);
+  const [dialog, setDialog] = useState<{
+    mode: "add" | "edit";
+    initial: ModelUpsert;
+  } | null>(null);
 
   return (
-    <section aria-labelledby="catalogue-heading" className="flex flex-col gap-inline">
+    <section
+      aria-labelledby="catalogue-heading"
+      className="flex flex-col gap-inline"
+    >
       <div className="flex items-center justify-between">
-        <h3 id="catalogue-heading" className="font-ui text-[0.92rem] font-semibold text-text">
+        <h3
+          id="catalogue-heading"
+          className="font-ui text-[0.95rem] font-semibold text-text"
+        >
           Catalogue
         </h3>
         <button
@@ -314,7 +350,9 @@ export function ModelCatalogue() {
             className="flex items-center justify-between gap-section border-b border-hairline px-body py-inline last:border-b-0"
           >
             <div className="min-w-0">
-              <div className="font-ui text-[0.86rem] font-medium text-text">{m.label}</div>
+              <div className="font-ui text-[0.86rem] font-medium text-text">
+                {m.label}
+              </div>
               <p className="truncate font-mono text-[0.72rem] text-text-faint">
                 {m.id} · {m.note}
               </p>
@@ -337,7 +375,9 @@ export function ModelCatalogue() {
                 data-disco-control="settings.model-edit"
                 data-model-id={m.id}
                 aria-label={`Edit ${m.id}`}
-                onClick={() => setDialog({ mode: "edit", initial: toUpsert(m) })}
+                onClick={() =>
+                  setDialog({ mode: "edit", initial: toUpsert(m) })
+                }
                 className="rounded-control p-hair text-text-faint transition-colors hover:text-text"
               >
                 <Pencil className="size-3.5" aria-hidden />
@@ -367,7 +407,9 @@ export function ModelCatalogue() {
       </ul>
       {del.error && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          {del.error instanceof ApiError ? del.error.message : "Couldn't remove the model."}
+          {del.error instanceof ApiError
+            ? del.error.message
+            : "Couldn't remove the model."}
         </p>
       )}
 

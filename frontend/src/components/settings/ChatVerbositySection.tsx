@@ -17,11 +17,14 @@ export function ChatVerbositySection() {
   const { verbose, setVerbose } = useVerboseAgentChat();
 
   return (
-    <section className="flex flex-col gap-section border-t border-hairline pt-section">
+    <section className="flex flex-col gap-inline">
       <header>
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Agent chat</h2>
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Agent chat
+        </h3>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
-          How much of the agent's step-by-step work shows in the control pane while it runs.
+          How much of the agent's step-by-step work shows in the control pane
+          while it runs.
         </p>
       </header>
 
@@ -55,16 +58,25 @@ export function ChatVerbositySection() {
               }}
               className={cn(
                 "flex items-start gap-inline rounded-card border px-body py-inline text-left transition-colors",
-                isActive ? "border-accent/50 bg-accent/5" : "border-hairline hover:border-hairline-strong",
+                isActive
+                  ? "border-accent/50 bg-accent/5"
+                  : "border-hairline hover:border-hairline-strong",
               )}
             >
               <Icon
-                className={cn("mt-px size-4 shrink-0", isActive ? "text-accent" : "text-text-faint")}
+                className={cn(
+                  "mt-px size-4 shrink-0",
+                  isActive ? "text-accent" : "text-text-faint",
+                )}
                 aria-hidden
               />
               <span className="flex min-w-0 flex-col gap-hair">
-                <span className="font-ui text-[0.9rem] font-medium text-text">{label}</span>
-                <span className="font-ui text-[0.8rem] leading-relaxed text-text-faint">{help}</span>
+                <span className="font-ui text-[0.9rem] font-medium text-text">
+                  {label}
+                </span>
+                <span className="font-ui text-[0.8rem] leading-relaxed text-text-faint">
+                  {help}
+                </span>
               </span>
             </button>
           );

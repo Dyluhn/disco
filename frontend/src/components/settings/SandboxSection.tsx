@@ -9,7 +9,11 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, ShieldCheck, ShieldHalf } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { useSandboxConfig, useUpdateSandboxConfig, useTestSandbox } from "@/hooks/useModels";
+import {
+  useSandboxConfig,
+  useUpdateSandboxConfig,
+  useTestSandbox,
+} from "@/hooks/useModels";
 import type { ProbeResult } from "@/types/probe";
 import {
   BACKEND_META,
@@ -72,12 +76,16 @@ function BackendCard({
       onClick={onSelect}
       className={cn(
         "flex flex-col gap-hair rounded-card border p-body text-left transition-colors",
-        selected ? "border-accent bg-surface-1" : "border-hairline hover:border-hairline-strong",
+        selected
+          ? "border-accent bg-surface-1"
+          : "border-hairline hover:border-hairline-strong",
         m.stub && "opacity-90",
       )}
     >
       <div className="flex items-center gap-inline">
-        <span className="font-ui text-[0.92rem] font-medium text-text">{m.name}</span>
+        <span className="font-ui text-[0.92rem] font-medium text-text">
+          {m.name}
+        </span>
         {m.stub && (
           <span className="flex items-center gap-hair rounded-full border border-weak px-inline py-px font-ui text-[0.64rem] uppercase tracking-wide text-weak">
             <AlertTriangle className="size-3" aria-hidden />
@@ -94,7 +102,9 @@ function BackendCard({
         <Shield className="size-3.5" aria-hidden />
         {m.tier}
       </span>
-      <p className="font-ui text-[0.78rem] leading-snug text-text-muted">{m.blurb}</p>
+      <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
+        {m.blurb}
+      </p>
     </button>
   );
 }
@@ -112,9 +122,13 @@ export function SandboxSection() {
 
   if (!draft) {
     return (
-      <section className="border-t border-hairline pt-section">
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Sandbox</h2>
-        <p className="mt-inline font-ui text-[0.82rem] text-text-faint">Loading…</p>
+      <section className="flex flex-col gap-inline">
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Sandbox
+        </h3>
+        <p className="mt-inline font-ui text-[0.82rem] text-text-faint">
+          Loading…
+        </p>
       </section>
     );
   }
@@ -137,10 +151,28 @@ export function SandboxSection() {
       // Defensive fallback if the server didn't send a block: a clean per-backend default,
       // never the previous backend's socket. gVisor gets the prefill below; others stay local.
       (id === "gvisor"
-        ? { docker_socket: "", podman_url: draft.podman_url, runtime: "runsc", image: draft.image, workspace_root: draft.workspace_root }
+        ? {
+            docker_socket: "",
+            podman_url: draft.podman_url,
+            runtime: "runsc",
+            image: draft.image,
+            workspace_root: draft.workspace_root,
+          }
         : id === "podman"
-          ? { docker_socket: "", podman_url: draft.podman_url, runtime: "crun", image: draft.image, workspace_root: draft.workspace_root }
-          : { docker_socket: "unix:///var/run/docker.sock", podman_url: draft.podman_url, runtime: m?.defaultRuntime ?? "runc", image: draft.image, workspace_root: draft.workspace_root });
+          ? {
+              docker_socket: "",
+              podman_url: draft.podman_url,
+              runtime: "crun",
+              image: draft.image,
+              workspace_root: draft.workspace_root,
+            }
+          : {
+              docker_socket: "unix:///var/run/docker.sock",
+              podman_url: draft.podman_url,
+              runtime: m?.defaultRuntime ?? "runc",
+              image: draft.image,
+              workspace_root: draft.workspace_root,
+            });
     const next: SandboxConfig = {
       backend: id,
       docker_socket: saved.docker_socket,
@@ -175,16 +207,22 @@ export function SandboxSection() {
   };
 
   return (
-    <section className="flex flex-col gap-section border-t border-hairline pt-section">
+    <section className="flex flex-col gap-inline">
       <header>
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Sandbox</h2>
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Sandbox
+        </h3>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
-          Where the agent runs its tools. Stronger isolation is safer for untrusted work;
-          weaker, local isolation is fine for trusted tasks.
+          Where the agent runs its tools. Stronger isolation is safer for
+          untrusted work; weaker, local isolation is fine for trusted tasks.
         </p>
       </header>
 
-      <div role="radiogroup" aria-label="Sandbox backend" className="grid gap-inline sm:grid-cols-3">
+      <div
+        role="radiogroup"
+        aria-label="Sandbox backend"
+        className="grid gap-inline sm:grid-cols-3"
+      >
         {BACKEND_META.map((b) => (
           <BackendCard
             key={b.id}
@@ -200,10 +238,15 @@ export function SandboxSection() {
         <p
           className={cn(
             "flex items-start gap-hair rounded-control border px-body py-inline font-ui text-[0.8rem] leading-snug",
-            meta.adversarialSafe ? "border-hairline text-text-muted" : "border-weak/50 text-text-muted",
+            meta.adversarialSafe
+              ? "border-hairline text-text-muted"
+              : "border-weak/50 text-text-muted",
           )}
         >
-          <ShieldHalf className="mt-px size-3.5 shrink-0 text-text-faint" aria-hidden />
+          <ShieldHalf
+            className="mt-px size-3.5 shrink-0 text-text-faint"
+            aria-hidden
+          />
           {meta.confirmNote}
         </p>
       )}
@@ -216,7 +259,9 @@ export function SandboxSection() {
       {meta && (
         <div className="flex flex-col gap-inline">
           {/* the "what you provide" subline — sets expectations before any input */}
-          <p className="font-ui text-[0.78rem] text-text-faint">{meta.provides}</p>
+          <p className="font-ui text-[0.78rem] text-text-faint">
+            {meta.provides}
+          </p>
 
           {/* the ONE connection field that varies per backend (null → none shown) */}
           {meta.primaryField && (
@@ -226,11 +271,16 @@ export function SandboxSection() {
                 label={meta.primaryLabel ?? fieldLabel(meta.primaryField)}
                 value={draft[meta.primaryField]}
                 disabled={meta.stub}
-                onChange={(v) => setDraft({ ...draft, [meta.primaryField!]: v })}
+                onChange={(v) =>
+                  setDraft({ ...draft, [meta.primaryField!]: v })
+                }
               />
               {/* W-48(b): inline "use the tailnet IP, not the LAN IP" guidance */}
               {meta.primaryHint && (
-                <p data-sandbox-hint={meta.primaryField} className="font-ui text-[0.72rem] text-text-faint">
+                <p
+                  data-sandbox-hint={meta.primaryField}
+                  className="font-ui text-[0.72rem] text-text-faint"
+                >
                   {meta.primaryHint}
                 </p>
               )}
@@ -269,8 +319,12 @@ export function SandboxSection() {
           })()}
 
           {meta.stub && (
-            <p data-disco-flag="sandbox-stub" className="font-ui text-[0.76rem] text-weak">
-              Podman is a stub in this environment — it configures but doesn’t run here; completed at deployment.
+            <p
+              data-disco-flag="sandbox-stub"
+              className="font-ui text-[0.76rem] text-weak"
+            >
+              Podman is a stub in this environment — it configures but doesn’t
+              run here; completed at deployment.
             </p>
           )}
         </div>
@@ -301,7 +355,10 @@ export function SandboxSection() {
             </button>
           )}
           {save.error && (
-            <span role="alert" className="font-ui text-[0.78rem] text-unsupported">
+            <span
+              role="alert"
+              className="font-ui text-[0.78rem] text-unsupported"
+            >
               {(save.error as Error).message}
             </span>
           )}

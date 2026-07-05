@@ -66,7 +66,7 @@ from .routing import (
     NullRoutingSink,
     RoutingSink,
 )
-from .secrets import SecretBox, SecretStore
+from .secrets import SecretBox, SecretStore, ensure_process_secret_key
 from .summarizer import RouterSummarizer
 from .types import (
     CapabilityProfile,
@@ -140,6 +140,7 @@ __all__ = [
     "ConfigStore",
     "SecretBox",
     "SecretStore",
+    "ensure_process_secret_key",
     "default_mode_for_role",
     "derive_family",
     "is_context_window_exceeded",

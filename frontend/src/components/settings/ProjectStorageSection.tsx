@@ -12,10 +12,16 @@ import { CheckCircle2, FolderSearch, XCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { PathPickerDialog } from "@/components/PathPickerDialog";
 import { cn } from "@/lib/cn";
-import { useProjectsConfig, useUpdateProjectsConfig } from "@/hooks/useProjectsConfig";
+import {
+  useProjectsConfig,
+  useUpdateProjectsConfig,
+} from "@/hooks/useProjectsConfig";
 import type { ProjectStorageStatus } from "@/types/project";
 
-const STATUS_HELP: Record<ProjectStorageStatus, { ok: boolean; label: string; help: string }> = {
+const STATUS_HELP: Record<
+  ProjectStorageStatus,
+  { ok: boolean; label: string; help: string }
+> = {
   ok: { ok: true, label: "Valid", help: "Projects will persist here." },
   unset: {
     ok: false,
@@ -50,8 +56,10 @@ export function ProjectStorageSection() {
 
   if (isLoading || !data) {
     return (
-      <section className="flex flex-col gap-section border-t border-hairline pt-section">
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Project storage</h2>
+      <section className="flex flex-col gap-inline">
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Project storage
+        </h3>
         <p className="font-ui text-[0.86rem] text-text-faint">Loading…</p>
       </section>
     );
@@ -76,7 +84,8 @@ export function ProjectStorageSection() {
     try {
       const j = JSON.parse(raw);
       const reason = j?.detail?.reason ?? j?.reason;
-      if (reason) return STATUS_HELP[reason as ProjectStorageStatus]?.help ?? reason;
+      if (reason)
+        return STATUS_HELP[reason as ProjectStorageStatus]?.help ?? reason;
     } catch {
       /* not JSON — fall through */
     }
@@ -84,17 +93,23 @@ export function ProjectStorageSection() {
   })();
 
   return (
-    <section className="flex flex-col gap-section border-t border-hairline pt-section">
+    <section className="flex flex-col gap-inline">
       <header>
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Project storage</h2>
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Project storage
+        </h3>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
-          Where Build projects persist on the app host (a directory you choose). Saved workspaces
-          let you reopen a project later with its files restored, and export them as a zip.
+          Where Build projects persist on the app host (a directory you choose).
+          Saved workspaces let you reopen a project later with its files
+          restored, and export them as a zip.
         </p>
       </header>
 
       <div className="flex flex-col gap-hair">
-        <label className="font-ui text-[0.78rem] text-text-muted" htmlFor="projects-root">
+        <label
+          className="font-ui text-[0.78rem] text-text-muted"
+          htmlFor="projects-root"
+        >
           Projects root
         </label>
         <div className="flex items-center gap-inline">
@@ -124,7 +139,11 @@ export function ProjectStorageSection() {
           data-storage-validation={status}
           className={cn(
             "flex items-center gap-hair font-ui text-[0.78rem]",
-            help.ok ? "text-supported" : status === "unset" ? "text-text-faint" : "text-weak",
+            help.ok
+              ? "text-supported"
+              : status === "unset"
+                ? "text-text-faint"
+                : "text-weak",
           )}
         >
           {help.ok ? (
@@ -156,14 +175,19 @@ export function ProjectStorageSection() {
         <button
           type="button"
           data-disco-control="settings.storage-save"
-          onClick={() => save.mutate({ projects_root: draft.trim(), status: "unset" })}
+          onClick={() =>
+            save.mutate({ projects_root: draft.trim(), status: "unset" })
+          }
           disabled={!dirty || save.isPending}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.82rem] font-medium text-bg transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {save.isPending ? "Saving…" : dirty ? "Save path" : "Saved"}
         </button>
         {saveErrorMsg && (
-          <span role="alert" className="font-ui text-[0.78rem] text-unsupported">
+          <span
+            role="alert"
+            className="font-ui text-[0.78rem] text-unsupported"
+          >
             {saveErrorMsg}
           </span>
         )}

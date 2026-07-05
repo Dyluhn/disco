@@ -14,9 +14,12 @@ export function NotWired({ detail }: { detail: string }) {
       role="note"
       className="flex items-start gap-inline rounded-control border border-unsupported/60 bg-unsupported/10 px-body py-inline"
     >
-      <AlertTriangle className="mt-px size-4 shrink-0 text-unsupported" aria-hidden />
+      <AlertTriangle
+        className="mt-px size-4 shrink-0 text-unsupported"
+        aria-hidden
+      />
       <p className="font-ui text-[0.8rem] leading-snug text-unsupported">
-        <span className="font-semibold">Not functional yet.</span> {detail}
+        <span className="font-semibold">Unavailable.</span> {detail}
       </p>
     </div>
   );

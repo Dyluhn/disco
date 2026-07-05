@@ -44,7 +44,9 @@ function Switch({
       onClick={() => onChange(!checked)}
       className={cn(
         "relative h-5 w-9 shrink-0 rounded-full border transition-colors",
-        checked ? "border-accent/50 bg-accent/30" : "border-hairline bg-surface-2",
+        checked
+          ? "border-accent/50 bg-accent/30"
+          : "border-hairline bg-surface-2",
       )}
     >
       <span
@@ -102,7 +104,9 @@ function ConnectionForm({
         className="rounded-control border border-hairline bg-surface-2 px-inline py-hair font-mono text-[0.82rem] text-text outline-none focus:border-accent"
       />
       <div className="flex items-center gap-inline">
-        <label className="font-ui text-[0.78rem] text-text-muted">Transport:</label>
+        <label className="font-ui text-[0.78rem] text-text-muted">
+          Transport:
+        </label>
         <select
           value={draft.transport}
           onChange={(e) => setDraft({ ...draft, transport: e.target.value })}
@@ -241,12 +245,12 @@ export function McpSection() {
     <section aria-labelledby="mcp-heading" className="flex flex-col gap-inline">
       <div className="flex items-center justify-between gap-inline">
         <div className="flex items-center gap-inline">
-          <h2
+          <h3
             id="mcp-heading"
-            className="font-ui text-[1.05rem] font-semibold text-text"
+            className="font-ui text-[0.95rem] font-semibold text-text"
           >
             Connections (MCP)
-          </h2>
+          </h3>
         </div>
         {!creating && (
           <button
@@ -268,7 +272,8 @@ export function McpSection() {
 
       {(create.error || update.error || remove.error || approve.error) && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          Couldn't save — the server didn't respond. Your connections are unchanged.
+          Couldn't save — the server didn't respond. Your connections are
+          unchanged.
         </p>
       )}
 
@@ -287,20 +292,17 @@ export function McpSection() {
             Loading connections…
           </li>
         )}
-        {!isLoading &&
-          (connections ?? []).length === 0 &&
-          !creating && (
-            <li className="px-body py-body text-center font-ui text-[0.84rem] text-text-faint">
-              No connections yet. Add one to let the agent call external tools.
-            </li>
-          )}
+        {!isLoading && (connections ?? []).length === 0 && !creating && (
+          <li className="px-body py-body text-center font-ui text-[0.84rem] text-text-faint">
+            No connections yet. Add one to let the agent call external tools.
+          </li>
+        )}
         {(connections ?? []).map((c) => {
           const meta = STATUS_META[c.status as McpStatus] ?? {
             label: c.status,
             dot: "bg-text-faint",
           };
-          const hashMismatch =
-            approvingServer === c.id;
+          const hashMismatch = approvingServer === c.id;
           return (
             <li
               key={c.id}

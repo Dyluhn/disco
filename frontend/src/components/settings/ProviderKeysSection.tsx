@@ -93,7 +93,9 @@ function StoredKeyRow({
   return (
     <li
       className={`flex flex-col gap-hair rounded-control border px-body py-inline ${
-        locked ? "border-unsupported/40 bg-unsupported/5" : "border-hairline bg-surface-1"
+        locked
+          ? "border-unsupported/40 bg-unsupported/5"
+          : "border-hairline bg-surface-1"
       }`}
     >
       <div className="flex items-center justify-between gap-inline">
@@ -104,7 +106,11 @@ function StoredKeyRow({
             <KeyRound className="size-3.5 text-supported" aria-hidden />
           )}
           {name}
-          {locked && <span className="font-ui text-[0.74rem] text-unsupported">can't decrypt</span>}
+          {locked && (
+            <span className="font-ui text-[0.74rem] text-unsupported">
+              can't decrypt
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-inline">
           <button
@@ -112,7 +118,8 @@ function StoredKeyRow({
             onClick={() => setEditing(true)}
             className="flex items-center gap-hair font-ui text-[0.8rem] text-text-muted hover:text-text"
           >
-            <Pencil className="size-3" aria-hidden /> {locked ? "Re-enter" : "Edit"}
+            <Pencil className="size-3" aria-hidden />{" "}
+            {locked ? "Re-enter" : "Edit"}
           </button>
           <button
             type="button"
@@ -141,11 +148,10 @@ function StoredKeyRow({
 }
 
 /**
- * Manage encrypted-at-rest provider API keys by env-var NAME — the generic
- * counterpart to the OpenRouter key field. The user enters the env var their
- * model/search/extraction/TTS provider is configured to read (its `api_key_env`)
- * plus the secret value; the agent-server overlays the decrypted value into that
- * env var at build time, so the plaintext never lands on disk. Full CRUD:
+ * Advanced provider keys by config name — the generic counterpart to the
+ * first-class OpenRouter key field. Some local/self-hosted and paid services
+ * still reference a named key in their config; the agent-server overlays the
+ * decrypted value at build time, so the plaintext never lands on disk. Full CRUD:
  * add (create), list (read-status; values are write-only), edit (update), clear.
  */
 export function ProviderKeysSection() {
@@ -161,9 +167,8 @@ export function ProviderKeysSection() {
   // Render the section shell even before/without data (matches OpenRouterSection)
   // — the heading + entry form always show; the stored-list and notices fill in
   // once the query resolves. Never vanish the whole section on load.
-  const storedNames = data?.names ?? [];
+  const storedNames = [...new Set(data?.names ?? [])];
   const stored = new Set(storedNames);
-  const canStore = data?.can_store ?? true;
   // The SPECIFIC keys that can't be decrypted — so we name them, not "one or more".
   const lockedNames = data?.locked_names ?? [];
   const lockedSet = new Set(lockedNames);
@@ -182,52 +187,58 @@ export function ProviderKeysSection() {
     e.preventDefault();
     const n = name.trim();
     if (!NAME_RE.test(n)) {
-      setNameError("Use the provider's env-var name, e.g. OPENAI_API_KEY or TAVILY_API_KEY.");
+      setNameError(
+        "Use a provider key name, e.g. OPENAI_API_KEY or TAVILY_API_KEY.",
+      );
       return;
     }
     setNameError(null);
     setSecret.mutate(
       { name: n, value: value.trim() },
-      { onSuccess: () => { setName(""); setValue(""); } },
+      {
+        onSuccess: () => {
+          setName("");
+          setValue("");
+        },
+      },
     );
   };
 
   return (
-    <section aria-labelledby="provider-keys-heading" className="flex flex-col gap-inline">
-      <h3 id="provider-keys-heading" className="font-ui text-[0.92rem] font-semibold text-text">
+    <section
+      aria-labelledby="provider-keys-heading"
+      className="flex flex-col gap-inline"
+    >
+      <h4
+        id="provider-keys-heading"
+        className="font-ui text-[0.88rem] font-semibold text-text"
+      >
         Provider API keys
-      </h3>
+      </h4>
       <p className="font-ui text-[0.82rem] text-text-muted">
-        Store any provider's API key encrypted at rest — paid models, web search, extraction,
-        TTS, or image generation. Enter the env-var name the provider reads (its <code className="font-mono text-[0.78rem] text-text">api_key_env</code>, set in its section)
-        and the key. It's encrypted with <code className="font-mono text-[0.78rem] text-text">DISCO_SECRET_KEY</code> and the plaintext never touches disk.
+        Advanced key storage for providers that still reference a named key in
+        their configuration: paid models, web search, extraction, TTS, or image
+        generation. Values are encrypted at rest and never shown back.
       </p>
 
-      {/* Stored-but-undecryptable: DISCO_SECRET_KEY changed/lost since save. Loud,
-          and SPECIFIC — names exactly which keys need restoring/re-entering. */}
+      {/* Stored-but-undecryptable: app key changed/lost since save. Loud, specific,
+          and action-oriented — name exactly which keys need re-entering. */}
       {lockedNames.length > 0 && (
-        <div role="alert" className="flex items-start gap-hair rounded-control border border-unsupported/40 bg-unsupported/5 px-body py-inline">
-          <Lock className="mt-0.5 size-3.5 shrink-0 text-unsupported" aria-hidden />
+        <div
+          role="alert"
+          className="flex items-start gap-hair rounded-control border border-warn/50 bg-warn/5 px-body py-inline"
+        >
+          <Lock className="mt-0.5 size-3.5 shrink-0 text-warn" aria-hidden />
           <p className="font-ui text-[0.78rem] leading-snug text-text">
-            {lockedNames.length === 1 ? "This key can't" : "These keys can't"} be decrypted —{" "}
+            Stored {lockedNames.length === 1 ? "key can't" : "keys can't"} be
+            decrypted — re-enter {lockedNames.length === 1 ? "it" : "them"}:{" "}
             {lockedNames.map((n, i) => (
               <span key={n}>
                 {i > 0 && ", "}
-                <code className="font-mono text-[0.76rem] text-unsupported">{n}</code>
+                <code className="font-mono text-[0.76rem] text-warn">{n}</code>
               </span>
             ))}
-            . <code className="font-mono text-[0.76rem]">DISCO_SECRET_KEY</code> is missing or
-            different from when {lockedNames.length === 1 ? "it was" : "they were"} saved. Restore
-            that app secret, or Edit each one below to re-enter its value.
-          </p>
-        </div>
-      )}
-
-      {!canStore && lockedNames.length === 0 && (
-        <div role="note" className="rounded-control border border-hairline bg-surface-1 px-body py-inline">
-          <p className="font-ui text-[0.78rem] leading-snug text-text-muted">
-            The server doesn't have <code className="font-mono text-[0.76rem] text-text">DISCO_SECRET_KEY</code> set, so keys can't be
-            encrypted at rest. Ask the operator to set the app secret to enable storage.
+            .
           </p>
         </div>
       )}
@@ -255,7 +266,10 @@ export function ProviderKeysSection() {
           <span className="font-ui text-[0.78rem] text-text-muted">
             Referenced by your providers
             {missing.length > 0 && (
-              <span className="text-unsupported"> · {missing.length} not stored yet</span>
+              <span className="text-unsupported">
+                {" "}
+                · {missing.length} not stored yet
+              </span>
             )}
           </span>
           <ul className="flex flex-col gap-hair">
@@ -270,12 +284,17 @@ export function ProviderKeysSection() {
                     {isStored ? (
                       <Check className="size-3.5 text-supported" aria-hidden />
                     ) : (
-                      <AlertTriangle className="size-3.5 text-unsupported" aria-hidden />
+                      <AlertTriangle
+                        className="size-3.5 text-unsupported"
+                        aria-hidden
+                      />
                     )}
                     {n}
                   </span>
                   {isStored ? (
-                    <span className="font-ui text-[0.76rem] text-supported">stored</span>
+                    <span className="font-ui text-[0.76rem] text-supported">
+                      stored
+                    </span>
                   ) : (
                     <button
                       type="button"
@@ -297,9 +316,9 @@ export function ProviderKeysSection() {
           <input
             className={`${field} font-mono`}
             value={name}
-            placeholder="ENV_VAR_NAME (e.g. OPENAI_API_KEY)"
+            placeholder="KEY_NAME (e.g. OPENAI_API_KEY)"
             onChange={(e) => setName(e.target.value)}
-            aria-label="Provider key env-var name"
+            aria-label="Provider key name"
           />
           <input
             ref={valueRef}
@@ -326,16 +345,21 @@ export function ProviderKeysSection() {
           data-key-validity="tested-on-demand"
           className="font-ui text-[0.74rem] text-text-faint"
         >
-          Stored keys are encrypted at rest. Use “Test key” on a stored key to verify
-          it with a real authenticated call to its provider — a key referenced by a
-          configured model can be checked without spending a conversation.
+          Stored keys are encrypted at rest. Use “Test key” on a stored key to
+          verify it with a real authenticated call to its provider — a key
+          referenced by a configured model can be checked without spending a
+          conversation.
         </p>
         {nameError && (
-          <p role="alert" className="font-ui text-[0.78rem] text-unsupported">{nameError}</p>
+          <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
+            {nameError}
+          </p>
         )}
         {setSecret.error && (
           <p role="alert" className="font-ui text-[0.78rem] text-unsupported">
-            {setSecret.error instanceof ApiError ? setSecret.error.message : "Couldn't save the key."}
+            {setSecret.error instanceof ApiError
+              ? setSecret.error.message
+              : "Couldn't save the key."}
           </p>
         )}
       </form>

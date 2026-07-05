@@ -10,8 +10,7 @@
  *  - Self-hosted (ComfyUI): your ComfyUI graph API (`base_url`; REQUIRED), keyless.
  *    Posts a workflow to /prompt and polls /history.
  *  - Paid API (OpenAI-compatible): a vendor like OpenAI gpt-image-1 / DALL·E via
- *    /v1/images/generations. Set the base URL and the secret/env-var NAME holding the key
- *    (never the key itself).
+ *    /v1/images/generations. Set the base URL and the stored key name.
  *  - OpenRouter: image models via chat-completions using the shared OpenRouter key.
  */
 
@@ -51,7 +50,12 @@ const orPrice = (m: {
 
 type Provider = "comfyui" | "openai" | "openrouter";
 
-const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: string }[] = [
+const OPTIONS: {
+  provider: Provider;
+  Icon: typeof Cpu;
+  label: string;
+  help: string;
+}[] = [
   {
     provider: "comfyui",
     Icon: Server,
@@ -62,13 +66,13 @@ const OPTIONS: { provider: Provider; Icon: typeof Cpu; label: string; help: stri
     provider: "openai",
     Icon: Cloud,
     label: "Paid API (OpenAI-compatible)",
-    help: "A vendor like OpenAI gpt-image-1 / DALL·E via /v1/images/generations (or ImageRouter's full /v1/openai/... URL). Set the base URL and the secret/env-var name holding your key (never the key here).",
+    help: "A vendor like OpenAI gpt-image-1 / DALL·E via /v1/images/generations (or ImageRouter's full /v1/openai/... URL). Set the base URL and choose the stored key name.",
   },
   {
     provider: "openrouter",
     Icon: Cloud,
     label: "OpenRouter (image models)",
-    help: "Image models via OpenRouter chat-completions (modalities:[image,text]) using your existing OpenRouter key from Provider API keys. PAID — every OpenRouter image model costs credits (no free tier). Set Model to an image model id; cheapest is google/gemini-2.5-flash-image.",
+    help: "Image models via OpenRouter chat-completions (modalities:[image,text]) using the OpenRouter key in Providers. Paid — every OpenRouter image model costs credits. Set Model to an image model id; cheapest is google/gemini-2.5-flash-image.",
   },
 ];
 
@@ -77,10 +81,12 @@ export function ImageGenSection() {
   const save = useUpdateImageGenConfig();
   // Live OpenRouter catalogue, fetched only while the OpenRouter tier is active —
   // filtered to image-OUTPUT models so the model field becomes a priced picker.
-  const orModels = useOpenRouterModels(data?.provider === "openrouter", { allModalities: true });
+  const orModels = useOpenRouterModels(data?.provider === "openrouter", {
+    allModalities: true,
+  });
   const imageModels = (orModels.data ?? []).filter((m) => m.image_output);
   // For the OpenRouter tier the required config is a decryptable OpenRouter key
-  // (stored under Provider API keys) — otherwise image-gen silently falls back to
+  // (stored under Providers) — otherwise image-gen silently falls back to
   // procedural, which we must warn about rather than imply it's working.
   const orKey = useOpenRouterKey();
   const orKeyReady = Boolean(orKey.data?.configured && !orKey.data?.locked);
@@ -148,14 +154,18 @@ export function ImageGenSection() {
     // quotes — `"seed": "%seed%"` would send `"123"` (a string) and ComfyUI rejects it.
     // Catch that here since the parse-probe below would otherwise mask it.
     if (/"\s*%(seed|width|height)%\s*"/.test(t))
-      return "Numeric tokens (%seed% %width% %height%) must be UNQUOTED, e.g. \"seed\": %seed% — not \"%seed%\".";
+      return 'Numeric tokens (%seed% %width% %height%) must be UNQUOTED, e.g. "seed": %seed% — not "%seed%".';
     // Strip the substitution tokens to a parseable stand-in before validating shape.
     const probe = t
       .replace(/%seed%|%width%|%height%/g, "0")
       .replace(/%prompt%|%negative%|%ckpt%/g, "x");
     try {
       const parsed = JSON.parse(probe);
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed)
+      )
         return "Workflow must be a JSON object of nodes (ComfyUI 'Save (API Format)').";
       return null;
     } catch {
@@ -170,9 +180,9 @@ export function ImageGenSection() {
     data?.provider === "comfyui" && !(data.base_url ?? "").trim()
       ? "Set a base URL below — until then, image generation is unavailable (not configured) and slides render text-only."
       : data?.provider === "openai" && !(data.api_key_env ?? "").trim()
-        ? "Set the API key env var below and store that key in Provider API keys — until then, image generation is unavailable (not configured)."
+        ? "Set the stored key name below and store that key in Providers — until then, image generation is unavailable (not configured)."
         : data?.provider === "openrouter" && !orKeyReady
-          ? "Store a decryptable OpenRouter key in Provider API keys — until then, image generation is unavailable (not configured)."
+          ? "Store a decryptable OpenRouter key in Providers — until then, image generation is unavailable (not configured)."
           : data?.provider === "openrouter" && !(data.model ?? "").trim()
             ? "Set an image model id below — until then, image generation is unavailable (not configured)."
             : null;
@@ -181,14 +191,16 @@ export function ImageGenSection() {
     "rounded-control border border-hairline bg-bg px-inline py-hair font-mono text-[0.78rem] text-text outline-none transition-colors placeholder:text-text-faint focus:border-accent/60";
 
   return (
-    <section className="flex flex-col gap-section border-t border-hairline pt-section">
+    <section className="flex flex-col gap-inline">
       <header>
-        <h2 className="font-display text-[1.3rem] tracking-tight text-text">Image generation</h2>
+        <h3 className="font-ui text-[0.95rem] font-semibold text-text">
+          Image generation
+        </h3>
         <p className="mt-hair font-ui text-[0.86rem] text-text-muted">
-          The provider the <code className="font-mono text-[0.8rem]">image_generate</code> tool uses
-          for slide art, website backgrounds, and other generated images. Point it at ComfyUI
-          (self-host) or a paid API (OpenAI / OpenRouter) — until one is configured, image
-          generation is unavailable and slides render text-only.
+          The provider used for slide art, website backgrounds, and other
+          generated images. Point it at ComfyUI (self-host) or a paid API
+          (OpenAI / OpenRouter) — until one is configured, image generation is
+          unavailable and slides render text-only.
         </p>
       </header>
 
@@ -216,14 +228,20 @@ export function ImageGenSection() {
                 )}
               >
                 <opt.Icon
-                  className={cn("mt-px size-4 shrink-0", isActive ? "text-accent" : "text-text-faint")}
+                  className={cn(
+                    "mt-px size-4 shrink-0",
+                    isActive ? "text-accent" : "text-text-faint",
+                  )}
                   aria-hidden
                 />
                 <span className="flex min-w-0 flex-col gap-hair">
                   <span className="flex items-center gap-hair font-ui text-[0.9rem] font-medium text-text">
                     {opt.label}
                     {isActive && save.isPending && (
-                      <Loader2 className="size-3 animate-spin text-accent" aria-hidden />
+                      <Loader2
+                        className="size-3 animate-spin text-accent"
+                        aria-hidden
+                      />
                     )}
                   </span>
                   <span className="font-ui text-[0.8rem] leading-relaxed text-text-faint">
@@ -240,7 +258,7 @@ export function ImageGenSection() {
               role="status"
               data-disco-flag="imagegen-procedural-fallback"
             >
-              ⚠ {fallbackWarning}
+              {fallbackWarning}
             </p>
           )}
 
@@ -253,7 +271,11 @@ export function ImageGenSection() {
             idleLabel="Test image"
             run={testImageGen}
             disabled={!agentLive() || fieldsDirty}
-            disabledHint={fieldsDirty ? "save changes to test" : "connect the agent server to test"}
+            disabledHint={
+              fieldsDirty
+                ? "save changes to test"
+                : "connect the agent server to test"
+            }
           />
 
           {/* Contextual fields — endpoint (self-host/paid) + model + key env (paid). */}
@@ -261,11 +283,12 @@ export function ImageGenSection() {
             <div className="mt-hair flex flex-col gap-inline rounded-card border border-hairline bg-surface-1/40 px-body py-inline">
               {showOpenRouter && (
                 <p className="font-ui text-[0.78rem] leading-relaxed text-text-faint">
-                  Uses your <strong className="text-text">OpenRouter key</strong> from{" "}
-                  <em>Provider API keys</em> — store it there if you haven't, or image
-                  generation is unavailable (not configured). Every OpenRouter image
-                  model is <strong className="text-text">paid</strong>; add credits at
-                  openrouter.ai/settings/credits.
+                  Uses your{" "}
+                  <strong className="text-text">OpenRouter key</strong> from{" "}
+                  <em>Providers</em> — store it there if you haven't, or image
+                  generation is unavailable (not configured). Every OpenRouter
+                  image model is <strong className="text-text">paid</strong>;
+                  add credits at openrouter.ai/settings/credits.
                 </p>
               )}
               {showUrl && (
@@ -345,12 +368,14 @@ export function ImageGenSection() {
                     Loading the OpenRouter image catalogue…
                   </span>
                 )}
-                {showOpenRouter && !orModels.isLoading && imageModels.length === 0 && (
-                  <span className="font-ui text-[0.72rem] text-text-faint">
-                    Couldn't load the live catalogue — type an image model id (e.g.
-                    google/gemini-2.5-flash-image).
-                  </span>
-                )}
+                {showOpenRouter &&
+                  !orModels.isLoading &&
+                  imageModels.length === 0 && (
+                    <span className="font-ui text-[0.72rem] text-text-faint">
+                      Couldn't load the live catalogue — type an image model id
+                      (e.g. google/gemini-2.5-flash-image).
+                    </span>
+                  )}
               </label>
               {showComfy && (
                 <label className="flex flex-col gap-hair">
@@ -372,16 +397,21 @@ export function ImageGenSection() {
                     className={cn(fieldClass, "resize-y leading-snug")}
                   />
                   <span className="font-ui text-[0.72rem] text-text-faint">
-                    Overrides the default graph so FLUX / SD3 / custom shapes work. Tokens are
-                    substituted per generation: string tokens{" "}
-                    <code className="font-mono">%prompt%</code> <code className="font-mono">%negative%</code>{" "}
-                    <code className="font-mono">%ckpt%</code> go inside quotes; numeric tokens{" "}
-                    <code className="font-mono">%seed%</code> <code className="font-mono">%width%</code>{" "}
-                    <code className="font-mono">%height%</code> go UNQUOTED (e.g.{" "}
-                    <code className="font-mono">"seed": %seed%</code>).
+                    Overrides the default graph so FLUX / SD3 / custom shapes
+                    work. Tokens are substituted per generation: string tokens{" "}
+                    <code className="font-mono">%prompt%</code>{" "}
+                    <code className="font-mono">%negative%</code>{" "}
+                    <code className="font-mono">%ckpt%</code> go inside quotes;
+                    numeric tokens <code className="font-mono">%seed%</code>{" "}
+                    <code className="font-mono">%width%</code>{" "}
+                    <code className="font-mono">%height%</code> go UNQUOTED
+                    (e.g. <code className="font-mono">"seed": %seed%</code>).
                   </span>
                   {workflowJsonError && (
-                    <span className="font-ui text-[0.76rem] text-warn" role="status">
+                    <span
+                      className="font-ui text-[0.76rem] text-warn"
+                      role="status"
+                    >
                       ⚠ {workflowJsonError}
                     </span>
                   )}
@@ -390,8 +420,10 @@ export function ImageGenSection() {
               {showPaid && (
                 <label className="flex flex-col gap-hair">
                   <span className="flex items-baseline gap-hair font-ui text-[0.8rem] text-text">
-                    API key env var
-                    <span className="font-ui text-[0.72rem] text-text-faint">· name, not the key</span>
+                    Stored key name
+                    <span className="font-ui text-[0.72rem] text-text-faint">
+                      · advanced
+                    </span>
                   </span>
                   <input
                     spellCheck={false}
@@ -423,7 +455,9 @@ export function ImageGenSection() {
                   Save
                 </button>
                 {!fieldsDirty && !save.isPending && (
-                  <span className="font-ui text-[0.76rem] text-text-faint">Saved</span>
+                  <span className="font-ui text-[0.76rem] text-text-faint">
+                    Saved
+                  </span>
                 )}
               </div>
             </div>

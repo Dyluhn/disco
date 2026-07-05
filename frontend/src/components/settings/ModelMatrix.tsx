@@ -1,10 +1,13 @@
 import { CapabilityBadges } from "@/components/CapabilityBadges";
 import { cn } from "@/lib/cn";
 import { costLabel } from "@/lib/cost";
-import { findModel, useAssignments, useModels, useUpdateAssignments } from "@/hooks/useModels";
+import {
+  findModel,
+  useAssignments,
+  useModels,
+  useUpdateAssignments,
+} from "@/hooks/useModels";
 import { isFree, type ModelInfo, ROLES } from "@/types/models";
-import { ModelCatalogue } from "./ModelCatalogue";
-import { OpenRouterSection } from "./OpenRouterSection";
 import { RoleModelPicker } from "./RoleModelPicker";
 
 /**
@@ -36,8 +39,12 @@ function MatrixRow({
   return (
     <div className="flex flex-col gap-inline border-b border-hairline py-body last:border-b-0 sm:flex-row sm:items-start sm:justify-between sm:gap-section">
       <div className="sm:max-w-xs">
-        <div className="font-ui text-[0.9rem] font-medium text-text">{row.label}</div>
-        <p className="font-ui text-[0.8rem] leading-snug text-text-muted">{row.desc}</p>
+        <div className="font-ui text-[0.9rem] font-medium text-text">
+          {row.label}
+        </div>
+        <p className="font-ui text-[0.8rem] leading-snug text-text-muted">
+          {row.desc}
+        </p>
       </div>
       <div className="flex flex-col gap-hair sm:items-end">
         <RoleModelPicker
@@ -70,24 +77,35 @@ export function ModelMatrix() {
   const update = useUpdateAssignments();
 
   return (
-    <section aria-labelledby="models-heading" className="flex flex-col gap-inline">
+    <section
+      aria-labelledby="models-heading"
+      className="flex flex-col gap-inline"
+    >
       <div>
-        <h2 id="models-heading" className="font-ui text-[1.05rem] font-semibold text-text">
-          Models
-        </h2>
+        <h3
+          id="models-heading"
+          className="font-ui text-[0.95rem] font-semibold text-text"
+        >
+          Role assignments
+        </h3>
         <p className="font-ui text-[0.84rem] text-text-muted">
-          Read live from the configured deployment. Assignments are absolute and manual — the system
-          uses exactly what you set, applied on the next request (no automatic routing). Capabilities
-          are advisory; a mis-assignment fails loudly at runtime.
+          Read live from the configured deployment. Assignments are absolute and
+          manual — the system uses exactly what you set, applied on the next
+          request (no automatic routing). Capabilities are advisory; a
+          mis-assignment fails loudly at runtime.
         </p>
       </div>
 
       <div className="rounded-card border border-hairline bg-surface-1 px-body">
         {isLoading && (
-          <div className="py-body font-ui text-[0.84rem] text-text-muted">Loading models…</div>
+          <div className="py-body font-ui text-[0.84rem] text-text-muted">
+            Loading models…
+          </div>
         )}
         {isError && (
-          <div className="py-body font-ui text-[0.84rem] text-warn">Couldn't load assignments.</div>
+          <div className="py-body font-ui text-[0.84rem] text-warn">
+            Couldn't load assignments.
+          </div>
         )}
         {assignments && (
           <>
@@ -123,13 +141,12 @@ export function ModelMatrix() {
       {update.error && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
           Couldn't save the assignment —{" "}
-          {update.error instanceof Error ? update.error.message : "the server didn't respond"}. Your
-          change wasn't applied.
+          {update.error instanceof Error
+            ? update.error.message
+            : "the server didn't respond"}
+          . Your change wasn't applied.
         </p>
       )}
-
-      <ModelCatalogue />
-      <OpenRouterSection />
     </section>
   );
 }
