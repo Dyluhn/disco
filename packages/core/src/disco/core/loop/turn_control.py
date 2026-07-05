@@ -247,6 +247,34 @@ _ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
 _ACTIONLESS_AUTO_RESUME_SEGMENT_CAP = 3
 
 
+def _plan_done_and_verified(events: list[Event]) -> bool:
+    """True when every effective plan step is done AND the most recent
+    verify_web_app observation PASSED — the done-not-stuck discriminator."""
+    from ..view import effective_plan_progress
+
+    plan, states = effective_plan_progress(events)
+    if plan is None or not plan.steps:
+        return False
+    if any(states.get(i) != "done" for i in range(1, len(plan.steps) + 1)):
+        return False
+    for e in reversed(events):
+        if isinstance(e, ObservationEvent) and "VERIFY_WEB_APP:" in str(
+            e.tool_result.content or ""
+        ):
+            return "VERIFY_WEB_APP: PASS" in str(e.tool_result.content or "")
+    return False
+
+
+def _no_progress_finish_hinted(events: list[Event], marker_seq: int) -> bool:
+    return any(
+        isinstance(e, StatusEvent)
+        and e.detail == "no_progress_finish_hint"
+        and e.seq is not None
+        and e.seq > marker_seq
+        for e in events
+    )
+
+
 def _no_progress_marker_seq(events: list[Event]) -> int | None:
     """Seq of the most recent `no_progress` marker since the last USER message,
     else None — mirrors `signals.stuck_escape_seq`. One nudge per user turn;
@@ -1206,6 +1234,38 @@ class Valve:
             for e in events
         )
         if acted_since:
+            # DONE-NOT-STUCK (dt3 autopsy): an UNCHANGED verify outcome is not
+            # failure when the work was already correct — plan all-done + last
+            # verify PASS means the run is one `finish` short of completion, and
+            # halting STUCK here converts a finished build into a failure. Point
+            # at the exit ONCE; the marker stays, so a model that still refuses
+            # to finish halts on the next trip through.
+            if _plan_done_and_verified(events) and not _no_progress_finish_hinted(
+                events, marker_seq
+            ):
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(
+                            role="user",
+                            content=(
+                                "<system-reminder>\n"
+                                "Every plan step is done and the app verify PASSES — "
+                                "the outcome isn't changing because the work is already "
+                                "complete. Do not edit or re-verify again: call `serve` "
+                                "to hand off the deliverable, then `finish` NOW.\n"
+                                "</system-reminder>"
+                            ),
+                        ),
+                    )
+                )
+                await self._loop._emit(
+                    StatusEvent(
+                        status=ConversationStatus.RUNNING,
+                        detail="no_progress_finish_hint",
+                    )
+                )
+                return Disp.CONTINUE
             # Nudged, the model made MORE varied edits, still the same symptom →
             # halt visibly (STUCK) instead of looping to the iteration ceiling.
             await self.land_blocked(

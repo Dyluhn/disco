@@ -1332,3 +1332,54 @@ def test_f6_loop_wiring_standard_model_policy_suppresses_rewrite_directive():
         "must NOT fire the F6 directive — the gate is closed for capable models. "
         f"Got: {result.rewrite_directive!r}"
     )
+
+
+def test_plan_done_and_verified_discriminator():
+    """dt3 autopsy: unchanged verify outcome is DONE, not stuck, when every plan
+    step is done and the last verify PASSED — the gate must hint finish instead
+    of halting STUCK."""
+    from disco.core.events import (
+        EventSource,
+        ObservationEvent,
+        PlanEvent,
+        PlanStep,
+        StatusEvent,
+        ToolResult,
+    )
+    from disco.core.loop.turn_control import _plan_done_and_verified
+
+    plan = PlanEvent(
+        source=EventSource.AGENT,
+        summary="s",
+        steps=[PlanStep(title="a"), PlanStep(title="b")],
+    )
+    def obs(content: str) -> ObservationEvent:
+        return ObservationEvent(
+            source=EventSource.ENVIRONMENT,
+            action_id="a1",
+            tool_result=ToolResult(
+                call_id="c1", tool_name="verify_web_app", success=True, content=content
+            ),
+        )
+    from disco.core.events import ActionEvent, ToolCall
+
+    done = [
+        ActionEvent(
+            source=EventSource.AGENT,
+            thought="",
+            tool_call=ToolCall(
+                tool_name="update_plan_progress",
+                arguments={"steps": [
+                    {"index": 1, "state": "done"},
+                    {"index": 2, "state": "done"},
+                ]},
+                call_id="p1",
+            ),
+        )
+    ]
+    # all steps done + PASS → True
+    assert _plan_done_and_verified([plan, *done, obs("VERIFY_WEB_APP: PASS (pass)")])
+    # FAIL verify → False
+    assert not _plan_done_and_verified([plan, *done, obs("VERIFY_WEB_APP: FAIL (broken)")])
+    # steps not done → False
+    assert not _plan_done_and_verified([plan, obs("VERIFY_WEB_APP: PASS (pass)")])
