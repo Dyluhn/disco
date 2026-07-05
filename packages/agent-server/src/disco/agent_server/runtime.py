@@ -3002,7 +3002,7 @@ class ConversationRuntime:
             if state.execution_status in self._CONCLUDED_STATUSES:
                 return  # already concluded — don't clobber
             detail = f"uncaught {type(exc).__name__}: {exc}"[:200]
-            logger.error("run task for %s crashed: %s", conversation_id, detail)
+            logger.error("run task for %s crashed: %s", conversation_id, detail, exc_info=exc)
             await self._store.append(
                 conversation_id,
                 StatusEvent(status=ConversationStatus.ERROR, detail=detail),

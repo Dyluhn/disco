@@ -94,6 +94,11 @@ def normalize_list_item_wrappers(
 ) -> dict[str, Any]:
     """Repair provider dialects that encode list fields as {"item": [...]}."""
 
+    if not isinstance(arguments, dict):
+        # A provider dialect can emit LIST-shaped arguments; validation must see
+        # them (and refuse with its own message), not crash the run task.
+        _LOG.warning("non-dict arguments for %s: %s", tool_name, type(arguments).__name__)
+        return arguments
     normalized: dict[str, Any] | None = None
     unwrapped: list[str] = []
     for field_name, field_info in args_model.model_fields.items():
