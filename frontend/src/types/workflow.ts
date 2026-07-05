@@ -121,3 +121,8 @@ export interface WorkflowDraftResult {
   workflow: WorkflowReview;
   simulation: WorkflowSimulation;
 }
+
+export interface WorkflowDraftFromDescriptionResult extends WorkflowDraftResult {
+  summary: string;
+  description: string;
+}

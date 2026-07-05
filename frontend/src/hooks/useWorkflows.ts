@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   approveWorkflow,
   authorWorkflow,
+  draftWorkflowFromDescription,
   getAuthoringContext,
   listWorkflowReviews,
   runWorkflow,
@@ -48,6 +49,16 @@ export function useAuthorWorkflow() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: authorWorkflow,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: WORKFLOWS_KEY });
+    },
+  });
+}
+
+export function useDraftFromDescription() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: draftWorkflowFromDescription,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: WORKFLOWS_KEY });
     },

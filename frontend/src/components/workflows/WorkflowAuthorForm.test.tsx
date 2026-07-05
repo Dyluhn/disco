@@ -14,17 +14,41 @@ function renderForm() {
 }
 
 describe("WorkflowAuthorForm", () => {
-  it("renders pickable builtin tools from the authoring context", async () => {
+  it("renders the describe-first workflow creator", async () => {
     renderForm();
 
+    expect(
+      await screen.findByLabelText("What should this workflow do?"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Draft it →" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Edit details (Advanced)" })).toBeInTheDocument();
+  });
+
+  it("shows the recap actions after a description draft", async () => {
+    const user = userEvent.setup();
+    renderForm();
+
+    await user.type(
+      await screen.findByLabelText("What should this workflow do?"),
+      "Summarize a topic into a markdown brief.",
+    );
+    await user.click(screen.getByRole("button", { name: "Draft it →" }));
+
+    expect(await screen.findByText(/Drafts a workflow from this request/)).toBeInTheDocument();
+    expect(screen.getByText("Drafted Workflow")).toBeInTheDocument();
+    expect(screen.getByText("Uses")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit details" })).toBeInTheDocument();
+  });
+
+  it("keeps detailed authoring behind the advanced affordance", async () => {
+    const user = userEvent.setup();
+    renderForm();
+
+    await user.click(await screen.findByRole("button", { name: "Edit details (Advanced)" }));
     expect(await screen.findByText("file_read")).toBeInTheDocument();
     expect(screen.getByText("Read a file from the workspace.")).toBeInTheDocument();
     expect(screen.getByText("file_write")).toBeInTheDocument();
-  });
-
-  it("blocks submit when a writable MCP mount lacks the write policy", async () => {
-    const user = userEvent.setup();
-    renderForm();
 
     await user.type(await screen.findByLabelText("Name"), "Writable GitHub Workflow");
     await user.type(
@@ -45,16 +69,19 @@ describe("WorkflowAuthorForm", () => {
     expect(screen.getByRole("button", { name: "Create draft" })).toBeEnabled();
   });
 
-  it("shows validation findings and simulation after authoring", async () => {
+  it("shows validation findings and simulation after advanced authoring", async () => {
     const user = userEvent.setup();
     renderForm();
 
+    await user.click(await screen.findByRole("button", { name: "Edit details (Advanced)" }));
     await user.type(await screen.findByLabelText("Name"), "Fixture Author Workflow");
     await user.type(screen.getByLabelText("Card"), "Workflow authored in a form test.");
     await user.click(screen.getByRole("button", { name: "Create draft" }));
 
     expect(await screen.findByText("Validation findings")).toBeInTheDocument();
     expect(screen.getByText("No validation findings.")).toBeInTheDocument();
-    expect(screen.getByText("Simulation result")).toBeInTheDocument();
+    expect(
+      screen.getByText((_, element) => element?.textContent === "Simulation ok"),
+    ).toBeInTheDocument();
   });
 });

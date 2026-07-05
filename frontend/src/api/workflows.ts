@@ -2,6 +2,7 @@ import { ApiError, agentGet, agentLive, agentSend, fixtureDelay } from "./client
 import type {
   WorkflowAuthorInput,
   WorkflowAuthoringContext,
+  WorkflowDraftFromDescriptionResult,
   WorkflowDraftResult,
   WorkflowListResponse,
   WorkflowReview,
@@ -268,6 +269,50 @@ export async function authorWorkflow(input: WorkflowAuthorInput): Promise<Workfl
       fixture_bytes: 72,
       findings,
     },
+  };
+}
+
+export async function draftWorkflowFromDescription(
+  description: string,
+): Promise<WorkflowDraftFromDescriptionResult> {
+  if (agentLive()) {
+    return agentSend<WorkflowDraftFromDescriptionResult>(
+      "POST",
+      "/api/workflows/draft-from-description",
+      { description },
+    );
+  }
+
+  const cleaned = description.trim();
+  if (!cleaned) throw new ApiError("description is empty", 422);
+  const needsWrites = /\b(save|write|create|export|update|append)\b/i.test(cleaned);
+  const input: WorkflowAuthorInput = {
+    name: "Drafted Workflow",
+    card:
+      "Workflow drafted from a plain-language description for review before approval.",
+    params: [
+      {
+        name: "request",
+        type: "string",
+        required: true,
+        description: "The request or topic to process.",
+      },
+    ],
+    tools: needsWrites ? ["file_read", "file_write"] : ["file_read"],
+    mcp_mounts: [],
+    skills: [],
+    allows_writes: needsWrites,
+    untrusted_content: true,
+    output_path_template: "outputs/{request}.md",
+    output_format: "markdown",
+    verify_checks: ["output_exists"],
+    finalizer: "ready_for_workflow_output",
+  };
+  const drafted = await authorWorkflow(input);
+  return {
+    ...drafted,
+    summary: `Drafts a workflow from this request: ${cleaned}`,
+    description: cleaned,
   };
 }
 

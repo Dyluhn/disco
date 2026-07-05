@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -24,6 +25,22 @@ from pydantic import BaseModel, ConfigDict
 
 class _EmptyArgs(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class _FakeCompletionResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _FakeDraftRouter:
+    def __init__(self, *texts: str) -> None:
+        self._texts = list(texts)
+        self.requests: list[Any] = []
+
+    async def complete(self, req: Any) -> _FakeCompletionResponse:
+        self.requests.append(req)
+        text = self._texts.pop(0) if self._texts else "{}"
+        return _FakeCompletionResponse(text)
 
 
 def _definition(*, tools: list[str] | None = None) -> dict:
@@ -56,6 +73,33 @@ def _app(project_root: Path) -> FastAPI:
     app = FastAPI()
     app.include_router(make_workflows_router(store, runtime))
     return app
+
+
+def _draft_model_json() -> str:
+    return json.dumps(
+        {
+            "summary": "Reads a query and writes a markdown workflow brief.",
+            "name": "Description Draft",
+            "card": "Workflow drafted from a user description into a bounded markdown output.",
+            "params": [
+                {
+                    "name": "query",
+                    "type": "string",
+                    "required": True,
+                    "description": "Topic or request to process.",
+                }
+            ],
+            "tools": ["file_read"],
+            "mcp_mounts": [],
+            "skills": [],
+            "allows_writes": False,
+            "untrusted_content": True,
+            "output_path_template": "outputs/{query}.md",
+            "output_format": "markdown",
+            "verify_checks": ["output_exists"],
+            "finalizer": "ready_for_workflow_output",
+        }
+    )
 
 
 def _quiet_startup(runtime: ConversationRuntime) -> None:
@@ -250,6 +294,93 @@ async def test_workflow_author_happy_path_persists_unapproved_review(
     stored = JsonDirWorkflowStore(tmp_path).get_instance(workflow["instance_id"])
     assert stored is not None
     assert stored.params == {"query": "sample"}
+
+
+async def test_workflow_draft_from_description_persists_unapproved_review(
+    tmp_path: Path,
+) -> None:
+    store = SqliteEventStore(":memory:")
+    cfg_store = ConfigStore(tmp_path / "config.json")
+    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+    router = _FakeDraftRouter(_draft_model_json())
+    runtime = ConversationRuntime(
+        store,
+        config_store=cfg_store,
+        router=cast(Any, router),
+    )
+    app = FastAPI()
+    app.include_router(make_workflows_router(store, runtime))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/workflows/draft-from-description",
+            json={"description": "Read a topic and write a markdown brief."},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    workflow = body["workflow"]
+    assert body["summary"] == "Reads a query and writes a markdown workflow brief."
+    assert body["description"] == "Read a topic and write a markdown brief."
+    assert workflow["name"] == "Description Draft"
+    assert workflow["enabled"] is False
+    assert workflow["approved"] is False
+    assert workflow["validation_findings"] == []
+    assert body["simulation"]["ok"] is True
+    assert router.requests
+    request = router.requests[0]
+    assert request.response_format == "json"
+    assert request.max_tokens == 1400
+    assert request.temperature == 0.3
+    stored = JsonDirWorkflowStore(tmp_path).get_instance(workflow["instance_id"])
+    assert stored is not None
+    assert stored.params == {"query": "sample"}
+
+
+async def test_workflow_draft_from_description_strips_think_spans(
+    tmp_path: Path,
+) -> None:
+    store = SqliteEventStore(":memory:")
+    cfg_store = ConfigStore(tmp_path / "config.json")
+    cfg_store.save_projects(ProjectStorageSettings(projects_root=str(tmp_path)))
+    router = _FakeDraftRouter(f"<think>plan the workflow</think>{_draft_model_json()}")
+    runtime = ConversationRuntime(
+        store,
+        config_store=cfg_store,
+        router=cast(Any, router),
+    )
+    app = FastAPI()
+    app.include_router(make_workflows_router(store, runtime))
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/workflows/draft-from-description",
+            json={"description": "Draft a workflow even when the model thinks first."},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"] == "Reads a query and writes a markdown workflow brief."
+    assert JsonDirWorkflowStore(tmp_path).get_instance(
+        body["workflow"]["instance_id"]
+    ) is not None
+
+
+async def test_workflow_draft_from_description_rejects_blank_description(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/workflows/draft-from-description",
+            json={"description": "   "},
+        )
+
+    assert response.status_code == 422
 
 
 async def test_workflow_author_invalid_definition_returns_422(tmp_path: Path) -> None:
