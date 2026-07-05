@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from ..equality import event_content_eq
 from ..events import (
+    StatusEvent,
     ActionEvent,
     AgentErrorEvent,
     Event,
@@ -174,14 +175,29 @@ class StuckResult(BaseModel):
     rewrite_directive: RewriteDirective | None = None
 
 
+# Recovery boundaries reset stuck detection exactly like a fresh user message:
+# a plan approval / harvested revision starts a NEW execution segment, and the
+# old segment's read-loop evidence must not convict it before its first turn
+# (dt6 autopsy: harvested_revision_plan → plan_approved → STUCK two events
+# later, zero actions in between — the window carried stale evidence across).
+_RECOVERY_BOUNDARY_DETAILS = frozenset(
+    {"plan_approved", "harvested_revision_plan", "alternative_picked:manual"}
+)
+
+
 def _after_last_user_message(events: list[Event]) -> list[Event]:
-    """Discard everything at/before the last USER MessageEvent — a new
-    instruction means 'not stuck'."""
-    last_user = -1
+    """Discard everything at/before the last USER MessageEvent OR recovery
+    boundary — a new instruction or an approved recovery means 'not stuck'."""
+    last = -1
     for i, e in enumerate(events):
         if isinstance(e, MessageEvent) and e.source == EventSource.USER:
-            last_user = i
-    return events[last_user + 1 :]
+            last = i
+        elif (
+            isinstance(e, StatusEvent)
+            and (e.detail or "") in _RECOVERY_BOUNDARY_DETAILS
+        ):
+            last = i
+    return events[last + 1 :]
 
 
 def _consecutive_pairs(
