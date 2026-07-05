@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import cast
 
-from ...verify_medium import VerifierMediumHint, detect_html_medium, html_manifest_hrefs
+from ...verify_medium import (
+    VerifierMediumHint,
+    detect_html_medium,
+    html_manifest_hrefs,
+    html_script_srcs,
+)
 from .common import *
 from .common import (
     _FINISH_VERIFY_CAP,
@@ -578,7 +583,9 @@ class _HostVerifyGateMixin(_FinishGateProto):
             clean = href.split("#", 1)[0].split("?", 1)[0].strip()
             if not clean or "://" in clean or clean.startswith("//"):
                 continue
-            safe = _safe_deliverable_file_path(posixpath.normpath(posixpath.join(base_dir, clean)))
+            safe = _safe_deliverable_file_path(
+                posixpath.normpath(posixpath.join(base_dir, clean))
+            )
             if safe is not None:
                 candidates.append(safe)
         if not candidates:
@@ -599,6 +606,36 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 return True
         return False
 
+    async def _related_game_texts_for_html(
+        self, html_path: str, html_text: str
+    ) -> list[str]:
+        base_dir = posixpath.dirname(html_path)
+        candidates: list[str] = []
+        for src in html_script_srcs(html_text):
+            clean = src.split("#", 1)[0].split("?", 1)[0].strip()
+            if not clean or "://" in clean or clean.startswith("//"):
+                continue
+            safe = _safe_deliverable_file_path(posixpath.normpath(posixpath.join(base_dir, clean)))
+            if safe is not None:
+                candidates.append(safe)
+        for name in ("README.md", "NOTES.md"):
+            safe = _safe_deliverable_file_path(
+                posixpath.normpath(posixpath.join(base_dir, name))
+            )
+            if safe is not None:
+                candidates.append(safe)
+
+        texts: list[str] = []
+        seen: set[str] = set()
+        for path in candidates:
+            if path in seen:
+                continue
+            seen.add(path)
+            raw = await self._read_workspace_bytes(path)
+            if raw is not None:
+                texts.append(raw.decode("utf-8", errors="replace"))
+        return texts
+
     async def _verifier_medium_hint(
         self,
         deliverable_paths: list[str],
@@ -613,7 +650,11 @@ class _HostVerifyGateMixin(_FinishGateProto):
             manifest_present = await self._manifest_present_for_html(
                 path, text, deliverable_paths
             )
-            hint = detect_html_medium(text, manifest_present=manifest_present)
+            hint = detect_html_medium(
+                text,
+                manifest_present=manifest_present,
+                related_texts=await self._related_game_texts_for_html(path, text),
+            )
             if hint is not None:
                 return hint
         return None

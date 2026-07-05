@@ -259,6 +259,45 @@ async def test_run_mobile_medium_uses_mobile_viewport(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_game_medium_interacts_and_keeps_canvas_meaningful(monkeypatch):
+    seen = []
+
+    async def fake_browser_run(self, args, ctx):
+        seen.append((args.action, args.selector, args.key))
+        return ToolOutcome(
+            success=True,
+            content="b",
+            structured=_structured(
+                text="",
+                elements=[],
+                console=[],
+                title="Canvas Game",
+            )
+            | {
+                "canvas_count": 1,
+                "screenshot_path": f".pmx/screenshots/{len(seen):04d}-{args.action}.png",
+            },
+        )
+
+    monkeypatch.setattr(verify_app.BrowserTool, "run", fake_browser_run)
+    out = await VerifyWebAppTool().run(
+        VerifyWebAppArgs(url="http://127.0.0.1:8000/", medium="game"),
+        _ctx(FakeSandbox("200")),
+    )
+
+    assert out.success is True
+    assert out.structured["passed"] is True
+    assert out.structured["medium"] == "game"
+    assert out.structured["canvas_count"] == 1
+    assert ("click", "canvas", "") in seen
+    assert ("press", "", "Space") in seen
+    assert ("press", "", "ArrowRight") in seen
+    interaction = out.structured["game_interaction"]
+    assert interaction["before_screenshot_path"].endswith("navigate.png")
+    assert interaction["after_screenshot_path"].endswith("screenshot.png")
+
+
+@pytest.mark.asyncio
 async def test_run_fail_console_error_with_stubbed_browser(monkeypatch):
     console = [{"level": "error", "text": "Uncaught TypeError"}]
 

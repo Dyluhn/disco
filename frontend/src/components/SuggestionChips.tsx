@@ -1,5 +1,11 @@
-import { useMemo } from "react";
-import { getSuggestions, type SuggestionSurface } from "@/data/suggestions";
+import { useEffect, useMemo, useState } from "react";
+import { fetchSuggestionPrompts } from "@/api/suggestions";
+import {
+  getSuggestions,
+  sampleSuggestions,
+  type Suggestion,
+  type SuggestionSurface,
+} from "@/data/suggestions";
 
 const CONTROL_BY_SURFACE: Record<SuggestionSurface, string> = {
   search: "search.suggestion",
@@ -18,7 +24,36 @@ export function SuggestionChips({
   surface: SuggestionSurface;
   onPick: (text: string) => void;
 }) {
-  const suggestions = useMemo(() => getSuggestions(surface).slice(0, 4), [surface]);
+  const fallbackSuggestions = useMemo(() => getSuggestions(surface), [surface]);
+  const [generated, setGenerated] = useState<{
+    surface: SuggestionSurface;
+    suggestions: Suggestion[];
+  } | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchSuggestionPrompts(surface, controller.signal)
+      .then((payload) => {
+        const suggestions = payload.suggestions.map((text, index) => ({
+          id: `${surface}-generated-${index + 1}`,
+          text,
+        }));
+        if (payload.source === "generated" && suggestions.length >= 4) {
+          setGenerated({
+            surface,
+            suggestions: sampleSuggestions(suggestions, suggestions.length),
+          });
+        }
+      })
+      .catch(() => {
+        // The curated pool is already rendered; generation is opportunistic.
+      });
+    return () => controller.abort();
+  }, [surface]);
+
+  const suggestions = (
+    generated?.surface === surface ? generated.suggestions : fallbackSuggestions
+  ).slice(0, 4);
 
   if (suggestions.length === 0) return null;
 

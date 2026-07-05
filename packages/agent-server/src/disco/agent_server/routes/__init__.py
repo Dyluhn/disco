@@ -26,6 +26,7 @@ from .schedules import make_schedules_router
 from .sessions import make_sessions_router
 from .share import make_share_router
 from .storage import make_storage_router
+from .suggestions import make_suggestions_router
 from .workflows import make_workflows_router
 from .ws import make_ws_router
 
@@ -49,6 +50,7 @@ __all__ = [
     "make_sessions_router",
     "make_share_router",
     "make_storage_router",
+    "make_suggestions_router",
     "make_workflows_router",
     "make_ws_router",
 ]

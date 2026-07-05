@@ -87,11 +87,11 @@ class VerifyWebAppArgs(BaseModel):
             "auto-detect the running preview server."
         ),
     )
-    medium: Literal["web", "deck", "mobile"] = Field(
+    medium: Literal["web", "deck", "mobile", "game"] = Field(
         default="web",
         description=(
             "Artifact medium hint from the finish gate. Defaults to web; mobile uses "
-            "a 390x844 viewport for browser evidence."
+            "a 390x844 viewport; game performs click/keyboard interaction evidence."
         ),
     )
 
@@ -155,6 +155,8 @@ class VerifyWebAppTool:
                 )
                 if browser_outcome.success and browser_outcome.structured:
                     structured = browser_outcome.structured
+                    if args.medium == "game":
+                        structured = await self._capture_game_interaction(ctx, structured)
                 elif (browser_outcome.structured or {}).get("browser_unavailable"):
                     # ROOT-3 — no browser daemon on this backend. The server IS
                     # reachable (HTTP probe passed); we simply cannot run the
@@ -184,6 +186,8 @@ class VerifyWebAppTool:
                     )
 
             meaningful = self._meaningful(structured)
+            if args.medium == "game":
+                meaningful = meaningful or bool((structured or {}).get("canvas_count"))
             verdict = compute_verdict(
                 url=url,
                 reachable=reachable,
@@ -191,6 +195,8 @@ class VerifyWebAppTool:
                 structured=structured,
                 meaningful=meaningful,
             )
+            if args.medium == "game" and structured is not None:
+                verdict["game_interaction"] = structured.get("game_interaction") or {}
             if args.medium != "web":
                 verdict["medium"] = args.medium
             return ToolOutcome(
@@ -202,6 +208,34 @@ class VerifyWebAppTool:
             return ToolOutcome(
                 success=False, content="", error=f"verify_web_app error: {e}"
             )
+
+    async def _capture_game_interaction(
+        self, ctx: ToolContext, before: dict[str, Any]
+    ) -> dict[str, Any]:
+        interaction: dict[str, Any] = {
+            "before_screenshot_path": str(before.get("screenshot_path") or ""),
+            "steps": [],
+        }
+        latest = before
+        probes = [
+            BrowserArgs(action="click", selector="canvas"),
+            BrowserArgs(action="press", key="Space"),
+            BrowserArgs(action="press", key="ArrowRight"),
+            BrowserArgs(action="screenshot"),
+        ]
+        for probe in probes:
+            outcome = await BrowserTool().run(probe, ctx)
+            step: dict[str, Any] = {"action": probe.action, "success": outcome.success}
+            if probe.action == "press":
+                step["key"] = probe.key
+            if outcome.success and outcome.structured:
+                latest = outcome.structured
+                step["screenshot_path"] = str(latest.get("screenshot_path") or "")
+            elif outcome.error:
+                step["error"] = outcome.error[:300]
+            interaction["steps"].append(step)
+        interaction["after_screenshot_path"] = str(latest.get("screenshot_path") or "")
+        return {**latest, "game_interaction": interaction}
 
     @staticmethod
     def _meaningful(structured: dict[str, Any] | None) -> bool:

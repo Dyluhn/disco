@@ -173,6 +173,7 @@ from .runtime_settings import RuntimeSettings
 from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
+from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
 from .verify.model_verifier import ModelVerifier
@@ -754,6 +755,9 @@ class ConversationRuntime:
         # History/Projects show real names, not a wall of "(untitled)". Fire-and-forget
         # from kick(); uses the cheap SUMMARIZER role; idempotent + non-blocking.
         self._title_service = TitleService(self._store, self._router_now)
+        self._suggestion_service = SuggestionService(
+            self._router_now, lambda: self._project_store_now().root or ""
+        )
         self._override_path = f"{db_path}.overrides.json" if db_path else ""
         self._model_override: dict[str, str] = self._load_overrides()
         # Per-conversation surface ("research" | "build" | "deep_research"); set at
@@ -3510,6 +3514,10 @@ class ConversationRuntime:
     def title_service(self) -> TitleService:
         """Public accessor for the auto-titler (used by the projects backfill route)."""
         return self._title_service
+
+    def suggestion_service(self) -> SuggestionService:
+        """Public accessor for request-time splash suggestion generation."""
+        return self._suggestion_service
 
     def project_store(self) -> ProjectStore:
         """Public accessor for the live project store (used by the agent-server's

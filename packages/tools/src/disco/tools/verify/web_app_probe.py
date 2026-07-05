@@ -147,6 +147,8 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
     elements = s.get("elements", []) or []
     visible_text_chars = len(text.strip())
     elements_count = len(elements) if isinstance(elements, list) else 0
+    canvas_count = s.get("canvas_count")
+    canvas_count = canvas_count if isinstance(canvas_count, int) else 0
     screenshot_path = str(s.get("screenshot_path", "") or "")
 
     return {
@@ -154,6 +156,7 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
         "text": text,
         "visible_text_chars": visible_text_chars,
         "elements_count": elements_count,
+        "canvas_count": canvas_count,
         "console_errors": console_errors,
         "console_warnings": console_warnings,
         "network_failures": network_failures,
@@ -186,6 +189,7 @@ def compute_verdict(
     title = str(probe["title"])
     visible_text_chars = int(probe["visible_text_chars"])
     elements_count = int(probe["elements_count"])
+    canvas_count = int(probe["canvas_count"])
     console_errors = probe["console_errors"]
     console_warnings = probe["console_warnings"]
     network_failures = probe["network_failures"]
@@ -257,6 +261,7 @@ def compute_verdict(
         "meaningful_content": meaningful,
         "visible_text_chars": visible_text_chars,
         "elements_count": elements_count,
+        "canvas_count": canvas_count,
         "console_errors": console_errors,
         "console_warnings": console_warnings,
         "network_failures": network_failures,

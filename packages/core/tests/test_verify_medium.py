@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from disco.core.verify_medium import detect_html_medium, html_manifest_hrefs
+from disco.core.verify_medium import detect_html_medium, html_manifest_hrefs, html_script_srcs
 
 
 def test_deck_html_detects_slide_medium() -> None:
@@ -37,6 +37,48 @@ def test_pwa_html_detects_mobile_medium_when_manifest_exists() -> None:
     assert hint.viewport_height == 844
     assert "44px" in hint.review_guidance
     assert "safe areas" in hint.review_guidance
+
+
+def test_canvas_request_animation_frame_detects_game_medium() -> None:
+    html = """
+    <html><body>
+      <canvas id="game"></canvas>
+      <script>
+        addEventListener("keydown", () => {});
+        requestAnimationFrame(function frame() {});
+      </script>
+    </body></html>
+    """
+
+    hint = detect_html_medium(html, manifest_present=False)
+
+    assert hint is not None
+    assert hint.kind == "game"
+    assert "before/after screenshots" in hint.review_guidance
+    assert "score or failure states" in hint.review_guidance
+
+
+def test_game_loop_starter_marker_detects_game_medium_from_related_files() -> None:
+    html = """
+    <html><body>
+      <canvas id="game"></canvas>
+      <script src="game.js"></script>
+    </body></html>
+    """
+
+    assert html_script_srcs(html) == ("game.js",)
+    hint = detect_html_medium(
+        html,
+        manifest_present=False,
+        related_texts=[
+            "requestAnimationFrame(frame);",
+            "# game_loop_vanilla usage notes",
+        ],
+    )
+
+    assert hint is not None
+    assert hint.kind == "game"
+    assert "primary input" in hint.review_guidance
 
 
 def test_plain_site_medium_is_default_none() -> None:

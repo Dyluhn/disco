@@ -240,6 +240,12 @@ class BrowserHandler(BaseHTTPRequestHandler):
             else:
                 return {"ok": False, "error": "index, selector, or click_text required for click"}
             page.wait_for_timeout(500)
+        elif action == "press":
+            key = params.get("key", "")
+            if not key:
+                return {"ok": False, "error": "key required for press"}
+            page.keyboard.press(key)
+            page.wait_for_timeout(500)
         elif action == "fill":
             index = params.get("index")
             text = params.get("text", "")
@@ -349,6 +355,10 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 )
             except Exception:
                 appkit_sections = []
+            try:
+                canvas_count = page.evaluate("() => document.querySelectorAll('canvas').length")
+            except Exception:
+                canvas_count = 0
 
             res = {
                 "ok": True,
@@ -359,6 +369,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "elements": elements,
                 "text": text,
                 "appkit_sections": appkit_sections,
+                "canvas_count": canvas_count,
                 "screenshot_path": screenshot_path,
             }
 

@@ -135,6 +135,40 @@ async def test_model_verifier_mobile_medium_prompt_variant() -> None:
 
 
 @pytest.mark.asyncio
+async def test_model_verifier_game_medium_prompt_variant() -> None:
+    router = _Router(json.dumps({"verified": True, "verdict": "pass"}))
+    medium = detect_html_medium(
+        """
+        <canvas id="game"></canvas>
+        <script>requestAnimationFrame(() => {}); addEventListener("keydown", () => {});</script>
+        """,
+        manifest_present=False,
+    )
+    seed = VerifierContextSeed(
+        contract={"kind": "interactive.prototype"},
+        deliverable_paths=["index.html"],
+        check_results={
+            "passed": True,
+            "game_interaction": {
+                "before_screenshot_path": ".pmx/screenshots/0001-navigate.png",
+                "after_screenshot_path": ".pmx/screenshots/0004-screenshot.png",
+            },
+        },
+        medium=medium,
+    )
+
+    await ModelVerifier(router).judge(seed)
+
+    req = router.requests[0]
+    assert "browser tool to interact" in req.messages[0].content
+    assert "before/after screenshots" in req.messages[0].content
+    assert "score or failure states" in req.messages[0].content
+    payload = json.loads(req.messages[1].content)
+    assert payload["medium"]["kind"] == "game"
+    assert payload["check_results"]["game_interaction"]["after_screenshot_path"]
+
+
+@pytest.mark.asyncio
 async def test_model_verifier_plain_web_prompt_unchanged() -> None:
     router = _Router(json.dumps({"verified": True, "verdict": "pass"}))
     seed = VerifierContextSeed(

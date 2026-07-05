@@ -195,8 +195,7 @@ function randomSampleCount(random: RandomSource): number {
   return SUGGESTION_SAMPLE_MIN + Math.floor(random() * range);
 }
 
-// Static provider seam for now. A future generative source should replace this
-// function without making the splash components care where suggestions came from.
+// Curated fallback provider; the splash swaps to generated suggestions when available.
 export function getSuggestions(surface: SuggestionSurface): Suggestion[] {
   return sampleSuggestions(getSuggestionPool(surface), randomSampleCount(Math.random));
 }
