@@ -298,7 +298,9 @@ _STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
     "<system-reminder>\n"
     "You've been repeating the same action. STOP and take a different "
     "approach — a different tool, a different argument shape, or a "
-    "different sub-task entirely. Do not retry what just failed.\n"
+    "different sub-task entirely. Do not retry what just failed. "
+    "If the work is already complete, do NOT re-verify by re-reading "
+    "unchanged files — call `serve`/`finish` now.\n"
     "<!-- disco:escape-attempt=0 -->\n"
     "</system-reminder>",
     "<system-reminder>\n"
