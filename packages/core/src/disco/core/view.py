@@ -351,8 +351,14 @@ def _recitation_message(
         current_idx = min(active) if active else next_pending
         if current_idx is not None:
             current = f"Current step: {current_idx}. {plan.steps[current_idx - 1].title}"
+            # Live-caught (agent-05 soak autopsy): a reasoning model ANSWERS this
+            # line in a think every turn instead of acting — 259 consecutive
+            # "not stale, write the file NOW" thinks. The reminder must forbid
+            # the meta-response so passing the gate costs zero turns.
             drift_gate = (
-                "Drift gate: if this is stale, update plan progress before continuing."
+                "Drift gate: if this step no longer matches reality, call "
+                "update_plan_progress. Otherwise take the step's next concrete "
+                "action immediately — do NOT restate or answer this reminder."
             )
         else:
             current = "Current step: all plan steps are marked done."
