@@ -214,6 +214,33 @@ _NO_PROGRESS_REMINDER = (
     "</system-reminder>"
 )
 
+async def _serve_path_missing(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
+    """CD-TOOLS-5 OUTPUT-TRUTH: True iff the deliverable path is VERIFIABLY absent in the
+    workspace. Fail-OPEN (return False) when there's no sandbox or the existence check errors —
+    serve is the handoff softguard, not a hard gate, and the verify gate is the real proof; an
+    unverifiable check must never block a legitimate handoff."""
+    sbx = getattr(loop.executor, "sandbox", None)
+    if sbx is None:
+        return False
+    try:
+        return not await sbx.file_exists(path)
+    except Exception:  # noqa: BLE001 — unverifiable → don't block the handoff
+        return False
+
+
+async def _serve_path_verified_present(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
+    """Fail-CLOSED twin of _serve_path_missing: True only when the sandbox
+    POSITIVELY confirms the path exists. The fresh-session gate's exception
+    for already-built work must not open on an unverifiable check."""
+    sbx = getattr(loop.executor, "sandbox", None)
+    if sbx is None:
+        return False
+    try:
+        return bool(await sbx.file_exists(path))
+    except Exception:  # noqa: BLE001 — unverifiable → no exception granted
+        return False
+
+
 _BLOCKED_LANDING_META_KEY = "blocked_landing"
 _BLOCKED_DETAIL_PREFIX = "blocked:"
 _ACTIONLESS_AUTO_RESUME_MARKER = "AUTO-RESUME-ONCE(actionless)"
@@ -1357,19 +1384,6 @@ class MetaToolHandlers:
             return Disp.HALT
         return Disp.CONTINUE
 
-    async def _serve_path_missing(self, path: str) -> bool:
-        """CD-TOOLS-5 OUTPUT-TRUTH: True iff the deliverable path is VERIFIABLY absent in the
-        workspace. Fail-OPEN (return False) when there's no sandbox or the existence check errors —
-        serve is the handoff softguard, not a hard gate, and the verify gate is the real proof; an
-        unverifiable check must never block a legitimate handoff."""
-        sbx = getattr(self._loop.executor, "sandbox", None)
-        if sbx is None:
-            return False
-        try:
-            return not await sbx.file_exists(path)
-        except Exception:  # noqa: BLE001 — unverifiable → don't block the handoff
-            return False
-
     async def handle_serve(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         # Finished-artifact HANDOFF: emit a DeliverableEvent the UI renders
@@ -1380,14 +1394,19 @@ class MetaToolHandlers:
         # form is COUNTED, because each is invisible in the event log
         # and was the unbounded serve-spam vector (Phase-B, 2026-06-10).
         #
-        # POST-RESUME SERVE GATE (Phase-B re-run #3, 2026-06-10): the
-        # model's FIRST post-resume turn was serve(path=".") on an empty
-        # restored workspace — a handoff with zero work behind it, which
-        # then seeded a prose/noop streak into the valve. A serve is only
-        # meaningful after at least one real action this session (since
-        # the last resume, or since start). Refuse with ACTIONABLE
-        # feedback (B4: the model must see why, or it just retries).
-        if signals.actions_since_last_resume(events) == 0:
+        # POST-RESUME SERVE GATE (Phase-B re-run #3, 2026-06-10): a zero-work
+        # serve on a fresh session is the spam vector — refuse with actionable
+        # feedback. EXCEPTION (dtsite autopsy): a re-planned conversation whose
+        # FINISHED build already sits in the rehydrated workspace must hand off
+        # without busywork, so a VERIFIED-present path passes. Fail-CLOSED here
+        # (unverifiable → still refuse); the output-truth gate below stays
+        # fail-open — different stakes.
+        _early_path = str((step.tool_call.arguments or {}).get("path") or "").strip()
+        if _early_path in (".", "./"):
+            _early_path = "index.html"
+        if signals.actions_since_last_resume(events) == 0 and not (
+            _early_path and await _serve_path_verified_present(self._loop, _early_path)
+        ):
             return await self._loop._valve.refuse_fresh_session(
                 step,
                 "serve refused: no real work has happened yet in "
@@ -1402,6 +1421,10 @@ class MetaToolHandlers:
         else:
             title = str(step.tool_call.arguments.get("title") or "").strip()
             path = str(step.tool_call.arguments.get("path") or "").strip()
+            # Whole-site handoffs arrive as "." — resolve to the entry file
+            # instead of refusing a finished site (dtsite autopsy).
+            if path in (".", "./") and await _serve_path_verified_present(self._loop, "index.html"):
+                path = "index.html"
             kind = str(step.tool_call.arguments.get("kind") or "app").strip()
             # F3: a sandbox-internal/loopback serve address (e.g. 127.0.0.1:8000) is
             # NOT reachable from the host — drop it so consumers fall back to the
@@ -1422,7 +1445,7 @@ class MetaToolHandlers:
                 # the few-shot spam prompt for the next one.
                 _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
                 self._loop._invisible_steps += 1
-            elif await self._serve_path_missing(path):
+            elif await _serve_path_missing(self._loop, path):
                 # CD-TOOLS-5 OUTPUT-TRUTH: never hand off a deliverable whose path does not exist
                 # in the workspace — that is a false "Open / Download" card for nothing. Refuse with
                 # actionable feedback (counted + valve-routed) instead of emitting a fake handoff.
@@ -1431,7 +1454,8 @@ class MetaToolHandlers:
                     step,
                     f"serve refused: the deliverable path {path!r} does not exist in the "
                     "workspace yet. Create it (write the file / build the app at that path), "
-                    "then serve it.",
+                    "then serve it. Serve takes the entry FILE path — for a site that is "
+                    "usually index.html.",
                 )
             else:
                 await self._loop._emit(
