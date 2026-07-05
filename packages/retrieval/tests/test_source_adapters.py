@@ -6,6 +6,7 @@ from disco.retrieval.providers import SearchProvider
 from disco.retrieval.source_adapters import (
     ArxivSearchProvider,
     MultiSearchProvider,
+    NewsSearchProvider,
     SemanticScholarSearchProvider,
     SiteScopedSearchProvider,
 )
@@ -92,6 +93,70 @@ async def test_arxiv_malformed_xml_degrades_to_empty():
     )
 
     assert await provider.search("bad") == []
+
+
+async def test_news_maps_rss_hits_strips_html_and_satisfies_protocol():
+    rss = b"""<?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0">
+      <channel>
+        <item>
+          <title> First Headline </title>
+          <link>https://news.google.com/rss/articles/abc</link>
+          <description><![CDATA[
+            <a href="https://publisher.example/a">Publisher</a>
+            <p>Lead <b>HTML</b> text.</p>
+          ]]></description>
+        </item>
+        <item>
+          <title>Second Headline</title>
+          <link>https://news.google.com/rss/articles/def</link>
+          <description><![CDATA[<p>Second &amp; plain <i>snippet</i>.</p>]]></description>
+        </item>
+      </channel>
+    </rss>"""
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        assert req.url.params["q"] == "agent funding"
+        assert req.url.params["hl"] == "en-US"
+        assert req.url.params["gl"] == "US"
+        assert req.url.params["ceid"] == "US:en"
+        return httpx.Response(200, content=rss)
+
+    provider = NewsSearchProvider(transport=_transport(handler))
+    assert isinstance(provider, SearchProvider)
+
+    hits = await provider.search("agent funding", limit=2)
+
+    assert [h.url for h in hits] == [
+        "https://news.google.com/rss/articles/abc",
+        "https://news.google.com/rss/articles/def",
+    ]
+    assert hits[0].title == "First Headline"
+    assert hits[0].snippet == "Publisher Lead HTML text."
+    assert hits[0].source_engine == "news"
+    assert hits[0].rank == 0
+    assert hits[1].snippet == "Second & plain snippet."
+
+
+async def test_news_malformed_xml_degrades_to_empty():
+    provider = NewsSearchProvider(
+        transport=_transport(lambda req: httpx.Response(200, content=b"<rss>"))
+    )
+
+    assert await provider.search("bad") == []
+
+
+async def test_news_week_time_filter_appends_when_operator():
+    seen_queries: list[str] = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen_queries.append(req.url.params["q"])
+        return httpx.Response(200, content=b"<rss><channel /></rss>")
+
+    provider = NewsSearchProvider(transport=_transport(handler))
+
+    assert await provider.search("climate policy", time_filter="week") == []
+    assert seen_queries == ["climate policy when:7d"]
 
 
 async def test_semantic_scholar_maps_json_and_sends_api_key():

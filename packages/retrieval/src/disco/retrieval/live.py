@@ -514,6 +514,7 @@ def _make_search(provider: str, base_url: str, api_key: str):
     from .bundled_providers import BraveSearchProvider, DdgsSearchProvider, TavilySearchProvider
     from .source_adapters import (
         ArxivSearchProvider,
+        NewsSearchProvider,
         SemanticScholarSearchProvider,
         SiteScopedSearchProvider,
     )
@@ -526,6 +527,8 @@ def _make_search(provider: str, base_url: str, api_key: str):
         return BraveSearchProvider(api_key, base_url=base_url or "https://api.search.brave.com")
     if provider == "arxiv":
         return ArxivSearchProvider(base_url=base_url) if base_url else ArxivSearchProvider()
+    if provider == "news":
+        return NewsSearchProvider(base_url=base_url) if base_url else NewsSearchProvider()
     if provider == "semantic_scholar":
         return (
             SemanticScholarSearchProvider(base_url=base_url, api_key=api_key)
@@ -562,6 +565,8 @@ def build_multi_search(
             providers.append(_make_search("ddgs", "", ""))
         elif source_id == "arxiv":
             providers.append(_make_search("arxiv", "", ""))
+        elif source_id == "news":
+            providers.append(_make_search("news", "", ""))
         elif source_id == "semantic_scholar":
             providers.append(_make_search("semantic_scholar", "", ss_key))
         elif source_id == "searxng" and searxng_url:

@@ -125,7 +125,7 @@ def test_data_source_bundled_is_honest_not_remote_green(client):
 def test_data_source_new_keyless_search_tiers_are_bundled(client, state):
     from disco.app_server.config.dtos import DataSourcesConfigDTO
 
-    for provider in ("arxiv", "semantic_scholar", "site_scoped"):
+    for provider in ("arxiv", "news", "semantic_scholar", "site_scoped"):
         state.update_data_sources_config(
             DataSourcesConfigDTO(
                 search_provider=provider,

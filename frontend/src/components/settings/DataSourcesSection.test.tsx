@@ -67,6 +67,11 @@ describe("DataSourcesSection — WALK-05 label", () => {
     // Wait for the config to load and the options to render
     const btn = await screen.findByRole("button", { name: /bundled.*ddgs/i });
     expect(btn).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", {
+        name: /news.*recent news headlines via google news/i,
+      }),
+    ).toBeInTheDocument();
     // The old trademark name must not appear
     expect(screen.queryByText(/DuckDuckGo/)).not.toBeInTheDocument();
   });

@@ -265,6 +265,7 @@ class DataSourcesConfigDTO(BaseModel):
         "tavily",
         "brave",
         "arxiv",
+        "news",
         "semantic_scholar",
         "site_scoped",
     ] = "ddgs"

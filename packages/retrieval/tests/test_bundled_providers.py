@@ -16,6 +16,7 @@ from disco.retrieval.bundled_providers import (
 from disco.retrieval.live import _make_extraction, _make_search
 from disco.retrieval.source_adapters import (
     ArxivSearchProvider,
+    NewsSearchProvider,
     SemanticScholarSearchProvider,
     SiteScopedSearchProvider,
 )
@@ -32,6 +33,7 @@ def test_search_tiers():
     assert type(_make_search("searxng", "http://h:8888", "")).__name__ == "SearxngSearchProvider"
     assert isinstance(_make_search("tavily", "", "key"), TavilySearchProvider)
     assert isinstance(_make_search("arxiv", "", ""), ArxivSearchProvider)
+    assert isinstance(_make_search("news", "", ""), NewsSearchProvider)
     assert isinstance(_make_search("semantic_scholar", "", "key"), SemanticScholarSearchProvider)
     assert isinstance(_make_search("site_scoped", "example.com", ""), SiteScopedSearchProvider)
 

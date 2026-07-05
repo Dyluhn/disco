@@ -313,7 +313,7 @@ class ConfigState:
         if kind == "search":
             s = cfg.search
             provider, base_url, key_env = s.provider, s.base_url.strip(), s.api_key_env.strip()
-            bundled = {"ddgs", "arxiv", "semantic_scholar", "site_scoped"}
+            bundled = {"ddgs", "arxiv", "news", "semantic_scholar", "site_scoped"}
         elif kind == "extraction":
             e = cfg.extraction
             provider, base_url, key_env = e.provider, e.base_url.strip(), e.api_key_env.strip()

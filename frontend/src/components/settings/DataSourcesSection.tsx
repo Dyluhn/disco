@@ -62,6 +62,12 @@ const SEARCH_OPTS: Opt<SearchProvider>[] = [
     help: "Your own SearXNG instance — set its URL below.",
   },
   {
+    id: "news",
+    tier: "bundled",
+    label: "News",
+    help: "Recent news headlines via Google News. No key required.",
+  },
+  {
     id: "arxiv",
     tier: "bundled",
     label: "arXiv",

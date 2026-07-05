@@ -565,6 +565,7 @@ class RuntimeSettings:
         {
             "ddgs",
             "arxiv",
+            "news",
             "semantic_scholar",
             "searxng",
             "tavily",

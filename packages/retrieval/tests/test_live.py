@@ -61,7 +61,7 @@ async def test_searxng_failure_degrades_to_no_hits():
 
 def test_build_multi_search_maps_ids_and_falls_back_to_ddgs():
     provider = build_multi_search(
-        ["arxiv", "ddgs", "semantic_scholar", "searxng", "tavily", "unknown"],
+        ["arxiv", "news", "ddgs", "semantic_scholar", "searxng", "tavily", "unknown"],
         searxng_url="http://searx",
         tavily_key="tv",
         ss_key="ss",
@@ -70,6 +70,7 @@ def test_build_multi_search_maps_ids_and_falls_back_to_ddgs():
     assert isinstance(provider, MultiSearchProvider)
     assert [type(p).__name__ for p in provider._providers] == [
         "ArxivSearchProvider",
+        "NewsSearchProvider",
         "DdgsSearchProvider",
         "SemanticScholarSearchProvider",
         "SearxngSearchProvider",

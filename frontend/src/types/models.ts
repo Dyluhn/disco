@@ -183,6 +183,7 @@ export type SearchProvider =
   | "tavily"
   | "brave"
   | "arxiv"
+  | "news"
   | "semantic_scholar"
   | "site_scoped";
 export type ExtractionProvider = "local" | "crawl4ai" | "firecrawl";

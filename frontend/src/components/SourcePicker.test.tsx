@@ -69,11 +69,13 @@ describe("SourcePicker", () => {
     render(<Harness />, { wrapper: wrapper() });
 
     const web = screen.getByRole("button", { name: /web/i });
+    const news = screen.getByRole("button", { name: /news/i });
     const arxiv = screen.getByRole("button", { name: /arxiv/i });
     const tavily = await screen.findByRole("button", { name: /tavily/i });
     const brave = screen.getByRole("button", { name: /brave/i });
 
     expect(web).toHaveAttribute("aria-pressed", "true");
+    expect(news).toBeEnabled();
     await waitFor(() => expect(tavily).toBeEnabled());
     expect(brave).toBeDisabled();
     expect(screen.getAllByRole("link", { name: /add in settings/i }).length).toBeGreaterThan(0);
@@ -81,15 +83,20 @@ describe("SourcePicker", () => {
     await user.click(arxiv);
     expect(screen.getByTestId("selected-sources")).toHaveTextContent("ddgs,arxiv");
 
+    await user.click(news);
+    expect(screen.getByTestId("selected-sources")).toHaveTextContent("ddgs,arxiv,news");
+
     await user.click(tavily);
-    expect(screen.getByTestId("selected-sources")).toHaveTextContent("ddgs,arxiv,tavily");
+    expect(screen.getByTestId("selected-sources")).toHaveTextContent(
+      "ddgs,arxiv,news,tavily",
+    );
 
     await user.click(web);
-    expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv,tavily");
+    expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv,news,tavily");
 
     await user.click(brave);
     await waitFor(() =>
-      expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv,tavily"),
+      expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv,news,tavily"),
     );
   });
 });

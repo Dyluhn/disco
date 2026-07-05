@@ -160,8 +160,8 @@ def test_create_conversation_applies_research_sources():
         json={
             "owner_id": "local",
             "surface": "deep_research",
-            "sources": ["arxiv", "ddgs", "arxiv", "unknown"],
+            "sources": ["news", "arxiv", "ddgs", "arxiv", "unknown"],
         },
     ).json()["conversation_id"]
 
-    assert runtime.get_research_sources(cid) == ("arxiv", "ddgs")
+    assert runtime.get_research_sources(cid) == ("news", "arxiv", "ddgs")

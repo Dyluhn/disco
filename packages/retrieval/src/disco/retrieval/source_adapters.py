@@ -1,7 +1,8 @@
 """Additional discovery adapters behind the SearchProvider protocol.
 
 arXiv ignores ``time_filter`` because its public Atom API has no simple recency
-parameter matching the search provider contract.
+parameter matching the search provider contract. Google News maps the supported
+filters onto RSS query ``when:`` operators.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import re
 import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 import httpx
@@ -25,6 +27,23 @@ def _host(url: str) -> str:
 
 def _collapse_ws(value: str | None) -> str:
     return " ".join((value or "").split())
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+
+def _strip_html(value: str | None) -> str:
+    parser = _HTMLTextExtractor()
+    parser.feed(value or "")
+    parser.close()
+    text = _collapse_ws(" ".join(parser.parts))
+    return re.sub(r"\s+([.,;:!?])", r"\1", text)
 
 
 def _allowed(url: str, allow: frozenset[str] | None, deny: frozenset[str] | None) -> bool:
@@ -110,6 +129,89 @@ class ArxivSearchProvider:
             if len(hits) >= limit:
                 break
         return hits
+
+
+class NewsSearchProvider:
+    """Google News RSS search adapter."""
+
+    name = "news"
+
+    def __init__(
+        self,
+        *,
+        base_url: str = "https://news.google.com/rss/search",
+        hl: str = "en-US",
+        gl: str = "US",
+        ceid: str = "US:en",
+        timeout_s: float = 15.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        self._base_url = base_url
+        self._hl = hl
+        self._gl = gl
+        self._ceid = ceid
+        self._timeout = timeout_s
+        self._transport = transport
+
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+        domains_allow: frozenset[str] | None = None,
+        domains_deny: frozenset[str] | None = None,
+        time_filter: str | None = None,
+    ) -> list[SearchHit]:
+        effective_query = _news_query(query, time_filter)
+        params = {
+            "q": effective_query,
+            "hl": self._hl,
+            "gl": self._gl,
+            "ceid": self._ceid,
+        }
+        try:
+            async with httpx.AsyncClient(
+                timeout=self._timeout,
+                transport=self._transport,
+                follow_redirects=True,
+            ) as client:
+                resp = await client.get(self._base_url, params=params)
+                resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+        except (httpx.HTTPError, httpx.InvalidURL, ET.ParseError, ValueError):
+            return []
+
+        hits: list[SearchHit] = []
+        try:
+            for i, item in enumerate(root.findall("channel/item")):
+                title = _collapse_ws(item.findtext("title"))
+                url = _collapse_ws(item.findtext("link"))
+                if not url or not _allowed(url, domains_allow, domains_deny):
+                    continue
+                hits.append(
+                    SearchHit(
+                        url=url,
+                        title=title or url,
+                        snippet=_strip_html(item.findtext("description")) or title or url,
+                        source_engine="news",
+                        rank=i,
+                    )
+                )
+                if len(hits) >= limit:
+                    break
+        except ValueError:
+            return []
+        return hits
+
+
+def _news_query(query: str, time_filter: str | None) -> str:
+    when = {
+        "week": "7d",
+        "day": "1d",
+        "today": "1d",
+        "month": "30d",
+    }.get((time_filter or "").lower())
+    return f"{query} when:{when}" if when else query
 
 
 class SemanticScholarSearchProvider:

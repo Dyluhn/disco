@@ -306,9 +306,9 @@ class TtsSettings(BaseModel):
 class SearchSettings(BaseModel):
     """[settings] Web DISCOVERY provider. The THREE tiers of the universal design:
     (a) self-host `searxng` (base_url), (b) paid APIs `tavily`/`brave` (BYO key),
-    and (c) BUNDLED keyless adapters (`ddgs`, `arxiv`, `semantic_scholar`,
-    `site_scoped`) — the FIRST-RUN DEFAULT so a fresh install searches the moment
-    it's downloaded."""
+    and (c) BUNDLED keyless adapters (`ddgs`, `arxiv`, `news`,
+    `semantic_scholar`, `site_scoped`) — the FIRST-RUN DEFAULT so a fresh install
+    searches the moment it's downloaded."""
 
     provider: Literal[
         "ddgs",
@@ -316,10 +316,11 @@ class SearchSettings(BaseModel):
         "tavily",
         "brave",
         "arxiv",
+        "news",
         "semantic_scholar",
         "site_scoped",
     ] = "ddgs"
-    base_url: str = ""  # searxng URL, arxiv override, or site_scoped domains
+    base_url: str = ""  # searxng URL, arxiv/news override, or site_scoped domains
     api_key_env: str = ""  # secrets key name for tavily/brave/semantic_scholar
 
 

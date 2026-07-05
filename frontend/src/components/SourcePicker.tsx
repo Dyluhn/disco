@@ -1,4 +1,11 @@
-import { BookOpen, Globe2, GraduationCap, Search, type LucideIcon } from "lucide-react";
+import {
+  BookOpen,
+  Globe2,
+  GraduationCap,
+  Newspaper,
+  Search,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect, useMemo } from "react";
 import { Link } from "react-router-dom";
 import { useDataSourcesConfig } from "@/hooks/useModels";
@@ -7,12 +14,13 @@ import { cn } from "@/lib/cn";
 type SourceId =
   | "ddgs"
   | "arxiv"
+  | "news"
   | "semantic_scholar"
   | "tavily"
   | "brave"
   | "searxng";
 
-const KEYLESS = new Set<SourceId>(["ddgs", "arxiv", "semantic_scholar"]);
+const KEYLESS = new Set<SourceId>(["ddgs", "arxiv", "news", "semantic_scholar"]);
 
 const SOURCES: Array<{
   id: SourceId;
@@ -21,6 +29,7 @@ const SOURCES: Array<{
   needsSetup?: boolean;
 }> = [
   { id: "ddgs", label: "Web", Icon: Globe2 },
+  { id: "news", label: "News", Icon: Newspaper },
   { id: "arxiv", label: "arXiv", Icon: BookOpen },
   { id: "semantic_scholar", label: "Semantic Scholar", Icon: GraduationCap },
   { id: "tavily", label: "Tavily", Icon: Search, needsSetup: true },
