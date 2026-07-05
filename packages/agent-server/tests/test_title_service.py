@@ -146,6 +146,20 @@ class _FakeRouter:
         return _FakeResp(self._text or "")
 
 
+class _ScriptedRouter:
+    """Returns scripted texts in order; records each request's max_tokens."""
+
+    def __init__(self, texts: list[str]) -> None:
+        self._texts = list(texts)
+        self.calls = 0
+        self.max_tokens_seen: list[int | None] = []
+
+    async def complete(self, req):  # noqa: ANN001
+        self.calls += 1
+        self.max_tokens_seen.append(getattr(req, "max_tokens", None))
+        return _FakeResp(self._texts.pop(0) if self._texts else "")
+
+
 @pytest.mark.anyio
 async def test_run_summarizes_and_persists() -> None:
     store = _FakeStore([_user("Build a Tetris game in one HTML file")])
@@ -183,6 +197,44 @@ async def test_run_noop_when_no_first_message_yet() -> None:
     svc = TitleService(store, lambda *a, **k: router)
     await svc._run("cid")  # type: ignore[attr-defined]
     assert store.updated_to is None
+    assert router.calls == 0
+
+
+@pytest.mark.anyio
+async def test_think_only_summary_retries_with_wider_budget() -> None:
+    """A reasoning SUMMARIZER can spend the whole 24-token budget inside <think>
+    (sanitize → ""), which used to store the fallback clamp PERMANENTLY — the
+    cut-off Deep Research PDF cover title. The retry must widen and win."""
+    store = _FakeStore([_user("How did the transatlantic telegraph cable change global finance?")])
+    router = _ScriptedRouter([
+        "<think>The user wants a concise title for",  # budget died mid-think
+        "<think>ok</think>Transatlantic Telegraph and Global Finance",
+    ])
+    svc = TitleService(store, lambda *a, **k: router)
+    await svc._run("cid")  # type: ignore[attr-defined]
+    assert store.updated_to == "Transatlantic Telegraph and Global Finance"
+    assert router.max_tokens_seen == [24, 384]
+
+
+@pytest.mark.anyio
+async def test_backfill_retitles_stored_fallback_clamp() -> None:
+    task = "How did the transatlantic telegraph cable change global finance and news?"
+    store = _FakeStore([_user(task)], title=fallback_title(task))
+    router = _FakeRouter(text="Transatlantic Telegraph History")
+    svc = TitleService(store, lambda *a, **k: router)
+    out = await svc.backfill(["cid"], retitle_fallbacks=True)
+    assert out == {"cid": "Transatlantic Telegraph History"}
+    assert store.title == "Transatlantic Telegraph History"
+
+
+@pytest.mark.anyio
+async def test_backfill_leaves_real_titles_alone_even_when_forced() -> None:
+    store = _FakeStore([_user("Build a Tetris game")], title="Single-File Tetris")
+    router = _FakeRouter(text="Different Title")
+    svc = TitleService(store, lambda *a, **k: router)
+    out = await svc.backfill(["cid"], retitle_fallbacks=True)
+    assert out == {}
+    assert store.title == "Single-File Tetris"
     assert router.calls == 0
 
 

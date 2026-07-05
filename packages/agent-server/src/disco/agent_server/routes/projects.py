@@ -63,20 +63,29 @@ def make_projects_router(
     @router.post("/api/projects/backfill-titles")
     async def backfill_titles(
         owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        retitle_fallbacks: bool = Query(default=False),
     ) -> dict:
         """Maintenance: title any conversations still showing ``(untitled)`` — those
         created before auto-titling existed, or where the live title-gen failed.
         Re-runnable + idempotent (already-titled conversations are skipped). Uses the
         same SUMMARIZER-role model as the live auto-titler, with the first-message
-        fallback. Returns ``{cid: title}`` for the ones it named."""
+        fallback. Returns ``{cid: title}`` for the ones it named.
+
+        ``retitle_fallbacks=true`` additionally upgrades stored fallback-clamp
+        titles (a question cut off mid-sentence) to real summarized titles — the
+        repair pass for PDF covers minted before the summarizer retry existed."""
         if runtime is None:
             return {"titled": {}, "scanned": 0, "status": "no-runtime"}
         summaries = await store.list_conversation_summaries(
             owner_id=owner_id, limit=500, cursor=None
         )
-        untitled = [s.conversation_id for s in summaries if not s.title]
-        titled = await runtime.title_service().backfill(untitled)
-        return {"titled": titled, "count": len(titled), "scanned": len(untitled)}
+        candidates = [
+            s.conversation_id for s in summaries if not s.title or retitle_fallbacks
+        ]
+        titled = await runtime.title_service().backfill(
+            candidates, retitle_fallbacks=retitle_fallbacks
+        )
+        return {"titled": titled, "count": len(titled), "scanned": len(candidates)}
 
     @router.get("/api/projects/{conversation_id}/download")
     async def download_project(conversation_id: str) -> StreamingResponse:

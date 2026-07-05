@@ -161,41 +161,63 @@ class TitleService:
 
     async def _summarize(self, task: str) -> str:
         """Model-summarized title via the cheap SUMMARIZER role. Returns '' on any
-        failure (the caller falls back to a truncated snippet)."""
+        failure (the caller falls back to a truncated snippet).
+
+        A reasoning-class SUMMARIZER can spend the whole tiny budget inside
+        <think> — sanitize_title strips that to "", and the fallback clamp then
+        gets stored PERMANENTLY (idempotence blocks retitling). So on an empty
+        first pass, retry ONCE with room for the reasoning to finish AND emit
+        the title (same shape as the synthesis empty-retry)."""
         try:
             router = self._router_now()
-            resp = await router.complete(
-                CompletionRequest(
-                    profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
-                    messages=[
-                        LLMMessage(
-                            role="user", content=_PROMPT_PREFIX + task[:_MAX_TASK_CHARS]
-                        )
-                    ],
-                    temperature=0.0,
-                    max_tokens=24,
+            for max_tokens in (24, 384):
+                resp = await router.complete(
+                    CompletionRequest(
+                        profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
+                        messages=[
+                            LLMMessage(
+                                role="user", content=_PROMPT_PREFIX + task[:_MAX_TASK_CHARS]
+                            )
+                        ],
+                        temperature=0.0,
+                        max_tokens=max_tokens,
+                    )
                 )
-            )
-            return sanitize_title(getattr(resp, "text", "") or "")
+                title = sanitize_title(getattr(resp, "text", "") or "")
+                if title:
+                    return title
+            return ""
         except Exception:
             _LOG.debug("title summarization call failed", exc_info=True)
             return ""
 
-    async def backfill(self, conversation_ids: Sequence[str]) -> dict[str, str]:
+    async def backfill(
+        self, conversation_ids: Sequence[str], *, retitle_fallbacks: bool = False
+    ) -> dict[str, str]:
         """Title a batch of existing conversations (the one-off pass for the wall of
         pre-feature ``(untitled)`` rows). Sequential to avoid hammering the model;
-        returns ``{cid: title}`` for the ones it set."""
+        returns ``{cid: title}`` for the ones it set.
+
+        ``retitle_fallbacks=True`` also revisits conversations whose stored title
+        is exactly the no-LLM fallback clamp of their first message (the scar a
+        failed summarizer call leaves behind — e.g. a Deep Research question cut
+        off mid-sentence on the PDF cover) and replaces it when the model now
+        produces a real title."""
         result: dict[str, str] = {}
         for cid in conversation_ids:
             try:
-                if await self._store.get_title(cid):
-                    continue
+                existing = await self._store.get_title(cid)
                 events = await self._store.get_events(cid)
                 task = first_user_text(events)
                 if not task:
                     continue
-                title = await self._summarize(task) or fallback_title(task)
-                if title:
+                if existing:
+                    if not (retitle_fallbacks and existing == fallback_title(task)):
+                        continue
+                    title = await self._summarize(task)  # only a REAL title replaces
+                else:
+                    title = await self._summarize(task) or fallback_title(task)
+                if title and title != existing:
                     await self._store.update_title(cid, title)
                     result[cid] = title
             except Exception:
