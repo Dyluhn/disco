@@ -69,6 +69,7 @@ from .recipes import (
     recipe_ids,
 )
 from .records_primitive import (
+    default_records_auth_app_spec,
     default_records_app_spec,
     generate_records,
     prepare_records_app_spec,
@@ -168,6 +169,7 @@ __all__ = [
     "cloudflare_export_ready_static",
     "default_directory_app_spec",
     "default_lead_gen_app_spec",
+    "default_records_auth_app_spec",
     "default_records_app_spec",
     "designspec_path",
     "ensure_lead_entity",

@@ -13,6 +13,8 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from http.client import HTTPMessage
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from types import TracebackType
 from typing import TextIO
@@ -29,6 +31,31 @@ _WRANGLER_METRICS_ENV = "WRANGLER_SEND_METRICS"
 
 class WorkerdAppError(RuntimeError):
     """Raised when the local workerd harness cannot complete a lifecycle step."""
+
+
+class CookieJar:
+    """Minimal test cookie jar for Worker session-cookie round trips."""
+
+    def __init__(self) -> None:
+        self._cookies: dict[str, str] = {}
+
+    def header(self) -> str | None:
+        if not self._cookies:
+            return None
+        return "; ".join(f"{name}={value}" for name, value in sorted(self._cookies.items()))
+
+    def store(self, set_cookie_headers: Sequence[str]) -> None:
+        for header in set_cookie_headers:
+            cookie = SimpleCookie()
+            try:
+                cookie.load(header)
+            except CookieError:
+                continue
+            for name, morsel in cookie.items():
+                if morsel["max-age"] == "0" or morsel.value == "":
+                    self._cookies.pop(name, None)
+                else:
+                    self._cookies[name] = morsel.value
 
 
 @dataclass(frozen=True)
@@ -54,6 +81,7 @@ class WorkerdApp:
         self._port: int | None = None
         self._dev_log_handle: TextIO | None = None
         self._dev_log_path: Path | None = None
+        self._cookies = CookieJar()
 
     @property
     def app_dir(self) -> Path:
@@ -141,21 +169,48 @@ class WorkerdApp:
         if port is not None:
             _wait_port_down(port, timeout_s=_KILL_TIMEOUT_S)
 
-    def post_json(self, path: str, obj: Mapping[str, object]) -> tuple[int, str]:
+    def cookie_jar(self) -> CookieJar:
+        return CookieJar()
+
+    def post_json(
+        self,
+        path: str,
+        obj: Mapping[str, object],
+        *,
+        token: str | None = None,
+        cookie_jar: CookieJar | None = None,
+    ) -> tuple[int, str]:
         body = json.dumps(obj).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if token is not None:
+            headers["Authorization"] = f"Bearer {token}"
         return self._request(
             "POST",
             path,
             body=body,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             timeout_s=_HTTP_TIMEOUT_S,
+            cookie_jar=cookie_jar,
         )
 
-    def get(self, path: str, token: str | None = None) -> tuple[int, str]:
+    def get(
+        self,
+        path: str,
+        token: str | None = None,
+        *,
+        cookie_jar: CookieJar | None = None,
+    ) -> tuple[int, str]:
         headers: dict[str, str] = {}
         if token is not None:
             headers["Authorization"] = f"Bearer {token}"
-        return self._request("GET", path, body=None, headers=headers, timeout_s=_HTTP_TIMEOUT_S)
+        return self._request(
+            "GET",
+            path,
+            body=None,
+            headers=headers,
+            timeout_s=_HTTP_TIMEOUT_S,
+            cookie_jar=cookie_jar,
+        )
 
     def is_down(self) -> bool:
         """Return True if the most recently used port is not accepting HTTP requests."""
@@ -202,6 +257,7 @@ class WorkerdApp:
                     headers={},
                     timeout_s=1.0,
                     port=port,
+                    cookie_jar=None,
                 )
                 return
             except (OSError, TimeoutError, urllib.error.URLError) as exc:
@@ -221,17 +277,25 @@ class WorkerdApp:
         headers: Mapping[str, str],
         timeout_s: float,
         port: int | None = None,
+        cookie_jar: CookieJar | None = None,
     ) -> tuple[int, str]:
         target_port = self._port if port is None else port
         if target_port is None:
             raise WorkerdAppError("wrangler dev has not been booted")
         url = _url(target_port, path)
-        req = urllib.request.Request(url, data=body, headers=dict(headers), method=method)
+        req_headers = dict(headers)
+        jar = self._cookies if cookie_jar is None else cookie_jar
+        cookie_header = jar.header()
+        if cookie_header is not None and "Cookie" not in req_headers:
+            req_headers["Cookie"] = cookie_header
+        req = urllib.request.Request(url, data=body, headers=req_headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout_s) as res:
+                jar.store(_set_cookie_headers(res.headers))
                 text = res.read().decode("utf-8", errors="replace")
                 return res.status, text
         except urllib.error.HTTPError as exc:
+            jar.store(_set_cookie_headers(exc.headers))
             text = exc.read().decode("utf-8", errors="replace")
             return exc.code, text
 
@@ -393,6 +457,11 @@ def _port_is_down(port: int) -> bool:
 def _url(port: int, path: str) -> str:
     suffix = path if path.startswith("/") else f"/{path}"
     return f"http://{_LOCAL_HOST}:{port}{suffix}"
+
+
+def _set_cookie_headers(headers: HTTPMessage) -> list[str]:
+    values = headers.get_all("Set-Cookie")
+    return list(values) if values is not None else []
 
 
 def _coerce_output(value: bytes | str | None) -> str:

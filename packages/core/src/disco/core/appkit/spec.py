@@ -360,6 +360,10 @@ class Entity(BaseModel):
     id: _IdStr
     name: _NameStr
     fields: tuple[EntityField, ...] = Field(default_factory=tuple, max_length=_MAX_FIELDS)
+    write_roles: tuple[_IdStr, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+    read_roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def _field_names_unique(self) -> Entity:
@@ -367,6 +371,18 @@ class Entity(BaseModel):
             (f.name for f in self.fields), what=f"field name on entity {self.id!r}"
         )
         return self
+
+    @field_validator("write_roles", "read_roles")
+    @classmethod
+    def _roles_are_safe_identifiers(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for role in value:
+            if not _IDENT_RE.match(role):
+                raise ValueError(
+                    "entity role names must be snake_case identifiers "
+                    f"(pattern {_IDENT_RE.pattern!r}: lowercase, starts with a letter, "
+                    f"only letters/digits/underscore), got {role!r}"
+                )
+        return value
 
 
 class Action(BaseModel):
@@ -423,11 +439,25 @@ class AppSpec(BaseModel):
     # The dominant kind of thing being built; aligns with BuildBrief.app_kind.
     app_kind: _ShortStr
     name: _NameStr
+    roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
     pages: tuple[Page, ...] = Field(default_factory=tuple, max_length=_MAX_PAGES)
     entities: tuple[Entity, ...] = Field(default_factory=tuple, max_length=_MAX_ENTITIES)
     primary_actions: tuple[Action, ...] = Field(
         default_factory=tuple, max_length=_MAX_ACTIONS
     )
+
+    @field_validator("roles")
+    @classmethod
+    def _roles_are_safe_identifiers(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for role in value:
+            if not _IDENT_RE.match(role):
+                raise ValueError(
+                    "role names must be snake_case identifiers "
+                    f"(pattern {_IDENT_RE.pattern!r}: lowercase, starts with a letter, "
+                    f"only letters/digits/underscore), got {role!r}"
+                )
+        _require_unique(value, what="role")
+        return value
 
     @model_validator(mode="after")
     def _ids_unique(self) -> AppSpec:
@@ -460,6 +490,23 @@ class AppSpec(BaseModel):
             for entity_id in ready:
                 emitted.add(entity_id)
                 del pending[entity_id]
+        return self
+
+    @model_validator(mode="after")
+    def _entity_roles_valid(self) -> AppSpec:
+        declared = set(self.roles)
+        for entity in self.entities:
+            for role in (*entity.write_roles, *entity.read_roles):
+                if not declared:
+                    raise ValueError(
+                        f"entity {entity.id!r} declares role {role!r} but AppSpec.roles "
+                        "is empty"
+                    )
+                if role not in declared:
+                    raise ValueError(
+                        f"entity {entity.id!r} declares unknown role {role!r}; "
+                        f"known roles: {sorted(declared)}"
+                    )
         return self
 
 
