@@ -138,8 +138,9 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | B-W4 | Build | **DONE** | `efccf4fe` | Fable's own run: real Firefox render of a generated app — disabled "Sending…" button + optimistic "Recently submitted" item mid-submit; backend worker+D1 byte-identical (B-W3 auth worker untouched) |
 | C1–C3 | Tier-3 | **DONE** (soak-pending) | `1dfedb15` | 83 tripwire tests; behavioral effect deferred to Epic Z soak |
 | S-W1 | Security | **DONE** (keystone) | `e028d2ac` | from-scratch auth/CSRF/owner-scoping; 19-proof real-exploit harness + route-inventory test; adversarially SHIP'd over 4 gpt-5.5 rounds (BLOCK 9→3→2→SHIP); UI-still-works Firefox screenshot = the one human-verify item |
-| S-W1 | Security | QUEUED (keystone) | — | — |
-| S-W2..W6 | Security | QUEUED | — | — |
+| S-W2 | Security | **DONE** | `2408e40f` | secret-ref resolution + egress origin-approval chokepoint (`core/host_egress.py` SSRF guard + `core/origin_approvals.py` out-of-band HMAC approvals + `secret_refs.py` origin-pinning); every egress sink swept; admin-gated `/api/security/approve-origin`; 962-line real-exploit harness (17 green); adversarially SHIP'd (gpt-5.5 xhigh, 4 rounds); ConfigState kept at 935 baseline via `origin_approval_wiring.py` extraction |
+| S-W-Pi | Security | IN PROGRESS | — | attack-surface reduction — remove Pi kernel/inference (Dylan cut) |
+| S-W3..W6 | Security | QUEUED / W6 in flight | — | — |
 | Z1–Z3 | Soak+debug | QUEUED (final) | — | — |
 
 **Rule:** a row moves to DONE only when committed AND live-proven. Partial work stays IN-PROGRESS with a note. Nothing is ever marked done on a green unit-test count alone.
