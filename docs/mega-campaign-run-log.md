@@ -103,3 +103,159 @@ Landed + fully proven this run: **Epic A (designs), Epic C (Tier-3), B-W1 (deplo
 Remaining (next session): **Epic S (security, 6 waves — ALREADY fully spec'd in docs/disco-security-fix-campaign.md, implementation-ready)** and **Epic Z (soak)**. These are large focused blocks; S each wave needs real-exploit-before/after + gpt-5.5 adversarial (like the B-W3 auth cycle). They're teed up to execute directly from the security doc.
 
 <!-- append below as work lands -->
+
+---
+
+## B-W4 — client reactivity (LANDED) — commit `efccf4fe`
+
+codex implemented the reactivity feature in wt-B; I verified + landed on main.
+
+- **Feature:** typed `postJson<T>` API client (`src/api/client.ts`), a `useSubmit`
+  hook with a discriminated-union state (idle|submitting|success|error),
+  double-submit protection (button disabled while submitting), inline
+  required-field validation, API-error surfacing, and an OPTIMISTIC in-session
+  "Recently submitted" list.
+- **Byte-identical backend:** I recomputed worker+D1 digests across main (pre-BW4)
+  and wt-B for all three app types — lead `dbf11360`, records `293b85b0`, auth
+  `90c28a51` — IDENTICAL. B-W4 is frontend-only, so B-W3's adversarially-hardened
+  auth worker is untouched. Golden frontend digests updated (correct, intentional):
+  `_LEAD_GEN_ACME_DIGEST` 3363aa17→7f05d743, `_RECORDS_BW2_DIGEST` 18074e7e→d2e60094.
+- **Live proof (Firefox, real render):** vite build + wrangler dev serving a
+  generated app; a real submit shows the disabled "Sending…" button and the
+  optimistic "Recently submitted" item (Ada Lovelace / ada@example.com) rendered
+  immediately, then the success state. Screenshots at
+  /tmp/disclaude-bw4-live-proof/*.png — sent to Dylan as visual evidence.
+- **Gates (authoritative, on main):** basedpyright 0 errors; arch-budget no new
+  over-budget item in touched files; lint-imports 2 kept/0 broken; diagram fresh;
+  core+tools unit suite exit 0.
+
+### Epic B COMPLETE
+Build-depth is done end-to-end: A (designs) + B-W1 (workerd persistence keystone) +
+B-W2 (FK data-layer) + B-W3 (RBAC/sessions, adversarially cleared) + B-W4 (client
+reactivity) all committed AND live-proven against real workerd/D1/Firefox. Epic C
+(tier-3) done (soak-pending). This satisfies Dylan's "get it working" build-depth
+mandate + the ephemeral→durable model (persistence demonstrated across restart).
+
+### Pivot → Epic S (security, the closer)
+Per Dylan's stated order (security is the closing epic), starting the 6-wave
+security fix campaign spec'd in docs/disco-security-fix-campaign.md. Each wave:
+build → real-exploit-before/after → gpt-5.5 adversarial to SHIP → commit. Then
+Epic Z (big soak + debug).
+
+---
+
+## Epic S — Security Hardening (the closer) — STARTED
+
+Pivoted to the 6-wave security campaign (docs/disco-security-fix-campaign.md, a 7-round
+Opus+gpt-5.5 converged plan, 38 findings, all decisions pre-resolved by Dylan). Per-wave
+discipline: real-exploit-before/after + gpt-5.5 xhigh adversarial to SHIP + commit.
+
+**Recon note:** the top-level `archived God files/` dir holds STALE copies of runtime.py /
+dod_evaluator.py / app.py etc. — the 2026-06-20 plan line numbers came from THOSE. Live code
+is under `packages/*/src`. Both WO specs re-grounded to current live locations (2026-07-06).
+
+**S-W1 (auth keystone) — codex IMPLEMENTING in wt-B.** Grounded map: no session/cookie/CSRF
+exists (build from scratch, mirror the appkit_cloudflare `_require_owner` hmac+rate-limit idiom);
+CORS `allow_origins=["*"]` both servers (agent app.py:139, app app.py:44); client-controlled
+owner_id (_common.py:79, conversations.py create+list+delete); store auto-creates unknown convs
+as owner "local" (sqlite.py:449-454 _store_one) → must reject BEFORE append; 4 WS endpoints accept
+with no Origin/auth; preview middleware has a session_resolver seam already wired (app.py:150) but
+wake_for_preview does an owner-blind DEFAULT_OWNER_ID lookup (preview_service.py:93-95). WO includes
+frontend auto-mint wiring so Dylan's UI keeps working + a GENERATED route-inventory test (A8) +
+a 7-proof real-exploit harness.
+
+**S-W2 (secrets + egress) — spec GROUNDED, queued behind W1.** Key live holes found:
+- `mcp/http.py:83-103` forwards SECRET-backed headers with `follow_redirects=True` (cred-leak-on-redirect).
+- `plan_conditions.py:812` `http_ok` has NO egress allowlist at all (the 2nd of two impls; DoD one at
+  dod_evaluator.py:365-392 gates but urllib still follows 3xx).
+- `policies.py:98-104` auto-approves `scope=="sandbox"` → the 3 remote-backed tools (image/audio/slides,
+  labeled sandbox but doing host HTTP with keys) bypass the host-scope confirm.
+- B4 SIMPLER than planned: brand fonts are already base64 data-URIs (css.py:82-122), so the WeasyPrint
+  url_fetcher can deny ALL file://+external with no font-allowlist exception.
+- B1 os.environ fallthrough at ~12 sites (runtime.py:1065 canonical + wiring.py:131-147 + 10 more).
+
+### S-W1 adversarial round 1 — BLOCK (9 findings), fix pass dispatched
+codex implemented S-W1 (+1676/-302, 41 files, 3 new auth modules + exploit harness + route-inventory test +
+frontend auto-mint). My authoritative gates ALL passed: basedpyright 0, unit suite exit 0, arch-budget clean
+(23-item baseline, zero new overage), 7/7 exploit proofs, route-inventory green, harness confirmed genuine
+(real app via create_app, real 403 asserts, checks the sqlite conversations table).
+
+BUT the mandatory gpt-5.5 xhigh adversarial review returned BLOCK — exactly why it's non-negotiable for auth
+code (same as B-W3). 9 findings, verified real by spot-check, in 4 root causes:
+- **R2 (CRITICAL class): guard/sink id-format mismatch.** The owner middleware keys on `_CID_RE=/conv_.../`
+  but preview/capability/message routes accept a TRUNCATED cid8 or non-conv_ id that bypasses it → #2 owner B
+  proxies A's live preview via `/conversations/<A-cid8>/preview-app/`; #3 B mints a preview capability for A's
+  cid8; #4 `POST /conversations/notconv/messages` auto-creates an owner=local row. Same class as the B-W3
+  self-approval bug (guard covers one shape, sink is another). Fix = canonical-id + owner-check AT THE SINK via
+  a shared `require_owned_conversation` dep, not a prefix-matching middleware alone.
+- **R1: mint unauthenticated by default.** `AUTH_DEV_AUTO_PAIR` defaults "1" → mint returns an admin session
+  with no pairing token, token never consumed (#1). Fix = default OFF, require+consume the one-time token, keep
+  loopback+Origin always-on, deliver the token to the first-party frontend same-origin.
+- **R3: whole resource families unscoped.** projects-list (#5), spaces (#6 — SpaceRecord has no owner_id),
+  workflows (#7 — JsonDirWorkflowStore no owner), schedule-runs (#8) all cross-owner readable/mutable. Fix =
+  add owner_id (legacy→DEFAULT_OWNER_ID) + filter every list/get/mutate.
+- **R4: tests miss the bypasses** (#9 — harness runtime=None, PROOF 6 encodes wrong mint behavior, inventory
+  only classifies templates). Fix = real negative tests for all of R1-R3 + inventory does actual requests.
+
+Fixing ALL 9 by class in ONE convergence pass (per parallel-convergence discipline), then re-review to SHIP.
+
+### S-W1 adversarial round 2 — BLOCK (3 findings, converging), fix pass 2 dispatched
+codex fix pass 1 (+2640/-424, 61 files, harness grew 7→14 proofs). My authoritative re-verify: basedpyright 0,
+unit exit 0, arch clean (23, zero new), 14/14 proofs, test edits confirmed legit id-canonicalization (not gutted).
+
+gpt-5.5 round 2: BLOCK — but CONFIRMED all 9 round-1 findings CLOSED (pairing default/replay/origin fixed;
+preview raw-cid8 + cross-owner capability blocked; non-conv_ writes 404 before auto-create; projects/spaces/
+workflows/schedules owner-scoped). 3 NEW narrower findings (9→3, only 1 High = convergence):
+- **#1 (High, CONFIRMED w/ live PoC): client-supplied `space_ids` forwarded into corpus lookup with no owner
+  check** — same A7 class relocated: after locking conversation_id, `space_ids` became the unguarded handle; B
+  passes A's space_A_secret via /ws/research frame or POST /conversations body → vectorstore keys on namespace
+  only → returns A's corpus. Fix clean: JsonSpaceStore.get(space_id, owner_id=...) already owner-scopes; routes
+  just weren't using it for space_ids. The wave's core lesson: EVERY client-supplied data-selecting id must be
+  owner-validated at the sink; locking one moves the attacker to the next.
+- **#2 (Medium): legacy owner-less records default→"local"** = the back-compat-vs-fail-closed tension I flagged;
+  low real reachability (post-#1 mint needs pairing token; hosted has no legacy rows) but making it explicit:
+  map legacy→INSTALL_OWNER + admin-gate unclaimed reads (Dylan's admin session unaffected).
+- **#3 (Plausible Medium): deck export drops authed owner, sandbox as "local"** — owner-attribution not a data
+  leak (B owns the conv); thread current_owner_id through.
+
+Fix pass 2 dispatched (targeted 3 + PROOF 15-17). Then adversarial round 3 → SHIP (per ~2-3 round discipline).
+
+### S-W1 adversarial round 3 — BLOCK (2 findings, converging 3→2), fix pass 3 dispatched
+Fix pass 2 verified authoritatively: basedpyright 0, unit exit 0, arch clean (23 zero-new), 17/17 proofs
+(PROOF 15 space_ids owner-checked, 16 legacy admin-gated, 17 deck owner-attributed).
+
+gpt-5.5 round 3: BLOCK — all 3 round-2 findings CONFIRMED closed. 2 NEW, SAME class (client-supplied
+server-local filesystem path → FS sink, no admin/owner gate) — the attacker pushed outward again
+(conversation_id → space_ids → raw path):
+- **#1 (High CONFIRMED, live PoC): `POST /api/projects/import` server-local `path`** — B posts A's workspace
+  path, it's copied into a B-owned project, B downloads A's secret.txt. Fix: admin-gate the server-path branch.
+- **#2 (Medium CONFIRMED): `GET /api/storage/browse`** lists any server dir for any authed user = the plan's
+  M2 finding exactly; decided fix = operator/admin-only + safe-roots. Fix: admin-gate (require_admin_session
+  already exists at auth.py:106).
+Both = operator-filesystem features → admin-gate (matches A2 "settings=admin-only" + M2 decisions); Dylan's
+operator session is admin so no UX regression. Fix pass 3 dispatched (+PROOF 18/19). Round 4 → expected SHIP.
+
+### S-W1 adversarial round 4 — SHIP ✓ + COMMITTED e028d2ac
+Round 3's 2 findings (projects/import path exfil + storage/browse) both admin-gated (PROOF 18/19). gpt-5.5
+round 4: SHIP — both closed BEFORE any FS resolution; final sweep found NO remaining cross-owner or
+non-admin host-FS read/write/exfil. Convergence in 4 rounds: BLOCK 9 → BLOCK 3 → BLOCK 2 → SHIP.
+
+**Arch-budget catch (methodology bug found + fixed):** check_arch_budget.py resolves `packages/` from its OWN
+__file__, so running main's copy from the worktree silently scanned MAIN the whole time — my worktree arch
+"diffs" during the fix passes were meaningless. The ONLY valid arch check is on the tree that has the code
+(worktree's own script, or main AFTER applying the patch). On main-with-patch I caught the real regression:
+S-W1 pushed make_ws_router 200→213 (NEW god-function) + make_conversations_router 353→387 (grew). Dispatched a
+behavior-preserving decomposition → ws_router back <200, conversations_router down to 321 (BELOW pre-S-W1),
+preview_router 406→212. 19/19 proofs still green after (pure extraction). Residual: pre-existing god-objects
+(ConversationRuntime +27, DeepResearchService +60) grew slightly from unavoidable owner-threading — no NEW
+items, accepted + noted.
+
+**Committed e028d2ac** — final gates on main: basedpyright 0, ws_router not over budget, lint 2 kept, diagram
+fresh, unit exit 0, 19/19 exploit proofs. S-W1 closes C5/H6/H8 + removes reachability of H2/H10/H13/H14/M2/M7.
+
+**Deferred (human-verify):** the "real UI still works with auth mandatory" Firefox screenshot. The
+security-authoritative proof (19-proof real-app exploit harness + 4-round adversarial SHIP) is DONE; the
+frontend auto-mint + CSRF wiring needs one real-browser eyeball (full stack: agent-server :8000 + app-server
+:8800 + vite :5173). Flagged, not silently skipped.
+
+**Next: S-W2 (secrets + egress chokepoint)** — spec already grounded (spec-sw2-egress.md).

@@ -135,8 +135,9 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | B-W1 | Build | **DONE** (keystone) | `d5db4e88` | Fable's own run: POST→kill→restart→marker present; real wrangler+workerd+D1 |
 | B-W2 | Build | **DONE** | `fea94682` | Fable's own run: FK'd shift survives cold restart; FK enforcement + byte-identical lead-gen verified |
 | B-W3 | Build | **DONE** | `d99c4147` | Fable's own run: RBAC (approver-only) + session survive cold restart; gpt-5.5 adversarial SHIP after 2 fix rounds; IDOR documented |
-| B-W4 | Build | QUEUED | — | — |
+| B-W4 | Build | **DONE** | `efccf4fe` | Fable's own run: real Firefox render of a generated app — disabled "Sending…" button + optimistic "Recently submitted" item mid-submit; backend worker+D1 byte-identical (B-W3 auth worker untouched) |
 | C1–C3 | Tier-3 | **DONE** (soak-pending) | `1dfedb15` | 83 tripwire tests; behavioral effect deferred to Epic Z soak |
+| S-W1 | Security | **DONE** (keystone) | `e028d2ac` | from-scratch auth/CSRF/owner-scoping; 19-proof real-exploit harness + route-inventory test; adversarially SHIP'd over 4 gpt-5.5 rounds (BLOCK 9→3→2→SHIP); UI-still-works Firefox screenshot = the one human-verify item |
 | S-W1 | Security | QUEUED (keystone) | — | — |
 | S-W2..W6 | Security | QUEUED | — | — |
 | Z1–Z3 | Soak+debug | QUEUED (final) | — | — |
