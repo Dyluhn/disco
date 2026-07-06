@@ -29,6 +29,7 @@ import { Ban, Bell, FileText, FileType, Loader2, Play, RotateCcw, Settings as Se
 import { UploadComposer } from "@/components/build/BuildSurface";
 import { useCallback, useEffect, useState } from "react";
 import { publishRunStatus } from "@/lib/runStatusBridge";
+import { markAllModesFresh } from "@/lib/sessionResume";
 import { Link } from "react-router-dom";
 import { Markdown } from "@/components/Markdown";
 import { PlanPanel } from "@/components/build/PlanPanel";
@@ -72,8 +73,17 @@ interface Props {
   initialSources?: string[];
 }
 
-const CTRL_BTN =
-  "flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text";
+// Color-free base so state variants can SWAP the border/text colors instead of
+// appending a second, competing set (Tailwind picks the winner by stylesheet
+// order, not source order — appending `text-accent` onto `text-text-muted` is a
+// coin-flip). Every variant below starts from this base and adds exactly one
+// border-/text- set.
+const CTRL_BTN_BASE =
+  "flex items-center gap-hair rounded-control border px-inline py-hair font-ui text-[0.78rem] transition-colors";
+const CTRL_BTN = `${CTRL_BTN_BASE} border-hairline text-text-muted hover:text-text`;
+// Notify armed: a filled accent chip that reads as "on" at a glance (mirrors the
+// SourcePicker active chip). Full swap — NOT appended onto CTRL_BTN.
+const NOTIFY_ARMED_BTN = `${CTRL_BTN_BASE} border-accent/50 bg-accent/10 text-accent`;
 // Kill is destructive (ends the run for good) → warn-tinted, distinct from Stop.
 const KILL_BTN =
   "flex items-center gap-hair rounded-control border border-warn/40 px-inline py-hair font-ui text-[0.78rem] text-warn transition-colors hover:bg-warn/10";
@@ -100,6 +110,18 @@ export function DeepResearchSurface({
     },
     [onDraftChange],
   );
+  // "New research" (top-right, on FINISHED/ERROR) is the sidebar "New" for this
+  // surface: clear the current DR session, drop the scope back to Standard, empty
+  // the shared draft, and mark every mode fresh so nothing auto-resumes. The <Link
+  // to="/"> still navigates when we arrived via /deep/:cid; at "/" the nav is a
+  // no-op and this reset is what actually clears the screen (the old bare Link did
+  // nothing here — the reported dead button).
+  const handleNewResearch = useCallback(() => {
+    r.reset();
+    onScopeChange?.("standard");
+    onDraftChange?.("");
+    markAllModesFresh();
+  }, [r, onScopeChange, onDraftChange]);
   // Gap #4: publish the DR run status to the W6 E2E bridge (await RUNNING/PAUSED/
   // FINISHED/ERROR); clear on unmount.
   useEffect(() => {
@@ -245,11 +267,7 @@ export function DeepResearchSurface({
                   onClick={doneNotify.toggle}
                   disabled={!r.cid}
                   data-disco-control="dr.notify-done"
-                  className={
-                    doneNotify.armed
-                      ? `${CTRL_BTN} border-accent/50 text-accent`
-                      : CTRL_BTN
-                  }
+                  className={doneNotify.armed ? NOTIFY_ARMED_BTN : CTRL_BTN}
                   title="Notify me when this deep research run completes"
                 >
                   <Bell className="size-3.5" aria-hidden />
@@ -331,7 +349,7 @@ export function DeepResearchSurface({
               </>
             )}
             {(r.status === "FINISHED" || r.status === "ERROR") && (
-              <Link to="/" className={CTRL_BTN}>
+              <Link to="/" onClick={handleNewResearch} data-disco-control="dr.new-research" className={CTRL_BTN}>
                 <RotateCcw className="size-3.5" aria-hidden />
                 New research
               </Link>

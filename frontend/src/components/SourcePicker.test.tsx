@@ -1,25 +1,17 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ReactElement } from "react";
-import { MemoryRouter } from "react-router-dom";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as clientModule from "@/api/client";
+import { useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SourcePicker } from "./SourcePicker";
 
-function jsonResponse(body: unknown): Response {
-  return {
-    ok: true,
-    status: 200,
-    statusText: "",
-    headers: { get: () => null },
-    json: async () => body,
-    text: async () => JSON.stringify(body),
-  } as unknown as Response;
-}
+// The picker is now settings-only for the web PROVIDER: it exposes ONLY the
+// keyless federation sources (Web / News / arXiv / Semantic Scholar). The
+// tavily/brave/searxng provider chips and the "Add in Settings ->" affordance
+// were removed — the provider is chosen once in Settings and an empty selection
+// means "use the one they set". No data-sources fetch happens here anymore.
 
-function Harness() {
-  const [selected, setSelected] = useState<string[]>(["ddgs"]);
+function Harness({ initial = [] as string[] }: { initial?: string[] }) {
+  const [selected, setSelected] = useState<string[]>(initial);
   return (
     <>
       <SourcePicker selected={selected} onChange={setSelected} />
@@ -28,75 +20,52 @@ function Harness() {
   );
 }
 
-function wrapper() {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  return ({ children }: { children: ReactElement }) => (
-    <QueryClientProvider client={qc}>
-      <MemoryRouter>{children}</MemoryRouter>
-    </QueryClientProvider>
-  );
-}
-
-beforeEach(() => {
-  vi.spyOn(clientModule, "isLive").mockReturnValue(true);
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      if (url === "/api/data-sources/config") {
-        return jsonResponse({
-          search_provider: "ddgs",
-          search_base_url: "",
-          search_api_key_env: "",
-          extraction_provider: "local",
-          extraction_base_url: "",
-          extraction_api_key_env: "",
-          configured_sources: ["tavily"],
-        });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    }),
-  );
-});
-
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
 describe("SourcePicker", () => {
-  it("toggles keyless/configured sources and disables unconfigured keyed sources", async () => {
+  it("shows only the keyless federation sources — no provider chips, no 'Add in Settings'", () => {
+    render(<Harness />);
+
+    // Keyless sources present + enabled.
+    expect(screen.getByRole("button", { name: /web/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /news/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /arxiv/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /semantic scholar/i })).toBeEnabled();
+
+    // The provider chips Dylan asked to remove are GONE.
+    expect(screen.queryByRole("button", { name: /tavily/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /brave/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /searxng/i })).toBeNull();
+
+    // The bush-league "Add in Settings ->" link is gone (no links at all).
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.queryByText(/add in settings/i)).toBeNull();
+  });
+
+  it("defaults to an empty selection so search runs the configured provider", () => {
+    render(<Harness />);
+    expect(screen.getByTestId("selected-sources")).toHaveTextContent("");
+    // aria-pressed=false on every chip when nothing is selected
+    expect(screen.getByRole("button", { name: /web/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("toggles sources on and off", async () => {
     const user = userEvent.setup();
-    render(<Harness />, { wrapper: wrapper() });
+    render(<Harness />);
 
-    const web = screen.getByRole("button", { name: /web/i });
-    const news = screen.getByRole("button", { name: /news/i });
-    const arxiv = screen.getByRole("button", { name: /arxiv/i });
-    const tavily = await screen.findByRole("button", { name: /tavily/i });
-    const brave = screen.getByRole("button", { name: /brave/i });
+    await user.click(screen.getByRole("button", { name: /arxiv/i }));
+    expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv");
 
-    expect(web).toHaveAttribute("aria-pressed", "true");
-    expect(news).toBeEnabled();
-    await waitFor(() => expect(tavily).toBeEnabled());
-    expect(brave).toBeDisabled();
-    expect(screen.getAllByRole("link", { name: /add in settings/i }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: /news/i }));
+    expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv,news");
 
-    await user.click(arxiv);
-    expect(screen.getByTestId("selected-sources")).toHaveTextContent("ddgs,arxiv");
-
-    await user.click(news);
-    expect(screen.getByTestId("selected-sources")).toHaveTextContent("ddgs,arxiv,news");
-
-    await user.click(tavily);
-    expect(screen.getByTestId("selected-sources")).toHaveTextContent(
-      "ddgs,arxiv,news,tavily",
-    );
-
-    await user.click(web);
-    expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv,news,tavily");
-
-    await user.click(brave);
-    await waitFor(() =>
-      expect(screen.getByTestId("selected-sources")).toHaveTextContent("arxiv,news,tavily"),
-    );
+    // toggling off removes it
+    await user.click(screen.getByRole("button", { name: /arxiv/i }));
+    expect(screen.getByTestId("selected-sources")).toHaveTextContent("news");
   });
 });

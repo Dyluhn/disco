@@ -29,7 +29,12 @@ export function ResearchSurface() {
   const [leaderId, setLeaderId] = useState<string | null | undefined>(undefined);
   const [scope, setScope] = useState<ScopeId>("standard");
   const [think, setThink] = useState(false);
-  const [sources, setSources] = useState<string[]>(["ddgs"]);
+  // Empty = "use the web provider configured in Settings". A non-empty list
+  // composes a per-query search override on the backend (build_multi_search),
+  // which is exactly what USED to force ddgs over the user's chosen provider.
+  // Default to none so a plain search always runs "the one they set"; the
+  // SourcePicker only ADDS keyless federation sources on top when chosen.
+  const [sources, setSources] = useState<string[]>([]);
   // W-06: the typed draft lives in the SHARED parent so it survives the
   // standard ↔ deep-research mount swap below (the standard input unmounts when
   // we render DeepResearchSurface, and DR has its OWN QueryInput). Both inputs
