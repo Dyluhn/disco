@@ -456,13 +456,14 @@ class Valve:
             legacy_status=legacy_status,
             legacy_detail=legacy_detail,
         )
+        autonomous = getattr(self._loop, "_autonomous", False)
         # COUNTER MARKER: the ladder/valve signals (actionless pause counts,
         # stuck-escape scans, REL-RC-P) key on the legacy status events. Emit the
         # legacy status FIRST so every counter keeps working, then supersede it
         # with the explanation + landing below (latest-status readers see the
         # landing; counters see the marker). Autonomous flavor re-lands the
         # legacy status at the END as its terminal state — skip the duplicate.
-        if not getattr(self._loop, "_autonomous", False):
+        if not autonomous:
             await self._loop._emit(
                 StatusEvent(
                     status=legacy_status,
@@ -483,9 +484,17 @@ class Valve:
                 meta=meta,
             )
         )
-        content = await self._blocked_model_message(
-            reason=clean_reason,
-            guidance=guidance,
+        # QUESTION-TEXT ordering is the whole fix: the frontend sets pendingQuestionId
+        # ONLY on AWAITING_USER_QUESTION and nulls it on any other status, so a bare
+        # PAUSED then — after a seconds-long LLM call — AWAITING left the AskPanel hidden
+        # the whole call ("doesn't ask until you refresh/wait"). Interactive path uses the
+        # DETERMINISTIC fallback (no model round-trip) so AWAITING emits immediately and
+        # the panel is instant; autonomous CONCLUDES (no live panel) so it can still
+        # afford the model-authored explanation for the run log.
+        content = (
+            await self._blocked_model_message(reason=clean_reason, guidance=guidance)
+            if autonomous
+            else self._fallback_blocked_message(reason=clean_reason, guidance=guidance)
         )
         required = required_explanation.strip()
         if required and required not in content:
@@ -496,7 +505,7 @@ class Valve:
             meta=meta,
         )
         await self._loop._emit(q_event)
-        if getattr(self._loop, "_autonomous", False):
+        if autonomous:
             # Two-flavor landing (Dylan, 2026-07-03): headless runs have nobody to
             # answer an open question — after the ladder, the run must CONCLUDE,
             # not hang. Land the legacy terminal status but never bare: the

@@ -276,7 +276,11 @@ async def test_transient_error_persistent_pauses(monkeypatch):
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     events = await store.get_events(CID)
     assert_blocked_question_landing(events, legacy_detail="driver-unavailable")
-    assert agent.calls == 5   # 1 initial + 3 retries + 1 bounded lander turn
+    # 1 initial + 3 retries. The INTERACTIVE breaker lander no longer makes a bounded
+    # model turn to author the question — it uses the deterministic fallback and emits
+    # AWAITING_USER_QUESTION immediately, so the AskPanel surfaces instantly instead of
+    # after a model-call-long delay (the "doesn't ask until you refresh/wait" fix).
+    assert agent.calls == 4
 
     errors = [e for e in events if getattr(e, "kind", None) == "error"]
     assert len(errors) == 0
