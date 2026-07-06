@@ -66,4 +66,12 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 - codex building the new `records` primitive: optional FK on EntityField, AppSpec FK-target + cycle validation, multi-table FK-ordered schema.sql + migrations/0001_init.sql, FK-ordered Drizzle, N-entity worker route table (POST-insert + auth-gated GET-list per entity), registration. Live-proof reuses the B-W1 harness (FK'd shift survives cold restart). Hard constraint: lead-gen output stays byte-identical. bg `bu4a3da10`.
 - Build-depth is now SEQUENTIAL (B-W2→B-W3 auth/RBAC→B-W4 reactivity); one deep workstream. Security (Epic S) held as the focused closer per Dylan's ordering.
 
+### B-W2 LANDED — commit `fea94682` (records primitive — data-layer depth)
+- codex built a genuinely real primitive (reviewed the full worker emitter — no stubs): FK-ordered multi-table schema + migrations/0001_init.sql, FK-ordered Drizzle `.references()`, an N-entity Worker ROUTES table (public POST-insert + Bearer-gated GET-list per entity, fail-closed like lead-gen), full request validation, collision-safe TS ids, cycle detection. Optional `EntityField.references` FK + AppSpec FK-target/cycle validators.
+- Fable authoritative verification: basedpyright 0, arch-budget baseline, lint/diagram clean, core unit suite green (incl. FK-enforcement unit test: bad FK → IntegrityError). **Byte-identical lead-gen proven by MY cross-checkout digest** (44e78c8d… identical main-clean vs wt-B). **Own live-proof** (marker 05cc899d…): 2-entity app (team_member ← shift.member_id), boot workerd, POST member + FK'd shift, GET 200, KILL, RESTART, GET still returns shift w/ member_id intact.
+- codex correctly left lead-gen emitters (`_emit_worker_ts`/`_emit_schema_sql`/`_emit_drizzle_schema_ts`) untouched.
+- Task #62 metadata updated; wt-B synced to tip.
+
+### Next: B-W3 (auth/RBAC) — the shift-calendar heart. Speccing real per-user RBAC (users+roles+sessions+role-gated routes) on the records primitive, with a gpt-5.5 adversarial review of the generated auth (it's auth code).
+
 <!-- append below as work lands -->

@@ -133,7 +133,7 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 |----|------|--------|--------|-----------|
 | A1–A3 | Design | **DONE** | `aef9c33d` | 22 dirs, zero self-flags, correct dark-mode, pick_direction selects each |
 | B-W1 | Build | **DONE** (keystone) | `d5db4e88` | Fable's own run: POST→kill→restart→marker present; real wrangler+workerd+D1 |
-| B-W2 | Build | QUEUED | — | — |
+| B-W2 | Build | **DONE** | `fea94682` | Fable's own run: FK'd shift survives cold restart; FK enforcement + byte-identical lead-gen verified |
 | B-W3 | Build | QUEUED | — | — |
 | B-W4 | Build | QUEUED | — | — |
 | C1–C3 | Tier-3 | **DONE** (soak-pending) | `1dfedb15` | 83 tripwire tests; behavioral effect deferred to Epic Z soak |
