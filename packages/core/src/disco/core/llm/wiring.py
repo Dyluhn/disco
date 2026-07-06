@@ -1,10 +1,11 @@
 """Build the live `ModelProvider` map from a `RouterConfig` (live-wiring).
 
-One `OpenAIProvider` per distinct endpoint (`entry.provider`), pointed at that
-entry's `base_url`, with the API key read from `entry.api_key_env` (env var) if
-the server needs one. Entries without a `base_url` (the NLI cross-encoder, etc.)
-are skipped — they aren't chat backends. Kept in its own module so importing
-`config` (widely imported) doesn't pull `httpx`.
+One `OpenAIProvider` per distinct endpoint (`entry.provider`), pointed at an
+operator-approved `base_url`, with the API key read from SecretStore by
+`entry.api_key_env` secret-ref if the server needs one. Entries without a
+`base_url` (the NLI cross-encoder, etc.) are skipped — they aren't chat
+backends. Kept in its own module so importing `config` (widely imported)
+doesn't pull `httpx`.
 
 V2 (§2): async vision probes for providers that advertise modality metadata.
   - llama.cpp / self-host: GET {base_url − /v1}/props → modalities.vision bool.
@@ -16,14 +17,15 @@ Results are memoized per (base_url, model_id) for the process lifetime.
 from __future__ import annotations
 
 import logging
-import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 import httpx
 
 from .config import ROLE_FALLBACK_PROVIDER_KEY, RouterConfig
 from .openai_provider import OpenAIProvider
 from .provider import ModelProvider
+from .secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
+from .secrets import SecretStore
 from .types import Requirement
 
 _LOG = logging.getLogger("disco.wiring")
@@ -99,10 +101,22 @@ async def probe_all_vision(config: RouterConfig) -> dict[str, bool | None]:
     Uses a single AsyncClient for all probes; results are memoized in
     _VISION_PROBE_CACHE for the process lifetime.
     """
+    return await probe_all_vision_with_approvals(config, origin_approved=lambda *_: False)
+
+
+async def probe_all_vision_with_approvals(
+    config: RouterConfig,
+    *,
+    origin_approved: Callable[[str, str, str | None], bool],
+) -> dict[str, bool | None]:
     results: dict[str, bool | None] = {}
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
         for key, entry in config.models.items():
             if entry.base_url is None:
+                continue
+            purpose = _model_purpose(entry.provider)
+            if not origin_approved(entry.base_url, purpose, entry.api_key_env):
+                results[key] = None
                 continue
             result = await probe_vision(entry.base_url, entry.model_id, client)
             results[key] = result
@@ -114,24 +128,37 @@ def build_providers(
     *,
     env: Mapping[str, str] | None = None,
     enable_thinking: bool | None = None,
+    origin_approved: Callable[[str, str, str | None], bool] | None = None,
 ) -> dict[str, ModelProvider]:
     """Map endpoint key → live provider. Keyed by `entry.provider`, matching how
     the router resolves a provider (`self._providers[entry.provider]`)."""
-    environ = os.environ if env is None else env
+    del env  # provider keys resolve from SecretStore by secret-ref id only.
+    secret_store = SecretStore()
+    approved = origin_approved or (lambda *_: False)
     providers: dict[str, ModelProvider] = {}
     if any(entry.provider == ROLE_FALLBACK_PROVIDER_KEY for entry in config.models.values()):
         raise ValueError(f"{ROLE_FALLBACK_PROVIDER_KEY!r} is reserved for role fallback")
     for entry in config.models.values():
         if entry.base_url is None or entry.provider in providers:
             continue
+        purpose = _model_purpose(entry.provider)
+        if not approved(entry.base_url, purpose, entry.api_key_env):
+            _LOG.warning("provider %s origin is not operator-approved; skipping", entry.provider)
+            continue
+        if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
+            _LOG.warning(
+                "provider %s secret_ref is not allowed for this origin; skipping",
+                entry.provider,
+            )
+            continue
         # advisory capability union across all models on this endpoint
         caps = set().union(
             *(e.capabilities for e in config.models.values() if e.provider == entry.provider)
         )
-        api_key = environ.get(entry.api_key_env) if entry.api_key_env else None
-        if api_key is None and entry.api_key_env and entry.api_key_env.startswith("DISCO_"):
-            # back-compat: honor a legacy PMX_<X> key var when DISCO_<X> is unset
-            api_key = environ.get("PMX_" + entry.api_key_env[len("DISCO_") :])
+        api_key = resolve_provider_secret(entry.api_key_env, secret_store)
+        if entry.api_key_env and not api_key:
+            _LOG.warning("provider %s secret_ref is not decryptable; skipping", entry.provider)
+            continue
         providers[entry.provider] = OpenAIProvider(
             entry.base_url,
             name=entry.provider,
@@ -141,10 +168,20 @@ def build_providers(
         )
     fallback = config.role_fallback
     if fallback.enabled and fallback.base_url.strip():
-        api_key_env = fallback.api_key_env.strip()
-        api_key = environ.get(api_key_env) if api_key_env else None
-        if api_key is None and api_key_env.startswith("DISCO_"):
-            api_key = environ.get("PMX_" + api_key_env[len("DISCO_") :])
+        if not approved(
+            fallback.base_url.strip(), "role_fallback", fallback.api_key_env.strip()
+        ):
+            _LOG.warning("role fallback origin is not operator-approved; skipping")
+            return providers
+        if not secret_ref_allowed_for_origin(
+            fallback.api_key_env.strip(), fallback.base_url.strip()
+        ):
+            _LOG.warning("role fallback secret_ref is not allowed for this origin; skipping")
+            return providers
+        api_key = resolve_provider_secret(fallback.api_key_env.strip(), secret_store)
+        if fallback.api_key_env.strip() and not api_key:
+            _LOG.warning("role fallback secret_ref is not decryptable; skipping")
+            return providers
         providers[ROLE_FALLBACK_PROVIDER_KEY] = OpenAIProvider(
             fallback.base_url.strip(),
             name="role_fallback",
@@ -153,3 +190,7 @@ def build_providers(
             enable_thinking=enable_thinking,
         )
     return providers
+
+
+def _model_purpose(provider: str) -> str:
+    return f"model:{provider or 'unknown'}"

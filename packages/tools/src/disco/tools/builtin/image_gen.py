@@ -70,6 +70,7 @@ from typing import Protocol
 
 import httpx
 from disco.core.llm.config_store import ConfigStore
+from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
 from disco.core.llm.secrets import SecretStore
 from pydantic import BaseModel, Field
 
@@ -97,6 +98,15 @@ class ImageGenNotConfigured(RuntimeError):
 
     def __init__(self, message: str = _NOT_CONFIGURED_MSG) -> None:
         super().__init__(message)
+
+
+def _raise_image_status(response: httpx.Response, provider: str) -> None:
+    status = getattr(response, "status_code", 200)
+    if not isinstance(status, int):
+        response.raise_for_status()
+        return
+    if status >= 400:
+        raise RuntimeError(f"{provider} image endpoint returned HTTP {status}")
 
 
 def _with_svg_fallback_hint(message: str) -> str:
@@ -317,13 +327,13 @@ class _OpenAIImageBackend:
         if self._model:
             payload["model"] = self._model
 
-        with httpx.Client(timeout=60.0) as client:
+        with httpx.Client(timeout=60.0, trust_env=False, follow_redirects=False) as client:
             response = client.post(
                 self._endpoint(),
                 json=payload,
                 headers=headers,
             )
-            response.raise_for_status()
+            _raise_image_status(response, self.name)
             data = response.json()
 
         # The response is {"data": [{"b64_json": "...", ...}]}
@@ -396,13 +406,13 @@ class _OpenRouterImageBackend:
             "modalities": ["image", "text"],
         }
 
-        with httpx.Client(timeout=120.0) as client:
+        with httpx.Client(timeout=120.0, trust_env=False, follow_redirects=False) as client:
             response = client.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
                 headers=headers,
             )
-            response.raise_for_status()
+            _raise_image_status(response, self.name)
             data = response.json()
 
         try:
@@ -629,13 +639,13 @@ class _ComfyUIBackend:
             seed=seed,
         )
 
-        with httpx.Client(timeout=120.0) as client:
+        with httpx.Client(timeout=120.0, trust_env=False, follow_redirects=False) as client:
             # Submit the prompt
             prompt_response = client.post(
                 f"{self._base_url}/prompt",
                 json={"prompt": workflow},
             )
-            prompt_response.raise_for_status()
+            _raise_image_status(prompt_response, self.name)
             prompt_data = prompt_response.json()
             prompt_id = prompt_data["prompt_id"]
 
@@ -645,7 +655,7 @@ class _ComfyUIBackend:
             for _ in range(120):  # 2 minutes max
                 time.sleep(1)
                 history_response = client.get(f"{self._base_url}/history/{prompt_id}")
-                history_response.raise_for_status()
+                _raise_image_status(history_response, self.name)
                 history = history_response.json()
 
                 if prompt_id in history:
@@ -673,7 +683,7 @@ class _ComfyUIBackend:
                                 "type": image_info.get("type", "output"),
                             },
                         )
-                        img_response.raise_for_status()
+                        _raise_image_status(img_response, self.name)
                         return img_response.content
 
                     # Generation completed but no images yet - wait a bit more
@@ -699,7 +709,8 @@ def select_image_backend() -> ImageBackend:
     Callers handle the exception explicitly (tool → NOT-CONFIGURED outcome; slides
     → image-less degrade), so the UI never advertises fake placeholder art.
     """
-    config = ConfigStore().load()
+    store = ConfigStore()
+    config = store.load()
     settings = config.image_gen
     provider = settings.provider
 
@@ -712,11 +723,18 @@ def select_image_backend() -> ImageBackend:
             base_url = base_url[: -len("/v1")]
         api_key_env = settings.api_key_env
 
-        # Look up the secret: encrypted SecretStore first, then os.environ — the same
-        # resolution order the TTS paid tier uses (report_audio.py), so an env-configured
-        # key works and the UI's "secret/env-var name" affordance is honest.
+        if not store.origin_approved(base_url, "image:openai", api_key_env):
+            raise ImageGenNotConfigured(
+                "Image generation endpoint is not operator-approved. Save the Image "
+                "generation settings to approve this exact origin."
+        )
+        # Look up the secret from SecretStore by secret-ref id only.
         if api_key_env:
-            api_key = SecretStore().get_secret(api_key_env) or os.environ.get(api_key_env)
+            if not secret_ref_allowed_for_origin(api_key_env, base_url):
+                raise ImageGenNotConfigured(
+                    "Image generation secret_ref is not allowed for this endpoint origin."
+                )
+            api_key = resolve_provider_secret(api_key_env, SecretStore())
             if api_key:
                 return _OpenAIImageBackend(base_url, api_key, model=settings.model)
         # No key available — NOT configured (no silent placeholder fallback).
@@ -725,16 +743,12 @@ def select_image_backend() -> ImageBackend:
     # For openrouter image gen, the key is the OpenRouter key (reserved "openrouter"
     # SecretStore slot, the same one the LLM router uses), NOT a user-named api_key_env.
     if provider == "openrouter":
-        from disco.core.llm.secrets import (
-            OPENROUTER_API_KEY_ENV,
-            OPENROUTER_API_KEY_ENV_LEGACY,
-        )
-
-        api_key = (
-            SecretStore().get_openrouter_key()
-            or os.environ.get(OPENROUTER_API_KEY_ENV)
-            or os.environ.get(OPENROUTER_API_KEY_ENV_LEGACY)
-        )
+        openrouter_base = "https://openrouter.ai/api/v1"
+        if not store.origin_approved(openrouter_base, "image:openrouter", "openrouter"):
+            raise ImageGenNotConfigured(
+                "OpenRouter image generation origin is not operator-approved."
+            )
+        api_key = resolve_provider_secret("openrouter", SecretStore())
         # An empty image model is NOT configured: OpenRouter has no usable provider
         # default (every image model is paid + model-specific), and Settings already
         # shows this tier as "unavailable" until a model id is set — so the factory must
@@ -746,7 +760,7 @@ def select_image_backend() -> ImageBackend:
             # another provider — and we must never send the OpenRouter Bearer key to an
             # unintended host. Ignore settings.base_url entirely.
             return _OpenRouterImageBackend(
-                "https://openrouter.ai/api/v1", api_key, model=settings.model
+                openrouter_base, api_key, model=settings.model
             )
         # No OpenRouter key stored, or no image model id set — NOT configured.
         raise ImageGenNotConfigured()
@@ -755,6 +769,11 @@ def select_image_backend() -> ImageBackend:
     if provider == "comfyui":
         base_url = settings.base_url
         if base_url:
+            if not store.origin_approved(base_url, "image:comfyui", ""):
+                raise ImageGenNotConfigured(
+                    "ComfyUI endpoint is not operator-approved. Save the Image "
+                    "generation settings to approve this exact origin."
+                )
             return _ComfyUIBackend(
                 base_url,
                 model=settings.model,
@@ -805,6 +824,9 @@ class ImageGenTool:
         # call without a restart, matching the Settings contract (and the TTS tier, which
         # likewise re-reads config per call rather than snapshotting at registry build).
         self._injected = backend
+
+    def execution_scope(self, args: ImageGenArgs) -> str:
+        return "sandbox" if self._injected is not None else "in_process"
 
     def _resolve_backend(self) -> ImageBackend:
         # May raise ImageGenNotConfigured (W-50) when no real tier is configured —

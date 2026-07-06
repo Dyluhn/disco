@@ -54,7 +54,13 @@ def _do_live_model_probe(
         if root.endswith("/v1"):
             root = root[:-3]
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        r = httpx.get(f"{root}/props", headers=headers, timeout=2.0)
+        r = httpx.get(
+            f"{root}/props",
+            headers=headers,
+            timeout=2.0,
+            follow_redirects=False,
+            trust_env=False,
+        )
         if r.status_code == 200:
             d = r.json()
             gen = d.get("default_generation_settings") or {}
@@ -120,7 +126,13 @@ def _models_context_length(
         # /api/v1/models, llama.cpp + MiniMax at /v1/models.
         root = base_url.rstrip("/")
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        r = httpx.get(f"{root}/models", headers=headers, timeout=2.0)
+        r = httpx.get(
+            f"{root}/models",
+            headers=headers,
+            timeout=2.0,
+            follow_redirects=False,
+            trust_env=False,
+        )
         if r.status_code == 200:
             fetched = True
             d = r.json()

@@ -14,6 +14,7 @@ import logging
 from typing import Any
 
 import httpx
+from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -66,8 +67,16 @@ class McpHttpClient:
         The secret is resolved HERE — never passed to the sandbox."""
         resolved: dict[str, str] = {}
         for key, ref in self._headers_config.items():
+            if not secret_ref_allowed_for_origin(ref, self._url):
+                _LOG.warning(
+                    "McpHttpClient: secret %r is not allowed for %s; dropping header %r",
+                    ref,
+                    self._url,
+                    key,
+                )
+                continue
             if self._secrets is not None:
-                val = self._secrets.get(ref)
+                val = self._secrets.get_secret(ref)
                 if val is not None:
                     resolved[key] = val
                 else:
@@ -99,7 +108,8 @@ class McpHttpClient:
             headers=headers,
             timeout=httpx.Timeout(self._call_timeout_s),
             proxy=proxy_url,
-            follow_redirects=True,
+            follow_redirects=False,
+            trust_env=False,
         )
 
     # --- lifecycle -----------------------------------------------------------

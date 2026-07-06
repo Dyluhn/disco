@@ -218,6 +218,7 @@ def _config_store(tmp_path) -> ConfigStore:
             ),
         },
         default_model=_SELECTED_KEY,
+        trusted_origins=("http://upstream.test",),
     )
     # nonexistent path → load() returns the base_factory config.
     return ConfigStore(path=tmp_path / "no-such-config.json", base_factory=lambda: cfg)
@@ -230,14 +231,26 @@ def _secret_store(tmp_path) -> SecretStore:
     return store
 
 
+def _approve_upstream(config_store: ConfigStore, secret_store: SecretStore) -> None:
+    config_store.approve_origin(
+        _BASE_URL,
+        "model:testprov",
+        _PROVIDER_KEY_ENV,
+        secret_store=secret_store,
+    )
+
+
 def _make_app(token_store: PiInferenceTokenStore, tmp_path, *, handler, trust_local_no_peer=False):
     """A FastAPI app mounting only the gateway router, wired to a mock upstream."""
+    config_store = _config_store(tmp_path)
+    secret_store = _secret_store(tmp_path)
+    _approve_upstream(config_store, secret_store)
     app = FastAPI()
     app.include_router(
         make_pi_inference_router(
             token_store,
-            config_store=_config_store(tmp_path),
-            secret_store=_secret_store(tmp_path),
+            config_store=config_store,
+            secret_store=secret_store,
             http_transport=httpx.MockTransport(handler),
             trust_local_no_peer=trust_local_no_peer,
         )
@@ -275,10 +288,13 @@ async def _post(app, token: str | None, body: dict, *, client=("127.0.0.1", 5555
 
 
 def test_resolve_upstream_reads_key_from_secret_store(tmp_path) -> None:
+    config_store = _config_store(tmp_path)
+    secret_store = _secret_store(tmp_path)
+    _approve_upstream(config_store, secret_store)
     target = resolve_upstream(
         _SELECTED_KEY,
-        config_store=_config_store(tmp_path),
-        secret_store=_secret_store(tmp_path),
+        config_store=config_store,
+        secret_store=secret_store,
     )
     assert target is not None
     assert target.model_id == _REAL_MODEL_ID

@@ -8,13 +8,13 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 import websockets
+from disco.agent_server.preview_inject import inject_element_mention_picker
 from disco.core.auth import (
     PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_COOKIE,
     PreviewCapabilitySigner,
     preview_ttl_s,
 )
-from disco.agent_server.preview_inject import inject_element_mention_picker
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 _LOG = logging.getLogger(__name__)
@@ -41,7 +41,11 @@ _client: httpx.AsyncClient | None = None
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _client is None:
-        _client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=60.0), follow_redirects=False)
+        _client = httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, read=60.0),
+            follow_redirects=False,
+            trust_env=False,
+        )
     return _client
 
 
@@ -535,7 +539,9 @@ class HostPreviewProxyMiddleware:
                 await task
 
 
-def make_preview_session_resolver(runtime: object | None) -> Callable[..., Awaitable[object | None]]:
+def make_preview_session_resolver(
+    runtime: object | None,
+) -> Callable[..., Awaitable[object | None]]:
     """Fix 2 (codex P1): build the `cid8 -> live SandboxSession | None` resolver the
     HostPreviewProxyMiddleware uses for its in-sandbox liveness fallback. Captures
     `runtime` (None in wire-only tests → always None). Read-only: resolves the full

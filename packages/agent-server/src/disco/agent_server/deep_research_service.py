@@ -237,15 +237,45 @@ class DeepResearchService:
             return self._rt._injected_research_providers
         cfg = self._rt._config_store.load()
         enc, sch, ext = cfg.encoders, cfg.search, cfg.extraction
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+        search_secret_url = {
+            "tavily": "https://api.tavily.com",
+            "brave": sch.base_url or "https://api.search.brave.com",
+            "semantic_scholar": sch.base_url or "https://api.semanticscholar.org",
+        }.get(sch.provider, sch.base_url)
+        extraction_secret_url = (
+            ext.base_url or "https://api.firecrawl.dev"
+            if ext.provider == "firecrawl"
+            else ext.base_url
+        )
+        search_purpose = f"search:{sch.provider}"
+        extraction_purpose = f"extraction:{ext.provider}"
         # paid-provider keys resolve by the configured env-var NAME (same mechanism
         # as model api_key_env): the encrypted store wins, else the live env.
         # Bundled providers (ddgs/local) need no key.
-        search_key = self._rt._resolve_secret(sch.api_key_env) or ""
-        ext_key = self._rt._resolve_secret(ext.api_key_env) or ""
+        search_key = (
+            self._rt._resolve_secret(sch.api_key_env) or ""
+            if self._rt._origin_approved(search_secret_url, search_purpose, sch.api_key_env)
+            and secret_ref_allowed_for_origin(sch.api_key_env, search_secret_url)
+            else ""
+        )
+        ext_key = (
+            self._rt._resolve_secret(ext.api_key_env) or ""
+            if self._rt._origin_approved(
+                extraction_secret_url, extraction_purpose, ext.api_key_env
+            )
+            and secret_ref_allowed_for_origin(ext.api_key_env, extraction_secret_url)
+            else ""
+        )
+        approval_key = self._rt._config_store.approval_store(
+            secret_store=self._rt._secret_store
+        ).verified()
         key = (
             enc.remote, enc.reranker_url, enc.embedder_url, enc.nli_url,
             sch.provider, sch.base_url, sch.api_key_env,
             ext.provider, ext.base_url, ext.api_key_env,
+            approval_key,
         )
         if search_override is not None:
             from disco.retrieval.live import build_live_retrieval
@@ -258,10 +288,13 @@ class DeepResearchService:
                 search_provider=sch.provider,
                 search_base_url=sch.base_url,
                 search_api_key=search_key,
+                search_secret_ref=sch.api_key_env,
                 search_override=search_override,
                 extraction_provider=ext.provider,
                 extraction_base_url=ext.base_url,
                 extraction_api_key=ext_key,
+                extraction_secret_ref=ext.api_key_env,
+                origin_approved=self._rt._origin_approved,
             )
         if self._rt._research_providers is None or self._rt._research_encoders_key != key:
             from disco.retrieval.live import build_live_retrieval
@@ -274,9 +307,12 @@ class DeepResearchService:
                 search_provider=sch.provider,
                 search_base_url=sch.base_url,
                 search_api_key=search_key,
+                search_secret_ref=sch.api_key_env,
                 extraction_provider=ext.provider,
                 extraction_base_url=ext.base_url,
                 extraction_api_key=ext_key,
+                extraction_secret_ref=ext.api_key_env,
+                origin_approved=self._rt._origin_approved,
             )
             self._rt._research_encoders_key = key
         return self._rt._research_providers
@@ -287,14 +323,35 @@ class DeepResearchService:
             return None
         cfg = self._rt._config_store.load()
         sch = cfg.search
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+        provider_urls = {
+            "tavily": "https://api.tavily.com",
+            "semantic_scholar": sch.base_url or "https://api.semanticscholar.org",
+            "brave": sch.base_url or "https://api.search.brave.com",
+        }
 
         def key_for(provider: str, *fallback_names: str) -> str:
+            target_url = provider_urls.get(provider, "")
+            purpose = f"search:{provider}"
+            if not target_url:
+                return ""
             if sch.provider == provider and sch.api_key_env:
-                key = self._rt._resolve_secret(sch.api_key_env)
+                key = (
+                    self._rt._resolve_secret(sch.api_key_env)
+                    if self._rt._origin_approved(target_url, purpose, sch.api_key_env)
+                    and secret_ref_allowed_for_origin(sch.api_key_env, target_url)
+                    else None
+                )
                 if key:
                     return key
             for name in fallback_names:
-                key = self._rt._resolve_secret(name)
+                key = (
+                    self._rt._resolve_secret(name)
+                    if self._rt._origin_approved(target_url, purpose, name)
+                    and secret_ref_allowed_for_origin(name, target_url)
+                    else None
+                )
                 if key:
                     return key
             return ""
@@ -303,7 +360,12 @@ class DeepResearchService:
 
         return build_multi_search(
             clean,
-            searxng_url=sch.base_url if sch.provider == "searxng" else "",
+            searxng_url=(
+                sch.base_url
+                if sch.provider == "searxng"
+                and self._rt._origin_approved(sch.base_url, "search:searxng", "")
+                else ""
+            ),
             tavily_key=key_for("tavily", "TAVILY_API_KEY", "DISCO_TAVILY_API_KEY"),
             ss_key=key_for(
                 "semantic_scholar",
@@ -317,7 +379,14 @@ class DeepResearchService:
                 "DISCO_BRAVE_SEARCH_API_KEY",
                 "BRAVE_API_KEY",
             ),
-            brave_url=sch.base_url if sch.provider == "brave" else "",
+            brave_url=(
+                sch.base_url
+                if sch.provider == "brave"
+                and self._rt._origin_approved(
+                    sch.base_url, "search:brave", sch.api_key_env
+                )
+                else ""
+            ),
             site_scoped_sites=sch.base_url if sch.provider == "site_scoped" else "",
         )
 

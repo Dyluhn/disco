@@ -271,6 +271,8 @@ class McpManager:
         from disco.tools.mcp.naming import qualified_name
         from disco.tools.mcp.pool import _UNTRUSTED_DESC_WRAPPER, _schema_to_args_model
 
+        if srv.url and not self._mcp_origin_approved(name, srv):
+            raise RuntimeError("MCP HTTP origin is not operator-approved")
         client = McpHttpClient(
             server=srv,
             secrets=self._rt._secret_store,
@@ -336,6 +338,32 @@ class McpManager:
             "McpPool: HTTP server %r connected — %d tool(s) registered",
             name, len(raw_tools),
         )
+
+    def _mcp_origin_approved(self, name: str, srv: McpServerConfig) -> bool:
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+        refs = self._mcp_secret_refs(srv)
+        checker = getattr(self._rt, "_origin_approved", None)
+        if callable(checker):
+            return all(
+                checker(srv.url, f"mcp:{name}", ref)
+                and secret_ref_allowed_for_origin(ref, srv.url)
+                for ref in refs
+            )
+        return all(
+            self._rt._config_store.origin_approved(
+                srv.url,
+                f"mcp:{name}",
+                ref,
+                secret_store=self._rt._secret_store,
+            )
+            and secret_ref_allowed_for_origin(ref, srv.url)
+            for ref in refs
+        )
+
+    def _mcp_secret_refs(self, srv: McpServerConfig) -> tuple[str, ...]:
+        refs = tuple(sorted(str(v).strip() for v in (srv.headers or {}).values() if str(v).strip()))
+        return refs or ("",)
 
     @property
     def _mcp_call_target(self) -> Any:

@@ -194,6 +194,11 @@ class SecretBox:
     def is_strong(self) -> bool:
         return bool(self._app_secret and not _looks_weak(self._app_secret))
 
+    @property
+    def signing_secret(self) -> str | None:
+        """Raw app secret for HMAC-bound operator metadata, never persisted."""
+        return self._app_secret
+
     def encrypt(self, plaintext: str) -> str:
         if self._fernet is None:
             raise RuntimeError(f"{_ENV_SECRET} is not set — cannot encrypt secrets")
@@ -237,6 +242,10 @@ class SecretStore:
     def locked(self) -> bool:
         """An encrypted secret exists but can't be decrypted (no/wrong app secret)."""
         return bool(self._raw().get("openrouter")) and not self._box.available
+
+    @property
+    def signing_secret(self) -> str | None:
+        return self._box.signing_secret
 
     # -- generic named secrets (any provider key, encrypted at rest) ----------
     # The store holds {name: ciphertext}. For provider keys the `name` is the

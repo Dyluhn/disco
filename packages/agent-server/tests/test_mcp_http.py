@@ -148,12 +148,15 @@ def _fake_http_server_config(
 # ---------------------------------------------------------------------------
 
 class _FakeSecretsStore:
-    """Minimal secrets store that only exposes .get(name)."""
+    """Minimal secrets store for closure-only resolution tests."""
 
     def __init__(self, secrets: dict[str, str] | None = None):
         self._secrets = dict(secrets or {})
 
     def get(self, name: str) -> str | None:
+        return self._secrets.get(name)
+
+    def get_secret(self, name: str) -> str | None:
         return self._secrets.get(name)
 
 

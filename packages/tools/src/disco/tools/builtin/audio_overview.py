@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import re
 import wave
 from dataclasses import dataclass
@@ -99,9 +98,13 @@ Output ONLY valid JSON array, nothing else:"""
 def _build_llm_payload(report_text: str, mode: str = "podcast") -> dict:
     from disco.agent_server.audio_config import LLM_MODEL
 
+    return _build_llm_payload_for_model(report_text, LLM_MODEL, mode=mode)
+
+
+def _build_llm_payload_for_model(report_text: str, model: str, mode: str = "podcast") -> dict:
     prompt = _SINGLE_SCRIPT_PROMPT if mode == "single" else _TURN_SCRIPT_PROMPT
     return {
-        "model": LLM_MODEL,
+        "model": model,
         "messages": [
             {
                 "role": "user",
@@ -115,11 +118,30 @@ def _build_llm_payload(report_text: str, mode: str = "podcast") -> dict:
 
 async def _call_llm(payload: dict, llm_url: str) -> str:
     """Call the LLM to generate the turn-script. Returns raw response text."""
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
+    ) as client:
         resp = await client.post(
             f"{llm_url}/chat/completions",
             json=payload,
             headers={"Content-Type": "application/json"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
+async def _call_llm_with_key(payload: dict, llm_url: str, api_key: str) -> str:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
+    ) as client:
+        resp = await client.post(
+            f"{llm_url}/chat/completions",
+            json=payload,
+            headers=headers,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -256,7 +278,9 @@ async def _synthesize_remote(
     # the right suffix so https://api.openai.com and http://speaches:8000/v1 both work.
     root = base_url.rstrip("/")
     url = f"{root}/audio/speech" if root.endswith("/v1") else f"{root}/v1/audio/speech"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0), trust_env=False, follow_redirects=False
+    ) as client:
         resp = await client.post(url, json=payload, headers=headers)
         resp.raise_for_status()
         with wave.open(io.BytesIO(resp.content), "rb") as w:
@@ -315,6 +339,9 @@ class AudioOverviewTool:
         read_only=False,
     )
 
+    def execution_scope(self, args: AudioOverviewArgs) -> str:
+        return "in_process"
+
     async def _resolve_tts_settings(
         self, tts: Any, speaches_url: str
     ) -> tuple[_ResolvedTts | None, ToolOutcome | None]:
@@ -356,7 +383,38 @@ class AudioOverviewTool:
             remote_base = (tts.base_url or speaches_url).rstrip("/")
         elif tts.provider == "openai":
             remote_base = (tts.base_url or _OPENAI_DEFAULT_BASE).rstrip("/")
-            remote_key = os.environ.get(tts.api_key_env, "") if tts.api_key_env else ""
+        if remote_base:
+            from disco.core.llm import ConfigStore
+
+            store = ConfigStore()
+            secret_ref = tts.api_key_env if tts.provider == "openai" else ""
+            if not store.origin_approved(remote_base, f"tts:{tts.provider}", secret_ref):
+                return None, ToolOutcome(
+                    success=False,
+                    content=(
+                        "Audio overview remote endpoint is not operator-approved. "
+                        "Save the Audio settings to approve this exact origin."
+                    ),
+                    error="tts endpoint not approved",
+                )
+        if tts.provider == "openai":
+            if tts.api_key_env:
+                from disco.core.llm.secret_refs import (
+                    resolve_provider_secret,
+                    secret_ref_allowed_for_origin,
+                )
+                from disco.core.llm.secrets import SecretStore
+
+                if not secret_ref_allowed_for_origin(tts.api_key_env, remote_base):
+                    return None, ToolOutcome(
+                        success=False,
+                        content=(
+                            "Audio overview secret_ref is not allowed for this "
+                            "endpoint origin."
+                        ),
+                        error="tts secret_ref origin mismatch",
+                    )
+                remote_key = resolve_provider_secret(tts.api_key_env, SecretStore()) or ""
             remote_model = tts.model or "tts-1"
         _BACKEND_LABEL = {
             "bundled": "bundled Kokoro",
@@ -376,14 +434,18 @@ class AudioOverviewTool:
         return resolved, None
 
     async def _generate_turn_script(
-        self, report_text: str, llm_url: str
+        self, report_text: str, llm_url: str, llm_model: str, llm_key: str = ""
     ) -> tuple[list[Turn] | None, ToolOutcome | None]:
         """Steps 1 & 2: call the LLM for a JSON turn-script, validate it, and retry
         ONCE on malformed output. Returns (turns, None) on success or
         (None, failure_outcome) on any unrecoverable error."""
-        payload = _build_llm_payload(report_text)
+        payload = _build_llm_payload_for_model(report_text, llm_model)
         try:
-            raw_response = await _call_llm(payload, llm_url)
+            raw_response = (
+                await _call_llm_with_key(payload, llm_url, llm_key)
+                if llm_key
+                else await _call_llm(payload, llm_url)
+            )
         except Exception as e:
             return None, ToolOutcome(
                 success=False,
@@ -396,7 +458,7 @@ class AudioOverviewTool:
 
         # One retry on malformed output.
         if error is not None:
-            retry_payload = _build_llm_payload(report_text)
+            retry_payload = _build_llm_payload_for_model(report_text, llm_model)
             retry_payload["messages"].append(
                 {"role": "assistant", "content": raw_response}
             )
@@ -410,7 +472,11 @@ class AudioOverviewTool:
                 }
             )
             try:
-                raw_response2 = await _call_llm(retry_payload, llm_url)
+                raw_response2 = (
+                    await _call_llm_with_key(retry_payload, llm_url, llm_key)
+                    if llm_key
+                    else await _call_llm(retry_payload, llm_url)
+                )
             except Exception as e:
                 return None, ToolOutcome(
                     success=False,
@@ -550,9 +616,34 @@ class AudioOverviewTool:
             transcript_lines.append("")
         return "\n".join(transcript_lines)
 
+    def _resolve_script_llm(self) -> tuple[str, str, str, str | None]:
+        from disco.core.llm import ConfigStore, ModelRole
+        from disco.core.llm.secret_refs import (
+            resolve_provider_secret,
+            secret_ref_allowed_for_origin,
+        )
+        from disco.core.llm.secrets import SecretStore
+
+        store = ConfigStore()
+        cfg = store.load()
+        key = cfg.assignments.get(ModelRole.RAG_ANSWERER) or cfg.default_model
+        entry = cfg.models.get(key)
+        if entry is None or not entry.base_url:
+            return "", "local-model", "", "LLM endpoint is not configured"
+        llm_url = entry.base_url.rstrip("/")
+        llm_model = entry.model_id
+        api_key_env = entry.api_key_env
+        if not store.origin_approved(llm_url, f"model:{entry.provider}", api_key_env or ""):
+            return "", llm_model, "", "LLM origin not approved"
+        if not secret_ref_allowed_for_origin(api_key_env, llm_url):
+            return "", llm_model, "", "LLM secret_ref not allowed for this origin"
+        key = resolve_provider_secret(api_key_env, SecretStore()) if api_key_env else None
+        if api_key_env and not key:
+            return "", llm_model, "", "LLM secret_ref is not decryptable"
+        return llm_url, llm_model, key or "", None
+
     async def run(self, args: AudioOverviewArgs, ctx: ToolContext) -> ToolOutcome:
         from disco.agent_server.audio_config import (
-            LLM_URL,
             SILENCE_MS_DEFAULT,
             SPEACHES_URL,
         )
@@ -574,7 +665,12 @@ class AudioOverviewTool:
         voice_b = tts_cfg.voice_b
 
         # --- Steps 1 & 2: Generate turn-script via LLM (+ one retry) ---------
-        turns, gen_failure = await self._generate_turn_script(report_text, LLM_URL)
+        llm_url, llm_model, llm_key, llm_error = self._resolve_script_llm()
+        if llm_error is not None:
+            return ToolOutcome(success=False, content=llm_error, error=llm_error)
+        turns, gen_failure = await self._generate_turn_script(
+            report_text, llm_url, llm_model, llm_key
+        )
         if gen_failure is not None:
             return gen_failure
 

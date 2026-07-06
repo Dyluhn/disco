@@ -12,7 +12,7 @@ mirror the frontend's `src/types/models.ts` + `src/types/config.ts`.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
@@ -64,6 +64,7 @@ from .config.mappers import (
     _sandbox_from,
     _tts_from,
 )
+from . import origin_approval_wiring as _origin_wiring
 
 
 class ConfigValidationError(Exception):
@@ -111,6 +112,12 @@ class ConfigState:
         # When None (tests without a DB), MCP config persists to ConfigStore only.
         self._db_conn = db_conn
 
+    def _approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None: _origin_wiring.sign_origin(self._store, self._secrets, url, purpose, secret_ref)
+
+    def approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None: _origin_wiring.approve_origin(self._store, self._secrets, url, purpose, secret_ref)
+
+    def _approve_model_origin(self, entry: Any) -> None: _origin_wiring.approve_model_origin(self._store, self._secrets, entry)
+
     # models + assignments (the absolute manual model story) ------------------
 
     def models(self) -> list[ModelDTO]:
@@ -120,7 +127,7 @@ class ConfigState:
         """Add a model to the catalogue. New models are their own endpoint (the
         endpoint key = the catalogue id). Raises ValueError on a duplicate id."""
         entry = _entry_from(upsert, provider=upsert.id)
-        return _models_from(self._store.add_model(upsert.id, entry))
+        self._store.add_model(upsert.id, entry); self._approve_model_origin(entry); return _models_from(self._store.load())
 
     def update_model(self, model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
         """Edit an existing model. Preserves its endpoint key so a seeded model
@@ -128,7 +135,7 @@ class ConfigState:
         existing = self._store.load().models.get(model_id)
         provider = existing.provider if existing is not None else model_id
         entry = _entry_from(upsert, provider=provider)
-        return _models_from(self._store.update_model(model_id, entry))
+        self._store.update_model(model_id, entry); self._approve_model_origin(entry); return _models_from(self._store.load())
 
     def remove_model(self, model_id: str) -> list[ModelDTO]:
         """Remove a model. Raises ValueError if it's the default or assigned to a
@@ -192,8 +199,12 @@ class ConfigState:
         ValueError (→ 400) on a reserved/invalid name, a blank value, or no app
         secret to encrypt with."""
         name = name.strip()
+        from disco.core.llm.secret_refs import is_control_secret_ref
+
         if name == self._RESERVED_SECRET:
             raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
+        if is_control_secret_ref(name):
+            raise ValueError(f"{name} is an internal control secret and cannot be a provider ref")
         if not value.strip():
             raise ValueError("value is empty")
         try:
@@ -209,24 +220,7 @@ class ConfigState:
         self._secrets.clear_secret(name)
         return self.secret_status(name)
 
-    def _resolve_secret_value(self, name: str) -> str | None:
-        """The same resolution order the agent-server uses to overlay a key at
-        build time: the encrypted store first (by env-var NAME), then the
-        reserved OpenRouter slot if this IS the OpenRouter env, then the live
-        process env. Returns None when nothing decryptable is available."""
-        import os
-
-        from disco.core.llm.secrets import (
-            OPENROUTER_API_KEY_ENV,
-            OPENROUTER_API_KEY_ENV_LEGACY,
-        )
-
-        val = self._secrets.get_secret(name)
-        if not val and name in (OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY):
-            val = self._secrets.get_openrouter_key()
-        if not val:
-            val = os.environ.get(name)
-        return val or None
+    def _resolve_secret_value(self, name: str) -> str | None: from disco.core.llm.secret_refs import resolve_provider_secret; return resolve_provider_secret(name, self._secrets)
 
     async def test_secret(self, name: str) -> ProbeResult:
         """Probe T4.1: a cheap authenticated call against the OpenAI-compatible
@@ -242,10 +236,12 @@ class ConfigState:
         # be a false green — OpenRouter serves /models without a key).
         base_url: str | None = None
         model_id: str = ""
+        provider: str = ""
         for entry in cfg.models.values():
             if entry.api_key_env == name and entry.base_url:
                 base_url = entry.base_url
                 model_id = entry.model_id
+                provider = entry.provider
                 break
         if base_url is None:
             # Maybe a search/extraction key (no /models endpoint) — point the
@@ -271,6 +267,7 @@ class ConfigState:
                     "model's api_key_env (Models), then test it there."
                 ),
             )
+        if gate := _origin_wiring.probe_approval_gate(self._store, "model", base_url, provider=provider, secret_ref=name, secrets=self._secrets, require_secret_ref_allowed=True): return gate
         # 2) Decrypt the stored value (or fall back to env).
         value = self._resolve_secret_value(name)
         if not value:
@@ -299,8 +296,6 @@ class ConfigState:
         as such, never as a remote "ok". Self-host tiers probe the configured base
         URL; paid tiers probe the vendor host (any HTTP answer = reachable, a
         401/403 = the key was rejected)."""
-        import os
-
         from .probe_clients import probe_reachable
 
         cfg = self._store.load()
@@ -342,6 +337,7 @@ class ConfigState:
                     detail=f"No base URL set for {provider} — add the service URL above.",
                     provider=provider,
                 )
+            if gate := _origin_wiring.probe_approval_gate(self._store, kind, base_url, provider=provider, secrets=self._secrets): return gate
             ok, status, detail = await probe_reachable(base_url)
             return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)
         # Paid tiers (tavily / brave / firecrawl): probe the vendor host with the key.
@@ -353,7 +349,8 @@ class ConfigState:
                 detail=f"No endpoint known for provider {provider!r}.",
                 provider=provider,
             )
-        key = (self._secrets.get_secret(key_env) or os.environ.get(key_env)) if key_env else None
+        if gate := _origin_wiring.probe_approval_gate(self._store, kind, host, provider=provider, secret_ref=key_env, secrets=self._secrets, require_secret_ref_allowed=True): return gate
+        key = self._resolve_secret_value(key_env) if key_env else None
         ok, status, detail = await probe_reachable(host, api_key=key)
         return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)
 
@@ -526,7 +523,7 @@ class ConfigState:
                 nli_url=dto.nli_url.strip(),
             )
         )
-        return _encoders_from(self._store.load())
+        _origin_wiring.approve_encoder_origins(self._store, self._secrets, dto); return _encoders_from(self._store.load())
 
     # TTS: audio-overview toggle / bundled-vs-remote / voices (persisted) --------
 
@@ -550,7 +547,7 @@ class ConfigState:
                 voice_b=dto.voice_b.strip() or "af_bella",
             )
         )
-        return _tts_from(self._store.load())
+        _origin_wiring.approve_tts_origin(self._store, self._secrets, dto); return _tts_from(self._store.load())
 
     # image generation: ComfyUI / OpenAI-compatible / OpenRouter (persisted) ------
 
@@ -577,7 +574,7 @@ class ConfigState:
                 workflow_json=dto.workflow_json.strip(),
             )
         )
-        return _image_gen_from(self._store.load())
+        _origin_wiring.approve_image_gen_origin(self._store, self._secrets, dto); return _image_gen_from(self._store.load())
 
     # data sources: web search + extraction provider tiers (persisted) ----------
 
@@ -606,7 +603,7 @@ class ConfigState:
                 api_key_env=dto.extraction_api_key_env.strip(),
             )
         )
-        cfg = self._store.load()
+        _origin_wiring.approve_data_source_origins(self._store, self._secrets, dto); cfg = self._store.load()
         return _data_sources_from(
             cfg, configured_sources=self._configured_research_sources(cfg)
         )
@@ -636,6 +633,8 @@ class ConfigState:
                 configured.add(provider)
         return sorted(configured)
 
+    def _approve_data_source_origins(self, dto: DataSourcesConfigDTO) -> None: _origin_wiring.approve_data_source_origins(self._store, self._secrets, dto)
+
     # auxiliary-role local fallback (persisted; agent-server reads per request) ---
 
     def role_fallback_config(self) -> RoleFallbackConfigDTO:
@@ -663,7 +662,7 @@ class ConfigState:
                 api_key_env=api_key_env,
             )
         )
-        return _role_fallback_from(self._store.load())
+        _origin_wiring.approve_role_fallback_origin(self._store, self._secrets, dto.enabled, base_url, api_key_env); return _role_fallback_from(self._store.load())
 
     # Live browser (noVNC) toggle (persisted; agent-server reads per request) ------
 
@@ -981,7 +980,7 @@ class ConfigState:
 
         create_mcp_approval(self._db_conn, name, body.description_hash)
         ap = get_mcp_approval(self._db_conn, name)
-        srv = cfg.servers[name]
+        srv = cfg.servers[name]; _origin_wiring.approve_mcp_server_origin(self._store, self._secrets, name, srv)
         return McpConnectionDTO(
             id=name,
             name=name,
@@ -993,6 +992,8 @@ class ConfigState:
             approved_at=ap["approved_at"] if ap else None,
             enabled=srv.get("enabled", True),
         )
+
+    def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]: return _origin_wiring.mcp_secret_refs(srv)
 
     def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
         """Return old-vs-new hash diff for the approve UI. None = no diff or no

@@ -456,7 +456,10 @@ class TestProbeVision:
     @pytest.mark.asyncio
     async def test_probe_all_vision_returns_dict_keyed_by_model_key(self):
         """probe_all_vision returns model-key → vision result dict."""
-        from disco.core.llm.wiring import _VISION_PROBE_CACHE, probe_all_vision
+        from disco.core.llm.wiring import (
+            _VISION_PROBE_CACHE,
+            probe_all_vision_with_approvals,
+        )
 
         _VISION_PROBE_CACHE.clear()
 
@@ -476,6 +479,7 @@ class TestProbeVision:
         config = RouterConfig(
             models={"local-model": entry_a, "nli-model": entry_nli},
             default_model="local-model",
+            trusted_origins=("http://localhost:18080",),
         )
 
         # Stub the /props response for the local endpoint
@@ -494,7 +498,10 @@ class TestProbeVision:
             mock_ctx.get = fake_get
             mock_async_client_cls.return_value = mock_ctx
 
-            result = await probe_all_vision(config)
+            result = await probe_all_vision_with_approvals(
+                config,
+                origin_approved=lambda *_args: True,
+            )
 
         assert "local-model" in result
         assert result["local-model"] is True
@@ -635,7 +642,12 @@ class TestVisionAwarePrompts:
         prompt = self._system_prompt(vision=False, mode=OperatingMode.LONG_HORIZON)
         # The prompt should not re-add the unbounded "a build you have not seen
         # render is not finished" pressure — it should use the bounded framing.
-        assert "verify once" in prompt.lower() or "one browser load" in prompt.lower() or "once" in prompt.lower()
+        prompt_lower = prompt.lower()
+        assert (
+            "verify once" in prompt_lower
+            or "one browser load" in prompt_lower
+            or "once" in prompt_lower
+        )
 
     def test_anti_monolith_in_execution_prompt(self):
         """The execution prompt includes the anti-monolith steer."""

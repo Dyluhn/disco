@@ -20,11 +20,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
 from urllib.parse import urlparse
 
 import httpx
+from disco.core.host_egress import EgressDenied, validate_untrusted_url
 
 from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, SearchHit
@@ -91,7 +92,10 @@ class SearxngSearchProvider:
             params["time_range"] = time_filter
         try:
             async with httpx.AsyncClient(
-                timeout=self._timeout, transport=self._transport
+                timeout=self._timeout,
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
                 resp = await client.get(
                     f"{self._base}/search", params=params
@@ -181,9 +185,17 @@ class Crawl4aiExtractionProvider:
     async def extract_many(self, urls: list[str]) -> list[ExtractedDoc]:
         if not urls:
             return []
+        for url in urls:
+            try:
+                validate_untrusted_url(url)
+            except EgressDenied as exc:
+                return [self._failed(u, i, str(exc)) for i, u in enumerate(urls)]
         try:
             async with httpx.AsyncClient(
-                timeout=self._timeout, transport=self._transport
+                timeout=self._timeout,
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
                 resp = await client.post(
                     f"{self._base}/crawl",
@@ -303,7 +315,10 @@ class TeiReranker:
             )
         try:
             async with httpx.AsyncClient(
-                timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
+                timeout=min(self._timeout, _PROBE_TIMEOUT_S),
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
                 await asyncio.wait_for(client.get(self._base), _PROBE_DEADLINE_S)
         except _PROBE_HTTP_ERRORS as exc:
@@ -324,7 +339,10 @@ class TeiReranker:
             return []
         try:
             async with httpx.AsyncClient(
-                timeout=self._timeout, transport=self._transport
+                timeout=self._timeout,
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
                 resp = await client.post(
                     f"{self._base}/rerank",
@@ -373,7 +391,10 @@ class OpenAIEmbedder:
             )
         try:
             async with httpx.AsyncClient(
-                timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
+                timeout=min(self._timeout, _PROBE_TIMEOUT_S),
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
                 await asyncio.wait_for(client.get(self._base), _PROBE_DEADLINE_S)
         except _PROBE_HTTP_ERRORS as exc:
@@ -395,7 +416,12 @@ class OpenAIEmbedder:
         headers = {"content-type": "application/json"}
         if self._key:
             headers["Authorization"] = f"Bearer {self._key}"
-        async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+        async with httpx.AsyncClient(
+            timeout=self._timeout,
+            transport=self._transport,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
             resp = await client.post(
                 f"{self._base}/embeddings",
                 json={"input": texts, "model": self._model},
@@ -450,7 +476,10 @@ class SidecarNLIVerifier:
 
         def _ping() -> None:
             with httpx.Client(
-                timeout=min(self._timeout, _PROBE_TIMEOUT_S), transport=self._transport
+                timeout=min(self._timeout, _PROBE_TIMEOUT_S),
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
             ) as client:
                 client.get(self._base)
 
@@ -477,7 +506,12 @@ class SidecarNLIVerifier:
         if key in self._cache:
             return self._cache[key]
         try:
-            with httpx.Client(timeout=self._timeout, transport=self._transport) as client:
+            with httpx.Client(
+                timeout=self._timeout,
+                transport=self._transport,
+                trust_env=False,
+                follow_redirects=False,
+            ) as client:
                 resp = client.post(
                     f"{self._base}/verify", json={"premise": premise, "claim": hypothesis}
                 )
@@ -606,10 +640,14 @@ def build_live_retrieval(
     search_provider: str = "ddgs",
     search_base_url: str = "",
     search_api_key: str = "",
+    search_secret_ref: str = "",
     search_override: SearchProvider | None = None,
     extraction_provider: str = "local",
     extraction_base_url: str = "",
     extraction_api_key: str = "",
+    extraction_secret_ref: str = "",
+    trusted_origins: tuple[str, ...] = (),
+    origin_approved: Callable[[str, str, str | None], bool] | None = None,
 ) -> dict[str, Any]:
     """Construct the five providers. Returns a dict {search, extraction, reranker,
     embedder, nli} the research wiring composes into a RetrievalEngine +
@@ -626,6 +664,7 @@ def build_live_retrieval(
     → Remote). Each takes precedence when non-empty; an empty one falls back to the
     PMX_*_URL env default — so a remote user who hasn't typed URLs still resolves."""
     e = os.environ if env is None else env
+    approved = origin_approved or (lambda *_: False)
 
     def url(key: str) -> str:
         # DISCO_<X> preferred; legacy PMX_<X> honored; else the LAN default.
@@ -643,25 +682,48 @@ def build_live_retrieval(
     # B1/B2 — pluggable discovery + extraction. Bundled (ddgs/local) by default so a
     # fresh install works keyless; searxng/crawl4ai self-host (base_url, empty → env
     # default); tavily/firecrawl are paid (resolved api_key passed in by the runtime).
+    search_url = search_base_url or (
+        url("DISCO_SEARXNG_URL") if search_provider == "searxng" else ""
+    )
+    search_trust_url = {
+        "tavily": "https://api.tavily.com",
+        "brave": search_url or "https://api.search.brave.com",
+        "semantic_scholar": search_url or "https://api.semanticscholar.org",
+    }.get(search_provider, search_url)
+    if search_trust_url and not approved(
+        search_trust_url, f"search:{search_provider}", search_secret_ref
+    ):
+        search_provider, search_url, search_api_key = "ddgs", "", ""
+    if extraction_provider == "crawl4ai":
+        extraction_url = extraction_base_url or url("DISCO_CRAWL4AI_URL")
+    elif extraction_provider == "firecrawl":
+        extraction_url = extraction_base_url or "https://api.firecrawl.dev"
+    else:
+        extraction_url = extraction_base_url
+    if extraction_provider != "local" and not approved(
+        extraction_url,
+        f"extraction:{extraction_provider}",
+        extraction_secret_ref,
+    ):
+        extraction_provider, extraction_url, extraction_api_key = "local", "", ""
     providers: dict[str, Any] = {
-        "search": search_override
-        or _make_search(
-            search_provider,
-            search_base_url
-            or (url("DISCO_SEARXNG_URL") if search_provider == "searxng" else ""),
-            search_api_key,
-        ),
-        "extraction": _make_extraction(
-            extraction_provider,
-            extraction_base_url or url("DISCO_CRAWL4AI_URL"),
-            extraction_api_key,
-        ),
+        "search": search_override or _make_search(search_provider, search_url, search_api_key),
+        "extraction": _make_extraction(extraction_provider, extraction_url, extraction_api_key),
     }
+    r_url = reranker_url or url("DISCO_RERANKER_URL")
+    e_url = embedder_url or url("DISCO_EMBEDDER_URL")
+    n_url = nli_url or url("DISCO_NLI_URL")
     if use_remote:
         # config override (non-empty) wins; else the env/default for that endpoint
-        providers["reranker"] = TeiReranker(reranker_url or url("DISCO_RERANKER_URL"))
-        providers["embedder"] = OpenAIEmbedder(embedder_url or url("DISCO_EMBEDDER_URL"))
-        providers["nli"] = SidecarNLIVerifier(nli_url or url("DISCO_NLI_URL"))
+        use_remote = (
+            approved(r_url, "encoder:reranker", "")
+            and approved(e_url, "encoder:embedder", "")
+            and approved(n_url, "encoder:nli", "")
+        )
+    if use_remote:
+        providers["reranker"] = TeiReranker(r_url)
+        providers["embedder"] = OpenAIEmbedder(e_url)
+        providers["nli"] = SidecarNLIVerifier(n_url)
     else:
         # In-process ONNX/CPU encoders (imported lazily — models load on first use).
         from .local_encoders import FastEmbedEmbedder, FastEmbedNLIVerifier, FastEmbedReranker

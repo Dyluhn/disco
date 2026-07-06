@@ -109,6 +109,19 @@ class SecretsListDTO(BaseModel):
     can_store: bool
 
 
+class OriginApprovalDTO(BaseModel):
+    origin: str
+    purpose: str
+    secret_ref: str = ""
+
+
+class OriginApprovalResultDTO(BaseModel):
+    approved: bool
+    origin: str
+    purpose: str
+    secret_ref: str = ""
+
+
 class ProbeResult(BaseModel):
     """The outcome of a live "test" probe (provider key / data source / TTS /
     image / MCP). A real network call decides this — never a fake green. An

@@ -26,6 +26,7 @@ from .routes import (
     make_models_router,
     make_openrouter_router,
     make_secrets_router,
+    make_security_router,
     make_skills_router,
 )
 
@@ -58,6 +59,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     app.include_router(make_config_router(state))
     app.include_router(make_openrouter_router(state))
     app.include_router(make_secrets_router(state))
+    app.include_router(make_security_router(state))
     app.include_router(make_skills_router(state))
     app.include_router(make_mcp_router(state))
     app.include_router(make_conversations_router(store))

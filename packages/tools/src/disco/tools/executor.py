@@ -394,6 +394,39 @@ class DefaultToolExecutor:
                 return tool.definition.runs_in
         return "unknown"
 
+    def tool_scope_for_call(self, tool_name: str, arguments: dict[str, Any]) -> str:
+        """Return the effective pre-execution scope for this concrete tool call.
+
+        Some tools write through the sandbox but optionally perform host-side HTTP
+        before that write. The confirmation gate calls this before execute(), so a
+        tool may expose a side-effect-free ``execution_scope(args)`` hook that
+        depends only on already-supplied arguments and saved config. Validation
+        failures fall back to the static scope; execute() still owns the real
+        invalid-arguments response.
+        """
+        for tool in self._registry.in_scope(self._scope):
+            if tool.definition.name != tool_name:
+                continue
+            hook = getattr(tool, "execution_scope", None)
+            if not callable(hook):
+                return tool.definition.runs_in
+            try:
+                normalized = normalize_list_item_wrappers(
+                    tool_name,
+                    tool.definition.args_model,
+                    arguments,
+                )
+                args = tool.definition.args_model.model_validate(normalized)
+                scope = hook(args)
+            except Exception:
+                return tool.definition.runs_in
+            return (
+                scope
+                if isinstance(scope, str) and scope in {"sandbox", "in_process", "unknown"}
+                else "unknown"
+            )
+        return "unknown"
+
     def available_tools(self) -> list[ToolSpec]:
         tools = self._registry.in_scope(self._scope)  # registry ∩ allowed_tools
         if self._scope.advertised_tools is not None:

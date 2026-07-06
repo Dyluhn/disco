@@ -34,9 +34,13 @@ def _hard_deny_reason(command: str) -> str | None:
 
 
 def _egress_allowed(url: str, allow_hosts: frozenset[str]) -> tuple[bool, str]:
-    """True if the URL is on the egress allow-list. Loopback + RFC1918 by
-    default — see `_DEFAULT_HTTP_ALLOW_HOSTS` for the rationale. Rejects
-    non-http(s) schemes (no `file://`, no `gopher://`)."""
+    """True if the URL shape is allowed before the guarded wire probe.
+
+    Private, loopback, and link-local IP literals are never allowed for class-1
+    probes. Hostnames must either be explicitly allowlisted or, when the
+    allowlist is empty, are left for the connect-time guarded fetch to resolve
+    and validate.
+    """
     try:
         parsed = urlparse(url)
     except ValueError as exc:
@@ -46,18 +50,15 @@ def _egress_allowed(url: str, allow_hosts: frozenset[str]) -> tuple[bool, str]:
     host = parsed.hostname or ""
     if not host:
         return False, "URL has no host"
-    if host in allow_hosts:
-        return True, ""
-    # RFC1918 private network — accepted by default. A real prod probe to a
-    # public host must be opted in via a custom `http_probe` argument.
     try:
         addr = ip_address(host)
     except ValueError:
-        # Hostname that didn't resolve to an IP literal (DNS resolution is
-        # the probe's job, not the gate's). Refuse by default — the loopback
-        # / private-IP shape is the in-cluster probe we actually need.
+        if not allow_hosts or host in allow_hosts:
+            return True, ""
         return False, f"host {host!r} not in egress allow-list"
-    if addr.is_loopback or addr.is_private:
+    if addr.is_loopback or addr.is_private or addr.is_link_local:
+        return False, f"host {host!r} resolves to a denied private range"
+    if not allow_hosts or host in allow_hosts:
         return True, ""
     return False, f"host {host!r} not in egress allow-list"
 

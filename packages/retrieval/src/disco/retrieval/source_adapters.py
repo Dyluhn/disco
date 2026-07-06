@@ -8,12 +8,15 @@ filters onto RSS query ``when:`` operators.
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Mapping
 from html.parser import HTMLParser
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx
+from disco.core.host_egress import EgressDenied, GuardedResponse, guarded_get
 
 from .models import SearchHit
 from .providers import SearchProvider
@@ -23,6 +26,29 @@ _ATOM_NS = {"a": "http://www.w3.org/2005/Atom"}
 
 def _host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
+
+
+def _with_params(base: str, params: Mapping[str, object]) -> str:
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}{urlencode(params)}"
+
+
+async def _fetch_get(
+    url: str,
+    *,
+    timeout_s: float,
+    headers: Mapping[str, str] | None = None,
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> httpx.Response | GuardedResponse:
+    if transport is not None:
+        async with httpx.AsyncClient(
+            transport=transport,
+            timeout=timeout_s,
+            follow_redirects=True,
+            trust_env=False,
+        ) as client:
+            return await client.get(url, headers=headers)
+    return await guarded_get(url, timeout_s=timeout_s, headers=headers)
 
 
 def _collapse_ws(value: str | None) -> str:
@@ -99,15 +125,15 @@ class ArxivSearchProvider:
         del time_filter
         params = {"search_query": f"all:{query}", "start": 0, "max_results": limit}
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
+            resp = await _fetch_get(
+                _with_params(self._base_url, params),
+                timeout_s=self._timeout,
                 transport=self._transport,
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(self._base_url, params=params)
-                resp.raise_for_status()
+            )
+            if resp.status_code >= 400:
+                return []
             root = ET.fromstring(resp.content)
-        except (httpx.HTTPError, httpx.InvalidURL, ET.ParseError, ValueError):
+        except (EgressDenied, OSError, ET.ParseError, ValueError, httpx.HTTPError):
             return []
 
         hits: list[SearchHit] = []
@@ -170,15 +196,15 @@ class NewsSearchProvider:
             "ceid": self._ceid,
         }
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
+            resp = await _fetch_get(
+                _with_params(self._base_url, params),
+                timeout_s=self._timeout,
                 transport=self._transport,
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(self._base_url, params=params)
-                resp.raise_for_status()
+            )
+            if resp.status_code >= 400:
+                return []
             root = ET.fromstring(resp.content)
-        except (httpx.HTTPError, httpx.InvalidURL, ET.ParseError, ValueError):
+        except (EgressDenied, OSError, ET.ParseError, ValueError, httpx.HTTPError):
             return []
 
         hits: list[SearchHit] = []
@@ -249,18 +275,17 @@ class SemanticScholarSearchProvider:
         }
         headers = {"x-api-key": self._api_key} if self._api_key else None
         try:
-            async with httpx.AsyncClient(
-                timeout=self._timeout,
+            resp = await _fetch_get(
+                _with_params(f"{self._base_url}/paper/search", params),
+                timeout_s=self._timeout,
+                headers=headers,
                 transport=self._transport,
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(
-                    f"{self._base_url}/paper/search", params=params, headers=headers
-                )
-                resp.raise_for_status()
-                payload = resp.json()
-                papers = payload.get("data", []) if isinstance(payload, dict) else []
-        except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+            )
+            if resp.status_code >= 400:
+                return []
+            payload = json.loads(resp.text)
+            papers = payload.get("data", []) if isinstance(payload, dict) else []
+        except (EgressDenied, OSError, ValueError, httpx.HTTPError):
             return []
 
         hits: list[SearchHit] = []

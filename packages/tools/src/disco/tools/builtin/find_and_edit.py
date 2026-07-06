@@ -23,7 +23,12 @@ from pydantic import BaseModel, Field, model_validator
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..sandbox.base import strip_redundant_workspace_prefix
-from ._slides_pipeline import _extract_json_object, _resolve_llm_key, _resolve_slides_llm
+from ._slides_pipeline import (
+    _extract_json_object,
+    _purpose_for_model_endpoint,
+    _resolve_llm_key,
+    _resolve_slides_llm,
+)
 from .files import (
     ExactReplaceArgs,
     ExactReplaceEdit,
@@ -117,7 +122,9 @@ async def _call_llm(
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
+    ) as client:
         resp = await client.post(
             f"{llm_url}/chat/completions",
             json=payload,
@@ -263,11 +270,25 @@ def _match_record(match: _Match) -> dict[str, Any]:
     }
 
 
-def _resolve_driver_llm(ctx: ToolContext) -> tuple[str, str, str | None]:
+def _resolve_driver_llm(ctx: ToolContext) -> tuple[str, str, str | None, str | None]:
     if ctx.driver_llm is not None:
         base_url, model, api_key_env = ctx.driver_llm
-        return base_url.rstrip("/"), model, _resolve_llm_key(api_key_env)
-    return _resolve_slides_llm()
+        llm_url = base_url.rstrip("/")
+        from disco.core.llm import ConfigStore
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+        store = ConfigStore()
+        cfg = store.load()
+        purpose = _purpose_for_model_endpoint(cfg, llm_url, api_key_env)
+        if not store.origin_approved(llm_url, purpose, api_key_env):
+            return "", model, None, "LLM origin not approved"
+        if not secret_ref_allowed_for_origin(api_key_env, llm_url):
+            return "", model, None, "LLM secret_ref not allowed"
+        return llm_url, model, _resolve_llm_key(api_key_env), None
+    llm_url, model, api_key = _resolve_slides_llm()
+    if not llm_url:
+        return "", model, None, "LLM origin not approved"
+    return llm_url, model, api_key, None
 
 
 def _decision_messages(args: FindAndEditArgs, match: _Match) -> list[dict[str, str]]:
@@ -339,7 +360,10 @@ async def _decide_match(
                 max_tokens=_MAX_LLM_TOKENS,
             )
         except Exception as exc:  # noqa: BLE001 - safe default is a per-match no-op.
-            return match.global_index, {"status": "skipped", "reason": f"llm_error:{type(exc).__name__}"}
+            return match.global_index, {
+                "status": "skipped",
+                "reason": f"llm_error:{type(exc).__name__}",
+            }
     action, replacement, reason = _parse_decision(raw, match.text)
     if action != "edit" or replacement is None:
         return match.global_index, {"status": "skipped", "reason": reason}
@@ -364,7 +388,10 @@ def _prepare_exact_edits(
     edits_by_old: dict[str, list[_Match]] = {}
     for match in file.matches:
         matches_by_old.setdefault(match.text, []).append(match)
-        decision = decisions.get(match.global_index, {"status": "skipped", "reason": "missing_decision"})
+        decision = decisions.get(
+            match.global_index,
+            {"status": "skipped", "reason": "missing_decision"},
+        )
         rec = file.result["matches"][match.file_index]
         rec.update(decision)
         if decision.get("status") == "accepted":
@@ -538,7 +565,15 @@ class FindAndEditTool:
                 result["matches"].append(_match_record(match))
             result["sha256"] = sha
             result["status"] = "matched" if file_matches else "unchanged"
-            files.append(_ReadFile(path=path, text=text, sha256=sha, matches=file_matches, result=result))
+            files.append(
+                _ReadFile(
+                    path=path,
+                    text=text,
+                    sha256=sha,
+                    matches=file_matches,
+                    result=result,
+                )
+            )
 
         if len(global_matches) > args.max_matches:
             return ToolOutcome(
@@ -558,7 +593,20 @@ class FindAndEditTool:
                 },
             )
 
-        llm_url, model, api_key = _resolve_driver_llm(ctx)
+        llm_url, model, api_key, llm_error = _resolve_driver_llm(ctx)
+        if llm_error is not None:
+            return ToolOutcome(
+                success=False,
+                error=llm_error,
+                content=f"find_and_edit refused: {llm_error}; no LLM calls were made.",
+                structured={
+                    "kind": "llm_not_approved",
+                    "scanned_files": len(selected),
+                    "matches": len(global_matches),
+                    "files": file_results,
+                    "warnings": warnings,
+                },
+            )
         sem = asyncio.Semaphore(_CONCURRENCY)
         decision_pairs = await asyncio.gather(
             *(

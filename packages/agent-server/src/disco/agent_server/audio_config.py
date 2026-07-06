@@ -11,9 +11,8 @@ SPEACHES_URL points at the Speaches HTTP service (Kokoro TTS via an
 OpenAI-compatible `/v1/audio/speech` endpoint). Default assumes Speaches
 runs on the homelab mini-PC at port 8000.
 
-LLM_URL / LLM_MODEL configure the OpenAI-compatible chat completions
-endpoint used to generate the turn-script JSON. Defaults to a local
-llama.cpp server; override LLM_URL + LLM_MODEL via env vars.
+The turn-script LLM is resolved at execution time through ConfigStore so a
+poisoned config/env cannot trigger import-time host egress.
 """
 
 from __future__ import annotations
@@ -32,25 +31,20 @@ SPEACHES_URL: str = os.environ.get("SPEACHES_URL", _SPEACHES_DEFAULT).rstrip("/"
 
 # ---- LLM endpoint (turn-script generation) ---------------------------------
 
-import json
+LLM_URL: str = ""
+LLM_MODEL: str = "local-model"
+LLM_API_KEY_ENV: str | None = None
 
 
-def _resolve_llm_config() -> tuple[str, str, str | None]:
-    try:
-        config_path = os.environ.get("DISCO_CONFIG") or os.environ.get("PMX_CONFIG") or "disco-config.json"
-        with open(config_path, encoding="utf-8") as f:
-            config = json.load(f)
-        key = config.get("assignments", {}).get("rag_answerer") or config.get("default_model")
-        model_info = config["models"][key]
-        return model_info["base_url"], model_info["model_id"], model_info.get("api_key_env")
-    except Exception:
-        return "http://192.168.1.231:18080/v1", "llama-3-8b", None
+def resolve_llm_config() -> tuple[str, str, str | None]:
+    from disco.core.llm import ConfigStore, ModelRole
 
-_cfg_url, _cfg_model, _cfg_key_env = _resolve_llm_config()
-
-LLM_URL: str = os.environ.get("LLM_URL", _cfg_url).rstrip("/")
-LLM_MODEL: str = os.environ.get("LLM_MODEL", _cfg_model)
-LLM_API_KEY_ENV: str | None = _cfg_key_env
+    cfg = ConfigStore().load()
+    key = cfg.assignments.get(ModelRole.RAG_ANSWERER) or cfg.default_model
+    entry = cfg.models.get(key)
+    if entry is None or not entry.base_url:
+        return "", LLM_MODEL, None
+    return entry.base_url.rstrip("/"), entry.model_id, entry.api_key_env
 
 # ---- inter-turn silence range (ms) -----------------------------------------
 
