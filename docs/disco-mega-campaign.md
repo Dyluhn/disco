@@ -136,7 +136,7 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | B-W2 | Build | QUEUED | — | — |
 | B-W3 | Build | QUEUED | — | — |
 | B-W4 | Build | QUEUED | — | — |
-| C1–C3 | Tier-3 | QUEUED | — | — |
+| C1–C3 | Tier-3 | **DONE** (soak-pending) | `1dfedb15` | 83 tripwire tests; behavioral effect deferred to Epic Z soak |
 | S-W1 | Security | QUEUED (keystone) | — | — |
 | S-W2..W6 | Security | QUEUED | — | — |
 | Z1–Z3 | Soak+debug | QUEUED (final) | — | — |

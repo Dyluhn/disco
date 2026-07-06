@@ -45,4 +45,15 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 - No migrations dir; drizzle-kit configured but never invoked (pure/deterministic generator can't run Node at generate-time). Least-invasive: hand-emitted numbered `migrations/NNNN_*.sql` + `wrangler d1 migrations apply`.
 - **Decision:** B-W2 = a NEW `records` primitive (register_primitive alongside lead-gen/directory), NOT a lead-gen mutation — lead-gen output must stay byte-identical (tests assert exact shape) and the codebase's explicit anti-over-generalization stance (primitives.py:6-11) wants per-primitive modules. Adds a relation/FK concept to the spec model + multi-table schema + FK ordering + N-entity worker route table + migrations.
 
+### Epic C LANDED — commit `1dfedb15` (done directly on main; disjoint from codex's B-W1/B-W2 files)
+- Recon corrected the map: build prompts live in `llm/prompts.py` (not `loop/prompts.py`). 5 surgical additive edits by Fable (precise, low-latitude — safer than giving codex latitude in dense live prompts):
+  - think-gate: `_EXECUTION_DRIVER_PROMPT` opener (plan→execute) + finish bullet; shared `_STUCK_ESCAPE_REMINDER_POOL[0]` (stuck→escape).
+  - never-modify-tests: build `<file_rules>`.
+  - design-first: `render_design_direction` DO-list (tailor tokens before components, no default shadcn).
+- Scoped to capable exec prompt (small left leaner; preserves C21 capable≠small). Verified: 83 tripwire tests (stuck nonce/substrings, C21 inequality, render determinism, exec substrings), no new arch-budget item, full core suite green.
+- HONEST: guidance text — behavioral effect is soak-verified (Epic Z), not claimed now.
+- Tasks #63 → completed.
+
+### Status: codex still building B-W1 harness (bg be1mwl9z6); B-W2 specced + queued.
+
 <!-- append below as work lands -->
