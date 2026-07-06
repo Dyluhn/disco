@@ -645,6 +645,22 @@ class PlanEvent(BaseEvent, LLMConvertible):
         )
 
 
+# The per-sub-question ROUND cap ("rounds") bounds iteration DEPTH, not coverage —
+# every sub-question still produces a full section — so it is NOT a truncation and must
+# never surface as "bounded by / some sub-questions were not covered". Only genuine
+# coverage truncations (e.g. sources / wall_clock / subquestions) are surfaced.
+_NON_TRUNCATING_BOUNDS = frozenset({"rounds"})
+
+
+def report_truncation(bounded_by: str | None) -> str | None:
+    """The ``bounded_by`` value to SURFACE as a real truncation, or None when coverage
+    completed (a natural finish, or the non-truncating 'rounds' depth cap). Shared by
+    every consumer (screen notice, PDF/markdown export, LLM-context header) so they
+    never diverge on what counts as a truncation."""
+    b = (bounded_by or "").strip()
+    return b if b and b not in _NON_TRUNCATING_BOUNDS else None
+
+
 class ReportEvent(BaseEvent, LLMConvertible):
     """A finished Deep Research report — the multi-section grounded synthesis
     produced from the per-run corpus. LLMConvertible so a follow-up turn in the
@@ -681,7 +697,8 @@ class ReportEvent(BaseEvent, LLMConvertible):
         # This keeps the committed report present in-context for a follow-up turn
         # ("expand section 3") without bloating the window.
         headers = "\n".join(f"## {s.title}" for s in self.sections)
-        bound = f"\n\n(Bounded by: {self.bounded_by}.)" if self.bounded_by else ""
+        _trunc = report_truncation(self.bounded_by)
+        bound = f"\n\n(Bounded by: {_trunc}.)" if _trunc else ""
         return LLMMessage(
             role="assistant",
             content=f"Research report for: {self.query}\n\n{self.summary}\n\n{headers}{bound}",

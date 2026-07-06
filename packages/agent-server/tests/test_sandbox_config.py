@@ -125,10 +125,14 @@ async def test_preview_is_backend_aware_and_honest():
     p = await rt.preview("idle")
     assert p["available"] is False and "isn't running" in p["reason"]
 
-    # Podman → the honest labeled stub (matches the UI), no fake URL
+    # Podman is NOT special-cased anymore: availability keys on whether a dev server
+    # is actually routable (expose_port/port_owners), exactly like the local backend —
+    # rootless-podman previews for real, it is not a labeled dead stub. With no
+    # routable dev server here it degrades HONESTLY (no fake URL, no backend-name stub).
     rt._executors["pod"] = _FakeExecutor(_FakeSession("podman", "http://nope"))
     pod = await rt.preview("pod")
-    assert pod["available"] is False and pod["stub"] is True
+    assert pod["available"] is False
+    assert "stub" not in pod
 
     # local with a reachable dev server → available (proxied through this origin); the
     # raw upstream is kept server-side (the browser hits the agent-server proxy).

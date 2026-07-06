@@ -20,11 +20,6 @@ interface Props {
 }
 
 const BOUND_TEXT: Record<string, { what: string; lever: string }> = {
-  rounds: {
-    what: "the per-sub-question round cap",
-    lever:
-      "Each sub-question can run up to N retrieve→reason→refine rounds. The run hit that cap before completing the plan.",
-  },
   sources: {
     what: "the whole-run source budget",
     lever:
@@ -42,7 +37,10 @@ const BOUND_TEXT: Record<string, { what: string; lever: string }> = {
 };
 
 export function DeepBoundedNotice({ report, plan, onTryExhaustive }: Props) {
-  if (!report.bounded_by) return null;
+  // "rounds" is the per-sub-question DEPTH cap, not a coverage truncation — every
+  // sub-question still produces a section — so it is not surfaced (mirrors the backend
+  // report_truncation() shared by the PDF/markdown/LLM-context exporters).
+  if (!report.bounded_by || report.bounded_by === "rounds") return null;
   const text =
     BOUND_TEXT[report.bounded_by] ??
     { what: report.bounded_by, lever: "" };

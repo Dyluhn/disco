@@ -31,6 +31,7 @@ from typing import Literal, cast
 
 import markdown as _md
 from disco.core import ReportEvent
+from disco.core.events import report_truncation
 from disco.core.brand import (
     definition_mark_html,
     font_face_css,
@@ -92,11 +93,12 @@ def serialize_markdown(
             lines.append("")
         lines.append(s.markdown)
         lines.append("")
-    if report.bounded_by:
+    _trunc = report_truncation(report.bounded_by)
+    if _trunc:
         lines.append("---")
         lines.append("")
         lines.append(
-            f"_This run was bounded by **{report.bounded_by}**. Some planned "
+            f"_This run was bounded by **{_trunc}**. Some planned "
             f"sub-questions were not covered. Consider running the EXHAUSTIVE "
             f"tier or assigning a faster driver model for deeper coverage._"
         )
@@ -386,10 +388,11 @@ def _cover_meta_html(report: ReportEvent, n_passages: int) -> str:
         "<span><span class=\"meta-label\">Sources</span>&nbsp;"
         f"{n_passages}</span>",
     ]
-    if (report.bounded_by or "").strip():
+    _trunc = report_truncation(report.bounded_by)
+    if _trunc:
         items.append(
             '<span><span class="meta-label">Bounded by</span>&nbsp;'
-            f"{_html.escape(report.bounded_by or '')}</span>"
+            f"{_html.escape(_trunc)}</span>"
         )
     return "".join(items)
 
@@ -505,10 +508,11 @@ def _build_pdf_html(
 
     # ---- bounded-by note ----
     bounded_html = ""
-    if report.bounded_by:
+    _trunc = report_truncation(report.bounded_by)
+    if _trunc:
         bounded_html = (
             '<div class="bounded-note">This run was bounded by '
-            f"<strong>{_html.escape(report.bounded_by)}</strong>. "
+            f"<strong>{_html.escape(_trunc)}</strong>. "
             "Some planned sub-questions were not covered. Consider running "
             "the EXHAUSTIVE tier or assigning a faster driver model for "
             "deeper coverage.</div>"

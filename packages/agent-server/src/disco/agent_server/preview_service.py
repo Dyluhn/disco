@@ -86,8 +86,6 @@ class PreviewService:
             self._live_browser_enabled() and getattr(session, "supports_live_view", False)
         ):
             return None
-        if getattr(getattr(session, "_service", None), "name", "?") == "podman":
-            return None  # stub here
         return session.expose_port(port)
 
     async def wake_for_preview(
@@ -140,18 +138,14 @@ class PreviewService:
         """Backend-aware live preview availability. The browser iframes the agent-server's
         proxy (/conversations/{id}/preview-app/), which forwards to the active backend's
         dev server — so previews work over the tailnet via the one reachable origin, with no
-        random container ports exposed. Podman is an honest labeled stub; never a fake URL."""
+        random container ports exposed. Availability is decided by whether the port is
+        actually routable (expose_port / port_owners), NOT by the backend's name — a local
+        rootless podman publishes real localhost URLs and previews exactly like the local
+        backend; a genuinely unroutable backend still degrades honestly below."""
         executor = self._rt._executors.get(conversation_id)
         session = getattr(executor, "_sandbox", None) if executor is not None else None
         if session is None:
             return {"available": False, "reason": "The agent hasn't started a sandbox yet."}
-        if getattr(getattr(session, "_service", None), "name", "?") == "podman":
-            return {
-                "available": False,
-                "stub": True,
-                "reason": "Preview isn't wired for the Podman backend in this environment "
-                "— it's completed at deployment.",
-            }
         # Passive probe ONLY: this GET is polled by the UI, and a read path must not
         # create a sandbox (that's _ensure()'s side effect) or surface its failures
         # as a 500. No live instance → no preview, plainly stated.
