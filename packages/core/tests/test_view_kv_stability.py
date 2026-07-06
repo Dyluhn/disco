@@ -155,6 +155,55 @@ def test_no_images_when_gate_off(monkeypatch):
     assert _image_messages(View.of(events)) == []
 
 
+def _verify_web_app_obs(b64: str | None, n: int) -> ObservationEvent:
+    """A successful verify_web_app observation; carries screenshot_b64 iff b64 is set
+    (mirrors the browser observation, but for the verify tool's structured verdict)."""
+    structured: dict = {
+        "url": "http://127.0.0.1:8000",
+        "verdict": "pass",
+        "passed": True,
+        "screenshot_path": f".pmx/screenshots/{n:04d}-navigate.png",
+    }
+    if b64 is not None:
+        structured["screenshot_b64"] = b64
+    return ObservationEvent(
+        tool_result=ToolResult(
+            call_id="v",
+            tool_name="verify_web_app",
+            success=True,
+            content="VERIFY_WEB_APP: PASS",
+            structured=structured,
+        ),
+        action_id="evt_x",
+    )
+
+
+def test_verify_web_app_screenshot_attached_under_vision(monkeypatch):
+    """H1: a verify_web_app observation carrying screenshot_b64 attaches an image on
+    the model's next turn when DRIVER_VISION==1 — exactly like a browser screenshot."""
+    monkeypatch.setenv("PMX_DRIVER_VISION", "1")
+    events = with_seqs([
+        user_msg("Start"),
+        action(thought="verify", tool="verify_web_app", args={}),
+        _verify_web_app_obs("VVV", 1),
+    ])
+    imaged = _image_messages(View.of(events))
+    assert len(imaged) == 1
+    assert imaged[0].images == ["data:image/png;base64,VVV"]
+
+
+def test_verify_web_app_no_image_when_gate_off(monkeypatch):
+    """H1: with the vision gate off, a verify_web_app screenshot attaches NOTHING —
+    graceful fallback, no behavior change for a no-vision model."""
+    monkeypatch.delenv("PMX_DRIVER_VISION", raising=False)
+    events = with_seqs([
+        user_msg("Start"),
+        action(thought="verify", tool="verify_web_app", args={}),
+        _verify_web_app_obs("VVV", 1),
+    ])
+    assert _image_messages(View.of(events)) == []
+
+
 def test_image_flip_fingerprint_stability(monkeypatch):
     """BP-00 invariant: appending a NEW screenshot observation changes at most ONE
     existing fingerprint element (the old image-bearing message flips image->text).

@@ -56,6 +56,12 @@ _MASK_MIN_CHARS = 600  # smaller bodies are never masked (cheap, often load-bear
 _DURABLE_TOOLS = frozenset({"file_write", "file_append", "file_edit", "plan_step"})
 
 
+# Tools whose latest observation may carry a rendered-page screenshot to attach to
+# the vision-capable driver (BP-00). browser navigations and verify_web_app both
+# capture a screenshot_b64 under vision; attach for neither more nor fewer tools.
+_SCREENSHOT_TOOLS = frozenset({"browser", "verify_web_app"})
+
+
 def repair_tool_call_adjacency(messages: list[LLMMessage]) -> list[LLMMessage]:
     """Return a provider-safe message list with dangling tool-call pairs dropped.
 
@@ -507,7 +513,7 @@ class View(BaseModel):
                     isinstance(e, ObservationEvent)
                     and e.seq is not None
                     and is_visible(e)
-                    and e.tool_result.tool_name == "browser"
+                    and e.tool_result.tool_name in _SCREENSHOT_TOOLS
                     and (e.tool_result.structured or {}).get("screenshot_b64")
                 ):
                     latest_screenshot_seq = e.seq

@@ -225,6 +225,27 @@ def test_prior_verify_marker_fp():
     assert _prior_verify_marker_fp([marker("resumed", 12)], 5) is None
 
 
+def test_advisory_vision_field_never_blocks_finish():
+    """H1 non-negotiable: the finish decision is keyed on the STRUCTURED verdict
+    (verdict/passed) only. A passing host verdict with a failing/empty advisory
+    `vision` field still yields a PASS finish label — the visual review can never
+    flip a passing verdict to fail."""
+    from disco.core.loop.finish.verify_gates import _HostVerifyGateMixin
+
+    label = _HostVerifyGateMixin._verdict_label
+    passing = {"verdict": "pass", "passed": True}
+    assert label(passing) == "pass"
+    # A failing advisory vision block does NOT change the finish label.
+    with_failing_vision = {
+        **passing,
+        "vision": {"used": True, "passed": False, "notes": ["looks cramped"]},
+    }
+    assert label(with_failing_vision) == "pass"
+    # An empty/unused vision block likewise leaves the pass intact.
+    with_empty_vision = {**passing, "vision": {"used": False, "passed": None, "notes": []}}
+    assert label(with_empty_vision) == "pass"
+
+
 # ---- (c) PASS finishes first try -------------------------------------------
 
 

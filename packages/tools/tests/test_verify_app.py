@@ -15,6 +15,7 @@ from disco.tools.builtin.verify_app import (
     _failure_fingerprint,
     compute_verdict,
 )
+from disco.tools.verify.web_app_probe import _VISION_REVIEW_CHECKLIST
 
 
 def _structured(
@@ -51,6 +52,68 @@ def test_verdict_pass_clean_page():
     # clean fingerprint is stable + non-empty
     assert v["failure_fingerprint"] == _failure_fingerprint([], [])
     assert v["vision"] == {"used": False, "passed": None, "notes": []}
+
+
+# ---- (a2) ADVISORY visual self-review — vision ON / OFF ---------------------
+
+
+def test_verdict_vision_on_seeds_screenshot_and_checklist():
+    """H1: with a browser observation carrying screenshot_b64 (vision active), the
+    verdict surfaces it AND seeds the advisory checklist — without touching pass/fail."""
+    s = _structured()
+    s["screenshot_b64"] = "aGVsbG8="  # base64("hello")
+    v = compute_verdict(
+        url="http://127.0.0.1:8000/",
+        reachable=True,
+        http_status=200,
+        structured=s,
+        meaningful=True,
+    )
+    assert v["screenshot_b64"] == "aGVsbG8="
+    assert v["vision"]["used"] is True
+    assert v["vision"]["passed"] is None  # advisory only, never a signal
+    assert v["vision"]["notes"] == [_VISION_REVIEW_CHECKLIST]
+    # the checklist mentions the concrete design dimensions
+    assert "padding / alignment / spacing" in _VISION_REVIEW_CHECKLIST
+    # the structured finish decision is unaffected by vision
+    assert v["passed"] is True and v["verdict"] == "pass"
+
+
+def test_verdict_vision_off_is_byte_identical_and_lean():
+    """H1: without screenshot_b64 (no-vision model), the verdict carries NO
+    screenshot_b64 key, vision.used stays False, and the structured verdict is
+    byte-identical to today's for the same inputs (no behavior change)."""
+    kwargs = dict(
+        url="http://127.0.0.1:8000/",
+        reachable=True,
+        http_status=200,
+        structured=_structured(),  # no screenshot_b64
+        meaningful=True,
+    )
+    v = compute_verdict(**kwargs)  # type: ignore[arg-type]
+    assert "screenshot_b64" not in v
+    assert v["vision"] == {"used": False, "passed": None, "notes": []}
+    # The verdict schema is exactly the pre-change key set — no new keys leak in
+    # when vision is off (proves the additive path is inert / no behavior change).
+    assert set(v.keys()) == {
+        "passed",
+        "verdict",
+        "url",
+        "http_status",
+        "title",
+        "meaningful_content",
+        "visible_text_chars",
+        "elements_count",
+        "canvas_count",
+        "console_errors",
+        "console_warnings",
+        "network_failures",
+        "screenshot_path",
+        "vision",
+        "failure_fingerprint",
+        "summary",
+        "next_action",
+    }
 
 
 # ---- (b) FAIL variants: console error / API 500 / blank render --------------

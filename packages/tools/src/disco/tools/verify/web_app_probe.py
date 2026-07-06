@@ -24,6 +24,20 @@ _IGNORABLE_NETWORK = (
     "/sockjs-node",
 )
 
+# Advisory visual self-review checklist. Seeded into ``verdict["vision"]["notes"]``
+# ONLY when a screenshot_b64 is present (vision active); the model applies it to the
+# rendered screenshot. Advisory — it never gates the finish decision.
+_VISION_REVIEW_CHECKLIST = (
+    "Visual self-review (advisory — does not gate finish). Looking at the rendered\n"
+    "screenshot, check ONLY for real problems and fix what is clearly off:\n"
+    "- padding / alignment / spacing consistency (no cramped or colliding elements)\n"
+    "- text contrast against its background (no low-contrast or invisible text)\n"
+    "- visual hierarchy (headings, sections, and CTAs are distinguishable)\n"
+    "- no overflow, overlap, or broken layout; footer and nav render correctly\n"
+    "Only flag what is incorrect or off. Do not invent issues or restyle a page that\n"
+    "already looks correct."
+)
+
 
 def _source_of(entry: dict[str, Any]) -> str:
     """Render a console entry's location dict into a ``url:line:col`` string."""
@@ -150,6 +164,9 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
     canvas_count = s.get("canvas_count")
     canvas_count = canvas_count if isinstance(canvas_count, int) else 0
     screenshot_path = str(s.get("screenshot_path", "") or "")
+    # Present ONLY when the browser layer captured it under vision (_vision_mode()).
+    # Absent for a no-vision model — keep it absent so the verdict payload stays lean.
+    screenshot_b64 = str(s.get("screenshot_b64", "") or "")
 
     return {
         "title": title,
@@ -161,6 +178,7 @@ def collect_web_app_probe(structured: dict[str, Any] | None) -> dict[str, Any]:
         "console_warnings": console_warnings,
         "network_failures": network_failures,
         "screenshot_path": screenshot_path,
+        "screenshot_b64": screenshot_b64,
         "failure_fingerprint": _failure_fingerprint(console_errors, network_failures),
     }
 
@@ -194,6 +212,7 @@ def compute_verdict(
     console_warnings = probe["console_warnings"]
     network_failures = probe["network_failures"]
     screenshot_path = str(probe["screenshot_path"])
+    screenshot_b64 = str(probe["screenshot_b64"])
     fingerprint = str(probe["failure_fingerprint"])
 
     http_ok = isinstance(http_status, int) and 200 <= http_status < 400
@@ -252,7 +271,7 @@ def compute_verdict(
         )
         next_action = ""
 
-    return {
+    result: dict[str, Any] = {
         "passed": passed,
         "verdict": verdict,
         "url": url,
@@ -271,6 +290,19 @@ def compute_verdict(
         "summary": summary,
         "next_action": next_action,
     }
+    # ADVISORY visual self-review — active ONLY when the browser layer captured a
+    # screenshot under vision (_vision_mode()). `passed`/`verdict` above are already
+    # decided; this block never touches them, so it can never gate the finish
+    # decision. When vision is off, screenshot_b64 is "" → nothing is added and the
+    # verdict is byte-identical to today's (no base64 bloat, no vision.used flip).
+    if screenshot_b64:
+        result["screenshot_b64"] = screenshot_b64
+        result["vision"] = {
+            "used": True,
+            "passed": None,  # advisory only — not a pass/fail signal
+            "notes": [_VISION_REVIEW_CHECKLIST],
+        }
+    return result
 
 
 __all__ = [
