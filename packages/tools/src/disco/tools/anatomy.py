@@ -125,6 +125,12 @@ class ToolDef(BaseModel):
     # [EXTENSION resolving §6 OPEN] named capabilities this tool may invoke via
     # the orchestrator-mediated CapabilitySet (e.g. "search", "extract").
     uses_capabilities: frozenset[str] = frozenset()
+    # Per-tool execution-timeout override (seconds). None => use the executor's
+    # generic default (300s). A LONG generative tool — slides_generate runs two
+    # LLM stages plus one image generation PER SLIDE plus a render, which
+    # legitimately exceeds 300s — must declare a bigger budget here or the executor
+    # kills it mid-run and the deliverable silently degrades (the plain-deck bug).
+    timeout_s: int | None = None
 
     def to_spec(self) -> ToolSpec:
         return ToolSpec(

@@ -632,7 +632,10 @@ class DefaultToolExecutor:
             sessions=sessions,
             kernel=kernel,
             workspace_path=".",  # relative to the sandbox instance's jailed workspace
-            timeout_s=self._default_timeout_s,
+            # Per-tool override wins (long generative tools declare a bigger budget);
+            # else the generic default. Kills the "slides_generate exceeded 300s ->
+            # plain deck" failure without loosening the ceiling for every other tool.
+            timeout_s=tool_def.timeout_s or self._default_timeout_s,
             capabilities=self._broker.grant(tool_def.uses_capabilities),
             owner_id=self._owner_id,
             conversation_id=self._conversation_id,

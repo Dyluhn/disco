@@ -367,6 +367,11 @@ class SlidesTool:
         base_risk=None,
         runs_in="sandbox",
         read_only=False,
+        # The C2 path is two LLM stages (outline + fill) + one image generation PER
+        # SLIDE (~10-30s each on a remote backend) + a render. On a real image-rich
+        # deck that legitimately runs into minutes; the generic 300s executor cap was
+        # killing it three times over → silent plain-Marp fallback. 15 min headroom.
+        timeout_s=900,
     )
 
     def execution_scope(self, args: SlidesGenerateArgs) -> str:
