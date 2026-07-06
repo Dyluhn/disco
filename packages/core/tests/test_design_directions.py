@@ -27,12 +27,25 @@ EXPECTED_IDS = {
     "playful-geometric",
     "dark-glass",
     "warm-craft",
+    "console-dense",
+    "enterprise-navy",
+    "clinical-calm",
+    "trust-fintech",
+    "premium-consumer",
+    "signal-noir",
+    "lab-precise",
+    "literate-docs",
+    "noir-deco",
+    "inkline-sketch",
+    "controlled-maximalism",
+    "gradient-mesh-warm",
+    "pressed-botanical",
 }
 
 
-def test_all_nine_directions_are_valid_records() -> None:
+def test_all_directions_are_valid_records() -> None:
     assert set(DIRECTION_IDS) == EXPECTED_IDS
-    assert len(DIRECTIONS) == 9
+    assert len(DIRECTIONS) == 22
     assert set(DIRECTION_BY_ID) == EXPECTED_IDS
 
     for direction in DIRECTIONS:
@@ -112,7 +125,14 @@ def test_render_design_direction_is_stable_and_carries_anti_slop_bans() -> None:
 
 
 def test_art_guidance_sets_svg_first_and_image_gen_fallback_postures() -> None:
-    rich_photographic = {"dark-glass", "warm-craft"}
+    rich_photographic = {
+        "dark-glass",
+        "warm-craft",
+        "premium-consumer",
+        "controlled-maximalism",
+        "gradient-mesh-warm",
+        "pressed-botanical",
+    }
     svg_first = EXPECTED_IDS - rich_photographic
 
     for direction_id in svg_first:

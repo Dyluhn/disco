@@ -25,6 +25,19 @@ DirectionId = Literal[
     "playful-geometric",
     "dark-glass",
     "warm-craft",
+    "console-dense",
+    "enterprise-navy",
+    "clinical-calm",
+    "trust-fintech",
+    "premium-consumer",
+    "signal-noir",
+    "lab-precise",
+    "literate-docs",
+    "noir-deco",
+    "inkline-sketch",
+    "controlled-maximalism",
+    "gradient-mesh-warm",
+    "pressed-botanical",
 ]
 SurfaceTreatmentName = Literal["flat", "soft-depth", "glass", "neobrutalist", "outlined"]
 MotionLevel = Literal["none", "subtle", "expressive"]
@@ -35,7 +48,9 @@ _HEX_PATTERN: Final[str] = r"^#[0-9A-Fa-f]{6}$"
 _GENERIC_FONT_FAMILIES: Final[frozenset[str]] = frozenset(
     {"serif", "sans-serif", "monospace", "system-ui", "ui-monospace", "-apple-system"}
 )
-_DARK_DIRECTION_IDS: Final[frozenset[str]] = frozenset({"dark-glass", "terminal-mono"})
+_DARK_DIRECTION_IDS: Final[frozenset[str]] = frozenset(
+    {"dark-glass", "terminal-mono", "signal-noir", "noir-deco", "controlled-maximalism"}
+)
 
 
 class FontStack(BaseModel):
@@ -603,6 +618,383 @@ DIRECTIONS: Final[tuple[DesignDirection, ...]] = (
             "earthy",
             "warm",
         ),
+    ),
+    DesignDirection(
+        id="console-dense",
+        label="Console Dense",
+        summary="operations-console density with semantic status color, hairline tables, and signal-first layout",
+        font_pairing=FontPairing(
+            heading=_font("Geist", "system-ui", "sans-serif"),
+            body=_font("Geist", "system-ui", "sans-serif"),
+            mono=_font("Geist Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#2D6CDF",
+        accents=(
+            Accent(name="healthy-green", hex="#1F9D6B"),
+            Accent(name="warn-amber", hex="#D98A0B"),
+            Accent(name="critical-red", hex="#D24141"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="outlined",
+            tokens=SurfaceTokens(
+                radius="6px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 16%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="operational dashboards, time-series charts, status tiles, muted grid, high data-ink",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="dense",
+        keywords=("observability", "monitoring", "telemetry", "ops", "incident", "metrics", "uptime", "alerting"),
+    ),
+    DesignDirection(
+        id="enterprise-navy",
+        label="Institutional",
+        summary="institutional B2B authority with navy structure, outlined cards, and dense records tables",
+        font_pairing=FontPairing(
+            heading=_font("Archivo", "Helvetica Neue", "system-ui", "sans-serif"),
+            body=_font("Public Sans", "system-ui", "sans-serif"),
+            mono=_font("Spline Sans Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#21406B",
+        accents=(
+            Accent(name="harbor-blue", hex="#2C5A94"),
+            Accent(name="steel-teal", hex="#2A7D8C"),
+            Accent(name="signal-amber", hex="#C08A2E"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="outlined",
+            tokens=SurfaceTokens(
+                radius="4px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 20%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="corporate documentary photography, boardroom neutrals, structured grids, restrained flag-blue accents",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="dense",
+        keywords=("enterprise", "institutional", "government", "compliance", "procurement", "erp", "records", "b2b"),
+    ),
+    DesignDirection(
+        id="clinical-calm",
+        label="Clean Room",
+        summary="calm clinical clarity with aqua accents, generous spacing, flat surfaces, and legible type",
+        font_pairing=FontPairing(
+            heading=_font("Lexend", "system-ui", "sans-serif"),
+            body=_font("Mulish", "system-ui", "sans-serif"),
+            mono=_font("IBM Plex Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#2C8BA0",
+        accents=(
+            Accent(name="care-mint", hex="#3FA787"),
+            Accent(name="periwinkle", hex="#6E8FD6"),
+            Accent(name="soft-coral", hex="#E0806B"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="flat",
+            tokens=SurfaceTokens(
+                radius="10px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 10%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="clean healthcare imagery, soft daylight, uncluttered rooms, reassuring human warmth, no clutter",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="spacious",
+        keywords=("healthcare", "clinical", "medical", "patient", "telehealth", "care", "pharmacy", "hospital"),
+    ),
+    DesignDirection(
+        id="trust-fintech",
+        label="Ledger & Copper",
+        summary="fintech trust in pine and copper with soft depth, tabular numerics, and quiet confidence",
+        font_pairing=FontPairing(
+            heading=_font("Hanken Grotesk", "system-ui", "sans-serif"),
+            body=_font("Figtree", "system-ui", "sans-serif"),
+            mono=_font("Spline Sans Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#1E5F52",
+        accents=(
+            Accent(name="copper", hex="#B0682F"),
+            Accent(name="slate", hex="#3C4A5A"),
+            Accent(name="deep-pine", hex="#14463C"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="soft-depth",
+            tokens=SurfaceTokens(
+                radius="8px",
+                shadow_level="soft-1",
+                border_style="1px solid color-mix(in oklch, currentColor 12%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="financial still life, copper and evergreen tones, ledgers and coin macro, warm trustworthy light",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="balanced",
+        keywords=("fintech", "banking", "ledger", "payments", "invoicing", "treasury", "accounting", "wallet"),
+    ),
+    DesignDirection(
+        id="premium-consumer",
+        label="Porcelain & Vermilion",
+        summary="premium consumer minimalism on porcelain with a single vermilion strike and editorial calm",
+        font_pairing=FontPairing(
+            heading=_font("Instrument Sans", "system-ui", "sans-serif"),
+            body=_font("Onest", "system-ui", "sans-serif"),
+            mono=_font("DM Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#2A2622",
+        accents=(
+            Accent(name="vermilion", hex="#D8452B"),
+            Accent(name="brass", hex="#C79A3E"),
+            Accent(name="stone", hex="#8A8078"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="flat",
+            tokens=SurfaceTokens(
+                radius="12px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 8%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="premium product photography, porcelain backdrops, single vermilion prop, soft studio gradient, generous negative space",
+        art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
+        density="spacious",
+        keywords=("premium", "consumer", "lifestyle", "dtc", "boutique", "retail", "ecommerce", "flagship"),
+    ),
+    DesignDirection(
+        id="signal-noir",
+        label="Signal Noir",
+        summary="dark command-center HUD with cyan signal, hairline glow panels, and tactical density",
+        font_pairing=FontPairing(
+            heading=_font("Space Grotesk", "system-ui", "sans-serif"),
+            body=_font("Chivo", "system-ui", "sans-serif"),
+            mono=_font("JetBrains Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#2BB8D6",
+        accents=(
+            Accent(name="signal-magenta", hex="#D6336C"),
+            Accent(name="alert-amber", hex="#E0A82E"),
+            Accent(name="hud-lime", hex="#8FBF3F"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="outlined",
+            tokens=SurfaceTokens(
+                radius="4px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 28%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="dark HUD interfaces, cyan wireframe overlays, scanlines, tactical readouts, neon signal on near-black",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="compact",
+        keywords=("cyber", "hud", "gaming", "esports", "streaming", "command-center", "tactical", "nightmode"),
+    ),
+    DesignDirection(
+        id="lab-precise",
+        label="Instrument",
+        summary="scientific-instrument precision, monochrome with one signal orange, no motion, tight grid",
+        font_pairing=FontPairing(
+            heading=_font("Libre Franklin", "Helvetica Neue", "system-ui", "sans-serif"),
+            body=_font("Libre Franklin", "Helvetica Neue", "system-ui", "sans-serif"),
+            mono=_font("IBM Plex Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#2B2F33",
+        accents=(
+            Accent(name="signal-orange", hex="#C75B2A"),
+            Accent(name="graphite-blue", hex="#48535E"),
+            Accent(name="slate", hex="#6B7580"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="flat",
+            tokens=SurfaceTokens(
+                radius="2px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 18%, transparent)",
+            ),
+        ),
+        motion=_NO_MOTION,
+        image_art_direction="laboratory instrument close-ups, calibration marks, monochrome precision, single orange indicator",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="dense",
+        keywords=("scientific", "laboratory", "research", "measurement", "precision", "calibration", "biotech", "sensor"),
+    ),
+    DesignDirection(
+        id="literate-docs",
+        label="Literate",
+        summary="developer-docs reading comfort with serif body, teal links, and calm reference hierarchy",
+        font_pairing=FontPairing(
+            heading=_font("Fraunces", "Georgia", "serif"),
+            body=_font("Source Serif 4", "Georgia", "serif"),
+            mono=_font("JetBrains Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#1F5E52",
+        accents=(
+            Accent(name="link-teal", hex="#2F7A6F"),
+            Accent(name="citation-amber", hex="#B7822E"),
+            Accent(name="note-rose", hex="#B5566B"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="outlined",
+            tokens=SurfaceTokens(
+                radius="6px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 12%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="documentation diagrams, annotated schematics, calm serif specimen, restrained teal call-outs",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="editorial",
+        keywords=("documentation", "docs", "knowledge-base", "wiki", "handbook", "tutorial", "manual", "whitepaper"),
+    ),
+    DesignDirection(
+        id="noir-deco",
+        label="Noir Deco",
+        summary="dark art-deco luxe with antique gold, geometric caps, emerald and oxblood, symmetrical grandeur",
+        font_pairing=FontPairing(
+            heading=_font("Marcellus", "Georgia", "serif"),
+            body=_font("Josefin Sans", "system-ui", "sans-serif"),
+            mono=_font("Space Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#B8963F",
+        accents=(
+            Accent(name="deco-emerald", hex="#215E4C"),
+            Accent(name="oxblood", hex="#7A2E2E"),
+            Accent(name="champagne", hex="#D9C48A"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="outlined",
+            tokens=SurfaceTokens(
+                radius="0px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 30%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="art-deco fan motifs, gold linework on charcoal, symmetrical geometry, 1920s hotel glamour",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="balanced",
+        keywords=("deco", "artdeco", "gatsby", "luxe", "nightlife", "jazz", "hotel", "speakeasy"),
+    ),
+    DesignDirection(
+        id="inkline-sketch",
+        label="Inkline",
+        summary="hand-drawn ink character on paper with sketch borders, warm neutrals, and friendly imperfection",
+        font_pairing=FontPairing(
+            heading=_font("Shantell Sans", "Comic Sans MS", "system-ui", "sans-serif"),
+            body=_font("Nunito Sans", "system-ui", "sans-serif"),
+            mono=_font("Space Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#26303A",
+        accents=(
+            Accent(name="sketch-red", hex="#C34B3E"),
+            Accent(name="pencil-ochre", hex="#B98A3C"),
+            Accent(name="slate", hex="#5A6470"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="outlined",
+            tokens=SurfaceTokens(
+                radius="10px",
+                shadow_level="none",
+                border_style="1.5px solid color-mix(in oklch, currentColor 40%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="hand-drawn ink illustration, loose pen strokes, cross-hatching, margin doodles, sketchbook paper texture",
+        art_guidance=_SVG_FIRST_ART_GUIDANCE,
+        density="balanced",
+        keywords=("handdrawn", "sketch", "doodle", "illustrated", "whiteboard", "journal", "notebook", "playful"),
+    ),
+    DesignDirection(
+        id="controlled-maximalism",
+        label="Controlled Maximalism",
+        summary="dark jewel-tone maximalism, layered saturated color with disciplined grid and expressive motion",
+        font_pairing=FontPairing(
+            heading=_font("Bricolage Grotesque", "system-ui", "sans-serif"),
+            body=_font("Albert Sans", "system-ui", "sans-serif"),
+            mono=_font("Space Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#0E7C7B",
+        accents=(
+            Accent(name="jewel-magenta", hex="#B5297E"),
+            Accent(name="gold", hex="#D6A93B"),
+            Accent(name="coral", hex="#E0654A"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="soft-depth",
+            tokens=SurfaceTokens(
+                radius="14px",
+                shadow_level="soft-2",
+                border_style="1px solid color-mix(in oklch, currentColor 22%, transparent)",
+            ),
+        ),
+        motion=_EXPRESSIVE_MOTION,
+        image_art_direction="maximalist jewel-tone collage, layered saturated shapes, bold editorial energy on deep ground",
+        art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
+        density="balanced",
+        keywords=("maximalist", "bold", "campaign", "expressive", "vibrant", "agency", "statement", "editorial-brand"),
+    ),
+    DesignDirection(
+        id="gradient-mesh-warm",
+        label="Warm Mesh",
+        summary="tasteful warm mesh-gradient landing style, terracotta to marigold, grain, generous space",
+        font_pairing=FontPairing(
+            heading=_font("Sora", "system-ui", "sans-serif"),
+            body=_font("Be Vietnam Pro", "system-ui", "sans-serif"),
+            mono=_font("JetBrains Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#C65D3B",
+        accents=(
+            Accent(name="sunset-coral", hex="#E0654A"),
+            Accent(name="marigold", hex="#E5A93C"),
+            Accent(name="plum-shadow", hex="#6B3A54"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="soft-depth",
+            tokens=SurfaceTokens(
+                radius="16px",
+                shadow_level="soft-1",
+                border_style="1px solid color-mix(in oklch, currentColor 10%, transparent)",
+            ),
+        ),
+        motion=_EXPRESSIVE_MOTION,
+        image_art_direction="controlled two-to-three-stop warm mesh gradient (terracotta, coral, marigold) with fine grain, one soft focal glow, never purple SaaS blur",
+        art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
+        density="spacious",
+        keywords=("gradient", "mesh", "sunset", "warm", "launch", "hero", "marketing-landing", "vibrant"),
+    ),
+    DesignDirection(
+        id="pressed-botanical",
+        label="Pressed Botanical",
+        summary="organic herbarium feel with sage and clay, pressed-plant art, and unhurried editorial rhythm",
+        font_pairing=FontPairing(
+            heading=_font("Spectral", "Georgia", "serif"),
+            body=_font("Karla", "system-ui", "sans-serif"),
+            mono=_font("IBM Plex Mono", "ui-monospace", "monospace"),
+        ),
+        palette_seed="#4F6B47",
+        accents=(
+            Accent(name="clay", hex="#B26A4A"),
+            Accent(name="mustard", hex="#C79A3E"),
+            Accent(name="berry", hex="#8A3A4E"),
+        ),
+        surface_treatment=SurfaceTreatment(
+            treatment="flat",
+            tokens=SurfaceTokens(
+                radius="8px",
+                shadow_level="none",
+                border_style="1px solid color-mix(in oklch, currentColor 14%, transparent)",
+            ),
+        ),
+        motion=_SUBTLE_MOTION,
+        image_art_direction="pressed botanical specimens, herbarium plates, sage and clay tones, natural paper, delicate leaf detail",
+        art_guidance=_IMAGE_GEN_PREFERRED_ART_GUIDANCE,
+        density="editorial",
+        keywords=("botanical", "herbarium", "organic", "garden", "floral", "naturalist", "apothecary", "artisan"),
     ),
 )
 

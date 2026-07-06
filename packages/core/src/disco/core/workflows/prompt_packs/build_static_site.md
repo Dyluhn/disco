@@ -11,8 +11,12 @@ Design-direction commitment FIRST:
 1. Before writing any file, read `.disco/context/design_direction.md` if present.
 2. If that file is absent, choose and state a named direction before writing any file.
    Use one of these unless the brief clearly implies a better named direction:
-   editorial magazine, Swiss/international, brutalist, soft-depth SaaS, terminal/mono,
-   luxury serif, playful geometric, retro-print, dark-glass, or warm-craft.
+   product/trust directions such as soft-depth SaaS, enterprise navy, clinical calm,
+   trust fintech, premium consumer, dark-glass, or warm-craft; data/dev directions
+   such as terminal/mono, console dense, signal noir, lab precise, or literate docs;
+   editorial/brand directions such as editorial magazine, Swiss/international,
+   brutalist, luxury serif, playful geometric, noir deco, inkline sketch, controlled
+   maximalism, warm mesh, or pressed botanical.
 3. State the committed tokens before authoring `index.html`: a type scale as CSS custom
    properties, a spacing scale, a palette derived from one seed color, and ONE surface treatment.
    Do not mix flat, soft-depth, glass, neobrutalist, outlined, and glow
