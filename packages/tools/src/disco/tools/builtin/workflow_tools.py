@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from disco.core import SecurityRisk
+from disco.core.owners import install_owner_id
 from disco.core.workflow import (
     McpMount,
     WorkflowDefinition,
@@ -51,8 +52,16 @@ class WorkflowStore(Protocol):
 class JsonDirWorkflowStore:
     """Read workflow instances from ``<projects_root>/workflows``."""
 
-    def __init__(self, projects_root: str | Path) -> None:
+    def __init__(
+        self,
+        projects_root: str | Path,
+        *,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
+    ) -> None:
         self._dir = Path(projects_root).expanduser() / "workflows"
+        self._owner_id = owner_id
+        self._include_unclaimed_legacy = include_unclaimed_legacy
 
     @property
     def workflows_dir(self) -> Path:
@@ -63,17 +72,30 @@ class JsonDirWorkflowStore:
             raise ValueError(f"unsafe workflow instance_id: {instance_id!r}")
         return self._dir / f"{instance_id}.json"
 
-    def list_instances(self) -> list[StoredWorkflowInstance]:
+    def _effective_owner(self, owner_id: str | None) -> str | None:
+        return owner_id if owner_id is not None else self._owner_id
+
+    def _load_instance(self, path: Path) -> tuple[WorkflowInstance, bool]:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("workflow instance must be a JSON object")
+        raw_owner = data.get("owner_id")
+        legacy_unclaimed = not isinstance(raw_owner, str) or not raw_owner.strip()
+        if legacy_unclaimed:
+            data["owner_id"] = install_owner_id()
+        return WorkflowInstance.model_validate(data), legacy_unclaimed
+
+    def list_instances(self, *, owner_id: str | None = None) -> list[StoredWorkflowInstance]:
         if not self._dir.is_dir():
             return []
+        effective_owner = self._effective_owner(owner_id)
         rows: list[StoredWorkflowInstance] = []
         for path in sorted(self._dir.glob("*.json")):
             instance_id = path.stem
             if not _SAFE_INSTANCE_ID.fullmatch(instance_id):
                 continue
             try:
-                raw = path.read_text(encoding="utf-8")
-                instance = WorkflowInstance.model_validate_json(raw)
+                instance, legacy_unclaimed = self._load_instance(path)
             except (OSError, ValueError) as exc:
                 # A stale digest (definition schema evolved) or corrupt row must be
                 # visible, not silently absent from every listing surface.
@@ -81,19 +103,39 @@ class JsonDirWorkflowStore:
                     "skipping invalid workflow instance %s: %s", path.name, exc
                 )
                 continue
+            if legacy_unclaimed and not self._include_unclaimed_legacy:
+                continue
+            if effective_owner is not None and instance.owner_id != effective_owner:
+                continue
             rows.append(StoredWorkflowInstance(instance_id=instance_id, instance=instance))
         return rows
 
-    def get_instance(self, instance_id: str) -> WorkflowInstance | None:
+    def get_instance(
+        self, instance_id: str, *, owner_id: str | None = None
+    ) -> WorkflowInstance | None:
         path = self._path_for(instance_id)
         if not path.is_file():
             return None
-        raw = path.read_text(encoding="utf-8")
-        return WorkflowInstance.model_validate_json(raw)
+        instance, legacy_unclaimed = self._load_instance(path)
+        if legacy_unclaimed and not self._include_unclaimed_legacy:
+            return None
+        effective_owner = self._effective_owner(owner_id)
+        if effective_owner is not None and instance.owner_id != effective_owner:
+            return None
+        return instance
 
-    def save_instance(self, instance_id: str, instance: WorkflowInstance) -> Path:
+    def save_instance(
+        self,
+        instance_id: str,
+        instance: WorkflowInstance,
+        *,
+        owner_id: str | None = None,
+    ) -> Path:
         path = self._path_for(instance_id)
         path.parent.mkdir(parents=True, exist_ok=True)
+        effective_owner = self._effective_owner(owner_id)
+        if effective_owner is not None and instance.owner_id != effective_owner:
+            instance = instance.model_copy(update={"owner_id": effective_owner})
         tmp = path.with_name(f".{path.name}.{os.getpid()}.{id(instance)}.tmp")
         tmp.write_text(
             json.dumps(instance.model_dump(mode="json"), indent=2, sort_keys=True),
@@ -524,6 +566,7 @@ def _workflow_summary(row: StoredWorkflowInstance) -> dict[str, object]:
     instance = row.instance
     return {
         "instance_id": row.instance_id,
+        "owner_id": instance.owner_id,
         "name": instance.definition.name,
         "card": instance.definition.card,
         "definition_digest": instance.definition_digest,
@@ -537,6 +580,7 @@ def _instance_payload(instance: WorkflowInstance) -> dict[str, object]:
         "name": instance.definition.name,
         "card": instance.definition.card,
         "definition_digest": instance.definition_digest,
+        "owner_id": instance.owner_id,
         "params_model_schema": instance.definition.params_model_schema,
         "tools": list(instance.definition.tools),
         "mcp_mounts": [m.model_dump(mode="json") for m in instance.definition.mcp_mounts],

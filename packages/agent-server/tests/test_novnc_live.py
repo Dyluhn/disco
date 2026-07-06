@@ -52,7 +52,7 @@ def test_live_url_route_disabled_returns_503():
     async def run():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-url")
             assert resp.status_code == 503
             body = resp.json()
             assert body["reason"] == "disabled"
@@ -88,7 +88,7 @@ def test_live_url_route_no_sandbox_returns_503():
     async def run():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-url")
             assert resp.status_code == 503
             body = resp.json()
             assert body["reason"] == "no_sandbox"
@@ -170,7 +170,7 @@ def test_live_url_route_happy_path_returns_200_and_NO_raw_url():
     async def run():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-url")
             assert resp.status_code == 200, resp.text
             body = resp.json()
             assert body["ready"] is True
@@ -322,7 +322,7 @@ def test_live_url_route_daemon_down_returns_503():
     async def run():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-url")
             assert resp.status_code == 503
             assert resp.json()["reason"] == "no_daemon"
 
@@ -502,7 +502,7 @@ def test_live_url_unsupported_backend_returns_503():
     async def run():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-url")
             assert resp.status_code == 503
             assert resp.json()["reason"] == "unsupported_backend"
 
@@ -544,7 +544,7 @@ def test_live_url_route_no_upstream_returns_503():
     async def run():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/conversations/conv_aabbccdd11223344/browser/live-url")
+            resp = await client.post("/conversations/conv_aabbccdd11223344/browser/live-url")
             assert resp.status_code == 503
             assert resp.json()["reason"] == "no_upstream"
 

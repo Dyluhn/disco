@@ -8,15 +8,18 @@ History surface lists (mirrors the frontend `ConversationSummary`).
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
-from disco.core import DEFAULT_OWNER_ID
 from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from ..auth import current_owner_id
+
 logger = logging.getLogger(__name__)
+_CONVERSATION_ID_RE = re.compile(r"^conv_[A-Za-z0-9_-]+$")
 
 # Best-effort agent-server notify on delete (finding #5): the app-server owns the DB
 # rows but the per-conversation RUNTIME caches (the kernel pin, cached loop, live task,
@@ -55,16 +58,30 @@ class SetConversationSpaceBody(BaseModel):
     space_id: str | None = None
 
 
+async def _require_owned_conversation(
+    store: SqliteEventStore, conversation_id: str, owner_id: str
+) -> str:
+    if not _CONVERSATION_ID_RE.fullmatch(conversation_id):
+        raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+    owner = await store.conversation_owner_id(conversation_id)
+    if owner is None:
+        raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+    if owner != owner_id:
+        raise HTTPException(status_code=403, detail={"reason": "conversation_forbidden"})
+    return conversation_id
+
+
 def make_conversations_router(store: SqliteEventStore) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/conversations")
     async def list_conversations(
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
         cursor: str | None = Query(default=None),
         limit: int = Query(default=50),
         space_id: str | None = Query(default=None),
     ) -> list[ConversationSummaryDTO]:
+        owner_id = current_owner_id(request)
         # BW-08: the History surface never shows 0-event ghost conversations.
         summaries = await store.list_conversation_summaries(
             owner_id=owner_id,
@@ -91,9 +108,10 @@ def make_conversations_router(store: SqliteEventStore) -> APIRouter:
     async def set_conversation_space(
         conversation_id: str,
         body: SetConversationSpaceBody,
+        request: Request,
     ) -> dict:
-        if not await store.conversation_exists(conversation_id):
-            raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+        owner_id = current_owner_id(request)
+        conversation_id = await _require_owned_conversation(store, conversation_id, owner_id)
         clean_space_id = body.space_id.strip() if body.space_id else None
         await store.set_conversation_space(conversation_id, clean_space_id)
         return {
@@ -105,9 +123,11 @@ def make_conversations_router(store: SqliteEventStore) -> APIRouter:
     @router.delete("/api/conversations/{conversation_id}")
     async def delete_conversation(
         conversation_id: str,
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
     ) -> dict:
         # Owner-scoped: a caller can only delete its own (no cross-owner deletes).
+        owner_id = current_owner_id(request)
+        conversation_id = await _require_owned_conversation(store, conversation_id, owner_id)
         deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
         # Release the agent-server's in-memory runtime state for this cid (finding #5),
         # best-effort — only when an agent-server URL is configured; never blocks/fails

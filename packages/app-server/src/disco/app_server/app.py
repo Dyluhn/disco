@@ -11,10 +11,12 @@ cookie) so the dev frontend on another origin can call it.
 
 from __future__ import annotations
 
+from disco.core.auth import allowed_frontend_origins
 from disco.core.store.sqlite import SqliteEventStore
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .auth import AppAuthMiddleware, make_auth_router
 from .config_state import ConfigState
 from .routes import (
     make_config_router,
@@ -41,14 +43,16 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     # mcp_approvals table (core SqliteEventStore schema).
     state = config or ConfigState(db_conn=store._conn)
 
+    app.add_middleware(AppAuthMiddleware, store=store)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # dev: open. ownership is an explicit param, not a cookie.
-        allow_credentials=False,
+        allow_origins=list(allowed_frontend_origins()),
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
+    app.include_router(make_auth_router())
     app.include_router(make_health_router())
     app.include_router(make_models_router(state))
     app.include_router(make_config_router(state))

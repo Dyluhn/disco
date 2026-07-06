@@ -21,7 +21,7 @@ import {
 } from "@/lib/buildTrace";
 import { useReplay } from "@/lib/useReplay";
 import { isolationForBackend } from "@/lib/isolation";
-import { agentHttpBase, agentLive } from "@/api/client";
+import { agentFetch, agentHttpBase, agentLive } from "@/api/client";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
@@ -114,7 +114,7 @@ export function BuildSurface({
   const [storedTitle, setStoredTitle] = useState<string | null>(null);
   useEffect(() => {
     if (!b.cid || !agentLive()) return;
-    void fetch(`${agentHttpBase()}/conversations/${b.cid}/state`)
+    void agentFetch(`/conversations/${b.cid}/state`)
       .then((r) => r.json())
       .then((s: { sandbox_backend?: string; title?: string | null }) => {
         setSandboxBackend(s.sandbox_backend ?? null);

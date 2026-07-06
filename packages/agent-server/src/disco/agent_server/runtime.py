@@ -2193,7 +2193,8 @@ class ConversationRuntime:
             assert _workflow_phase is not None
             workflow_registry = build_default_registry()
             project_root = self._project_store_now().root
-            workflow_store = JsonDirWorkflowStore(project_root or "")
+            owner_id = self._store.conversation_owner_id_sync(conversation_id) or DEFAULT_OWNER_ID
+            workflow_store = JsonDirWorkflowStore(project_root or "", owner_id=owner_id)
 
             def _workflow_mcp_tool_names(
                 registry: ToolRegistry = workflow_registry,
@@ -2474,6 +2475,8 @@ class ConversationRuntime:
         think: bool = False,
         conversation_id: str | None = None,
         space_ids: frozenset[str] = frozenset(),
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
         sources: list[str] | tuple[str, ...] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         return self._dr.research_stream(
@@ -2484,6 +2487,8 @@ class ConversationRuntime:
             think=think,
             conversation_id=conversation_id,
             space_ids=space_ids,
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
             sources=sources,
         )
 
@@ -3831,6 +3836,9 @@ class ConversationRuntime:
     def resolve_cid_prefix(self, cid8: str) -> str | None:
         return self._preview.resolve_cid_prefix(cid8)
 
+    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
+        return await self._preview.resolve_owned_cid_prefix(cid8, owner_id)
+
     def preview_upstream(self, conversation_id: str) -> str | None:
         """The URL the AGENT-SERVER can reach the conversation's dev server at (the backend
         owns how — localhost for local, the remote host's tailnet IP for gVisor). The
@@ -3840,8 +3848,10 @@ class ConversationRuntime:
     def port_upstream(self, conversation_id: str, port: int) -> str | None:
         return self._preview.port_upstream(conversation_id, port)
 
-    async def wake_for_preview(self, cid8: str, port: int) -> str | None:
-        return await self._preview.wake_for_preview(cid8, port)
+    async def wake_for_preview(
+        self, cid8: str, port: int, *, owner_id: str = DEFAULT_OWNER_ID
+    ) -> str | None:
+        return await self._preview.wake_for_preview(cid8, port, owner_id=owner_id)
 
     def live_session(self, conversation_id: str) -> SandboxSession | None:
         """Read-only sandbox accessor (BP-14). Does NOT create a session — a GET must
@@ -4275,6 +4285,7 @@ class ConversationRuntime:
         schedule_id: str,
         spec: ScheduleSpec,
         coalesced: bool,
+        owner_id: str,
     ) -> tuple[
         str,
         datetime,
@@ -4285,7 +4296,7 @@ class ConversationRuntime:
         conversation_id = f"conv_{uuid.uuid4().hex}"
         self._store.create_conversation(
             conversation_id,
-            owner_id=DEFAULT_OWNER_ID,
+            owner_id=owner_id,
             surface="agent",
             title=f"Workflow schedule {spec.instance_id}",
         )
@@ -4294,7 +4305,7 @@ class ConversationRuntime:
 
         fired_at = datetime.now(UTC)
         project_root = self._project_store_now().root
-        workflow_store = JsonDirWorkflowStore(project_root or "")
+        workflow_store = JsonDirWorkflowStore(project_root or "", owner_id=owner_id)
         fallback_output_path = ""
 
         try:
@@ -4555,6 +4566,7 @@ class ConversationRuntime:
         *,
         schedule_id: str,
         spec: ScheduleSpec,
+        owner_id: str = DEFAULT_OWNER_ID,
         coalesced: bool = False,
     ) -> WorkflowScheduleRunRecord:
         """Fire a workflow schedule as a fresh sealed agent conversation.
@@ -4574,6 +4586,7 @@ class ConversationRuntime:
             schedule_id=schedule_id,
             spec=spec,
             coalesced=coalesced,
+            owner_id=owner_id,
         )
         if setup_record is not None:
             return setup_record
@@ -4648,17 +4661,29 @@ class ConversationRuntime:
     ) -> dict:
         return self._schedule.create_workflow_schedule(spec, owner_id=owner_id)
 
-    def list_workflow_schedules(self, *, owner_id: str | None = None) -> list[dict]:
-        return self._schedule.list_workflow_schedules(owner_id=owner_id)
+    def list_workflow_schedules(
+        self,
+        *,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
+    ) -> list[dict]:
+        return self._schedule.list_workflow_schedules(
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+        )
 
     def list_workflow_schedule_runs(
         self,
         *,
         schedule_id: str | None = None,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
         limit: int = 100,
     ) -> list[dict]:
         return self._schedule.list_workflow_schedule_runs(
             schedule_id=schedule_id,
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
             limit=limit,
         )
 
@@ -4667,10 +4692,12 @@ class ConversationRuntime:
         schedule_id: str,
         *,
         owner_id: str,
+        include_unclaimed_legacy: bool = False,
     ) -> dict | None:
         return await self._schedule.fire_workflow_schedule_now(
             schedule_id,
             owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
         )
 
     def preview_schedule_runs(self, rrule: str, n: int = 3) -> list[str]:

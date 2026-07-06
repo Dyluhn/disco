@@ -11,9 +11,8 @@
 import { useState } from "react";
 import { CalendarClock, Plus, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { agentFetch } from "@/api/client";
 import { parseScheduleNL } from "@/lib/scheduleNL";
-
-const API = "";  // relative — same origin
 
 // ---- API functions ----------------------------------------------------------
 
@@ -35,7 +34,7 @@ interface PreviewResult {
 }
 
 async function fetchSchedules(cid: string): Promise<ScheduleRow[]> {
-  const r = await fetch(`${API}/api/conversations/${encodeURIComponent(cid)}/schedules`);
+  const r = await agentFetch(`/api/conversations/${encodeURIComponent(cid)}/schedules`);
   if (!r.ok) throw new Error(`Failed to load schedules: ${r.status}`);
   const body = await r.json();
   return body.schedules ?? [];
@@ -45,7 +44,7 @@ async function createSchedule(
   cid: string,
   payload: { rrule: string; description: string; depth?: string; model_override?: string },
 ): Promise<ScheduleRow> {
-  const r = await fetch(`${API}/api/conversations/${encodeURIComponent(cid)}/schedules`, {
+  const r = await agentFetch(`/api/conversations/${encodeURIComponent(cid)}/schedules`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -58,14 +57,14 @@ async function createSchedule(
 }
 
 async function deleteSchedule(scheduleId: string): Promise<void> {
-  const r = await fetch(`${API}/api/schedules/${encodeURIComponent(scheduleId)}`, {
+  const r = await agentFetch(`/api/schedules/${encodeURIComponent(scheduleId)}`, {
     method: "DELETE",
   });
   if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
 }
 
 async function previewSchedule(rrule: string, n = 3): Promise<PreviewResult> {
-  const r = await fetch(`${API}/api/schedules/preview`, {
+  const r = await agentFetch(`/api/schedules/preview`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ rrule, n }),

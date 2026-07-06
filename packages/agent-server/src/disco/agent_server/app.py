@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .appkit_cloudflare import CloudflareDeployCorsMiddleware, make_cloudflare_router
+from .auth import AgentAuthMiddleware, make_auth_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
 from .pi_inference import PiInferenceTokenStore
 from .routes import (
@@ -56,6 +57,7 @@ from .routes import (
 from .routes._common import _sanitize_name, make_preview_upstream_resolver
 from .routes.pi_tools import make_pi_tools_router
 from .runtime import ConversationRuntime
+from disco.core.auth import allowed_frontend_origins
 
 # `_sanitize_name` is re-exported here for tests that import it from this module
 # (test_upload.py) — its definition now lives in routes/_common.py.
@@ -136,10 +138,11 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app = FastAPI(
         title="disco agent-server", version="0.1.0", lifespan=lifespan
     )
+    app.add_middleware(AgentAuthMiddleware, store=store)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # dev: open (ownership is an explicit param, not a cookie)
-        allow_credentials=False,
+        allow_origins=list(allowed_frontend_origins()),
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -149,6 +152,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         # Fix 2 (codex P1): in-sandbox liveness fallback so the canonical iframe
         # renders on sealed/filtered backends that publish no host port.
         session_resolver=make_preview_session_resolver(runtime),
+        require_capability=True,
     )
     # EPIC O P0-3 — strip the permissive wildcard CORS from the owner-only
     # Cloudflare deploy surface. Added LAST so it is the OUTERMOST middleware and
@@ -158,6 +162,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     # Per-domain routers (routes/<domain>.py). Registration order preserves the
     # original relative order; the `{path:path}` catch-alls (workspace/artifacts/
     # preview-app/port) live inside their domain routers after the literal routes.
+    app.include_router(make_auth_router())
     app.include_router(make_health_router(store, runtime))
     app.include_router(make_mcp_router(store, runtime))
     app.include_router(make_conversations_router(store, runtime))

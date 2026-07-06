@@ -11,7 +11,7 @@ import {
   killConversation,
   patchConversationSettings,
 } from "@/api/agent";
-import { agentHttpBase, agentLive } from "@/api/client";
+import { agentFetch, agentLive } from "@/api/client";
 import {
   clearFreshMode,
   markConversationKilled,
@@ -77,7 +77,7 @@ export function useBuild(
   useEffect(() => {
     if (!resumeCid || !agentLive() || modelTouched.current) return;
     let cancelled = false;
-    void fetch(`${agentHttpBase()}/conversations/${resumeCid}/state`)
+    void agentFetch(`/conversations/${resumeCid}/state`)
       .then((r) => r.json())
       .then((s: { model_override?: string | null }) => {
         if (!cancelled && !modelTouched.current && s.model_override) {

@@ -38,7 +38,16 @@ import type {
   WSServerFrame,
 } from "@/types/agent";
 import type { JsonPatchOp, LoweredDeck } from "@/components/build/editor/types";
-import { agentGet, agentHttpBase, agentLive, agentSend, agentWsUrl, fixtureDelay } from "./client";
+import {
+  agentFetch,
+  agentGet,
+  agentHttpBase,
+  agentLive,
+  agentSend,
+  agentWsUrl,
+  ensureAgentSession,
+  fixtureDelay,
+} from "./client";
 
 export interface AgentHandle {
   /** Send a client frame (send_message / confirm / reject / cancel). */
@@ -62,7 +71,6 @@ export async function createBuildConversation(
 ): Promise<string> {
   if (!agentLive()) return FIXTURE_CID;
   const res = await agentSend<{ conversation_id: string }>("POST", "/conversations", {
-    owner_id: import.meta.env.VITE_OWNER_ID ?? "local",
     surface,
     model_override: modelOverride ?? null,
     autonomous,
@@ -182,7 +190,7 @@ export async function uploadFiles(cid: string, files: File[]): Promise<UploadRes
   if (!agentLive()) return { saved: [], rejected: [] };
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
-  const res = await fetch(`${agentHttpBase()}/conversations/${cid}/files`, {
+  const res = await agentFetch(`/conversations/${cid}/files`, {
     method: "POST",
     body: fd,
   });
@@ -268,7 +276,7 @@ export async function getDeckRenderHtml(
   const params = new URLSearchParams({ path: base });
   if (template) params.set("template", template);
   const url = `${agentHttpBase()}/conversations/${encodeURIComponent(cid)}/deck/editor/render?${params}`;
-  const res = await fetch(url, { headers: { accept: "text/html" } });
+  const res = await agentFetch(url, { headers: { accept: "text/html" } });
   if (!res.ok) throw new Error(`Deck render fetch failed: ${res.status}`);
   return res.text();
 }
@@ -359,7 +367,9 @@ export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void):
   let timer: ReturnType<typeof setTimeout> | null = null;
   const queue: WSClientFrame[] = [];
 
-  function connect() {
+  async function connect() {
+    await ensureAgentSession();
+    if (closed) return;
     ws = new WebSocket(agentWsUrl(`/ws/conversations/${cid}`)!);
     ws.onopen = () => {
       attempt = 0; // a successful connection resets the backoff
@@ -387,14 +397,14 @@ export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void):
         return;
       }
       const delay = Math.min(1000 * 2 ** (attempt - 1), 15000); // 1s,2s,…capped 15s
-      timer = setTimeout(connect, delay);
+      timer = setTimeout(() => void connect(), delay);
     };
     ws.onerror = () => {
       /* onclose handles teardown + reconnect */
     };
   }
 
-  connect();
+  void connect();
 
   return {
     send: (f) => {

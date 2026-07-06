@@ -49,10 +49,11 @@ import secrets
 
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..oid_stamp import stamp_oids
 from ..runtime import ConversationRuntime
+from ._common import require_owned_conversation
 
 
 def _read_workspace_file_safe(
@@ -124,13 +125,14 @@ def make_preview_edit_router(
     router = APIRouter()
 
     @router.get("/conversations/{conversation_id}/preview-edit/{path:path}")
-    async def preview_edit(conversation_id: str, path: str) -> Response:
+    async def preview_edit(conversation_id: str, path: str, request: Request) -> Response:
         """Serve a workspace HTML file stamped + selection-injected for edit mode.
 
         404 uniformly on any rejection (traversal, missing file, non-HTML, no
         runtime) — no probe. Relative sibling assets (css/js/img) requested by the
         stamped page resolve back through this route and are served with their
         natural media type, UNSTAMPED."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         norm = posixpath.normpath(path)
         # Jail: reject traversal / absolute paths (mirrors files.py + preview jails).
         if posixpath.isabs(norm) or norm.startswith("..") or norm == ".":

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cronsim import CronSim, CronSimError
+from disco.core.owners import install_owner_id
 from disco.core.workflow import ScheduleSpec
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -90,7 +91,7 @@ class WorkflowScheduleRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schedule_id: str = Field(default_factory=_new_schedule_id)
-    owner_id: str = "local"
+    owner_id: str = Field(default_factory=install_owner_id)
     spec: ScheduleSpec
     created_at: datetime = Field(default_factory=_now)
     next_run: datetime | None = None
@@ -108,7 +109,7 @@ class WorkflowScheduleRow(BaseModel):
     def from_json_dict(cls, data: dict[str, object]) -> WorkflowScheduleRow:
         return cls(
             schedule_id=str(data["schedule_id"]),
-            owner_id=str(data.get("owner_id") or "local"),
+            owner_id=str(data.get("owner_id") or install_owner_id()),
             spec=ScheduleSpec.model_validate(data["spec"]),
             created_at=_parse_dt(str(data.get("created_at") or "")) or _now(),
             next_run=_parse_dt(
@@ -157,16 +158,26 @@ class JsonWorkflowScheduleStore:
             raise ValueError(f"unsafe workflow schedule_id: {schedule_id!r}")
         return self._schedules_dir / f"{schedule_id}.json"
 
+    def _load_schedule(self, path: Path) -> tuple[WorkflowScheduleRow, bool]:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("workflow schedule must be a JSON object")
+        raw_owner = raw.get("owner_id")
+        legacy_unclaimed = not isinstance(raw_owner, str) or not raw_owner.strip()
+        if legacy_unclaimed:
+            raw["owner_id"] = install_owner_id()
+        return WorkflowScheduleRow.from_json_dict(raw), legacy_unclaimed
+
     def create_schedule(
         self,
         spec: ScheduleSpec,
         *,
-        owner_id: str = "local",
+        owner_id: str | None = None,
         now: datetime | None = None,
     ) -> WorkflowScheduleRow:
         current = now or _now()
         row = WorkflowScheduleRow(
-            owner_id=owner_id,
+            owner_id=owner_id or install_owner_id(),
             spec=spec,
             created_at=current,
             next_run=_next_future_run(spec.cron, current),
@@ -174,7 +185,12 @@ class JsonWorkflowScheduleStore:
         _write_json_atomic(self._path_for(row.schedule_id), row.to_json_dict())
         return row
 
-    def list_schedules(self, *, owner_id: str | None = None) -> list[WorkflowScheduleRow]:
+    def list_schedules(
+        self,
+        *,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
+    ) -> list[WorkflowScheduleRow]:
         if not self._schedules_dir.is_dir():
             return []
         rows: list[WorkflowScheduleRow] = []
@@ -182,9 +198,10 @@ class JsonWorkflowScheduleStore:
             if not _SAFE_ID.fullmatch(path.stem):
                 continue
             try:
-                raw = json.loads(path.read_text(encoding="utf-8"))
-                row = WorkflowScheduleRow.from_json_dict(raw)
+                row, legacy_unclaimed = self._load_schedule(path)
             except (OSError, ValueError, TypeError, KeyError):
+                continue
+            if legacy_unclaimed and not include_unclaimed_legacy:
                 continue
             if owner_id is None or row.owner_id == owner_id:
                 rows.append(row)
@@ -192,7 +209,11 @@ class JsonWorkflowScheduleStore:
         return rows
 
     def list_enabled_schedules(self) -> list[WorkflowScheduleRow]:
-        return [row for row in self.list_schedules() if row.spec.enabled]
+        return [
+            row
+            for row in self.list_schedules(include_unclaimed_legacy=True)
+            if row.spec.enabled
+        ]
 
     def update_next_run(self, schedule_id: str, next_run: datetime | None) -> None:
         path = self._path_for(schedule_id)
@@ -210,6 +231,8 @@ class JsonWorkflowScheduleStore:
         self,
         *,
         schedule_id: str | None = None,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
         limit: int = 100,
     ) -> list[WorkflowScheduleRunRecord]:
         if not self._runs_path.is_file():
@@ -228,6 +251,15 @@ class JsonWorkflowScheduleStore:
                 rows.append(WorkflowScheduleRunRecord.model_validate(item))
             except ValueError:
                 continue
+        if owner_id is not None:
+            owned_schedule_ids = {
+                row.schedule_id
+                for row in self.list_schedules(
+                    owner_id=owner_id,
+                    include_unclaimed_legacy=include_unclaimed_legacy,
+                )
+            }
+            rows = [row for row in rows if row.schedule_id in owned_schedule_ids]
         if schedule_id is not None:
             rows = [row for row in rows if row.schedule_id == schedule_id]
         rows.sort(key=lambda r: r.fired_at, reverse=True)
@@ -252,25 +284,50 @@ class WorkflowScheduleManager:
         self,
         spec: ScheduleSpec,
         *,
-        owner_id: str = "local",
+        owner_id: str | None = None,
     ) -> WorkflowScheduleRow:
         return self._store().create_schedule(spec, owner_id=owner_id, now=self._now_fn())
 
-    def list_schedules(self, *, owner_id: str | None = None) -> list[WorkflowScheduleRow]:
-        return self._store().list_schedules(owner_id=owner_id)
+    def list_schedules(
+        self,
+        *,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
+    ) -> list[WorkflowScheduleRow]:
+        return self._store().list_schedules(
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+        )
 
     def list_runs(
-        self, *, schedule_id: str | None = None, limit: int = 100
+        self,
+        *,
+        schedule_id: str | None = None,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
+        limit: int = 100,
     ) -> list[WorkflowScheduleRunRecord]:
-        return self._store().list_runs(schedule_id=schedule_id, limit=limit)
+        return self._store().list_runs(
+            schedule_id=schedule_id,
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+            limit=limit,
+        )
 
     async def fire_now(
-        self, schedule_id: str, *, owner_id: str = "local"
+        self,
+        schedule_id: str,
+        *,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
     ) -> WorkflowScheduleRunRecord | None:
         row = next(
             (
                 candidate
-                for candidate in self._store().list_schedules(owner_id=owner_id)
+                for candidate in self._store().list_schedules(
+                    owner_id=owner_id,
+                    include_unclaimed_legacy=include_unclaimed_legacy,
+                )
                 if candidate.schedule_id == schedule_id
             ),
             None,
@@ -302,6 +359,7 @@ class WorkflowScheduleManager:
             record = await self._runtime.run_sealed_workflow_schedule(
                 schedule_id=row.schedule_id,
                 spec=row.spec,
+                owner_id=row.owner_id,
                 coalesced=coalesced,
             )
         except Exception as exc:  # noqa: BLE001 - scheduler must keep sweeping

@@ -35,7 +35,7 @@ import { cn } from "@/lib/cn";
 import { readVerboseAgentChat } from "@/lib/useVerboseAgentChat";
 // B1/B4: MD and PDF non-FSA paths now use inline fetch+blob-URL
 // so we no longer call exportReport / exportReportAsMarkdown from deepResearch.ts.
-import { agentHttpBase } from "@/api/client";
+import { agentFetch, agentHttpBase } from "@/api/client";
 import { createBuildConversation } from "@/api/agent";
 import { serializeReportToMarkdown } from "@/api/deepResearch";
 import { useExportCapabilities } from "@/hooks/useExportCapabilities";
@@ -207,8 +207,8 @@ function ExportModal({ open, onOpenChange, report, cid, followUpSeqs }: ExportMo
     fmt: "md" | "pdf",
     bodyPayload: string | undefined,
   ): Promise<Blob> {
-    const res = await fetch(
-      `${agentHttpBase()}/api/conversations/${cid}/report/export?fmt=${fmt}`,
+    const res = await agentFetch(
+      `/api/conversations/${cid}/report/export?fmt=${fmt}`,
       {
         method: "POST",
         headers: bodyPayload ? { "Content-Type": "application/json" } : undefined,
@@ -595,8 +595,8 @@ function AudioSection({
       const viaStream = async (): Promise<boolean> => {
         let res: Response;
         try {
-          res = await fetch(
-            `${agentHttpBase()}/conversations/${cid}/report/audio/stream?mode=${mode}`,
+          res = await agentFetch(
+            `/conversations/${cid}/report/audio/stream?mode=${mode}`,
             { method: "POST", headers, body: bodyPayload },
           );
         } catch {
@@ -668,8 +668,8 @@ function AudioSection({
 
       // Blocking fallback — the original single-shot POST.
       const viaBlocking = async (): Promise<void> => {
-        const res = await fetch(
-          `${agentHttpBase()}/conversations/${cid}/report/audio?mode=${mode}`,
+        const res = await agentFetch(
+          `/conversations/${cid}/report/audio?mode=${mode}`,
           { method: "POST", headers, body: bodyPayload },
         );
         if (!res.ok) {

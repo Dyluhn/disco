@@ -14,7 +14,12 @@ import { Download, FileCode2, FileSpreadsheet, FileText, Globe, History, Package
 import { cn } from "@/lib/cn";
 import { deriveActivity, deriveFiles, deriveSrcDoc, deriveTerminal, deriveLiveSignal } from "@/lib/buildTrace";
 import type { WorkspaceFile } from "@/lib/buildTrace";
-import { agentGet, agentSend, agentHttpBase, previewHostUrl } from "@/api/client";
+import {
+  agentGet,
+  agentSend,
+  agentHttpBase,
+  previewBootstrapUrl,
+} from "@/api/client";
 import { useElementSelect } from "@/hooks/useElementSelect";
 import { SelectionOverlay } from "@/components/build/canvas/SelectionOverlay";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
@@ -240,17 +245,18 @@ function BrowserPane({
         if (!liveViewRef.current && !startInFlightRef.current && doomedRef.current !== cid) {
           startInFlightRef.current = true;
           try {
-            const data = await agentGet<{ ready: boolean; novnc_path: string; port: number }>(
+            const data = await agentSend<{ ready: boolean; novnc_path: string; port: number }>(
+              "POST",
               `/conversations/${encodeURIComponent(cid)}/browser/live-url`,
             );
             // SECURITY: build the single-origin proxy URL client-side
             // ({cid8}-6080.localhost). The server intentionally never returns a raw sandbox
             // host:port — that would bypass the auth/cid-scoping proxy. previewHostUrl is
             // the same helper the dev-server preview uses.
-            const base = previewHostUrl(cid, data.port, agentHttpBase());
-            if (!cancelled && base) {
+            const src = await previewBootstrapUrl(cid, data.port, data.novnc_path);
+            if (!cancelled && src) {
               setIframeConnected(false);
-              setLiveView({ url: base, novnc_path: data.novnc_path, ownerCid: cid });
+              setLiveView({ url: src, novnc_path: "", ownerCid: cid });
             }
           } catch (e: unknown) {
             // SILENT fallback — no banner, no false affordance. Distinguish DOOMED from

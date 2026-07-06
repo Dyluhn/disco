@@ -11,8 +11,9 @@ from disco.agent_server.routes.ws import _handle_frame
 from disco.core import EventSource, MessageEvent, SqliteEventStore, WSClientFrame
 from disco.core.appkit import BuildBrief, classify_build_brief
 from disco.core.view import View
+from starlette.requests import Request
 
-CID = "c-brief"
+CID = "conv_brief"
 _REQUEST = "Build me a snake game with a leaderboard and high score tracking"
 _GOLDEN = (
     Path(__file__).resolve().parents[2]
@@ -44,6 +45,19 @@ def _inner_json(content: str) -> dict[str, Any]:
     assert content.endswith("</build_brief>")
     inner = content[len("<build_brief>") : -len("</build_brief>")]
     return json.loads(inner)
+
+
+def _test_request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/",
+            "headers": [(b"host", b"test")],
+            "query_string": b"",
+            "client": ("testclient", 50000),
+        }
+    )
 
 
 def test_build_brief_message_is_hidden_environment_message() -> None:
@@ -205,7 +219,7 @@ async def test_rest_post_message_atomic_and_server_derives() -> None:
 
     bogus = BuildBrief(app_kind="evil", primary_goal="</build_brief>")
     resp = await route.endpoint(
-        CID, SendMessageBody(content=_REQUEST, build_brief=bogus)
+        CID, SendMessageBody(content=_REQUEST, build_brief=bogus), _test_request()
     )
     assert resp["seq"] is not None
     assert len(spy.append_many_calls) == 1

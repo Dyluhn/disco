@@ -20,6 +20,8 @@ from typing import Annotated, Any
 from typing import Literal
 
 from cronsim import CronSim, CronSimError
+
+from ..owners import install_owner_id
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -421,6 +423,7 @@ class WorkflowApproval(BaseModel):
 class WorkflowInstance(BaseModel):
     model_config = _STRICT
 
+    owner_id: str = Field(default_factory=install_owner_id)
     definition_digest: _DigestStr
     definition: WorkflowDefinition
     params: dict[str, Any]

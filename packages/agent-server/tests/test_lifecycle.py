@@ -45,7 +45,7 @@ def _runtime_with_storage(store: SqliteEventStore, projects_root: str) -> Conver
 
 async def _make_conversation(store: SqliteEventStore, status: ConversationStatus) -> str:
     """Create a conversation with a user message and the given status."""
-    cid = f"test-{status.value.lower()}-{id(status)}"
+    cid = f"conv_test_{status.value.lower()}_{id(status)}"
     await store.append(cid, MessageEvent(
         source=EventSource.USER,
         message=LLMMessage(role="user", content="hello"),

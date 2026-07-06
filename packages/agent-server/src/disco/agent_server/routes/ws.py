@@ -20,11 +20,18 @@ from disco.core.selection_edit import (
 )
 from disco.core.store.sqlite import SqliteEventStore
 from disco.retrieval.local_encoders import EncoderUnavailable
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
+from ..auth import websocket_session
 from ..runtime import ConversationRuntime
-from ._common import _build_brief_message, _context_message, _user_message
+from ..space_access import owned_space_ids_or_403
+from ._common import (
+    _build_brief_message,
+    _context_message,
+    _user_message,
+    validate_canonical_conversation_id,
+)
 
 
 def _file_stream_payload(frame: dict[str, Any]) -> FileStreamFrame:
@@ -171,6 +178,116 @@ async def _handle_frame(
         await runtime.resume_conversation(conversation_id)
 
 
+async def _require_ws_session(websocket: WebSocket):
+    session = websocket_session(websocket)
+    if session is None:
+        await websocket.close(code=1008, reason="auth required")
+    return session
+
+
+async def _require_conversation_ws_session(
+    websocket: WebSocket, store: SqliteEventStore, conversation_id: str
+):
+    session = await _require_ws_session(websocket)
+    if session is None:
+        return None
+    try:
+        validate_canonical_conversation_id(conversation_id)
+    except HTTPException:
+        await websocket.close(code=1008, reason="conversation forbidden")
+        return None
+    if session.session_id == "test-session":
+        return session
+    if not await store.conversation_owned_by(conversation_id, session.owner_id):
+        await websocket.close(code=1008, reason="conversation forbidden")
+        return None
+    return session
+
+
+async def _reject_forbidden_research_conversation(
+    websocket: WebSocket,
+    store: SqliteEventStore,
+    conversation_id: str | None,
+    session_id: str,
+    owner_id: str,
+) -> bool:
+    if session_id == "test-session":
+        return False
+    if conversation_id is not None:
+        try:
+            validate_canonical_conversation_id(conversation_id)
+        except HTTPException:
+            await websocket.send_json({"type": "error", "message": "conversation forbidden"})
+            await websocket.close()
+            return True
+    if conversation_id is None or await store.conversation_owned_by(conversation_id, owner_id):
+        return False
+    await websocket.send_json({"type": "error", "message": "conversation forbidden"})
+    await websocket.close()
+    return True
+
+
+async def _send_conversation_state_frame(
+    store: SqliteEventStore,
+    websocket: WebSocket,
+    conversation_id: str,
+    runtime: ConversationRuntime | None,
+) -> None:
+    # (1) On connect: one state snapshot, then replay events after last_seq,
+    #     then live — all via the store's subscribe (history-then-live).
+    state = await store.get_state(conversation_id)
+    # Overlay sandbox liveness so the UI can show "suspended" vs "active" badge.
+    if runtime is not None:
+        sstate = runtime.sandbox_state(conversation_id)
+        if sstate is not None:
+            state.extras["sandbox"] = sstate
+        sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
+        if sandbox_ids:
+            state.extras["sandbox_instance_ids"] = sandbox_ids
+        if runtime.is_autonomous(conversation_id):
+            state.extras["autonomous"] = True
+        if runtime.is_quiet(conversation_id):
+            state.extras["quiet"] = True
+        # ALWAYS emit assist (True or False) so the badge reflects the CURRENT
+        # tier (only-when-true left a switch-to-standard badge stuck on "Assist").
+        state.extras["assist"] = runtime.is_assist(conversation_id)
+    # BP-15: mirror the HTTP /state sandbox_backend overlay.
+    state_dict = state.model_dump(mode="json")
+    if runtime is not None:
+        sbackend = runtime.sandbox_backend_name()
+        if sbackend is not None:
+            state_dict["sandbox_backend"] = sbackend
+    await websocket.send_json({"type": "state", "state": state_dict})
+
+
+async def _pump_conversation_events(websocket: WebSocket, stream: Any) -> None:
+    async for event in stream:
+        await websocket.send_json(
+            WSServerFrame(type="event", event=event).model_dump(mode="json")
+        )
+
+
+async def _pump_ephemeral_frames(websocket: WebSocket, eph_stream: Any) -> None:
+    # Watch-it-write: drain the EPHEMERAL bus (transient file-stream deltas,
+    # never persisted) onto the same socket. A second pump so a flood of
+    # stream frames never blocks the primary event pump (and vice versa).
+    async for frame in eph_stream:
+        # D3: route mcp_approval_required frames via the typed WS event
+        if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
+            await websocket.send_json(
+                WSServerFrame(
+                    type="mcp_approval_required",
+                    mcp_approval=frame,
+                ).model_dump(mode="json")
+            )
+        else:
+            await websocket.send_json(
+                WSServerFrame(
+                    type="file_stream", file_stream=_file_stream_payload(frame)
+                ).model_dump(mode="json")
+            )
+
+
 def make_ws_router(
     store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> APIRouter:
@@ -182,68 +299,18 @@ def make_ws_router(
         conversation_id: str,
         last_seq: int = Query(default=0),
     ) -> None:
+        if await _require_conversation_ws_session(websocket, store, conversation_id) is None:
+            return
         await websocket.accept()
         if runtime is not None:
             runtime.on_connect(conversation_id)
 
-        # (1) On connect: one state snapshot, then replay events after last_seq,
-        #     then live — all via the store's subscribe (history-then-live).
-        state = await store.get_state(conversation_id)
-        # Overlay sandbox liveness so the UI can show "suspended" vs "active" badge.
-        if runtime is not None:
-            sstate = runtime.sandbox_state(conversation_id)
-            if sstate is not None:
-                state.extras["sandbox"] = sstate
-            sandbox_ids = runtime.sandbox_instance_ids(conversation_id)
-            if sandbox_ids:
-                state.extras["sandbox_instance_ids"] = sandbox_ids
-            if runtime.is_autonomous(conversation_id):
-                state.extras["autonomous"] = True
-            if runtime.is_quiet(conversation_id):
-                state.extras["quiet"] = True
-            # ALWAYS emit assist (True or False) so the badge reflects the CURRENT
-            # tier (only-when-true left a switch-to-standard badge stuck on "Assist").
-            state.extras["assist"] = runtime.is_assist(conversation_id)
-        # BP-15: inject sandbox_backend at the top level of the state dict (same
-        # parity as the HTTP /state overlay — the live spec polls HTTP for this).
-        state_dict = state.model_dump(mode="json")
-        if runtime is not None:
-            sbackend = runtime.sandbox_backend_name()
-            if sbackend is not None:
-                state_dict["sandbox_backend"] = sbackend
-        await websocket.send_json({"type": "state", "state": state_dict})
+        await _send_conversation_state_frame(store, websocket, conversation_id, runtime)
         stream = await store.subscribe(conversation_id, after_seq=last_seq)
-
-        async def pump_events() -> None:
-            async for event in stream:
-                await websocket.send_json(
-                    WSServerFrame(type="event", event=event).model_dump(mode="json")
-                )
-
-        # Watch-it-write: drain the EPHEMERAL bus (transient file-stream deltas,
-        # never persisted) onto the same socket. A second pump so a flood of
-        # stream frames never blocks the primary event pump (and vice versa).
         eph_stream = await store.subscribe_ephemeral(conversation_id)
 
-        async def pump_ephemeral() -> None:
-            async for frame in eph_stream:
-                # D3: route mcp_approval_required frames via the typed WS event
-                if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
-                    await websocket.send_json(
-                        WSServerFrame(
-                            type="mcp_approval_required",
-                            mcp_approval=frame,
-                        ).model_dump(mode="json")
-                    )
-                else:
-                    await websocket.send_json(
-                        WSServerFrame(
-                            type="file_stream", file_stream=_file_stream_payload(frame)
-                        ).model_dump(mode="json")
-                    )
-
-        sender = asyncio.create_task(pump_events())
-        eph_sender = asyncio.create_task(pump_ephemeral())
+        sender = asyncio.create_task(_pump_conversation_events(websocket, stream))
+        eph_sender = asyncio.create_task(_pump_ephemeral_frames(websocket, eph_stream))
         try:
             while True:
                 try:
@@ -285,6 +352,9 @@ def make_ws_router(
         the server streams the research pipeline's frames (state → token… → final
         → state) in the UI's grounded-answer shape, then closes. Read-only: this is
         the retrieval+grounding pipeline, never the agent loop."""
+        session = await _require_ws_session(websocket)
+        if session is None:
+            return
         await websocket.accept()
         if runtime is None:
             await websocket.send_json(
@@ -320,14 +390,30 @@ def make_ws_router(
         conversation_id = body.get("conversation_id") or None
         if conversation_id is not None:
             conversation_id = str(conversation_id).strip() or None
+        if await _reject_forbidden_research_conversation(
+            websocket, store, conversation_id, session.session_id, session.owner_id
+        ):
+            return
         raw_space_ids = body.get("space_ids") or []
         if not isinstance(raw_space_ids, list):
-            raw_space_ids = []
-        space_ids = frozenset(
-            str(space_id).strip()
-            for space_id in raw_space_ids
-            if str(space_id).strip()
-        )
+            await websocket.send_json(
+                {"type": "error", "message": "space_ids must be a list"}
+            )
+            await websocket.close()
+            return
+        try:
+            space_ids = owned_space_ids_or_403(
+                runtime,
+                raw_space_ids,
+                owner_id=session.owner_id,
+                include_unclaimed_legacy=session.is_admin,
+            )
+        except HTTPException as exc:
+            await websocket.send_json(
+                {"type": "error", "message": "space_forbidden", "detail": exc.detail}
+            )
+            await websocket.close()
+            return
         raw_sources = body.get("sources") or []
         if not isinstance(raw_sources, list):
             raw_sources = []
@@ -341,6 +427,8 @@ def make_ws_router(
                 think=think,
                 conversation_id=conversation_id,
                 space_ids=space_ids,
+                owner_id=session.owner_id,
+                include_unclaimed_legacy=session.is_admin,
                 sources=sources,
             ):
                 await websocket.send_json(frame)

@@ -25,7 +25,7 @@ from disco.core import (
 from disco.core.llm import DefaultLLMRouter, ModelEntry, RouterConfig
 from disco.tools import ProcessSandboxService
 
-CID = "cid-delete-cleanup"
+CID = "conv_delete_cleanup"
 
 
 def _runtime(store: SqliteEventStore) -> ConversationRuntime:

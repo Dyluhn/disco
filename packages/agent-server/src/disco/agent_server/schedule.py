@@ -186,30 +186,48 @@ class ScheduleManager:
         self,
         spec: ScheduleSpec,
         *,
-        owner_id: str = "local",
+        owner_id: str | None = None,
     ) -> WorkflowScheduleRow:
         return self._workflow.create_schedule(spec, owner_id=owner_id)
 
     def list_workflow_schedules(
-        self, *, owner_id: str | None = None
+        self,
+        *,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
     ) -> list[WorkflowScheduleRow]:
-        return self._workflow.list_schedules(owner_id=owner_id)
+        return self._workflow.list_schedules(
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+        )
 
     def list_workflow_schedule_runs(
         self,
         *,
         schedule_id: str | None = None,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
         limit: int = 100,
     ) -> list[WorkflowScheduleRunRecord]:
-        return self._workflow.list_runs(schedule_id=schedule_id, limit=limit)
+        return self._workflow.list_runs(
+            schedule_id=schedule_id,
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+            limit=limit,
+        )
 
     async def fire_workflow_schedule_now(
         self,
         schedule_id: str,
         *,
-        owner_id: str = "local",
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
     ) -> WorkflowScheduleRunRecord | None:
-        return await self._workflow.fire_now(schedule_id, owner_id=owner_id)
+        return await self._workflow.fire_now(
+            schedule_id,
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+        )
 
     # ---- background loop ----------------------------------------------------
 

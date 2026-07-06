@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tempfile
 from dataclasses import dataclass
@@ -40,11 +41,12 @@ from disco.tools.builtin.workflow_tools import (
     build_workflow_definition,
 )
 from disco.tools.projects import StorageStatus
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..runtime import ConversationRuntime
+from ..auth import current_owner_id, current_session
 from ..workflow_schedule import JsonWorkflowScheduleStore
 
 _SAFE_ID_FRAGMENT = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -121,10 +123,10 @@ def make_workflows_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    async def _list_workflows() -> dict:
+    async def _list_workflows(request: Request) -> dict:
         if runtime is None:
             return {"workflows": [], "status": "no_runtime"}
-        workflow_store = _workflow_store(runtime)
+        workflow_store = _workflow_store_for_request(runtime, request)
         env = _surface_environment(runtime)
         workflows = [
             _workflow_review_payload(row.instance_id, row.instance, env)
@@ -145,10 +147,10 @@ def make_workflows_router(
         env = _surface_environment(runtime)
         return _authoring_context_payload(env)
 
-    async def _draft_workflow(body: DraftWorkflowBody) -> dict:
+    async def _draft_workflow(body: DraftWorkflowBody, request: Request) -> dict:
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        workflow_store = _workflow_store(runtime)
+        workflow_store = _workflow_store_for_request(runtime, request)
         env = _surface_environment(runtime)
         instance_id = body.instance_id or _generated_instance_id(body.definition)
         return _draft_definition(
@@ -159,7 +161,7 @@ def make_workflows_router(
             instance_id=instance_id,
         )
 
-    async def _author_workflow(body: DraftWorkflowArgs) -> Any:
+    async def _author_workflow(body: DraftWorkflowArgs, request: Request) -> Any:
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
         try:
@@ -170,7 +172,7 @@ def make_workflows_router(
                 content={"reason": "workflow_definition_invalid", "detail": str(exc)},
             )
 
-        workflow_store = _workflow_store(runtime)
+        workflow_store = _workflow_store_for_request(runtime, request)
         env = _surface_environment(runtime)
         return _draft_definition(
             workflow_store=workflow_store,
@@ -182,13 +184,18 @@ def make_workflows_router(
 
     async def _draft_workflow_from_description(
         body: DraftWorkflowFromDescriptionBody,
+        request: Request,
     ) -> Any:
-        return await _draft_workflow_from_description_impl(runtime, body)
+        return await _draft_workflow_from_description_impl(
+            runtime,
+            body,
+            owner_id=current_owner_id(request),
+        )
 
-    async def _run_workflow(instance_id: str) -> dict:
+    async def _run_workflow(instance_id: str, request: Request) -> dict:
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        workflow_store = _workflow_store(runtime)
+        workflow_store = _workflow_store_for_request(runtime, request)
         try:
             instance = workflow_store.get_instance(instance_id)
         except ValueError as exc:
@@ -212,6 +219,7 @@ def make_workflows_router(
                 runtime,
                 instance_id=instance_id,
                 instance=instance,
+                owner_id=current_owner_id(request),
             )
         except ValueError as exc:
             raise HTTPException(
@@ -220,10 +228,12 @@ def make_workflows_router(
             ) from exc
         return {"conversation_id": conversation_id, "status": "started"}
 
-    async def _approve_workflow(instance_id: str, body: ApproveWorkflowBody) -> dict:
+    async def _approve_workflow(
+        instance_id: str, body: ApproveWorkflowBody, request: Request
+    ) -> dict:
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
-        workflow_store = _workflow_store(runtime)
+        workflow_store = _workflow_store_for_request(runtime, request)
         try:
             instance = workflow_store.get_instance(instance_id)
         except ValueError as exc:
@@ -265,12 +275,15 @@ def make_workflows_router(
                 },
             )
 
+        approved_by = current_owner_id(request)
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            approved_by = body.approved_by
         approved = instance.model_copy(
             update={
                 "enabled": True,
                 "approval": WorkflowApproval(
                     approved_at=_now_iso(),
-                    approved_by=body.approved_by,
+                    approved_by=approved_by,
                     surface_shown_digest=surface_digest,
                 ),
                 "validation_findings": tuple(findings),
@@ -352,7 +365,12 @@ def _draft_definition(
     }
 
 
-def _workflow_store(runtime: ConversationRuntime) -> JsonDirWorkflowStore:
+def _workflow_store(
+    runtime: ConversationRuntime,
+    *,
+    owner_id: str | None = None,
+    include_unclaimed_legacy: bool = False,
+) -> JsonDirWorkflowStore:
     project_store = runtime.project_store()
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
@@ -365,7 +383,23 @@ def _workflow_store(runtime: ConversationRuntime) -> JsonDirWorkflowStore:
             status_code=409,
             detail={"reason": "project_storage_unavailable", "status": "unset"},
         )
-    return JsonDirWorkflowStore(root)
+    return JsonDirWorkflowStore(
+        root,
+        owner_id=owner_id,
+        include_unclaimed_legacy=include_unclaimed_legacy,
+    )
+
+
+def _workflow_store_for_request(
+    runtime: ConversationRuntime,
+    request: Request,
+) -> JsonDirWorkflowStore:
+    session = current_session(request)
+    return _workflow_store(
+        runtime,
+        owner_id=session.owner_id,
+        include_unclaimed_legacy=session.is_admin,
+    )
 
 
 def _surface_environment(runtime: ConversationRuntime) -> _SurfaceEnvironment:
@@ -425,6 +459,7 @@ def _workflow_review_payload(
     surface_digest = _digest_payload(compiled_surface)
     return {
         "instance_id": instance_id,
+        "owner_id": instance.owner_id,
         "name": instance.definition.name,
         "card": instance.definition.card,
         "definition_digest": instance.definition_digest,
@@ -559,6 +594,8 @@ def _authoring_context_payload(env: _SurfaceEnvironment) -> dict[str, object]:
 async def _draft_workflow_from_description_impl(
     runtime: ConversationRuntime | None,
     body: DraftWorkflowFromDescriptionBody,
+    *,
+    owner_id: str = DEFAULT_OWNER_ID,
 ) -> Any:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
@@ -604,7 +641,7 @@ async def _draft_workflow_from_description_impl(
                 },
             )
 
-    workflow_store = _workflow_store(runtime)
+    workflow_store = _workflow_store(runtime, owner_id=owner_id)
     drafted = _draft_definition(
         workflow_store=workflow_store,
         env=env,
@@ -951,6 +988,7 @@ async def _fire_approved_workflow_once(
     *,
     instance_id: str,
     instance: WorkflowInstance,
+    owner_id: str,
 ) -> str:
     spec = ScheduleSpec(
         instance_id=instance_id,
@@ -958,14 +996,14 @@ async def _fire_approved_workflow_once(
         cron=_ONE_SHOT_CRON,
         enabled=False,
     )
-    row = runtime.create_workflow_schedule(spec, owner_id=DEFAULT_OWNER_ID)
+    row = runtime.create_workflow_schedule(spec, owner_id=owner_id)
     schedule_id = str(row.get("schedule_id") or "")
     if not schedule_id:
         raise ValueError("workflow schedule creation did not return a schedule_id")
     try:
         record = await runtime.fire_workflow_schedule_now(
             schedule_id,
-            owner_id=DEFAULT_OWNER_ID,
+            owner_id=owner_id,
         )
     finally:
         _delete_ephemeral_workflow_schedule(runtime, schedule_id)

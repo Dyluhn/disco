@@ -10,6 +10,7 @@
  */
 
 import {
+  agentFetch,
   agentGet,
   agentHttpBase,
   agentLive,
@@ -29,8 +30,6 @@ import type {
   ProjectStorageConfig,
   ProjectStorageSaveInput,
 } from "@/types/project";
-
-const OWNER_ID = (import.meta.env.VITE_OWNER_ID as string | undefined) ?? "local";
 
 // ---- fixture state (offline mode) ------------------------------------------
 // A small in-memory mirror so the Projects UI renders + tests run without a
@@ -89,8 +88,7 @@ export async function listProjects(): Promise<ProjectsList> {
       root: fixtureStorage.projects_root,
     };
   }
-  const params = new URLSearchParams({ owner_id: OWNER_ID });
-  return agentGet<ProjectsList>(`/api/projects?${params.toString()}`);
+  return agentGet<ProjectsList>("/api/projects");
 }
 
 /** Trigger a browser download of the project's workspace zip. Returns nothing
@@ -101,7 +99,7 @@ export async function downloadProject(cid: string): Promise<void> {
     return;
   }
   const url = `${agentHttpBase()}/api/projects/${encodeURIComponent(cid)}/download`;
-  const res = await fetch(url, { headers: { accept: "application/zip" } });
+  const res = await agentFetch(url, { headers: { accept: "application/zip" } });
   if (!res.ok) {
     let reason = `${res.status}`;
     try {
@@ -130,7 +128,7 @@ export async function exportProjectManifest(cid: string): Promise<void> {
     return;
   }
   const url = `${agentHttpBase()}/api/projects/${encodeURIComponent(cid)}/manifest`;
-  const res = await fetch(url, { headers: { accept: "application/json" } });
+  const res = await agentFetch(url, { headers: { accept: "application/json" } });
   if (!res.ok) {
     let reason = `${res.status}`;
     try {
@@ -212,19 +210,18 @@ export async function importProject(input: ProjectImportInput): Promise<ProjectI
     await fixtureDelay();
     throw new Error("Project import requires a live agent server.");
   }
-  const params = new URLSearchParams({ owner_id: OWNER_ID });
-  const url = `${agentHttpBase()}/api/projects/import?${params.toString()}`;
+  const url = `${agentHttpBase()}/api/projects/import`;
   if (input.kind === "zip") {
     const fd = new FormData();
     fd.append("file", input.file);
-    return parseImportResponse(await fetch(url, { method: "POST", body: fd }));
+    return parseImportResponse(await agentFetch(url, { method: "POST", body: fd }));
   }
   const body =
     input.kind === "path"
       ? { path: input.path }
       : { git_url: input.gitUrl };
   return parseImportResponse(
-    await fetch(url, {
+    await agentFetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),

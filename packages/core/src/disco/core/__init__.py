@@ -74,7 +74,7 @@ from .migration import migrate_event
 from .skills import Skill, SkillStore, render_skills_for_prompt, slugify
 from .state import ConversationState
 from .store.base import ConversationSummary, EventFilter, EventStore, Page
-from .store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
+from .store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore, install_owner_id
 from .view import (
     CondensationRequest,
     Condenser,
@@ -103,6 +103,7 @@ __all__ = [
     "ConversationStatus",
     "ConversationSummary",
     "DEFAULT_OWNER_ID",
+    "install_owner_id",
     "DoDPredicate",
     "DoDEvaluator",
     "DoDPredicateResult",

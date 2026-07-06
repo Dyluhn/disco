@@ -95,11 +95,17 @@ class ScheduleService:
         )
         return row.model_dump(mode="json")
 
-    def list_workflow_schedules(self, *, owner_id: str | None = None) -> list[dict]:
+    def list_workflow_schedules(
+        self,
+        *,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
+    ) -> list[dict]:
         return [
             row.model_dump(mode="json")
             for row in self._schedule_manager().list_workflow_schedules(
                 owner_id=owner_id,
+                include_unclaimed_legacy=include_unclaimed_legacy,
             )
         ]
 
@@ -107,12 +113,16 @@ class ScheduleService:
         self,
         *,
         schedule_id: str | None = None,
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
         limit: int = 100,
     ) -> list[dict]:
         return [
             row.model_dump(mode="json")
             for row in self._schedule_manager().list_workflow_schedule_runs(
                 schedule_id=schedule_id,
+                owner_id=owner_id,
+                include_unclaimed_legacy=include_unclaimed_legacy,
                 limit=limit,
             )
         ]
@@ -122,10 +132,12 @@ class ScheduleService:
         schedule_id: str,
         *,
         owner_id: str,
+        include_unclaimed_legacy: bool = False,
     ) -> dict | None:
         row = await self._schedule_manager().fire_workflow_schedule_now(
             schedule_id,
             owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
         )
         if row is None:
             return None

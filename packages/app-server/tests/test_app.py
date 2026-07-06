@@ -538,14 +538,14 @@ async def test_conversations_are_owner_scoped(client, store):
 
 
 def test_delete_is_owner_scoped(client, store):
-    store.create_conversation("c1", owner_id="me", title="x")
-    store.create_conversation("c2", owner_id="other", title="y")
+    store.create_conversation("conv_c1", owner_id="me", title="x")
+    store.create_conversation("conv_c2", owner_id="other", title="y")
 
     # cannot delete another owner's conversation
-    resp = client.delete("/api/conversations/c2", params={"owner_id": "me"})
-    assert resp.json()["deleted"] is False
+    resp = client.delete("/api/conversations/conv_c2", params={"owner_id": "me"})
+    assert resp.status_code == 403
     # can delete own
-    resp = client.delete("/api/conversations/c1", params={"owner_id": "me"})
+    resp = client.delete("/api/conversations/conv_c1", params={"owner_id": "me"})
     assert resp.json()["deleted"] is True
     assert client.get("/api/conversations", params={"owner_id": "me"}).json() == []
 

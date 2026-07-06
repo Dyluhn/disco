@@ -7,16 +7,14 @@ import {
   apiSend,
   fixtureDelay,
   isLive,
-  OWNER_ID,
 } from "./client";
 
 /**
  * Data-access for the conversation library (History). The list is OWNER-SCOPED:
  * the backend filters by owner and never returns another owner's conversations.
- * Live (VITE_API_BASE set) → the app-server GET /api/conversations?owner_id= and
- * DELETE /api/conversations/{id}?owner_id= (the delete is owner-scoped server-
- * side too); otherwise → the in-repo fixture. Components reach this only through
- * hooks.
+ * Live (VITE_API_BASE set) → the app-server filters by the authenticated
+ * session owner; otherwise → the in-repo fixture. Components reach this only
+ * through hooks.
  */
 
 let fixtureStore: ConversationSummary[] = CONVERSATIONS.map((c) => ({ ...c }));
@@ -26,7 +24,7 @@ export async function listConversations(
   spaceId?: string | null,
 ): Promise<ConversationSummary[]> {
   if (isLive()) {
-    const params = new URLSearchParams({ owner_id: OWNER_ID });
+    const params = new URLSearchParams();
     if (spaceId !== undefined) params.set("space_id", spaceId ?? "");
     const rows = await apiGet<ConversationSummary[]>(`/api/conversations?${params}`);
     return rows.map((c) => ({ ...c, title: c.title ?? "(untitled)" }));
@@ -75,10 +73,9 @@ export async function setConversationSpace(
 /** Delete a conversation (destructive). Owner-scoped both client- and server-side. */
 export async function deleteConversation(id: string): Promise<{ id: string }> {
   if (isLive()) {
-    const owner = encodeURIComponent(OWNER_ID);
     await apiSend<{ id: string; deleted: boolean }>(
       "DELETE",
-      `/api/conversations/${encodeURIComponent(id)}?owner_id=${owner}`,
+      `/api/conversations/${encodeURIComponent(id)}`,
     );
     return { id };
   }

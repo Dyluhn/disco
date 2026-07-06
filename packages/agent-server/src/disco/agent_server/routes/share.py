@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from disco.core import DEFAULT_OWNER_ID
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
+from ..auth import current_owner_id
 from ..runtime import ConversationRuntime
 from ..share_viewer import _SHARE_VIEWER_HTML
+from ._common import require_owned_conversation
 
 
 def make_share_router(
@@ -17,7 +18,7 @@ def make_share_router(
     router = APIRouter()
 
     @router.post("/api/conversations/{conversation_id}/share")
-    async def create_share(conversation_id: str) -> dict:
+    async def create_share(conversation_id: str, request: Request) -> dict:
         """Create a revocable share link for a conversation.
 
         Returns 200 with the token (and its public URL) on success, 404 when
@@ -29,8 +30,10 @@ def make_share_router(
             raise HTTPException(
                 status_code=503, detail={"ok": False, "reason": "no_runtime"}
             )
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        owner_id = current_owner_id(request)
         result = await runtime.create_share_link_async(
-            conversation_id, owner_id=DEFAULT_OWNER_ID
+            conversation_id, owner_id=owner_id
         )
         if not result.get("ok"):
             raise HTTPException(
@@ -46,15 +49,15 @@ def make_share_router(
         }
 
     @router.get("/api/share")
-    async def list_share_links() -> dict:
+    async def list_share_links(request: Request) -> dict:
         """List the active share links owned by the default owner. Revoked
         links are filtered out at the store level."""
         if runtime is None:
             return {"links": []}
-        return {"links": runtime.list_share_links(owner_id=DEFAULT_OWNER_ID)}
+        return {"links": runtime.list_share_links(owner_id=current_owner_id(request))}
 
     @router.delete("/api/share/{token}")
-    async def revoke_share(token: str) -> dict:
+    async def revoke_share(token: str, request: Request) -> dict:
         """Revoke a share link. Returns 200 with `revoked: true/false` (the
         `false` case = token didn't exist, was already revoked, or is not
         owned by the caller). Owner-scoped: a caller can only revoke a
@@ -63,11 +66,11 @@ def make_share_router(
             raise HTTPException(
                 status_code=503, detail={"ok": False, "reason": "no_runtime"}
             )
-        ok = runtime.revoke_share_link(token, owner_id=DEFAULT_OWNER_ID)
+        ok = runtime.revoke_share_link(token, owner_id=current_owner_id(request))
         return {"ok": ok, "token": token, "revoked": ok}
 
     @router.get("/api/conversations/{conversation_id}/share/bundle")
-    async def export_share_bundle(conversation_id: str) -> dict:
+    async def export_share_bundle(conversation_id: str, request: Request) -> dict:
         """Build the scrubbed JSON bundle for a conversation without
         issuing a share link. Useful for direct export (download the
         bundle) and for the reviewer's standalone-rung check. The bundle
@@ -76,8 +79,10 @@ def make_share_router(
             raise HTTPException(
                 status_code=503, detail={"ok": False, "reason": "no_runtime"}
             )
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        owner_id = current_owner_id(request)
         result = await runtime.share_export(
-            conversation_id, owner_id=DEFAULT_OWNER_ID
+            conversation_id, owner_id=owner_id
         )
         if not result.get("ok"):
             raise HTTPException(
@@ -87,14 +92,14 @@ def make_share_router(
         return result["bundle"]
 
     @router.post("/api/share/import")
-    async def import_share_bundle(bundle: dict) -> dict:
+    async def import_share_bundle(bundle: dict, request: Request) -> dict:
         """Import an exported bundle as a READ-ONLY local conversation. Untrusted
         input → fail-closed validation + re-scrub on ingest + an importer-minted cid
         + an `origin="imported"` marker the read-only guard keys on. 422 (typed
         reason) on any validation failure — never a partial import."""
         if runtime is None:
             raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
-        result = await runtime.share_import(bundle, owner_id=DEFAULT_OWNER_ID)
+        result = await runtime.share_import(bundle, owner_id=current_owner_id(request))
         if not result.get("ok"):
             raise HTTPException(
                 status_code=422,

@@ -13,10 +13,11 @@ from typing import Any
 from disco.core.evidence.schema import redact
 from disco.core.inspect import inspect_enabled, registry
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
+from ._common import require_owned_conversation
 
 
 def make_debug_router(
@@ -43,13 +44,14 @@ def make_debug_router(
         )
 
     @router.get("/api/debug/trace/{conversation_id}")
-    async def trace(conversation_id: str) -> JSONResponse:
+    async def trace(conversation_id: str, request: Request) -> JSONResponse:
         """The full interleaved routing+span trace for one conversation.
 
         404 when inspect is off, or when no trace exists yet for the id (the
         conversation hasn't made a model call, or it aged out of the ring)."""
         if not inspect_enabled():
             return _disabled()
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         snap = registry().snapshot(conversation_id)
         if snap is None:
             return JSONResponse(
@@ -59,7 +61,7 @@ def make_debug_router(
         return JSONResponse(redact(snap))
 
     @router.get("/api/debug/evidence/{conversation_id}")
-    async def evidence(conversation_id: str) -> JSONResponse:
+    async def evidence(conversation_id: str, request: Request) -> JSONResponse:
         """Bundled, redacted evidence for one conversation: state, event log,
         inspect trace, and project manifest (metadata only — no file contents).
 
@@ -76,6 +78,7 @@ def make_debug_router(
         only structured store data is returned."""
         if not inspect_enabled():
             return _disabled()
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
 
         # Conversation state (reconstructed from the append-only event log).
         state_dict: dict[str, Any] = (

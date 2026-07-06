@@ -13,7 +13,7 @@
  * any host/port without rebaking. Build-time `VITE_*` still wins in dev; in
  * vitest/jsdom there's no global, so this is `{}` and fixture mode is preserved.
  * Legacy `__PMX_ENV` is honored as a fallback (the rename compat path). */
-type RtEnv = { API_BASE?: string; AGENT_BASE?: string; OWNER_ID?: string };
+type RtEnv = { API_BASE?: string; AGENT_BASE?: string };
 const RT: RtEnv =
   (globalThis as { __DISCO_ENV?: RtEnv; __PMX_ENV?: RtEnv }).__DISCO_ENV ??
   (globalThis as { __DISCO_ENV?: RtEnv; __PMX_ENV?: RtEnv }).__PMX_ENV ??
@@ -26,8 +26,9 @@ const BASE = ((RT.API_BASE ?? import.meta.env.VITE_API_BASE) ?? "").replace(/\/+
  * different services/ports. Unset → research stays fixture-backed (offline/tests). */
 const AGENT_BASE = ((RT.AGENT_BASE ?? import.meta.env.VITE_AGENT_BASE) ?? "").replace(/\/+$/, "");
 
-/** The owner whose conversations we read/write (no auth in v1; an explicit id). */
-export const OWNER_ID = RT.OWNER_ID ?? import.meta.env.VITE_OWNER_ID ?? "local";
+const CSRF_HEADER = "X-Disco-CSRF";
+const csrfByBase = new Map<string, string>();
+const sessionInitByBase = new Map<string, Promise<void>>();
 
 /** True when a backend base URL is configured — the api modules call it live. */
 export function isLive(): boolean {
@@ -47,6 +48,14 @@ export function isDemoMode(): boolean {
 export function researchWsUrl(): string | null {
   if (!AGENT_BASE) return null;
   return `${AGENT_BASE.replace(/^http/, "ws")}/ws/research`;
+}
+
+export function ensureAgentSession(): Promise<void> {
+  return ensureSessionFor(AGENT_BASE);
+}
+
+export function ensureApiSession(): Promise<void> {
+  return ensureSessionFor(BASE);
 }
 
 /** True when the agent-server is configured — the Build surface runs live. */
@@ -84,22 +93,44 @@ export function agentHttpBase(): string {
 }
 
 /** A GET against the AGENT-server (e.g. the driver model catalogue). */
-export function agentGet<T>(path: string): Promise<T> {
-  return fetch(`${AGENT_BASE}${path}`, { headers: { accept: "application/json" } }).then(parse<T>);
+export async function agentGet<T>(path: string): Promise<T> {
+  return agentFetch(path, { headers: { accept: "application/json" } }).then(parse<T>);
 }
 
 /** A REST call against the AGENT-server (loops/kill) — distinct from apiSend, which
  * targets the app-server (settings/library). */
-export function agentSend<T>(
+export async function agentSend<T>(
   method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<T> {
-  return fetch(`${AGENT_BASE}${path}`, {
+  return agentFetch(path, {
     method,
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   }).then(parse<T>);
+}
+
+export async function agentFetch(pathOrUrl: string, init: RequestInit = {}): Promise<Response> {
+  return authFetch(AGENT_BASE, pathOrUrl, init);
+}
+
+export async function apiFetch(pathOrUrl: string, init: RequestInit = {}): Promise<Response> {
+  return authFetch(BASE, pathOrUrl, init);
+}
+
+export async function previewBootstrapUrl(
+  cid: string,
+  port: number,
+  targetPath = "/",
+): Promise<string | null> {
+  if (!agentLive()) return previewHostUrl(cid, port);
+  const result = await agentSend<{ bootstrap_url: string }>(
+    "POST",
+    `/conversations/${encodeURIComponent(cid)}/preview/capability`,
+    { port, target_path: targetPath },
+  );
+  return result.bootstrap_url;
 }
 
 /** An API error that carries the real backend message (surfaced to the UI). */
@@ -127,20 +158,88 @@ async function parse<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function apiGet<T>(path: string): Promise<T> {
-  return fetch(`${BASE}${path}`, { headers: { accept: "application/json" } }).then(parse<T>);
+export async function apiGet<T>(path: string): Promise<T> {
+  return apiFetch(path, { headers: { accept: "application/json" } }).then(parse<T>);
 }
 
-export function apiSend<T>(
+export async function apiSend<T>(
   method: "POST" | "PUT" | "PATCH" | "DELETE",
   path: string,
   body?: unknown,
 ): Promise<T> {
-  return fetch(`${BASE}${path}`, {
+  return apiFetch(path, {
     method,
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   }).then(parse<T>);
+}
+
+async function ensureSessionFor(base: string): Promise<void> {
+  if (!base) return;
+  const existing = sessionInitByBase.get(base);
+  if (existing) return existing;
+  const pending = initializeSession(base).finally(() => {
+    if (!csrfByBase.has(base)) sessionInitByBase.delete(base);
+  });
+  sessionInitByBase.set(base, pending);
+  return pending;
+}
+
+async function initializeSession(base: string): Promise<void> {
+  const current = await fetch(`${base}/api/auth/session`, {
+    credentials: "include",
+    headers: { accept: "application/json" },
+  });
+  if (current.ok) {
+    const body = await current.json().catch(() => null) as
+      | { authenticated?: boolean; csrf_token?: string }
+      | null;
+    if (body?.authenticated && body.csrf_token) {
+      csrfByBase.set(base, body.csrf_token);
+      return;
+    }
+  }
+  let minted = await fetch(`${base}/api/auth/mint`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: "{}",
+  });
+  if (minted.status === 401) {
+    const pairing = await fetch(`${base}/api/auth/pairing-token`, {
+      credentials: "include",
+      headers: { accept: "application/json" },
+    });
+    if (pairing.ok) {
+      const body = await pairing.json().catch(() => null) as
+        | { pairing_token?: string }
+        | null;
+      if (body?.pairing_token) {
+        minted = await fetch(`${base}/api/auth/mint`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify({ pairing_token: body.pairing_token }),
+        });
+      }
+    }
+  }
+  if (!minted.ok) throw new ApiError("auth mint failed", minted.status);
+  const body = await minted.json() as { csrf_token?: string };
+  if (!body.csrf_token) throw new ApiError("auth mint missing csrf", minted.status);
+  csrfByBase.set(base, body.csrf_token);
+}
+
+async function authFetch(base: string, pathOrUrl: string, init: RequestInit): Promise<Response> {
+  await ensureSessionFor(base);
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  if (base && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    const csrf = csrfByBase.get(base);
+    if (csrf) headers.set(CSRF_HEADER, csrf);
+  }
+  const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${base}${pathOrUrl}`;
+  return fetch(url, { ...init, headers, credentials: "include" });
 }
 
 /** A small artificial delay for the fixture paths (keeps loading states visible). */

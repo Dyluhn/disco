@@ -25,7 +25,7 @@
 import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { agentHttpBase, agentLive } from "@/api/client";
+import { agentFetch, agentHttpBase, agentLive } from "@/api/client";
 import { useTemplates } from "@/hooks/useTemplates";
 import { deckPdfCapableBackend } from "@/lib/isolation";
 import { TemplatePicker } from "@/components/research/TemplatePicker";
@@ -89,7 +89,7 @@ export function DeckExportBar({
   const [sandboxBackend, setSandboxBackend] = useState<string | null>(null);
   useEffect(() => {
     if (!conversationId || !agentLive()) return;
-    void fetch(`${agentHttpBase()}/conversations/${conversationId}/state`)
+    void agentFetch(`/conversations/${conversationId}/state`)
       .then((r) => r.json())
       .then((s: { sandbox_backend?: string }) => setSandboxBackend(s.sandbox_backend ?? null))
       .catch(() => {});
@@ -111,7 +111,7 @@ export function DeckExportBar({
     setExportNotice(null);
     let res: Response;
     try {
-      res = await fetch(exportHref(fmt), { headers: { accept: "*/*" } });
+      res = await agentFetch(exportHref(fmt), { headers: { accept: "*/*" } });
     } catch {
       setExportNotice("Couldn't reach the server to export the deck. Please retry.");
       return;

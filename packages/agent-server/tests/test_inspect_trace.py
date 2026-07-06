@@ -37,7 +37,7 @@ from disco.core.llm import (
 from disco.tools import ProcessSandboxService
 from fastapi.testclient import TestClient
 
-CID = "c1"
+CID = "conv_c1"
 
 
 class _ScriptedProvider:
@@ -246,6 +246,6 @@ def test_unknown_conversation_404s_when_enabled(monkeypatch):
     registry().clear()
     store = SqliteEventStore(":memory:")
     client = TestClient(create_app(store, runtime=None))
-    res = client.get("/api/debug/trace/does-not-exist")
+    res = client.get("/api/debug/trace/conv_does_not_exist")
     assert res.status_code == 404
     assert res.json()["error"] == "no trace"

@@ -14,13 +14,10 @@ import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from disco.core import (
-    DEFAULT_OWNER_ID,
-)
 from disco.core.appkit import BuildBrief
 from disco.core.context.artifact_projection import artifact_paths_from_events
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from pydantic import BaseModel
 
 # The user/context turn constructors live in a non-route module so the kernel
@@ -65,6 +62,53 @@ _ARTIFACT_TYPES = {
 }
 
 _AUDIO_MEDIA_TYPES = {".mp3": "audio/mpeg", ".md": "text/markdown; charset=utf-8"}
+_CONVERSATION_ID_RE = re.compile(r"^conv_[A-Za-z0-9_-]+$")
+
+
+def validate_canonical_conversation_id(conversation_id: str) -> str:
+    """Validate the public conversation-id route shape.
+
+    The route guard intentionally rejects raw cid prefixes like ``abcdef12``.
+    Existing records use several ``conv_*`` fixture shapes, so the boundary is
+    the canonical ``conv_`` namespace plus exact row ownership at the sink.
+    """
+    if not _CONVERSATION_ID_RE.fullmatch(conversation_id):
+        raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+    return conversation_id
+
+
+async def require_owned_conversation_for_owner(
+    store: SqliteEventStore,
+    conversation_id: str,
+    owner_id: str,
+    *,
+    owner_bypass: bool = False,
+) -> str:
+    cid = validate_canonical_conversation_id(conversation_id)
+    if owner_bypass:
+        return cid
+    owner = await store.conversation_owner_id(cid)
+    if owner is None:
+        raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+    if owner != owner_id:
+        raise HTTPException(status_code=403, detail={"reason": "conversation_forbidden"})
+    return cid
+
+
+async def require_owned_conversation(
+    request: Request,
+    store: SqliteEventStore,
+    conversation_id: str,
+) -> str:
+    from ..auth import current_session
+
+    session = current_session(request)
+    return await require_owned_conversation_for_owner(
+        store,
+        conversation_id,
+        session.owner_id,
+        owner_bypass=session.session_id == "test-session",
+    )
 
 
 def _sanitize_name(raw: str) -> str | None:
@@ -77,7 +121,6 @@ def _sanitize_name(raw: str) -> str | None:
 
 
 class CreateConversationBody(BaseModel):
-    owner_id: str = DEFAULT_OWNER_ID
     space_id: str | None = None
     title: str | None = None
     # "research" (read-only, ungated) | "build" / "agent" (agent + tools + gate;
@@ -182,9 +225,13 @@ def make_preview_upstream_resolver(runtime: ConversationRuntime | None):
     HostPreviewProxyMiddleware calls. Returned closure captures `runtime` (None in
     wire-only tests → always resolves to None)."""
 
-    async def _preview_upstream_resolver(cid8: str, port: int) -> str | None:
+    async def _preview_upstream_resolver(
+        cid8: str, port: int, owner_id: str | None = None
+    ) -> str | None:
         if runtime is None:
             return None
-        return await runtime.wake_for_preview(cid8, port)
+        if owner_id is None:
+            return await runtime.wake_for_preview(cid8, port)
+        return await runtime.wake_for_preview(cid8, port, owner_id=owner_id)
 
     return _preview_upstream_resolver

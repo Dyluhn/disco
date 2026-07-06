@@ -17,7 +17,7 @@ from disco.core import (
 from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
-from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
 from ..runtime import ConversationRuntime
@@ -28,6 +28,7 @@ from ._common import (
     _MAX_FILE_BYTES,
     _MAX_FILES_PER_REQUEST,
     _declared_artifacts,
+    require_owned_conversation,
     _reject_if_imported,
     _sanitize_name,
 )
@@ -87,6 +88,7 @@ def make_files_router(
     @router.post("/conversations/{conversation_id}/files")
     async def upload_files(
         conversation_id: str,
+        request: Request,
         files: Annotated[list[UploadFile], File()],
     ) -> JSONResponse:
         """Upload files into the conversation's sandbox under uploads/.
@@ -94,6 +96,7 @@ def make_files_router(
         Returns 200 {"saved": [...], "rejected": [...]} unless ALL files are
         rejected (413).  Allowed in every state except terminal ERROR.
         """
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         state = await store.get_state(conversation_id)
         if state.execution_status == ConversationStatus.ERROR:
@@ -223,6 +226,7 @@ def make_files_router(
     async def artifact_file(
         conversation_id: str,
         path: str,
+        request: Request,
         inline: bool = Query(default=False),
     ) -> Response:
         """Download a generated artifact by its workspace-relative path.
@@ -238,6 +242,7 @@ def make_files_router(
         instance's APIs.  Only .html is allowed in inline mode — all other extensions
         still 404 on ?inline=true so the inline allowlist stays minimal.
         The default (no param) is unchanged: always attachment."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         norm = posixpath.normpath(path)
         if posixpath.isabs(norm) or norm.startswith(".."):
             raise HTTPException(status_code=404)

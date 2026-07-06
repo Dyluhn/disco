@@ -23,6 +23,7 @@ from pathlib import Path
 import httpx
 import pytest
 from disco.agent_server import ConversationRuntime
+from disco.agent_server.auth import AgentAuthMiddleware
 from disco.agent_server.build_kernel.pi_kernel import PiKernel
 from disco.agent_server.pi_inference import PiInferenceTokenStore
 from disco.agent_server.routes.debug import make_debug_router
@@ -35,7 +36,7 @@ from fastapi import FastAPI
 
 pytestmark = pytest.mark.asyncio
 
-CID = "c-inspect"
+CID = "conv_c_inspect"
 KERNEL = "k-inspect"
 MODEL_KEY = "m"
 
@@ -82,7 +83,7 @@ class _IdleProvider:
 
 async def _post(app, kernel_id, tool, token, body):
     transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 5555))
-    async with httpx.AsyncClient(transport=transport, base_url="http://gw.test") as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
         return await c.post(
             f"/internal/pi-kernel/{kernel_id}/tools/{tool}",
             json=body,
@@ -110,6 +111,7 @@ async def test_inspect_trace_shows_the_nine_pikernel_spans(
     rt.attach_pi_token_store(token_store)
 
     app = FastAPI()
+    app.add_middleware(AgentAuthMiddleware, store=store)
     app.include_router(make_pi_tools_router(token_store, rt))
     app.include_router(make_debug_router(store, rt))
 
@@ -162,8 +164,8 @@ async def test_inspect_trace_shows_the_nine_pikernel_spans(
         await kernel.cancel(CID)
 
     # The real debug-trace endpoint shows all nine span names for this conversation.
-    transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 5555))
-    async with httpx.AsyncClient(transport=transport, base_url="http://gw.test") as c:
+    transport = httpx.ASGITransport(app=app, client=("testclient", 5555))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         resp = await c.get(f"/api/debug/trace/{CID}")
     assert resp.status_code == 200
     span_names = {s.get("span") for s in resp.json()["spans"]}

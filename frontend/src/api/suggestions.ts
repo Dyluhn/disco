@@ -1,4 +1,4 @@
-import { agentHttpBase } from "@/api/client";
+import { agentFetch } from "@/api/client";
 import type { SuggestionSurface } from "@/data/suggestions";
 
 type ApiSuggestionSurface = "research" | "build" | "agent";
@@ -19,7 +19,7 @@ export async function fetchSuggestionPrompts(
   signal?: AbortSignal,
 ): Promise<SuggestionResponse> {
   const params = new URLSearchParams({ surface: apiSurface(surface) });
-  const res = await fetch(`${agentHttpBase()}/api/suggestions?${params.toString()}`, {
+  const res = await agentFetch(`/api/suggestions?${params.toString()}`, {
     headers: { accept: "application/json" },
     signal,
   });

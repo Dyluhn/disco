@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
-from disco.core import DEFAULT_OWNER_ID, DeliverableEvent, EventSource, LLMMessage, MessageEvent
-from disco.core.store.sqlite import SqliteEventStore
+from disco.core import DeliverableEvent, EventSource, LLMMessage, MessageEvent
+from disco.core.auth import AuthSession
+from disco.core.store.sqlite import SqliteEventStore, install_owner_id
 from disco.tools.projects import StorageStatus, aiter_zip_workspace
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -23,6 +24,8 @@ from starlette.datastructures import UploadFile
 
 from ..runtime import ConversationRuntime
 from ..title_service import fallback_title
+from ..auth import current_owner_id, current_session, require_admin_session
+from ._common import require_owned_conversation
 
 _MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024
 _MAX_IMPORT_TREE_BYTES = 200 * 1024 * 1024
@@ -260,6 +263,7 @@ async def _parse_import_source(request: Request) -> _ImportSource:
     if len(supplied) != 1:
         _reject_import(400, "invalid_request", "supply exactly one of path or git_url")
     if isinstance(path_value, str) and path_value.strip():
+        require_admin_session(request)
         root = Path(path_value).expanduser()
         if not root.exists():
             _reject_import(400, "path_not_found", f"path does not exist: {path_value}")
@@ -305,6 +309,67 @@ def _import_message(stats: _ImportStats, source_label: str) -> str:
         f"Imported {stats.files} files from {source_label}; "
         f"largest: {largest}. The workspace is already pre-populated."
     )
+
+
+def _project_owner_for_session(
+    raw_owner_id: str | None,
+    session: AuthSession,
+    *,
+    legacy_unclaimed_owner: bool = False,
+) -> str | None:
+    owner_id = raw_owner_id.strip() if isinstance(raw_owner_id, str) else ""
+    legacy_unclaimed = legacy_unclaimed_owner or not owner_id
+    effective_owner = owner_id or install_owner_id()
+    if effective_owner != session.owner_id:
+        return None
+    if legacy_unclaimed and not session.is_admin:
+        return None
+    return effective_owner
+
+
+async def _handle_list_projects(
+    request: Request,
+    *,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+) -> dict:
+    session = current_session(request)
+    owner_id = session.owner_id
+    ps = runtime.project_store() if runtime is not None else None
+    if ps is None:
+        return {"projects": [], "status": StorageStatus.UNSET.value}
+    status = ps.status()
+    if status != StorageStatus.OK:
+        return {"projects": [], "status": status.value, "root": str(ps.root or "")}
+    records = ps.list_projects()
+    summaries = await store.list_conversation_summaries(
+        owner_id=owner_id, limit=500, cursor=None
+    )
+    by_id = {s.conversation_id: s for s in summaries}
+    projects = []
+    for r in records:
+        record_owner = _project_owner_for_session(
+            r.owner_id,
+            session,
+            legacy_unclaimed_owner=r.legacy_unclaimed_owner,
+        )
+        if record_owner is None:
+            continue
+        s = by_id.get(r.conversation_id)
+        projects.append(
+            {
+                "id": r.conversation_id,
+                "owner_id": record_owner,
+                "title": (s.title if s else None) or r.title or "(untitled)",
+                "surface": (s.surface if s else None) or "build",
+                "created_at": (s.created_at if s else None) or r.created_at,
+                "last_snapshot_at": r.last_snapshot_at,
+                "file_count": r.file_count,
+                "total_bytes": r.total_bytes,
+                "files_missing": r.files_missing,
+            }
+        )
+    return {"projects": projects, "status": status.value, "root": str(ps.root or "")}
 
 
 async def _handle_import_project(
@@ -408,49 +473,17 @@ def make_projects_router(
 
     @router.get("/api/projects")
     async def list_projects(
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
     ) -> dict:
         """List Build projects under the configured projects_root, joined with
         their conversation metadata (title/created_at). Returns an empty list
         with a clear `status` field when the storage isn't configured/valid —
         graceful empty, never crash."""
-        ps = runtime.project_store() if runtime is not None else None
-        if ps is None:
-            return {"projects": [], "status": StorageStatus.UNSET.value}
-        status = ps.status()
-        if status != StorageStatus.OK:
-            return {"projects": [], "status": status.value, "root": str(ps.root or "")}
-        records = ps.list_projects()
-        # cross-reference with conversations so the row title/created_at always
-        # come from the authoritative store (manifest can drift on rename).
-        summaries = await store.list_conversation_summaries(
-            owner_id=owner_id, limit=500, cursor=None
-        )
-        by_id = {s.conversation_id: s for s in summaries}
-        projects = []
-        for r in records:
-            s = by_id.get(r.conversation_id)
-            projects.append(
-                {
-                    "id": r.conversation_id,
-                    "owner_id": r.owner_id or (s.owner_id if s else owner_id),
-                    "title": (s.title if s else None) or r.title or "(untitled)",
-                    # Surface so the Projects list resumes each row on the right
-                    # surface ("agent" → /agent/:cid, else /build/:cid). Build-like
-                    # surfaces are the only ones that snapshot, so default to "build".
-                    "surface": (s.surface if s else None) or "build",
-                    "created_at": (s.created_at if s else None) or r.created_at,
-                    "last_snapshot_at": r.last_snapshot_at,
-                    "file_count": r.file_count,
-                    "total_bytes": r.total_bytes,
-                    "files_missing": r.files_missing,
-                }
-            )
-        return {"projects": projects, "status": status.value, "root": str(ps.root or "")}
+        return await _handle_list_projects(request, store=store, runtime=runtime)
 
     @router.post("/api/projects/backfill-titles")
     async def backfill_titles(
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
         retitle_fallbacks: bool = Query(default=False),
     ) -> dict:
         """Maintenance: title any conversations still showing ``(untitled)`` — those
@@ -462,6 +495,7 @@ def make_projects_router(
         ``retitle_fallbacks=true`` additionally upgrades stored fallback-clamp
         titles (a question cut off mid-sentence) to real summarized titles — the
         repair pass for PDF covers minted before the summarizer retry existed."""
+        owner_id = current_owner_id(request)
         if runtime is None:
             return {"titled": {}, "scanned": 0, "status": "no-runtime"}
         summaries = await store.list_conversation_summaries(
@@ -478,19 +512,20 @@ def make_projects_router(
     @router.post("/api/projects/import")
     async def import_project(
         request: Request,
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
     ) -> dict:
         """Create a new Build conversation whose ProjectStore workspace is seeded
         from a zip upload, local directory, or shallow git clone."""
+        owner_id = current_owner_id(request)
         return await _handle_import_project(
             request, owner_id=owner_id, store=store, runtime=runtime
         )
 
     @router.get("/api/projects/{conversation_id}/download")
-    async def download_project(conversation_id: str) -> StreamingResponse:
+    async def download_project(conversation_id: str, request: Request) -> StreamingResponse:
         """Stream a zip of the project's workspace. 404 with a specific reason
         when the storage is unconfigured / the project is unknown / the files
         have been deleted under the manifest."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         ps = runtime.project_store() if runtime is not None else None
         if ps is None or ps.status() != StorageStatus.OK:
             raise HTTPException(
@@ -500,6 +535,15 @@ def make_projects_router(
         record = ps.get(conversation_id)
         if record is None:
             raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
+        if (
+            _project_owner_for_session(
+                record.owner_id,
+                current_session(request),
+                legacy_unclaimed_owner=record.legacy_unclaimed_owner,
+            )
+            is None
+        ):
+            raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
         if record.files_missing:
             raise HTTPException(status_code=404, detail={"reason": "files_missing"})
         workspace = ps.path_for(conversation_id)
@@ -515,17 +559,27 @@ def make_projects_router(
         )
 
     @router.get("/api/projects/{conversation_id}/manifest")
-    async def project_manifest(conversation_id: str) -> dict:
+    async def project_manifest(conversation_id: str, request: Request) -> dict:
         """Export a JSON manifest of the project: metadata, the file tree (path +
         bytes), and the agent's last deliverable handoff (title/path/kind +
         deployment_url). The honest, portable description of what the run produced —
         the companion to the workspace zip download."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         ps = runtime.project_store() if runtime is not None else None
         if ps is None or ps.status() != StorageStatus.OK:
             raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
         record = ps.get(conversation_id)
         if record is None:
             raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
+        if (
+            _project_owner_for_session(
+                record.owner_id,
+                current_session(request),
+                legacy_unclaimed_owner=record.legacy_unclaimed_owner,
+            )
+            is None
+        ):
+            raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
         # file tree (workspace-relative path + size), skipping the codeact scratch files
         files: list[dict] = []
         workspace = ps.path_for(conversation_id)
@@ -559,16 +613,29 @@ def make_projects_router(
         }
 
     @router.delete("/api/projects/{conversation_id}")
-    async def delete_project(conversation_id: str) -> dict:
+    async def delete_project(conversation_id: str, request: Request) -> dict:
         """Remove a project's manifest + workspace from disk. The conversation
         events in SQLite are left alone (deleting those is a separate concern,
         and matches the History surface's existing delete semantics)."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         ps = runtime.project_store() if runtime is not None else None
         if ps is None or ps.status() != StorageStatus.OK:
             raise HTTPException(
                 status_code=404,
                 detail={"reason": "storage_unavailable"},
             )
+        record = ps.get(conversation_id)
+        if record is None:
+            return {"id": conversation_id, "deleted": False}
+        if (
+            _project_owner_for_session(
+                record.owner_id,
+                current_session(request),
+                legacy_unclaimed_owner=record.legacy_unclaimed_owner,
+            )
+            is None
+        ):
+            raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
         deleted = ps.delete(conversation_id)
         return {"id": conversation_id, "deleted": deleted}
 

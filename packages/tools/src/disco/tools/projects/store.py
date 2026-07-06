@@ -45,6 +45,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from disco.core.owners import install_owner_id
+
 # Used both as the manifest filename and the workspace subdirectory; constants
 # here so the agent-server doesn't depend on string literals scattered around.
 _MANIFEST = "manifest.json"
@@ -132,6 +134,7 @@ class ProjectRecord:
     file_count: int
     total_bytes: int
     files_missing: bool  # True iff manifest exists but workspace/ is gone or empty
+    legacy_unclaimed_owner: bool = False
 
 
 @dataclass(frozen=True)
@@ -151,6 +154,13 @@ class VersionRecord:
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _manifest_owner(data: dict[str, Any]) -> tuple[str, bool]:
+    raw_owner = data.get("owner_id")
+    if isinstance(raw_owner, str) and raw_owner.strip():
+        return raw_owner.strip(), False
+    return install_owner_id(), True
 
 
 def _safe_segment(s: str) -> bool:
@@ -553,16 +563,18 @@ class ProjectStore:
                 or not workspace.is_dir()
                 or not any(workspace.rglob("*"))
             )
+            owner_id, legacy_unclaimed = _manifest_owner(data)
             records.append(
                 ProjectRecord(
                     conversation_id=entry.name,
                     title=data.get("title"),
-                    owner_id=data.get("owner_id"),
+                    owner_id=owner_id,
                     created_at=data.get("created_at"),
                     last_snapshot_at=data.get("last_snapshot_at"),
                     file_count=int(data.get("file_count") or 0),
                     total_bytes=int(data.get("total_bytes") or 0),
                     files_missing=files_missing,
+                    legacy_unclaimed_owner=legacy_unclaimed,
                 )
             )
         # Newest last-snapshot first; entries with no timestamp sort last.
@@ -586,15 +598,17 @@ class ProjectStore:
             or not workspace.is_dir()
             or not any(workspace.rglob("*"))
         )
+        owner_id, legacy_unclaimed = _manifest_owner(data)
         return ProjectRecord(
             conversation_id=conversation_id,
             title=data.get("title"),
-            owner_id=data.get("owner_id"),
+            owner_id=owner_id,
             created_at=data.get("created_at"),
             last_snapshot_at=data.get("last_snapshot_at"),
             file_count=int(data.get("file_count") or 0),
             total_bytes=int(data.get("total_bytes") or 0),
             files_missing=files_missing,
+            legacy_unclaimed_owner=legacy_unclaimed,
         )
 
     def write_manifest(
@@ -632,7 +646,7 @@ class ProjectStore:
         caller (the agent-server) makes. Returns True if anything was removed."""
         if self._root is None:
             return False
-        project_dir = self._root / conversation_id
+        project_dir = self._project_dir(conversation_id)
         if not project_dir.exists():
             return False
         shutil.rmtree(project_dir)

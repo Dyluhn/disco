@@ -4,7 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Check, ChevronDown, ExternalLink, History, MonitorPlay, MousePointer2, Pencil, RotateCw, Undo2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { deriveFiles, deriveSrcDoc } from "@/lib/buildTrace";
-import { agentHttpBase, ApiError, previewHostUrl } from "@/api/client";
+import { agentHttpBase, ApiError, previewBootstrapUrl, previewHostUrl } from "@/api/client";
 import { restartPreview, restoreWorkspaceVersion, type WorkspaceVersion } from "@/api/agent";
 import { useBuildPreview } from "@/hooks/useBuildPreview";
 import { useWorkspaceVersions } from "@/hooks/useWorkspaceVersions";
@@ -440,7 +440,25 @@ export function PreviewPane({
       {restoreNotice.text}
     </div>
   ) : null;
-  const proxySrc = cid ? `${previewHostUrl(cid, previewPort)}/?r=${reloadKey}` : null;
+  const rawProxySrc = cid ? `${previewHostUrl(cid, previewPort)}/?r=${reloadKey}` : null;
+  const [proxySrc, setProxySrc] = useState<string | null>(rawProxySrc);
+  useEffect(() => {
+    let cancelled = false;
+    if (!cid) {
+      setProxySrc(null);
+      return;
+    }
+    void previewBootstrapUrl(cid, previewPort, `/?r=${reloadKey}`)
+      .then((url) => {
+        if (!cancelled) setProxySrc(url ?? rawProxySrc);
+      })
+      .catch(() => {
+        if (!cancelled) setProxySrc(rawProxySrc);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cid, previewPort, rawProxySrc, reloadKey]);
   const liveIframeRef = useRef<HTMLIFrameElement | null>(null);
   // E3 — Firefox-safe path-based route. The origin-true `{cid8}-{port}.localhost`
   // URL above is the most correct (separate origin, dev-server assets resolve

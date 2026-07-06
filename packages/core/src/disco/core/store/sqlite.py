@@ -25,15 +25,12 @@ from typing import TYPE_CHECKING
 
 from ..events import Event, EventAdapter, event_to_json_dict
 from ..migration import migrate_event
+from ..owners import DEFAULT_OWNER_ID, install_owner_id
 from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
 
 if TYPE_CHECKING:  # annotations only; runtime uses a local import (dod.py is a leaf)
     from ..dod import DoDSpec
-
-# v1 single-user: every conversation carries an owner_id from day one (§6.1).
-# It is a constant until the auth module is enabled (BoD §4.1).
-DEFAULT_OWNER_ID = "local"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -600,6 +597,18 @@ class SqliteEventStore:
         ).fetchone()
         return row is not None
 
+    async def conversation_owner_id(self, conversation_id: str) -> str | None:
+        return self.conversation_owner_id_sync(conversation_id)
+
+    def conversation_owner_id_sync(self, conversation_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT owner_id FROM conversations WHERE conversation_id = ? LIMIT 1", (conversation_id,)
+        ).fetchone()
+        return row["owner_id"] if row is not None else None
+
+    async def conversation_owned_by(self, conversation_id: str, owner_id: str) -> bool:
+        return await self.conversation_owner_id(conversation_id) == owner_id
+
     async def list_conversations(
         self, *, owner_id: str, limit: int = 50, cursor: str | None = None
     ) -> list[str]:
@@ -698,14 +707,15 @@ class SqliteEventStore:
                     (clean_space_id or None, conversation_id),
                 )
 
-    async def clear_space_members(self, space_id: str) -> None:
-        """Clear all conversations currently filed in a deleted Space."""
+    async def clear_space_members(self, space_id: str, *, owner_id: str | None = None) -> None:
+        sql = "UPDATE conversations SET space_id = NULL WHERE space_id = ?"
+        params: tuple[str, ...] = (space_id,)
+        if owner_id is not None:
+            sql += " AND owner_id = ?"
+            params = (space_id, owner_id)
         async with self._write_lock:
             with self._conn:
-                self._conn.execute(
-                    "UPDATE conversations SET space_id = NULL WHERE space_id = ?",
-                    (space_id,),
-                )
+                self._conn.execute(sql, params)
 
     def conversation_origin(self, conversation_id: str) -> str | None:
         """The `origin` marker ("imported" or None) — the server-edge gate for

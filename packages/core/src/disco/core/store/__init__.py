@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from .base import ConversationSummary, EventFilter, EventStore, Page
-from .sqlite import DEFAULT_OWNER_ID, SqliteEventStore
+from .sqlite import DEFAULT_OWNER_ID, SqliteEventStore, install_owner_id
 
 __all__ = [
     "DEFAULT_OWNER_ID",
@@ -12,4 +12,5 @@ __all__ = [
     "EventStore",
     "Page",
     "SqliteEventStore",
+    "install_owner_id",
 ]

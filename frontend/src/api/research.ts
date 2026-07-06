@@ -9,7 +9,7 @@
  * Unset → it replays the in-repo fixture (offline / tests), so the UI and its
  * tests run with no backend.
  */
-import { researchWsUrl } from "@/api/client";
+import { ensureAgentSession, researchWsUrl } from "@/api/client";
 import { rrfAnswer, sheetDemoAnswer } from "@/fixtures/answers";
 import type { AnswerBlock, GroundedAnswer, ReScope, StreamFrame } from "@/types/grounded";
 
@@ -108,38 +108,47 @@ function subscribeLive(
   onFrame: (f: StreamFrame) => void,
 ): StreamHandle {
   let closed = false;
-  const ws = new WebSocket(url);
-  ws.onopen = () => {
-    ws.send(
-      JSON.stringify({
-        query: scope.query,
-        drop_weak: scope.drop_weak ?? false,
-        domains_deny: scope.domains_deny ?? [],
-        model_override: scope.model_override ?? null, // the leader pill → answerer
-        think: scope.think ?? false, // reasoning mode for the answerer (Think toggle)
-        // G1/DR-4: thread the pre-created cid so the server loads upload seeds.
-        // null → OFF path (server-side byte-identical to pre-DR-4 code).
-        conversation_id: scope.conversation_id ?? null,
-        sources: scope.sources ?? [],
-      }),
-    );
-  };
-  ws.onmessage = (ev) => {
+  let ws: WebSocket | null = null;
+  function openSocket() {
     if (closed) return;
-    try {
-      onFrame(JSON.parse(ev.data) as StreamFrame);
-    } catch {
-      onFrame({ type: "error", message: "malformed frame from server" });
-    }
-  };
-  // A transport failure surfaces as the UI's clean error state (never silent).
-  ws.onerror = () => {
-    if (!closed) onFrame({ type: "error", message: "connection to the research server failed" });
-  };
+    ws = new WebSocket(url);
+    ws.onopen = () => {
+      ws?.send(
+        JSON.stringify({
+          query: scope.query,
+          drop_weak: scope.drop_weak ?? false,
+          domains_deny: scope.domains_deny ?? [],
+          model_override: scope.model_override ?? null, // the leader pill → answerer
+          think: scope.think ?? false, // reasoning mode for the answerer (Think toggle)
+          // G1/DR-4: thread the pre-created cid so the server loads upload seeds.
+          // null → OFF path (server-side byte-identical to pre-DR-4 code).
+          conversation_id: scope.conversation_id ?? null,
+          sources: scope.sources ?? [],
+        }),
+      );
+    };
+    ws.onmessage = (ev) => {
+      if (closed) return;
+      try {
+        onFrame(JSON.parse(ev.data) as StreamFrame);
+      } catch {
+        onFrame({ type: "error", message: "malformed frame from server" });
+      }
+    };
+    ws.onerror = () => {
+      if (!closed) onFrame({ type: "error", message: "research stream connection failed" });
+    };
+    ws.onclose = () => {
+      /* terminal */
+    };
+  }
+  void ensureAgentSession().then(openSocket).catch(() => {
+    if (!closed) onFrame({ type: "error", message: "research auth failed" });
+  });
   return {
     cancel: () => {
       closed = true;
-      ws.close();
+      ws?.close();
     },
   };
 }

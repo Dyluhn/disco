@@ -188,19 +188,22 @@ async def test_port_proxy_route_auth_and_defense():
     from disco.tools.sandbox._container import USER_PORTS
     from fastapi.testclient import TestClient
 
-    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    store = SqliteEventStore(":memory:")
+    cid = "conv_x"
+    store.create_conversation(cid, owner_id="local")
+    rt = ConversationRuntime(store)
     app = create_app(rt._store, runtime=rt)
     client = TestClient(app)
 
     # 404 for ports NOT in USER_PORTS (defense stays in the app layer)
     assert 9999 not in USER_PORTS
-    assert client.get("/conversations/x/port/9999/").status_code == 404
+    assert client.get(f"/conversations/{cid}/port/9999/").status_code == 404
     # 404 for INTERNAL_PORTS (8899)
     assert 8899 not in USER_PORTS
-    assert client.get("/conversations/x/port/8899/").status_code == 404
+    assert client.get(f"/conversations/{cid}/port/8899/").status_code == 404
 
     # 503 if the upstream isn't available (box down / no executor)
-    assert client.get("/conversations/x/port/3000/").status_code == 503
+    assert client.get(f"/conversations/{cid}/port/3000/").status_code == 503
 
     # 200 (proxied) if available. WALK-10: the route now wakes a suspended sandbox via
     # runtime.wake_for_preview (async) instead of the passive port_upstream, so stub that.
@@ -213,7 +216,7 @@ async def test_port_proxy_route_auth_and_defense():
             mock_get.return_value = unittest.mock.MagicMock(
                 status_code=200, content=b"hello", headers={"content-type": "text/plain"}
             )
-            resp = client.get("/conversations/x/port/3000/api/data")
+            resp = client.get(f"/conversations/{cid}/port/3000/api/data")
             assert resp.status_code == 200
             assert resp.text == "hello"
             mock_get.assert_called_with("http://localhost:32769/api/data")

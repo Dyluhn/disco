@@ -42,6 +42,17 @@ class PreviewService:
             return matches[0]
         return None
 
+    async def resolve_owned_cid_prefix(self, cid8: str, owner_id: str) -> str | None:
+        matches: list[str] = []
+        for cid in self._rt._executors.keys():
+            if not cid.removeprefix("conv_").startswith(cid8):
+                continue
+            if await self._rt._store.conversation_owned_by(cid, owner_id):
+                matches.append(cid)
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
     def _live_browser_enabled(self) -> bool:
         """Read the live-browser Settings flag; default-deny on any config failure."""
         try:
@@ -79,19 +90,21 @@ class PreviewService:
             return None  # stub here
         return session.expose_port(port)
 
-    async def wake_for_preview(self, cid8: str, port: int) -> str | None:
+    async def wake_for_preview(
+        self, cid8: str, port: int, *, owner_id: str = DEFAULT_OWNER_ID
+    ) -> str | None:
         """Wake a suspended sandbox if a preview request hits it.
         Restores the workspace and the built-in static preview server on 8000.
         It does NOT restart agent-started dev servers (vite/express) — requests
         for ports nothing listens on after wake will proxy to a 502.
         """
-        cid = self._rt.resolve_cid_prefix(cid8)
+        cid = await self.resolve_owned_cid_prefix(cid8, owner_id)
         if cid is not None:
             return self._rt.port_upstream(cid, port)
 
         try:
             summaries = await self._rt._store.list_conversation_summaries(
-                owner_id=DEFAULT_OWNER_ID, limit=500, cursor=None
+                owner_id=owner_id, limit=500, cursor=None
             )
             matches = [
                 s.conversation_id

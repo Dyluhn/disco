@@ -8,6 +8,12 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 import websockets
+from disco.core.auth import (
+    PREVIEW_BOOTSTRAP_PATH,
+    PREVIEW_COOKIE,
+    PreviewCapabilitySigner,
+    preview_ttl_s,
+)
 from disco.agent_server.preview_inject import inject_element_mention_picker
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -38,16 +44,43 @@ def _get_client() -> httpx.AsyncClient:
         _client = httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=60.0), follow_redirects=False)
     return _client
 
+
+def _cookie_value(scope: Scope, name: str) -> str | None:
+    needle = name + "="
+    for header_name, value in scope.get("headers", []):
+        if header_name.lower() != b"cookie":
+            continue
+        for part in value.decode("latin1").split(";"):
+            item = part.strip()
+            if item.startswith(needle):
+                return item[len(needle):]
+    return None
+
+
+def _preview_ws_origin_allowed(scope: Scope, host: str) -> bool:
+    origin = ""
+    for name, value in scope.get("headers", []):
+        if name.lower() == b"origin":
+            origin = value.decode("latin1")
+            break
+    if not origin:
+        return False
+    parsed = urllib.parse.urlparse(origin)
+    return parsed.scheme in {"http", "https"} and parsed.netloc == host
+
 class HostPreviewProxyMiddleware:
     def __init__(
         self,
         app: ASGIApp,
         *,
-        upstream_resolver: Callable[[str, int], str | None | Awaitable[str | None]],
-        session_resolver: Callable[[str], object | None] | None = None,
+        upstream_resolver: Callable[..., str | None | Awaitable[str | None]],
+        session_resolver: Callable[..., object | None | Awaitable[object | None]] | None = None,
+        require_capability: bool = False,
     ) -> None:
         self.app = app
         self.upstream_resolver = upstream_resolver
+        self.capability_signer = PreviewCapabilitySigner()
+        self.require_capability = require_capability
         # Fix 2 (codex P1): cid8 -> live SandboxSession (or None). On sealed/filtered
         # backends the hostname proxy gets NO host upstream even while the dev server
         # is up, so the canonical in-app iframe 503s "available-then-broken". When a
@@ -91,7 +124,57 @@ class HostPreviewProxyMiddleware:
                 await send({"type": "websocket.close", "code": 1008, "reason": "unknown port"})
             return
 
-        upstream_res = self.upstream_resolver(cid8, port)
+        if (
+            self.require_capability
+            and scope["type"] == "websocket"
+            and not _preview_ws_origin_allowed(scope, host)
+        ):
+            await send(
+                {"type": "websocket.close", "code": 1008, "reason": "preview origin required"}
+            )
+            return
+
+        path = str(scope.get("path") or "/")
+        if self.require_capability and scope["type"] == "http" and path == PREVIEW_BOOTSTRAP_PATH:
+            await self._handle_preview_bootstrap(scope, send, cid8, port)
+            return
+
+        cap_owner_id = None
+        if self.require_capability:
+            method = "WEBSOCKET" if scope["type"] == "websocket" else str(
+                scope.get("method") or "GET"
+            ).upper()
+            cap = self.capability_signer.verify(
+                _cookie_value(scope, PREVIEW_COOKIE),
+                cid8=cid8,
+                port=port,
+                method=method,
+                path=path,
+            )
+            if cap is None:
+                if scope["type"] == "http":
+                    await send({
+                        "type": "http.response.start",
+                        "status": 403,
+                        "headers": [(b"content-type", b"text/plain")],
+                    })
+                    await send({
+                        "type": "http.response.body",
+                        "body": b"preview capability required",
+                    })
+                else:
+                    await send({
+                        "type": "websocket.close",
+                        "code": 1008,
+                        "reason": "preview capability required",
+                    })
+                return
+            cap_owner_id = cap.owner_id
+
+        try:
+            upstream_res = self.upstream_resolver(cid8, port, cap_owner_id)
+        except TypeError:
+            upstream_res = self.upstream_resolver(cid8, port)
         if inspect.isawaitable(upstream_res):
             upstream = await upstream_res
         else:
@@ -104,7 +187,7 @@ class HostPreviewProxyMiddleware:
             # renders the built result. Websocket/HMR upgrade still needs a published
             # port on open boxes (unchanged) — the fallback is for "view the result".
             if scope["type"] == "http" and await self._proxy_http_via_session(
-                scope, send, cid8, port
+                scope, send, cid8, port, cap_owner_id
             ):
                 return
             if scope["type"] == "http":
@@ -124,6 +207,47 @@ class HostPreviewProxyMiddleware:
             await self._proxy_http(scope, receive, send, upstream)
         elif scope["type"] == "websocket":
             await self._proxy_websocket(scope, receive, send, upstream)
+
+    async def _handle_preview_bootstrap(
+        self, scope: Scope, send: Send, cid8: str, port: int
+    ) -> None:
+        query = urllib.parse.parse_qs(scope.get("query_string", b"").decode("latin1"))
+        intent = (query.get("intent") or [""])[0]
+        minted = self.capability_signer.mint_cookie_from_intent(intent)
+        if minted is None:
+            await send({
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [(b"content-type", b"text/plain")],
+            })
+            await send({"type": "http.response.body", "body": b"invalid preview intent"})
+            return
+        token, target = minted
+        if self.capability_signer.verify(
+            token, cid8=cid8, port=port, method="GET", path=target.split("?", 1)[0] or "/"
+        ) is None:
+            await send({
+                "type": "http.response.start",
+                "status": 403,
+                "headers": [(b"content-type", b"text/plain")],
+            })
+            await send({"type": "http.response.body", "body": b"preview intent scope mismatch"})
+            return
+        cookie = (
+            f"{PREVIEW_COOKIE}={token}; Path=/; Max-Age={preview_ttl_s()}; "
+            "HttpOnly; SameSite=Strict"
+        ).encode("latin1")
+        await send({
+            "type": "http.response.start",
+            "status": 303,
+            "headers": [
+                (b"location", target.encode("latin1")),
+                (b"set-cookie", cookie),
+                (b"referrer-policy", b"no-referrer"),
+                (b"cache-control", b"no-store"),
+            ],
+        })
+        await send({"type": "http.response.body", "body": b""})
 
     async def _send_with_connect_retry(
         self,
@@ -168,7 +292,12 @@ class HostPreviewProxyMiddleware:
         return None
 
     async def _proxy_http_via_session(
-        self, scope: Scope, send: Send, cid8: str, port: int
+        self,
+        scope: Scope,
+        send: Send,
+        cid8: str,
+        port: int,
+        owner_id: str | None,
     ) -> bool:
         """Fix 2 (codex P1) — fall back to the in-sandbox liveness proxy when there's
         no published host upstream. Returns True iff the live in-box server answered
@@ -187,7 +316,11 @@ class HostPreviewProxyMiddleware:
         if resolver is None:
             return False
         try:
-            session = resolver(cid8)
+            try:
+                session_res = resolver(cid8, owner_id)
+            except TypeError:
+                session_res = resolver(cid8)
+            session = await session_res if inspect.isawaitable(session_res) else session_res
             if session is None:
                 return False
             path = scope.get("path", "")
@@ -402,17 +535,20 @@ class HostPreviewProxyMiddleware:
                 await task
 
 
-def make_preview_session_resolver(runtime: object | None) -> Callable[[str], object | None]:
+def make_preview_session_resolver(runtime: object | None) -> Callable[..., Awaitable[object | None]]:
     """Fix 2 (codex P1): build the `cid8 -> live SandboxSession | None` resolver the
     HostPreviewProxyMiddleware uses for its in-sandbox liveness fallback. Captures
     `runtime` (None in wire-only tests → always None). Read-only: resolves the full
     conversation id from the 8-char prefix, then the live session (no creation)."""
 
-    def _resolve(cid8: str) -> object | None:
+    async def _resolve(cid8: str, owner_id: str | None = None) -> object | None:
         if runtime is None:
             return None
         try:
-            cid = runtime.resolve_cid_prefix(cid8)  # type: ignore[attr-defined]
+            if owner_id is not None:
+                cid = await runtime.resolve_owned_cid_prefix(cid8, owner_id)  # type: ignore[attr-defined]
+            else:
+                cid = runtime.resolve_cid_prefix(cid8)  # type: ignore[attr-defined]
             if not cid:
                 return None
             return runtime.live_session(cid)  # type: ignore[attr-defined]

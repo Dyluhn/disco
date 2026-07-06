@@ -39,7 +39,7 @@ from disco.core.llm import (
 )
 from disco.tools import ProcessSandboxService
 
-CID = "test-resume-cid"
+CID = "conv_test_resume_cid"
 
 
 # ---- shared scripted model ---------------------------------------------------

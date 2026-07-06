@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from disco.core import DEFAULT_OWNER_ID
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 
+from ..auth import current_owner_id
 from ..runtime import ConversationRuntime
 
 
@@ -16,7 +16,7 @@ def make_activity_router(
 
     @router.get("/api/activity")
     async def get_activity(
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
         limit: int = Query(default=50),
     ) -> dict:
         """The background-task dashboard feed for one owner:
@@ -28,6 +28,7 @@ def make_activity_router(
         if runtime is None:
             return {"running": [], "recent_runs": [], "counts": {"running": 0}}
 
+        owner_id = current_owner_id(request)
         live = runtime.running_conversation_ids()
         running: list[dict] = []
         if live:

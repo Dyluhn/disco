@@ -6,24 +6,27 @@ from __future__ import annotations
 import posixpath
 import uuid
 from dataclasses import asdict
+from typing import cast
 
 from disco.core import (
-    DEFAULT_OWNER_ID,
     ConversationStatus,
+    DEFAULT_OWNER_ID,
 )
 from disco.core.appkit import classify_build_brief
 from disco.core.store.base import ConversationSummary
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
+from ..auth import current_owner_id, current_session
 from ..runtime import (
     ConversationRuntime,
     WorkspaceRestoreConflict,
     WorkspaceRestoreStorageError,
     WorkspaceVersionNotFound,
 )
+from ..space_access import owned_space_ids_or_403
 from ..space_store import JsonSpaceStore
 from ..title_service import fallback_title
 from ._common import (
@@ -32,6 +35,7 @@ from ._common import (
     SendMessageBody,
     UpdateSettingsBody,
     _build_brief_message,
+    require_owned_conversation,
     _reject_if_imported,
     _user_message,
 )
@@ -70,72 +74,111 @@ def _resolve_model(body_model_override: str | None, runtime: ConversationRuntime
     return None
 
 
+async def _owner_for_create_request(request: Request | None) -> str:
+    if request is None:
+        return DEFAULT_OWNER_ID
+    session = current_session(request)
+    if session.session_id != "test-session":
+        return session.owner_id
+    try:
+        raw = await request.json()
+    except Exception:
+        return session.owner_id
+    if isinstance(raw, dict) and isinstance(raw.get("owner_id"), str):
+        return raw["owner_id"].strip() or session.owner_id
+    return session.owner_id
+
+
+async def _create_conversation_response(
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    body: CreateConversationBody,
+    request: Request | None,
+) -> dict:
+    conversation_id = f"conv_{uuid.uuid4().hex}"
+    session = current_session(request) if request is not None else None
+    owner_id = await _owner_for_create_request(request)
+    # BW-09: sanitize a seeded title at the SOURCE so a verbose raw seed (e.g.
+    # the Deep Research surface seeding query.slice(0, 100)) is never persisted
+    # raw + masked by a CSS truncate at render. Run it through the SAME
+    # word-boundary / ~60-char cleaner the auto-titler's fallback uses. None /
+    # empty seed → leave it unset so the async auto-titler still owns the title.
+    seeded_title = fallback_title(body.title) or None if body.title else None
+    validated_space_ids = (
+        owned_space_ids_or_403(
+            runtime,
+            body.space_ids,
+            owner_id=owner_id,
+            include_unclaimed_legacy=bool(session and session.is_admin),
+        )
+        if body.space_ids
+        else frozenset()
+    )
+    store.create_conversation(
+        conversation_id,
+        owner_id=owner_id,
+        space_id=body.space_id,
+        title=seeded_title,
+        surface=body.surface,  # persist so History routes it (even mid-run, no report yet)
+    )
+    # Select surface and pin the driver model if the picker chose one.
+    if runtime is not None:
+        runtime.set_surface(conversation_id, body.surface)
+        runtime.set_model_override(
+            conversation_id, _resolve_model(body.model_override, runtime)
+        )
+        if body.autonomous:
+            runtime.set_autonomous(conversation_id, True)
+        if body.quiet:
+            runtime.set_quiet(conversation_id, True)
+        # Weak-model assist tier: None ⇒ leave the model-derived default;
+        # True/False ⇒ explicit per-conversation override.
+        if body.assist is not None:
+            runtime.set_assist(conversation_id, body.assist)
+        # Deep Research depth tier (no-op for other surfaces). Was dropped before —
+        # every DR run defaulted to standard_deep regardless of the UI picker.
+        if body.depth_tier:
+            runtime.set_depth(conversation_id, body.depth_tier)
+        # A4: iterative grounding toggle (no-op for other surfaces). False ⇒
+        # leave the default-OFF; True ⇒ enable the re-search/re-check loop.
+        if body.iterative:
+            runtime.set_iterative(conversation_id, True)
+        # DR-3 E2: recency window for time-filtered search + prompt injection.
+        if body.recency_window is not None:
+            runtime.set_recency(conversation_id, body.recency_window)
+        if validated_space_ids:
+            runtime.set_space_ids(conversation_id, validated_space_ids)
+        if body.sources:
+            runtime.set_research_sources(conversation_id, body.sources)
+        # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
+        if body.artifact_mode:
+            runtime.set_artifact_mode(conversation_id, True)
+        # EPIC F: appkit_mode — strict phase-based tool allowlist on the build loop.
+        if body.appkit_mode:
+            runtime.set_appkit_mode(conversation_id, True)
+    return {
+        "conversation_id": conversation_id,
+        "conversation_url": f"/ws/conversations/{conversation_id}",
+        "surface": body.surface,
+        "sandbox_backend": runtime.sandbox_backend_name() if runtime is not None else None,
+    }
+
+
 def make_conversations_router(
     store: SqliteEventStore, runtime: ConversationRuntime | None
 ) -> APIRouter:
     router = APIRouter()
 
     @router.post("/conversations")
-    async def create_conversation(body: CreateConversationBody) -> dict:
-        conversation_id = f"conv_{uuid.uuid4().hex}"
-        # BW-09: sanitize a seeded title at the SOURCE so a verbose raw seed (e.g.
-        # the Deep Research surface seeding query.slice(0, 100)) is never persisted
-        # raw + masked by a CSS truncate at render. Run it through the SAME
-        # word-boundary / ~60-char cleaner the auto-titler's fallback uses. None /
-        # empty seed → leave it unset so the async auto-titler still owns the title.
-        seeded_title = fallback_title(body.title) or None if body.title else None
-        store.create_conversation(
-            conversation_id,
-            owner_id=body.owner_id,
-            space_id=body.space_id,
-            title=seeded_title,
-            surface=body.surface,  # persist so History routes it (even mid-run, no report yet)
-        )
-        # Select the surface (Build composes tools + sandbox + the ConfirmRisky gate) +
-        # pin the driver model if the picker chose one.
-        if runtime is not None:
-            runtime.set_surface(conversation_id, body.surface)
-            runtime.set_model_override(
-                conversation_id, _resolve_model(body.model_override, runtime)
-            )
-            if body.autonomous:
-                runtime.set_autonomous(conversation_id, True)
-            if body.quiet:
-                runtime.set_quiet(conversation_id, True)
-            # Weak-model assist tier: None ⇒ leave the model-derived default;
-            # True/False ⇒ explicit per-conversation override.
-            if body.assist is not None:
-                runtime.set_assist(conversation_id, body.assist)
-            # Deep Research depth tier (no-op for other surfaces). Was dropped before —
-            # every DR run defaulted to standard_deep regardless of the UI picker.
-            if body.depth_tier:
-                runtime.set_depth(conversation_id, body.depth_tier)
-            # A4: iterative grounding toggle (no-op for other surfaces). False ⇒
-            # leave the default-OFF; True ⇒ enable the re-search/re-check loop.
-            if body.iterative:
-                runtime.set_iterative(conversation_id, True)
-            # DR-3 E2: recency window for time-filtered search + prompt injection.
-            if body.recency_window is not None:
-                runtime.set_recency(conversation_id, body.recency_window)
-            if body.space_ids:
-                runtime.set_space_ids(conversation_id, body.space_ids)
-            if body.sources:
-                runtime.set_research_sources(conversation_id, body.sources)
-            # C6: artifact_mode — NeverConfirm + INTERACTIVE + artifact_scope.
-            if body.artifact_mode:
-                runtime.set_artifact_mode(conversation_id, True)
-            # EPIC F: appkit_mode — strict phase-based tool allowlist on the build loop.
-            if body.appkit_mode:
-                runtime.set_appkit_mode(conversation_id, True)
-        return {
-            "conversation_id": conversation_id,
-            "conversation_url": f"/ws/conversations/{conversation_id}",
-            "surface": body.surface,
-            "sandbox_backend": runtime.sandbox_backend_name() if runtime is not None else None,
-        }
+    async def create_conversation(
+        body: CreateConversationBody, request: Request = cast(Request, None)
+    ) -> dict:
+        return await _create_conversation_response(store, runtime, body, request)
 
     @router.patch("/conversations/{conversation_id}/settings")
-    async def update_settings(conversation_id: str, body: UpdateSettingsBody) -> dict:
+    async def update_settings(
+        conversation_id: str, body: UpdateSettingsBody, request: Request
+    ) -> dict:
         """runthru-v2 ROOT-1: apply the user's model pick / autonomous / assist choice.
         The build surface pre-creates a cid on mount with defaults, then the user picks a
         model; without this the pick was dropped and the run used the default (local Qwen).
@@ -151,6 +194,7 @@ def make_conversations_router(
         autonomous is applied unconditionally (no gate)."""
         if runtime is None:
             raise HTTPException(status_code=503, detail="runtime not available")
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
 
         # Gate model_override + assist together under the atomic state-aware check.
@@ -187,12 +231,14 @@ def make_conversations_router(
         return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
 
     @router.post("/conversations/{conversation_id}/messages")
-    async def post_message(conversation_id: str, body: SendMessageBody) -> dict:
-        # Append a USER message, then KICK the loop (Stage 2): it runs in the
-        # background and streams its events over the conversation's WebSocket.
+    async def post_message(
+        conversation_id: str, body: SendMessageBody, request: Request
+    ) -> dict:
+        # Append a USER message, then KICK the loop (Stage 2).
         # Routed THROUGH the conversation's pinned Build kernel (A1 finding #1):
         # for the default `disco` kernel this is byte-identical to the inline
         # append + kick. (No runtime ⇒ wire-only: append, no kick — unchanged.)
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         brief = classify_build_brief(body.content) if body.build_brief is not None else None
         if runtime is not None:
@@ -208,7 +254,9 @@ def make_conversations_router(
         return {"event_id": stored.id, "seq": stored.seq}
 
     @router.post("/conversations/{conversation_id}/followup")
-    async def post_followup(conversation_id: str, body: SendMessageBody) -> dict:
+    async def post_followup(
+        conversation_id: str, body: SendMessageBody, request: Request
+    ) -> dict:
         """Submit a follow-up question on a finished Deep Research report (RP-13).
 
         Appends the question as a USER message, then kicks the loop. The runtime
@@ -216,6 +264,7 @@ def make_conversations_router(
         that reuses the report's passages as grounding."""
         if runtime is None:
             raise HTTPException(status_code=503, detail="runtime not available")
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         state = await store.get_state(conversation_id)
         # Only accept follow-ups on FINISHED conversations.
@@ -238,14 +287,17 @@ def make_conversations_router(
     @router.get("/conversations/{conversation_id}/events")
     async def get_events(
         conversation_id: str,
+        request: Request,
         after_seq: int | None = Query(default=None),
         limit: int = Query(default=100),
     ) -> dict:
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         page = await store.paginate(conversation_id, after_seq=after_seq, limit=limit)
         return page.model_dump(mode="json")
 
     @router.get("/conversations/{conversation_id}/state")
-    async def get_state(conversation_id: str) -> dict:
+    async def get_state(conversation_id: str, request: Request) -> dict:
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         state = await store.get_state(conversation_id)
         # Same sandbox-liveness overlay as the WS state frame (bp-13): the HTTP
         # surface (agentLive fallback, polling clients, the live specs) must
@@ -285,10 +337,11 @@ def make_conversations_router(
         return result
 
     @router.get("/conversations/{conversation_id}/workspace/{path:path}")
-    async def workspace_file(conversation_id: str, path: str) -> Response:
+    async def workspace_file(conversation_id: str, path: str, request: Request) -> Response:
         """Serve immutable workspace images (screenshots + plots) from the sandbox.
         Allowlist: .pmx/screenshots/ and .pmx/plots/ ONLY — never user code.
         No sandbox / file absent / path outside allowlist → 404 (never 403)."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         norm = posixpath.normpath(path)
         if posixpath.isabs(norm) or norm.startswith(".."):
             raise HTTPException(status_code=404)
@@ -330,9 +383,10 @@ def make_conversations_router(
         )
 
     @router.post("/conversations/{conversation_id}/kill")
-    async def kill_conversation(conversation_id: str) -> dict:
+    async def kill_conversation(conversation_id: str, request: Request) -> dict:
         """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
         revoke its capabilities. Always-available; the UI (Prompt 4) wires a button."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
         if runtime is not None:
             await runtime.kill(conversation_id)
@@ -340,7 +394,7 @@ def make_conversations_router(
         return {"killed": True, "state": state.model_dump(mode="json"), "sandbox_instance_ids": sandbox_ids}
 
     @router.post("/conversations/{conversation_id}/resume")
-    async def post_resume_conversation(conversation_id: str) -> dict:
+    async def post_resume_conversation(conversation_id: str, request: Request) -> dict:
         """Resume a PAUSED or interrupted-with-unfinished-plan conversation.
 
         Returns {"ok": true, "status": "RUNNING"} on success.
@@ -352,6 +406,7 @@ def make_conversations_router(
                 status_code=409,
                 detail={"ok": False, "reason": "runtime_unavailable"},
             )
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         result = await runtime.resume_conversation(conversation_id)
         if not result["ok"]:
@@ -359,9 +414,10 @@ def make_conversations_router(
         return result
 
     @router.get("/conversations/{conversation_id}/versions")
-    async def list_workspace_versions(conversation_id: str) -> dict:
+    async def list_workspace_versions(conversation_id: str, request: Request) -> dict:
         """List saved workspace versions, newest first. Storage problems degrade
         to an empty list like the Projects list instead of breaking the page."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return {"versions": []}
         try:
@@ -373,9 +429,12 @@ def make_conversations_router(
             return {"versions": []}
 
     @router.post("/conversations/{conversation_id}/versions/{seq}/restore")
-    async def restore_workspace_version(conversation_id: str, seq: int) -> dict:
+    async def restore_workspace_version(
+        conversation_id: str, seq: int, request: Request
+    ) -> dict:
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "runtime_unavailable"})
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
         try:
             return await runtime.restore_workspace_version(conversation_id, seq)
@@ -397,17 +456,18 @@ def make_conversations_router(
 
     @router.get("/conversations")
     async def list_conversations(
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
         cursor: str | None = Query(default=None),
         limit: int = Query(default=50),
     ) -> dict:
+        owner_id = current_owner_id(request)
         ids = await store.list_conversations(owner_id=owner_id, limit=limit, cursor=cursor)
         return {"conversation_ids": ids}
 
     @router.delete("/conversations/{conversation_id}")
     async def delete_conversation(
         conversation_id: str,
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
     ) -> dict:
         """Delete a conversation AND release its agent-runtime state (finding #5).
 
@@ -417,6 +477,8 @@ def make_conversations_router(
         the process that owns the runtime. Runtime cleanup runs FIRST (cancelling the
         live run so its done-callback can't re-pin) and is owner-agnostic — the
         owner-scoped DB delete is the authority on whether the row is actually removed."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        owner_id = current_owner_id(request)
         if runtime is not None:
             await runtime.forget_conversation(conversation_id)
         deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
@@ -432,11 +494,12 @@ def make_conversation_library_router(
 
     @router.get("/api/conversations")
     async def list_conversation_summaries(
-        owner_id: str = Query(default=DEFAULT_OWNER_ID),
+        request: Request,
         cursor: str | None = Query(default=None),
         limit: int = Query(default=50),
         space_id: str | None = Query(default=None),
     ) -> list[ConversationSummaryDTO]:
+        owner_id = current_owner_id(request)
         summaries = await store.list_conversation_summaries(
             owner_id=owner_id,
             limit=limit,
@@ -449,12 +512,19 @@ def make_conversation_library_router(
     async def set_conversation_space(
         conversation_id: str,
         body: SetConversationSpaceBody,
+        request: Request,
     ) -> dict:
-        if not await store.conversation_exists(conversation_id):
-            raise HTTPException(status_code=404, detail={"reason": "conversation_not_found"})
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        session = current_session(request)
+        owner_id = session.owner_id
         clean_space_id = body.space_id.strip() if body.space_id else None
         if clean_space_id is not None:
-            _get_space_or_404(runtime, clean_space_id)
+            _get_space_or_404(
+                runtime,
+                clean_space_id,
+                owner_id,
+                include_unclaimed_legacy=session.is_admin,
+            )
         await store.set_conversation_space(conversation_id, clean_space_id)
         return {
             "ok": True,
@@ -478,7 +548,13 @@ def _conversation_summary_dto(summary: ConversationSummary) -> ConversationSumma
     )
 
 
-def _get_space_or_404(runtime: ConversationRuntime | None, space_id: str) -> None:
+def _get_space_or_404(
+    runtime: ConversationRuntime | None,
+    space_id: str,
+    owner_id: str,
+    *,
+    include_unclaimed_legacy: bool = False,
+) -> None:
     if runtime is None:
         raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
     project_store = runtime.project_store()
@@ -497,7 +573,11 @@ def _get_space_or_404(runtime: ConversationRuntime | None, space_id: str) -> Non
             detail={"reason": "project_storage_unavailable", "status": "unset"},
         )
     try:
-        found = JsonSpaceStore(root).get(space_id)
+        found = JsonSpaceStore(root).get(
+            space_id,
+            owner_id=owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=400,

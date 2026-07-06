@@ -11,7 +11,7 @@ from typing import Any
 
 from disco.core import MessageEvent, ReportEvent
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -23,7 +23,7 @@ from ..report_audio import (
     report_audio_cache_dir,
 )
 from ..runtime import ConversationRuntime
-from ._common import _AUDIO_MEDIA_TYPES
+from ._common import _AUDIO_MEDIA_TYPES, require_owned_conversation
 
 # ── Request body models ───────────────────────────────────────────────────────
 
@@ -239,6 +239,7 @@ def make_report_router(
     @router.post("/api/conversations/{conversation_id}/report/export")
     async def export_report(
         conversation_id: str,
+        request: Request,
         fmt: str = Query(...),
         body: ExportBody = ExportBody(),
     ) -> Response:
@@ -255,6 +256,7 @@ def make_report_router(
             raise HTTPException(
                 status_code=503, detail={"ok": False, "reason": "no_runtime"}
             )
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
 
         valid_fmts = frozenset({"md", "pdf"})
         if fmt not in valid_fmts:
@@ -294,6 +296,7 @@ def make_report_router(
     @router.post("/conversations/{conversation_id}/report/audio")
     async def report_audio(
         conversation_id: str,
+        request: Request,
         mode: str = Query("podcast"),
         body: AudioBody = AudioBody(),
     ) -> dict:
@@ -314,6 +317,7 @@ def make_report_router(
         404 → no ReportEvent; 400 → unknown mode; 503 → TTS disabled in
         Settings; 502 → synth/LLM failure. 200 →
         ``{"ok": True, "mp3_url": ..., "transcript_url": ...}``."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
             store, conversation_id, mode, body.follow_up_seqs or []
         )
@@ -349,6 +353,7 @@ def make_report_router(
     @router.post("/conversations/{conversation_id}/report/audio/stream")
     async def report_audio_stream(
         conversation_id: str,
+        request: Request,
         mode: str = Query("podcast"),
         body: AudioBody | None = None,
     ) -> StreamingResponse:
@@ -368,6 +373,7 @@ def make_report_router(
         to it if streaming is unavailable).  Bad mode → 400, no report → 404
         (raised before the stream opens)."""
         body = body or AudioBody()
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         report, follow_ups, tts, out_dir = await _resolve_audio_inputs(
             store, conversation_id, mode, body.follow_up_seqs or []
         )
@@ -437,9 +443,12 @@ def make_report_router(
         )
 
     @router.get("/conversations/{conversation_id}/report/audio/{name}")
-    async def report_audio_file(conversation_id: str, name: str) -> Response:
+    async def report_audio_file(
+        conversation_id: str, name: str, request: Request
+    ) -> Response:
         """Serve a cached audio-overview file (mp3 / transcript) as an attachment.
         Jailed: canonical basename only + resolve-jail to this conversation's cache."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if "/" in name or ".." in name:
             raise HTTPException(status_code=404)
         _, ext = posixpath.splitext(name)

@@ -17,10 +17,8 @@
  * and client-driven exports.
  */
 
-import { agentHttpBase, agentLive, agentSend, fixtureDelay } from "./client";
+import { agentFetch, agentLive, agentSend, fixtureDelay } from "./client";
 import type { ReportEvent, ReportSection } from "@/types/agent";
-
-const OWNER_ID = (import.meta.env.VITE_OWNER_ID as string | undefined) ?? "local";
 
 export interface DeepResearchSubmit {
   query: string;
@@ -54,7 +52,6 @@ export async function createDeepResearchConversation(
     "POST",
     "/conversations",
     {
-      owner_id: OWNER_ID,
       surface: "deep_research",
       // BW-09: this is a SEED, not the final stored title. The backend sanitizes
       // it (word-boundary, ~60-char `fallback_title`) before persisting, so the
@@ -114,7 +111,7 @@ export async function exportReport(
   const body = followUpSeqs && followUpSeqs.length > 0
     ? JSON.stringify({ follow_up_seqs: followUpSeqs })
     : undefined;
-  const res = await fetch(`${agentHttpBase()}/api/conversations/${cid}/report/export?fmt=${fmt}`, {
+  const res = await agentFetch(`/api/conversations/${cid}/report/export?fmt=${fmt}`, {
     method: "POST",
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body,
@@ -167,8 +164,8 @@ export async function requestReportAudio(
   const body = followUpSeqs && followUpSeqs.length > 0
     ? JSON.stringify({ follow_up_seqs: followUpSeqs })
     : undefined;
-  const res = await fetch(
-    `${agentHttpBase()}/conversations/${cid}/report/audio?mode=${mode}`,
+  const res = await agentFetch(
+    `/conversations/${cid}/report/audio?mode=${mode}`,
     {
       method: "POST",
       headers: body ? { "Content-Type": "application/json" } : undefined,

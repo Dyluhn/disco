@@ -12,16 +12,28 @@ import urllib.parse
 import httpx
 import websockets
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.auth import PREVIEW_BOOTSTRAP_PATH, PreviewCapabilitySigner
 from disco.tools.projects import StorageError, StorageStatus
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix
-from fastapi import APIRouter, Query, Response, WebSocket
+from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
+from ..auth import current_session, websocket_session
 from ..preview_inject import inject_element_mention_picker
 from ..runtime import ConversationRuntime
+from ._common import (
+    require_owned_conversation,
+    require_owned_conversation_for_owner,
+)
 
 _LOG = logging.getLogger(__name__)
+
+
+class PreviewCapabilityBody(BaseModel):
+    port: int = PREVIEW_PORT
+    target_path: str = "/"
 
 
 def _serve_static_from_snapshot(
@@ -101,6 +113,31 @@ async def _close_ws(websocket: WebSocket, code: int, reason: str) -> None:
         await websocket.close(code=code, reason=reason)
 
 
+def _preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) -> str:
+    url = request.url
+    hostname = url.hostname or "localhost"
+    if hostname in {"127.0.0.1", "localhost"}:
+        preview_host = f"{cid8}-{port}.localhost"
+    else:
+        preview_host = f"{cid8}-{port}.{hostname}"
+    netloc = preview_host
+    if url.port is not None:
+        netloc = f"{preview_host}:{url.port}"
+    query = urllib.parse.urlencode({"intent": intent})
+    return urllib.parse.urlunparse(
+        (url.scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", query, "")
+    )
+
+
+async def _wake_for_preview(
+    runtime: ConversationRuntime, cid8: str, port: int, *, owner_id: str
+) -> str | None:
+    try:
+        return await runtime.wake_for_preview(cid8, port, owner_id=owner_id)
+    except TypeError:
+        return await runtime.wake_for_preview(cid8, port)  # type: ignore[call-arg]
+
+
 async def _proxy_websocket_to_upstream(
     websocket: WebSocket, upstream: str, rel_path: str
 ) -> None:
@@ -172,28 +209,41 @@ async def _proxy_websocket_to_upstream(
             await ws_client.close()
 
 
-def make_preview_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
-    router = APIRouter()
+def _register_preview_capability_route(router: APIRouter, store: SqliteEventStore) -> None:
+    cap_signer = PreviewCapabilitySigner()
 
-    @router.get("/conversations/{conversation_id}/browser/live-url")
-    async def browser_live_url(conversation_id: str) -> Response:
-        """Lazily start the noVNC live-view stack in the sandbox and return the
-        auth-gated proxy URL. Returns 503 when live browser is disabled in Settings
-        or when no sandbox is running for this conversation.
+    @router.post("/conversations/{conversation_id}/preview/capability")
+    async def preview_capability(
+        conversation_id: str,
+        body: PreviewCapabilityBody,
+        request: Request,
+    ) -> dict:
+        if body.port not in USER_PORTS:
+            raise HTTPException(status_code=404, detail={"reason": "unknown_port"})
+        session = current_session(request)
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
+        cid8 = conversation_id.removeprefix("conv_")[:8]
+        target = body.target_path if body.target_path.startswith("/") else f"/{body.target_path}"
+        intent = cap_signer.mint_intent(
+            session=session,
+            conversation_id=conversation_id,
+            port=body.port,
+            target_path=target,
+        )
+        bootstrap = _preview_bootstrap_url(request, cid8, body.port, intent)
+        return {"bootstrap_url": bootstrap, "target_path": target, "port": body.port}
 
-        Security: the noVNC endpoint is behind the existing per-conversation
-        preview proxy ({cid8}-{NOVNC_PORT}.localhost) — same owner-scoped auth
-        as the dev-server preview. VNC is loopback-bound inside the sandbox.
 
-        P5 live jail acceptance is HARDWARE-DEFERRED (VM 201 destroyed). The
-        security invariants (loopback-bind, per-conv jail, view-only) must be
-        verified on a real sandbox backend before shipping to production."""
+def _register_live_browser_start_route(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
+    @router.post("/conversations/{conversation_id}/browser/live-url")
+    async def browser_live_url(conversation_id: str, request: Request) -> Response:
+        """Lazily start the noVNC live-view stack and return the gated proxy port."""
         if runtime is None:
             return Response("no runtime", status_code=503, media_type="text/plain")
-
-        # Check if live browser is enabled in config
+        owner_id = current_session(request).owner_id
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         try:
             cfg = runtime._config_store.load()
             if not cfg.live_browser.enabled:
@@ -209,8 +259,6 @@ def make_preview_router(
             return Response("config unavailable", status_code=503, media_type="text/plain")
 
         cid8 = conversation_id.removeprefix("conv_")[:8]
-
-        # Trigger live_start inside the sandbox via the browser daemon
         session = runtime.live_session(conversation_id)
         if session is None:
             return Response(
@@ -221,14 +269,6 @@ def make_preview_router(
                 status_code=503,
                 media_type="application/json",
             )
-
-        # HONESTY GATE (fixes the live_start_failed bug): only a backend that ships the
-        # Xvfb/x11vnc/websockify stack (gVisor — see LIVE_VIEW_BACKENDS) can run the live
-        # view. On the process dev / local / podman backends live_start would shell out to
-        # an Xvfb binary that isn't there and fail with "Failed to start live view stack".
-        # Refuse up-front with an honest reason so the frontend falls back to screenshots
-        # rather than surfacing a scary failure. live-ready reports the same truth, so the
-        # auto-stream path never even reaches here on an unsupported backend.
         if not getattr(session, "supports_live_view", False):
             return Response(
                 _json.dumps({
@@ -240,11 +280,7 @@ def make_preview_router(
             )
 
         try:
-            # Check browser daemon health first
-            res = await session.exec_shell(
-                "curl -sf http://127.0.0.1:8901/health",
-                timeout_s=3,
-            )
+            res = await session.exec_shell("curl -sf http://127.0.0.1:8901/health", timeout_s=3)
             if res.exit_code != 0:
                 return Response(
                     _json.dumps({
@@ -254,15 +290,10 @@ def make_preview_router(
                     status_code=503,
                     media_type="application/json",
                 )
-
-            # Trigger live_start in the daemon
-            job = _json.dumps({"action": "live_start"})
-            # Escape single quotes for shell safety
-            job_escaped = job.replace("'", "'\"'\"'")
+            job_escaped = _json.dumps({"action": "live_start"}).replace("'", "'\"'\"'")
             res2 = await session.exec_shell(
                 f"curl -s -X POST http://127.0.0.1:8901"
-                f" -H 'Content-Type: application/json'"
-                f" -d '{job_escaped}'",
+                f" -H 'Content-Type: application/json' -d '{job_escaped}'",
                 timeout_s=30,
             )
             if res2.exit_code != 0:
@@ -289,14 +320,7 @@ def make_preview_router(
                 media_type="application/json",
             )
 
-        # Readiness check ONLY: confirm the sandbox has actually published NOVNC_PORT
-        # (wake_for_preview → port_upstream → expose_port resolves the host mapping).
-        # We deliberately DISCARD the resolved value: it is the raw sandbox host:port
-        # upstream, and handing that to the browser would bypass HostPreviewProxyMiddleware
-        # (cid/owner scoping + the live-browser enabled-gate). With x11vnc -nopw, a leaked
-        # raw URL is enough to watch the session — so the proxy must be the ONLY
-        # browser-visible path. (noVNC BLOCK fix.)
-        upstream = await runtime.wake_for_preview(cid8, NOVNC_PORT)
+        upstream = await _wake_for_preview(runtime, cid8, NOVNC_PORT, owner_id=owner_id)
         if upstream is None:
             return Response(
                 _json.dumps({
@@ -306,122 +330,103 @@ def make_preview_router(
                 status_code=503,
                 media_type="application/json",
             )
-
-        # Return only the port; the client builds the single-origin proxy URL
-        # ({cid8}-6080.localhost via previewHostUrl), the same path as the dev-server
-        # preview. `ready` lets the client distinguish "go" from a 503 without a URL.
         return JSONResponse({
             "ready": True,
             "novnc_path": "/vnc.html?autoconnect=1&view_only=1",
             "port": NOVNC_PORT,
         })
 
-    @router.get("/conversations/{conversation_id}/browser/live-ready")
-    async def browser_live_ready(conversation_id: str) -> Response:
-        """W-47: side-effect-FREE readiness probe for the Live button. Mirrors the
-        guard checks of /browser/live-url (runtime present → feature enabled → a sandbox
-        session exists → the browser daemon is healthy) but triggers NO live_start and
-        exposes NO port, so the frontend can POLL it every few seconds to gate the button
-        WITHOUT the error-spam and side-effects of calling live-url. Always 200; `ready`
-        plus a machine `reason` (which doubles as the button tooltip) carry the state.
 
-        The daemon /health is a read-only GET (returns 200 once the agent has actually
-        opened the browser), so this never starts the headed stack or maps a host port."""
+def _register_live_browser_status_routes(
+    router: APIRouter, store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> None:
+    @router.get("/conversations/{conversation_id}/browser/live-ready")
+    async def browser_live_ready(conversation_id: str, request: Request) -> Response:
+        """Side-effect-free readiness probe for the Live button."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return JSONResponse({"ready": False, "reason": "no_runtime"})
-
         try:
             cfg = runtime._config_store.load()
             if not cfg.live_browser.enabled:
                 return JSONResponse({"ready": False, "reason": "disabled"})
-        except Exception:  # noqa: BLE001 — config unavailable is "not ready", never a 500
+        except Exception:  # noqa: BLE001
             return JSONResponse({"ready": False, "reason": "config_unavailable"})
-
-        # Read-only accessor (live_session never CREATES a sandbox — see runtime.py).
         session = runtime.live_session(conversation_id)
         if session is None:
             return JSONResponse({"ready": False, "reason": "no_sandbox"})
-
-        # HONESTY GATE: a backend that can't run the Xvfb/x11vnc/websockify stack is NOT
-        # streamable — report it as such (NOT-ready) so the frontend shows screenshots and
-        # never auto-starts a doomed stack (the live_start_failed case). Only gVisor ships
-        # the stack + carries the accepted live-jail security model (LIVE_VIEW_BACKENDS).
         if not getattr(session, "supports_live_view", False):
             return JSONResponse({"ready": False, "reason": "unsupported_backend"})
-
-        # Probe the browser daemon's read-only /health endpoint ONLY. No live_start POST,
-        # no wake_for_preview/port expose — a poll must have zero side-effects.
         try:
-            res = await session.exec_shell(
-                "curl -sf http://127.0.0.1:8901/health",
-                timeout_s=3,
-            )
-        except Exception:  # noqa: BLE001 — a readiness probe must never 500
+            res = await session.exec_shell("curl -sf http://127.0.0.1:8901/health", timeout_s=3)
+        except Exception:  # noqa: BLE001
             return JSONResponse({"ready": False, "reason": "no_daemon"})
         if res.exit_code != 0:
             return JSONResponse({"ready": False, "reason": "no_daemon"})
-
         return JSONResponse({"ready": True, "reason": "ready"})
 
     @router.post("/conversations/{conversation_id}/browser/live-touch")
-    async def browser_live_touch(conversation_id: str) -> Response:
-        """Heartbeat from the open Live pane — refresh the sandbox idle watchdog so an
-        actively-watched session is not reaped after the idle timeout. Best-effort + 200
-        regardless (a missing sandbox/daemon just means nothing to keep alive)."""
+    async def browser_live_touch(conversation_id: str, request: Request) -> Response:
+        """Heartbeat from the open Live pane; best-effort and always 200."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return JSONResponse({"ok": True, "note": "no runtime"})
         session = runtime.live_session(conversation_id)
         if session is None:
             return JSONResponse({"ok": True, "note": "no sandbox"})
         try:
-            job = _json.dumps({"action": "live_touch"})
-            job_escaped = job.replace("'", "'\"'\"'")
+            job_escaped = _json.dumps({"action": "live_touch"}).replace("'", "'\"'\"'")
             await session.exec_shell(
                 f"curl -s -X POST http://127.0.0.1:8901"
-                f" -H 'Content-Type: application/json'"
-                f" -d '{job_escaped}'",
+                f" -H 'Content-Type: application/json' -d '{job_escaped}'",
                 timeout_s=5,
             )
-        except Exception:  # noqa: BLE001 — heartbeat is best-effort
+        except Exception:  # noqa: BLE001
             return JSONResponse({"ok": True, "note": "touch best-effort"})
         return JSONResponse({"ok": True})
 
     @router.post("/conversations/{conversation_id}/browser/live-stop")
-    async def browser_live_stop(conversation_id: str) -> Response:
-        """Tear the live-view stack down (Xvfb + x11vnc + websockify) inside the sandbox.
-        The client calls this when the user closes the Live pane / unmounts / disables
-        the feature, so the VNC surface does not linger for the life of the sandbox
-        (the idle watchdog is the backstop; this is the prompt path). Always 200 — a
-        no-op teardown (no sandbox / no daemon) is success, not an error."""
+    async def browser_live_stop(conversation_id: str, request: Request) -> Response:
+        """Tear the live-view stack down inside the sandbox; best-effort."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return JSONResponse({"ok": True, "note": "no runtime"})
         session = runtime.live_session(conversation_id)
         if session is None:
             return JSONResponse({"ok": True, "note": "no sandbox"})
         try:
-            job = _json.dumps({"action": "live_stop"})
-            job_escaped = job.replace("'", "'\"'\"'")
+            job_escaped = _json.dumps({"action": "live_stop"}).replace("'", "'\"'\"'")
             await session.exec_shell(
                 f"curl -s -X POST http://127.0.0.1:8901"
-                f" -H 'Content-Type: application/json'"
-                f" -d '{job_escaped}'",
+                f" -H 'Content-Type: application/json' -d '{job_escaped}'",
                 timeout_s=10,
             )
-        except Exception:  # noqa: BLE001 — best-effort teardown; report success regardless
+        except Exception:  # noqa: BLE001
             return JSONResponse({"ok": True, "note": "teardown best-effort"})
         return JSONResponse({"ok": True})
 
+
+def make_preview_router(
+    store: SqliteEventStore, runtime: ConversationRuntime | None
+) -> APIRouter:
+    router = APIRouter()
+    _register_preview_capability_route(router, store)
+    _register_live_browser_start_route(router, store, runtime)
+    _register_live_browser_status_routes(router, store, runtime)
+
     @router.get("/conversations/{conversation_id}/preview")
-    async def get_preview(conversation_id: str) -> dict:
+    async def get_preview(conversation_id: str, request: Request) -> dict:
         """Backend-aware live preview availability (the browser iframes the proxy below)."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return {"available": False, "reason": "no runtime"}
         return await runtime.preview(conversation_id)
 
     @router.post("/conversations/{conversation_id}/preview/restart")
-    async def ensure_preview(conversation_id: str) -> dict:
+    async def ensure_preview(conversation_id: str, request: Request) -> dict:
         """Bring a down preview back on demand (§E7) — the UI 'Restart preview' button.
         Bounded + safe (same path as SandboxSession.ensure_preview)."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return {"ok": False}
         return {"ok": await runtime.ensure_preview(conversation_id)}
@@ -432,6 +437,7 @@ def make_preview_router(
     # WALK-10: now wakes suspended sandboxes via wake_for_preview — fixes the Open button
     # and the PreviewPane "Open in new tab" link that returned 503 after sandbox auto-suspend.
     async def preview_app(
+        request: Request,
         conversation_id: str,
         path: str = "",
         version: int | None = Query(default=None),
@@ -443,8 +449,10 @@ def make_preview_router(
 
         Uses wake_for_preview so a suspended sandbox is rematerialised on demand —
         the passive preview_upstream check only finds live in-memory executors."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if runtime is None:
             return Response("preview not available", status_code=503, media_type="text/plain")
+        owner_id = current_session(request).owner_id
         cid8 = conversation_id.removeprefix("conv_")[:8]
         # Historical preview is static-only AND must NEVER fall through to the live
         # proxy: a ?version request answered by the live sandbox would show current
@@ -457,7 +465,7 @@ def make_preview_router(
             if served is not None:
                 return served
             return Response("version not found", status_code=404, media_type="text/plain")
-        upstream = await runtime.wake_for_preview(cid8, PREVIEW_PORT)
+        upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=owner_id)
         if upstream is None:
             # Fix 2 (B-E): on sealed/filtered boxes no host port is published, so
             # `wake_for_preview` resolves None even with a live dev server. Before
@@ -502,6 +510,20 @@ def make_preview_router(
         path: str = "",
     ) -> None:
         """Proxy live preview WebSockets (Vite HMR) through the path preview URL."""
+        session = websocket_session(websocket)
+        if session is None:
+            await _close_ws(websocket, 1008, "auth required")
+            return
+        try:
+            conversation_id = await require_owned_conversation_for_owner(
+                store,
+                conversation_id,
+                session.owner_id,
+                owner_bypass=session.session_id == "test-session",
+            )
+        except HTTPException:
+            await _close_ws(websocket, 1008, "conversation forbidden")
+            return
         if runtime is None:
             await _close_ws(websocket, 1008, "preview not available")
             return
@@ -509,7 +531,7 @@ def make_preview_router(
             await _close_ws(websocket, 1008, "historical previews are static")
             return
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        upstream = await runtime.wake_for_preview(cid8, PREVIEW_PORT)
+        upstream = await _wake_for_preview(runtime, cid8, PREVIEW_PORT, owner_id=session.owner_id)
         if upstream is None:
             await _close_ws(websocket, 1008, "preview not available")
             return
@@ -519,18 +541,22 @@ def make_preview_router(
     @router.get("/conversations/{conversation_id}/port/{port}/")
     # DEPRECATED (DC-01): hostname proxy is canonical; kept one release for single-file pages.
     # WALK-10: now wakes suspended sandboxes via wake_for_preview — same fix as preview_app.
-    async def port_app(conversation_id: str, port: int, path: str = "") -> Response:
+    async def port_app(
+        request: Request, conversation_id: str, port: int, path: str = ""
+    ) -> Response:
         """Per-port proxy (BP-10): same single-origin forwarding as preview-app for
         the curated USER port set. Arbitrary ints and INTERNAL plumbing ports are
         never proxied (404 — not 503: the port does not exist as a surface).
 
         Uses wake_for_preview so a suspended sandbox is rematerialised on demand."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         if port not in USER_PORTS:
             return Response("unknown port", status_code=404, media_type="text/plain")
         if runtime is None:
             return Response("preview not available", status_code=503, media_type="text/plain")
+        owner_id = current_session(request).owner_id
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        upstream = await runtime.wake_for_preview(cid8, port)
+        upstream = await _wake_for_preview(runtime, cid8, port, owner_id=owner_id)
         if upstream is None:
             # Fix 2 (B-E): liveness proxy into the sandbox when no host port is
             # published (sealed/filtered boxes). Honest 503 if nothing is listening.
@@ -564,6 +590,20 @@ def make_preview_router(
         path: str = "",
     ) -> None:
         """Proxy live curated-port WebSockets (including Vite HMR)."""
+        session = websocket_session(websocket)
+        if session is None:
+            await _close_ws(websocket, 1008, "auth required")
+            return
+        try:
+            conversation_id = await require_owned_conversation_for_owner(
+                store,
+                conversation_id,
+                session.owner_id,
+                owner_bypass=session.session_id == "test-session",
+            )
+        except HTTPException:
+            await _close_ws(websocket, 1008, "conversation forbidden")
+            return
         if port not in USER_PORTS:
             await _close_ws(websocket, 1008, "unknown port")
             return
@@ -571,7 +611,7 @@ def make_preview_router(
             await _close_ws(websocket, 1008, "preview not available")
             return
         cid8 = conversation_id.removeprefix("conv_")[:8]
-        upstream = await runtime.wake_for_preview(cid8, port)
+        upstream = await _wake_for_preview(runtime, cid8, port, owner_id=session.owner_id)
         if upstream is None:
             await _close_ws(websocket, 1008, "preview not available")
             return

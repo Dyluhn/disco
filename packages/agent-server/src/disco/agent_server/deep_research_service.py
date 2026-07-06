@@ -72,6 +72,9 @@ from disco.retrieval.deep_research import (
     DepthTier,
     decompose_query,
 )
+from disco.tools.projects import StorageStatus
+
+from .space_store import JsonSpaceStore
 
 _LOG = logging.getLogger(__name__)
 
@@ -85,6 +88,38 @@ class DeepResearchService:
 
     def __init__(self, rt: Any) -> None:
         self._rt = rt
+
+    def _validated_space_ids(
+        self,
+        space_ids: frozenset[str],
+        *,
+        owner_id: str | None,
+        include_unclaimed_legacy: bool = False,
+    ) -> tuple[frozenset[str], tuple[str, ...]]:
+        if not space_ids:
+            return frozenset(), ()
+        if owner_id is None:
+            return frozenset(), tuple(sorted(space_ids))
+        project_store = self._rt.project_store()
+        if project_store.status() != StorageStatus.OK or project_store.root is None:
+            return frozenset(), tuple(sorted(space_ids))
+        space_store = JsonSpaceStore(project_store.root)
+        owned: set[str] = set()
+        forbidden: list[str] = []
+        for space_id in sorted(space_ids):
+            try:
+                record = space_store.get(
+                    space_id,
+                    owner_id=owner_id,
+                    include_unclaimed_legacy=include_unclaimed_legacy,
+                )
+            except ValueError:
+                record = None
+            if record is None:
+                forbidden.append(space_id)
+            else:
+                owned.add(space_id)
+        return frozenset(owned), tuple(forbidden)
 
     def _compose_deep_research_loop(
         self, conversation_id: str, router: DefaultLLMRouter, agent: RouterAgent
@@ -330,6 +365,8 @@ class DeepResearchService:
         think: bool = False,
         conversation_id: str | None = None,
         space_ids: frozenset[str] = frozenset(),
+        owner_id: str | None = None,
+        include_unclaimed_legacy: bool = False,
         sources: Sequence[str] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Stream a live grounded answer as the UI's research frames (state →
@@ -368,6 +405,21 @@ class DeepResearchService:
             yield {"type": "error", "message": driver_reason}
             return
         requested_space_ids = space_ids or self._rt.get_space_ids(conversation_id)
+        space_owner_id = owner_id
+        if space_owner_id is None and conversation_id:
+            space_owner_id = self._rt._store.conversation_owner_id_sync(conversation_id)
+        requested_space_ids, forbidden_space_ids = self._validated_space_ids(
+            requested_space_ids,
+            owner_id=space_owner_id,
+            include_unclaimed_legacy=include_unclaimed_legacy,
+        )
+        if forbidden_space_ids:
+            yield {
+                "type": "error",
+                "message": "space_forbidden",
+                "space_ids": list(forbidden_space_ids),
+            }
+            return
         # W-33: the live answer grounds on the reranker + NLI verifier. Space
         # grounding also needs the embedder for vector lookup.
         required_encoders = (
@@ -671,6 +723,17 @@ class DeepResearchService:
         search_override = self._search_override_for_sources(research_sources)
         deps = self._rt._research(search_override=search_override)
         space_ids = self._rt.get_space_ids(conversation_id)
+        space_owner_id = self._rt._store.conversation_owner_id_sync(conversation_id)
+        space_ids, forbidden_space_ids = self._validated_space_ids(
+            space_ids,
+            owner_id=space_owner_id,
+        )
+        if forbidden_space_ids:
+            _LOG.warning(
+                "dropping unowned space_ids for %s: %s",
+                conversation_id,
+                ", ".join(forbidden_space_ids),
+            )
         # W-35/W-33: pre-flight the driver + the REQUIRED encoders BEFORE the engine
         # starts. A dead driver or a degraded/empty remote reranker/NLI would
         # otherwise run a long, expensive job that silently produces a wrong report.

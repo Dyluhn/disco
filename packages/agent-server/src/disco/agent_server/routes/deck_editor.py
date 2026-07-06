@@ -22,15 +22,16 @@ import json
 import posixpath
 from typing import Any
 
-from disco.core import DEFAULT_OWNER_ID, ObservationEvent
+from disco.core import ObservationEvent
 from disco.core.brand.tokens import Theme
 from disco.core.design import direction_from_markdown, to_brand_tokens
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ..runtime import ConversationRuntime
-from ._common import _declared_artifacts
+from ..auth import current_owner_id
+from ._common import _declared_artifacts, require_owned_conversation
 from .files import _read_artifact_bytes
 
 
@@ -381,6 +382,7 @@ async def _export_deck_with_template_response(
     path: str,
     template: str,
     fmt: str,
+    owner_id: str,
 ) -> Any:
     from disco.core.brand import is_valid_template
     from disco.tools.builtin._pptx_render import render_html, render_pptx
@@ -424,7 +426,7 @@ async def _export_deck_with_template_response(
         elif fmt == "pdf":
             pptx_bytes = render_pptx(deck)
             body = await _render_deck_pdf_in_sandbox(
-                live_runtime, pptx_bytes, owner_id=DEFAULT_OWNER_ID
+                live_runtime, pptx_bytes, owner_id=owner_id
             )
             media = "application/pdf"
             ext = "pdf"
@@ -455,10 +457,12 @@ async def _export_deck_with_template_response(
 
 async def _deck_export_capabilities_response(
     runtime: ConversationRuntime | None,
+    *,
+    owner_id: str,
 ) -> dict[str, Any]:
     if runtime is None:
         return {"pptx": True, "html": True, "pdf": False, "pdf_reason": "no_runtime"}
-    available, reason = await _deck_pdf_available(runtime, owner_id=DEFAULT_OWNER_ID)
+    available, reason = await _deck_pdf_available(runtime, owner_id=owner_id)
     return {"pptx": True, "html": True, "pdf": available, "pdf_reason": reason}
 
 
@@ -565,14 +569,17 @@ def make_deck_editor_router(
     @router.get("/conversations/{conversation_id}/deck/editor")
     async def get_deck_for_editor(
         conversation_id: str,
+        request: Request,
         path: str = Query(..., description="Deck base name (no extension)."),
     ) -> dict[str, Any]:
         """Return the LoweredDeck for `{path}.authored.json` (editor geometry)."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         return await _get_deck_for_editor_response(store, runtime, conversation_id, path)
 
     @router.get("/conversations/{conversation_id}/deck/editor/render")
     async def get_deck_render_inline(
         conversation_id: str,
+        request: Request,
         path: str = Query(..., description="Deck base name (no extension)."),
         template: str | None = Query(None, description="Template id, e.g. 'disco-light'."),
     ) -> Any:
@@ -583,6 +590,7 @@ def make_deck_editor_router(
         inject it as an iframe ``srcDoc``. The live render reads the stored authored
         sidecar + optional theme override — same jailing and staleness guards as the
         export and PUT routes. Template defaults to the deck's own theme when omitted."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         return await _get_deck_render_inline_response(
             store, runtime, conversation_id, path, template
         )
@@ -590,6 +598,7 @@ def make_deck_editor_router(
     @router.get("/conversations/{conversation_id}/deck/export")
     async def export_deck_with_template(
         conversation_id: str,
+        request: Request,
         path: str = Query(..., description="Deck base name (no extension)."),
         template: str = Query("disco-light", description="Template id, '{name}-{mode}'."),
         fmt: str = Query("pptx", description="'pptx', 'html', or 'pdf'."),
@@ -609,12 +618,21 @@ def make_deck_editor_router(
         the ``process`` (no-container) backend the route returns 409
         {"reason": "no_container_backend"} and the UI hides the PDF button (no false
         affordance)."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         return await _export_deck_with_template_response(
-            store, runtime, conversation_id, path, template, fmt
+            store,
+            runtime,
+            conversation_id,
+            path,
+            template,
+            fmt,
+            owner_id=current_owner_id(request),
         )
 
     @router.get("/conversations/{conversation_id}/deck/export/capabilities")
-    async def deck_export_capabilities(conversation_id: str) -> dict[str, Any]:
+    async def deck_export_capabilities(
+        conversation_id: str, request: Request
+    ) -> dict[str, Any]:
         """Report which export formats this conversation's sandbox can ACTUALLY produce.
 
         BW-10: deck→PDF needs LibreOffice. Rather than the FE guessing from the backend
@@ -622,12 +640,17 @@ def make_deck_editor_router(
         ``command -v soffice`` in a throwaway box so the PDF button is hidden HONESTLY
         when the deployed image lacks it. ``pptx``/``html`` render in-process → always
         available."""
-        return await _deck_export_capabilities_response(runtime)
+        await require_owned_conversation(request, store, conversation_id)
+        return await _deck_export_capabilities_response(
+            runtime,
+            owner_id=current_owner_id(request),
+        )
 
     @router.put("/conversations/{conversation_id}/deck/editor")
     async def patch_deck(
         conversation_id: str,
         body: DeckPatchBody,
+        request: Request,
         path: str = Query(..., description="Deck base name (no extension)."),
     ) -> dict[str, Any]:
         """Apply the patch, re-render, and write authored.json + html + pptx back.
@@ -635,6 +658,7 @@ def make_deck_editor_router(
         Mirrors DeckPatchTool.run: read → apply_patch → validate (422 on failure,
         workspace untouched) → lower_deck → render. Write-back requires a live
         sandbox session (409 otherwise — no writes)."""
+        conversation_id = await require_owned_conversation(request, store, conversation_id)
         return await _patch_deck_response(store, runtime, conversation_id, body, path)
 
     return router
