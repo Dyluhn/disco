@@ -56,4 +56,14 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 
 ### Status: codex still building B-W1 harness (bg be1mwl9z6); B-W2 specced + queued.
 
+### B-W1 LANDED — commit `d5db4e88` (the build-depth keystone)
+- codex built `WorkerdApp` harness (`packages/core/tests/_workerd_harness.py`) + integration test + retired the "Epic I deferred (local)" verifier docstrings. Harness is robust: path-escape guard, process-group SIGTERM→SIGKILL + port-down check, db-name read from wrangler.toml, wrangler_available() skip, timeouts + capped output, fully typed.
+- Fable authoritative verification (not codex paste): basedpyright 0; arch-budget baseline (no new); lint-imports 2 kept; diagram fresh; core unit suite green. **Own live-proof run** (unique marker `a785d1b2…`, distinct from codex's): POST lead → authed GET 200 → KILL (port 34361 down) → RESTART → authed GET still returns the lead; unauth GET 401 before AND after. Real wrangler 4.107 + workerd + local D1.
+- Verifier scope notes correctly retired the stale wording while preserving the structural-vs-runtime honesty + "hosted Cloudflare deploy owner-gated."
+- Patched to campaign branch; wt-B reset to new tip (harness present).
+
+### B-W2 dispatched (records primitive — data-layer depth)
+- codex building the new `records` primitive: optional FK on EntityField, AppSpec FK-target + cycle validation, multi-table FK-ordered schema.sql + migrations/0001_init.sql, FK-ordered Drizzle, N-entity worker route table (POST-insert + auth-gated GET-list per entity), registration. Live-proof reuses the B-W1 harness (FK'd shift survives cold restart). Hard constraint: lead-gen output stays byte-identical. bg `bu4a3da10`.
+- Build-depth is now SEQUENTIAL (B-W2→B-W3 auth/RBAC→B-W4 reactivity); one deep workstream. Security (Epic S) held as the focused closer per Dylan's ordering.
+
 <!-- append below as work lands -->

@@ -132,7 +132,7 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | WO | Epic | Status | Commit | Live-proof |
 |----|------|--------|--------|-----------|
 | A1–A3 | Design | **DONE** | `aef9c33d` | 22 dirs, zero self-flags, correct dark-mode, pick_direction selects each |
-| B-W1 | Build | QUEUED (keystone) | — | — |
+| B-W1 | Build | **DONE** (keystone) | `d5db4e88` | Fable's own run: POST→kill→restart→marker present; real wrangler+workerd+D1 |
 | B-W2 | Build | QUEUED | — | — |
 | B-W3 | Build | QUEUED | — | — |
 | B-W4 | Build | QUEUED | — | — |
