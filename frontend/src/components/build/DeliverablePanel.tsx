@@ -76,6 +76,23 @@ export function DeliverablePanel({
           Manifest
         </button>
       )}
+      {/* A served app is a graph of files, not one artifact — "Open" alone left no
+          way to take the site with you. This is the honest whole-site export: the
+          extension-agnostic /api/projects/{cid}/download zip (owner-scoped, streams
+          the whole workspace). Secondary styling — "Open" stays the primary action. */}
+      {isApp && cid && (
+        <a
+          href={`${agentHttpBase()}/api/projects/${cid}/download`}
+          download
+          aria-label={`Download the site as a .zip: ${deliverable.title}`}
+          title="Download the whole site (.zip)"
+          data-disco-control="build.download-site-zip"
+          className="flex shrink-0 items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+        >
+          <Download className="size-3.5" aria-hidden />
+          Site .zip
+        </a>
+      )}
       {/* When the agent served to a canonical URL, surface it as a real link. */}
       {deployUrl && (
         <a

@@ -59,6 +59,31 @@ _ARTIFACT_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".csv": "text/csv; charset=utf-8",
+    # Web-app assets. A built site is a graph of files — download index.html and
+    # every stylesheet/script/font/icon it references must resolve too, or the
+    # export is a blank page. These stay ATTACHMENTS (Content-Disposition:
+    # attachment + nosniff; inline mode is .html-only above), so a .js/.svg here
+    # is bytes-on-disk to save, never something this origin parses or executes —
+    # the "safe as long as it stays an attachment" invariant holds. The declared-
+    # artifact jail below still governs WHICH files are reachable.
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".mjs": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".avif": "image/avif",
+    ".txt": "text/plain; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".webmanifest": "application/manifest+json",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+    ".otf": "font/otf",
+    ".eot": "application/vnd.ms-fontobject",
 }
 
 _AUDIO_MEDIA_TYPES = {".mp3": "audio/mpeg", ".md": "text/markdown; charset=utf-8"}

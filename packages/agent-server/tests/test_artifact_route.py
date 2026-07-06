@@ -238,10 +238,12 @@ def test_rejected_paths_404(live_client: TestClient, path: str) -> None:
 
 
 def test_declared_but_wrong_extension_still_404(live_client: TestClient) -> None:
-    """Even a DECLARED non-xlsx artifact is rejected by the extension allowlist (v1)."""
+    """Even a DECLARED artifact is rejected when its extension isn't in the allowlist.
+    The web-asset expansion added site assets (.css/.js/.svg/.txt/fonts…) but NOT
+    source code — a declared .py still 404s."""
     cid = _create(live_client)
-    _declare_sheet(live_client._store, cid, "notes.txt")  # type: ignore[attr-defined]
-    assert live_client.get(f"/conversations/{cid}/artifacts/notes.txt").status_code == 404
+    _declare_sheet(live_client._store, cid, "script.py")  # type: ignore[attr-defined]
+    assert live_client.get(f"/conversations/{cid}/artifacts/script.py").status_code == 404
 
 
 # ---- finished run → ProjectStore snapshot fallback --------------------------
@@ -325,10 +327,11 @@ def test_undeclared_new_format_still_404(live_client: TestClient) -> None:
 
 
 def test_disallowed_extension_still_404_after_e7(live_client: TestClient) -> None:
-    """.txt is not in _ARTIFACT_TYPES even after the E7 allowlist expansion."""
+    """.py is not in _ARTIFACT_TYPES even after the E7 + web-asset allowlist expansions
+    — source/executable types are never served, only documents + web assets."""
     cid = _create(live_client)
-    _declare_sheet(live_client._store, cid, "notes.txt")  # type: ignore[attr-defined]
-    assert live_client.get(f"/conversations/{cid}/artifacts/notes.txt").status_code == 404
+    _declare_sheet(live_client._store, cid, "run.py")  # type: ignore[attr-defined]
+    assert live_client.get(f"/conversations/{cid}/artifacts/run.py").status_code == 404
 
 
 # ---- C5: ?inline=true — HTML inline mode with CSP / non-HTML 404 guard ------
