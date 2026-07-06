@@ -295,13 +295,19 @@ class Page(BaseModel):
 
 class EntityField(BaseModel):
     """A field on an entity. `type` is an open scalar vocabulary
-    (str/int/bool/datetime/text/...) the generator maps to columns/inputs."""
+    (str/int/bool/datetime/text/...) the generator maps to columns/inputs.
+
+    `references`, when set, names another Entity id whose implicit `id` column this
+    field foreign-keys to. Referencing fields must be declared as integer-ish
+    (`int`, `integer`, or `number`) and are emitted as INTEGER columns regardless of
+    other type spelling."""
 
     model_config = _STRICT
 
     name: _IdStr
     type: _ShortStr
     required: bool = False
+    references: _IdStr | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("name")
     @classmethod
@@ -333,6 +339,17 @@ class EntityField(BaseModel):
                 f"Object.prototype); choose another name"
             )
         return value
+
+    @model_validator(mode="after")
+    def _reference_type_is_integer(self) -> EntityField:
+        if self.references is None:
+            return self
+        if self.type.strip().lower() not in {"int", "integer", "number"}:
+            raise ValueError(
+                "entity field with references set must use type 'int', 'integer', "
+                f"or 'number', got {self.type!r}"
+            )
+        return self
 
 
 class Entity(BaseModel):
@@ -418,6 +435,31 @@ class AppSpec(BaseModel):
         _require_unique((p.route for p in self.pages), what="route")
         _require_unique((e.id for e in self.entities), what="entity id")
         _require_unique((a.id for a in self.primary_actions), what="primary action")
+        return self
+
+    @model_validator(mode="after")
+    def _foreign_keys_valid(self) -> AppSpec:
+        entity_ids = {e.id for e in self.entities}
+        deps: dict[str, set[str]] = {}
+        for entity in self.entities:
+            refs = {f.references for f in entity.fields if f.references is not None}
+            for ref in refs:
+                if ref not in entity_ids:
+                    raise ValueError(
+                        f"entity {entity.id!r} references unknown entity {ref!r}"
+                    )
+            deps[entity.id] = set(refs)
+
+        emitted: set[str] = set()
+        pending = dict(deps)
+        while pending:
+            ready = [entity_id for entity_id, refs in pending.items() if refs <= emitted]
+            if not ready:
+                cycle = ", ".join(sorted(pending))
+                raise ValueError(f"entity foreign key cycle detected among: {cycle}")
+            for entity_id in ready:
+                emitted.add(entity_id)
+                del pending[entity_id]
         return self
 
 

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 # the verifier never disagree about the spelling.
 LEAD_GEN_PRIMITIVE_ID = "lead_gen"
 DIRECTORY_PRIMITIVE_ID = "directory"
+RECORDS_PRIMITIVE_ID = "records"
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,7 @@ def primitive_ids() -> frozenset[str]:
 __all__ = [
     "DIRECTORY_PRIMITIVE_ID",
     "LEAD_GEN_PRIMITIVE_ID",
+    "RECORDS_PRIMITIVE_ID",
     "PrimitiveDefinition",
     "get_primitive",
     "primitive_ids",

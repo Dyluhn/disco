@@ -250,8 +250,9 @@ class AppCreateArgs(BaseModel):
     primitive_id: str = Field(
         default=LEAD_GEN_PRIMITIVE_ID,
         description="The AppKit primitive to scaffold: 'lead_gen' (a lead-capture app) or "
-        "'directory' (a static, searchable directory site). Ignored when an explicit "
-        "app_spec is given (the primitive is taken from app_spec.app_kind).",
+        "'directory' (a static, searchable directory site) or 'records' (related "
+        "entities with CRUD list/insert routes). Ignored when an explicit app_spec "
+        "is given (the primitive is taken from app_spec.app_kind).",
     )
     brief: str | None = Field(
         default=None,
@@ -279,12 +280,13 @@ class AppCreateTool:
     definition = ToolDef(
         name="app_create",
         description=(
-            "Scaffold a lead-gen Cloudflare app (Vite React SPA + Worker + D1) from a "
-            "design RECIPE. Provide `recipe_id` (required) and optionally an explicit "
-            "`app_spec` JSON or a `brief` to name a sensible default. Writes the generated "
-            "tree plus .disco/appspec.json + .disco/designspec.json. The output is "
-            "design_lint-clean by construction. Refuses to overwrite an existing app "
-            "unless `overwrite` is true."
+            "Scaffold an AppKit Cloudflare app from a design RECIPE. Provide "
+            "`recipe_id` (required), optionally `primitive_id`, and optionally an "
+            "explicit `app_spec` JSON or a `brief` to name a sensible default. "
+            "Writes the generated tree plus .disco/appspec.json + "
+            ".disco/designspec.json. The output is design_lint-clean by "
+            "construction. Refuses to overwrite an existing app unless `overwrite` "
+            "is true."
         ),
         args_model=AppCreateArgs,
         needs=_FS,

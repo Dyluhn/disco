@@ -40,6 +40,7 @@ from .local_verify import (
 from .primitives import (
     DIRECTORY_PRIMITIVE_ID,
     LEAD_GEN_PRIMITIVE_ID,
+    RECORDS_PRIMITIVE_ID,
     PrimitiveDefinition,
     get_primitive,
     primitive_ids,
@@ -66,6 +67,11 @@ from .recipes import (
     SiteRecipe,
     get_recipe,
     recipe_ids,
+)
+from .records_primitive import (
+    default_records_app_spec,
+    generate_records,
+    prepare_records_app_spec,
 )
 from .section_catalog import (
     COVERED_KINDS,
@@ -131,6 +137,7 @@ __all__ = [
     "COVERED_KINDS",
     "DIRECTORY_PRIMITIVE_ID",
     "LEAD_GEN_PRIMITIVE_ID",
+    "RECORDS_PRIMITIVE_ID",
     "MAX_DESIGNSPEC_BYTES",
     "RECIPES",
     "SECTION_VARIANTS",
@@ -161,14 +168,17 @@ __all__ = [
     "cloudflare_export_ready_static",
     "default_directory_app_spec",
     "default_lead_gen_app_spec",
+    "default_records_app_spec",
     "designspec_path",
     "ensure_lead_entity",
     "local_api_roundtrip",
     "generate",
+    "generate_records",
     "get_primitive",
     "get_recipe",
     "get_variant",
     "primitive_ids",
+    "prepare_records_app_spec",
     "resolve_primitive",
     "load_app_spec",
     "load_app_spec_from_bytes",

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import importlib
 import json
 import re
 from urllib.parse import quote
@@ -1921,6 +1922,9 @@ register_primitive(
         generate=_generate_directory,
     )
 )
+
+# Register sibling primitives that depend on the shared emitters defined above.
+importlib.import_module(".records_primitive", package=__package__)
 
 
 __all__ = [
