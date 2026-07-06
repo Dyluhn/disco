@@ -168,6 +168,27 @@ _DESIGN_DIRECTION_SITE_APP_HINTS: tuple[str, ...] = (
     "restaurant",
     "event page",
     "form",
+    # Broadened so ordinary small-business/site briefs also seed a design direction
+    # (palette + art-direction keywords), not just ones that literally say "website".
+    # Without this, "a page for my bakery" got NO direction and the art fell flat.
+    "page",
+    "brand",
+    "business",
+    "company",
+    "agency",
+    "studio",
+    "blog",
+    "gallery",
+    "menu",
+    "booking",
+    "cafe",
+    "coffee",
+    "bakery",
+    "salon",
+    "shop page",
+    "microsite",
+    "product page",
+    "marketing",
 )
 _DESIGN_DIRECTION_DECK_HINTS: tuple[str, ...] = (
     "deck",
