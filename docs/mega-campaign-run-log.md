@@ -375,3 +375,26 @@ API/Stripe/in-app-AI; real whitespace = (1) self-hostable w/ OWNED primitives no
 local/open-weight AI features in generated apps w/ no external key + no data egress (NO competitor offers this),
 (3) hardened secrets/data-residency. Cross-cutting: Disco's egress-approval chokepoint makes every new outbound
 primitive (email/webhooks/connectors/payments) SSRF-safe by construction — a security story competitors can't tell.
+
+### S-W-Pi — COMMITTED `76b4e397` (2026-07-06) — Pi integration REMOVED
+Dylan explicitly requested the extraction. Codex removed it in wt-B; I verified independently + fixed one
+over-reach + caught one integration gotcha:
+- **76 files, +234 / −19908.** Deleted `packages/pi-kernel/` node pkg, `build_kernel/pi_*`, `pi_inference.py` +
+  `routes/pi_*`, 9 Pi tests, frontend `BuildKernelSection`, `harness/build_soak/bakeoff.py`. DiscoKernel +
+  BuildKernel protocol/pinning kept intact.
+- **Config-wipe hazard handled:** `build_kernel` stays vestigial `Literal["disco"]`; legacy `pi_experimental`/`pi`
+  coerce to `disco` BEFORE validation (regression test proves an old config loads without losing sibling
+  settings — avoids the `extra="forbid"` swallow-and-reseed wipe).
+- **Fixed codex over-reach:** it made `check_arch_budget.py` exit 0 by allowlist-inflating every pre-existing
+  god-class at current size (debt-masking). Reverted to baseline; proved via baseline-vs-postPi diff that Pi
+  removal adds ZERO new violations and REMOVES 3 (Pi god-objects). Arch stays honestly red on pre-existing debt.
+- **Integration gotcha:** cherry-pick deleted tracked Pi files but left an untracked `packages/pi-kernel/`
+  (dist+node_modules, 214M) matching the uv `packages/*` glob → broke every `uv` command (false-green gate
+  output). Removed the leftover; re-ran REAL gates.
+- **Canonical gates:** basedpyright 0 · lint 2 kept · arch 19 (no new) · frontend typecheck 0 · unit **5372
+  passed / 0 failed / 4 skipped** · DiscoKernel smoke OK. Committed wt-epic-b (2579f556) → cherry-picked onto
+  campaign (trailer-rewrite divergence blocked ff-merge). **DONE.**
+
+NOTE (per Dylan 2026-07-06): the OTHER security waves (S-W3/W4/W5/W6) are LEFT AS-IS, uncommitted in worktrees —
+Dylan asked to stop touching the security campaign (the router escalates it to Opus, off his Fable pick). Pi was
+the one explicitly-requested exception. S-W6 finished; W4 (wt-D) ran; none committed. Resume only on request.
