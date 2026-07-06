@@ -259,3 +259,119 @@ frontend auto-mint + CSRF wiring needs one real-browser eyeball (full stack: age
 :8800 + vite :5173). Flagged, not silently skipped.
 
 **Next: S-W2 (secrets + egress chokepoint)** — spec already grounded (spec-sw2-egress.md).
+
+## S-W2 — secret-resolution + egress chokepoint — codex done, verifying
+codex impl: +1883/-415, 46 files, 3 new modules (core/host_egress.py 273 = SSRF chokepoint, llm/secret_refs.py
+153 = secret-ref map + allowlisted migration, test_sw2_egress_exploits.py 412 = 9 exploit tests). B1-B6 all
+addressed (secret-ref-only resolution, 2-class egress, report-PDF url_fetcher deny, error redaction,
+pre-execution host-scope confirm for remote image/audio/slides).
+
+My authoritative verify: basedpyright 0; arch 22 symbols, NONE in S-W2-touched files (no new god-objects);
+exploit harness 9/9. Unit suite: 1 failure = test_process_backend_expose_port_defense — NOT S-W2 (didn't touch
+test_sandbox.py or sandbox/process.py); root cause = an orphaned `python3 -m http.server 3000` (leftover disco
+sandbox fixture, 36min old) squatting :3000, so the "port not bound" assert failed. Killed the orphan → test
+passes. Env flake, not a regression.
+
+**/tmp hygiene:** found 11,357 orphaned /tmp/disco-sbx-* dirs (near-empty, inode creep) + leftover podman
+sandbox containers from prior soak runs. Quota ~39% blocks (not wedged). Safely removed 9,987 EMPTY orphans
+(→1,370 non-empty left untouched) as proactive insurance vs the /tmp usrquota wedge before the sandbox-heavy
+W3/W4/W5. codex couldn't self-run the gpt-5.5 adversarial pass (no such tool in its env) — dispatched
+separately. Awaiting S-W2 adversarial verdict.
+
+### S-W2 adversarial round 1 — BLOCK (6 findings, incl. a CRITICAL), fix pass dispatched
+Core B1/B4/B5 HELD (no env fallthrough; report-PDF url_fetcher deny; provider-error redaction). But the trust
+model + SSRF range + 2 un-chokepointed host-HTTP paths failed:
+- **#1 CRITICAL (loopback-reproduced): config SELF-BLESSES.** trusted_origins is a plain field IN the config
+  (config.py:447), so a poisoned config sets base_url=attacker + trusted_origins=[attacker] + api_key_env=
+  OPENAI_API_KEY → migration imports the host key → startup prewarm ships `Authorization: Bearer <host key>` to
+  the attacker. Approval living in the artifact being approved is no approval. Fix: OUT-OF-BAND approval,
+  master-secret-HMAC'd (unforgeable by a config/file poisoner), written ONLY by the S-W1 admin Settings API;
+  migration imports no key + startup fires no wire for unapproved origins (fail-closed per plan B2'').
+- **#2 HIGH: SSRF guard misses 100.64.0.0/10** (CGNAT/Tailscale) — is_private is False for it. Fix: `not
+  ip.is_global` (covers CGNAT/benchmark/unspecified/mapped-v6).
+- **#3 HIGH: HTTP MCP connects+list_tools at startup before approval** (+ latent `.get` vs `.get_secret` bug).
+- **#4 HIGH: audio_overview resolves LLM base_url at IMPORT time**, POSTs report text with no trusted-origin
+  check → host SSRF. Fix: execution-time ConfigStore resolution + egress policy.
+- **#5 MED: Pi inference client honors proxy env** → trust_env=False, follow_redirects=False.
+- **#6 LOW: exploit tests miss the blocking cases** (trusted=() only, monkeypatched redirect, scope-not-ordering).
+The self-blessing crux is why S-W1 (auth boundary) had to be the keystone: approval must ride the admin
+boundary, not the model-facing config. Fix pass dispatched. Then adversarial round 2 → SHIP.
+
+### S-W2 adversarial round 2 — BLOCK (2 findings, converging), fix pass 2 dispatched
+HMAC approval infra PROVEN SOUND (no bypass: compare_digest, canonical JSON, fails closed on
+missing/tampered/absent-signing-secret, replay-resistant across scheme/port/purpose/ref/trailing-dot). All 6
+round-1 findings CONFIRMED closed (poisoned-config zero-wire, SSRF is_global incl. 100.64/10 + redirect
+revalidation, MCP startup gated, audio exec-time approval, Pi trust_env=False). 2 NEW = same chokepoint-
+completeness class (an egress site that forgot the approval gate):
+- **#1 CRITICAL (wire-reproduced, 1062 bytes): `find_and_edit` cross-origin key exfil** — resolves ctx.driver_llm
+  raw + POSTs Authorization: Bearer <host key> with no approval check; root = runtime_settings.py:363 hands
+  tools the config endpoint even when build_providers skipped it unapproved. Fix: gate at source
+  (_effective_driver_endpoint) + sink (find_and_edit) + sweep all ctx.driver_llm readers.
+- **#2 HIGH (wire-reproduced): `/api/mcp/test` connects before approval** — probes.py:284 builds McpHttpClient +
+  connect+list_tools with no origin_approved; also AgentAuthMiddleware lacks admin-path enforcement. Fix:
+  approval-gate the probe + admin-gate agent-server operator routes (mirror app-server _is_admin_path).
+Same lesson as S-W1's owner sweep: the infra is right; completeness across every sink is the work. Fix pass 2 +
+pi_inference arch trim dispatched. Then round 3 → SHIP.
+
+## STRATEGY PIVOT (2026-07-06) — MAX THROUGHPUT (budget abundant, time-constrained)
+Dylan clarified: the "50% weekly usage" spans the whole 6-day session; budget is ABUNDANT, but today is the
+last day of availability. So: go maximally parallel + full adversarial rigor, get the whole campaign DONE +
+proven today, don't conserve. Also: **DROP Pi** (Dylan: "cut off pi, it never worked well") — all reliability
+work was on the native DiscoKernel loop; Pi never earned the 193-run soak. Pi removal = attack-surface
+reduction, folded into Epic S (task #68).
+
+**Parallelization plan (disjoint file sets → separate worktrees, concurrent codex impl + adversarial):**
+- wt-B (sandbox/runtime chain, serial): S-W2 finish → commit → Pi removal → S-W3 → S-W5.
+- wt-C (fully disjoint sinks): S-W6 (share_service/sheets/redaction/gitignore).
+- wt-D (mostly disjoint, after S-W2): S-W4 (MCP approval — builds on S-W2's mcp origin/secret-ref gating).
+Recon for W4/W5/W6 launched in parallel; W3 already grounded (spec-sw3-hostexec.md). S-W2 fix pass 3 (2 egress
+stragglers: app-server data-source probe + MCP secret-ref-pin; + 3 stale test fixtures; + operator-approval-
+path check) running. Round 3 had CONFIRMED closed R2 fixes + HMAC infra sound + ~15 egress sites swept clean.
+
+### S-W2 — VERIFIED, adversarially SHIP (2026-07-06)
+Fix pass 3 landed both round-3 stragglers. Final gate results on wt-B (branch `wt-epic-b`):
+- **adv4 (gpt-5.5 xhigh): VERDICT SHIP** — no confirmed BLOCK. Confirmed closures: (a) app-server data-source
+  probes admin-gated + signed `origin_approved(base_url, kind:provider, "")` required before `probe_reachable()`
+  wire; paid probes also require `secret_ref_allowed_for_origin()`. (b) MCP header-refs require both
+  `origin_approved(url, mcp:name, ref)` AND secret-ref pinned to URL before streamable-HTTP connect — an
+  OpenRouter ref to a non-OpenRouter MCP origin is NOT sent. (c) operator admin-gated approval paths exist
+  (`POST /api/security/approve-origin` + config-save flows sign local-provider approvals).
+- **unit (core+tools+agent-server+app-server, not-integration): 5562 passed / 0 failed / 0 errors / 4 skipped**
+  (JUnit-XML counted; per repo CLAUDE.md the `-q` summary line is swallowed — exit code + XML are truth).
+- **basedpyright: 0 errors** · **lint-imports: 2 kept** · exploit harness `test_sw2_egress_exploits.py`: 14 green.
+- **arch budget: ONE regression** — S-W2 wiring grew `ConfigState` 935→1058 class-LOC (>800 cap, an already-
+  over-budget coordinator). NOT hidden behind an allowlist bump. Behavior-preserving extraction dispatched to
+  codex: relocate the origin-approval/probe-gating wiring into a new app-server-internal
+  `origin_approval_wiring.py`, ConfigState back to ≤935, re-verify all 6 gates + prove no approval call dropped.
+  Once green → patch to main + commit S-W2. THEN fan out {Pi removal, W4} and the wt-B chain {W3 → W5}.
+
+Pi-removal dependency-closure recon DONE (read-only). Key hazard found: naively deleting the `build_kernel`
+field is a **silent full-config wipe** — `RouterConfig` is `extra="forbid"` and `config_store.load()` swallows
+the validation error → falls back to seed config, discarding ALL user settings. Mitigation baked into the Pi
+spec: keep a vestigial `build_kernel: Literal["disco"]` that coerces legacy `"pi_experimental"`→`"disco"` on
+load. Bonus: Pi removal DROPS baseline arch violations (`pi_chat_completions` 331-LOC etc.).
+
+### S-W2 — COMMITTED `2408e40f` (2026-07-06)
+ConfigState extraction landed (new `app-server/origin_approval_wiring.py`, 185 LOC; ConfigState back to 935
+baseline, 16→16 approval calls preserved, no dropped approval). Committed on `disclaude/mega-campaign` via
+wt-epic-b commit + `--ff-only` merge (68 files, +3620/−624; 6 new files incl. `core/host_egress.py`,
+`core/origin_approvals.py`, `core/llm/secret_refs.py`, `app-server/routes/security.py`, and the 962-line
+`test_sw2_egress_exploits.py`). Canonical-checkout confirmation: basedpyright 0, ConfigState 935, exploit
+harness exit 0. **S-W2 DONE.**
+
+### Fan-out after S-W2 (2026-07-06)
+Critical path opened. wt-B (clean on 2408e40f) → **Pi removal** (spec sharpened w/ exact file:line closure +
+config-wipe mitigation) → then W3 → W5 (serial: share tools/sandbox/*). wt-D (re-synced to 2408e40f) → **W4**
+(MCP approval integrity — builds on S-W2's mcp origin/secret-ref gating; touches runtime.py analyzer wiring
+:1880/:2341/:2373/:2394, disjoint from Pi's runtime.py hunks :164/:991/:3896). wt-C → **W6** still running
+(bctsmtdda). NOTE Pi+W4 both touch runtime.py but non-overlapping hunks → integrate Pi first, W4 rebases on top.
+
+### Parallel (user request 2026-07-06): site-builder capability research
+Dylan asked to "send out research for other areas similar to auth/database/RBAC we could add to our site
+builder." Dispatched 7 parallel agents (6 capability clusters + competitive scan), grounded in Disco's
+self-hosted/security-first/open-weight constraints. 6/7 back; synthesizing into a ranked Artifact briefing when
+cluster 4 (content/forms/CMS) lands. Verified thesis: table-stakes = auth/DB/RLS/storage/secrets/hosting/auto-
+API/Stripe/in-app-AI; real whitespace = (1) self-hostable w/ OWNED primitives not borrowed-Supabase, (2)
+local/open-weight AI features in generated apps w/ no external key + no data egress (NO competitor offers this),
+(3) hardened secrets/data-residency. Cross-cutting: Disco's egress-approval chokepoint makes every new outbound
+primitive (email/webhooks/connectors/payments) SSRF-safe by construction — a security story competitors can't tell.
