@@ -94,4 +94,12 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 - Final authoritative gates on main: basedpyright 0, arch baseline, lint 2 kept, diagram fresh, core suite green. My own final live-proof: full RBAC + session cold-restart. Byte-identical (my cross-checkout digests) for lead-gen + no-auth records.
 - **Build-depth arc so far: deploy-proof (B-W1) + relational data (B-W2) + auth/RBAC (B-W3) — all live-proven against real workerd.** Next: B-W4 (client reactivity, the last explicitly-requested feature), then Epic S (security closer, already fully spec'd in disco-security-fix-campaign.md), then Epic Z (soak).
 
+### B-W4 (client reactivity) dispatched — bg `byd1snk7w`
+- Scope: typed API client + reactive submit hook (idle/submitting/success/error discriminated union) + double-submit protection + inline validation + API-error surfacing + OPTIMISTIC "recently submitted" list. Enhances the shared form emitter (applies to lead-gen + records). INTENTIONALLY changes the frontend → golden digests updated (legit output change, not test-cheating). Mandatory Firefox screenshot live-proof (vite build → wrangler dev → Firefox E2E of the optimistic update).
+- Dispatched to codex to build on ITS budget; Fable verifies the screenshot + gates on return.
+
+### Honest remaining-scope read (for the morning)
+Landed + fully proven this run: **Epic A (designs), Epic C (Tier-3), B-W1 (deploy-proof), B-W2 (relational data), B-W3 (auth/RBAC — adversarially SHIP)**. That covers Dylan's two biggest asks (designs + auth) + the deploy/data foundation. B-W4 (reactivity, his 3rd ask) in flight.
+Remaining (next session): **Epic S (security, 6 waves — ALREADY fully spec'd in docs/disco-security-fix-campaign.md, implementation-ready)** and **Epic Z (soak)**. These are large focused blocks; S each wave needs real-exploit-before/after + gpt-5.5 adversarial (like the B-W3 auth cycle). They're teed up to execute directly from the security doc.
+
 <!-- append below as work lands -->
