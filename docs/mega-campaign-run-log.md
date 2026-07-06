@@ -398,3 +398,30 @@ over-reach + caught one integration gotcha:
 NOTE (per Dylan 2026-07-06): the OTHER security waves (S-W3/W4/W5/W6) are LEFT AS-IS, uncommitted in worktrees —
 Dylan asked to stop touching the security campaign (the router escalates it to Opus, off his Fable pick). Pi was
 the one explicitly-requested exception. S-W6 finished; W4 (wt-D) ran; none committed. Resume only on request.
+
+## ⚠️ PARKED SECURITY WAVES — RESUME PLAYBOOK (2026-07-06)
+Waves S-W3/W4/W5/W6 are PARKED at Dylan's request. Their definitions + grounded recon live in
+`docs/disco-security-fix-campaign.md` + this run log (per-wave scratchpad specs were session-temp and may be
+gone — rebuild from the committed docs). Current campaign tip: **`9620eb92`** (post-Pi).
+
+**State of each:**
+- **S-W3** (host-execution cluster) — NOT started. Would run in wt-B (now clean @ tip).
+- **S-W4** (MCP approval integrity) — codex RAN then was stopped mid-flight; **15 uncommitted files in
+  `disclaude-wt-D` @ base `2408e40f`** (old-S-W2, pre-Pi). Unverified, no adversarial pass completed.
+- **S-W5** (isolation + resource caps) — NOT started. Serial after W3 (shares `tools/sandbox/*`).
+- **S-W6** (output sinks + share) — codex FINISHED; **10 uncommitted files in `disclaude-wt-C` @ base
+  `4d09585a`** (pre-S-W2!). Unverified, no adversarial pass run.
+
+**🔧 CRITICAL — how to resume (all parked work sits on PRE-Pi, some on PRE-S-W2, bases → MUST rebase):**
+1. The worktree branches diverged from the campaign tip (the S-W2 trailer-rewrite + Pi commit moved the tip;
+   worktrees were never re-synced). A plain ff-merge WILL FAIL.
+2. For each parked wave: generate a patch of its uncommitted diff (`git add -A && git reset -- .disco-env &&
+   git diff --cached --binary > wave.patch`), reset the worktree to tip (`git reset --hard 9620eb92`), then
+   `git apply --3way wave.patch` and resolve conflicts (expect real conflicts in `mcp_manager.py`/`runtime.py`
+   for W4 since S-W2 + Pi both touched those since its base).
+3. **Pi-leftover gotcha:** after resetting any worktree to the post-Pi tip, the tracked `packages/pi-kernel/`
+   files are deleted but the untracked `packages/pi-kernel/{node_modules,dist}` (~214M) REMAIN and break every
+   `uv` command (uv `packages/*` glob → missing pyproject.toml). **`rm -rf packages/pi-kernel` first**, else all
+   gate output is false-green (tool aborts before running).
+4. Then run each wave's full discipline fresh: real exploit harness + 5 gates + gpt-5.5 xhigh adversarial-to-SHIP
+   (they were NEVER adversarially reviewed — do not trust the parked codex output).
