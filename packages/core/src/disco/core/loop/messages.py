@@ -313,6 +313,8 @@ _STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
     "different sub-task entirely. Do not retry what just failed. "
     "If the work is already complete, do NOT re-verify by re-reading "
     "unchanged files — call `serve`/`finish` now.\n"
+    "Before you move, `think` for one line about WHY the last attempt failed, "
+    "then pick a genuinely different action.\n"
     "<!-- disco:escape-attempt=0 -->\n"
     "</system-reminder>",
     "<system-reminder>\n"

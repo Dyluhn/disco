@@ -1224,6 +1224,8 @@ def render_design_direction(direction: DesignDirection) -> str:
             "",
             "DO:",
             "- Commit to this named direction before writing sections or components.",
+            "- Tailor the theme and design tokens to THIS direction before generating any "
+            "component — never ship default shadcn / component-library styling.",
             "- Derive the full palette from the seed in OKLCH-friendly tokens; "
             "keep accents named.",
             "- A ready-to-use tokens file exists at .disco/context/direction_tokens.css; "
