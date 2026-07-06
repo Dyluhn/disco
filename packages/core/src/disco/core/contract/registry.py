@@ -2,9 +2,9 @@
 
 Declares the concrete BuildContract for each artifact kind — its required files,
 starter kit, bootstrap/edit tool packs, verification finalizer, export pipeline,
-prompt pack, and UI card — and looks one up by kind or from a BuildBrief. Both kernels
-(DiscoKernel/PiKernel) resolve the same contract here, so a Build run has a declared,
-host-owned contract before execution. Pure data + lookup; no runtime imports.
+prompt pack, and UI card — and looks one up by kind or from a BuildBrief. Build runs
+resolve the same host-owned contract before execution. Pure data + lookup; no runtime
+imports.
 """
 
 from __future__ import annotations

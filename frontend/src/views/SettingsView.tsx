@@ -1,7 +1,6 @@
 import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
 import { AudioSection } from "@/components/settings/AudioSection";
-import { BuildKernelSection } from "@/components/settings/BuildKernelSection";
 import { ChatVerbositySection } from "@/components/settings/ChatVerbositySection";
 import { DataSourcesSection } from "@/components/settings/DataSourcesSection";
 import { EncoderSection } from "@/components/settings/EncoderSection";
@@ -238,16 +237,13 @@ export function SettingsView() {
             <SettingsGroup
               id="agent-sandbox"
               title="Agent & Sandbox"
-              summary="Tune the agent control pane, tool isolation, Build kernel, and live browser stream."
+              summary="Tune the agent control pane, tool isolation, and live browser stream."
             >
               <SettingsItem id="agent-chat">
                 <ChatVerbositySection />
               </SettingsItem>
               <SettingsItem id="sandbox">
                 <SandboxSection />
-              </SettingsItem>
-              <SettingsItem id="build-kernel">
-                <BuildKernelSection />
               </SettingsItem>
               <SettingsItem id="live-browser">
                 <LiveBrowserSection />

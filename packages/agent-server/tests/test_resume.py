@@ -134,9 +134,8 @@ async def test_resume_from_paused_is_legal():
 
 async def test_resume_pins_the_kernel_via_start(monkeypatch):
     """Finding #2: a resume must route through the PINNED `start` path, not a raw
-    `kick`. Otherwise a resumed run starts UNPINNED (and would silently force the disco
-    loop even when pi_experimental is selected). Here: a PAUSED build resume pins the
-    disco kernel and triggers it via `kick` (the disco kernel's `start`)."""
+    `kick`. Otherwise a resumed run starts UNPINNED. Here: a PAUSED build resume pins
+    the disco kernel and triggers it via `kick` (the disco kernel's `start`)."""
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)

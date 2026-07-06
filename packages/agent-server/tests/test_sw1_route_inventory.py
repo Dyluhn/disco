@@ -50,8 +50,6 @@ def _agent_public(path: str, methods: set[str]) -> bool:
         return True
     if "GET" in methods and path == "/api/share/{token}/bundle":
         return True
-    if path.startswith("/internal/pi-kernel/"):
-        return True
     if path.startswith("/api/appkit/cloudflare/"):
         return True
     return False

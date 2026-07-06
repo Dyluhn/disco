@@ -481,24 +481,6 @@ async def test_live_run_task_blocks_suspend(tmp_path):
         task.cancel()
 
 
-async def test_live_pi_sidecar_blocks_suspend(tmp_path):
-    """A live Pi sidecar session means in-flight work — suspend must skip it."""
-    store = SqliteEventStore(":memory:")
-    rt = _runtime_with_storage(store, str(tmp_path))
-    cid = await _make_conversation(store, ConversationStatus.PAUSED)
-    fake_executor = MagicMock()
-    fake_executor.kill = AsyncMock()
-    rt._executors[cid] = fake_executor
-    rt._pi_kernel._sessions[cid] = MagicMock()  # a live sidecar session
-    try:
-        with patch.dict("os.environ", {"PMX_IDLE_SUSPEND_S": "0"}):
-            count = await rt.sweep_idle_once()
-        assert count == 0
-        assert cid in rt._executors
-    finally:
-        rt._pi_kernel._sessions.pop(cid, None)
-
-
 async def test_done_run_task_does_not_block_suspend(tmp_path):
     """A COMPLETED task is not in-flight — it must NOT block suspend."""
     store = SqliteEventStore(":memory:")

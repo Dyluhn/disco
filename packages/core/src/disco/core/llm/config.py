@@ -37,30 +37,6 @@ ROLE_FALLBACK_PROVIDER_KEY = "__role_fallback__"
 # Flag to emit the DRIVER_VISION env deprecation warning at most once per process.
 _DRIVER_VISION_DEPRECATION_LOGGED: bool = False
 
-# Build-kernel experimental gate (Disco Pi Build Kernel Campaign A2). The
-# `pi_experimental` build kernel is unlocked ONLY when this env flag is set;
-# default OFF means a persisted `pi_experimental` selection transparently resolves
-# back to `disco`, so a stale setting can never route a real build through the
-# experimental stub. Defined in the shared core layer because BOTH the agent-server
-# (which routes the build) and the app-server (which reports the gate to Settings to
-# avoid a false affordance) must read ONE source of truth — they are independent
-# sibling packages and cannot import each other.
-BUILD_KERNEL_EXPERIMENTAL_ENV = "PI_KERNEL_EXPERIMENTAL"
-
-
-def build_kernel_experimental_enabled() -> bool:
-    """True when the experimental Pi build kernel may be selected (env-gated,
-    default OFF). Read live (not cached) so toggling the flag needs no restart,
-    matching how the rest of the runtime reloads settings per request."""
-    return disco_env(BUILD_KERNEL_EXPERIMENTAL_ENV, "") in {
-        "1",
-        "true",
-        "True",
-        "yes",
-        "on",
-    }
-
-
 class ModelEntry(BaseModel):
     model_id: str  # provider's id string [VERIFY]
     provider: str  # the endpoint key (one OpenAIProvider per distinct backend) [VERIFY]
@@ -461,13 +437,10 @@ class RouterConfig(BaseModel):
     # roles may retry against this prebuilt local OpenAI-compatible provider.
     # Driver-class roles never use it.
     role_fallback: RoleFallbackSettings = Field(default_factory=RoleFallbackSettings)
-    # Build kernel selector (Disco Pi Build Kernel Campaign A2). Which inner Build
-    # agent the agent-server runs: `disco` (the current AgentLoop, default) or
-    # `pi_experimental` (the experimental Pi-SDK kernel). `pi_experimental` only
-    # takes effect when the agent-server's experimental flag (PI_KERNEL_EXPERIMENTAL)
-    # is on — otherwise it transparently resolves back to `disco`, so a stale setting
-    # can never route a real build through the experimental stub.
-    build_kernel: Literal["disco", "pi_experimental"] = "disco"
+    # Vestigial compatibility field. Old configs may carry removed build-kernel
+    # choices; the before-validator coerces those to `disco` before Literal
+    # validation so a stale config never falls back to the seed and loses settings.
+    build_kernel: Literal["disco"] = "disco"
     # v1.2 deterministic assignment — the source of truth (R10):
     default_model: str  # AGENT_DRIVER's model + fallback for any unassigned role
     assignments: dict[ModelRole, str] = Field(default_factory=dict)  # explicit per-role
@@ -478,6 +451,13 @@ class RouterConfig(BaseModel):
     hard_budget_usd_per_conversation: float | None = None
     soft_budget_usd_global_daily: float | None = None
     hard_budget_usd_global_daily: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_build_kernel(cls, data: object) -> object:
+        if isinstance(data, dict) and data.get("build_kernel") != "disco":
+            return {**data, "build_kernel": "disco"}
+        return data
 
     # === INTELLIGENT ROUTING (DORMANT) — see policy.py / routing.py ============
     # The intelligent router consumed per-role `RoleRouting` (primary + overflow +

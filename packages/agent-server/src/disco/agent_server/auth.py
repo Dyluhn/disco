@@ -93,8 +93,6 @@ def _is_public_http(path: str, method: str) -> bool:
         return True
     if method == "GET" and path.startswith("/api/share/") and path.endswith("/bundle"):
         return True
-    if path.startswith("/internal/pi-kernel/"):
-        return True
     if path.startswith("/api/appkit/cloudflare/"):
         return True
     if path == PREVIEW_BOOTSTRAP_PATH:

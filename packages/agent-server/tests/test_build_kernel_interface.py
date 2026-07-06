@@ -1,19 +1,14 @@
-"""BuildKernel seam — Disco Pi Build Kernel Campaign, PR A1/A2.
+"""BuildKernel seam.
 
-Proves the seam introduced in A1/A2 is a ZERO-behavior-change wrapper:
+Proves the seam is a ZERO-behavior-change wrapper:
 
   * the current Build runs through `DiscoKernel`, which is a thin pass-through to
     the SAME collaborators the agent-server already drives (the event store +
     `ControlOps` + `kick` + `ResumeService`), with IDENTICAL events/args;
-  * the kernel selector resolves `disco` → `DiscoKernel` and `pi_experimental`
-    → the `PiKernel` stub ONLY when the experimental flag is on (else it
-    downgrades to `disco`, never routing a real build through the stub);
+  * the kernel selector resolves legacy/unknown persisted values to `DiscoKernel`;
   * `ConversationRuntime`'s public plan/action-gate ops (confirm / reject /
     approve_plan / request_plan) route THROUGH the active kernel and, with the
     default `disco` kernel, land on `ControlOps` exactly as before.
-
-The experimental flag is the env var `DISCO_PI_KERNEL_EXPERIMENTAL` (read via
-`disco_env`, suffix `PI_KERNEL_EXPERIMENTAL`).
 """
 
 from __future__ import annotations
@@ -25,10 +20,7 @@ import pytest
 from disco.agent_server.build_kernel import (
     BuildKernel,
     BuildKernelKind,
-    BuildKernelPolicy,
     DiscoKernel,
-    PiKernel,
-    experimental_kernels_enabled,
     resolve_kernel_kind,
     select_kernel,
 )
@@ -37,7 +29,6 @@ from disco.agent_server.runtime import ConversationRuntime
 from disco.core import EventSource, SqliteEventStore
 
 CID = "conv-build-kernel-test"
-EXP_ENV = "DISCO_PI_KERNEL_EXPERIMENTAL"
 
 
 # ---- helpers -----------------------------------------------------------------
@@ -60,7 +51,6 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
     fake.kick = MagicMock()
     fake._pinned_kernels = {}
     fake._run_generation = {}
-    fake._pi_token_store = None  # C#3: revoke is None-safe when no gateway store wired
 
     control = MagicMock()
     control.confirm = AsyncMock()
@@ -87,15 +77,12 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
     fake._config_store = config_store
 
     fake._disco_kernel = DiscoKernel(fake)
-    fake._pi_kernel = PiKernel(fake)
-
     # Bind the REAL runtime methods so we test the shipped routing, not a copy.
     for name in (
         "_kernel_for",
         "_ensure_kernel_pinned",
         "_clear_pinned_kernel",
         "_unpin_if_current_generation",
-        "_revoke_pi_tokens",
         "_run_continuing_control",
     ):
         setattr(fake, name, types.MethodType(getattr(ConversationRuntime, name), fake))
@@ -106,77 +93,36 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
 
 
 @pytest.mark.parametrize(
-    ("selected", "flag", "expected"),
+    ("selected", "expected"),
     [
-        (None, False, "disco"),
-        ("disco", False, "disco"),
-        ("disco", True, "disco"),
-        ("pi_experimental", False, "disco"),  # gated off → downgrade
-        ("pi_experimental", True, "pi_experimental"),  # gated on → honored
-        ("garbage", False, "disco"),  # unknown/stale → disco
-        ("garbage", True, "disco"),
+        (None, "disco"),
+        ("disco", "disco"),
+        ("pi_experimental", "disco"),
+        ("pi", "disco"),
+        ("garbage", "disco"),
     ],
 )
 def test_resolve_kernel_kind(
-    monkeypatch: pytest.MonkeyPatch, selected: str | None, flag: bool, expected: BuildKernelKind
+    selected: str | None, expected: BuildKernelKind
 ) -> None:
-    if flag:
-        monkeypatch.setenv(EXP_ENV, "1")
-    else:
-        monkeypatch.delenv(EXP_ENV, raising=False)
     assert resolve_kernel_kind(selected) == expected
 
 
-def test_experimental_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(EXP_ENV, raising=False)
-    assert experimental_kernels_enabled() is False
-
-
-@pytest.mark.parametrize("val", ["1", "true", "True", "yes", "on"])
-def test_experimental_flag_truthy(monkeypatch: pytest.MonkeyPatch, val: str) -> None:
-    monkeypatch.setenv(EXP_ENV, val)
-    assert experimental_kernels_enabled() is True
-
-
-@pytest.mark.parametrize("val", ["", "0", "false", "off", "no"])
-def test_experimental_flag_falsy(monkeypatch: pytest.MonkeyPatch, val: str) -> None:
-    monkeypatch.setenv(EXP_ENV, val)
-    assert experimental_kernels_enabled() is False
-
-
-def test_policy_effective_kind(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(EXP_ENV, raising=False)
-    assert BuildKernelPolicy.resolve("pi_experimental").effective_kind == "disco"
-    monkeypatch.setenv(EXP_ENV, "1")
-    p = BuildKernelPolicy.resolve("pi_experimental")
-    assert p.selected == "pi_experimental"
-    assert p.experimental_enabled is True
-    assert p.effective_kind == "pi_experimental"
-    # An unknown persisted value normalizes to disco regardless of the flag.
-    assert BuildKernelPolicy.resolve("nope").effective_kind == "disco"
-
-
-def test_select_kernel_picks_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_select_kernel_picks_disco_for_every_value() -> None:
     disco = DiscoKernel(MagicMock())
-    pi = PiKernel(MagicMock())
-    monkeypatch.delenv(EXP_ENV, raising=False)
-    assert select_kernel(None, disco=disco, pi=pi, selected="disco") is disco
-    assert select_kernel(None, disco=disco, pi=pi, selected="pi_experimental") is disco
-    monkeypatch.setenv(EXP_ENV, "1")
-    assert select_kernel(None, disco=disco, pi=pi, selected="pi_experimental") is pi
-    assert select_kernel(None, disco=disco, pi=pi, selected="disco") is disco
+    assert select_kernel(None, disco=disco, selected="disco") is disco
+    assert select_kernel(None, disco=disco, selected="pi_experimental") is disco
+    assert select_kernel(None, disco=disco, selected="pi") is disco
+    assert select_kernel(None, disco=disco, selected="garbage") is disco
 
 
 # ---- protocol conformance ----------------------------------------------------
 
 
-def test_both_kernels_satisfy_protocol() -> None:
-    """`BuildKernel` is runtime_checkable; both implementations conform so either
-    can occupy the seam."""
+def test_disco_kernel_satisfies_protocol() -> None:
+    """`BuildKernel` is runtime_checkable; Disco occupies the seam."""
     assert isinstance(DiscoKernel(MagicMock()), BuildKernel)
-    assert isinstance(PiKernel(MagicMock()), BuildKernel)
     assert DiscoKernel.name == "disco"
-    assert PiKernel.name == "pi_experimental"
 
 
 # ---- DiscoKernel pass-through (zero behavior change) -------------------------
@@ -259,22 +205,17 @@ async def test_disco_kernel_send_user_turn_no_context(store: SqliteEventStore) -
 # ---- runtime public ops route THROUGH the kernel ----------------------------
 
 
-async def test_runtime_kernel_for_resolves_disco_by_default(
-    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
-) -> None:
-    monkeypatch.delenv(EXP_ENV, raising=False)
+async def test_runtime_kernel_for_resolves_disco_by_default(store: SqliteEventStore) -> None:
     rt = _fake_runtime(store, build_kernel="disco")
     assert rt._kernel_for(CID) is rt._disco_kernel
 
 
-async def test_runtime_kernel_for_resolves_pi_only_when_flagged(
-    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
+@pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
+async def test_runtime_kernel_for_resolves_legacy_values_to_disco(
+    legacy: str, store: SqliteEventStore
 ) -> None:
-    rt = _fake_runtime(store, build_kernel="pi_experimental")
-    monkeypatch.delenv(EXP_ENV, raising=False)
-    assert rt._kernel_for(CID) is rt._disco_kernel  # gated off → disco
-    monkeypatch.setenv(EXP_ENV, "1")
-    assert rt._kernel_for(CID) is rt._pi_kernel  # gated on → stub
+    rt = _fake_runtime(store, build_kernel=legacy)
+    assert rt._kernel_for(CID) is rt._disco_kernel
 
 
 async def test_runtime_control_ops_route_through_disco_kernel(store: SqliteEventStore) -> None:
@@ -294,45 +235,3 @@ async def test_runtime_control_ops_route_through_disco_kernel(store: SqliteEvent
     await ConversationRuntime.request_plan(rt, CID, "replan please")
     rt._control.request_plan.assert_awaited_once_with(CID, "replan please")
 
-
-async def test_runtime_control_ops_route_to_pi_when_flagged(
-    monkeypatch: pytest.MonkeyPatch, store: SqliteEventStore
-) -> None:
-    """When pi_experimental is selected AND flagged on, the public op routes to the
-    REAL PiKernel (no longer a stub): confirm is a Pi no-op (Pi has no Disco
-    BlastRadiusConfirm action gate) and NEVER recurses into ControlOps."""
-    monkeypatch.setenv(EXP_ENV, "1")
-    rt = _fake_runtime(store, build_kernel="pi_experimental")
-    # Routes through _ensure_kernel_pinned → PiKernel.confirm (a no-op) without raising.
-    await ConversationRuntime.confirm(rt, CID)
-    # The Disco loop's collaborator was never touched (no recursion through the kernel).
-    rt._control.confirm.assert_not_awaited()
-    assert rt._pinned_kernels[CID] is rt._pi_kernel
-
-
-# ---- PiKernel (real) — store-delegating ops + no-recursion action gate -------
-
-
-async def test_pi_kernel_subscribe_and_get_state_delegate_to_store(
-    store: SqliteEventStore,
-) -> None:
-    """subscribe/get_state are byte-identical to DiscoKernel — straight off the store,
-    so the WS history-then-live + UI work unchanged under PiKernel."""
-    k = PiKernel(_fake_runtime(store))
-    state = await k.get_state(CID)
-    assert state.conversation_id == CID
-    it = await k.subscribe(CID)
-    assert hasattr(it, "__anext__")
-
-
-async def test_pi_kernel_action_gate_ops_are_noops_no_recursion(
-    store: SqliteEventStore,
-) -> None:
-    """Pi has no Disco per-action gate: confirm/reject are no-ops that never touch the
-    runtime's public methods (no recursion). They simply return."""
-    fake = _fake_runtime(store)
-    k = PiKernel(fake)
-    await k.confirm(CID)
-    await k.reject(CID, "no")
-    fake._control.confirm.assert_not_awaited()
-    fake._control.reject.assert_not_awaited()

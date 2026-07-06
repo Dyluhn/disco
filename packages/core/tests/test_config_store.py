@@ -245,119 +245,65 @@ def test_apply_vision_probe_none_leaves_table_caps(tmp_path, monkeypatch):
     assert Requirement.VISION not in store.load().models["driver-local"].capabilities
 
 
-# ---- build-kernel gate authority (Disco Pi campaign, codex finding #2) -------
-#
-# The store is the SINGLE authority deciding whether a persisted `pi_experimental`
-# build kernel may load/save as ACTIVE. Gate authority used to be split — the
-# app-server validated persistence against ITS env while the agent-server decided
-# activation against its own — so a stale value could load as active in the wrong
-# process. `experimental_enabled` is injected so a test pins the gate explicitly.
+# ---- build-kernel legacy normalization --------------------------------------
 
 
-def _kernel_store(tmp_path, *, gate: bool) -> ConfigStore:
-    return ConfigStore(tmp_path / "cfg.json", experimental_enabled=lambda: gate)
+def _kernel_store(tmp_path) -> ConfigStore:
+    return ConfigStore(tmp_path / "cfg.json")
 
 
 def test_build_kernel_default_is_disco(tmp_path):
-    assert _kernel_store(tmp_path, gate=False).load().build_kernel == "disco"
+    assert _kernel_store(tmp_path).load().build_kernel == "disco"
 
 
-def test_save_build_kernel_normalizes_pi_to_disco_when_gate_off(tmp_path):
-    """A direct save of `pi_experimental` with the gate OFF must persist `disco` —
-    never write an active experimental value the executor would later honor."""
-    store = _kernel_store(tmp_path, gate=False)
-    store.save_build_kernel("pi_experimental")
-    # Persisted-on-disk value is normalized, not just the in-memory load.
+@pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
+def test_save_build_kernel_normalizes_legacy_to_disco(tmp_path, legacy):
+    store = _kernel_store(tmp_path)
+    store.save_build_kernel(legacy)
     written = json.loads((tmp_path / "cfg.json").read_text())
     assert written["build_kernel"] == "disco"
     assert store.load().build_kernel == "disco"
 
 
-def test_save_build_kernel_keeps_pi_when_gate_on(tmp_path):
-    store = _kernel_store(tmp_path, gate=True)
-    store.save_build_kernel("pi_experimental")
-    assert store.load().build_kernel == "pi_experimental"
-
-
-def test_stale_persisted_pi_normalizes_to_disco_on_load_when_gate_off(tmp_path):
-    """The core finding-#2 case: a file persisted with `pi_experimental` (e.g. by an
-    app-server whose env had the gate ON) must LOAD as `disco` in a process whose
-    gate is OFF — a dormant value can never load as active in the wrong process."""
-    # Write a raw config carrying an active pi_experimental, bypassing the save gate.
-    raw = default_config().model_copy(update={"build_kernel": "pi_experimental"})
+@pytest.mark.parametrize("legacy", ["pi_experimental", "pi", "garbage"])
+def test_stale_persisted_build_kernel_normalizes_to_disco_on_load(tmp_path, legacy):
+    raw = default_config().model_copy(update={"build_kernel": legacy})
     (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
 
-    assert _kernel_store(tmp_path, gate=False).load().build_kernel == "disco"
-
-
-def test_gate_off_load_writes_through_so_a_later_gate_flip_does_not_auto_activate(tmp_path):
-    """Finding #4 (write-through): a gated-off `load()` must not just normalize in memory
-    — it must PERSIST `disco` over the stale `pi_experimental`. Otherwise the dormant
-    value stays on disk and AUTO-ACTIVATES the instant the gate later flips on, with no
-    fresh user selection (the env-split hazard). After a gate-off load: the FILE reads
-    `disco`, and a SUBSEQUENT gate-ON load returns `disco` (no auto-activation) until the
-    user explicitly re-selects."""
-    raw = default_config().model_copy(update={"build_kernel": "pi_experimental"})
-    (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
-
-    # Gate OFF: in-memory normalized AND written through to disk.
-    assert _kernel_store(tmp_path, gate=False).load().build_kernel == "disco"
+    assert _kernel_store(tmp_path).load().build_kernel == "disco"
     written = json.loads((tmp_path / "cfg.json").read_text())
-    assert written["build_kernel"] == "disco"  # stale value erased on disk
-
-    # Gate flips ON later — the stale value is gone, so it does NOT reactivate.
-    assert _kernel_store(tmp_path, gate=True).load().build_kernel == "disco"
+    assert written["build_kernel"] == "disco"
 
 
-def test_gate_on_load_honors_a_freshly_persisted_pi_without_rewriting(tmp_path):
-    """The gate-ON counterpart: a file carrying `pi_experimental` loaded in a process
-    whose gate is OPEN is honored as-is and the file is NOT rewritten (write-through is
-    only the gated-OFF migration). So an operator who deploys with the gate on gets the
-    selected experimental kernel."""
-    raw = default_config().model_copy(update={"build_kernel": "pi_experimental"})
+def test_legacy_pi_config_loads_without_losing_sibling_settings(tmp_path):
+    raw = default_config().model_copy(
+        update={
+            "build_kernel": "pi_experimental",
+            "default_model": "driver-overflow",
+            "assignments": {ModelRole.RAG_ANSWERER: "answerer-local"},
+            "sandbox": default_config().sandbox.model_copy(
+                update={"backend": "process", "idle_ttl_s": 123}
+            ),
+            "search": default_config().search.model_copy(update={"provider": "searxng"}),
+        }
+    )
     (tmp_path / "cfg.json").write_text(json.dumps(raw.model_dump(mode="json")))
 
-    assert _kernel_store(tmp_path, gate=True).load().build_kernel == "pi_experimental"
-    written = json.loads((tmp_path / "cfg.json").read_text())
-    assert written["build_kernel"] == "pi_experimental"  # untouched under an open gate
+    cfg = _kernel_store(tmp_path).load()
+
+    assert cfg.build_kernel == "disco"
+    assert cfg.default_model == "driver-overflow"
+    assert cfg.assignments[ModelRole.RAG_ANSWERER] == "answerer-local"
+    assert cfg.sandbox.backend == "process"
+    assert cfg.sandbox.idle_ttl_s == 123
+    assert cfg.search.provider == "searxng"
 
 
-def test_full_config_save_normalizes_pi_to_disco_when_gate_off(tmp_path):
-    """Finding #4: the PUBLIC full-config `save()` must also gate-normalize — a config
-    carrying an active `pi_experimental` saved verbatim while the gate is OFF would
-    bypass `save_build_kernel`/`load` normalization and persist a value the executor
-    could later honor if the gate flips. Both the on-disk write AND the returned config
-    are normalized to `disco`."""
-    store = _kernel_store(tmp_path, gate=False)
+def test_full_config_save_normalizes_legacy_build_kernel(tmp_path):
+    store = _kernel_store(tmp_path)
     cfg = default_config().model_copy(update={"build_kernel": "pi_experimental"})
     returned = store.save(cfg)
     assert returned.build_kernel == "disco"
     written = json.loads((tmp_path / "cfg.json").read_text())
     assert written["build_kernel"] == "disco"
     assert store.load().build_kernel == "disco"
-
-
-def test_full_config_save_keeps_pi_when_gate_on(tmp_path):
-    """The gate-ON counterpart: a deliberate full-config save of `pi_experimental`
-    is honored when the experimental gate is open."""
-    store = _kernel_store(tmp_path, gate=True)
-    cfg = default_config().model_copy(update={"build_kernel": "pi_experimental"})
-    assert store.save(cfg).build_kernel == "pi_experimental"
-    assert store.load().build_kernel == "pi_experimental"
-
-
-def test_experimental_kernels_enabled_reads_injected_authority(tmp_path):
-    assert _kernel_store(tmp_path, gate=True).experimental_kernels_enabled() is True
-    assert _kernel_store(tmp_path, gate=False).experimental_kernels_enabled() is False
-
-
-def test_default_gate_reads_env(tmp_path, monkeypatch):
-    """With no injected predicate the store falls back to the shared core env gate —
-    one ambient-env reader, default OFF."""
-    # disco_env prepends the DISCO_ prefix to the bare PI_KERNEL_EXPERIMENTAL suffix.
-    monkeypatch.delenv("DISCO_PI_KERNEL_EXPERIMENTAL", raising=False)
-    monkeypatch.delenv("PMX_PI_KERNEL_EXPERIMENTAL", raising=False)
-    store = ConfigStore(tmp_path / "cfg.json")  # no experimental_enabled injected
-    assert store.experimental_kernels_enabled() is False
-    monkeypatch.setenv("DISCO_PI_KERNEL_EXPERIMENTAL", "1")
-    assert store.experimental_kernels_enabled() is True

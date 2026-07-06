@@ -36,7 +36,6 @@ from .config import (
     SearchSettings,
     TtsSettings,
     apply_runtime_capabilities,
-    build_kernel_experimental_enabled,
     default_config,
 )
 from .secret_refs import migrate_legacy_secret_ref
@@ -55,22 +54,9 @@ class ConfigStore:
         path: str | os.PathLike[str] | None = None,
         *,
         base_factory: Callable[[], RouterConfig] = default_config,
-        experimental_enabled: Callable[[], bool] | None = None,
     ) -> None:
         self._path = Path(path or disco_env("CONFIG", _DEFAULT_PATH))
         self._base_factory = base_factory
-        # The SINGLE authority deciding whether a persisted `pi_experimental` build
-        # kernel may load/save as ACTIVE (codex finding #2). Gate authority used to
-        # be split — the app-server validated persistence against its OWN env while
-        # the agent-server decided activation against its own — so a stale value
-        # could load as active in the wrong process. Now the store normalizes at
-        # BOTH load and save against one injected predicate; it defaults to the
-        # shared core env gate (`PI_KERNEL_EXPERIMENTAL`), so there is ONE ambient-env
-        # reader, and the build executor (agent-server) is the authority by
-        # constructing its store in its own process.
-        self._experimental_enabled: Callable[[], bool] = (
-            experimental_enabled or build_kernel_experimental_enabled
-        )
         # V2/V4 (§2): process-lifetime overlay of the async vision-probe results
         # (model catalogue key → True/False/None), produced ONCE at server startup
         # by wiring.probe_all_vision and installed via `apply_vision_probe`. None
@@ -127,64 +113,48 @@ class ConfigStore:
         facts, so a pre-vision file cannot pin the driver text-only."""
         base = self._base_factory()
         data = self._read()
+        build_kernel_changed = False
         if data is None:
             cfg = base
         elif "models" in data:  # full config
+            data, build_kernel_changed = self._normalize_build_kernel_data(data)
             try:
                 cfg = RouterConfig.model_validate(data)
             except Exception:  # noqa: BLE001 — a corrupt/stale file must not crash routing
                 cfg = base
+                build_kernel_changed = False
         else:
             cfg = self._apply_overlay(base, data)  # legacy {default_model, assignments}
-        # Finding #4 — WRITE-THROUGH normalization. `_gate_build_kernel` only normalized
-        # `pi_experimental`→`disco` IN MEMORY when the gate is off, so the stale
-        # `pi_experimental` stayed PERSISTED and would auto-activate the moment the gate
-        # later flipped on — WITHOUT a fresh user selection (and an env-split between the
-        # app- and agent-server made it worse). Persist the normalized value HERE, at the
-        # read boundary, so a dormant gated-off `pi_experimental` is erased from disk the
-        # first time it is loaded under a closed gate. A later gate flip then finds
-        # `disco` and the user must re-select to activate the experimental kernel. Only a
-        # real file is migrated (never the seed), and never a legacy overlay (it carries
-        # no build_kernel, so the seed default `disco` normalizes to a no-op) — so this
-        # writes at most ONCE per stale file and is a no-op on every subsequent load. The
-        # write persists the PRE-overlay config so the runtime capability overlay
-        # (vision-probe etc.) is never baked into the file.
+        # Legacy build-kernel write-through. This is intentionally before runtime
+        # capability overlays so probe/env-derived fields are never baked into the
+        # user's file.
         if data is not None:
             migrated, security_changed = self._migrate_secret_refs_and_trust(cfg)
             if security_changed:
                 cfg = migrated
                 self._write(cfg.model_dump(mode="json"))
-            normalized = self._normalize_build_kernel(cfg.build_kernel)
-            if normalized != cfg.build_kernel:
-                cfg = cfg.model_copy(update={"build_kernel": normalized})
+                build_kernel_changed = False
+            if build_kernel_changed:
                 self._write(cfg.model_dump(mode="json"))
         else:
             cfg = self._with_security_diagnostics(cfg)
         cfg = apply_runtime_capabilities(cfg, probe_results=self._vision_probe)
         return self._gate_build_kernel(cfg)
 
-    def experimental_kernels_enabled(self) -> bool:
-        """Whether the experimental Pi build kernel may be selected/activated — the
-        store's single gate authority (finding #2). Other layers read it THROUGH the
-        store rather than the ambient env directly, so there is one reader."""
-        return self._experimental_enabled()
-
     def _normalize_build_kernel(self, build_kernel: str) -> str:
-        """The SINGLE gate-normalization rule (finding #2/#4): a `pi_experimental`
-        selection collapses to `disco` unless the experimental gate is open. Used by
-        every persistence boundary — `load` (`_gate_build_kernel`), the full-config
-        `save`, and `save_build_kernel` — so no path can persist or load a gated-off
-        `pi_experimental` as active. No-op for any other value."""
-        if build_kernel == "pi_experimental" and not self._experimental_enabled():
-            return "disco"
-        return build_kernel
+        """Normalize legacy/unknown build-kernel choices to the only live kernel."""
+        return "disco" if build_kernel != "disco" else build_kernel
+
+    def _normalize_build_kernel_data(self, data: dict) -> tuple[dict, bool]:
+        if "build_kernel" not in data:
+            return data, False
+        normalized = self._normalize_build_kernel(str(data["build_kernel"]))
+        if normalized == data["build_kernel"]:
+            return data, False
+        return {**data, "build_kernel": normalized}, True
 
     def _gate_build_kernel(self, cfg: RouterConfig) -> RouterConfig:
-        """Normalize a persisted `pi_experimental` selection to `disco` unless the
-        experimental gate is open (finding #2), so a stale/dormant value can never
-        LOAD as active — and therefore can't silently activate the stub if the gate
-        later flips on in a different process than the one that persisted it. No-op
-        for any other value."""
+        """Normalize any legacy in-memory value to the only live kernel."""
         normalized = self._normalize_build_kernel(cfg.build_kernel)
         if normalized != cfg.build_kernel:
             return cfg.model_copy(update={"build_kernel": normalized})
@@ -193,10 +163,7 @@ class ConfigStore:
     def save(self, config: RouterConfig) -> RouterConfig:
         """Persist the full config (atomically) and return it.
 
-        Gate-normalizes `build_kernel` first (finding #4): the public full-config save
-        must NOT persist `pi_experimental` as active while the experimental gate is off —
-        otherwise a stale value could load as active if the gate later flips, bypassing
-        the `save_build_kernel`/`load` normalization. No-op for the `disco` default."""
+        Normalizes `build_kernel` first so legacy/unknown values never persist."""
         normalized = self._normalize_build_kernel(config.build_kernel)
         if normalized != config.build_kernel:
             config = config.model_copy(update={"build_kernel": normalized})
@@ -274,12 +241,7 @@ class ConfigStore:
         return self.save(self.load().model_copy(update={"live_browser": live_browser}))
 
     def save_build_kernel(self, build_kernel: str) -> RouterConfig:
-        """Persist the Build kernel selector (Disco Pi campaign A2). The agent-server
-        reloads per-request, so a change drives the NEXT control op / run.
-
-        Gate authority (finding #2): never PERSIST `pi_experimental` as active while
-        the experimental gate is off — normalize to `disco` first, so a later gate
-        flip (possibly in another process) can't silently activate a stale value."""
+        """Persist the vestigial Build kernel selector after legacy normalization."""
         build_kernel = self._normalize_build_kernel(build_kernel)
         return self.save(self.load().model_copy(update={"build_kernel": build_kernel}))
 

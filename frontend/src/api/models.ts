@@ -399,9 +399,9 @@ export async function updateLiveBrowserConfig(cfg: LiveBrowserConfig): Promise<L
   return { ...fixtureLiveBrowser };
 }
 
-// ---- build kernel selector (Disco Pi campaign A2) --------------------------
+// ---- vestigial build kernel config -----------------------------------------
 
-let fixtureBuildKernel: BuildKernelConfig = { kind: "disco", experimental_enabled: false };
+let fixtureBuildKernel: BuildKernelConfig = { kind: "disco" };
 
 export async function getBuildKernelConfig(): Promise<BuildKernelConfig> {
   if (isLive()) return apiGet<BuildKernelConfig>("/api/build-kernel/config");

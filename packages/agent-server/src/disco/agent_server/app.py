@@ -27,7 +27,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from .appkit_cloudflare import CloudflareDeployCorsMiddleware, make_cloudflare_router
 from .auth import AgentAuthMiddleware, make_auth_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
-from .pi_inference import PiInferenceTokenStore
 from .routes import (
     make_activity_router,
     make_conversation_library_router,
@@ -39,7 +38,6 @@ from .routes import (
     make_health_router,
     make_mcp_router,
     make_models_router,
-    make_pi_inference_router,
     make_preview_edit_router,
     make_preview_router,
     make_probes_router,
@@ -55,7 +53,6 @@ from .routes import (
     make_ws_router,
 )
 from .routes._common import _sanitize_name, make_preview_upstream_resolver
-from .routes.pi_tools import make_pi_tools_router
 from .runtime import ConversationRuntime
 from disco.core.auth import allowed_frontend_origins
 
@@ -127,13 +124,6 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
         if runtime is not None:
             with contextlib.suppress(Exception):
                 await runtime._close_mcp_pool()
-        # EPIC C — on shutdown, revoke every live gateway token so none outlives the
-        # process (defense-in-depth; the store is in-memory and dies with the process,
-        # but the explicit sweep keeps validate→401 holding for any in-flight handler).
-        _store = getattr(_app.state, "pi_token_store", None)
-        if _store is not None:
-            with contextlib.suppress(Exception):
-                _store.revoke_all()
 
     app = FastAPI(
         title="disco agent-server", version="0.1.0", lifespan=lifespan
@@ -189,29 +179,5 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     # EPIC O — owner-only Cloudflare deploy API (real deploy is HARD-GATED +
     # dry-run by default; the mutation path sits OUTSIDE the LLM tool loop).
     app.include_router(make_cloudflare_router(store, runtime))
-    # EPIC C — the DiscoInferenceGateway: a loopback, run-scoped, OpenAI-compatible
-    # endpoint that lets the Pi sidecar drive the UI-selected model WITHOUT ever
-    # seeing a provider key. The ephemeral token store is held on app.state so the
-    # kernel-spawn path can issue tokens and the lifecycle (cancel/finish/error) can
-    # revoke them; the router resolves the bound model + decrypts the key per request
-    # via the shared ConfigStore/SecretStore.
-    pi_token_store = PiInferenceTokenStore()
-    app.state.pi_token_store = pi_token_store
-    app.include_router(make_pi_inference_router(pi_token_store))
-    # PR D2/D3 — the Pi tool bridge: a loopback, run-scoped endpoint that lets a Pi
-    # custom tool drive ONE Disco tool call (server-side allowlisted) through the
-    # conversation's DefaultToolExecutor, appending the Action/Observation pair. It
-    # validates against the SAME ephemeral token store, bound to the kernel.
-    app.include_router(make_pi_tools_router(pi_token_store, runtime))
-    # Wire the SAME store onto the runtime so the lifecycle (terminalizers / cancel /
-    # kill / delete / shutdown / startup reconcile) can revoke a conversation's tokens
-    # the moment its run ends (EPIC C finding C#3). None-safe: the non-gateway / test
-    # paths that pass runtime=None simply skip the wiring (the store is still served).
-    # `getattr` so a lightweight test-double runtime that predates the gateway hook is
-    # still accepted (the store stays served; revocation is simply inactive for it).
-    if runtime is not None:
-        attach = getattr(runtime, "attach_pi_token_store", None)
-        if attach is not None:
-            attach(pi_token_store)
 
     return app

@@ -159,12 +159,11 @@ from disco.tools.sandbox import (
 from disco.tools.sandbox._container import PREVIEW_PORT
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
 
-from .build_kernel import BuildKernel, DiscoKernel, PiKernel, select_kernel  # noqa: E402
+from .build_kernel import BuildKernel, DiscoKernel, select_kernel  # noqa: E402
 from .control_ops import ControlOps
 from .deep_research_service import DeepResearchService
 from .lifecycle import _GATE_STATES, LifecycleManager
 from .mcp_manager import McpManager
-from .pi_inference import PiInferenceTokenStore  # noqa: E402
 from .preview_service import PreviewService
 from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
@@ -715,17 +714,8 @@ class ConversationRuntime:
         sandbox_service: SandboxService | None = None,
         sandbox_spec: SandboxSpec | None = None,
         skill_store: SkillStore | None = None,
-        pi_token_store: PiInferenceTokenStore | None = None,
     ) -> None:
         self._store = store
-        # EPIC C — the DiscoInferenceGateway's ephemeral, run-scoped token store. The
-        # token authorizes a Pi kernel to drive the UI-selected model over the loopback
-        # gateway; it MUST be revoked the moment a run ends so a kernel can't keep
-        # calling the model after FINISHED/ERROR/STUCK/IDLE/cancel/kill/delete. Wired
-        # by `create_app` (which owns the store on app.state) via `attach_pi_token_store`
-        # — OPTIONAL/None here so tests + the non-gateway paths never depend on it. All
-        # revocation flows through `_revoke_pi_tokens` (None-safe + idempotent).
-        self._pi_token_store = pi_token_store
         # The user's reusable instruction modules (.md skills). Read per-request
         # so a skill toggled in Settings affects the next conversation without a
         # restart — same live-reload model as the config + sandbox stores.
@@ -981,14 +971,11 @@ class ConversationRuntime:
         # reaches _loops / _tasks / _executors / _pending_sessions / _cancel_flags /
         # _store + _loop_for / kick via a back-ref. See control_ops.py.
         self._control = ControlOps(self)
-        # Build kernel seam (Disco Pi campaign A1/A2). The current loop runs through
+        # Build kernel seam. The current loop runs through
         # `DiscoKernel` (a thin pass-through to _control / kick / _store, ZERO behavior
         # change); the public plan/action-gate methods route through `_kernel_for`, so a
-        # future PiKernel can be selected in Settings without the routes caring which
-        # inner agent ran. Both kernels hold only a back-ref (like _control). See
-        # build_kernel/.
+        # stable `BuildKernel` protocol remains between runtime controls and the loop.
         self._disco_kernel = DiscoKernel(self)
-        self._pi_kernel = PiKernel(self)
         # The kernel PINNED to each conversation's in-flight run (codex finding #1).
         # A run resolves its kernel ONCE, at the turn that starts it (via
         # `_ensure_kernel_pinned`), and every later op (gate resume, steer, control
@@ -1896,15 +1883,10 @@ class ConversationRuntime:
             self._loops[conversation_id] = loop
         return loop
 
-    # ---- Pi tool bridge (PR D2) — additive; existing paths unchanged --------
-
     def _executor_for(self, conversation_id: str) -> DefaultToolExecutor:
-        """[D2] Read-only accessor for a conversation's tool executor, lazily
-        building the loop (which constructs + REGISTERS the executor in
-        ``self._executors``) on first access. Used by the Pi tool bridge
-        (``routes/pi_tools.py``) to drive ONE externally-proposed tool call through
-        the SAME ``DefaultToolExecutor`` the in-process agent loop uses — same
-        sandbox, scope, broker, and policy.
+        """Read-only accessor for a conversation's tool executor, lazily building
+        the loop (which constructs + REGISTERS the executor in ``self._executors``)
+        on first access.
 
         Purely additive: building the loop here is exactly what ``_loop_for`` already
         does for any caller; no existing behavior changes. Raises ``LookupError``
@@ -3493,11 +3475,8 @@ class ConversationRuntime:
             ConversationStatus.PAUSED,
             ConversationStatus.IDLE,
         }
-        # The disco loop sets the RETURNED state's execution_status terminal; the PiKernel
-        # instead APPENDS a FINISHED StatusEvent and returns a non-terminal state object
-        # (bake-off #5a — its workspace then never snapshotted, scoring it a false 0%). Re-read
-        # the AUTHORITATIVE state from the store (computed from the event log, so it is terminal
-        # for BOTH kernels) for the end-gate.
+        # Re-read the AUTHORITATIVE state from the store (computed from the event log)
+        # for the end-gate.
         ended_state = await self._store.get_state(conversation_id)
         if surface in self._BUILD_LIKE_SURFACES and ended_state.execution_status in _ENDED:
             self._emit_toolscope_audit_summary(conversation_id, ended_state.execution_status)
@@ -3895,29 +3874,24 @@ class ConversationRuntime:
     # ---- control ops: the confirmation gate + kill switch (BoD §13.4/§13.6) -----
 
     def _kernel_for(self, conversation_id: str) -> BuildKernel:
-        """The active Build kernel for this conversation (Disco Pi campaign A1/A2).
+        """The active Build kernel for this conversation.
 
         If a kernel is PINNED to this conversation's in-flight run, return it —
         a run must not re-resolve mid-flight (codex finding #1), so every control
         op on a live run lands on the SAME kernel the run started under, even if
         Settings (or the experimental flag) changed since.
 
-        Otherwise resolve fresh: read the persisted `build_kernel` setting and
-        resolve it against the experimental gate — `disco` (default) →
-        `DiscoKernel`; `pi_experimental` → `PiKernel` ONLY when the experimental
-        flag is on, else `DiscoKernel`. Both kernels are constructed once (back-ref
-        only); this just selects. The config is reloaded per call, mirroring
-        `_router_now`, so a Settings change takes effect on the next NEW run
-        without a restart."""
+        Otherwise resolve fresh: read the persisted `build_kernel` setting. The
+        setting is vestigial and legacy/unknown values resolve to `DiscoKernel`.
+        The config is reloaded per call, mirroring `_router_now`, so compatibility
+        migrations take effect without a restart."""
         pinned = getattr(self, "_pinned_kernels", None)
         if pinned is not None:
             existing = pinned.get(conversation_id)
             if existing is not None:
                 return existing
         selected = self._config_store.load().build_kernel
-        return select_kernel(
-            self, disco=self._disco_kernel, pi=self._pi_kernel, selected=selected
-        )
+        return select_kernel(self, disco=self._disco_kernel, selected=selected)
 
     def _ensure_kernel_pinned(self, conversation_id: str) -> BuildKernel:
         """Resolve + PIN the kernel for a (continuing) run, if not already pinned
@@ -3940,25 +3914,6 @@ class ConversationRuntime:
         — NOT on a pause / gate-park, which stay pinned for resume."""
         self._pinned_kernels.pop(conversation_id, None)
 
-    def attach_pi_token_store(self, store: PiInferenceTokenStore | None) -> None:
-        """Wire the DiscoInferenceGateway's run-scoped token store onto the runtime so
-        the terminalizers / control ops / delete / shutdown can revoke a conversation's
-        tokens when its run ends (EPIC C deferred finding C#3). `create_app` calls this
-        after it mounts the store on `app.state`. None-safe (passing None detaches)."""
-        self._pi_token_store = store
-
-    def _revoke_pi_tokens(self, conversation_id: str) -> None:
-        """Revoke EVERY DiscoInferenceGateway token bound to `conversation_id` so a Pi
-        kernel can no longer drive the model once the run has ended. None-safe (a no-op
-        when no gateway store is wired — tests + non-gateway paths) and idempotent (the
-        store skips already-revoked records and never raises). Best-effort: a revoke
-        failure must never crash a terminalizer / kill / delete / shutdown."""
-        store = self._pi_token_store
-        if store is None:
-            return
-        with contextlib.suppress(Exception):
-            store.revoke_conversation(conversation_id)
-
     def _unpin_if_current_generation(
         self, conversation_id: str, generation: int | None
     ) -> None:
@@ -3970,24 +3925,20 @@ class ConversationRuntime:
         `generation` is None (the stranded-run sweep / legacy callers, which have no
         competing newer run) clear unconditionally.
 
-        The gateway-token revoke is CO-LOCATED here so it shares the EXACT generation
-        guard as the pin clear (EPIC C finding C#3): a stale/old-generation terminalizer
-        that loses the guard returns WITHOUT revoking, so it can never revoke a token that
-        now belongs to a NEWER run on the same conversation. Every guarded terminal path
-        (`_finalize_clean_return` FINISHED/STUCK/IDLE, `_terminalize_crashed` ERROR, the
-        abandoned-gate sweep, and `kill`) revokes here, with the winning generation."""
+        Every guarded terminal path (`_finalize_clean_return` FINISHED/STUCK/IDLE,
+        `_terminalize_crashed` ERROR, the abandoned-gate sweep, and `kill`) unpins here
+        with the winning generation."""
         if generation is not None and self._run_generation.get(conversation_id) != generation:
-            return  # a newer run owns the pin/token now — leave both for that run
+            return  # a newer run owns the pin now — leave it for that run
         self._clear_pinned_kernel(conversation_id)
-        self._revoke_pi_tokens(conversation_id)
 
     def start(self, conversation_id: str) -> None:
         """Start/continue the conversation's run THROUGH the pinned kernel (codex
         finding #1, point a). For the default `disco` kernel this is a behaviour-
         identical pass-through to `kick`.
 
-        If the kernel's `start` RAISES (e.g. a `PiKernel.start` failure) and we just
-        created the pin in this call, roll it back (finding #2): the pin is committed
+        If the kernel's `start` RAISES and we just created the pin in this call,
+        roll it back (finding #2): the pin is committed
         only once the kernel call succeeds, so a failed start leaves NO pin and the
         next attempt re-resolves the current selection. A pre-existing pin (a steer /
         resume of a live run) is NOT rolled back — that run stays on its kernel."""
@@ -4015,9 +3966,9 @@ class ConversationRuntime:
         store-append + `kick` the routes performed inline before the seam. Returns
         the stored USER message so the REST routes can report its id/seq.
 
-        If the kernel's `send_user_turn` RAISES (e.g. a `PiKernel.send_user_turn`
-        failure, before any task is spawned) and we just created the pin in this call,
-        roll it back (finding #2): the pin commits only once the kernel call succeeds,
+        If the kernel's `send_user_turn` RAISES before any task is spawned and we just
+        created the pin in this call, roll it back (finding #2): the pin commits only
+        once the kernel call succeeds,
         so a failed send leaves NO pin and the next attempt re-resolves. A pre-existing
         pin (a steer of a live run) is NOT rolled back — that run stays on its kernel."""
         newly_pinned = conversation_id not in self._pinned_kernels
@@ -4199,10 +4150,6 @@ class ConversationRuntime:
         not fail because cleanup hit a wedged sandbox)."""
         # Stop any in-flight run first so its done-callback can't re-pin/re-kick.
         self._clear_pinned_kernel(conversation_id)
-        # The conversation is DELETED — unconditionally revoke any gateway token bound
-        # to it (no generation guard: a deleted id can never be reused by a newer run,
-        # and its rows are gone, so the token is pure leak). None-safe + idempotent.
-        self._revoke_pi_tokens(conversation_id)
         task = self._tasks.pop(conversation_id, None)
         if task is not None and not task.done():
             task.cancel()

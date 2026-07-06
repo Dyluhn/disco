@@ -1,10 +1,9 @@
 """The `BuildKernel` seam — the abstraction the Build loop runs through.
 
-Disco Pi Build Kernel Campaign, PR A1. The point of this module is a thin,
+Build kernel protocol. The point of this module is a thin,
 behavior-preserving seam: today the agent-server drives ONE Build loop (Disco's
 `AgentLoop`, scheduled by `ConversationRuntime.kick`, gated by `ControlOps`,
-streamed through the event store). A future `PiKernel` should be selectable in
-its place WITHOUT the rest of the agent-server caring which inner agent ran.
+streamed through the event store).
 
 Design note (per the codex SEAM EVAL of the real code): the current architecture
 is an **append-only event store + task supervision**, NOT a loop that yields
@@ -27,33 +26,15 @@ spine (the store's element type), not a new parallel event type.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol, runtime_checkable
 
 from disco.core import ConversationState, Event, MessageEvent
 from disco.core.appkit import BuildBrief
 
-# The experimental gate lives in the shared core layer (one source of truth for
-# both sibling server packages) and is re-exported here so the build_kernel API
-# surface stays self-contained. `EXPERIMENTAL_ENV` is the env var that unlocks the
-# experimental Pi kernel; `experimental_kernels_enabled()` reads it live. Default
-# OFF: selecting `pi_experimental` with it unset transparently downgrades to the
-# Disco kernel, so a stale persisted setting can never route a real build through
-# the stub.
-from disco.core.llm.config import (
-    BUILD_KERNEL_EXPERIMENTAL_ENV as EXPERIMENTAL_ENV,
-)
-from disco.core.llm.config import (
-    build_kernel_experimental_enabled as experimental_kernels_enabled,
-)
-
 __all__ = [
-    "EXPERIMENTAL_ENV",
     "BuildKernel",
     "BuildKernelKind",
-    "BuildKernelPolicy",
     "KernelEvent",
-    "experimental_kernels_enabled",
 ]
 
 # A KernelEvent is exactly an event in the append-only store. The whole loop —
@@ -63,38 +44,9 @@ __all__ = [
 # of the agent-server share one event spine.
 KernelEvent = Event
 
-# The kernel choices exposed in Settings (A2). `disco` is the only production
-# kernel today; `pi_experimental` is gated behind the experimental flag and
-# currently wires to a stub.
-BuildKernelKind = Literal["disco", "pi_experimental"]
-
-
-@dataclass(frozen=True)
-class BuildKernelPolicy:
-    """Resolves the persisted kernel setting against the experimental gate.
-
-    `selected` is the user's Settings value; `experimental_enabled` is whether
-    the experimental flag is on. `effective_kind` is what the runtime ACTUALLY
-    routes to — `pi_experimental` only survives when the flag is on, otherwise it
-    falls back to `disco` (never silently routing a build through the stub)."""
-
-    selected: BuildKernelKind = "disco"
-    experimental_enabled: bool = False
-
-    @classmethod
-    def resolve(cls, selected: str | None) -> BuildKernelPolicy:
-        """Build a policy from a persisted setting (`None`/unknown → `disco`),
-        reading the experimental gate from the environment."""
-        kind: BuildKernelKind = "pi_experimental" if selected == "pi_experimental" else "disco"
-        return cls(selected=kind, experimental_enabled=experimental_kernels_enabled())
-
-    @property
-    def effective_kind(self) -> BuildKernelKind:
-        """The kernel the runtime resolves to. `pi_experimental` is honored only
-        when the experimental flag is on; otherwise it downgrades to `disco`."""
-        if self.selected == "pi_experimental" and self.experimental_enabled:
-            return "pi_experimental"
-        return "disco"
+# The only active build kernel. The vestigial persisted config field lives in
+# core for legacy-load compatibility, but runtime selection always resolves here.
+BuildKernelKind = Literal["disco"]
 
 
 @runtime_checkable
@@ -102,8 +54,7 @@ class BuildKernel(Protocol):
     """The inner Build agent behind a stable, runtime-shaped seam.
 
     Every method maps 1:1 to an existing agent-server entry point so the current
-    `DiscoKernel` is a faithful pass-through (ZERO behavior change). A future
-    `PiKernel` implements the same surface to host the Pi SDK in the same slot.
+    `DiscoKernel` is a faithful pass-through (ZERO behavior change).
 
     The campaign's "core" surface is start / send_user_turn / approve_plan /
     reject_plan / cancel / resume + the event subscription accessor; the

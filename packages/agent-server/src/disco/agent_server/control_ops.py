@@ -161,12 +161,6 @@ class ControlOps:
         Deep Research (engine, not an AgentLoop) this ALSO sets the cancel flag the
         engine polls — without it, Stop was a no-op (the engine ran to completion)."""
         self._rt._cancel_flags.setdefault(conversation_id, asyncio.Event()).set()
-        # A cooperative stop ends the run — revoke its gateway token now so a Pi kernel
-        # can't keep driving the model while the loop winds down (EPIC C finding C#3).
-        # Unconditional: cancel is a user op on the CURRENT run within one request, so
-        # no newer generation can have taken over yet. None-safe + idempotent. The later
-        # terminalizer also revokes (guarded) — both is fine.
-        self._rt._revoke_pi_tokens(conversation_id)
         loop = self._rt._loops.get(conversation_id)
         if loop is not None:
             await loop.cancel()

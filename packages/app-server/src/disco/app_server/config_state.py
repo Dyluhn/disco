@@ -698,36 +698,11 @@ class ConfigState:
     # Build kernel selector (persisted; agent-server reads it per request) --------
 
     def build_kernel_config(self) -> BuildKernelConfigDTO:
-        """The Build kernel selector + whether the experimental gate is open (so the
-        Settings UI can show/hide the `pi_experimental` option) — Disco Pi campaign A2.
-
-        The gate is read THROUGH the store (finding #2): the store is the single gate
-        authority, so a stale persisted `pi_experimental` already normalizes to `disco`
-        on load when the gate is off — no second ambient-env read here."""
-        return _build_kernel_from(
-            self._store.load(),
-            experimental_enabled=self._store.experimental_kernels_enabled(),
-        )
+        """The vestigial Build kernel config. Legacy values load as Disco."""
+        return _build_kernel_from(self._store.load())
 
     def update_build_kernel_config(self, dto: BuildKernelConfigDTO) -> BuildKernelConfigDTO:
-        """Persist the Build kernel selector (A2). The agent-server reads it per control
-        op / run, so a change takes effect on the next step without a restart.
-
-        REJECT selecting `pi_experimental` while the experimental gate is OFF — no false
-        affordance, and a direct API call can't persist a setting that would only ever
-        resolve back to `disco` at runtime. Selecting `disco` is always allowed.
-
-        The gate is read THROUGH the store (finding #2) — the single authority that also
-        normalizes the value on save, so this rejection and the persisted state agree."""
-        if dto.kind == "pi_experimental" and not self._store.experimental_kernels_enabled():
-            raise ConfigValidationError(
-                "experimental_disabled",
-                detail=(
-                    "The experimental Pi build kernel is off. Set the "
-                    "PI_KERNEL_EXPERIMENTAL flag on the agent-server to enable it; "
-                    "until then only the 'disco' kernel can be selected."
-                ),
-            )
+        """Persist the vestigial Build kernel selector."""
         self._store.save_build_kernel(dto.kind)
         return self.build_kernel_config()
 

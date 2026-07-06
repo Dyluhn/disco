@@ -1,7 +1,6 @@
-"""Kernel-neutral prompt assembly (WPP-2).
+"""Prompt assembly (WPP-2).
 
-Both kernels (DiscoKernel / PiKernel) build the model prompt from the SAME ordered
-parts, so product behavior can't diverge between them:
+The Build loop assembles the model prompt from the SAME ordered parts every time:
 
     stable system prefix
     → WorkflowPromptPack (the mode-specific operating manual, WPP-1)

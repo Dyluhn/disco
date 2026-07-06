@@ -334,11 +334,9 @@ def _live_browser_from(config: RouterConfig) -> LiveBrowserConfigDTO:
     return LiveBrowserConfigDTO(enabled=lb.enabled)
 
 
-def _build_kernel_from(config: RouterConfig, *, experimental_enabled: bool) -> BuildKernelConfigDTO:
-    """Wire DTO for the Build kernel selector (A2). Mirrors RouterConfig.build_kernel;
-    `experimental_enabled` is supplied by the caller (an env-gate read kept out of this
-    pure mapper)."""
-    return BuildKernelConfigDTO(kind=config.build_kernel, experimental_enabled=experimental_enabled)
+def _build_kernel_from(config: RouterConfig) -> BuildKernelConfigDTO:
+    """Wire DTO for the vestigial Build kernel setting."""
+    return BuildKernelConfigDTO(kind=config.build_kernel)
 
 
 def _mcp_live_status(approval: dict | None) -> str:
