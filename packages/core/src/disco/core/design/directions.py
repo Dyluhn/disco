@@ -11,6 +11,7 @@ import hashlib
 import re
 from typing import Final, Literal, Self
 
+from disco.core.brand.css import theme_css_vars
 from disco.core.brand.tokens import Theme
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -749,6 +750,20 @@ def to_brand_tokens(direction: DesignDirection) -> Theme:
     )
 
 
+def direction_tokens_css(direction: DesignDirection) -> str:
+    """Emit a ready-to-use ``:root{…}`` tokens.css for a committed direction.
+
+    Pure composition of the two existing bridges — map the direction into the brand
+    ``Theme`` (``to_brand_tokens``) and render it as CSS custom properties
+    (``theme_css_vars``) — with a one-line header comment naming the direction id so
+    the emitted file is self-identifying. Deterministic: same direction in → byte-
+    identical CSS out. No new token logic lives here.
+    """
+
+    header = f"/* disco direction tokens — {direction.id} */\n"
+    return header + theme_css_vars(to_brand_tokens(direction))
+
+
 def _format_font(label: str, stack: FontStack) -> str:
     return f"- {label}: {stack.family}; fallbacks: {', '.join(stack.fallbacks)}"
 
@@ -819,6 +834,8 @@ def render_design_direction(direction: DesignDirection) -> str:
             "- Commit to this named direction before writing sections or components.",
             "- Derive the full palette from the seed in OKLCH-friendly tokens; "
             "keep accents named.",
+            "- A ready-to-use tokens file exists at .disco/context/direction_tokens.css; "
+            "import or copy those CSS variables instead of hand-picking values.",
             "- Use one coherent surface treatment across the project.",
             "- Keep typography, density, imagery, and motion aligned with this contract.",
             "",

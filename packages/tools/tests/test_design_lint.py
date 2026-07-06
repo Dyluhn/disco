@@ -20,6 +20,7 @@ import shlex
 import pytest
 from disco.core.appkit import RECIPES
 from disco.core.appkit.spec import DesignSpec, Justification, Palette, Typography
+from disco.core.design import DIRECTION_BY_ID, render_design_direction
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.design_lint import DesignLintArgs, DesignLintTool, lint_design
 
@@ -857,3 +858,87 @@ async def test_tool_is_read_only_and_registered():
 
     assert DesignLintTool.definition.read_only is True
     assert build_default_registry().names().issuperset({"design_lint"})
+
+
+# --- H2 direction-conformance (advisory) -------------------------------------
+
+
+def test_direction_font_mismatch_fires_and_committed_fonts_pass():
+    direction = DIRECTION_BY_ID["editorial-magazine"]  # Newsreader / Schibsted Grotesk / IBM Plex Mono
+    off = "h1 { font-family: 'Comic Sans MS', cursive; }\n"
+    on = (
+        "h1 { font-family: 'Newsreader', Georgia, serif; }\n"
+        "body { font-family: 'Schibsted Grotesk', system-ui, sans-serif; }\n"
+    )
+    off_v = lint_design(
+        {"s.css": off}, None, spec_present=False, spec_valid=False, direction=direction
+    )
+    on_v = lint_design(
+        {"s.css": on}, None, spec_present=False, spec_valid=False, direction=direction
+    )
+    assert any(
+        f["rule_id"] == "direction_font_mismatch"
+        and f["severity"] == "warning"
+        and "comic sans" in f["evidence"].lower()
+        for f in off_v["findings"]
+    )
+    assert not any(f["rule_id"] == "direction_font_mismatch" for f in on_v["findings"])
+
+
+def test_direction_generic_fallbacks_and_no_direction_stay_quiet():
+    direction = DIRECTION_BY_ID["swiss-international"]
+    generic = (
+        "body { font-family: system-ui, sans-serif; }\n"
+        "code { font-family: monospace; }\n"
+        ".x { font-family: serif; }\n"
+    )
+    gv = lint_design(
+        {"s.css": generic}, None, spec_present=False, spec_valid=False, direction=direction
+    )
+    assert not any(f["rule_id"] == "direction_font_mismatch" for f in gv["findings"])
+
+    # NO direction committed → the conformance rule no-ops (no crash), even on a
+    # font/color that WOULD contradict a direction.
+    off = "h1 { font-family: 'Comic Sans MS'; color: #1e90ff; }\n"
+    nv = lint_design({"s.css": off}, None, spec_present=False, spec_valid=False)
+    assert not any(
+        f["rule_id"] in {"direction_font_mismatch", "direction_palette_drift"}
+        for f in nv["findings"]
+    )
+
+
+def test_direction_palette_drift_fires_for_far_color_and_near_accent_passes():
+    direction = DIRECTION_BY_ID["editorial-magazine"]  # seed #4B3F72; accents inc. #B54A3A
+    far = ".x { color: #1e90ff; }\n"  # saturated blue, far from every committed color
+    near = ".y { color: #b54a3a; }\n"  # exactly a committed accent
+    far_v = lint_design(
+        {"s.css": far}, None, spec_present=False, spec_valid=False, direction=direction
+    )
+    near_v = lint_design(
+        {"s.css": near}, None, spec_present=False, spec_valid=False, direction=direction
+    )
+    assert any(
+        f["rule_id"] == "direction_palette_drift" and f["severity"] == "info"
+        for f in far_v["findings"]
+    )
+    assert not any(f["rule_id"] == "direction_palette_drift" for f in near_v["findings"])
+
+
+@pytest.mark.asyncio
+async def test_direction_conformance_is_advisory_via_tool():
+    """The committed direction is read from durable context and drives conformance
+    findings, but the tool merely RETURNS a verdict (never raises/blocks) and stays
+    read-only — conformance is advisory."""
+    direction = DIRECTION_BY_ID["editorial-magazine"]
+    sbx = _FakeSandbox(
+        {
+            "styles.css": b"h1 { font-family: 'Comic Sans MS'; }\n",
+            ".disco/context/design_direction.md": render_design_direction(direction).encode(),
+        }
+    )
+    out = await DesignLintTool().run(DesignLintArgs(), _ctx(sbx))
+    assert out.success is True  # scan ran; conformance findings are just findings
+    assert out.structured is not None
+    fired = {f["rule_id"] for f in out.structured["findings"]}
+    assert "direction_font_mismatch" in fired
+    assert DesignLintTool.definition.read_only is True

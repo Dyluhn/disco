@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import re
 
+from disco.core.brand import theme_css_vars
 from disco.core.design import (
     BANNED_PRIMARY_FONTS,
     DIRECTION_BY_ID,
     DIRECTION_IDS,
     DIRECTIONS,
     direction_from_markdown,
+    direction_tokens_css,
     pick_direction,
     render_design_direction,
     to_brand_tokens,
@@ -145,3 +147,24 @@ def test_direction_contract_roundtrips_to_brand_theme_shape() -> None:
     assert theme.font_ui.startswith("'Nunito Sans'")
     assert theme.font_mono.startswith("'Fira Code'")
     assert theme.branded is True
+
+
+def test_direction_tokens_css_is_deterministic_and_names_the_id() -> None:
+    direction = DIRECTION_BY_ID["editorial-magazine"]
+    css = direction_tokens_css(direction)
+
+    # names the direction id in a header comment
+    assert css.startswith("/* disco direction tokens — editorial-magazine */")
+    # a real :root{…} custom-property block
+    assert ":root{" in css
+    # carries the committed fonts + palette vars
+    assert "--display:Newsreader,Georgia,serif" in css
+    assert "--mono:'IBM Plex Mono'" in css
+    assert "--accent:#4b3f72" in css
+    # pure composition of the two existing bridges
+    assert css == (
+        "/* disco direction tokens — editorial-magazine */\n"
+        + theme_css_vars(to_brand_tokens(direction))
+    )
+    # deterministic: same input → byte-identical output
+    assert direction_tokens_css(direction) == css

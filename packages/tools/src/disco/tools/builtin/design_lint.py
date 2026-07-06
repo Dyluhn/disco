@@ -58,6 +58,8 @@ from disco.core.appkit import (
     load_design_spec_from_bytes,
 )
 from disco.core.appkit.spec import DesignSpec
+from disco.core.context import ArtifactMemoryStore
+from disco.core.design import DesignDirection, direction_from_markdown
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
@@ -368,6 +370,7 @@ _RULE_META: dict[str, tuple[str, int]] = {
     "deck_type_floor": ("error", 5),
     "ai_purple": ("error", 10),
     "generic_font": ("warning", 20),
+    "direction_font_mismatch": ("warning", 25),
     "gradient_hero_text": ("warning", 30),
     "dark_neon_glow": ("warning", 40),
     "deck_text_budget": ("warning", 45),
@@ -386,6 +389,7 @@ _RULE_META: dict[str, tuple[str, int]] = {
     "web_default_hidden_content": ("warning", 56),
     "centered_hero_3_cards_cta": ("warning", 50),
     "too_many_animations": ("info", 60),
+    "direction_palette_drift": ("info", 65),
     "pill_button_monoculture": ("info", 70),
     "emoji_as_icons": ("info", 80),
 }
@@ -898,6 +902,143 @@ def _rule_ai_purple(
                         f"AI-purple primary ({m.group(0)}) — the single most common generated "
                         "site tell. Pick a palette that suits the subject, or justify "
                         "palette.primary in .disco/designspec.json if the violet is intended."
+                    ),
+                )
+            )
+    return findings
+
+
+# ---- direction conformance (advisory: the committed direction is ground truth) --
+
+# Generic fallbacks that are NEVER an intentional brand font choice — a
+# `direction_font_mismatch` must stay quiet for these (a `system-ui`/`serif`
+# fallback AFTER the chosen family is legitimate, not a contradiction).
+_DIRECTION_GENERIC_FONTS: frozenset[str] = frozenset(
+    {
+        "serif",
+        "sans-serif",
+        "monospace",
+        "system-ui",
+        "-apple-system",
+        "blinkmacsystemfont",
+        "cursive",
+        "fantasy",
+        "inherit",
+        "initial",
+        "unset",
+        "revert",
+        "currentcolor",
+    }
+)
+
+# Off-palette color thresholds (RGB space; the diagonal is ~441). A brand color
+# must be BOTH saturated (a real hue — not a neutral/grey or a tint/shade toward
+# white/black) AND far from EVERY committed color before it counts as drift.
+# Conservative on purpose: near-matches, tints and shades legitimately vary, so
+# the rule stays quiet rather than false-positive (severity is `info`).
+_DIRECTION_MIN_SATURATION = 60
+_DIRECTION_DRIFT_MIN_DISTANCE = 120.0
+
+
+def _norm_font_name(name: str) -> str:
+    return re.sub(r"\s+", " ", name.strip().strip("'\"").lower())
+
+
+def _direction_committed_families(direction: DesignDirection) -> set[str]:
+    fp = direction.font_pairing
+    return {
+        _norm_font_name(fp.heading.family),
+        _norm_font_name(fp.body.family),
+        _norm_font_name(fp.mono.family),
+    }
+
+
+def _direction_committed_rgbs(direction: DesignDirection) -> list[tuple[int, int, int]]:
+    raw = [direction.palette_seed, *(a.hex for a in direction.accents)]
+    return [rgb for rgb in (_resolve_rgb(v) for v in raw) if rgb is not None]
+
+
+def _rgb_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+
+
+def _rgb_saturation(rgb: tuple[int, int, int]) -> int:
+    return max(rgb) - min(rgb)
+
+
+def _rule_direction_conformance(
+    path: str, text: str, direction: DesignDirection
+) -> list[DesignFinding]:
+    """ADVISORY conformance — flag built fonts/colors that CONTRADICT the committed
+    design direction. Ground truth is the committed DIRECTION itself, so these are
+    NEVER run through designspec justifications. Conservative: only intentional,
+    prominent choices fire; generic fallbacks, unresolved `var()` references and
+    neutral/tint colors are skipped so the rule stays quiet rather than false-fire."""
+
+    findings: list[DesignFinding] = []
+    committed_families = _direction_committed_families(direction)
+
+    seen_fonts: set[str] = set()
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not _FONT_CONTEXT_RE.search(line):
+            continue
+        for token in _primary_families(line):
+            if token in seen_fonts:
+                continue
+            seen_fonts.add(token)
+            if (
+                not token
+                or token in _DIRECTION_GENERIC_FONTS
+                or token in committed_families
+                or token.startswith("ui-")
+                or "var(" in token
+            ):
+                continue  # generic fallback / committed family / unresolved var
+            findings.append(
+                DesignFinding(
+                    rule_id="direction_font_mismatch",
+                    severity="warning",
+                    path=path,
+                    line=lineno,
+                    evidence=f"font '{token}' in: {line.strip()[:140]}",
+                    choice_key=CHOICE_TYPOGRAPHY_HEADING,
+                    message=(
+                        f"Font '{token}' is not in the committed design direction "
+                        f"({direction.id}: heading={direction.font_pairing.heading.family}, "
+                        f"body={direction.font_pairing.body.family}, "
+                        f"mono={direction.font_pairing.mono.family}). Use the committed "
+                        "families or re-commit the direction."
+                    ),
+                )
+            )
+
+    committed_rgbs = _direction_committed_rgbs(direction)
+    if committed_rgbs:
+        low = text.lower()
+        seen_colors: set[str] = set()
+        for m in re.finditer(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?|rgb\([^)]*\)", low):
+            val = _norm_color(m.group(0))
+            if val in seen_colors:
+                continue
+            seen_colors.add(val)
+            rgb = _resolve_rgb(val)
+            if rgb is None or _rgb_saturation(rgb) < _DIRECTION_MIN_SATURATION:
+                continue  # unresolved / neutral-grey / tint-or-shade → stay quiet
+            if min(_rgb_distance(rgb, c) for c in committed_rgbs) <= _DIRECTION_DRIFT_MIN_DISTANCE:
+                continue  # near a committed color (incl. same-hue variation)
+            findings.append(
+                DesignFinding(
+                    rule_id="direction_palette_drift",
+                    severity="info",
+                    path=path,
+                    line=_line_of(low, m.start()),
+                    evidence=m.group(0),
+                    choice_key=CHOICE_PALETTE_PRIMARY,
+                    message=(
+                        f"Color {m.group(0)} is far from the committed direction palette "
+                        f"({direction.id}: seed={direction.palette_seed}, accents "
+                        f"{', '.join(a.hex for a in direction.accents)}). Derive brand "
+                        "colors from the committed seed/accents."
                     ),
                 )
             )
@@ -1732,12 +1873,16 @@ def lint_design(
     *,
     spec_present: bool,
     spec_valid: bool,
+    direction: DesignDirection | None = None,
 ) -> dict[str, Any]:
     """Scan an in-memory `{path: text}` map and return the structured verdict.
 
     `design_spec` is the parsed spec (None when absent OR invalid). `spec_present`
     / `spec_valid` are reported in the verdict so the agent knows WHY rules fired
-    (a missing/invalid spec suppresses nothing — intent can't be claimed)."""
+    (a missing/invalid spec suppresses nothing — intent can't be claimed).
+    `direction` is the committed design direction (None when absent/unparseable);
+    when present it drives the ADVISORY conformance rules (font/palette), which are
+    ground-truthed to the direction and never suppressed by a designspec."""
     justified = _justified_keys(design_spec)
     findings: list[DesignFinding] = []
     markup: list[tuple[str, str]] = []
@@ -1759,6 +1904,8 @@ def lint_design(
         deck_slides = _extract_deck_slides(text) if is_markup else []
         # rules that apply to any styled text (css + markup w/ inline styles)
         findings += _rule_generic_font(path, text, design_spec, justified)
+        if direction is not None:
+            findings += _rule_direction_conformance(path, text, direction)
         if not deck_slides:
             findings += _rule_web_banned_default_font(path, text, design_spec, justified)
             findings += _rule_web_reflexive_hover_scale(path, text)
@@ -1883,11 +2030,13 @@ class DesignLintTool:
             root = (args.root or ".").strip() or "."
             files = await self._collect_files(ctx, root)
             design_spec, spec_present, spec_valid = await self._load_design_spec(ctx)
+            direction = await self._load_direction(ctx)
             verdict = lint_design(
                 files,
                 design_spec,
                 spec_present=spec_present,
                 spec_valid=spec_valid,
+                direction=direction,
             )
             return ToolOutcome(
                 success=True,  # the scan ran; pass/findings live in `structured`
@@ -1896,6 +2045,17 @@ class DesignLintTool:
             )
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a scan error
             return ToolOutcome(success=False, content="", error=f"design_lint error: {e}")
+
+    async def _load_direction(self, ctx: ToolContext) -> DesignDirection | None:
+        """Read the committed design direction from durable context and recover the
+        typed record. Absent/unreadable/unparseable → None (the conformance rule then
+        simply no-ops). Best-effort: never raises into the scan."""
+        assert ctx.sandbox is not None
+        try:
+            markdown = await ArtifactMemoryStore(ctx.sandbox).read_design_direction()
+        except Exception:  # noqa: BLE001 — absent/unreadable → no committed direction
+            return None
+        return direction_from_markdown(markdown or "")
 
     async def _collect_files(self, ctx: ToolContext, root: str) -> dict[str, str]:
         """Walk the workspace via the sandbox `list_dir`, reading only scannable

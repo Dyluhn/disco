@@ -2166,7 +2166,11 @@ class AgentLoop:
             return
         try:
             from ..context import ArtifactMemoryStore
-            from ..design import pick_direction, render_design_direction
+            from ..design import (
+                direction_tokens_css,
+                pick_direction,
+                render_design_direction,
+            )
             from ..view import _latest_plan
             from .context_builder import render_plan_as_todo_markdown
 
@@ -2182,6 +2186,9 @@ class AgentLoop:
             if brief:
                 direction = pick_direction(brief, self.conversation_id)
                 await store.write_design_direction(render_design_direction(direction))
+                # Mechanical bridge: also emit a ready-to-use tokens.css so
+                # conformance is copy-paste (never blocks approval — same try/except).
+                await store.write_design_direction_tokens(direction_tokens_css(direction))
         except Exception:
             _LOG.warning(
                 "CXT-7 context seed from plan failed for %s", self.conversation_id, exc_info=True

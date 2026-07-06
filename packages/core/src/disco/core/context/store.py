@@ -197,6 +197,16 @@ class ArtifactMemoryStore:
     async def read_design_direction(self) -> str | None:
         return await self.read_markdown(ArtifactMemoryKind.DESIGN_DIRECTION)
 
+    async def write_design_direction_tokens(self, css: str) -> ArtifactMemoryRef:
+        """Write the mechanical tokens.css emitted from the committed direction next
+        to ``design_direction.md`` (``.disco/context/direction_tokens.css``). Advisory
+        companion artifact — NOT a durable singleton kind — so the model can import
+        ready-made CSS variables instead of hand-picking values."""
+        path = f"{self._base}/direction_tokens.css"
+        body = css if css.endswith("\n") else css + "\n"
+        await self._fs.write_file(path, body.encode("utf-8"))
+        return self._ref(ArtifactMemoryKind.DESIGN_DIRECTION, path)
+
     async def write_summary(self, range_id: str, summary: str) -> ArtifactMemoryRef:
         """Write a per-range durable summary under ``.disco/context/summary``."""
         safe_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", range_id).strip("._")
