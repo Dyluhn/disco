@@ -74,4 +74,24 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 
 ### Next: B-W3 (auth/RBAC) — the shift-calendar heart. Speccing real per-user RBAC (users+roles+sessions+role-gated routes) on the records primitive, with a gpt-5.5 adversarial review of the generated auth (it's auth code).
 
+### B-W3 (auth/RBAC) — codex build + Fable verification + gpt-5.5 adversarial BLOCK → fix pass
+- codex built real per-user RBAC: users+sessions tables, PBKDF2 (100k/SHA-256/16-byte salt), 32-byte session token stored as SHA-256, HttpOnly/SameSite=Strict/Secure cookie, register (ADMIN_TOKEN-gated), login/logout, role-gated routes. Opt-in on `AppSpec.roles` (inert when absent).
+- Fable verification: byte-identical proven by MY cross-checkout digests (lead-gen 44e78c8d + no-auth records 737bd1b8 identical). Own live-proof: register approver+member, login, member creates team_member/time_off_request, approver POST /api/approval=201, member=403, unauth=401, no login enumeration, KILL, RESTART → session persisted, RBAC holds. basedpyright 0, arch baseline, core suite green. My own line-by-line read of the shipped worker: PBKDF2/session/expiry/parameterization all correct.
+- **gpt-5.5 adversarial (xhigh) returned BLOCK — 6 findings.** The pass earned its keep: it caught that the bypass was in the DATA SHAPE, not the mechanism. Triage:
+  - #1 CRIT (member self-approves via client-writable `time_off_request.status`, a route the guard doesn't cover) → FIX: redesign demo (drop `status`; approval row is the only approver-gated write).
+  - #3 CSRF (cookie auth, no Origin/Content-Type check), #4 login-timing enumeration (PBKDF2 only on known email), #5 ADMIN_TOKEN `===`, #6 `/api/` falls through to ASSETS on method/path mismatch → FIX all (engine hardening).
+  - #2 HIGH IDOR/object-level ownership → genuinely beyond route-level RBAC; DOCUMENT as the next depth increment (truth-in-affordance, not faked). 
+- Fix pass dispatched to codex (bg `b9z75kumf`). Then: re-run live-proof + RE-RUN the adversary → must reach SHIP (or only the documented #2 remains) before commit. Commit held until then.
+
+### B-W3 fix pass 1 verified + adversarial round 2 (BLOCK on defense-in-depth) → fix pass 2
+- Fix pass 1: all engine fixes (#3 CSRF, #4 login-timing, #5 ADMIN_TOKEN, #6 /api fail-closed) + demo redesign (#1 dropped `status`) + #2 documented. My own live-proof of fixed version: 415/403/404 + RBAC cold-restart all hold. byte-identical preserved.
+- Adversarial round 2 (gpt-5.5 xhigh) on the PATCHED worker: BLOCK, 4 findings — but ALL defense-in-depth (timing side-channels + consistency), NO auth bypass (adversary confirms "no direct DB read/write bypass"; core RBAC sound). Triage: #1 login-timing-via-password-size, #2 logout skips origin guard (logout-CSRF), #3 ADMIN_TOKEN length leak → FIX (cheap correctness); #4 percent-encoded /api serving SPA → cheap to close (not a handler bypass — ROUTES is exact-match). 
+- CONVERGENCE DISCIPLINE: round 1 caught a real CRITICAL (worth it); round 2 is marginal hardening. Fixing all 4 by class, then ONE confirming pass — not an infinite adversarial loop (budget ~2-3 rounds). If round 3 leaves only marginal/theoretical nits, accept documented + commit. Fix pass 2 dispatched (bg `bmji9xlsp`).
+
+### B-W3 LANDED — commit `d99c4147` (auth/RBAC — adversarial round 3 = SHIP)
+- Round-3 gpt-5.5 adversarial: **SHIP** — no auth bypass, no privilege escalation, all prior fixes confirmed correct (it even ran a URL-parser test to verify the encoded-path classifier). Only residual = the documented object-ownership/IDOR limitation (accepted, in OWNER_GUIDE).
+- Convergence: CRITICAL (round 1) → defense-in-depth (round 2) → SHIP (round 3). 2 fix rounds, as budgeted — no infinite adversarial loop.
+- Final authoritative gates on main: basedpyright 0, arch baseline, lint 2 kept, diagram fresh, core suite green. My own final live-proof: full RBAC + session cold-restart. Byte-identical (my cross-checkout digests) for lead-gen + no-auth records.
+- **Build-depth arc so far: deploy-proof (B-W1) + relational data (B-W2) + auth/RBAC (B-W3) — all live-proven against real workerd.** Next: B-W4 (client reactivity, the last explicitly-requested feature), then Epic S (security closer, already fully spec'd in disco-security-fix-campaign.md), then Epic Z (soak).
+
 <!-- append below as work lands -->
