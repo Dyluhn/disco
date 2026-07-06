@@ -29,15 +29,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-logger = logging.getLogger(__name__)
-
 from disco.core import (
-    Event,
     DEFAULT_OWNER_ID,
     ActionEvent,
     AgentErrorEvent,
     ConversationState,
     ConversationStatus,
+    Event,
     EventSource,
     LLMMessage,
     LLMSummarizingCondenser,
@@ -55,12 +53,12 @@ from disco.core import (
     WorkspaceRestoredEvent,
     render_skills_for_prompt,
 )
+from disco.core.appkit import BuildBrief
 from disco.core.context.artifact_projection import (
     artifact_paths_from_events,
     manifest_path_divergence,
     manifest_shadow_enabled,
 )
-from disco.core.appkit import BuildBrief
 from disco.core.context.ledger import ArtifactRecord
 from disco.core.context.store import ArtifactMemoryStore
 from disco.core.contract import (
@@ -97,8 +95,8 @@ from disco.core.llm import (
     SecretStore,
 )
 from disco.core.llm.config import RouterConfig
-from disco.core.llm.secrets import OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY
-from disco.core.llm.wiring import build_providers, probe_all_vision
+from disco.core.llm.secret_refs import resolve_provider_secret, secret_ref_allowed_for_origin
+from disco.core.llm.wiring import build_providers, probe_all_vision_with_approvals
 from disco.core.loop import (
     AgentLoop,
     BlastRadiusConfirm,
@@ -113,16 +111,16 @@ from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.workflow import ScheduleSpec, WorkflowRun, compile_workflow_scope
+from disco.retrieval import DefaultCorpusService, DiskVectorStore
 from disco.retrieval.deep_research import (
     DepthTier,
 )
-from disco.retrieval import DefaultCorpusService, DiskVectorStore
 from disco.retrieval.wiring import retrieval_capability_handlers
 from disco.tools import (
-    AppKitPhaseState,
-    AppKitToolExecutor,
     REGISTRY_EGRESS_ALLOW,
     WORKFLOW_ROUTER_ALLOWED_TOOLS,
+    AppKitPhaseState,
+    AppKitToolExecutor,
     Capability,
     CapabilityBroker,
     DefaultToolExecutor,
@@ -181,6 +179,8 @@ from .verify.host import HostWebAppVerifier
 from .verify.model_verifier import ModelVerifier
 from .workflow_events import handle_workflow_tool_event
 from .workflow_schedule import WorkflowScheduleRunRecord
+
+logger = logging.getLogger(__name__)
 
 _HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
 _TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
@@ -1041,35 +1041,14 @@ class ConversationRuntime:
         ModelRole.SUMMARIZER,
     )
 
-    def _overlay_stored_secrets(self, env: dict[str, str]) -> None:
-        """Overlay every encrypted-at-rest provider key into `env` under its
-        env-var name, so build_providers authenticates from the store. The
-        reserved "openrouter" slot maps to OPENROUTER_API_KEY_ENV; all other
-        stored secrets are keyed BY their api_key_env name, so name == env var.
-        A stored value WINS over a pre-existing plaintext env var of the same
-        name (the encrypted source is authoritative)."""
-        for name in self._secret_store.secret_names():
-            value = self._secret_store.get_secret(name)
-            if not value:
-                continue
-            if name == "openrouter":
-                # Overlay under BOTH the canonical and legacy env names: existing
-                # disco-config.json entries still declare api_key_env="PMX_OPENROUTER_API_KEY",
-                # so build_providers resolves the legacy name. Without this the stored key
-                # never attaches → anonymous OpenRouter calls → paid models 402 "no credits".
-                env[OPENROUTER_API_KEY_ENV] = value
-                env[OPENROUTER_API_KEY_ENV_LEGACY] = value
-            else:
-                env[name] = value
-
     def _resolve_secret(self, name: str | None) -> str | None:
-        """A provider key by its api_key_env var name: the encrypted store wins,
-        else the live process env (back-compat for env-var-configured keys).
-        Used by the search/extract/TTS paths that read a key directly rather than
-        through build_providers' env."""
-        if not name:
-            return None
-        return self._secret_store.get_secret(name) or os.environ.get(name)
+        """Resolve a provider key by secret-ref id from SecretStore only."""
+        return resolve_provider_secret(name, self._secret_store)
+
+    def _origin_approved(self, url: str, purpose: str, secret_ref: str | None = "") -> bool:
+        return self._config_store.origin_approved(
+            url, purpose, secret_ref, secret_store=self._secret_store
+        )
 
     def _workflow_router_prompt_active(self, conversation_id: str) -> bool:
         executor = self._executors.get(conversation_id)
@@ -1103,15 +1082,12 @@ class ConversationRuntime:
         if pick and pick in cfg.models:
             reassigned = {**cfg.assignments, **{r: pick for r in self._GENERATIVE_ROLES}}
             cfg = cfg.model_copy(update={"assignments": reassigned})
-        # Overlay decrypted provider keys into the (per-request copy of the) env
-        # that build_providers reads, so any model authenticates from the encrypted
-        # store without its key being on disk in plaintext. OpenRouter uses a
-        # reserved slot mapped to its env-var name; every other stored secret is
-        # keyed BY its api_key_env var name, so it overlays onto itself.
-        env = dict(os.environ)
-        self._overlay_stored_secrets(env)
         thinking = self._enable_thinking if enable_thinking is None else enable_thinking
-        providers = build_providers(cfg, env=env, enable_thinking=thinking)
+        providers = build_providers(
+            cfg,
+            enable_thinking=thinking,
+            origin_approved=self._origin_approved,
+        )
         # DriverPrompts gives the AGENT_DRIVER role phase-aware system prompts (the
         # plan→approve→build flow); every other role/mode defers to the default
         # provider, so Research is unaffected. Enabled SKILLS (the user's reusable
@@ -1125,7 +1101,11 @@ class ConversationRuntime:
         workflow_router_active: Callable[[], bool] | None = None
         if workflow_router_enabled() and surface == "agent" and conversation_id:
             cid = conversation_id
-            workflow_router_active = lambda: self._workflow_router_prompt_active(cid)
+
+            def _workflow_router_active() -> bool:
+                return self._workflow_router_prompt_active(cid)
+
+            workflow_router_active = _workflow_router_active
 
         # DISCO_INSPECT: when on, bind a per-conversation routing sink so every
         # RoutingDecision this (per-conversation) router emits lands in the trace.
@@ -1264,11 +1244,16 @@ class ConversationRuntime:
             # Prefer the model server's ACTUAL n_ctx over the static config — the
             # condenser must budget against the window the backend really serves,
             # not a config that may assume 128k (the "assuming 128k context" bug).
-            live = _probe_live_model(
-                entry.base_url,
-                os.environ.get(entry.api_key_env) if entry.api_key_env else None,
-                entry.model_id,
-            )
+            if not entry.base_url or not self._origin_approved(
+                entry.base_url, f"model:{entry.provider}", entry.api_key_env
+            ):
+                return entry.context_window
+            if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
+                return entry.context_window
+            api_key = self._resolve_secret(entry.api_key_env)
+            if entry.api_key_env and not api_key:
+                return entry.context_window
+            live = _probe_live_model(entry.base_url, api_key, entry.model_id)
             return live["n_ctx"] or entry.context_window
         except Exception:  # noqa: BLE001 — never block loop construction on this
             return None
@@ -1288,10 +1273,14 @@ class ConversationRuntime:
             cfg = self._config_store.load()
             key = cfg.model_for(ModelRole.AGENT_DRIVER)
             entry = cfg.entry_for(key)
-            if entry and entry.base_url:
-                api_key = (
-                    os.environ.get(entry.api_key_env) if entry.api_key_env else None
-                )
+            if entry and entry.base_url and self._origin_approved(
+                entry.base_url, f"model:{entry.provider}", entry.api_key_env
+            ):
+                if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
+                    return
+                api_key = self._resolve_secret(entry.api_key_env)
+                if entry.api_key_env and not api_key:
+                    return
                 await asyncio.to_thread(
                     _do_live_model_probe, entry.base_url, api_key, entry.model_id
                 )
@@ -1308,7 +1297,9 @@ class ConversationRuntime:
         just not installed and load() keeps the static table."""
         try:
             self._config_store.apply_vision_probe(
-                await probe_all_vision(self._config_store.load())
+                await probe_all_vision_with_approvals(
+                    self._config_store.load(), origin_approved=self._origin_approved
+                )
             )
         except Exception:  # noqa: BLE001 — best effort; the static table is the fallback
             pass
@@ -1452,7 +1443,10 @@ class ConversationRuntime:
         if entry is None:
             # only a build/artifact run has a delivery shape — don't fabricate a
             # contract for an ordinary conversation.
-            if not (self._effective_artifact_mode(conversation_id) or conversation_id in self._build_kind):
+            if not (
+                self._effective_artifact_mode(conversation_id)
+                or conversation_id in self._build_kind
+            ):
                 return None
             self._build_scope_guard(conversation_id)  # resolves + caches the contract
             entry = self._build_trackers.get(conversation_id)
@@ -1774,11 +1768,18 @@ class ConversationRuntime:
             seen.add(m.model_id)
             # Ground truth over declaration: prefer the live-served model name +
             # context window; fall back to the static ModelEntry on any probe miss.
-            live = _probe_live_model(
-                m.base_url,
-                os.environ.get(m.api_key_env) if m.api_key_env else None,
-                m.model_id,
-            )
+            if self._origin_approved(m.base_url, f"model:{m.provider}", m.api_key_env):
+                if secret_ref_allowed_for_origin(m.api_key_env, m.base_url):
+                    api_key = self._resolve_secret(m.api_key_env)
+                    live = (
+                        {"model_id": None, "n_ctx": None}
+                        if m.api_key_env and not api_key
+                        else _probe_live_model(m.base_url, api_key, m.model_id)
+                    )
+                else:
+                    live = {"model_id": None, "n_ctx": None}
+            else:
+                live = {"model_id": None, "n_ctx": None}
             label = _model_label(live["model_id"] or m.model_id)
             ctx = live["n_ctx"] or m.context_window
             # W-05-fu: expose pricing_mode so the picker can tell a SUBSCRIPTION

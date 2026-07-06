@@ -81,7 +81,11 @@ def make_openrouter_router(state: ConfigState) -> APIRouter:
 
     async def _fetch(all_modalities: bool) -> list[OpenRouterModelDTO]:
         url = _OPENROUTER_MODELS_URL + ("?output_modalities=all" if all_modalities else "")
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
             resp = await client.get(url)
             resp.raise_for_status()
             models = normalize_openrouter(resp.json().get("data", []))

@@ -126,7 +126,11 @@ def test_payload_byte_identical_local_with_and_without_prefs():
 
 
 def _make_error_resp(status: int, message: str, err_type: str = "") -> httpx.Response:
-    payload = {"error": {"message": message, "type": err_type}} if err_type else {"error": {"message": message}}
+    payload = (
+        {"error": {"message": message, "type": err_type}}
+        if err_type
+        else {"error": {"message": message}}
+    )
     return httpx.Response(status, json=payload)
 
 
@@ -151,7 +155,11 @@ async def test_provider_rejection_classifies_to_provider_unavailable(message, er
     p = _openrouter_provider(handler)
     with pytest.raises(LLMProviderUnavailable) as exc:
         await p.complete(_req(), model="m")
-    assert message in str(exc.value)
+    expected = "provider openrouter returned HTTP 400"
+    if err_type:
+        expected += f" type={err_type}"
+    assert str(exc.value) == expected
+    assert message not in str(exc.value)
 
 
 async def test_provider_unavailable_is_transient_subclass():

@@ -37,7 +37,6 @@ import ipaddress
 import json
 import logging
 import math
-import os
 import re
 import time
 import urllib.parse
@@ -46,11 +45,8 @@ from dataclasses import dataclass
 
 import httpx
 from disco.core.llm import ConfigStore
-from disco.core.llm.secrets import (
-    OPENROUTER_API_KEY_ENV,
-    OPENROUTER_API_KEY_ENV_LEGACY,
-    SecretStore,
-)
+from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+from disco.core.llm.secrets import SecretStore
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -151,30 +147,10 @@ def _bearer(request: Request) -> str | None:
 
 
 def _resolve_provider_key(api_key_env: str | None, secret_store: SecretStore) -> str | None:
-    """The decrypted provider key for a model's ``api_key_env``, ORCHESTRATOR-SIDE —
-    the same resolution order the runtime uses to overlay a key at build time:
-    the encrypted SecretStore wins, with the reserved OpenRouter slot + the
-    DISCO_→PMX_ legacy alias honored, then the live process env as a last resort.
+    """Resolve a provider key by secret-ref id from SecretStore only."""
+    from disco.core.llm.secret_refs import resolve_provider_secret
 
-    Returns None when no key is configured (a keyless local endpoint, §4.4)."""
-    if not api_key_env:
-        return None
-    # (1) a secret stored directly under the env-var name.
-    val = secret_store.get_secret(api_key_env)
-    if val:
-        return val
-    # (2) the reserved "openrouter" slot maps to the OpenRouter env-var names.
-    if api_key_env in (OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY):
-        val = secret_store.get_secret("openrouter")
-        if val:
-            return val
-    # (3) DISCO_<X> ciphertext may be stored under the legacy PMX_<X> name.
-    if api_key_env.startswith("DISCO_"):
-        val = secret_store.get_secret("PMX_" + api_key_env[len("DISCO_") :])
-        if val:
-            return val
-    # (4) back-compat: an env-var-configured key (never persisted in plaintext by us).
-    return os.environ.get(api_key_env) or None
+    return resolve_provider_secret(api_key_env, secret_store)
 
 
 def resolve_upstream(
@@ -189,6 +165,15 @@ def resolve_upstream(
     cfg = config_store.load()
     entry = cfg.models.get(model_key)
     if entry is None or not entry.base_url:
+        return None
+    if not config_store.origin_approved(
+        entry.base_url,
+        f"model:{entry.provider}",
+        entry.api_key_env,
+        secret_store=secret_store,
+    ):
+        return None
+    if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
         return None
     return _UpstreamTarget(
         base_url=entry.base_url.rstrip("/"),
@@ -451,6 +436,17 @@ async def _read_capped(resp: httpx.Response, limit: int) -> tuple[bytes, bool]:
     return bytes(buf), False
 
 
+def _upstream_client(
+    http_transport: httpx.AsyncBaseTransport | None,
+) -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=_UPSTREAM_TIMEOUT_S,
+        transport=http_transport,
+        trust_env=False,
+        follow_redirects=False,
+    )
+
+
 def make_pi_inference_router(
     token_store: PiInferenceTokenStore,
     *,
@@ -625,7 +621,7 @@ def make_pi_inference_router(
             rec.fingerprint, target.model_id, target.provider, stream,
         )
 
-        client = httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT_S, transport=http_transport)
+        client = _upstream_client(http_transport)
 
         if not stream:
             try:

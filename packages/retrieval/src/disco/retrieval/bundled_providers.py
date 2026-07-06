@@ -15,10 +15,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
 import httpx
+
+from disco.core.host_egress import EgressDenied, guarded_get, validate_untrusted_url
 
 from .models import ExtractedDoc, Passage, SearchHit
 
@@ -187,7 +190,9 @@ class TavilySearchProvider:
         if not self._key:
             return []
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+            async with httpx.AsyncClient(
+                timeout=_TIMEOUT, trust_env=False, follow_redirects=False
+            ) as c:
                 r = await c.post(
                     "https://api.tavily.com/search",
                     json={"api_key": self._key, "query": query, "max_results": limit},
@@ -231,7 +236,9 @@ class BraveSearchProvider:
         if not self._key:
             return []
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+            async with httpx.AsyncClient(
+                timeout=_TIMEOUT, trust_env=False, follow_redirects=False
+            ) as c:
                 r = await c.get(
                     f"{self._base}/res/v1/web/search",
                     params={"q": query, "count": max(1, min(limit, 20))},
@@ -355,20 +362,24 @@ class LocalExtractionProvider:
 
     async def extract(self, url: str) -> ExtractedDoc:
         try:
-            async with httpx.AsyncClient(
-                timeout=_TIMEOUT, follow_redirects=True, headers={"User-Agent": _UA}
-            ) as c:
-                r = await c.get(url)
-                r.raise_for_status()
-                html = r.text
-        except httpx.HTTPStatusError as e:
-            code = e.response.status_code
+            r = await guarded_get(url, timeout_s=20.0, headers={"User-Agent": _UA})
+            if r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}")
+            html = r.text
+        except EgressDenied as e:
+            _LOG.info("local extract DENIED %s → %s", url[:80], e)
+            return ExtractedDoc(
+                url=url, title="", content="", fetched_ok=False, error=str(e), status="error"
+            )
+        except RuntimeError as e:
+            code_match = re.search(r"HTTP (\d+)", str(e))
+            code = int(code_match.group(1)) if code_match else 0
             status = "not_found" if code == 404 else "blocked" if code in (401, 403) else "error"
             _LOG.info("local extract FAIL %s → HTTP %s (%s)", url[:80], code, status)
             return ExtractedDoc(
                 url=url, title="", content="", fetched_ok=False, error=str(e), status=status
             )
-        except httpx.HTTPError as e:
+        except OSError as e:
             _LOG.info("local extract FAIL %s → %s: %s", url[:80], type(e).__name__, e)
             return ExtractedDoc(
                 url=url, title="", content="", fetched_ok=False, error=str(e), status="error"
@@ -407,7 +418,10 @@ class FirecrawlExtractionProvider:
                 error="no firecrawl key configured", status="error",
             )
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+            validate_untrusted_url(url)
+            async with httpx.AsyncClient(
+                timeout=_TIMEOUT, trust_env=False, follow_redirects=False
+            ) as c:
                 r = await c.post(
                     f"{self._base}/v1/scrape",
                     headers={"Authorization": f"Bearer {self._key}"},
@@ -415,7 +429,7 @@ class FirecrawlExtractionProvider:
                 )
                 r.raise_for_status()
                 data = r.json().get("data", {})
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, EgressDenied) as e:
             return ExtractedDoc(
                 url=url, title="", content="", fetched_ok=False, error=str(e), status="error"
             )

@@ -232,6 +232,7 @@ async def test_end_paths_are_none_safe_without_token_store() -> None:
 
 _SELECTED_KEY = "selected-model"
 _PROVIDER_KEY_ENV = "PI_TEST_PROVIDER_KEY"
+_BASE_URL = "http://upstream.test/v1"
 
 
 def _gateway_app(token_store: PiInferenceTokenStore, tmp_path) -> FastAPI:
@@ -239,14 +240,21 @@ def _gateway_app(token_store: PiInferenceTokenStore, tmp_path) -> FastAPI:
         models={
             _SELECTED_KEY: ModelEntry(
                 model_id="vendor/real-7b", provider="testprov", context_window=8192,
-                base_url="http://upstream.test/v1", api_key_env=_PROVIDER_KEY_ENV,
+                base_url=_BASE_URL, api_key_env=_PROVIDER_KEY_ENV,
             )
         },
         default_model=_SELECTED_KEY,
+        trusted_origins=("http://upstream.test",),
     )
     config_store = ConfigStore(path=tmp_path / "none.json", base_factory=lambda: cfg)
     secret_store = SecretStore(path=tmp_path / "secrets.json", box=SecretBox(app_secret="t"))
     secret_store.set_secret(_PROVIDER_KEY_ENV, "sk-secret")
+    config_store.approve_origin(
+        _BASE_URL,
+        "model:testprov",
+        _PROVIDER_KEY_ENV,
+        secret_store=secret_store,
+    )
 
     def _handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"id": "x", "choices": [], "usage": {}})

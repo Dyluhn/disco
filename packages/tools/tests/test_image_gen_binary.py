@@ -609,6 +609,9 @@ def test_select_image_backend_raises_when_openai_has_no_key(monkeypatch):
         def load(self):
             return _MockConfig()
 
+        def origin_approved(self, *_args, **_kwargs):
+            return True
+
     # Mock SecretStore to return no secret
     class _MockSecrets:
         def get_secret(self, name):
@@ -635,6 +638,9 @@ def test_select_image_backend_raises_when_comfyui_has_no_url(monkeypatch):
         def load(self):
             return _MockConfig()
 
+        def origin_approved(self, *_args, **_kwargs):
+            return True
+
     monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
 
     with pytest.raises(ImageGenNotConfigured):
@@ -656,6 +662,9 @@ def test_select_image_backend_returns_openai_with_key(monkeypatch):
     class _MockStore:
         def load(self):
             return _MockConfig()
+
+        def origin_approved(self, *_args, **_kwargs):
+            return True
 
     class _MockSecrets:
         def get_secret(self, name):
@@ -686,6 +695,9 @@ def test_select_image_backend_returns_comfyui_with_url(monkeypatch):
     class _MockStore:
         def load(self):
             return _MockConfig()
+
+        def origin_approved(self, *_args, **_kwargs):
+            return True
 
     monkeypatch.setattr('disco.tools.builtin.image_gen.ConfigStore', lambda: _MockStore())
 
@@ -1176,7 +1188,14 @@ def test_select_image_backend_openrouter_uses_reserved_slot(monkeypatch):
             "model": "google/gemini-2.5-flash-image", "workflow_json": "",
         })()
 
-    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())  # noqa: E501
+    monkeypatch.setattr(
+        "disco.tools.builtin.image_gen.ConfigStore",
+        lambda: type(
+            "S",
+            (),
+            {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
+        )(),
+    )
 
     class _Secret:
         def get_openrouter_key(self):
@@ -1201,7 +1220,14 @@ def test_select_image_backend_openrouter_empty_model_raises(monkeypatch):
             "model": "", "workflow_json": "",
         })()
 
-    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())  # noqa: E501
+    monkeypatch.setattr(
+        "disco.tools.builtin.image_gen.ConfigStore",
+        lambda: type(
+            "S",
+            (),
+            {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
+        )(),
+    )
     monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
                         lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
 
@@ -1217,7 +1243,14 @@ def test_select_image_backend_openrouter_whitespace_model_raises(monkeypatch):
             "model": "   ", "workflow_json": "",
         })()
 
-    monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore", lambda: type("S", (), {"load": lambda s: _Cfg()})())  # noqa: E501
+    monkeypatch.setattr(
+        "disco.tools.builtin.image_gen.ConfigStore",
+        lambda: type(
+            "S",
+            (),
+            {"load": lambda s: _Cfg(), "origin_approved": lambda s, *a, **kw: True},
+        )(),
+    )
     monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
                         lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
 
@@ -1237,7 +1270,14 @@ def test_select_openrouter_ignores_stale_base_url(monkeypatch):
         })()
 
     monkeypatch.setattr("disco.tools.builtin.image_gen.ConfigStore",
-                        lambda: type("S", (), {"load": lambda s: _Cfg()})())
+                        lambda: type(
+                            "S",
+                            (),
+                            {
+                                "load": lambda s: _Cfg(),
+                                "origin_approved": lambda s, *a, **kw: True,
+                            },
+                        )())
     monkeypatch.setattr("disco.tools.builtin.image_gen.SecretStore",
                         lambda: type("K", (), {"get_openrouter_key": lambda s: "sk-or"})())
     be = select_image_backend()

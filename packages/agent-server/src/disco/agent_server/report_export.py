@@ -326,6 +326,22 @@ def _render_md_segment(text: str, cite_map: dict[str, int] | None) -> str:
     )
 
 
+_RAW_RESOURCE_TAG_RE = re.compile(
+    r"(?is)<\s*(?:img|link|iframe|object|embed|source|video|audio|script|style)\b[^>]*>.*?"
+    r"(?:<\s*/\s*(?:iframe|object|embed|video|audio|script|style)\s*>)?"
+)
+_RAW_HTML_TAG_RE = re.compile(r"(?is)<\s*/?\s*[a-zA-Z!][^>]*>")
+_MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]+\)")
+_CSS_URL_RE = re.compile(r"(?is)url\(\s*[^)]*\)")
+
+
+def _sanitize_report_markdown(text: str) -> str:
+    text = _MD_IMAGE_RE.sub(lambda m: _html.escape(m.group(1)), text)
+    text = _RAW_RESOURCE_TAG_RE.sub("", text)
+    text = _CSS_URL_RE.sub("", text)
+    return _RAW_HTML_TAG_RE.sub("", text)
+
+
 def _render_section_body(
     text: str,
     cite_map: dict[str, int] | None = None,
@@ -336,6 +352,7 @@ def _render_section_body(
     code blocks. Non-chart segments go through python-markdown; chart segments
     are spliced in so markdown can't mangle the SVG."""
     parts: list[str] = []
+    text = _sanitize_report_markdown(text)
     last = 0
     for m in _CHART_FENCE_RE.finditer(text):
         parts.append(_render_md_segment(text[last : m.start()], cite_map))
@@ -582,6 +599,14 @@ def _lazy_import_weasyprint():
     return weasyprint
 
 
+def _report_pdf_url_fetcher(url: str, *args, **kwargs):
+    if str(url).startswith("data:"):
+        from weasyprint import default_url_fetcher
+
+        return default_url_fetcher(url, *args, **kwargs)
+    raise ValueError("external PDF resource fetch blocked")
+
+
 def serialize_pdf(
     report: ReportEvent,
     follow_ups: list[tuple[str, str]] | None = None,
@@ -613,7 +638,7 @@ def serialize_pdf(
         from weasyprint.text.fonts import FontConfiguration
 
         font_config = FontConfiguration()
-        wp_doc = weasyprint.HTML(string=doc_html)
+        wp_doc = weasyprint.HTML(string=doc_html, url_fetcher=_report_pdf_url_fetcher)
         pdf = wp_doc.write_pdf(font_config=font_config)
         assert pdf is not None  # target not provided → bytes
         return pdf

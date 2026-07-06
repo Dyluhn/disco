@@ -117,7 +117,7 @@ async def test_crawl4ai_falls_back_to_raw_markdown_when_fit_is_empty():
     handler = _crawl(
         [
             {
-                "url": "https://m.example/post",
+                "url": "https://example.com/post",
                 "success": True,
                 "status_code": 200,
                 "markdown": {
@@ -129,17 +129,24 @@ async def test_crawl4ai_falls_back_to_raw_markdown_when_fit_is_empty():
         ]
     )
     doc = await Crawl4aiExtractionProvider("http://x", transport=_async(handler)).extract(
-        "https://m.example/post"
+        "https://example.com/post"
     )
     assert doc.fetched_ok and "Real content here" in doc.content
 
 
 async def test_crawl4ai_maps_failure_statuses_for_honest_rendering():
     handler = _crawl(
-        [{"url": "https://blocked.example", "success": False, "status_code": 403, "markdown": {}}]
+        [
+            {
+                "url": "https://example.com/blocked",
+                "success": False,
+                "status_code": 403,
+                "markdown": {},
+            }
+        ]
     )
     doc = await Crawl4aiExtractionProvider("http://x", transport=_async(handler)).extract(
-        "https://blocked.example"
+        "https://example.com/blocked"
     )
     assert doc.status == "blocked" and not doc.fetched_ok  # shown, not silently dropped
 

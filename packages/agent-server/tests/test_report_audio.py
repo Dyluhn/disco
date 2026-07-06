@@ -161,16 +161,11 @@ def _create_conv(client: TestClient) -> str:
 # configured TtsSettings instance.
 @pytest.fixture
 def configure_tts(monkeypatch: pytest.MonkeyPatch):
-    from disco.core.llm import ConfigStore
+    from disco.core.llm import ConfigStore, default_config
 
     def _set(tts: TtsSettings) -> None:
         def _loader(self):  # noqa: ANN001
-            class _Cfg:
-                pass
-
-            cfg = _Cfg()
-            cfg.tts = tts
-            return cfg
+            return default_config().model_copy(update={"tts": tts})
 
         monkeypatch.setattr(ConfigStore, "load", _loader)
 

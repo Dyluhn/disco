@@ -111,7 +111,10 @@ def _patch_tts(tts: TtsSettings):
     """Pin ConfigStore.load to a config with the given TTS settings so the tool's
     Step 0 resolves deterministically (independent of the repo config file)."""
     cfg = default_config().model_copy(update={"tts": tts})
-    with mock.patch.object(ConfigStore, "load", return_value=cfg):
+    with (
+        mock.patch.object(ConfigStore, "load", return_value=cfg),
+        mock.patch.object(ConfigStore, "origin_approved", return_value=True),
+    ):
         yield
 
 

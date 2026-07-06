@@ -485,7 +485,9 @@ def make_preview_router(
                 return served
             return Response("preview not available", status_code=503, media_type="text/plain")
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=15, follow_redirects=False, trust_env=False
+            ) as client:
                 r = await client.get(f"{upstream}/{path}")
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
             # Fix 2 safety net: a RESOLVED-but-unreachable upstream (host port mapped but
@@ -565,7 +567,9 @@ def make_preview_router(
                 return served
             return Response("preview not available", status_code=503, media_type="text/plain")
         try:
-            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=15, follow_redirects=False, trust_env=False
+            ) as client:
                 r = await client.get(f"{upstream}/{path}")
         except Exception:  # noqa: BLE001 — upstream not up yet / unreachable
             # Fix 2 safety net: resolved-but-unreachable upstream → try the in-sandbox

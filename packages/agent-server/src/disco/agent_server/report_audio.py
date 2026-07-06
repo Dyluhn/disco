@@ -51,7 +51,7 @@ from disco.tools.builtin import audio_overview
 from disco.tools.builtin._audio_mixer import encode_mp3, mix_pcm
 from disco.tools.builtin._tts_normalize import normalize_tts_text as _normalize_for_tts
 
-from .audio_config import LLM_API_KEY_ENV, LLM_URL, SILENCE_MS_DEFAULT
+from .audio_config import SILENCE_MS_DEFAULT
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +93,8 @@ def _resolve_remote_params(
     (in-process Kokoro), `speaches` and `openai` use an OpenAI-compatible HTTP
     client.  The key is resolved from the ENV-VAR NAME the user set in
     Settings (never the raw key) — same convention as the rest of the
-    provider stack. `resolve` (the runtime's store-then-env resolver) lets the
-    key come from the encrypted store; absent it, fall back to the env var.
+    provider stack. `resolve` must resolve from the encrypted SecretStore; absent
+    it, the key is missing.
     """
     if provider == "bundled":
         return "", "", ""
@@ -110,10 +110,18 @@ def _resolve_remote_params(
         # Unknown provider (settings drifted) — treat as a backend error so
         # the user gets a clear message rather than a silent fallback.
         raise TtsBackendError(f"unknown TTS provider {provider!r}")
+    from disco.core.llm import ConfigStore
+    from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+    secret_ref = api_key_env if provider == "openai" else ""
+    if not ConfigStore().origin_approved(effective_base, f"tts:{provider}", secret_ref):
+        raise TtsBackendError("TTS origin not approved")
+    if not secret_ref_allowed_for_origin(api_key_env, effective_base):
+        raise TtsBackendError("TTS secret_ref not allowed for this origin")
     if resolve is not None:
         key = resolve(api_key_env) or ""
     else:
-        key = os.environ.get(api_key_env, "") if api_key_env else ""
+        key = ""
     effective_model = model or "tts-1"
     return effective_base, key, effective_model
 
@@ -224,16 +232,53 @@ async def _emit(on_progress: ProgressCallback | None, event: dict[str, Any]) -> 
 # ---- The pipeline ----------------------------------------------------------
 
 
-async def _authenticated_call_llm(payload: dict, llm_url: str) -> str:
+def _resolve_report_llm() -> tuple[str, str, str | None, str]:
+    from disco.core.llm import ConfigStore, ModelRole
+
+    cfg = ConfigStore().load()
+    key = cfg.assignments.get(ModelRole.RAG_ANSWERER) or cfg.default_model
+    entry = cfg.models.get(key)
+    if entry is None or not entry.base_url:
+        raise TurnScriptError("LLM endpoint is not configured")
+    return (
+        entry.base_url.rstrip("/"),
+        entry.model_id,
+        entry.api_key_env,
+        f"model:{entry.provider}",
+    )
+
+
+async def _authenticated_call_llm(
+    payload: dict,
+    llm_url: str,
+    *,
+    api_key_env: str | None,
+    purpose: str,
+) -> str:
     if getattr(audio_overview._call_llm, "__name__", "") == "_fake_llm":
         return await audio_overview._call_llm(payload, llm_url)
 
+    from disco.core.llm import ConfigStore
+
+    if not ConfigStore().origin_approved(llm_url, purpose, api_key_env or ""):
+        raise RuntimeError("LLM origin not approved")
+
     headers = {"Content-Type": "application/json"}
-    if LLM_API_KEY_ENV:
-        key = os.environ.get(LLM_API_KEY_ENV)
+    if api_key_env:
+        from disco.core.llm.secret_refs import (
+            resolve_provider_secret,
+            secret_ref_allowed_for_origin,
+        )
+        from disco.core.llm.secrets import SecretStore
+
+        if not secret_ref_allowed_for_origin(api_key_env, llm_url):
+            raise RuntimeError("LLM secret_ref not allowed for this origin")
+        key = resolve_provider_secret(api_key_env, SecretStore())
         if key:
             headers["Authorization"] = f"Bearer {key}"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
+    ) as client:
         resp = await client.post(
             f"{llm_url}/chat/completions",
             json=payload,
@@ -261,7 +306,10 @@ async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
     # inserting a system message that the local server-side adapter controls, so
     # the TTS script expands abbreviations (HTTP/3, API, ML) on first mention —
     # avoiding letter-soup in generated speech.
-    payload = audio_overview._build_llm_payload(overview_text, mode=mode)
+    llm_url, llm_model, api_key_env, purpose = _resolve_report_llm()
+    payload = audio_overview._build_llm_payload_for_model(
+        overview_text, llm_model, mode=mode
+    )
     payload["messages"].insert(0, {
         "role": "system",
         "content": (
@@ -272,7 +320,9 @@ async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
         ),
     })
     try:
-        raw_response = await _authenticated_call_llm(payload, LLM_URL)
+        raw_response = await _authenticated_call_llm(
+            payload, llm_url, api_key_env=api_key_env, purpose=purpose
+        )
     except Exception as e:
         raise TurnScriptError(f"LLM call failed while generating turn-script: {e}") from e
 
@@ -298,7 +348,9 @@ async def _generate_turn_script(overview_text: str, mode: str) -> list[Any]:
             }
         )
         try:
-            raw_response2 = await _authenticated_call_llm(retry_payload, LLM_URL)
+            raw_response2 = await _authenticated_call_llm(
+                retry_payload, llm_url, api_key_env=api_key_env, purpose=purpose
+            )
         except Exception as e:
             raise TurnScriptError(
                 f"Turn-script validation failed: {error}; retry LLM call also failed: {e}"
@@ -472,7 +524,8 @@ async def generate_report_audio(
             ) from e
         except Exception as e:
             raise TtsBackendError(
-                f"TTS ({backend}) failed for turn {i + 1}/{len(turns)} (speaker {turn.speaker}): {e}"
+                f"TTS ({backend}) failed for turn {i + 1}/{len(turns)} "
+                f"(speaker {turn.speaker}): {e}"
             ) from e
         size = getattr(pcm, "size", len(pcm) if pcm is not None else 0)
         if pcm is None or size == 0:

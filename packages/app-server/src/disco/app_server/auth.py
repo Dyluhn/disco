@@ -32,6 +32,7 @@ _ADMIN_PREFIXES = (
     "/api/models",
     "/api/openrouter",
     "/api/secrets",
+    "/api/security",
     "/api/skills",
     "/api/mcp",
     "/api/sandbox",

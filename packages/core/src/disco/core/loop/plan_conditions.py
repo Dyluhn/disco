@@ -813,29 +813,16 @@ class PlanStepConditions:
         self, predicate: HTTPOkPredicate
     ) -> tuple[bool, str]:
         """GET `predicate.url` and compare to `predicate.expect_status`
-        (default 200). Tight timeout; failures surface the reason. Does
-        NOT enforce the C1b egress allow-list — this is a per-step
-        advisory check the agent opted into by attaching the predicate;
-        the C1c gate (fresh-context, with egress discipline) is the
-        authoritative check."""
+        (default 200). Tight timeout; failures surface the reason. Uses
+        the shared class-1 host egress guard so private ranges and redirects
+        are blocked before a socket is opened."""
         try:
-            import httpx
-        except ImportError:
-            # httpx is in disco-core's deps (we saw it in pyproject.toml),
-            # but be defensive in case the test env differs.
-            try:
-                import urllib.request
-                with urllib.request.urlopen(predicate.url, timeout=2.0) as resp:
-                    status = int(resp.status)
-            except Exception as exc:  # noqa: BLE001 — defensive
-                return (False, f"http_ok({predicate.url}): error ({exc})")
-        else:
-            try:
-                async with httpx.AsyncClient(timeout=2.0) as client:
-                    resp = await client.get(predicate.url)
-                    status = int(resp.status_code)
-            except Exception as exc:  # noqa: BLE001 — defensive
-                return (False, f"http_ok({predicate.url}): error ({exc})")
+            from disco.core.host_egress import guarded_get
+
+            resp = await guarded_get(predicate.url, timeout_s=2.0)
+            status = int(resp.status_code)
+        except Exception as exc:  # noqa: BLE001 — defensive
+            return (False, f"http_ok({predicate.url}): error ({exc})")
         if status == predicate.expect_status:
             return (True, f"http_ok({predicate.url}): status {status} as expected")
         return (

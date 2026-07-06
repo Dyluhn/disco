@@ -84,7 +84,7 @@ async def test_reasoning_only_truncation_yields_empty_content():
     assert r.text == "" and r.finish_reason == "length"
 
 
-async def test_context_window_error_is_classified_and_preserves_message():
+async def test_context_window_error_is_classified_and_redacts_provider_message():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             400,
@@ -100,10 +100,12 @@ async def test_context_window_error_is_classified_and_preserves_message():
     with pytest.raises(LLMContextWindowExceeded) as exc:
         await _provider(handler).complete(_req(), model="m")
     assert is_context_window_exceeded(exc.value)  # the condenser's dependency
-    assert "exceeds the available context size" in str(exc.value)  # real message preserved
+    text = str(exc.value)
+    assert text == "provider fake returned HTTP 400 type=exceed_context_size_error"
+    assert "exceeds the available context size" not in text
 
 
-async def test_auth_error_preserves_real_message():
+async def test_auth_error_redacts_real_message():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             401, json={"error": {"message": "Invalid API Key", "type": "authentication_error"}}
@@ -111,10 +113,11 @@ async def test_auth_error_preserves_real_message():
 
     with pytest.raises(LLMAuthError) as exc:
         await _provider(handler).complete(_req(), model="m")
-    assert str(exc.value) == "Invalid API Key"
+    assert str(exc.value) == "provider fake returned HTTP 401 type=authentication_error"
+    assert "Invalid API Key" not in str(exc.value)
 
 
-async def test_generic_provider_error_is_not_flattened():
+async def test_generic_provider_error_uses_safe_summary():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             400,
@@ -123,7 +126,8 @@ async def test_generic_provider_error_is_not_flattened():
 
     with pytest.raises(LLMError) as exc:
         await _provider(handler).complete(_req(), model="m")
-    assert "something specific broke" in str(exc.value)  # not a generic failure
+    assert str(exc.value) == "provider fake returned HTTP 400 type=invalid_request"
+    assert "something specific broke" not in str(exc.value)
 
 
 async def test_streaming_reassembles_and_final_matches():
@@ -230,8 +234,12 @@ async def test_streaming_parallel_calls_with_index_on_every_delta():
         {"choices": [{"delta": {"tool_calls": [
             {"index": 1, "id": "b", "type": "function",
              "function": {"name": "toolB", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '{"x": '}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"arguments": '{"y": '}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 0, "function": {"arguments": '{"x": '}}
+        ]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"index": 1, "function": {"arguments": '{"y": '}}
+        ]}}]},
         {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": '1}'}}]}}]},
         {"choices": [{"delta": {"tool_calls": [{"index": 1, "function": {"arguments": '2}'}}]}}]},
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
@@ -252,11 +260,15 @@ async def test_streaming_parallel_calls_with_index_dropped_on_continuations():
         {"choices": [{"delta": {"tool_calls": [
             {"index": 0, "id": "a", "type": "function",
              "function": {"name": "toolA", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"function": {"arguments": '{"x": 1}'}}]}}]},  # no index → toolA
+        {"choices": [{"delta": {"tool_calls": [
+            {"function": {"arguments": '{"x": 1}'}}
+        ]}}]},  # no index -> toolA
         {"choices": [{"delta": {"tool_calls": [
             {"index": 1, "id": "b", "type": "function",
              "function": {"name": "toolB", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"function": {"arguments": '{"y": 2}'}}]}}]},  # no index → toolB
+        {"choices": [{"delta": {"tool_calls": [
+            {"function": {"arguments": '{"y": 2}'}}
+        ]}}]},  # no index -> toolB
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     )
     _, final, _ = await _collect(_stream_provider(content))
@@ -275,8 +287,12 @@ async def test_streaming_interleaved_continuations_keyed_by_id_without_index():
         {"choices": [{"delta": {"tool_calls": [
             {"index": 1, "id": "b", "type": "function",
              "function": {"name": "toolB", "arguments": ""}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"id": "a", "function": {"arguments": '{"x": '}}]}}]},
-        {"choices": [{"delta": {"tool_calls": [{"id": "b", "function": {"arguments": '{"y": '}}]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"id": "a", "function": {"arguments": '{"x": '}}
+        ]}}]},
+        {"choices": [{"delta": {"tool_calls": [
+            {"id": "b", "function": {"arguments": '{"y": '}}
+        ]}}]},
         {"choices": [{"delta": {"tool_calls": [{"id": "a", "function": {"arguments": '1}'}}]}}]},
         {"choices": [{"delta": {"tool_calls": [{"id": "b", "function": {"arguments": '2}'}}]}}]},
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
@@ -304,10 +320,15 @@ def test_tool_calls_survive_array_shaped_arguments():
     honest {"_raw": ...} shape (validation refuses with feedback), never crash."""
     from disco.core.llm.openai_provider import OpenAIProvider
 
-    raw = [{
-        "id": "c1",
-        "function": {"name": "update_plan_progress", "arguments": '[{"index": 1, "state": "done"}]'},
-    }]
+    raw = [
+        {
+            "id": "c1",
+            "function": {
+                "name": "update_plan_progress",
+                "arguments": '[{"index": 1, "state": "done"}]',
+            },
+        }
+    ]
     calls = OpenAIProvider._tool_calls(raw)
     assert len(calls) == 1
     args = calls[0].arguments

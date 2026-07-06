@@ -369,6 +369,11 @@ class SlidesTool:
         read_only=False,
     )
 
+    def execution_scope(self, args: SlidesGenerateArgs) -> str:
+        if args.goal and args.mode != "markdown":
+            return "in_process"
+        return "sandbox"
+
     async def run(self, args: SlidesGenerateArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
 

@@ -32,6 +32,14 @@ def test_encoders_are_local_by_default():
 
 def test_remote_encoders_are_opt_in():
     d = build_live_retrieval(env={"PMX_ENCODERS": "remote"})
+    assert type(d["reranker"]).__name__ == "FastEmbedReranker"
+    assert type(d["embedder"]).__name__ == "FastEmbedEmbedder"
+    assert type(d["nli"]).__name__ == "FastEmbedNLIVerifier"
+
+    d = build_live_retrieval(
+        env={"PMX_ENCODERS": "remote"},
+        origin_approved=lambda *_args: True,
+    )
     assert type(d["reranker"]).__name__ == "TeiReranker"
     assert type(d["embedder"]).__name__ == "OpenAIEmbedder"
     assert type(d["nli"]).__name__ == "SidecarNLIVerifier"

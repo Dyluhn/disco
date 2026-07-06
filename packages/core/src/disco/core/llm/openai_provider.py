@@ -188,7 +188,12 @@ class OpenAIProvider:
         self._transport = transport  # test seam (httpx.MockTransport); None = real
 
     def _client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(timeout=self._timeout, transport=self._transport)
+        return httpx.AsyncClient(
+            timeout=self._timeout,
+            transport=self._transport,
+            trust_env=False,
+            follow_redirects=False,
+        )
 
     def _is_openrouter(self) -> bool:
         """True when this provider routes through OpenRouter. Reuses the same
@@ -443,7 +448,7 @@ class OpenAIProvider:
             # The tool surface is stable too — a breakpoint after the last tool caches it.
             tools[-1]["cache_control"] = {"type": "ephemeral"}
 
-    # -- error mapping (preserve the real message) ----------------------------
+    # -- error mapping (classify on raw body, raise only a safe summary) -------
 
     def _raise_typed(self, status: int, body_text: str) -> None:
         message, err_type = body_text, ""
@@ -456,14 +461,15 @@ class OpenAIProvider:
         except (json.JSONDecodeError, ValueError):
             pass
         message = message.strip() or f"HTTP {status}"
+        safe_message = self._safe_provider_error(status, err_type)
         if _is_context_overflow(err_type, message):
-            raise LLMContextWindowExceeded(message, provider=self.name)
+            raise LLMContextWindowExceeded(safe_message, provider=self.name)
         if status in (401, 403) or "auth" in err_type.lower():
-            raise LLMAuthError(message, provider=self.name)
+            raise LLMAuthError(safe_message, provider=self.name)
         if "content_filter" in err_type.lower() or status == 451:
-            raise LLMContentFiltered(message, provider=self.name)
+            raise LLMContentFiltered(safe_message, provider=self.name)
         if status == 429 or status >= 500:
-            raise LLMTransientError(message, provider=self.name)
+            raise LLMTransientError(safe_message, provider=self.name)
         # P2 — provider-availability rejection classification. These messages
         # are upstream routing failures (Chutes/OpenRouter), NOT model errors:
         # the model payload is fine; an upstream provider is unavailable or
@@ -481,8 +487,13 @@ class OpenAIProvider:
             "requires moderation",
         )
         if any(p in _msg_lower for p in _provider_phrases) or _type_lower.startswith("provider"):
-            raise LLMProviderUnavailable(message, provider=self.name)
-        raise LLMError(message, provider=self.name)
+            raise LLMProviderUnavailable(safe_message, provider=self.name)
+        raise LLMError(safe_message, provider=self.name)
+
+    def _safe_provider_error(self, status: int, err_type: str) -> str:
+        typ = "".join(ch for ch in (err_type or "") if ch.isalnum() or ch in {"_", "-", "."})
+        suffix = f" type={typ[:80]}" if typ else ""
+        return f"provider {self.name} returned HTTP {status}{suffix}"
 
     # -- response shaping -----------------------------------------------------
 

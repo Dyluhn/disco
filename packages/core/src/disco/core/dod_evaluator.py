@@ -90,8 +90,6 @@ import hashlib
 import json
 import os
 import subprocess
-import urllib.error
-import urllib.request
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -107,6 +105,7 @@ from .dod import (
     HTTPOkPredicate,
 )
 from .dod_util import _egress_allowed, _hard_deny_reason, tail
+from .host_egress import EgressDenied, guarded_get
 
 # ---- result types ----------------------------------------------------------
 
@@ -373,8 +372,8 @@ async def _default_http_probe(
     egress gate is checked BEFORE the wire call, so a denied URL never
     touches the network.
 
-    The probe DOES NOT use `requests` (no third-party dep) — `urllib.request`
-    is stdlib, matches the engine's own `_app_verify_command`."""
+    The wire call uses the shared host-side guarded fetcher so redirects and
+    DNS resolution are revalidated before a socket is opened."""
     allowed, reason = _egress_allowed(url, allow_hosts)
     if not allowed:
         return HttpProbeResult(
@@ -386,29 +385,22 @@ async def _default_http_probe(
         )
     started = datetime.now(UTC).timestamp()
 
-    def _do() -> tuple[int | None, str]:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
-            return int(resp.status), ""
-
     try:
-        status, err = await asyncio.to_thread(_do)
-    except urllib.error.HTTPError as exc:
-        # HTTP 4xx/5xx is a real response — record the status (it's the
-        # observed code, which may differ from `expected_status`). The
-        # verdict's pass/fail is "status == expected_status".
-        duration = datetime.now(UTC).timestamp() - started
-        return HttpProbeResult(
-            status_code=int(exc.code),
-            error_message="",
-            duration_seconds=duration,
+        resp = await guarded_get(
+            url,
+            timeout_s=timeout_seconds,
+            allow_hosts=allow_hosts if allow_hosts else None,
         )
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        status, err = resp.status_code, ""
+    except (EgressDenied, TimeoutError, OSError) as exc:
         duration = datetime.now(UTC).timestamp() - started
+        denied = isinstance(exc, EgressDenied)
         return HttpProbeResult(
             status_code=None,
             error_message=f"{type(exc).__name__}: {exc}",
             duration_seconds=duration,
+            egress_denied=denied,
+            egress_reason=str(exc) if denied else "",
         )
     except Exception as exc:  # pragma: no cover - defensive executor surface
         duration = datetime.now(UTC).timestamp() - started

@@ -127,7 +127,7 @@ def test_role_fallback_config_round_trips(client):
         "enabled": True,
         "base_url": "http://localhost:8080/v1",
         "model": "llama-fallback",
-        "api_key_env": "DISCO_FALLBACK_API_KEY",
+        "api_key_env": "fallback",
     }
     put = client.put("/api/role-fallback/config", json=payload)
 
@@ -306,12 +306,12 @@ def test_tts_config_round_trips(client):
             "enabled": True,
             "provider": "openai",
             "base_url": "https://api.openai.com",
-            "api_key_env": "OPENAI_API_KEY",
+            "api_key_env": "openai",
             "model": "tts-1",
         },
     ).json()
     assert paid["provider"] == "openai"
-    assert paid["api_key_env"] == "OPENAI_API_KEY"
+    assert paid["api_key_env"] == "openai"
     assert paid["model"] == "tts-1"
     got = client.get("/api/tts/config").json()
     assert got["provider"] == "openai" and got["model"] == "tts-1"
@@ -481,6 +481,7 @@ def test_mcp_approval_persists_via_production_default_wiring(store, tmp_path, mo
     monkeypatch.setenv("PMX_CONFIG", str(tmp_path / "config.json"))
     monkeypatch.setenv("PMX_SECRETS", str(tmp_path / "secrets.json"))
     monkeypatch.setenv("PMX_SKILLS_DIR", str(tmp_path / "skills"))
+    monkeypatch.setenv("DISCO_SECRET_KEY", "mcp-approval-test-secret-32-bytes")
 
     client = TestClient(create_app(store))  # production construction — no ConfigState
 

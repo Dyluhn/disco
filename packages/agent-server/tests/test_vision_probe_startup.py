@@ -16,7 +16,7 @@ from __future__ import annotations
 import disco.agent_server.runtime as runtime_mod
 from disco.agent_server import ConversationRuntime
 from disco.core import SqliteEventStore
-from disco.core.llm import ConfigStore, ModelRole, Requirement
+from disco.core.llm import ConfigStore, ModelRole, Requirement, SecretBox, SecretStore
 
 
 def _runtime(tmp_path) -> ConversationRuntime:
@@ -24,7 +24,19 @@ def _runtime(tmp_path) -> ConversationRuntime:
     # table). A non-existent cfg path → load() falls back to the seed catalogue.
     store = SqliteEventStore(":memory:")
     config_store = ConfigStore(tmp_path / "cfg.json")
-    return ConversationRuntime(store, config_store=config_store)
+    secret_store = SecretStore(
+        tmp_path / "secrets.json", box=SecretBox("vision-test-secret-32-bytes")
+    )
+    cfg = config_store.load()
+    entry = cfg.models["driver-local"]
+    assert entry.base_url is not None
+    config_store.approve_origin(
+        entry.base_url,
+        f"model:{entry.provider}",
+        entry.api_key_env or "",
+        secret_store=secret_store,
+    )
+    return ConversationRuntime(store, config_store=config_store, secret_store=secret_store)
 
 
 def _driver_has_vision(rt: ConversationRuntime) -> bool:
@@ -43,11 +55,14 @@ async def test_prewarm_runs_probe_and_overlays_vision(tmp_path, monkeypatch):
 
     called: dict[str, object] = {}
 
-    async def _fake_probe(config):
+    async def _fake_probe(config, *, origin_approved):
         called["config"] = config
+        entry = config.models["driver-local"]
+        assert entry.base_url is not None
+        assert origin_approved(entry.base_url, f"model:{entry.provider}", entry.api_key_env)
         return {"driver-local": True}
 
-    monkeypatch.setattr(runtime_mod, "probe_all_vision", _fake_probe)
+    monkeypatch.setattr(runtime_mod, "probe_all_vision_with_approvals", _fake_probe)
     await rt.prewarm_vision_probe()
 
     assert "config" in called  # the probe was actually invoked at startup
@@ -61,10 +76,11 @@ async def test_prewarm_is_fail_soft_on_probe_error(tmp_path, monkeypatch):
     monkeypatch.delenv("DISCO_DRIVER_VISION", raising=False)
     rt = _runtime(tmp_path)
 
-    async def _boom(config):
+    async def _boom(config, *, origin_approved):
+        assert origin_approved is not None
         raise RuntimeError("probe endpoint exploded")
 
-    monkeypatch.setattr(runtime_mod, "probe_all_vision", _boom)
+    monkeypatch.setattr(runtime_mod, "probe_all_vision_with_approvals", _boom)
     await rt.prewarm_vision_probe()  # must not raise
 
     # still loadable, still table-only (no overlay installed)

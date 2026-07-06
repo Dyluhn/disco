@@ -376,6 +376,14 @@ class RuntimeSettings:
         entry = router._config.models.get(key)
         if entry is None or not entry.base_url:
             return None
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+        if not self._rt._origin_approved(
+            entry.base_url, f"model:{entry.provider}", entry.api_key_env
+        ):
+            return None
+        if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
+            return None
         return (entry.base_url, entry.model_id, entry.api_key_env)
 
     def is_assist(self, conversation_id: str) -> bool:

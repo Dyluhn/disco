@@ -30,6 +30,18 @@ _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
 _PAIRING_TOKEN = secrets.token_urlsafe(32)
 _PAIRING_TOKEN_CONSUMED = False
+_ADMIN_PREFIXES = (
+    "/api/mcp",
+    "/api/tts",
+    "/api/image-gen",
+    "/api/sandbox",
+    "/api/encoders",
+    "/api/data-sources",
+    "/api/role-fallback",
+    "/api/projects/storage",
+    "/api/live-browser",
+    "/api/build-kernel",
+)
 
 
 class MintSessionBody(BaseModel):
@@ -88,6 +100,10 @@ def _is_public_http(path: str, method: str) -> bool:
     if path == PREVIEW_BOOTSTRAP_PATH:
         return True
     return False
+
+
+def _is_admin_path(path: str) -> bool:
+    return any(path == prefix or path.startswith(prefix + "/") for prefix in _ADMIN_PREFIXES)
 
 
 def current_session(request: Request) -> AuthSession:
@@ -169,6 +185,8 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         if session is None:
             return Response("auth required", status_code=401)
         request.state.auth_session = session
+        if _is_admin_path(path) and not session.is_admin:
+            return Response("admin required", status_code=403)
         if (
             method in _UNSAFE_METHODS
             and not _is_testclient(request)

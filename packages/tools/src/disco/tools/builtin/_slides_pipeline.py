@@ -29,9 +29,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-from typing import TYPE_CHECKING, get_args
+from typing import TYPE_CHECKING, Any, get_args
 
 import httpx
 from disco.tools.builtin._deck_schema import (
@@ -51,6 +50,9 @@ if TYPE_CHECKING:
     from disco.tools.builtin.image_gen import ImageBackend
 
 _LOG = logging.getLogger("disco.tools.slides_pipeline")
+
+# Prompt templates below intentionally preserve JSON examples and schema alternations.
+# ruff: noqa: E501
 
 # Derive the valid theme set from the single source of truth — the Literal on
 # AuthoredDeck.theme.  Every prompt and the retry message reference this tuple
@@ -76,10 +78,9 @@ _BANNED_TITLE_PATTERNS = (
 def _resolve_slides_llm() -> tuple[str, str, str | None]:
     """Return (base_url, model_id, api_key) for the slides generation LLM.
 
-    Uses the AGENT_DRIVER model from ConfigStore.  Falls back to env vars
-    LLM_URL / LLM_MODEL, then to a hardcoded local default. The api_key is
-    resolved from the entry's `api_key_env` (encrypted SecretStore first, then
-    os.environ) so a REMOTE driver (OpenRouter / any paid OpenAI-compatible
+    Uses the AGENT_DRIVER model from ConfigStore. The api_key is resolved from
+    the entry's `api_key_env` SecretStore ref so a REMOTE driver
+    (OpenRouter / any paid OpenAI-compatible
     endpoint) authenticates — without it the deck author silently 401s on every
     non-local driver. Local keyless endpoints resolve to None (no auth header).
 
@@ -87,55 +88,52 @@ def _resolve_slides_llm() -> tuple[str, str, str | None]:
     """
     try:
         from disco.core.llm import ConfigStore
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
         from disco.core.llm.types import ModelRole
 
-        cfg = ConfigStore().load()
+        store = ConfigStore()
+        cfg = store.load()
         model_key = cfg.model_for(ModelRole.AGENT_DRIVER)
         entry = cfg.models.get(model_key)
-        if entry and entry.base_url:
+        if (
+            entry
+            and entry.base_url
+            and store.origin_approved(
+                entry.base_url, f"model:{entry.provider}", entry.api_key_env
+            )
+            and secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url)
+        ):
             return entry.base_url.rstrip("/"), entry.model_id, _resolve_llm_key(entry.api_key_env)
     except Exception:  # noqa: BLE001
         pass
-    url = os.environ.get("LLM_URL", "http://localhost:18080/v1").rstrip("/")
-    model = os.environ.get("LLM_MODEL", "local-model")
-    # An explicit env override may still want a key (e.g. LLM_API_KEY_ENV names it).
-    return url, model, _resolve_llm_key(os.environ.get("LLM_API_KEY_ENV"))
+    return "", "local-model", None
 
 
 def _resolve_llm_key(api_key_env: str | None) -> str | None:
     """Resolve the named secret for the deck-author LLM. Never logs the value.
 
-    Mirrors the agent-server's canonical resolution (runtime._overlay_stored_secrets):
+    Mirrors the agent-server's canonical SecretStore-only resolution:
     the OpenRouter driver key is stored in the RESERVED "openrouter" SecretStore slot
     (set by the dedicated /api OpenRouter route), NOT under its env-var name — so a
-    plain get_secret(api_key_env) misses it. Order: exact named secret → reserved
-    openrouter slot (when api_key_env is the OpenRouter var) → exact env → legacy
-    PMX_OPENROUTER_API_KEY env. Returns None if nothing is configured."""
+    plain get_secret(api_key_env) misses it. Returns None if nothing is configured."""
     if not api_key_env:
         return None
     try:
-        from disco.core.llm.secrets import (
-            OPENROUTER_API_KEY_ENV,
-            OPENROUTER_API_KEY_ENV_LEGACY,
-            SecretStore,
-        )
+        from disco.core.llm.secret_refs import resolve_provider_secret
+        from disco.core.llm.secrets import SecretStore
 
-        store = SecretStore()
-        key = store.get_secret(api_key_env)
-        if key:
-            return key
-        if api_key_env in (OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY):
-            key = store.get_openrouter_key()  # the reserved "openrouter" slot
-            if key:
-                return key
-        env_val = os.environ.get(api_key_env)
-        if env_val:
-            return env_val
-        if api_key_env == OPENROUTER_API_KEY_ENV:
-            return os.environ.get(OPENROUTER_API_KEY_ENV_LEGACY)
-        return None
+        return resolve_provider_secret(api_key_env, SecretStore())
     except Exception:  # noqa: BLE001
-        return os.environ.get(api_key_env)
+        return None
+
+
+def _purpose_for_model_endpoint(cfg: Any, llm_url: str, api_key_env: str | None) -> str:
+    for entry in cfg.models.values():
+        if not entry.base_url:
+            continue
+        if entry.base_url.rstrip("/") == llm_url and (entry.api_key_env or None) == api_key_env:
+            return f"model:{entry.provider}"
+    return "model:unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -383,7 +381,9 @@ async def _call_llm(
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    async with httpx.AsyncClient(timeout=httpx.Timeout(120.0)) as client:
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
+    ) as client:
         resp = await client.post(
             f"{llm_url}/chat/completions",
             json=payload,
@@ -908,9 +908,22 @@ async def generate_deck(
     # AGENT_DRIVER. The key env-var name is resolved here (ctx never carries raw secrets).
     if ctx.driver_llm is not None:
         base_url, model, api_key_env = ctx.driver_llm
-        llm_url, api_key = base_url.rstrip("/"), _resolve_llm_key(api_key_env)
+        from disco.core.llm import ConfigStore
+        from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+        llm_url = base_url.rstrip("/")
+        store = ConfigStore()
+        cfg = store.load()
+        purpose = _purpose_for_model_endpoint(cfg, llm_url, api_key_env)
+        if not store.origin_approved(llm_url, purpose, api_key_env):
+            return None, _outline_to_markdown(None, goal), "LLM origin not approved", None
+        if not secret_ref_allowed_for_origin(api_key_env, llm_url):
+            return None, _outline_to_markdown(None, goal), "LLM secret_ref not allowed", None
+        api_key = _resolve_llm_key(api_key_env)
     else:
         llm_url, model, api_key = _resolve_slides_llm()
+    if not llm_url:
+        return None, _outline_to_markdown(None, goal), "LLM origin not approved", None
     system = _WEAK_SYSTEM if ctx.assist else _CAPABLE_SYSTEM
 
     # Stage 1: Outline

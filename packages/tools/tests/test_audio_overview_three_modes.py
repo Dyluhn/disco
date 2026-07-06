@@ -53,8 +53,12 @@ pytestmark = pytest.mark.asyncio
 
 @contextmanager
 def _patch_tts(tts: TtsSettings):
-    cfg = default_config().model_copy(update={"tts": tts})
-    with mock.patch.object(ConfigStore, "load", return_value=cfg):
+    cfg = default_config()
+    cfg = cfg.model_copy(update={"tts": tts})
+    with (
+        mock.patch.object(ConfigStore, "load", return_value=cfg),
+        mock.patch.object(ConfigStore, "origin_approved", return_value=True),
+    ):
         yield
 
 
@@ -209,7 +213,10 @@ async def test_mode_openai_sends_key_and_model():
                     model="tts-1",
                 )
             ),
-            mock.patch.dict("os.environ", {"OPENAI_TTS_KEY": "sk-test-123"}),
+            mock.patch(
+                "disco.core.llm.secret_refs.resolve_provider_secret",
+                return_value="sk-test-123",
+            ),
             mock.patch("disco.tools.builtin.audio_overview._call_llm", side_effect=_llm_ok),
             mock.patch("disco.tools.builtin.audio_overview._synthesize_remote", remote),
         ):

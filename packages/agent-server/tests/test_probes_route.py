@@ -49,13 +49,14 @@ def test_tts_openai_without_key_is_misconfigured(client, cfg_path):
 
 
 def test_tts_openai_happy_path_with_stubbed_synth(client, cfg_path, monkeypatch):
-    ConfigStore(cfg_path).save_tts(
-        TtsSettings(enabled=True, provider="openai", api_key_env="OPENAI_API_KEY", model="tts-1")
+    store = ConfigStore(cfg_path)
+    store.save_tts(
+        TtsSettings(enabled=True, provider="openai", api_key_env="openai", model="tts-1")
     )
     # store the key so resolution succeeds
     from disco.core.llm.secrets import SecretStore
 
-    SecretStore().set_secret("OPENAI_API_KEY", "sk-tts-live")
+    SecretStore().set_secret("openai", "sk-tts-live")
 
     async def fake_remote(text, voice, base_url, *, api_key="", model=""):
         assert api_key == "sk-tts-live" and text == "Disco"
@@ -63,6 +64,7 @@ def test_tts_openai_happy_path_with_stubbed_synth(client, cfg_path, monkeypatch)
 
     import disco.tools.builtin.audio_overview as ao
 
+    store.approve_origin("https://api.openai.com", "tts:openai", "openai")
     monkeypatch.setattr(ao, "_synthesize_remote", fake_remote)
     body = client.post("/api/tts/test").json()
     assert body["ok"] is True and body["status"] == "ok"

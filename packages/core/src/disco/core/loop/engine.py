@@ -1425,14 +1425,22 @@ class AgentLoop:
         else:
             risk = self.analyzer.assess(action)
 
-        # DC-03: obtain WHERE the tool executes (duck-typed; absent → "unknown").
-        _scope_fn = getattr(self.executor, "tool_scope", None)
+        # DC-03: obtain WHERE this concrete tool call executes. The call-aware hook
+        # lets sandbox-backed tools declare host scope before any HTTP/key work.
+        _scope_fn = getattr(self.executor, "tool_scope_for_call", None)
         _tool_scope = "unknown"
         if callable(_scope_fn):
             try:
-                _tool_scope = _scope_fn(action.tool_call.tool_name)
+                _tool_scope = _scope_fn(action.tool_call.tool_name, action.tool_call.arguments)
             except Exception:
                 _tool_scope = "unknown"
+        else:
+            _static_scope_fn = getattr(self.executor, "tool_scope", None)
+            if callable(_static_scope_fn):
+                try:
+                    _tool_scope = _static_scope_fn(action.tool_call.tool_name)
+                except Exception:
+                    _tool_scope = "unknown"
 
         # Use should_confirm_action if the policy supports it; fall back to
         # should_confirm(risk) for policies that predate DC-03.

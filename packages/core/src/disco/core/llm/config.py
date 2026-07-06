@@ -441,6 +441,13 @@ class RouterConfig(BaseModel):
     # MCP (Model Context Protocol) — external tool servers (RP-05).
     # Off by default; the pool is built at agent-server start when enabled.
     mcp: McpSettings = Field(default_factory=McpSettings)
+    # Legacy inert field: origin approval moved to the signed out-of-band
+    # OriginApprovalStore. Load paths ignore this field for egress policy.
+    trusted_origins: tuple[str, ...] = ()
+    # Fail-closed migration diagnostics for quarantined env-name secret refs or
+    # origins awaiting operator approval. This is diagnostic only; policy reads
+    # the concrete config fields above.
+    security_diagnostics: tuple[str, ...] = ()
     # Live browser (noVNC): off by default. When enabled, a 'Live' toggle
     # appears on the Agent canvas browser pane (P4). The VNC stack spins up
     # lazily on first open; idle cost is ~0. gVisor needs D7 egress work.
@@ -547,7 +554,7 @@ def default_config() -> RouterConfig:
             model_id="gemma-4-e2b-mtp",
             provider="gemma",
             base_url=_GEMMA,
-            api_key_env="DISCO_GEMMA_API_KEY",
+            api_key_env="gemma",
             context_window=32_768,
             capabilities=frozenset({Requirement.JSON_MODE}),
             family="gemma",
@@ -556,7 +563,7 @@ def default_config() -> RouterConfig:
             model_id="gemma-4-e2b-mtp",
             provider="gemma",
             base_url=_GEMMA,
-            api_key_env="DISCO_GEMMA_API_KEY",
+            api_key_env="gemma",
             context_window=32_768,
             family="gemma",
         ),
@@ -575,7 +582,7 @@ def default_config() -> RouterConfig:
             model_id="anthropic/claude-3.5-sonnet",
             provider="openrouter",
             base_url="https://openrouter.ai/api/v1",
-            api_key_env="DISCO_OPENROUTER_API_KEY",
+            api_key_env="openrouter",
             context_window=200_000,
             capabilities=frozenset(
                 {
@@ -619,7 +626,7 @@ def default_config() -> RouterConfig:
             model_id="google/gemini-3-flash-preview",
             provider="openrouter",
             base_url="https://openrouter.ai/api/v1",
-            api_key_env="DISCO_OPENROUTER_API_KEY",
+            api_key_env="openrouter",
             context_window=1_048_576,
             capabilities=frozenset(
                 {

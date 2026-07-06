@@ -46,7 +46,11 @@ async def probe_openai_auth(
     }
     root = base_url.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=4.0)) as client:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(12.0, connect=4.0),
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
             resp = await client.post(url, json=payload, headers=headers)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
         return False, "unreachable", f"Couldn't reach {root}: {type(exc).__name__}."
@@ -90,7 +94,11 @@ async def probe_reachable(
     """
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=_TIMEOUT,
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
             resp = await client.get(url, headers=headers)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
         return False, "unreachable", f"Couldn't reach {url}: {type(exc).__name__}."

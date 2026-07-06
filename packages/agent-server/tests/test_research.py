@@ -230,10 +230,23 @@ def test_think_toggles_reasoning_on_the_answerer_provider(tmp_path):
     # The Think toggle threads through to the per-request provider build: the
     # answerer's endpoint provider runs in reasoning mode (or not) accordingly.
     store = SqliteEventStore(":memory:")
+    config_store = ConfigStore(tmp_path / "config.json")
+    secret_store = SecretStore(
+        tmp_path / "secrets.json", box=SecretBox("research-test-secret-32-bytes")
+    )
+    cfg = config_store.load()
+    qwen = cfg.models["driver-local"]
+    assert qwen.base_url is not None
+    config_store.approve_origin(
+        qwen.base_url,
+        f"model:{qwen.provider}",
+        qwen.api_key_env or "",
+        secret_store=secret_store,
+    )
     rt = ConversationRuntime(
         store,
-        config_store=ConfigStore(tmp_path / "config.json"),
-        secret_store=SecretStore(tmp_path / "secrets.json", box=SecretBox(None)),
+        config_store=config_store,
+        secret_store=secret_store,
     )
     on = rt._router_now(enable_thinking=True)._providers["qwen"]
     off = rt._router_now(enable_thinking=False)._providers["qwen"]

@@ -45,7 +45,7 @@ def _route(get_map: dict[str, _FakeResp]):
     routed is a 404 (a backend that doesn't serve that endpoint, e.g. OpenRouter
     has no /props)."""
 
-    def fake_get(url: str, headers=None, timeout=None):  # noqa: ANN001
+    def fake_get(url: str, headers=None, timeout=None, **kwargs):  # noqa: ANN001, ARG001
         for suffix, resp in get_map.items():
             if url.endswith(suffix):
                 return resp
@@ -93,7 +93,7 @@ def test_props_only_server_uses_props_n_ctx(monkeypatch):
     base = "http://llama:8080/v1"
     models_hits: list[str] = []
 
-    def fake_get(url, headers=None, timeout=None):  # noqa: ANN001
+    def fake_get(url, headers=None, timeout=None, **kwargs):  # noqa: ANN001, ARG001
         if url.endswith("/props"):
             return _LLAMA_PROPS
         if url.endswith("/models"):
@@ -184,7 +184,7 @@ async def test_models_probe_does_not_block_running_loop(monkeypatch):
     base = "https://openrouter.ai/api/v1"
     seen: dict[str, str] = {}
 
-    def slow_get(url, headers=None, timeout=None):  # noqa: ANN001
+    def slow_get(url, headers=None, timeout=None, **kwargs):  # noqa: ANN001, ARG001
         seen["thread"] = threading.current_thread().name
         if url.endswith("/models"):
             time.sleep(1.0)  # simulate a slow listing

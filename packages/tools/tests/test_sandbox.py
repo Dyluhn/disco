@@ -171,10 +171,32 @@ async def test_shell_and_code_exec_run_in_process_sandbox():
 
 async def test_process_backend_expose_port_defense():
     # BP-10: process backend expose_port stays within USER_PORTS and checks binding
+    import socket
     import tempfile
     from pathlib import Path
 
+    import pytest
+    from disco.core.loop.preview_target import reserved_control_ports
+    from disco.tools.sandbox._container import USER_PORTS
     from disco.tools.sandbox.process import ProcessSandboxInstance
+
+    def _bound(port: int) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                return True
+        except OSError:
+            return False
+
+    unbound = next(
+        (
+            port
+            for port in sorted(USER_PORTS - reserved_control_ports())
+            if not _bound(port)
+        ),
+        None,
+    )
+    if unbound is None:
+        pytest.skip("all non-reserved user preview ports are already bound on this host")
 
     with tempfile.TemporaryDirectory() as tmp:
         inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
@@ -183,7 +205,7 @@ async def test_process_backend_expose_port_defense():
         assert inst.expose_port(9999) is None
 
         # 2. In USER_PORTS but not bound -> None
-        assert inst.expose_port(3000) is None
+        assert inst.expose_port(unbound) is None
 
         # 3. INTERNAL_PORTS (8899) -> None
         assert inst.expose_port(8899) is None
