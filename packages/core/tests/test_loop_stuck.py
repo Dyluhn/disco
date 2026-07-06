@@ -606,6 +606,49 @@ def test_c7_pool_selector_is_deterministic_and_injective_across_attempts():
         )
 
 
+# ---- T2 — error-recovery guidance woven into the stuck-recovery reminders -----
+#
+# Text-only: the escape pool + no-progress + circuit-breaker reminders now also
+# carry the search-to-escape (look the error up) and environment-vs-your-code
+# ideas. These assert the GUIDANCE TEXT is present without touching any
+# detection / halt / marker behavior (those invariants are covered above and
+# must stay byte-identical).
+
+
+def test_t2_escape_pool_carries_search_and_environment_guidance():
+    """The escape pool gained two error-recovery entries: one telling the model
+    to SEARCH the exact error instead of retrying from memory, and one telling
+    it to distinguish an ENVIRONMENT problem from a bug in its own code. Existing
+    entries stay intact and the selector still returns pool entries."""
+    from disco.core.loop.messages import (
+        _STUCK_ESCAPE_REMINDER_POOL,
+        _stuck_escape_reminder,
+    )
+
+    # The pool grew beyond the original 3 entries (new guidance appended).
+    assert len(_STUCK_ESCAPE_REMINDER_POOL) >= 5
+
+    joined = "\n".join(_STUCK_ESCAPE_REMINDER_POOL).lower()
+    # search-to-escape guidance present (stable keywords).
+    assert "search" in joined
+    assert "look up" in joined or "look it up" in joined
+    # environment-vs-your-code guidance present.
+    assert "environment" in joined
+
+    # At least one entry carries the search idea and one the environment idea.
+    assert any("search" in e.lower() for e in _STUCK_ESCAPE_REMINDER_POOL)
+    assert any("environment" in e.lower() for e in _STUCK_ESCAPE_REMINDER_POOL)
+
+    # The original three entries are still exactly present and in place.
+    assert "repeating the same action" in _STUCK_ESCAPE_REMINDER_POOL[0]
+    assert "previous retry didn't work" in _STUCK_ESCAPE_REMINDER_POOL[1]
+    assert "Self-imitation detected" in _STUCK_ESCAPE_REMINDER_POOL[2]
+
+    # The selector still returns a pool entry for every attempt index.
+    for i in range(len(_STUCK_ESCAPE_REMINDER_POOL)):
+        assert _stuck_escape_reminder(i) in _STUCK_ESCAPE_REMINDER_POOL
+
+
 # ---- W-31: the STUCK breaker is NAMED (StuckResult.reason + StatusEvent.detail) --
 
 
@@ -1208,6 +1251,79 @@ async def test_no_progress_gate_nudges_then_halts():
     assert disp is Disp.HALT
     events = await store.get_events(CID)
     assert_blocked_question_landing(events, legacy_detail="no_progress")
+
+
+async def test_t2_no_progress_reminder_carries_search_and_environment_guidance():
+    """T2 — the no-progress corrective reminder now also points the model at
+    search-to-escape (look the recurring error up) + environment-vs-your-code.
+    Reuses the gate_no_progress nudge setup; the existing 'outcome has NOT
+    changed' reframe stays intact (asserted here too, so the append didn't
+    rewrite it)."""
+    loop, store = build_loop(ScriptedAgent([finish_step()]))
+    await store.append(CID, user_msg("build the app"))
+    for i in range(4):
+        await store.append(CID, _edit(i))
+        for e in _probe():
+            await store.append(CID, e)
+
+    events = await store.get_events(CID)
+    disp = await loop._valve.gate_no_progress(events)
+    assert disp is Disp.CONTINUE  # first trip → nudge (unchanged behavior)
+    events = await store.get_events(CID)
+    reminder = next(
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "outcome has NOT changed" in (e.message.content or "")
+    )
+    content = (reminder.message.content or "").lower()
+    # existing reframe preserved…
+    assert "outcome has not changed" in content
+    # …plus the two new ideas.
+    assert "search" in content
+    assert "environment" in content
+
+
+async def test_t2_circuit_breaker_recovery_message_carries_search_and_environment_guidance():
+    """T2 — the circuit-breaker recovery nudge (already 'try a DIFFERENT
+    technical path') now also mentions searching the recurring error and the
+    environment-vs-your-code distinction. Drives the real breaker (non-autonomous
+    build_loop) with distinct failing actions and inspects the emitted recovery
+    reminder in the log; detection/halt behavior is unchanged."""
+    from loop_fakes import FakeExecutor
+    from disco.core import ToolResult
+
+    failing = ToolResult(
+        call_id="c", tool_name="shell", success=False, content="", error="boom"
+    )
+    agent = ScriptedAgent(
+        [
+            action_step(args={"cmd": "a"}),
+            action_step(args={"cmd": "b"}),
+            action_step(args={"cmd": "c"}),
+            action_step(args={"cmd": "d"}),
+            action_step(args={"cmd": "e"}),
+        ]
+    )
+    loop, store = build_loop(agent, executor=FakeExecutor(result=failing))
+    await loop.send_message("go")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    recovery = next(
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "times in a row" in (e.message.content or "")
+    )
+    content = (recovery.message.content or "").lower()
+    # existing recovery framing preserved…
+    assert "times in a row" in content
+    # …plus the two new ideas.
+    assert "search" in content
+    assert "environment" in content
 
 
 async def test_no_progress_gate_finish_hints_when_latest_verify_passes_despite_stale_plan():

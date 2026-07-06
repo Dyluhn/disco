@@ -295,9 +295,12 @@ def _hs03_reground_message(
 # C7 — escape-reminder pool + serialization seed. A small fixed pool of
 # `<system-reminder>` phrasings selected by attempt count (modulo the pool
 # length) so consecutive escape attempts are NOT byte-identical. The
-# pool size is intentionally small (3 entries) — enough that the model sees
+# pool is intentionally small (5 entries) — enough that the model sees
 # a different angle each time, but small enough to keep the system prompt
-# footprint predictable. A per-attempt nonce is embedded as a hidden
+# footprint predictable. The last two entries carry error-recovery guidance
+# (search-to-escape + environment-vs-your-code) so the model is reminded to
+# look the error up and to tell an environment problem from a code bug.
+# A per-attempt nonce is embedded as a hidden
 # comment-style suffix so the reminder is identifiable in tests (the model
 # ignores HTML comments) AND differs in bytes between attempts. Deterministic
 # under a fixed attempt count: index = attempt_count % len(_STUCK_ESCAPE_REMINDER_POOL),
@@ -324,6 +327,21 @@ _STUCK_ESCAPE_REMINDER_POOL: tuple[str, ...] = (
     "or attack a different angle of the problem. If nothing else works, "
     "declare the blocker and call `finish` honestly.\n"
     "<!-- disco:escape-attempt=2 -->\n"
+    "</system-reminder>",
+    "<system-reminder>\n"
+    "Same error again? Stop retrying from memory. Use the `search`/`extract` "
+    "tools to look up the EXACT error text or the API you're using, then apply "
+    "what you find and try again. Never conclude something is impossible before "
+    "you've searched for it.\n"
+    "<!-- disco:escape-attempt=3 -->\n"
+    "</system-reminder>",
+    "<system-reminder>\n"
+    "Diagnose the LAYER before you retry: is this an ENVIRONMENT problem "
+    "(sandbox, network, a missing tool, a platform limit) or a bug in YOUR "
+    "code? If it's the environment, work AROUND it with a different approach "
+    "or path instead of fighting it; if it's your code, the root cause is "
+    "usually in the code under test, not the test.\n"
+    "<!-- disco:escape-attempt=4 -->\n"
     "</system-reminder>",
 )
 
