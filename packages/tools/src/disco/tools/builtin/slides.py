@@ -518,7 +518,13 @@ class SlidesTool:
                 c1_deck, args, ctx, fmt, editable_source=authored_sidecar
             )
 
-        # C2 failed → fall back to Marp/html fallback with the generated markdown
+        # C2 failed → fall back to Marp/html fallback with the generated markdown.
+        # This path is a DEGRADED deck: no theme/brand, no layout variety, no
+        # embedded images. Report that LOUDLY (content + structured) so neither the
+        # user nor the agent mistakes a plain fallback for the real styled deck and
+        # silently "finishes" on it. (The dominant live cause of landing here —
+        # OpenRouter driver origin-not-approved — was fixed in 90828654; when that
+        # is resolved the authored pipeline succeeds and this branch is rare.)
         if fallback_md:
             marp_args = SlidesGenerateArgs(
                 goal=None,
@@ -529,14 +535,23 @@ class SlidesTool:
                 mode="markdown",
             )
             outcome = await self._run_marp_path(marp_args, ctx, fmt)
-            # Annotate content to indicate C2 failure + fallback
-            note = f"\n[C2 pipeline failed ({err}); rendered via Marp fallback]"
+            note = (
+                "\n\n⚠️ DEGRADED: this deck came out of the PLAIN fallback renderer — the "
+                f"styled deck author didn't complete ({err}), so it has no theme, no "
+                "images, and no layout variety. To get the full branded deck with "
+                "images: make sure a capable driver model is selected and an image "
+                "backend is configured in Settings → Image generation, then regenerate."
+            )
+            degraded_meta = dict(outcome.structured or {})
+            degraded_meta.update(
+                {"degraded": True, "degraded_reason": err, "renderer": "marp_fallback"}
+            )
             return ToolOutcome(
                 success=outcome.success,
                 content=outcome.content + note,
                 error=outcome.error,
                 artifacts=outcome.artifacts,
-                structured=outcome.structured,
+                structured=degraded_meta,
             )
 
         return ToolOutcome(

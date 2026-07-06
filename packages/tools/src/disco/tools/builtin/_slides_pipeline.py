@@ -813,9 +813,12 @@ async def _stage_assets(
     if backend is None:
         _LOG.info("no image backend configured — generating image-less (text-only) slides")
         return assets
+    wanted = 0  # slides that requested an image
+    failed: list[int] = []  # slide indices whose image generation errored/was rejected
     for i, slide in enumerate(authored.slides):
         if not slide.image_prompt:
             continue
+        wanted += 1
         img_name = f"{filename_base}_img_{i}.png"
         meta_name = f"{filename_base}_img_{i}.sha256"
         h = hashlib.sha256(slide.image_prompt.encode("utf-8"))
@@ -848,6 +851,7 @@ async def _stage_assets(
             # placeholder, not a broken data-URI / corrupt add_picture.
             if not _is_raster_bytes(img_bytes):
                 _LOG.warning("Slide %d image is not PNG/JPEG — skipping embed", i)
+                failed.append(i)
                 continue
             assets[i] = img_bytes
             if ctx.sandbox is not None:
@@ -855,6 +859,18 @@ async def _stage_assets(
                 await ctx.sandbox.write_file(meta_name, h_hex.encode("utf-8"))
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Image generation failed for slide %d: %s", i, e)
+            failed.append(i)
+    if failed:
+        # One aggregate signal instead of scattered per-slide lines — a backend that
+        # is configured but erroring (out of credits, rate-limited) otherwise produced
+        # an image-less deck invisibly.
+        _LOG.warning(
+            "Deck image generation: %d of %d requested slide image(s) failed (slides %s) "
+            "— those slides fall back to the placeholder box.",
+            len(failed),
+            wanted,
+            ", ".join(str(x) for x in failed),
+        )
     return assets
 
 
