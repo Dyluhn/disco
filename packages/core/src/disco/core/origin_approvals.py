@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import hmac
 import json
+import logging
 import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -21,6 +22,11 @@ from .host_egress import origin_for_url
 
 if TYPE_CHECKING:
     from .llm.secrets import SecretStore
+
+_LOG = logging.getLogger(__name__)
+# Warn at most once per ledger path per process about a non-empty-but-unverifiable
+# ledger — verified() is called per-request, so an unconditional log would spam.
+_WARNED_UNVERIFIABLE_PATHS: set[str] = set()
 
 ApprovalChecker = Callable[[str, str, str | None], bool]
 
@@ -71,11 +77,46 @@ class OriginApprovalStore:
         entries = _normalize_entries(raw.get("approved_origins"))
         supplied = raw.get("hmac")
         if not isinstance(supplied, str):
+            self._warn_unverifiable(entries, "ledger has no HMAC signature")
             return frozenset()
         expected = self._signature(entries)
         if expected is None or not hmac.compare_digest(supplied, expected):
+            # SILENT-FAILURE GUARD: the ledger has operator approvals but they do NOT
+            # verify under the current master secret (a DISCO_SECRET_KEY that differs
+            # from the one that SIGNED the ledger — e.g. launched a different way, or a
+            # rotated key). Failing closed is correct, but doing it SILENTLY disables
+            # EVERY configured provider (image gen, OpenRouter routing, search keys)
+            # with zero operator signal — a very expensive thing to diagnose. Surface it.
+            reason = (
+                "no master secret available"
+                if expected is None
+                else "HMAC does not verify under the current secret "
+                "(the ledger was signed with a different DISCO_SECRET_KEY) — "
+                "re-save Settings to re-approve these origins"
+            )
+            self._warn_unverifiable(entries, reason)
             return frozenset()
         return frozenset(entries)
+
+    def _warn_unverifiable(
+        self, entries: frozenset[OriginApproval], reason: str
+    ) -> None:
+        """Warn ONCE per (path) per process when a NON-EMPTY approval ledger is being
+        dropped — so silent 'all my providers stopped working' breakage is visible."""
+        if not entries:
+            return
+        key = str(self._path)
+        if key in _WARNED_UNVERIFIABLE_PATHS:
+            return
+        _WARNED_UNVERIFIABLE_PATHS.add(key)
+        _LOG.warning(
+            "origin-approval ledger %s has %d operator approval(s) but they are being "
+            "IGNORED: %s. All configured provider origins (image gen / LLM routing / "
+            "search) will read as unapproved until this is resolved.",
+            key,
+            len(entries),
+            reason,
+        )
 
     def is_approved(self, url: str, purpose: str, secret_ref: str | None = "") -> bool:
         origin = origin_for_url(url)
