@@ -219,6 +219,7 @@ _EXPECTED_AGENT_TOOLS = [
     "file_replace_lines",
     "file_str_replace",  # W4 — anchored str-replace; withheld from weak-tier advertised set
     "file_write",
+    "find_and_edit",  # H3 — regex fan-out refactor tool for the agent/custom-build lane
     "image_generate",
     "plan_step",
     # EPIC F: platform-owned preview surface — supersedes the old `deploy_preview`.

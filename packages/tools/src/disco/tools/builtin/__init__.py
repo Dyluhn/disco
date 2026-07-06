@@ -30,6 +30,7 @@ from .files import (
     FileWriteTool,
     SafeWriteFileTool,
 )
+from .find_and_edit import FindAndEditTool
 from .image_gen import ImageGenTool, select_image_backend
 from .plan import PlanStepTool, SubmitPlanTool, UpdatePlanProgressTool
 from .preview import (
@@ -76,6 +77,7 @@ __all__ = [
     "FileReplaceLinesTool",
     "FileStrReplaceTool",
     "FileWriteTool",
+    "FindAndEditTool",
     "RunProjectScriptTool",
     "SafeWriteFileTool",
     "ImageGenTool",
@@ -118,6 +120,7 @@ def build_default_registry() -> ToolRegistry:
         FileInsertLinesTool(),
         FileStrReplaceTool(),  # W4: anchored str-replace; withheld from weak-tier advertised set
         ExactReplaceTool(),  # CD-TOOLS-2: atomic exact-match batch replace; anchored-edit tier
+        FindAndEditTool(),  # H3: regex fan-out edit tool mediated by the driver LLM
         SafeWriteFileTool(),  # CD-TOOLS-3: guarded whole-file writer (shrink/governed/atomic)
         RunProjectScriptTool(),  # CD-TOOLS-7: buffered transactional batch of file transforms
         FileListTool(),

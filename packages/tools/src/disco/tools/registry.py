@@ -83,6 +83,9 @@ AGENT_TOOLS = frozenset(
         # CD-TOOLS-2 — atomic exact-match batch replace; anchored-edit tier (withheld from the
         # weak advertised set via ModelExecutionPolicy.withheld_tools, callable by all).
         "exact_replace",
+        # H3 — regex fan-out refactor tool. Raw free-form agent/custom-build surface only;
+        # strict AppKit scope intentionally does not include it.
+        "find_and_edit",
         # CD-TOOLS-7 — buffered transactional batch of deterministic file transforms.
         "run_project_script",
         "file_list",
