@@ -35,7 +35,18 @@ def approve_origin(
 sign_origin = approve_origin
 
 
-def approve_model_origin(store: ConfigStore, secrets: SecretStore, entry: Any) -> None:
+def approve_model_origin(
+    store: ConfigStore, secrets: SecretStore, entry: Any, *, model_id: str | None = None
+) -> None:
+    # Approve under the CANONICAL secret-ref the store persists (e.g. the reserved
+    # "openrouter" slot), NOT the raw submitted api_key_env — otherwise wiring and the
+    # env-secret import check a ref nothing else uses, the model is skipped ("origin not
+    # approved"), and the key never imports. The stored entry (post load-migration)
+    # carries the canonical ref, so re-load it when the model_id is known.
+    if model_id is not None:
+        stored = store.load().models.get(model_id)
+        if stored is not None:
+            entry = stored
     if entry.base_url:
         approve_origin(store, secrets, entry.base_url, f"model:{entry.provider}", entry.api_key_env or "")
 

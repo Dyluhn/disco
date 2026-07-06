@@ -349,6 +349,24 @@ class DefaultLLMRouter:
             )
             raise BudgetExceeded("hard cost cap reached; refusing further spend")
 
+    def _provider_for(self, entry: ModelEntry) -> ModelProvider:
+        """Resolve the live provider for a resolved entry. build_providers() SKIPS a
+        provider whose origin is not operator-approved / whose secret-ref is not
+        allowed for that origin / whose key is undecryptable — so a bare
+        ``self._providers[entry.provider]`` raises a RAW KeyError that escapes the
+        caller and crashes the run (deep research's uncaught-KeyError trap). Convert
+        it into the TERMINAL, named NoEligibleModel the pre-flight + loop already
+        classify and surface as a clean StatusEvent(ERROR)."""
+        provider = self._providers.get(entry.provider)
+        if provider is None:
+            raise NoEligibleModel(
+                f"model {entry.model_id!r} is unavailable: its endpoint "
+                f"{entry.provider!r} was not wired — the origin is not "
+                "operator-approved, its secret-ref is not allowed for that origin, "
+                "or the API key could not be decrypted. Re-save the model in Settings."
+            )
+        return provider
+
     # -- complete (§4.1 step 5–6) — one assigned model, same-model retry ------
 
     async def complete(
@@ -358,7 +376,7 @@ class DefaultLLMRouter:
         entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
-        provider = self._providers[entry.provider]
+        provider = self._provider_for(entry)
         model_id = entry.model_id
         provider_name = entry.provider
         active_path = path
@@ -432,7 +450,7 @@ class DefaultLLMRouter:
         ctx = context or CallContext()
         entry, path, reason, overflow_triggers = self._resolve(req, ctx)
         self._enforce_hard_budget(req, entry, path, ctx)
-        provider = self._providers[entry.provider]
+        provider = self._provider_for(entry)
         model_id = entry.model_id
         provider_name = entry.provider
         active_path = path

@@ -116,7 +116,7 @@ class ConfigState:
 
     def approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None: _origin_wiring.approve_origin(self._store, self._secrets, url, purpose, secret_ref)
 
-    def _approve_model_origin(self, entry: Any) -> None: _origin_wiring.approve_model_origin(self._store, self._secrets, entry)
+    def _approve_model_origin(self, entry: Any, model_id: str | None = None) -> None: _origin_wiring.approve_model_origin(self._store, self._secrets, entry, model_id=model_id)
 
     # models + assignments (the absolute manual model story) ------------------
 
@@ -127,7 +127,7 @@ class ConfigState:
         """Add a model to the catalogue. New models are their own endpoint (the
         endpoint key = the catalogue id). Raises ValueError on a duplicate id."""
         entry = _entry_from(upsert, provider=upsert.id)
-        self._store.add_model(upsert.id, entry); self._approve_model_origin(entry); return _models_from(self._store.load())
+        self._store.add_model(upsert.id, entry); self._approve_model_origin(entry, model_id=upsert.id); return _models_from(self._store.load())
 
     def update_model(self, model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
         """Edit an existing model. Preserves its endpoint key so a seeded model
@@ -135,7 +135,7 @@ class ConfigState:
         existing = self._store.load().models.get(model_id)
         provider = existing.provider if existing is not None else model_id
         entry = _entry_from(upsert, provider=provider)
-        self._store.update_model(model_id, entry); self._approve_model_origin(entry); return _models_from(self._store.load())
+        self._store.update_model(model_id, entry); self._approve_model_origin(entry, model_id=model_id); return _models_from(self._store.load())
 
     def remove_model(self, model_id: str) -> list[ModelDTO]:
         """Remove a model. Raises ValueError if it's the default or assigned to a
@@ -145,9 +145,17 @@ class ConfigState:
     # openrouter key (encrypted at rest) -------------------------------------
 
     def openrouter_key_status(self) -> OpenRouterKeyStatus:
+        # `locked` must reflect ACTUAL decryptability, not just "app secret missing".
+        # A key encrypted under a DIFFERENT app secret (rotated/wrong key) is present
+        # but undecryptable — SecretStore.locked misses that (it only checks box
+        # availability, and it gates the env-secret import so it must stay lenient).
+        # Compute the DISPLAY status here from a real decrypt attempt so the UI shows
+        # "re-enter the key" instead of a false green over an unusable key.
+        present = self._secrets.has_openrouter_key()
+        usable = present and bool(self._secrets.get_openrouter_key())
         return OpenRouterKeyStatus(
-            configured=self._secrets.has_openrouter_key(),
-            locked=self._secrets.locked,
+            configured=present,
+            locked=present and not usable,
             can_store=self._secrets.can_store,
         )
 
