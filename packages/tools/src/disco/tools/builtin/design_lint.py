@@ -210,6 +210,7 @@ _FONT_SIZE_DECL_RE = re.compile(
     r"font-size\s*:\s*(?P<value>[0-9]*\.?[0-9]+)\s*(?P<unit>px|pt|vw|rem|em)?\b",
     re.I,
 )
+_LINE_HEIGHT_DECL_RE = re.compile(r"line-height:\s*(\d*\.?\d+)\s*;", re.I)
 _BACKDROP_DECL_RE = re.compile(
     r"(?:-webkit-)?backdrop-filter\s*:\s*(?P<value>[^;{}]+)",
     re.I,
@@ -220,6 +221,12 @@ _BACKGROUND_DECL_RE = re.compile(
 )
 
 _ANIMATION_THRESHOLD = 12  # transition/animation declarations over this = soup
+_MAX_FONT_FAMILIES = 3
+_MIN_FONT_SIZE_PX = 14.0
+_MAX_BRAND_COLORS = 6
+_COLOR_SATURATION_FLOOR = 60
+_COLOR_MERGE_DISTANCE = 40.0
+_MIN_LINE_HEIGHT = 1.2
 _EMOJI_THRESHOLD = 3  # this many emoji glyphs in markup = emoji-as-icons
 _DECK_TEXT_WORD_LIMIT = 90
 _DECK_BULLET_LIMIT = 6
@@ -237,6 +244,10 @@ _CHOICE_WEB_HOVER_A11Y = "web.hover_a11y"
 _CHOICE_WEB_HOVER_SCALE = "web.hover_scale"
 _CHOICE_WEB_GLASS = "web.glass"
 _CHOICE_WEB_DEFAULT_HIDDEN_CONTENT = "web.default_hidden_content"
+_CHOICE_WEB_FONT_COUNT = "web.font_count"
+_CHOICE_WEB_FONT_SIZE = "web.font_size"
+_CHOICE_WEB_COLOR_COUNT = "web.color_count"
+_CHOICE_WEB_LINE_HEIGHT = "web.line_height"
 _DECK_PIPELINE_GENERATOR_MARKER = "disco-slides-generate:pipeline-html"
 
 _WEB_BANNED_DEFAULT_FONTS: frozenset[str] = frozenset({"inter", "roboto", "arial"})
@@ -271,6 +282,11 @@ _WEB_CONTENT_SELECTOR_RE = re.compile(
     r"(^|[,\s>+~])(?:section|div)(?:$|[\s>+~.#:\[])|"
     r"\.(?:section|content|copy|text|hero|panel|card|feature|tile|block|"
     r"reveal|scroll-reveal|fade|fade-up|split|stack|grid)\b",
+    re.I,
+)
+_WEB_HEADING_TARGET_RE = re.compile(
+    r"(^|[\s>+~])h[1-6](?:$|[\s>+~:#.\[])|"
+    r"(?:hero|headline|heading|masthead|display|title)",
     re.I,
 )
 
@@ -387,9 +403,13 @@ _RULE_META: dict[str, tuple[str, int]] = {
     "web_glass_missing_saturate": ("warning", 54),
     "web_glass_flat_backdrop": ("warning", 55),
     "web_default_hidden_content": ("warning", 56),
+    "too_many_fonts": ("warning", 57),
     "centered_hero_3_cards_cta": ("warning", 50),
     "too_many_animations": ("info", 60),
     "direction_palette_drift": ("info", 65),
+    "too_many_colors": ("info", 66),
+    "font_size_too_small": ("info", 67),
+    "tight_line_height": ("info", 68),
     "pill_button_monoculture": ("info", 70),
     "emoji_as_icons": ("info", 80),
 }
@@ -795,7 +815,15 @@ def _primary_families(line: str) -> list[str]:
 
     for m in re.finditer(r"font-family\s*:\s*([^;{}]+)", low):
         out.append(_first(m.group(1)))
-    for m in re.finditer(r"--[a-z0-9-]*font[a-z0-9-]*\s*:\s*([^;{}]+)", low):
+    for m in re.finditer(r"(?P<name>--[a-z0-9-]*font[a-z0-9-]*)\s*:\s*([^;{}]+)", low):
+        if re.search(
+            r"font-(?:size|weight|style|feature|variation|variant|smoothing)|"
+            r"(?:size|weight|style)$",
+            m.group("name"),
+        ):
+            continue
+        out.append(_first(m.group(2)))
+    for m in re.finditer(r"--(?:display|ui|reading|mono)\s*:\s*([^;{}]+)", low):
         out.append(_first(m.group(1)))
     for m in re.finditer(r"family=([^&\"'<>;:]+)", low):
         for fam in re.split(r"[|]|&family=", m.group(1)):
@@ -964,6 +992,151 @@ def _rgb_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
 
 def _rgb_saturation(rgb: tuple[int, int, int]) -> int:
     return max(rgb) - min(rgb)
+
+
+def _is_generic_font_family(token: str) -> bool:
+    return token in _DIRECTION_GENERIC_FONTS or token.startswith("ui-") or "var(" in token
+
+
+def _rule_too_many_fonts(path: str, text: str) -> list[DesignFinding]:
+    families: dict[str, int] = {}
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not _FONT_CONTEXT_RE.search(line) and re.search(
+            r"--(?:display|ui|reading|mono)\s*:", line, re.I
+        ) is None:
+            continue
+        for token in _primary_families(line):
+            family = _norm_font_name(token)
+            if not family or _is_generic_font_family(family):
+                continue
+            families.setdefault(family, lineno)
+
+    if len(families) <= _MAX_FONT_FAMILIES:
+        return []
+
+    listed = ", ".join(sorted(families))
+    first_line = min(families.values())
+    return [
+        DesignFinding(
+            rule_id="too_many_fonts",
+            severity="warning",
+            path=path,
+            line=first_line,
+            evidence=f"{len(families)} primary font families: {listed}",
+            choice_key=_CHOICE_WEB_FONT_COUNT,
+            message=(
+                f"{len(families)} distinct primary font families (> {_MAX_FONT_FAMILIES}). "
+                "Use a focused heading/body/mono system unless the brand truly needs more."
+            ),
+        )
+    ]
+
+
+def _rule_font_size_too_small(path: str, text: str) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    seen_values: set[str] = set()
+    for m in _CSS_BLOCK_RE.finditer(text):
+        selector = m.group(1).strip()
+        body = m.group(2)
+        for decl in _FONT_SIZE_DECL_RE.finditer(body):
+            if decl.start() > 0 and body[decl.start() - 1] == "-":
+                continue
+            value = decl.group("value")
+            unit = decl.group("unit")
+            if (unit or "").lower() not in {"px", "pt"}:
+                continue
+            px = _font_size_px(value, unit)
+            if px is None or px == 0 or px >= _MIN_FONT_SIZE_PX:
+                continue
+            evidence = decl.group(0).strip()
+            key = evidence.lower()
+            if key in seen_values:
+                continue
+            seen_values.add(key)
+            findings.append(
+                DesignFinding(
+                    rule_id="font_size_too_small",
+                    severity="info",
+                    path=path,
+                    line=_line_of(text, m.start(2) + decl.start()),
+                    evidence=f"{selector} {{ {evidence} }}",
+                    choice_key=_CHOICE_WEB_FONT_SIZE,
+                    message=(
+                        f"{evidence} resolves to {px:.1f}px, below the "
+                        f"{_MIN_FONT_SIZE_PX:.0f}px readable web floor."
+                    ),
+                )
+            )
+    return findings
+
+
+def _rule_too_many_colors(path: str, text: str) -> list[DesignFinding]:
+    colors: list[tuple[tuple[int, int, int], str, int]] = []
+    low = text.lower()
+    for m in re.finditer(r"#[0-9a-f]{3}(?:[0-9a-f]{3})?|rgb\([^)]*\)", low):
+        val = _norm_color(m.group(0))
+        rgb = _resolve_rgb(val)
+        if rgb is None or _rgb_saturation(rgb) < _COLOR_SATURATION_FLOOR:
+            continue
+        if any(_rgb_distance(rgb, kept) <= _COLOR_MERGE_DISTANCE for kept, _, _ in colors):
+            continue
+        colors.append((rgb, val, m.start()))
+
+    if len(colors) <= _MAX_BRAND_COLORS:
+        return []
+
+    listed = ", ".join(color for _, color, _ in colors[:10])
+    return [
+        DesignFinding(
+            rule_id="too_many_colors",
+            severity="info",
+            path=path,
+            line=_line_of(text, colors[0][2]),
+            evidence=f"{len(colors)} saturated brand colors: {listed}",
+            choice_key=_CHOICE_WEB_COLOR_COUNT,
+            message=(
+                f"{len(colors)} distinct saturated brand colors (> {_MAX_BRAND_COLORS}). "
+                "Normal palettes should cluster around a small set of intentional hues."
+            ),
+        )
+    ]
+
+
+def _rule_tight_line_height(path: str, text: str) -> list[DesignFinding]:
+    findings: list[DesignFinding] = []
+    for m in _CSS_BLOCK_RE.finditer(text):
+        selector = m.group(1).strip()
+        selector_parts = [part.strip() for part in selector.split(",") if part.strip()]
+        if selector_parts and all(
+            _WEB_HEADING_TARGET_RE.search(part) is not None for part in selector_parts
+        ):
+            continue
+        body = m.group(2)
+        for decl in _LINE_HEIGHT_DECL_RE.finditer(body):
+            if decl.start() > 0 and body[decl.start() - 1] == "-":
+                continue
+            try:
+                value = float(decl.group(1))
+            except ValueError:
+                continue
+            if value >= _MIN_LINE_HEIGHT:
+                continue
+            findings.append(
+                DesignFinding(
+                    rule_id="tight_line_height",
+                    severity="info",
+                    path=path,
+                    line=_line_of(text, m.start(2) + decl.start()),
+                    evidence=f"{selector} {{ {decl.group(0).strip()} }}",
+                    choice_key=_CHOICE_WEB_LINE_HEIGHT,
+                    message=(
+                        f"Unitless line-height {value:g} is below {_MIN_LINE_HEIGHT:g}; "
+                        "body copy below this tends to read cramped."
+                    ),
+                )
+            )
+            break
+    return findings
 
 
 def _rule_direction_conformance(
@@ -1908,6 +2081,10 @@ def lint_design(
             findings += _rule_direction_conformance(path, text, direction)
         if not deck_slides:
             findings += _rule_web_banned_default_font(path, text, design_spec, justified)
+            findings += _rule_too_many_fonts(path, text)
+            findings += _rule_font_size_too_small(path, text)
+            findings += _rule_too_many_colors(path, text)
+            findings += _rule_tight_line_height(path, text)
             findings += _rule_web_reflexive_hover_scale(path, text)
             findings += _rule_web_hover_only_interactivity(
                 path, text, workspace_has_focus_visible=workspace_has_focus_visible

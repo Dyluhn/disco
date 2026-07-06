@@ -20,7 +20,8 @@ import shlex
 import pytest
 from disco.core.appkit import RECIPES
 from disco.core.appkit.spec import DesignSpec, Justification, Palette, Typography
-from disco.core.design import DIRECTION_BY_ID, render_design_direction
+from disco.core.design import DIRECTION_BY_ID, direction_tokens_css, render_design_direction
+from disco.tools.builtin import design_lint as design_lint_module
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.design_lint import DesignLintArgs, DesignLintTool, lint_design
 
@@ -658,6 +659,143 @@ html.js .reveal { opacity: 0; transform: translateY(16px); }
     assert "web_default_hidden_content" in _fired(bad_v)
     assert "web_default_hidden_content" not in _fired(clean_v)
     assert clean_v["ok"] is True
+
+
+# --- T1 numeric design-constraint rules --------------------------------------
+
+
+def test_numeric_too_many_fonts_flags_four_real_families_and_allows_three():
+    bad = """
+h1 { font-family: Fraunces, Georgia, serif; }
+body { font-family: "Source Sans 3", system-ui, sans-serif; }
+code { font-family: "JetBrains Mono", ui-monospace, monospace; }
+blockquote { font-family: Newsreader, Georgia, serif; }
+"""
+    clean = """
+h1 { font-family: Fraunces, Georgia, serif; }
+body { font-family: "Source Sans 3", system-ui, -apple-system, sans-serif; }
+code { font-family: "JetBrains Mono", ui-monospace, monospace; }
+.system { font-family: system-ui, -apple-system, sans-serif; }
+"""
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    bad_findings = [f for f in bad_v["findings"] if f["rule_id"] == "too_many_fonts"]
+    assert bad_findings and bad_findings[0]["severity"] == "warning"
+    assert "too_many_fonts" not in _fired(clean_v)
+
+
+def test_numeric_font_size_too_small_flags_resolved_values_under_floor():
+    bad = ".caption { font-size: 11px; }\n"
+    clean = (
+        ":root { --font-size-small: 11px; }\n"
+        ".body { font-size: 16px; }\n"
+        ".note { font-size: 1rem; }\n"
+        ".eyebrow { font-size: 0.8rem; }\n"
+    )
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    bad_findings = [f for f in bad_v["findings"] if f["rule_id"] == "font_size_too_small"]
+    assert bad_findings and bad_findings[0]["severity"] == "info"
+    assert "font_size_too_small" not in _fired(clean_v)
+
+
+def test_numeric_too_many_colors_counts_only_distinct_saturated_hues():
+    bad = """
+:root {
+  --rose:#e11d48; --orange:#f97316; --yellow:#eab308; --lime:#84cc16;
+  --green:#22c55e; --cyan:#06b6d4; --blue:#2563eb; --magenta:#db2777;
+}
+"""
+    clean = """
+:root {
+  --primary:#2e7d66; --accent:#3b6ea8; --warn:#d9902f;
+  --support:#0ea5a4; --danger:#b14e49; --success:#2f855a;
+  --bg:#f8fafc; --text:#111827; --muted:#9ca3af;
+  --accent-strong:#338a70; --accent-soft:#296f5b;
+}
+"""
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    bad_findings = [f for f in bad_v["findings"] if f["rule_id"] == "too_many_colors"]
+    assert bad_findings and bad_findings[0]["severity"] == "info"
+    assert "too_many_colors" not in _fired(clean_v)
+
+
+def test_numeric_tight_line_height_flags_only_unitless_cramped_values():
+    bad = ".copy { line-height: 1.1; }\n"
+    clean = (
+        ":root { --line-height-tight: 1.1; }\n"
+        "h1, h2 { line-height: 1.1; }\n"
+        ".copy { line-height: 1.5; }\n"
+        ".caption { line-height: 24px; }\n"
+    )
+
+    bad_v = lint_design({"site.css": bad}, None, spec_present=False, spec_valid=False)
+    clean_v = lint_design({"site.css": clean}, None, spec_present=False, spec_valid=False)
+
+    bad_findings = [f for f in bad_v["findings"] if f["rule_id"] == "tight_line_height"]
+    assert bad_findings and bad_findings[0]["severity"] == "info"
+    assert "tight_line_height" not in _fired(clean_v)
+
+
+def test_numeric_rules_do_not_flag_soft_depth_direction_tokens():
+    css = (
+        direction_tokens_css(DIRECTION_BY_ID["soft-depth-saas"])
+        + """
+body {
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.5;
+  background: var(--bg);
+  color: var(--text);
+}
+h1 {
+  font-family: var(--display);
+  font-size: 42px;
+  line-height: 1.2;
+  color: var(--accent);
+}
+p {
+  font-family: var(--reading);
+  font-size: 18px;
+  line-height: 1.6;
+}
+code {
+  font-family: var(--mono);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.button {
+  background: var(--accent);
+  color: var(--bg);
+  border-radius: 8px;
+}
+"""
+    )
+    v = lint_design({"tokens.css": css}, None, spec_present=False, spec_valid=False)
+    numeric_rule_ids = {
+        "too_many_fonts",
+        "font_size_too_small",
+        "too_many_colors",
+        "tight_line_height",
+    }
+
+    assert not (numeric_rule_ids & _fired(v)), v["findings"]
+
+
+def test_numeric_rule_meta_severities_are_registered():
+    rule_meta = getattr(design_lint_module, "_RULE_META")
+
+    assert rule_meta["too_many_fonts"][0] == "warning"
+    assert rule_meta["font_size_too_small"][0] == "info"
+    assert rule_meta["too_many_colors"][0] == "info"
+    assert rule_meta["tight_line_height"][0] == "info"
 
 
 # --- P1-2: single source of truth for canonical keys --------------------------
