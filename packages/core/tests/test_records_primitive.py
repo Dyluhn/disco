@@ -18,7 +18,10 @@ from disco.core.appkit import (
 )
 from disco.core.appkit.spec import AppSpec, Entity, EntityField
 
-_LEAD_GEN_ACME_DIGEST = "3363aa1762da208d3f7869d23eb8c4011c53de3d9ddb6b57afe2505cd4f6bb33"
+_LEAD_GEN_ACME_DIGEST = "7f05d743fdb5fdeab275cb62a7a1bd8a7f15654d0b29349ebcb9a791e7f029c9"
+_RECORDS_WORKER_SCHEMA_DIGEST = (
+    "88a20d2d82bcbbc5a32640d39b2496ad4ed013926096ca7b0f6b08622517af1d"
+)
 
 
 def _design():
@@ -40,6 +43,16 @@ def _tree() -> dict[str, str]:
 def _digest(tree: dict[str, str]) -> str:
     h = hashlib.sha256()
     for path in sorted(tree):
+        h.update(path.encode("utf-8"))
+        h.update(b"\0")
+        h.update(tree[path].encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def _digest_paths(tree: dict[str, str], paths: tuple[str, ...]) -> str:
+    h = hashlib.sha256()
+    for path in paths:
         h.update(path.encode("utf-8"))
         h.update(b"\0")
         h.update(tree[path].encode("utf-8"))
@@ -69,6 +82,13 @@ def test_records_worker_has_per_entity_routes_and_imports() -> None:
     assert "POST /api/team_member" in worker
     assert "GET /api/shift" in worker
     assert "db.insert(shift)" in worker
+
+
+def test_records_worker_and_schema_outputs_stay_stable() -> None:
+    assert _digest_paths(
+        _tree(),
+        ("schema.sql", "migrations/0001_init.sql", "worker/index.ts", "src/db/schema.ts"),
+    ) == _RECORDS_WORKER_SCHEMA_DIGEST
 
 
 def test_records_schema_sql_round_trips_with_fk_enforcement() -> None:

@@ -739,7 +739,7 @@ def cloudflare_export_ready(files: Mapping[str, str | None]) -> CheckResult:
 
     rwf = assets.get("run_worker_first")
     routes = set(rwf) if isinstance(rwf, list) else set()
-    if not set(_CF_WORKER_FIRST_ROUTES) <= routes:
+    if rwf is not True and not set(_CF_WORKER_FIRST_ROUTES) <= routes:
         return CheckResult(
             name,
             False,

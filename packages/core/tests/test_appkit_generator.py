@@ -27,6 +27,7 @@ from disco.core.appkit import (
     Entity,
     EntityField,
     Page,
+    RECORDS_PRIMITIVE_ID,
     Section,
     SectionContent,
     check_drizzle_schema,
@@ -36,6 +37,10 @@ from disco.core.appkit import (
     get_recipe,
     resolve_lead_entity,
     synthesized_lead_entity,
+)
+
+_LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST = (
+    "cfe5bfd3497d8e566d2e804286143694307a184ed68d230d4e01e83c3b165d13"
 )
 
 # The single most common generated-site tells the generator must never emit.
@@ -121,6 +126,16 @@ def _digest(tree: dict[str, str]) -> str:
     return h.hexdigest()
 
 
+def _digest_paths(tree: dict[str, str], paths: tuple[str, ...]) -> str:
+    h = hashlib.sha256()
+    for path in paths:
+        h.update(path.encode("utf-8"))
+        h.update(b"\0")
+        h.update(tree[path].encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 def test_generate_is_deterministic_byte_identical():
     # Two INDEPENDENT constructions of the same specs must yield byte-identical
     # trees — catches any dict/set-ordering nondeterminism in the emitters.
@@ -142,6 +157,8 @@ def test_generate_emits_the_expected_tree():
         "index.html",
         "src/main.tsx",
         "src/App.tsx",
+        "src/api/client.ts",
+        "src/hooks/useSubmit.ts",
         "src/styles.css",
         "src/db/schema.ts",
         "src/generated/content.ts",
@@ -178,16 +195,86 @@ def test_variant_drives_component_class():
     assert "kind-hero" in hero
 
 
-def test_form_component_onchange_is_well_formed():
+def test_form_component_emits_reactive_submit_contract():
     # Guards the f-string brace-escaping in the lead form: the onChange handler must
     # be balanced JSX, not the `})}}` mis-escape a careless line-split produces.
     tree = generate(_app(), _design())
     form = next(tree[p] for p in tree if p.endswith("SignupSection.tsx"))
-    # computed (bracketed) object key — never a bare/injectable JS key
-    assert 'onChange={(e) => setForm({ ...form, ["name"]: e.target.value })} />' in form
+    client = tree["src/api/client.ts"]
+    hook = tree["src/hooks/useSubmit.ts"]
+    # fields stay bound through the form-state updater, never bare/injectable JS keys
+    assert 'onChange={(e) => updateField("name", e.target.value)} />' in form
+    assert 'value={form["name"] ?? ""}' in form
     assert "}})}}" not in form  # the broken double-escape must never appear
-    # the lead form posts JSON to the worker endpoint
-    assert 'fetch("/api/leads"' in form
+    assert 'import { useSubmit } from "../hooks/useSubmit";' in form
+    assert 'useSubmit("/api/leads")' in form
+    assert "function validateRequired(): boolean" in form
+    assert 'fieldErrors["name"]' in form
+    assert 'if (!validateRequired()) return;' in form
+    assert 'disabled={state.kind === "submitting"}' in form
+    assert 'state.kind === "submitting" ? "Sending…"' in form
+    assert 'aria-live="polite"' in form
+    assert "Recently submitted" in form
+    assert "submitted.map((entry)" in form
+    assert "form-status-error" in form
+    assert "fetch(" not in form
+    # the single fetch chokepoint is typed and reads {error} on failure
+    assert "export type ApiResult<T>" in client
+    assert "export async function postJson<T>(path: string, body: unknown)" in client
+    assert 'headers: { "Content-Type": "application/json" }' in client
+    assert "errorFromBody(body)" in client
+    assert "any" not in client
+    assert "export type SubmitState" in hook
+    assert '| { kind: "submitting" }' in hook
+    assert 'setState({ kind: "error", message: result.error });' in hook
+    assert "setSubmitted((current) => [entry, ...current]);" in hook
+    assert "current.filter((item) => item.id !== entry.id)" in hook
+
+
+def test_records_form_uses_entity_route_with_shared_submit_hook():
+    app = AppSpec(
+        schema_version=1,
+        app_kind=RECORDS_PRIMITIVE_ID,
+        name="Records Form",
+        pages=(
+            Page(
+                id="home",
+                route="/",
+                title="Home",
+                sections=(
+                    Section(
+                        id="signup",
+                        kind="form",
+                        content=SectionContent(heading="Add member", cta_label="Save"),
+                    ),
+                ),
+            ),
+        ),
+        entities=(
+            Entity(
+                id="team_member",
+                name="Team Member",
+                fields=(
+                    EntityField(name="name", type="str", required=True),
+                    EntityField(name="email", type="email", required=True),
+                ),
+            ),
+        ),
+    )
+    tree = generate(app, _design())
+    form = next(tree[p] for p in tree if p.endswith("SignupSection.tsx"))
+    assert "src/api/client.ts" in tree
+    assert "src/hooks/useSubmit.ts" in tree
+    assert 'useSubmit("/api/team_member")' in form
+
+
+def test_lead_gen_worker_and_schema_outputs_stay_stable():
+    recipe = get_recipe("editorial-ledger")
+    assert recipe is not None
+    tree = generate(default_lead_gen_app_spec("Acme", recipe), recipe.to_design_spec())
+    assert _digest_paths(
+        tree, ("schema.sql", "worker/index.ts", "src/db/schema.ts")
+    ) == _LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST
 
 
 def test_generated_jsx_braces_and_parens_balanced():

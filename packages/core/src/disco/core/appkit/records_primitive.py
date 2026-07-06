@@ -1310,6 +1310,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         _comp_name,
         _component_names,
         _db_name,
+        _emit_api_client_ts,
         _emit_component,
         _emit_content_ts,
         _emit_dev_vars_example,
@@ -1320,6 +1321,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         _emit_manifest_ts,
         _emit_package_json,
         _emit_styles_css,
+        _emit_submit_hook_ts,
         _emit_tsconfig,
         _emit_vite_config,
         _emit_wrangler_toml,
@@ -1370,6 +1372,8 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         "worker/index.ts": worker_ts,
         "src/main.tsx": _emit_main_tsx(),
         "src/App.tsx": _emit_index_app_tsx(app, names),
+        "src/api/client.ts": _emit_api_client_ts(),
+        "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
         "src/styles.css": _emit_styles_css(design),
         "src/db/schema.ts": drizzle_ts,
         "src/generated/content.ts": _emit_content_ts(app, names),
@@ -1381,7 +1385,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     for page, section in _iter_sections(app):
         comp = _comp_name(names, page, section)
         files[f"src/components/{comp}.tsx"] = _emit_component(
-            comp, page, section, db_entity
+            comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
         )
     return dict(sorted(files.items()))
 

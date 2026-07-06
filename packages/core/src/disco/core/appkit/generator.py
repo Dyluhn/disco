@@ -422,6 +422,7 @@ def _emit_styles_css(design: DesignSpec) -> str:
         "  transition: opacity 120ms ease;\n"
         "}\n"
         ".btn:hover { opacity: 0.9; }\n"
+        ".btn:disabled { cursor: not-allowed; opacity: 0.62; }\n"
         ".btn:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }\n"
         ".btn-secondary {\n"
         "  background: transparent; color: var(--color-primary);\n"
@@ -441,6 +442,24 @@ def _emit_styles_css(design: DesignSpec) -> str:
         ".lead-form input:focus, .lead-form textarea:focus"
         " { border-color: var(--color-primary); }\n"
         ".form-status { font-size: 0.9rem; color: var(--color-accent); }\n"
+        ".form-status-success {\n"
+        "  border-left: 3px solid var(--color-accent); padding-left: 0.75rem;\n"
+        "}\n"
+        ".form-status-error, .field-error { color: var(--color-primary); }\n"
+        ".field-error { font-size: 0.85rem; font-weight: 600; }\n"
+        ".form-feedback { display: grid; gap: 0.75rem; }\n"
+        ".recent-submissions {\n"
+        "  border-top: 1px solid color-mix(in srgb, var(--color-text) 14%, transparent);\n"
+        "  padding-top: 0.75rem;\n"
+        "}\n"
+        ".recent-submissions h3 { margin: 0 0 0.5rem; font-size: 1rem; }\n"
+        ".recent-submissions ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }\n"
+        ".recent-submissions li {\n"
+        "  border: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);\n"
+        "  border-radius: var(--radius); padding: 0.65rem;\n"
+        "}\n"
+        ".recent-submission-fields { display: flex; flex-wrap: wrap; gap: 0.4rem 0.8rem; }\n"
+        ".recent-submission-field { font-size: 0.9rem; }\n"
         ".site-footer {\n"
         "  padding: calc(var(--space) * 2) 0;\n"
         "  border-top: 1px solid color-mix(in srgb, var(--color-text) 14%, transparent);\n"
@@ -516,14 +535,16 @@ def _render_body(comp_id: str) -> str:
     )
 
 
-def _emit_component(comp: str, page: Page, section: Section, lead: Entity) -> str:
+def _emit_component(
+    comp: str, page: Page, section: Section, lead: Entity, post_path: str = "/api/leads"
+) -> str:
     comp_id = comp
     layout = _variant_layout(section)
     kind = section.kind
     classes = f"section kind-{kind} variant-{layout}"
 
     if kind == "form":
-        return _emit_form_component(comp, comp_id, page, section, lead, classes)
+        return _emit_form_component(comp, comp_id, page, section, lead, classes, post_path)
 
     disco_attrs = _disco_section_attrs(section)
 
@@ -630,55 +651,189 @@ def _emit_component(comp: str, page: Page, section: Section, lead: Entity) -> st
 def _input_for(field: EntityField) -> str:
     """A labeled input for one lead field. `text`/`message` → textarea; `email` name
     → email input; everything else → a text input. Required maps to `required`."""
-    req = " required" if field.required else ""
     label = field.name.replace("_", " ").title()
     is_textarea = field.type.lower() in ("text", "message") or field.name.lower() == "message"
     input_type = "email" if field.name.lower() == "email" else "text"
-    # Use a COMPUTED (bracketed) object key keyed off the JSON-encoded field name,
-    # so even a name the spec validator somehow let through can never emit a bare
-    # broken/injected JS key (belt-and-suspenders; spec already guarantees safety).
     key = _ts(field.name)
+    field_id = f"lead-field-{field.name.replace('_', '-')}"
+    error_id = f"{field_id}-error"
+    required = " required" if field.required else ""
+    described_by = (
+        f' aria-describedby={{fieldErrors[{key}] ? {_ts(error_id)} : undefined}}'
+        if field.required
+        else ""
+    )
+    invalid = f' aria-invalid={{fieldErrors[{key}] ? "true" : undefined}}'
     if is_textarea:
         control = (
-            f'          <textarea name={_ts(field.name)} value={{form[{_ts(field.name)}] ?? ""}}'
-            f"{req}\n"
-            f"            onChange={{(e) => setForm({{ ...form, [{key}]:"
-            " e.target.value })} />"
+            f'          <textarea id={_ts(field_id)} name={_ts(field.name)}'
+            f" value={{form[{key}] ?? \"\"}}{required}{invalid}{described_by}\n"
+            f"            onChange={{(e) => updateField({key}, e.target.value)}} />"
         )
     else:
         control = (
-            f'          <input type={_ts(input_type)} name={_ts(field.name)}'
-            f' value={{form[{_ts(field.name)}] ?? ""}}{req}\n'
-            f"            onChange={{(e) => setForm({{ ...form, [{key}]:"
-            " e.target.value })} />"
+            f'          <input id={_ts(field_id)} type={_ts(input_type)}'
+            f" name={_ts(field.name)} value={{form[{key}] ?? \"\"}}{required}"
+            f"{invalid}{described_by}\n"
+            f"            onChange={{(e) => updateField({key}, e.target.value)}} />"
         )
-    return f"        <label>{label}\n{control}\n        </label>"
+    error = (
+        f"\n"
+        f"          {{fieldErrors[{key}] ? (\n"
+        f'            <span className="field-error" id={_ts(error_id)}>'
+        f"{{fieldErrors[{key}]}}</span>\n"
+        "          ) : null}"
+        if field.required
+        else ""
+    )
+    return f"        <label htmlFor={_ts(field_id)}>{label}\n{control}{error}\n        </label>"
+
+
+def _emit_api_client_ts() -> str:
+    return (
+        "export type ApiResult<T> =\n"
+        "  | { ok: true; data: T }\n"
+        "  | { ok: false; status: number; error: string };\n\n"
+        "function errorFromBody(body: unknown): string | null {\n"
+        '  if (typeof body !== "object" || body === null || !("error" in body)) {\n'
+        "    return null;\n"
+        "  }\n"
+        '  const value = (body as { error: unknown }).error;\n'
+        '  return typeof value === "string" && value.trim() ? value : null;\n'
+        "}\n\n"
+        "async function readError(response: Response): Promise<string> {\n"
+        "  try {\n"
+        "    const body: unknown = await response.json();\n"
+        "    return (errorFromBody(body) ?? response.statusText) || \"Request failed\";\n"
+        "  } catch {\n"
+        '    return response.statusText || "Request failed";\n'
+        "  }\n"
+        "}\n\n"
+        "export async function postJson<T>(path: string, body: unknown): Promise<ApiResult<T>> {\n"
+        "  try {\n"
+        "    const response = await fetch(path, {\n"
+        '      method: "POST",\n'
+        '      headers: { "Content-Type": "application/json" },\n'
+        "      body: JSON.stringify(body),\n"
+        "    });\n"
+        "    if (!response.ok) {\n"
+        "      return { ok: false, status: response.status, error: await readError(response) };\n"
+        "    }\n"
+        "    const data = (await response.json()) as T;\n"
+        "    return { ok: true, data };\n"
+        "  } catch (error: unknown) {\n"
+        "    return {\n"
+        "      ok: false,\n"
+        "      status: 0,\n"
+        '      error: error instanceof Error ? error.message : "Network error",\n'
+        "    };\n"
+        "  }\n"
+        "}\n"
+    )
+
+
+def _emit_submit_hook_ts() -> str:
+    return (
+        'import { useCallback, useRef, useState } from "react";\n'
+        'import { postJson } from "../api/client";\n\n'
+        "export type SubmitState =\n"
+        '  | { kind: "idle" }\n'
+        '  | { kind: "submitting" }\n'
+        '  | { kind: "success" }\n'
+        '  | { kind: "error"; message: string };\n\n'
+        "export interface SubmittedEntry {\n"
+        "  id: string;\n"
+        "  values: Record<string, string>;\n"
+        "}\n\n"
+        "function entryId(): string {\n"
+        '  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;\n'
+        "}\n\n"
+        "export function useSubmit(path: string) {\n"
+        '  const [state, setState] = useState<SubmitState>({ kind: "idle" });\n'
+        "  const [submitted, setSubmitted] = useState<SubmittedEntry[]>([]);\n"
+        "  const inFlight = useRef(false);\n\n"
+        "  const submit = useCallback(\n"
+        "    async (values: Record<string, string>): Promise<boolean> => {\n"
+        "      if (inFlight.current) return false;\n"
+        "      inFlight.current = true;\n"
+        '      setState({ kind: "submitting" });\n'
+        "      const entry: SubmittedEntry = { id: entryId(), values: { ...values } };\n"
+        "      setSubmitted((current) => [entry, ...current]);\n\n"
+        "      const result = await postJson<{ ok: true }>(path, values);\n"
+        "      inFlight.current = false;\n"
+        "      if (result.ok) {\n"
+        '        setState({ kind: "success" });\n'
+        "        return true;\n"
+        "      }\n"
+        "      setSubmitted((current) => current.filter((item) => item.id !== entry.id));\n"
+        '      setState({ kind: "error", message: result.error });\n'
+        "      return false;\n"
+        "    },\n"
+        "    [path]\n"
+        "  );\n\n"
+        "  const reset = useCallback(() => {\n"
+        '    setState({ kind: "idle" });\n'
+        "  }, []);\n\n"
+        "  return { state, submitted, submit, reset };\n"
+        "}\n"
+    )
 
 
 def _emit_form_component(
-    comp: str, comp_id: str, page: Page, section: Section, lead: Entity, classes: str
+    comp: str,
+    comp_id: str,
+    page: Page,
+    section: Section,
+    lead: Entity,
+    classes: str,
+    post_path: str,
 ) -> str:
     inputs = "\n".join(_input_for(f) for f in lead.fields)
     disco_attrs = _disco_section_attrs(section)
+    required_fields = [f.name for f in lead.fields if f.required]
+    labels = {f.name: f.name.replace("_", " ").title() for f in lead.fields}
+    recent_fields = [f.name for f in lead.fields[:2]]
     return (
         '/* Auto-generated lead-capture component — do NOT hand-edit; regenerated from '
         '.disco/appspec.json. */\n'
+        'import type { FormEvent } from "react";\n'
         'import { useState } from "react";\n'
         'import { CONTENT } from "../generated/content";\n\n'
+        'import { useSubmit } from "../hooks/useSubmit";\n\n'
+        f"const REQUIRED_FIELDS = {_ts(required_fields)} as const;\n"
+        f"const RECENT_FIELDS = {_ts(recent_fields)} as const;\n"
+        f"const FIELD_LABELS: Record<string, string> = {_ts(labels)};\n\n"
         f"export default function {comp}() {{\n"
         f"  const c = CONTENT[{_ts(comp_id)}] ?? {{}};\n"
         "  const [form, setForm] = useState<Record<string, string>>({});\n"
-        '  const [status, setStatus] = useState<string>("");\n'
-        "  async function onSubmit(e: React.FormEvent) {\n"
-        "    e.preventDefault();\n"
-        '    setStatus("Sending…");\n'
-        "    const res = await fetch(\"/api/leads\", {\n"
-        '      method: "POST",\n'
-        '      headers: { "Content-Type": "application/json" },\n'
-        "      body: JSON.stringify(form),\n"
+        "  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});\n"
+        f"  const {{ state, submitted, submit, reset }} = useSubmit({_ts(post_path)});\n\n"
+        "  function updateField(field: string, value: string) {\n"
+        "    setForm((current) => ({ ...current, [field]: value }));\n"
+        "    setFieldErrors((current) => {\n"
+        "      if (!current[field]) return current;\n"
+        "      const next = { ...current };\n"
+        "      delete next[field];\n"
+        "      return next;\n"
         "    });\n"
-        '    setStatus(res.ok ? "Thanks — we will be in touch." : "Something went wrong.");\n'
-        "    if (res.ok) setForm({});\n"
+        '    if (state.kind === "success" || state.kind === "error") reset();\n'
+        "  }\n\n"
+        "  function validateRequired(): boolean {\n"
+        "    const nextErrors: Record<string, string> = {};\n"
+        "    for (const field of REQUIRED_FIELDS) {\n"
+        "      if (!(form[field] ?? \"\").trim()) {\n"
+        "        nextErrors[field] = `${FIELD_LABELS[field] ?? field} is required.`;\n"
+        "      }\n"
+        "    }\n"
+        "    setFieldErrors(nextErrors);\n"
+        "    return Object.keys(nextErrors).length === 0;\n"
+        "  }\n\n"
+        "  async function onSubmit(e: FormEvent<HTMLFormElement>) {\n"
+        "    e.preventDefault();\n"
+        '    if (state.kind === "submitting") return;\n'
+        "    if (!validateRequired()) return;\n"
+        "    const saved = await submit(form);\n"
+        "    if (saved) setForm({});\n"
         "  }\n"
         f"  return (\n"
         f'    <section className={_ts(classes)} id="lead-form"'
@@ -688,11 +843,38 @@ def _emit_form_component(
         f"        {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
         f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
         "{c.subheading}</p> : null}\n"
-        '        <form className="lead-form" onSubmit={onSubmit}>\n'
+        '        <form className="lead-form" onSubmit={onSubmit} noValidate>\n'
         + inputs + "\n"
-        f'          <button className="btn" type="submit"{_disco_field_attr("cta_label")}>'
-        '{c.ctaLabel ?? "Submit"}</button>\n'
-        '          {status ? <p className="form-status">{status}</p> : null}\n'
+        f'          <button className="btn" type="submit" disabled={{state.kind === "submitting"}}'
+        f'{_disco_field_attr("cta_label")}>\n'
+        '            {state.kind === "submitting" ? "Sending…" : c.ctaLabel ?? "Submit"}\n'
+        "          </button>\n"
+        '          <div className="form-feedback" aria-live="polite">\n'
+        '            {state.kind === "success" ? (\n'
+        '              <p className="form-status form-status-success">Thanks — we will be in touch.</p>\n'
+        "            ) : null}\n"
+        '            {state.kind === "error" ? (\n'
+        '              <p className="form-status form-status-error">{state.message}</p>\n'
+        "            ) : null}\n"
+        "            {submitted.length > 0 ? (\n"
+        '              <div className="recent-submissions">\n'
+        "                <h3>Recently submitted</h3>\n"
+        "                <ul>\n"
+        "                  {submitted.map((entry) => (\n"
+        "                    <li key={entry.id}>\n"
+        '                      <div className="recent-submission-fields">\n'
+        "                        {RECENT_FIELDS.map((field) => (\n"
+        '                          <span className="recent-submission-field" key={field}>\n'
+        "                            <strong>{FIELD_LABELS[field] ?? field}:</strong> {entry.values[field] ?? \"\"}\n"
+        "                          </span>\n"
+        "                        ))}\n"
+        "                      </div>\n"
+        "                    </li>\n"
+        "                  ))}\n"
+        "                </ul>\n"
+        "              </div>\n"
+        "            ) : null}\n"
+        "          </div>\n"
         "        </form>\n"
         "      </div>\n"
         "    </section>\n"
@@ -1433,6 +1615,8 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         "worker/index.ts": _emit_worker_ts(lead),
         "src/main.tsx": _emit_main_tsx(),
         "src/App.tsx": _emit_app_tsx(app_spec, names),
+        "src/api/client.ts": _emit_api_client_ts(),
+        "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
         "src/styles.css": _emit_styles_css(design_spec),
         "src/db/schema.ts": _emit_drizzle_schema_ts(lead),
         "src/generated/content.ts": _emit_content_ts(app_spec, names),

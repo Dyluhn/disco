@@ -32,9 +32,10 @@ generated app in the workspace, each returning a PASS/FAIL with concrete evidenc
                             after an early return / inside a dead branch FAILS (no
                             false-PASS on a broken/insecure worker).
 * ``lead_form_posts``     — control-flow-inspect the form component(s): a REAL (non-
-                            comment) POST fetch to `/api/leads`, JSON content-type, the
-                            form state serialized into the body, and every lead field
-                            actually BOUND to that form state (value + onChange).
+                            comment) `useSubmit("/api/leads")` call, generated
+                            client/hook files with the single POST JSON fetch
+                            chokepoint, optimistic add/remove state, and every lead
+                            field actually BOUND to form state (value + onChange).
 * ``local_api_roundtrip`` — a MODEL (driven by the structural flags above, NOT a
                             runtime execution of the worker) exercised against
                             in-memory sqlite: confirms that structure is internally
@@ -791,13 +792,14 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
     return post_contract_ok, model, reasons
 
 
-def _fetch_leads_in_call_position(code: str) -> bool:
-    """True iff `fetch("/api/leads"...)` appears as an actual CALL in executable code:
-    the `fetch` identifier sits in code context (NOT inside a string/template literal),
-    is a bare/`await`ed call (not a `.member` access), is immediately applied to `(`,
-    and its first argument is the string `/api/leads`. A `fetch("/api/leads")` buried
-    inside a string or template literal — inert text that never runs — does NOT count
-    (that is the false-PASS hole this closes)."""
+def _call_with_string_arg_in_position(code: str, callee: str, path: str) -> bool:
+    """True iff `callee("path"...)` appears as an actual CALL in executable code.
+
+    The identifier sits in code context (NOT inside a string/template literal), is a
+    bare/`await`ed call (not a `.member` access), is immediately applied to `(`, and
+    its first argument is the expected string. Inert mentions in strings/templates do
+    not count.
+    """
     i, n = 0, len(code)
     while i < n:
         ch = code[i]
@@ -806,10 +808,10 @@ def _fetch_leads_in_call_position(code: str) -> bool:
             if end > i:
                 i = end  # skip the whole string/template literal — its text is not code
                 continue
-        if code.startswith("fetch", i) and (
+        if code.startswith(callee, i) and (
             i == 0 or not (code[i - 1].isalnum() or code[i - 1] in "_$.")
         ):
-            j = i + len("fetch")
+            j = i + len(callee)
             while j < n and code[j] in " \t\r\n":
                 j += 1
             if j < n and code[j] == "(":
@@ -817,41 +819,85 @@ def _fetch_leads_in_call_position(code: str) -> bool:
                 while j < n and code[j] in " \t\r\n":
                     j += 1
                 inner, _end = _read_string_literal(code, j)
-                if inner is not None and inner.split("?", 1)[0] == "/api/leads":
+                if inner is not None and inner.split("?", 1)[0] == path:
                     return True
         i += 1
     return False
 
 
+def _fetch_leads_in_call_position(code: str) -> bool:
+    return _call_with_string_arg_in_position(code, "fetch", "/api/leads")
+
+
+def _use_submit_leads_in_call_position(code: str) -> bool:
+    return _call_with_string_arg_in_position(code, "useSubmit", "/api/leads")
+
+
+def inspect_submit_support(client_src: str, hook_src: str) -> tuple[bool, list[str]]:
+    """Inspect the generated API client + submit hook that back the reactive form."""
+    reasons: list[str] = []
+    client = _strip_ts_comments(client_src)
+    hook = _strip_ts_comments(hook_src)
+    if "export type ApiResult<T>" not in client:
+        reasons.append("src/api/client.ts does not export the typed ApiResult<T> union")
+    if re.search(r"\bany\b", client):
+        reasons.append("src/api/client.ts uses `any`; the API boundary must be typed")
+    if not re.search(r"\bfetch\s*\(\s*path\s*,", client):
+        reasons.append("src/api/client.ts is not the fetch(path, ...) chokepoint")
+    if not re.search(r'method:\s*"POST"', client):
+        reasons.append("src/api/client.ts does not POST")
+    if not re.search(r'"Content-Type":\s*"application/json"', client):
+        reasons.append("src/api/client.ts does not set JSON Content-Type")
+    if not re.search(r"body:\s*JSON\.stringify\(\s*body\s*\)", client):
+        reasons.append("src/api/client.ts does not serialize the submitted body")
+    if "errorFromBody(body)" not in client:
+        reasons.append("src/api/client.ts does not surface the API {error} response body")
+
+    if "export type SubmitState" not in hook:
+        reasons.append("src/hooks/useSubmit.ts does not export the SubmitState union")
+    for state in ("idle", "submitting", "success", "error"):
+        if f'kind: "{state}"' not in hook:
+            reasons.append(f"src/hooks/useSubmit.ts is missing the {state!r} state")
+    if "useRef(false)" not in hook:
+        reasons.append("src/hooks/useSubmit.ts lacks in-flight double-submit protection")
+    if "setSubmitted((current) => [entry, ...current])" not in hook:
+        reasons.append("src/hooks/useSubmit.ts does not optimistically add submissions")
+    if "current.filter((item) => item.id !== entry.id)" not in hook:
+        reasons.append("src/hooks/useSubmit.ts does not remove failed optimistic entries")
+    if not re.search(r"postJson\s*<[^>]+>\s*\(\s*path\s*,\s*values\s*\)", hook):
+        reasons.append("src/hooks/useSubmit.ts does not submit through postJson(path, values)")
+    return (not reasons), reasons
+
+
 def inspect_lead_form(form_src: str, lead: Entity) -> tuple[bool, list[str]]:
     """Control-flow-inspect a generated form component for the lead-POST contract:
-    a REAL (non-comment, non-string) `fetch("/api/leads")` CALL POSTing JSON, the whole
-    form state serialized into the body (`JSON.stringify(form)`), and EVERY resolved
-    lead field bound to that form state (a named input wired by `value={form[...]}` + an
-    `onChange` that writes `[field]:`). A commented-out/dummy fetch, a `fetch("/api/leads")`
-    that is only inert STRING content, an unbound field, or a field dropped from the
-    POST body FAILS. Returns (ok, reasons)."""
+    a REAL (non-comment, non-string) `useSubmit("/api/leads")` CALL, inline required
+    validation, disabled submitting button, optimistic list/live region, and EVERY
+    resolved lead field bound to form state (a named input wired by `value={form[...]}` +
+    `updateField(field, value)`). Inert string/comment mentions do not count. Returns
+    (ok, reasons)."""
     reasons: list[str] = []
     code = _strip_ts_comments(form_src)
-    if not _fetch_leads_in_call_position(code):
+    if not _use_submit_leads_in_call_position(code):
         reasons.append(
-            'the form does not fetch("/api/leads") in call position in live code '
+            'the form does not call useSubmit("/api/leads") in live code '
             "(only in a comment or an inert string?)"
         )
-    if not re.search(r'method:\s*"POST"', code):
-        reasons.append("the form submit is not a POST")
-    if not re.search(r'"Content-Type":\s*"application/json"', code):
-        reasons.append("the form does not send a JSON Content-Type")
-    if not re.search(r"body:\s*JSON\.stringify\(\s*form\s*\)", code):
-        reasons.append(
-            "the POST body does not serialize the form state (body: JSON.stringify(form)) — "
-            "fields may be dropped from the request"
-        )
+    if "function validateRequired(): boolean" not in code:
+        reasons.append("the form does not run inline required-field validation")
+    if 'disabled={state.kind === "submitting"}' not in code:
+        reasons.append("the submit button is not disabled while submitting")
+    if 'aria-live="polite"' not in code:
+        reasons.append("the form feedback/list region is not aria-live")
+    if "Recently submitted" not in code or "submitted.map((entry)" not in code:
+        reasons.append("the form does not render the optimistic recently-submitted list")
     for field in lead.fields:
         name = re.escape(field.name)
         has_input = re.search(r'name="' + name + r'"', code) is not None
         value_bound = re.search(r'value=\{\s*form\[\s*"' + name + r'"\s*\]', code) is not None
-        change_bound = re.search(r'\[\s*"' + name + r'"\s*\]\s*:', code) is not None
+        change_bound = (
+            re.search(r'updateField\(\s*"' + name + r'"\s*,', code) is not None
+        )
         if not has_input:
             reasons.append(f'no input named "{field.name}" for the lead field')
         elif not (value_bound and change_bound):
@@ -1401,16 +1447,21 @@ class VerifyAppKitAppTool:
             if not name.endswith(".tsx"):
                 continue
             src = await self._read_text(ctx, f"{_COMPONENTS_DIR}/{name}")
-            # Select form components by a REAL fetch("/api/leads") CALL (not inert
-            # string/comment content), consistent with inspect_lead_form's proof.
-            if src and _fetch_leads_in_call_position(_strip_ts_comments(src)):
+            # Select form components by a REAL useSubmit("/api/leads") CALL (not
+            # inert string/comment content), consistent with inspect_lead_form.
+            if src and _use_submit_leads_in_call_position(_strip_ts_comments(src)):
                 form_srcs.append(src)
         if not form_srcs:
             return _check(
                 "lead_form_posts",
                 False,
-                'no form component POSTs to /api/leads — the lead form is missing or broken.',
+                'no form component calls useSubmit("/api/leads") — the lead form is missing or broken.',
             )
+        client_src = await self._read_text(ctx, "src/api/client.ts")
+        hook_src = await self._read_text(ctx, "src/hooks/useSubmit.ts")
+        support_ok, support_reasons = inspect_submit_support(client_src or "", hook_src or "")
+        if not support_ok:
+            return _check("lead_form_posts", False, "; ".join(support_reasons))
         for src in form_srcs:
             ok, reasons = inspect_lead_form(src, lead)
             if not ok:
@@ -1418,7 +1469,7 @@ class VerifyAppKitAppTool:
         return _check(
             "lead_form_posts",
             True,
-            f"the lead form POSTs JSON to /api/leads with an input per lead field "
+            f"the lead form submits JSON through useSubmit/postJson with an input per lead field "
             f"({', '.join(f.name for f in lead.fields)}).",
         )
 
@@ -1707,5 +1758,6 @@ __all__ = [
     "inspect_directory_listing",
     "inspect_lead_form",
     "inspect_static_worker",
+    "inspect_submit_support",
     "inspect_worker",
 ]

@@ -40,6 +40,7 @@ from disco.tools.builtin.verify_appkit_app import (
     _is_vite_app_tree,
     _served_preview_uses_built_bundle,
     inspect_lead_form,
+    inspect_submit_support,
     inspect_worker,
 )
 
@@ -356,7 +357,7 @@ def test_inspect_lead_form_known_good_and_broken_path():
     form = tree["src/components/HomeContactSection.tsx"].decode()
     ok, reasons = inspect_lead_form(form, lead)
     assert ok, reasons
-    broken = form.replace('fetch("/api/leads"', 'fetch("/api/wrong"')
+    broken = form.replace('useSubmit("/api/leads")', 'useSubmit("/api/wrong")')
     ok2, reasons2 = inspect_lead_form(broken, lead)
     assert not ok2 and any("/api/leads" in r for r in reasons2)
 
@@ -545,10 +546,10 @@ async def test_route_console_error_fails_route_coverage(stub_browser):
 
 
 @pytest.mark.asyncio
-async def test_form_wrong_fetch_fails_lead_form(stub_browser):
+async def test_form_wrong_submit_path_fails_lead_form(stub_browser):
     tree, _ = _build_tree()
     form = tree["src/components/HomeContactSection.tsx"].decode().replace(
-        'fetch("/api/leads"', 'fetch("/api/wrong"'
+        'useSubmit("/api/leads")', 'useSubmit("/api/wrong")'
     )
     tree["src/components/HomeContactSection.tsx"] = form.encode()
     out = await VerifyAppKitAppTool().run(
@@ -557,7 +558,7 @@ async def test_form_wrong_fetch_fails_lead_form(stub_browser):
     v = out.structured
     checks = _checks_by_name(v)
     assert v["passed"] is False
-    # no form posts to /api/leads anymore → lead_form_posts fails
+    # no form submits to /api/leads anymore → lead_form_posts fails
     assert checks["lead_form_posts"]["passed"] is False
 
 
@@ -734,15 +735,15 @@ async def test_raw_sql_insert_fails_worker_contract(stub_browser):
     assert checks["worker_contract"]["passed"] is False
 
 
-def test_inspect_lead_form_commented_fetch_fails():
-    # A fetch hidden in a COMMENT is not live code — substring presence passed; the
-    # comment-stripping control-flow check must FAIL.
+def test_inspect_lead_form_commented_submit_fails():
+    # A useSubmit call hidden in a COMMENT is not live code — substring presence
+    # passed; the comment-stripping control-flow check must FAIL.
     tree, app = _build_tree()
     lead = resolve_lead_entity(app)
     form = tree["src/components/HomeContactSection.tsx"].decode()
     broken = form.replace(
-        'const res = await fetch("/api/leads", {',
-        'const res = { ok: true }; // await fetch("/api/leads", {',
+        'useSubmit("/api/leads")',
+        'useSubmit("/api/wrong") // useSubmit("/api/leads")',
     )
     assert broken != form
     ok, reasons = inspect_lead_form(broken, lead)
@@ -756,26 +757,30 @@ def test_inspect_lead_form_unbound_field_fails():
     tree, app = _build_tree()
     lead = resolve_lead_entity(app)
     form = tree["src/components/HomeContactSection.tsx"].decode()
-    broken = form.replace('["email"]: e.target.value', '["other"]: e.target.value')
+    broken = form.replace(
+        'updateField("email", e.target.value)',
+        'updateField("other", e.target.value)',
+    )
     assert broken != form
     ok, reasons = inspect_lead_form(broken, lead)
     assert not ok
     assert any("email" in r and "bound" in r for r in reasons)
 
 
-def test_inspect_lead_form_field_dropped_from_body_fails():
-    # The body posts a partial object (email dropped) instead of the whole form. Must
-    # FAIL — a field silently missing from the request is a broken lead form.
+def test_inspect_submit_support_field_body_dropped_fails():
+    # The API client must serialize the submitted body object. A partial/hardcoded
+    # body can silently drop fields, so the support-file inspection must FAIL.
     tree, app = _build_tree()
-    lead = resolve_lead_entity(app)
-    form = tree["src/components/HomeContactSection.tsx"].decode()
-    broken = form.replace(
-        "body: JSON.stringify(form)", 'body: JSON.stringify({ name: form["name"] })'
+    _ = resolve_lead_entity(app)
+    client = tree["src/api/client.ts"].decode()
+    hook = tree["src/hooks/useSubmit.ts"].decode()
+    broken = client.replace(
+        "body: JSON.stringify(body)", 'body: JSON.stringify({ name: "Ada" })'
     )
-    assert broken != form
-    ok, reasons = inspect_lead_form(broken, lead)
+    assert broken != client
+    ok, reasons = inspect_submit_support(broken, hook)
     assert not ok
-    assert any("body" in r for r in reasons)
+    assert any("body" in r or "serialize" in r for r in reasons)
 
 
 @pytest.mark.asyncio
@@ -783,7 +788,7 @@ async def test_unbound_form_field_fails_lead_form_check(stub_browser):
     tree, _ = _build_tree()
     form = tree["src/components/HomeContactSection.tsx"].decode()
     tree["src/components/HomeContactSection.tsx"] = form.replace(
-        '["email"]: e.target.value', '["other"]: e.target.value'
+        'updateField("email", e.target.value)', 'updateField("other", e.target.value)'
     ).encode()
     out = await _run(tree)
     checks = _checks_by_name(out.structured)
@@ -801,8 +806,8 @@ async def test_unbound_form_field_fails_lead_form_check(stub_browser):
 #   2. the 401 proof accepted any return+denial text in the guard body → a denial
 #      buried behind a dead inner condition (`if (false) return ..., 401`) passed while
 #      unauthenticated callers fell through to the read.
-#   3. the form fetch proof matched a preserved STRING → an inert string literal
-#      containing `fetch("/api/leads")` passed while the real submit had no fetch.
+#   3. the form submit proof matched a preserved STRING → an inert string literal
+#      containing `useSubmit("/api/leads")` passed while the real submit used a wrong path.
 # Each codex mutation must now FAIL the RIGHT check.
 
 _POST_BODY = (
@@ -878,31 +883,33 @@ async def test_dead_401_guard_fails_worker_and_roundtrip(stub_browser):
     assert checks["local_api_roundtrip"]["passed"] is False
 
 
-def test_inspect_lead_form_inert_string_fetch_fails():
-    # (3) The real submit fetch is gone; an inert TEMPLATE-LITERAL string still
-    # contains `fetch("/api/leads")`. The old substring check false-passed; requiring
-    # the fetch in CALL POSITION must FAIL.
+def test_inspect_lead_form_inert_string_submit_fails():
+    # (3) The real submit hook call is gone; an inert TEMPLATE-LITERAL string still
+    # contains `useSubmit("/api/leads")`. The old substring check false-passed;
+    # requiring the call in CALL POSITION must FAIL.
     tree, app = _build_tree()
     lead = resolve_lead_entity(app)
     form = tree["src/components/HomeContactSection.tsx"].decode()
     broken = form.replace(
-        'const res = await fetch("/api/leads", {',
-        'const res = { ok: true }; const note = `see fetch("/api/leads") for docs`;',
+        'useSubmit("/api/leads")',
+        'useSubmit("/api/wrong"); '
+        'const note = `see useSubmit("/api/leads") for docs`',
     )
     assert broken != form
-    assert 'fetch("/api/leads")' in broken  # the inert string is present
+    assert 'useSubmit("/api/leads")' in broken  # the inert string is present
     ok, reasons = inspect_lead_form(broken, lead)
     assert not ok
     assert any("/api/leads" in r for r in reasons)
 
 
 @pytest.mark.asyncio
-async def test_inert_string_fetch_fails_lead_form(stub_browser):
+async def test_inert_string_submit_fails_lead_form(stub_browser):
     tree, _ = _build_tree()
     form = tree["src/components/HomeContactSection.tsx"].decode()
     tree["src/components/HomeContactSection.tsx"] = form.replace(
-        'const res = await fetch("/api/leads", {',
-        'const res = { ok: true }; const note = `see fetch("/api/leads") for docs`;',
+        'useSubmit("/api/leads")',
+        'useSubmit("/api/wrong"); '
+        'const note = `see useSubmit("/api/leads") for docs`',
     ).encode()
     out = await _run(tree)
     checks = _checks_by_name(out.structured)

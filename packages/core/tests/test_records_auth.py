@@ -19,7 +19,10 @@ from disco.core.appkit import (
 )
 from disco.core.appkit.spec import AppSpec, Entity, EntityField
 
-_RECORDS_BW2_DIGEST = "18074e7e185e511d35f22c87cd34146fd68bc3993f9c04e13c6aec8f00ef2049"
+_RECORDS_BW2_DIGEST = "d2e6009449a482fc356416990c723c298358e16925fc829d6a2af252f727bb11"
+_AUTH_RECORDS_WORKER_SCHEMA_DIGEST = (
+    "b989c72e80629609bac03d9024f6544515a35762a294b6bdacdaedb100605e67"
+)
 
 
 def _design():
@@ -47,6 +50,16 @@ def _auth_tree() -> dict[str, str]:
 def _digest(tree: dict[str, str]) -> str:
     h = hashlib.sha256()
     for path in sorted(tree):
+        h.update(path.encode("utf-8"))
+        h.update(b"\0")
+        h.update(tree[path].encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def _digest_paths(tree: dict[str, str], paths: tuple[str, ...]) -> str:
+    h = hashlib.sha256()
+    for path in paths:
         h.update(path.encode("utf-8"))
         h.update(b"\0")
         h.update(tree[path].encode("utf-8"))
@@ -106,6 +119,13 @@ def test_auth_records_emits_auth_schema_worker_and_approval_rbac() -> None:
 
     wrangler = tree["wrangler.toml"]
     assert "run_worker_first = true" in wrangler
+
+
+def test_auth_records_worker_and_schema_outputs_stay_stable() -> None:
+    assert _digest_paths(
+        _auth_tree(),
+        ("schema.sql", "migrations/0001_init.sql", "worker/index.ts", "src/db/schema.ts"),
+    ) == _AUTH_RECORDS_WORKER_SCHEMA_DIGEST
 
 
 def test_auth_records_schema_sql_round_trips_with_fk_enforcement() -> None:
