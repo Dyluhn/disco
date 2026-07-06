@@ -35,4 +35,14 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 - Real lead-gen app materialized to `scratchpad/bw1-app` (21 files; db `acme-leads-d7fcf353`; wrangler.toml has `[assets] directory=./dist` + `run_worker_first=["/api/*","/admin"]`; POST /api/leads public, GET auth-gated by ADMIN_TOKEN).
 - `npm install` in the app dir DONE (exit 0). Next: stub ./dist, write .dev.vars, init local D1 with --persist-to, boot `wrangler dev`, prove POST→kill→restart→GET survives.
 
+### B-W1 spike PASSED (keystone proven) — real runtime, real cold restart
+- Proven sequence against real `wrangler dev`/workerd + local D1: POST /api/leads → 201 {"ok":true}; GET (Bearer) → lead id 1; KILL process → HTTP 000 (down); RESTART (same cwd/.wrangler/state) → GET → SAME lead present. **State is durable across a Worker cold restart.**
+- Working incantation: `wrangler dev --port P --ip 127.0.0.1 --local`, `CI=true WRANGLER_SEND_METRICS=false`, stub `./dist/index.html`, `.dev.vars` ADMIN_TOKEN, default cwd `.wrangler/state`. Ready ~2s/boot.
+- codex dispatched to productionize into a reusable harness (`packages/core/tests/_workerd_harness.py`) + integration test (`test_workerd_persistence.py`) + retire the "Epic I deferred (local)" docstrings. bg `be1mwl9z6`. Task #62 in_progress.
+
+### B-W2 recon done (data-layer depth)
+- AppSpec ALREADY holds N entities (`entities: tuple[Entity,...]` max 50) but Entity/EntityField are FLAT — no FK/relation field; generator collapses all to ONE hardcoded `leads` entity. Schema/Drizzle/worker fully lead-specialized.
+- No migrations dir; drizzle-kit configured but never invoked (pure/deterministic generator can't run Node at generate-time). Least-invasive: hand-emitted numbered `migrations/NNNN_*.sql` + `wrangler d1 migrations apply`.
+- **Decision:** B-W2 = a NEW `records` primitive (register_primitive alongside lead-gen/directory), NOT a lead-gen mutation — lead-gen output must stay byte-identical (tests assert exact shape) and the codebase's explicit anti-over-generalization stance (primitives.py:6-11) wants per-primitive modules. Adds a relation/FK concept to the spec model + multi-table schema + FK ordering + N-entity worker route table + migrations.
+
 <!-- append below as work lands -->
