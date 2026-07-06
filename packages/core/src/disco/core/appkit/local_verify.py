@@ -11,9 +11,11 @@ HONEST SCOPE: `local_api_roundtrip` is a structural consistency model, not a
 runtime proof. It shows the inspected structure (POST has a reachable parameterized
 insert; reads are guard-first; missing ADMIN_TOKEN fails closed) is internally
 coherent against a real schema — it does NOT execute the generated TypeScript, so
-actual runtime behaviour/reachability is explicitly DEFERRED to Epic I's local CF
-(workerd) emulation. The check name `local_api_roundtrip` denotes a MODELLED
-round-trip, never a live API call.
+actual runtime behaviour/reachability is proved separately by
+`packages/core/tests/test_workerd_persistence.py`, which runs the generated Worker
+under local workerd/wrangler with real local D1 and a cold restart. The check name
+`local_api_roundtrip` denotes a MODELLED round-trip, never a live API call. Hosted
+Cloudflare deploy remains an owner-gated action outside this local model.
 
 PURITY / LAYERING: stdlib (`sqlite3`) + the sibling `.spec` models only. No IO,
 no network, no clock/random. `disco.core` is the leaf package (.importlinter), so
@@ -64,11 +66,11 @@ class WorkerAuthModel:
       ``db.insert(leads).values(...).run()`` lead insert in a non-dead position (not after
       an unconditional early return, not inside an `if (false)`/`if (0)` branch).
       This is structural PRESENCE + ordering, NOT a runtime proof that a submission
-      persists — actual reachability is deferred to Epic I emulation. A POST route
-      whose body short-circuits to ``return json({ ok: true })`` while an insert
-      merely exists in an unreached function does NOT have the insert in-region, so
-      the modelled persist leg fails instead of structurally passing on an absent /
-      dead insert.
+      persists — actual local reachability is covered by
+      `packages/core/tests/test_workerd_persistence.py`. A POST route whose body
+      short-circuits to ``return json({ ok: true })`` while an insert merely exists
+      in an unreached function does NOT have the insert in-region, so the modelled
+      persist leg fails instead of structurally passing on an absent / dead insert.
     """
 
     reads_require_auth: bool
@@ -300,8 +302,9 @@ def local_api_roundtrip(
     `schema.sql` + the resolved lead entity. This does NOT execute the generated
     Worker — it exercises the behaviour implied by the inspected structural flags
     (`auth`) and checks that structure is internally CONSISTENT, WITHOUT a real CF
-    deploy. Runtime behaviour/reachability is deferred to Epic I emulation. The model
-    confirms:
+    deploy. The real local runtime proof lives in
+    `packages/core/tests/test_workerd_persistence.py` (workerd/wrangler + local D1 +
+    cold restart); hosted Cloudflare deploy remains owner-gated. The model confirms:
 
       1. the modelled POST /api/leads with valid JSON INSERTS (the row appears);
       2. a modelled UNauthenticated GET /api/leads is REJECTED (401);
@@ -411,7 +414,8 @@ def local_api_roundtrip(
             True,
             "modelled round-trip consistent: POST inserts; unauth GET/admin → 401; "
             "authed read returns the row; ADMIN_TOKEN unset fails closed "
-            "(structural model — runtime behaviour deferred to Epic I emulation).",
+            "(structural model; local runtime proof is "
+            "packages/core/tests/test_workerd_persistence.py).",
         )
     finally:
         conn.close()

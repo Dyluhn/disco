@@ -5,8 +5,10 @@ errors", `verify_appkit_app` answers the stronger AppKit question: "is this a
 design-clean lead-gen app whose lead+admin contract is STRUCTURALLY correct —
 presence + ordering + parameterization + guard-first". This is STRUCTURAL
 verification of the generated source, NOT a proof that the app works at runtime:
-runtime reachability / behavioural execution of the Worker is explicitly deferred
-to Epic I's local CF (workerd) emulation. It runs NINE checks against the
+runtime reachability / behavioural execution of the Worker is proved separately by
+`packages/core/tests/test_workerd_persistence.py`, which runs the generated Worker
+under local workerd/wrangler with real local D1 and a cold restart. Hosted
+Cloudflare deploy remains an owner-gated action. It runs NINE checks against the
 generated app in the workspace, each returning a PASS/FAIL with concrete evidence:
 
 * ``design_lint_clean``   — `lint_design(workspace_tree, design_spec)` == 0 findings.
@@ -18,8 +20,9 @@ generated app in the workspace, each returning a PASS/FAIL with concrete evidenc
                             notNull flags, and package.json declares drizzle-orm +
                             drizzle-kit.
 * ``worker_contract``     — STRUCTURALLY inspect `worker/index.ts` (presence +
-                            ordering + parameterization + guard-first; NOT CF-runtime
-                            execution — that is Epic I): the public POST /api/leads
+                            ordering + parameterization + guard-first; NOT live
+                            execution — the local runtime proof is
+                            packages/core/tests/test_workerd_persistence.py): the public POST /api/leads
                             region CONTAINS a Drizzle insert in a
                             non-dead position; GET /api/leads AND /admin each
                             early-return 401 via the auth guard as the FIRST statement
@@ -37,7 +40,9 @@ generated app in the workspace, each returning a PASS/FAIL with concrete evidenc
                             in-memory sqlite: confirms that structure is internally
                             consistent (modelled POST inserts; unauth GET/admin → 401;
                             an authed read returns the row; ADMIN_TOKEN unset fails
-                            closed). Runtime behaviour is deferred to Epic I emulation.
+                            closed). The local runtime proof is
+                            packages/core/tests/test_workerd_persistence.py; hosted
+                            Cloudflare deploy remains owner-gated.
 * ``cloudflare_export_ready`` — Epic I deploy-export completeness: the export tree
                             carries the owner deliverables (OWNER_GUIDE.md + the
                             .dev.vars.example secret template), wrangler.toml binds DB +
@@ -146,12 +151,12 @@ class WorkerAuthVerdict(WorkerAuthModel):
 #
 # SCOPE (honest): this is STRUCTURAL verification of the TypeScript *source*
 # (presence + ordering + parameterization + guard-first) — NOT CF-runtime execution
-# (running the Worker under workerd is Epic I's local-emulation job). A PASS here
-# means "the handler's STRUCTURE enforces the lead/admin contract" — it does NOT
-# prove the insert is reached or the guard runs at runtime. The flags it extracts
-# then drive `local_api_roundtrip`, which runs a MODEL of that behaviour against a
-# real in-memory sqlite DB — a structural-consistency check, NOT a runtime execution
-# of the worker itself. Runtime reachability/behaviour is deferred to Epic I.
+# (the local runtime proof lives in packages/core/tests/test_workerd_persistence.py).
+# A PASS here means "the handler's STRUCTURE enforces the lead/admin contract" — it
+# does NOT prove the insert is reached or the guard runs at runtime. The flags it
+# extracts then drive `local_api_roundtrip`, which runs a MODEL of that behaviour
+# against a real in-memory sqlite DB — a structural-consistency check, NOT a runtime
+# execution of the worker itself. Hosted Cloudflare deploy remains owner-gated.
 
 
 def _read_string_literal(src: str, start: int) -> tuple[str | None, int]:
@@ -446,7 +451,8 @@ def _region_has_run_insert(region: str) -> tuple[bool, bool]:
     HONEST SCOPE: this proves STRUCTURAL PRESENCE + non-dead position of the insert in
     the POST handler region (see `_post_region`), NOT that runtime control actually
     REACHES it. An insert that exists only in an UNcalled function is correctly NOT
-    found here; full reachability is deferred to Epic I's local CF emulation."""
+    found here; local runtime reachability is proved separately by
+    `packages/core/tests/test_workerd_persistence.py`."""
     for m in re.finditer(r"\.insert\s*\(\s*leads\s*\)", region):
         values = re.match(r"\s*\.values\s*\(", region[m.end():])
         if values is None:
@@ -538,7 +544,7 @@ def _post_region(src: str, post_block: str) -> str:
 #
 # HONEST SCOPE: static (no runtime). The leak-sink + reachability matchers cover the
 # demonstrated exfiltration/bypass channels — they are NOT a complete information-flow
-# proof (full runtime behaviour is Epic I's local CF emulation).
+# proof. The local runtime proof is packages/core/tests/test_workerd_persistence.py.
 
 
 # Sinks into which a token VALUE must never flow ({E} = the token expr/alias fragment).
@@ -654,8 +660,8 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
     """STRUCTURALLY inspect the generated worker. Returns (post_contract_ok,
     auth_model, reasons) where `reasons` names every contract gap found. We parse the
     ACTUAL route-handler blocks and verify STRUCTURE (presence + ordering +
-    parameterization + guard-first), not substring presence — but NOT runtime
-    behaviour, which is deferred to Epic I's local CF emulation:
+    parameterization + guard-first), not substring presence. Runtime behaviour is
+    proved separately by packages/core/tests/test_workerd_persistence.py:
 
     * POST /api/leads is PUBLIC (no auth guard) and its in-region code (the handler
       block + any helper it calls) CONTAINS a Drizzle table insert
@@ -676,7 +682,8 @@ def inspect_worker(worker_ts: str, lead: Entity) -> tuple[bool, WorkerAuthVerdic
 
     The extracted `WorkerAuthVerdict` reflects the inspected STRUCTURE, so the
     deploy-free `local_api_roundtrip` models that structure (not CF-runtime
-    execution; runtime reachability/behaviour is Epic I).
+    execution; local runtime reachability/behaviour is covered by
+    packages/core/tests/test_workerd_persistence.py).
     """
     reasons: list[str] = []
     src = _strip_ts_comments(worker_ts)
@@ -1013,8 +1020,8 @@ def build_verdict(
             f"verify_appkit_app: all {n} STRUCTURAL checks passed — design-clean; "
             "schema+worker+form structure intact (presence/ordering/parameterization/"
             "guard-first); local lead/admin model round-trip consistent; routes + "
-            "sections covered. STRUCTURE verified — runtime behaviour deferred to Epic I "
-            "local CF emulation."
+            "sections covered. STRUCTURE verified — local runtime proof lives in "
+            "packages/core/tests/test_workerd_persistence.py."
         )
         next_action = ""
     else:
@@ -1081,8 +1088,9 @@ class VerifyAppKitAppTool:
         name="verify_appkit_app",
         description=(
             "STRUCTURALLY verify the generated AppKit lead-gen app and return a STRUCTURED "
-            "pass/fail verdict (presence + ordering + parameterization + guard-first; runtime "
-            "behaviour is deferred to Epic I local CF emulation). Runs nine checks: "
+            "pass/fail verdict (presence + ordering + parameterization + guard-first; "
+            "local runtime proof lives in packages/core/tests/test_workerd_persistence.py). "
+            "Runs nine checks: "
             "design_lint clean, schema.sql valid (sqlite round-trip + NOT NULL), Drizzle "
             "schema valid (src/db/schema.ts matches schema.sql and package deps exist), worker "
             "contract (public POST /api/leads region contains a Drizzle insert in a "
@@ -1223,8 +1231,9 @@ class VerifyAppKitAppTool:
                 "guard-first): public POST /api/leads region contains a Drizzle "
                 "insert in a non-dead position; GET /api/leads + /admin "
                 "early-return 401 as the first guard statement before any read; "
-                "Bearer-checked + fail-closed on missing ADMIN_TOKEN. Runtime "
-                "reachability/behaviour deferred to Epic I local CF emulation."
+                "Bearer-checked + fail-closed on missing ADMIN_TOKEN. Local runtime "
+                "proof lives in packages/core/tests/test_workerd_persistence.py; "
+                "hosted Cloudflare deploy remains owner-gated."
                 if ok
                 else "; ".join(reasons)
             )
