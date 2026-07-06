@@ -15,4 +15,24 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 - **Tasks:** #61 EPIC A, #62 EPIC B, #63 EPIC C, #64 EPIC S, #65 EPIC Z. #60 (scoping) closed.
 - **Next:** dispatch Epic A (design integration) to codex in an isolated worktree; then B-W1.
 
+### Epic A dispatched (design integration)
+- Worktree `disclaude-wt-A` (branch `wt-epic-a` off mega-campaign). PYTHONPATH override verified (imports worktree code, count=9 pre-change).
+- Spec `scratchpad/spec-epic-a-directions.md` — 13 full drop-in records authored by Fable (taste-driven), codex does mechanical integration + Literal/dark-set/test edits + gates. codex bg id `beyvfa6ke`.
+- All 13 palettes verified clean of the ai_purple hex list; fonts all real Google Fonts; 3 dark directions flagged for `_DARK_DIRECTION_IDS`.
+
+### Epic B setup
+- Worktree `disclaude-wt-B` (branch `wt-epic-b`). 
+- `wrangler` global install kicked off (bg `b7hfazrg1`) — required for the B-W1 local Workers-runtime persistence proof (was not installed).
+- B-W1 build-surface recon dispatched to map the minimal generate→boot→restart path before speccing.
+
+### Epic A LANDED — commit `aef9c33d`
+- codex integrated all 13 records + Literal + `_DARK_DIRECTION_IDS` + tests + prose list; no keyword collisions (all pick_direction assertions held, no keyword edits needed).
+- Fable authoritative verification (not codex self-report): basedpyright 0; arch-budget = the standing 23-item baseline with ZERO new items (all pre-existing loop/runtime/turn-control god-objects, none in directions.py); design tests pass; **live-proof script**: count=22, all 13 ids present, dark-set = 5 (correct), every direction renders tokens.css + resolves correct light/dark mode + design_lint zero self-flags + pick_direction selects each by its own keywords.
+- Patched to campaign branch via git-diff→git-apply (worktree commit-hook path). wt-A removed.
+- Tasks #59, #61 → completed.
+
+### B-W1 spike in progress
+- Real lead-gen app materialized to `scratchpad/bw1-app` (21 files; db `acme-leads-d7fcf353`; wrangler.toml has `[assets] directory=./dist` + `run_worker_first=["/api/*","/admin"]`; POST /api/leads public, GET auth-gated by ADMIN_TOKEN).
+- `npm install` in the app dir DONE (exit 0). Next: stub ./dist, write .dev.vars, init local D1 with --persist-to, boot `wrangler dev`, prove POST→kill→restart→GET survives.
+
 <!-- append below as work lands -->
