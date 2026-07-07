@@ -29,6 +29,12 @@ const AGENT_BASE = ((RT.AGENT_BASE ?? import.meta.env.VITE_AGENT_BASE) ?? "").re
 const CSRF_HEADER = "X-Disco-CSRF";
 const csrfByBase = new Map<string, string>();
 const sessionInitByBase = new Map<string, Promise<void>>();
+// Both servers share ONE session cookie (same host + signing secret), so two
+// bases minting CONCURRENTLY race: the second Set-Cookie replaces the session
+// the first base's CSRF token was bound to → "csrf required" on a fresh visit.
+// Serialize all session inits through one chain; a base whose init runs second
+// then sees the already-authenticated shared session and adopts its token.
+let sessionInitChain: Promise<void> = Promise.resolve();
 
 /** True when a backend base URL is configured — the api modules call it live. */
 export function isLive(): boolean {
@@ -178,10 +184,14 @@ async function ensureSessionFor(base: string): Promise<void> {
   if (!base) return;
   const existing = sessionInitByBase.get(base);
   if (existing) return existing;
-  const pending = initializeSession(base).finally(() => {
-    if (!csrfByBase.has(base)) sessionInitByBase.delete(base);
-  });
+  const pending = sessionInitChain
+    .catch(() => undefined) // one base's failure must not wedge the other
+    .then(() => initializeSession(base))
+    .finally(() => {
+      if (!csrfByBase.has(base)) sessionInitByBase.delete(base);
+    });
   sessionInitByBase.set(base, pending);
+  sessionInitChain = pending.catch(() => undefined);
   return pending;
 }
 
