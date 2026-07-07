@@ -850,10 +850,12 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
             bold=True,
         ))
 
-    # Optional caption (single body line, no overflow)
+    # Optional caption (single body line, no overflow). Box height allows a
+    # TWO-line wrap — gauntlet run-2's title-slide subtitle clipped mid-phrase
+    # in a single-line box; the scrim band above already reserves this room.
     overflow: list[str] = []
     shown = _visible_body_count_without_orphan(len(slide.body), 1)
-    caption_h = 274_320
+    caption_h = 460_000
     caption_block_h = caption_h * max(1, shown)
     caption_top = _SLIDE_H - caption_block_h - _MARGIN
     for i, line in enumerate(slide.body[:shown]):
