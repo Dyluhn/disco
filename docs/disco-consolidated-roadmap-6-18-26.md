@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Self-described “single living what’s-left doc” — that role now belongs to `docs/disco-project-state.md`.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Disco — consolidated roadmap: EVERYTHING from here to shipping (reconciled 2026-06-18)
 
 THE single living "what's left" doc. **Reconciled against git + code on 2026-06-18** —

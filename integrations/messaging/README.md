@@ -1,3 +1,7 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Messaging-bridge setup notes whose one-shot bot instructions hit `POST /conversations` etc. directly.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+> ⚠ post-auth (S-W1) these direct-POST instructions likely require a session/pairing token — VERIFY before use; see `docs/disco-security-state.md`.
+
 # Disco messaging bridge
 
 Start and observe Disco tasks from a chat channel. `disco_bot.py` is a **thin external

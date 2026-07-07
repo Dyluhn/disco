@@ -1,3 +1,11 @@
+> **SUPERSEDED (2026-07-07).** This tracker describes a pre-mega-campaign operating mode.
+> The current master status is `docs/disco-project-state.md`; remaining/next work is in
+> `docs/disco-status-and-remaining.md`. Kept for history.
+> Note: the "source of full surgical detail" cited below, `docs/dylans-walkthrough-v3-6-22-26.md`,
+> does not exist in the tree — that reference is dangling.
+
+---
+
 These are the remaining work orders. As you complete each item, mark them off. For deferred items, evaluate the recommended action to complete the work order fully. execute it. do not pause to ask the user questions. do not pause the python timer.
 
 ---

@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era autonomous feature-campaign tracker, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Autonomous feature campaign (Dylan mandate 2026-06-19)
 
 **Mandate:** complete ALL §A feature backlog autonomously, end every feature surface. Don't stop

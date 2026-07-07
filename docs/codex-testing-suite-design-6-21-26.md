@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era codex testing/verification-suite design doc, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Codex: ideal testing/verification suite for Disco — two rounds
 
 Method: codex was given the FACTS only (system shape, the green-tests-but-real-usage-breaks pattern, 4 concrete bugs + root causes, the human's 'tests check the middle' diagnosis, the Playwright-OOM / artifact-inspection-works observations, available compute, non-determinism). No preferred solution was implied. Round 2 fed round 1 back and asked codex to critique it ruthlessly and refine.

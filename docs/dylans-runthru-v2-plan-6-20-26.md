@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era runthru-v2 root-cause + fix plan, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Dylan runthru-v2 — root cause + fix plan (2026-06-20)
 
 Frustrated live test (slow/broken build). Root-caused by 6 parallel investigations (5 tracers + codex),

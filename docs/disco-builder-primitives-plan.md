@@ -25,7 +25,7 @@ offers**, shippable via a single `docker compose up`.
 | # | Decision | LOCKED |
 |---|----------|--------|
 | 1 | Content model | **Native** Pydantic-backed store + RBAC-gated owner admin (NOT an embedded Node CMS) |
-| 2 | Comms backbone | **Adopt Novu** (self-hosted) as the one backbone for email + in-app + push |
+| 2 | Comms backbone | **Adopt Novu** (self-hosted) as the one backbone for email + in-app + push — *resolved otherwise in §9 (2026-07-07): Novu is too heavy for the single-command deploy; transactional email goes **plain SMTP first**, Novu revisited only as an optional profile* |
 | 3 | Managed providers | **Operator-gated opt-in adapters** (Resend/Stripe/Twilio) alongside self-hosted defaults |
 | 4 | Hosting scope | **Preview + self-host deploy + custom-domain TLS first; defer autoscale/scale-to-zero** |
 | 5 | Approach | **Framework-first** (build F-A/F-E seam before primitives) |
@@ -34,6 +34,10 @@ offers**, shippable via a single `docker compose up`.
 ---
 
 ## 2. F-A — The Primitive Framework (the keystone WO cluster)
+
+> **As-built: see §10.** §10.0 is the authoritative as-built record: the shipped tool is `app_add_primitive`
+> (not `add_primitive`), it folds the spec into the AppSpec rather than overlaying `generate(spec)` artifacts,
+> and A0/A1/A2.1/A3 are DONE. Where this section and §10 disagree, §10 wins.
 
 Extends the existing generated-app scaffolding system (`disco.core.appkit` / the AppKit generator the build loop
 already drives — **confirm exact seam at WO-A0**). A **Primitive** is a registered object:
@@ -70,6 +74,9 @@ Primitive:
 ---
 
 ## 3. The six foundations
+
+> **As-built: see §10.** The Status column below is the planning-time snapshot; §10.0 is the authoritative
+> as-built record (F-A's A0/A1/A2.1/A3 are DONE, not NEW).
 
 | # | Foundation | Status | WOs |
 |---|-----------|--------|-----|

@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era runthru #3 punch list, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Dylan runthru #3 — punch list (2026-06-21, laptop-over-Tailscale)
 
 Running items surfaced during the 3rd walkthrough. Each ends with VISUAL PROOF in the

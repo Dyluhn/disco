@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Dated model-routing operating decisions (Pi / MiniMax-via-Pi workers, “Fable only for verification”) that no longer reflect current practice.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # USAGE-PLAN — who does what after the bake-off
 
 Routing implemented 2026-06-10 from the decided conclusions in `bakeoff/SUMMARY.md`.

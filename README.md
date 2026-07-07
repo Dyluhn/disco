@@ -12,9 +12,11 @@ shape of the system.
 
 ## Status
 
-Disco is single-tenant software. There is no built-in auth layer yet; every
-conversation is scoped to the local owner. Keep the default loopback binding
-unless you put your own TLS and authentication in front of it.
+Disco is single-tenant software with a built-in auth layer: cookie sessions
+with CSRF protection, a single-use pairing-token mint, and owner-scoping of
+every conversation (see [`docs/disco-security-state.md`](./docs/disco-security-state.md)
+for the full security state). It is still local-first — keep the default
+loopback binding unless you put your own TLS in front of it.
 
 ### Surfaces
 
@@ -59,6 +61,16 @@ Four surfaces, one shared event log + agent core:
 - **AppKit builds** — generated React/Vite/TypeScript apps with Worker/D1 exports,
   Drizzle schema checks, a strict AppKit verifier, versioned previews, and
   owner-gated Cloudflare deploy routes.
+- **App primitives** — a primitive framework for generated apps: each primitive
+  is a registered definition (tier / host contract / spec schema / verify /
+  apply-spec) that the agent adds via the `app_add_primitive` tool — validate
+  spec → fold into the AppSpec → regenerate → provenance record — with a
+  fail-closed finish gate so unverified security-critical scaffolds cannot
+  ship. Shipped primitives: `form` (typed fields, server-side validation, D1
+  submissions table, owner inbox), `seo` (meta/OG/JSON-LD, sitemap.xml,
+  robots.txt), and `collection` (structured content collections).
+- **Design directions** — a 22-direction design library, with a numeric
+  design-constraint lint, behind the always-on art direction of generated sites.
 
 ### Known limits
 

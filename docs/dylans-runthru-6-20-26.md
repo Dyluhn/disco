@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era live-runthrough issue log, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Dylan's runthru — 2026-06-20 (DR → slides test session)
 
 10 issues surfaced in a live test (short Deep Research → make slides), each root-caused by a parallel tracer

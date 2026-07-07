@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era assist-pipeline → ModelExecutionPolicy refactor plan, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Assist-pipeline refactor → ModelExecutionPolicy (work-order plan)
 
 **Decision (Dylan, 2026-06-20):** FULL refactor in ONE pass. Codex architecture verdict =

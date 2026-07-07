@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Dated model-routing wiring notes (Pi / MiniMax-via-Pi era) that no longer reflect current practice.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Model routing — the wiring in force (2026-06-11)
 
 Basis: bakeoff/SUMMARY.md, RESULTS-verifier.md, RESULTS-vision.md,

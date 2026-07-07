@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Earlier snapshot of the disclaude PR / ship-ladder (near-duplicate of `docs/disclaude-pr-status.md`).
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # disclaude — build reliability + PR status report (2026-06-29)
 
 Scope: the disclaude experimental campaign — re-architecting "Disco Build" into a host-owned

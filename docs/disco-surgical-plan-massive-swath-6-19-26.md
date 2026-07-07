@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era pre-publish surgical-swath execution plan, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Disco — surgical execution plan: the pre-publish swath (2026-06-19)
 
 Grounded against current code on `build-surface-recovery-ux` by 8 parallel investigators.

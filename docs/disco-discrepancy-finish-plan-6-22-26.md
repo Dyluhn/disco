@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era finish-all-discrepancies plan, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Finish-all-discrepancies plan (2026-06-22)
 
 Closes every gap between "marker present" (commit 97ffbed) and "done + proven", across 4 tiers.

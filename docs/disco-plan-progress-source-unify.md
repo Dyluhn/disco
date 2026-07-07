@@ -1,3 +1,6 @@
+> **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era plan-progress source-unify fix plan, frozen mid-execution.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+
 # Fix: plan-completion reads `plan_step` only, ignores `update_plan_progress` (the #3 tool)
 
 Source: a bias-free dual investigation (mine + a neutral codex review) of the live DeepSeek build
