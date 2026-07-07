@@ -1791,12 +1791,13 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
             app_spec,
         ),
         "src/main.tsx": lower_analytics_main_tsx(_emit_main_tsx(), app_spec),
-        "src/App.tsx": lower_analytics_app_tsx(
+        # ONE route-aware shell builder wins: with blog present its shell already
+        # routes every host page (the analytics fold appends /analytics as a real
+        # Page); without blog the analytics lowering upgrades the plain shell.
+        "src/App.tsx": (
             emit_app_tsx_with_blog_routes(app_spec, names)
             if has_blog(app_spec)
-            else _emit_app_tsx(app_spec, names),
-            app_spec,
-            names,
+            else lower_analytics_app_tsx(_emit_app_tsx(app_spec, names), app_spec, names)
         ),
         "src/api/client.ts": _emit_api_client_ts(),
         "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
