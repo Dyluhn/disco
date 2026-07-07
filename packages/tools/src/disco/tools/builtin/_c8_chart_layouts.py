@@ -321,12 +321,21 @@ def _chart_fallback_pptx_table(
                 run.font.bold = True
                 run.font.size = Pt(11)
 
-    # Series rows
+    # Series rows — explicit theme fill/text (same dark-theme contrast fix as
+    # layout_table_slide_pptx; the default light banding is never trusted).
     for i, s in enumerate(spec.series):
         table.cell(i + 1, 0).text = str(s.get("name", ""))
         for j, v in enumerate(s.get("data", [])):
             if j + 1 < n_cols:
                 table.cell(i + 1, j + 1).text = str(v)
+        for j in range(n_cols):
+            cell = table.cell(i + 1, j)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _rgb(theme.surface_1)
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(11)
+                    run.font.color.rgb = _rgb(theme.text)
 
 
 def _chart_empty_placeholder(
@@ -445,11 +454,18 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     # Data rows. In the headerless case the first column carries the row labels
     # (dimension names in a comparison table), so bold it for scannability instead
     # of leaving a flat, hard-to-read grid.
+    # Cell fill is set EXPLICITLY from the theme: python-pptx's default table style
+    # is a light banded fill, so on a dark theme the near-white ``theme.text`` runs
+    # were invisible on the default light cells (gauntlet e-web 2026-07-07 — data
+    # rows unreadable). surface_1 + theme.text is self-consistent on any theme,
+    # matching the two_by_two quadrant treatment.
     for i, row in enumerate(data_rows):
         for j in range(n_cols):
             val = str(row[j]) if j < len(row) else ""
             cell = table.cell(i + row_offset, j)
             cell.text = val
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _rgb(theme.surface_1)
             for para in cell.text_frame.paragraphs:
                 for run in para.runs:
                     run.font.size = Pt(11)

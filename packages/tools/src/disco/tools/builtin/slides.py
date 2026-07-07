@@ -386,6 +386,22 @@ class SlidesTool:
     async def run(self, args: SlidesGenerateArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
 
+        # Filename hygiene (gauntlet e-web 2026-07-07): the driver passed
+        # filename='>residential-…' and every artifact landed with a literal '>'
+        # prefix — shell-hostile and invalid on Windows. Strip OS/shell-hostile
+        # characters and stray whitespace; '.' and '/' are deliberately left
+        # alone so the sandbox jail still sees (and rejects) traversal attempts.
+        clean = re.sub(r'[<>:"|?*\\\x00-\x1f]', "", args.filename).strip().strip("-")
+        if clean != args.filename:
+            args = args.model_copy(update={"filename": clean})
+        if not clean:
+            return ToolOutcome(
+                success=False,
+                content="filename is empty after removing invalid characters "
+                "(<>:\"|?* and control chars). Provide a plain base name like 'my-deck'.",
+                error="invalid filename",
+            )
+
         fmt = args.format.lower()
         if fmt not in ("html", "pdf", "pptx"):
             return ToolOutcome(
