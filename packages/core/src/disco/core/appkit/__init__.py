@@ -38,6 +38,7 @@ from .local_verify import (
     local_api_roundtrip,
 )
 from .primitives import (
+    COLLECTION_PRIMITIVE_ID,
     DIRECTORY_PRIMITIVE_ID,
     FORM_PRIMITIVE_ID,
     HELLO_PRIMITIVE_ID,
@@ -139,6 +140,7 @@ __all__ = [
     "CHOICE_PALETTE_SURFACE",
     "CHOICE_TYPOGRAPHY_BODY",
     "CHOICE_TYPOGRAPHY_HEADING",
+    "COLLECTION_PRIMITIVE_ID",
     "COVERED_KINDS",
     "DIRECTORY_PRIMITIVE_ID",
     "FORM_PRIMITIVE_ID",
