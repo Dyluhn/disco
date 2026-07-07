@@ -135,6 +135,13 @@ def create_app() -> Any:
             client = httpx.AsyncClient(timeout=600)
             req = client.build_request("POST", url, json=body, headers=auth)
             r = await client.send(req, stream=True)
+            if r.status_code >= 400:
+                # Surface the upstream rejection REASON — a bare 400 in the agent
+                # log is undiagnosable (gauntlet s-web deck run died opaque).
+                err_body = (await r.aread())[:600]
+                await r.aclose(); await client.aclose()
+                print(f"RELAY-UPSTREAM-ERROR {r.status_code} {err_body!r}", flush=True)
+                return JSONResponse(status_code=r.status_code, content={"error": {"message": err_body.decode('utf-8', 'replace'), "type": "upstream_error"}})
 
             async def gen() -> AsyncIterator[bytes]:
                 try:
@@ -151,6 +158,8 @@ def create_app() -> Any:
             )
         async with httpx.AsyncClient(timeout=600) as c:
             r = await c.post(url, json=body, headers=auth)
+        if r.status_code >= 400:
+            print(f"RELAY-UPSTREAM-ERROR {r.status_code} {r.text[:600]!r}", flush=True)
         return JSONResponse(status_code=r.status_code, content=r.json())
 
     return app
