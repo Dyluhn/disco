@@ -85,6 +85,24 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
     }
 )
 
+_FINISH_INTENT_RE = re.compile(
+    r"\b(?:finish(?:ing)?|finali[sz]e|complete|completion|done|ship|handoff|"
+    r"hand[\s-]?off|deliver|submit(?: the)? final|final answer|ready for "
+    r"verification|call finish)\b",
+    re.IGNORECASE,
+)
+_ACTIONABLE_BUILD_VERB_RE = re.compile(
+    r"\b(?:add(?:s|ed|ing)?|create(?:s|d)?|creating|build(?:s|ing)?|built|"
+    r"implement(?:s|ed|ing)?|writ(?:e|es|ing)|wrote|design(?:s|ed|ing)?|"
+    r"styl(?:e|es|ed|ing)|mak(?:e|es|ing)|made|configure(?:s|d)?|configuring|"
+    r"config|install(?:s|ed|ing)?|includ(?:e|es|ed|ing)|insert(?:s|ed|ing)?|"
+    r"append(?:s|ed|ing)?|generat(?:e|es|ed|ing)|develop(?:s|ed|ing)?|"
+    r"scaffold(?:s|ed|ing)?|integrat(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|"
+    r"fix(?:es|ed|ing)?|refactor(?:s|ed|ing)?|polish(?:es|ed|ing)?|setup|"
+    r"set[\s-]?up|wire[\s-]?up)\b",
+    re.IGNORECASE,
+)
+
 SYNTHETIC_FINISH_ATTEMPT_DETAIL = "synthetic_finish_attempted"
 
 
@@ -142,6 +160,69 @@ def productive_action_since_approval(events: list[Event]) -> bool:
             if e.id in successful_actions and e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
                 return True
     return False
+
+
+def _plan_approval_seqs(events: list[Event]) -> list[int]:
+    return [
+        e.seq or 0
+        for e in events
+        if isinstance(e, StatusEvent) and e.detail == "plan_approved"
+    ]
+
+
+def _step_is_finish_intent(step: PlanStep) -> bool:
+    text = f"{step.title} {step.detail or ''}".strip()
+    if not text:
+        return False
+    if _ACTIONABLE_BUILD_VERB_RE.search(text):
+        return False
+    return _FINISH_INTENT_RE.search(text) is not None
+
+
+def finish_intent_replan_after_prior_productive_work(events: list[Event]) -> bool:
+    """True for a re-plan that only tells the model to finish after earlier work.
+
+    The execution nudge is anchored to the latest ``plan_approved`` marker. That
+    is correct for a fresh plan, but a re-plan whose only remaining step is
+    completion/handoff can otherwise erase the productive work that happened in
+    the prior approved segment and deadlock on "plan not executed yet". This
+    predicate is intentionally narrow: it requires a prior approval segment with
+    successful productive work, and the latest plan's unfinished steps must be
+    finish-intent only. A genuinely never-executed plan therefore still returns
+    False and lands in the existing ``approve_plan_no_execution`` cap path.
+    """
+
+    approvals = _plan_approval_seqs(events)
+    if len(approvals) < 2:
+        return False
+    previous_approval_seq = approvals[-2]
+    latest_approval_seq = approvals[-1]
+
+    successful_actions = _successful_action_ids(events)
+    prior_productive = False
+    for event in events:
+        seq = event.seq or 0
+        if seq <= previous_approval_seq or seq >= latest_approval_seq:
+            continue
+        if _is_successful_productive_action(event, successful_actions):
+            prior_productive = True
+            break
+    if not prior_productive:
+        return False
+
+    plan, states = effective_plan_progress(events)
+    if plan is None or not plan.steps:
+        return False
+    plan_seq = plan.seq or 0
+    if plan_seq > latest_approval_seq or plan_seq <= previous_approval_seq:
+        return False
+
+    remaining = [
+        step
+        for index, step in enumerate(plan.steps, start=1)
+        if states.get(index) != "done"
+    ]
+    return bool(remaining) and all(_step_is_finish_intent(step) for step in remaining)
 
 
 def _is_successful_productive_action(

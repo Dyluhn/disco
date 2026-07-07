@@ -11,6 +11,7 @@ from .common import (
     _FinishGateProto,
     _DoDWorkspaceUnavailable,
     _LOG,
+    _appkit_scope_active,
     _deliverable_event_paths,
     _is_web_deliverable,
     _latest_plan_revision,
@@ -166,6 +167,9 @@ class _ContentGateMixin(_FinishGateProto):
         """
 
         if not self._loop._planning_tools or self._loop.mode == OperatingMode.PLANNING:
+            return True
+        if _appkit_scope_active(self._loop):
+            self._loop._dictated_content_refusals = 0
             return True
         current_revision = _latest_plan_revision(events)
         if current_revision is None:
@@ -525,6 +529,7 @@ class _ContentGateMixin(_FinishGateProto):
             self._loop._planning_tools  # plan-first lifecycle is configured
             and self._loop.mode != OperatingMode.PLANNING  # we're executing
             and not signals.productive_action_since_approval(events)
+            and not signals.finish_intent_replan_after_prior_productive_work(events)
         ):
             # W5 cap: after _EXECUTION_NUDGE_CAP nudges without productive
             # action, TERMINALIZE the run as a FAILURE — NOT a false FINISHED.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from disco.core import (
+    ActionEvent,
     MessageEvent,
     NoOpCondenser,
     ObservationEvent,
@@ -43,6 +44,20 @@ def _appkit_verdict(*, passed: bool, fp: str) -> dict:
     }
 
 
+def _appkit_primitive_fail_verdict() -> dict:
+    verdict = _appkit_verdict(passed=False, fp="primitive_verify:template_only")
+    verdict["summary"] = "primitive_verify:template_only FAILED"
+    verdict["next_action"] = "Replace the template-only primitive or add a verifier."
+    verdict["checks"] = [
+        {
+            "name": "primitive_verify:template_only",
+            "passed": False,
+            "evidence": "template_only primitives cannot ship without a verifier.",
+        }
+    ]
+    return verdict
+
+
 class AppKitVerifyExecutor(FakeExecutor):
     def __init__(self, verdicts):
         super().__init__(
@@ -74,7 +89,13 @@ class AppKitVerifyExecutor(FakeExecutor):
         return await super().execute(call)
 
 
-def _gate_loop(agent, executor):
+def _gate_loop(
+    agent,
+    executor,
+    *,
+    mode: OperatingMode = OperatingMode.LONG_HORIZON,
+    autonomous: bool = False,
+):
     store = SqliteEventStore(":memory:")
     loop = AgentLoop(
         "conv",
@@ -86,9 +107,10 @@ def _gate_loop(agent, executor):
         NeverConfirm(),
         NoOpCondenser(),
         FakeSummarizer(),
-        mode=OperatingMode.LONG_HORIZON,
+        mode=mode,
         planning_tools=frozenset({"submit_plan"}),
         host_verify_authoritative=False,
+        autonomous=autonomous,
     )
     return loop, store
 
@@ -172,6 +194,77 @@ async def test_appkit_build_finishes_on_appkit_pass_verdict() -> None:
 
 
 @pytest.mark.asyncio
+async def test_appkit_deadlock_sequence_replan_to_finish_terminates_cleanly() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(
+                tool="submit_plan",
+                args={
+                    "summary": "Build the AppKit app",
+                    "steps": [{"title": "Create the AppKit app"}],
+                },
+            ),
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            action_step(
+                tool="propose_plan_update",
+                args={
+                    "summary": "Finish the completed AppKit app",
+                    "steps": [{"title": "Finish and hand off the AppKit app"}],
+                },
+            ),
+            action_step(tool="finish", args={"summary": "done"}),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(
+        agent,
+        execu,
+        mode=OperatingMode.PLANNING,
+        autonomous=True,
+    )
+
+    await loop.send_message("Build the app using the 'editorial-ledger' recipe.")
+    state = await loop.run()
+
+    events = await store.get_events("conv")
+    statuses = _statuses(events)
+    env = _env(events)
+    assert state.execution_status.value == "FINISHED"
+    assert ("FINISHED", None) in statuses
+    assert not any(s in ("STUCK", "ERROR") for s, _ in statuses), statuses
+    assert not any("quoted user literal is missing" in m for m in env), env
+    assert not any("approved plan has not been executed" in m for m in env), env
+    assert execu.appkit_calls >= 1
+    assert all(call.tool_name != "shell" for call in execu.calls)
+
+
+@pytest.mark.asyncio
+async def test_appkit_finish_verify_arg_defers_to_appkit_verifier_without_shell() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            action_step(
+                tool="finish",
+                args={"summary": "done", "verify": "npm run build"},
+            ),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_verdict(passed=True, fp="CLEAN")])
+    loop, store = _gate_loop(agent, execu)
+
+    await loop.send_message("build me a lead-gen app")
+    await loop.run()
+
+    events = await store.get_events("conv")
+    assert execu.appkit_calls >= 1
+    assert all(call.tool_name != "shell" for call in execu.calls)
+    assert not any(
+        isinstance(e, ActionEvent) and e.tool_call.tool_name == "shell" for e in events
+    )
+    assert ("FINISHED", None) in _statuses(events)
+
+
+@pytest.mark.asyncio
 async def test_appkit_build_refuses_on_appkit_fail_verdict() -> None:
     agent = ScriptedAgent(
         [
@@ -188,3 +281,26 @@ async def test_appkit_build_refuses_on_appkit_fail_verdict() -> None:
     assert execu.appkit_calls >= 1
     assert execu.web_calls == 0
     assert any("verify_appkit_app did not pass" in m for m in _env(events)), _env(events)
+
+
+@pytest.mark.asyncio
+async def test_appkit_failing_primitive_verify_refuses_finish() -> None:
+    agent = ScriptedAgent(
+        [
+            action_step(tool="app_create", args={"recipe_id": "editorial-ledger"}),
+            finish_step(),
+        ]
+    )
+    execu = AppKitVerifyExecutor([_appkit_primitive_fail_verdict()])
+    loop, store = _gate_loop(agent, execu)
+
+    await loop.send_message("build me a lead-gen app")
+    state = await loop.run()
+
+    events = await store.get_events("conv")
+    env = _env(events)
+    statuses = _statuses(events)
+    assert state.execution_status.value != "FINISHED"
+    assert not any(s == "FINISHED" for s, _ in statuses), statuses
+    assert any("verify_appkit_app did not pass" in m for m in env), env
+    assert any("primitive_verify:template_only" in m for m in env), env
