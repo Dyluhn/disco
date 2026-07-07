@@ -20,7 +20,11 @@ from mcp.types import Tool as MCPTool
 from pydantic import BaseModel
 
 from ..anatomy import ToolDef
-from .approval import ApprovalRequired, compute_description_hash
+from .approval import (
+    ApprovalRequired,
+    compute_description_hash,
+    compute_server_config_hash,
+)
 from .config import McpServerConfig, McpSettings
 from .naming import qualified_name
 from .stdio import McpStdioClient
@@ -45,10 +49,12 @@ class McpPool:
         *,
         secrets: Any | None = None,  # SecretsStore
         approvals: dict[str, str] | None = None,  # server -> stored description_hash
+        server_config_approvals: dict[str, str] | None = None,
     ) -> None:
         self._settings = settings
         self._secrets = secrets
         self._approvals = dict(approvals or {})
+        self._server_config_approvals = dict(server_config_approvals or {})
         self._exit_stack = AsyncExitStack()
         self._clients: dict[str, McpStdioClient] = {}
         self._tools: dict[str, ToolDef] = {}  # qualified_name -> ToolDef
@@ -89,6 +95,7 @@ class McpPool:
                 continue
 
             try:
+                self._require_server_config_approval(name, srv)
                 await self._connect_stdio(name, srv)
             except ApprovalRequired as exc:
                 # D1: per-server refusal — mark the server, don't propagate.
@@ -102,6 +109,7 @@ class McpPool:
                 self._approval_pending[name] = {
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
+                    "kind": exc.kind,
                 }
                 # P1: teardown unapproved server — kill subprocess, remove from pool.
                 # The client is still registered in _clients (connected before the
@@ -155,14 +163,18 @@ class McpPool:
 
         # Compute the description hash and check approval
         tool_descs = [
-            {"name": t.name, "description": t.description or ""}
+            {
+                "name": t.name,
+                "description": t.description or "",
+                "inputSchema": t.inputSchema or {},
+            }
             for t in raw_tools
         ]
         new_hash = compute_description_hash(tool_descs)
 
         stored = self._approvals.get(name)
-        if stored is not None and stored != new_hash:
-            raise ApprovalRequired(name, stored, new_hash)
+        if stored is None or stored != new_hash:
+            raise ApprovalRequired(name, stored or "", new_hash, kind="tool_schema")
 
         # Build ToolDefs — only tools in allowed_tools (if set)
         allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None
@@ -189,10 +201,18 @@ class McpPool:
                 args_model=_schema_to_args_model(tool),
                 needs=frozenset(),
                 base_risk=srv.risk_tier,  # REQUIRED — not inferred
-                runs_in="sandbox",  # stdio always runs in sandbox (gVisor)
+                runs_in="in_process",  # stdio subprocess runs host-side, not in sandbox
                 read_only=False,  # MCP tools are not assumed read-only
                 uses_capabilities=frozenset(),
             )
+
+    def _require_server_config_approval(
+        self, name: str, srv: McpServerConfig
+    ) -> None:
+        new_hash = compute_server_config_hash(name, srv)
+        stored = self._server_config_approvals.get(name)
+        if stored is None or stored != new_hash:
+            raise ApprovalRequired(name, stored or "", new_hash, kind="server_config")
 
     def snapshot(self) -> list[ToolDef]:
         """The frozen list of ToolDefs for one conversation.

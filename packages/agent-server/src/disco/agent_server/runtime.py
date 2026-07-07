@@ -450,6 +450,16 @@ def _apply_mcp_scope(
         )
 
 
+def _mcp_base_risk_by_tool(all_mcp_tools: list[ToolDef]) -> dict[str, SecurityRisk]:
+    """Map MCP qualified tool names to their configured base risk."""
+    risks: dict[str, SecurityRisk] = {}
+    for t in all_mcp_tools:
+        base_risk = getattr(t, "base_risk", None)
+        if base_risk is not None:
+            risks[t.name] = base_risk
+    return risks
+
+
 def _build_appkit_registry() -> ToolRegistry:
     """Default registry plus AppKit-only tools for strict AppKit executors."""
     from disco.tools.builtin.app_kit import APPKIT_V2_TOOLS
@@ -2283,6 +2293,8 @@ class ConversationRuntime:
             # broker). The cap-handler cache is invalidated when the providers are
             # (re)built so the composition picks up the live set.
 
+        _mcp_risks = _mcp_base_risk_by_tool(all_mcp_tools)
+
         if sealed_workflow_run is not None:
             assert _workflow_phase is not None
             _workflow_phase.compiled_run_scope = compile_workflow_scope(
@@ -2339,7 +2351,7 @@ class ConversationRuntime:
                 agent,
                 executor,
                 router,
-                RuleBasedAnalyzer(),
+                RuleBasedAnalyzer(_mcp_risks),
                 NeverConfirm(),
                 LLMSummarizingCondenser(context_window=self._driver_context_window()),
                 RouterSummarizer(router),
@@ -2371,7 +2383,7 @@ class ConversationRuntime:
                 agent,
                 executor,
                 router,
-                RuleBasedAnalyzer(),
+                RuleBasedAnalyzer(_mcp_risks),
                 # No per-action approval for artifact ops — confinement + narrow scope
                 # are the blast-radius controls (NeverConfirm mirrors Research surface).
                 NeverConfirm(),
@@ -2390,9 +2402,12 @@ class ConversationRuntime:
                 host_verify_authoritative=host_verify_authoritative_enabled(),
             )
         _analyzer = (
-            RuleBasedAnalyzer({"request_custom_build": SecurityRisk.HIGH})
+            RuleBasedAnalyzer({
+                **_mcp_risks,
+                "request_custom_build": SecurityRisk.HIGH,
+            })
             if _appkit_mode
-            else RuleBasedAnalyzer()
+            else RuleBasedAnalyzer(_mcp_risks)
         )
         _planning_tools = frozenset(
             # read/explore + plan + `think`. `think` is a pure NO-OP reasoning

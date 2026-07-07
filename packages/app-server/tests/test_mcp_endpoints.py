@@ -18,6 +18,7 @@ from disco.app_server import create_app
 from disco.app_server.config_state import ConfigState
 from disco.core import SkillStore, SqliteEventStore
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.tools.mcp.migrations import set_mcp_approval_pending
 from fastapi.testclient import TestClient
 
 
@@ -54,6 +55,13 @@ def client(store: SqliteEventStore, tmp_path: Path) -> TestClient:
 
 def _hash(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
+
+
+def _pending_hash(client: TestClient, name: str) -> str:
+    row = next(c for c in client.get("/api/mcp").json() if c["name"] == name)
+    pending = row.get("new_description_hash")
+    assert isinstance(pending, str) and len(pending) == 64
+    return pending
 
 
 # ---- CRUD -------------------------------------------------------------------
@@ -142,18 +150,32 @@ def test_mcp_delete_removes_server(client):
 
 
 def test_mcp_approve_creates_approval_row(client):
-    """POST /approve creates an approval row; the server status flips to connected."""
+    """POST /approve stores the server-side config fingerprint."""
     client.post(
         "/api/mcp/servers",
         json={"name": "mysrv", "url": "https://tools.example.com", "transport": "streamable_http"},
     )
-    h = _hash("echo, add, read_file")
+    h = _pending_hash(client, "mysrv")
     resp = client.post("/api/mcp/servers/mysrv/approve", json={"description_hash": h})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["description_hash"] == h
+    assert data["description_hash"] is None
     assert data["approved_at"] is not None
     assert data["status"] == "connected"
+
+
+def test_mcp_approve_rejects_empty_hash_when_server_fingerprint_is_nonempty(client):
+    client.post(
+        "/api/mcp/servers",
+        json={
+            "name": "emptyhash",
+            "url": "https://tools.example.com",
+            "transport": "streamable_http",
+        },
+    )
+    resp = client.post("/api/mcp/servers/emptyhash/approve", json={"description_hash": ""})
+    assert resp.status_code == 400
+    assert "approval hash does not match" in resp.json()["detail"]
 
 
 def test_mcp_reapprove_mutates_single_row_not_second_insert(client, store):
@@ -163,7 +185,7 @@ def test_mcp_reapprove_mutates_single_row_not_second_insert(client, store):
         "/api/mcp/servers",
         json={"name": "srv", "url": "https://example.com", "transport": "streamable_http"},
     )
-    h1 = _hash("tool_a, tool_b")
+    h1 = _pending_hash(client, "srv")
     client.post("/api/mcp/servers/srv/approve", json={"description_hash": h1})
 
     # Count rows — should be exactly 1
@@ -174,6 +196,7 @@ def test_mcp_reapprove_mutates_single_row_not_second_insert(client, store):
 
     # Re-approve with a different hash
     h2 = _hash("tool_a, tool_b, tool_c")
+    set_mcp_approval_pending(store._conn, "srv", old_hash="", new_hash=h2)
     resp = client.post("/api/mcp/servers/srv/approve", json={"description_hash": h2})
     assert resp.status_code == 200
     assert resp.json()["description_hash"] == h2
@@ -189,6 +212,36 @@ def test_mcp_reapprove_mutates_single_row_not_second_insert(client, store):
         "SELECT description_hash FROM mcp_approvals WHERE server = ?", ("srv",)
     ).fetchone()[0]
     assert stored == h2
+
+
+def test_mcp_config_reapproval_takes_precedence_over_stale_tool_pending(client, store):
+    client.post(
+        "/api/mcp/servers",
+        json={"name": "srv", "url": "https://old.example.com", "transport": "streamable_http"},
+    )
+    h1 = _pending_hash(client, "srv")
+    client.post("/api/mcp/servers/srv/approve", json={"description_hash": h1})
+
+    stale_tool_hash = _hash("stale tool-schema drift")
+    set_mcp_approval_pending(store._conn, "srv", old_hash="", new_hash=stale_tool_hash)
+    patched = client.patch(
+        "/api/mcp/servers/srv",
+        json={"name": "srv", "url": "https://new.example.com", "transport": "streamable_http"},
+    )
+    assert patched.status_code == 200
+
+    row = next(c for c in client.get("/api/mcp").json() if c["name"] == "srv")
+    config_hash = row["new_description_hash"]
+    assert config_hash != stale_tool_hash
+
+    stale_resp = client.post(
+        "/api/mcp/servers/srv/approve",
+        json={"description_hash": stale_tool_hash},
+    )
+    assert stale_resp.status_code == 400
+    ok = client.post("/api/mcp/servers/srv/approve", json={"description_hash": config_hash})
+    assert ok.status_code == 200
+    assert ok.json()["description_hash"] is None
 
 
 def test_mcp_approve_nonexistent_server_is_404(client):
@@ -208,7 +261,7 @@ def test_mcp_approval_diff_returns_old_vs_new_hash(client, store):
         "/api/mcp/servers",
         json={"name": "diffsrv", "url": "https://example.com", "transport": "streamable_http"},
     )
-    h1 = _hash("old tools")
+    h1 = _pending_hash(client, "diffsrv")
     client.post("/api/mcp/servers/diffsrv/approve", json={"description_hash": h1})
 
     # Verify the approval row is there
@@ -217,10 +270,11 @@ def test_mcp_approval_diff_returns_old_vs_new_hash(client, store):
         ("diffsrv",),
     ).fetchone()
     assert row is not None
-    assert row[0] == h1
+    assert row[0] == ""
 
     # Now re-approve with new hash and verify the row mutates (not a second row)
     h2 = _hash("new tools")
+    set_mcp_approval_pending(store._conn, "diffsrv", old_hash="", new_hash=h2)
     client.post("/api/mcp/servers/diffsrv/approve", json={"description_hash": h2})
 
     # Verify old hash is gone, new one is stored
@@ -258,13 +312,13 @@ def test_mcp_connection_projection_includes_optional_fields(client):
             "risk_tier": "high",
         },
     )
-    h = _hash("tool_a, tool_b")
+    h = _pending_hash(client, "fullsrv")
     client.post("/api/mcp/servers/fullsrv/approve", json={"description_hash": h})
     listed = client.get("/api/mcp").json()
     srv = listed[0]
     assert srv["transport"] == "streamable_http"
     assert srv["risk_tier"] == "high"
-    assert srv["description_hash"] == h
+    assert srv["description_hash"] is None
     assert srv["approved_at"] is not None
     assert srv["enabled"] is True
     assert srv["status"] == "connected"

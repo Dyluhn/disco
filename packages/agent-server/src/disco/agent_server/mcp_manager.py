@@ -123,11 +123,17 @@ class McpManager:
 
         # Read existing approvals from the DB (D1: security gate production path)
         approvals: dict[str, str] = {}
+        server_config_approvals: dict[str, str] = {}
         try:
             conn = getattr(self._rt._store, "_conn", None)
             if conn is not None:
                 for row in list_mcp_approvals(conn):
-                    approvals[row["server"]] = row["description_hash"]
+                    if row.get("description_hash"):
+                        approvals[row["server"]] = row["description_hash"]
+                    if row.get("server_config_hash"):
+                        server_config_approvals[row["server"]] = row[
+                            "server_config_hash"
+                        ]
         except Exception:
             _LOG.warning("MCP pool: failed to read approvals from DB", exc_info=True)
 
@@ -141,7 +147,11 @@ class McpManager:
         http_servers: dict[str, McpServerConfig] = {}
         stdio_servers: dict[str, McpServerConfig] = {}
         for name, srv_raw in mcp_cfg.servers.items():
-            srv = TypedMcpServerConfig.model_validate({"name": name, **srv_raw})
+            typed_raw = {"name": name, **srv_raw}
+            risk = typed_raw.get("risk_tier")
+            if isinstance(risk, str):
+                typed_raw["risk_tier"] = risk.upper()
+            srv = TypedMcpServerConfig.model_validate(typed_raw)
             if srv.transport == "streamable_http":
                 http_servers[name] = srv
             else:
@@ -155,7 +165,10 @@ class McpManager:
                 max_active_schemas=mcp_cfg.max_active_schemas,
             )
             self._rt._mcp_pool = McpPool(
-                typed, secrets=self._rt._secret_store, approvals=approvals
+                typed,
+                secrets=self._rt._secret_store,
+                approvals=approvals,
+                server_config_approvals=server_config_approvals,
             )
             try:
                 await self._rt._mcp_pool.start()
@@ -185,7 +198,7 @@ class McpManager:
                         "(old=%s… new=%s…)",
                         name, old_hash[:12], new_hash[:12],
                     )
-                    if pending_db_conn is not None and old_hash and new_hash:
+                    if pending_db_conn is not None and new_hash:
                         try:
                             from disco.tools.mcp.migrations import (
                                 set_mcp_approval_pending,
@@ -208,7 +221,9 @@ class McpManager:
                 continue
 
             try:
-                await self._connect_http(name, srv, approvals)
+                await self._connect_http(
+                    name, srv, approvals, server_config_approvals
+                )
             except ApprovalRequired as exc:
                 _LOG.warning(
                     "McpPool: HTTP server %r refused — description_hash changed "
@@ -218,6 +233,7 @@ class McpManager:
                 self._rt._mcp_approval_pending[name] = {
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
+                    "kind": exc.kind,
                 }
                 # E6: same drift-persistence path as the stdio branch — write
                 # the AUTHORITATIVE new_hash the live HTTP server advertised to
@@ -261,15 +277,24 @@ class McpManager:
         name: str,
         srv: McpServerConfig,
         approvals: dict[str, str],
+        server_config_approvals: dict[str, str],
     ) -> None:
         """Connect one HTTP MCP server, build ToolDefs, verify approval hash."""
         from disco.tools.mcp.approval import (
             ApprovalRequired,
             compute_description_hash,
+            compute_server_config_hash,
         )
         from disco.tools.mcp.http import McpHttpClient
         from disco.tools.mcp.naming import qualified_name
         from disco.tools.mcp.pool import _UNTRUSTED_DESC_WRAPPER, _schema_to_args_model
+
+        config_hash = compute_server_config_hash(name, srv)
+        stored_config = server_config_approvals.get(name)
+        if stored_config is None or stored_config != config_hash:
+            raise ApprovalRequired(
+                name, stored_config or "", config_hash, kind="server_config"
+            )
 
         if srv.url and not self._mcp_origin_approved(name, srv):
             raise RuntimeError("MCP HTTP origin is not operator-approved")
@@ -297,14 +322,18 @@ class McpManager:
 
         # Compute the description hash and check approval
         tool_descs = [
-            {"name": t.name, "description": t.description or ""}
+            {
+                "name": t.name,
+                "description": t.description or "",
+                "inputSchema": t.inputSchema or {},
+            }
             for t in raw_tools
         ]
         new_hash = compute_description_hash(tool_descs)
 
         stored = approvals.get(name)
-        if stored is not None and stored != new_hash:
-            raise ApprovalRequired(name, stored, new_hash)
+        if stored is None or stored != new_hash:
+            raise ApprovalRequired(name, stored or "", new_hash, kind="tool_schema")
 
         # Build ToolDefs
         allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None

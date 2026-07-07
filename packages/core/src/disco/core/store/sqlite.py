@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS mcp_approvals (
     -- re-approval). The PK is the server name (matching McpServerConfig.name).
     server          TEXT PRIMARY KEY,
     description_hash TEXT NOT NULL,
+    server_config_hash TEXT,
     approved_at     TEXT NOT NULL,  -- ISO-8601
     approved_by     TEXT NOT NULL   -- operator username
 );

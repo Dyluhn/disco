@@ -497,23 +497,27 @@ def test_mcp_approval_persists_via_production_default_wiring(store, tmp_path, mo
     )
     assert created.status_code == 201, created.text
 
-    h = "a" * 64
+    h = next(c for c in client.get("/api/mcp").json() if c["name"] == "prod")[
+        "new_description_hash"
+    ]
     approved = client.post("/api/mcp/servers/prod/approve", json={"description_hash": h})
     assert approved.status_code == 200, approved.text  # was a 500 before the fix
-    assert approved.json()["description_hash"] == h
+    assert approved.json()["description_hash"] is None
 
     # The approval actually persisted to the shared SQLite mcp_approvals table
     # (the table the core SqliteEventStore schema already creates).
     rows = store._conn.execute(
-        "SELECT description_hash FROM mcp_approvals WHERE server = ?", ("prod",)
+        "SELECT description_hash, server_config_hash FROM mcp_approvals WHERE server = ?",
+        ("prod",),
     ).fetchall()
     assert len(rows) == 1
-    assert rows[0]["description_hash"] == h
+    assert rows[0]["description_hash"] == ""
+    assert rows[0]["server_config_hash"] == h
 
     # …and the live projection now reports it as approved/connected.
     listed = client.get("/api/mcp").json()
     srv = next(c for c in listed if c["name"] == "prod")
-    assert srv["description_hash"] == h
+    assert srv["description_hash"] is None
     assert srv["status"] == "connected"
 
 

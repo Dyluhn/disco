@@ -46,6 +46,32 @@ class TestComputeDescriptionHash:
         ])
         assert h1 != h2
 
+    def test_same_description_different_schema_produces_different_hash(self):
+        """A changed inputSchema → different hash."""
+        h1 = compute_description_hash([
+            {
+                "name": "echo",
+                "description": "Echo back a message",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}},
+                    "required": ["message"],
+                },
+            },
+        ])
+        h2 = compute_description_hash([
+            {
+                "name": "echo",
+                "description": "Echo back a message",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        ])
+        assert h1 != h2
+
     def test_empty_tool_list_produces_valid_hash(self):
         """An empty tool list produces a valid SHA-256 hex string."""
         h = compute_description_hash([])

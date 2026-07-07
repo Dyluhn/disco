@@ -15,6 +15,7 @@ import pytest
 from disco.core import SecurityRisk
 from disco.tools.mcp.approval import (
     compute_description_hash,
+    compute_server_config_hash,
 )
 from disco.tools.mcp.config import McpServerConfig, McpSettings
 from disco.tools.mcp.migrations import (
@@ -45,13 +46,83 @@ def _fake_stdio_server_config(
     )
 
 
+def _fake_tool_descs() -> list[dict]:
+    return [
+        {
+            "name": "echo",
+            "description": "Echo back the message",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"message": {"type": "string"}},
+                "required": ["message"],
+            },
+        },
+        {
+            "name": "add",
+            "description": "Add two numbers together",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"},
+                },
+                "required": ["a", "b"],
+            },
+        },
+        {
+            "name": "read_file",
+            "description": "Read a file from the server temp dir",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+        {
+            "name": "list_files",
+            "description": "List files in the temp dir",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "get_env",
+            "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
+        },
+    ]
+
+
+def _fake_tool_hash() -> str:
+    return compute_description_hash(_fake_tool_descs())
+
+
 def _make_pool(
     servers: dict[str, McpServerConfig] | None = None,
     approvals: dict[str, str] | None = None,
+    server_config_approvals: dict[str, str] | None = None,
 ) -> McpPool:
     """Build a pool with the given servers, optionally pre-approved."""
-    settings = McpSettings(enabled=True, servers=servers or {})
-    return McpPool(settings, approvals=approvals)
+    actual_servers = servers or {}
+    if approvals is None:
+        approvals = {
+            name: _fake_tool_hash()
+            for name, srv in actual_servers.items()
+            if srv.transport == "stdio"
+        }
+    if server_config_approvals is None:
+        server_config_approvals = {
+            name: compute_server_config_hash(name, srv)
+            for name, srv in actual_servers.items()
+        }
+    settings = McpSettings(enabled=True, servers=actual_servers)
+    return McpPool(
+        settings,
+        approvals=approvals,
+        server_config_approvals=server_config_approvals,
+    )
 
 
 @pytest.mark.asyncio
@@ -170,19 +241,7 @@ async def test_pool_approval_match_does_not_raise():
     """When the stored approval hash matches the current tools, start
     proceeds and the server is 'connected'."""
     srv = _fake_stdio_server_config()
-    # Compute the expected hash from the RAW tool descriptions (not the fenced
-    # ones in ToolDef). The pool hashes the original MCP tool descriptions.
-    raw_tool_descs = [
-        {"name": "echo", "description": "Echo back the message"},
-        {"name": "add", "description": "Add two numbers together"},
-        {"name": "read_file", "description": "Read a file from the server temp dir"},
-        {"name": "list_files", "description": "List files in the temp dir"},
-        {
-            "name": "get_env",
-            "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
-        },
-    ]
-    expected_hash = compute_description_hash(raw_tool_descs)
+    expected_hash = _fake_tool_hash()
 
     # Start a pool with the correct approval hash
     pool = _make_pool(
@@ -204,6 +263,7 @@ async def test_pool_approval_from_real_db_table():
     """D1: The production path — pool started with approvals read from a
     real mcp_approvals table row. A description mismatch marks the server
     as approval_required (not a hand-constructed approvals dict)."""
+    srv = _fake_stdio_server_config()
     # Create an in-memory SQLite DB with the mcp_approvals table
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -220,19 +280,25 @@ async def test_pool_approval_from_real_db_table():
         conn,
         "fake_srv",
         "0000000000000000000000000000000000000000000000000000000000000000",
+        server_config_hash=compute_server_config_hash("fake_srv", srv),
     )
 
     # Read approvals the production way (as _start_mcp_pool does)
     approvals: dict[str, str] = {}
+    server_config_approvals: dict[str, str] = {}
     for row in list_mcp_approvals(conn):
         approvals[row["server"]] = row["description_hash"]
+        server_config_approvals[row["server"]] = row["server_config_hash"]
     assert approvals == {
         "fake_srv": "0000000000000000000000000000000000000000000000000000000000000000"
     }
 
     # Start pool with approvals from the DB — same path as _start_mcp_pool
-    srv = _fake_stdio_server_config()
-    pool = _make_pool({"fake_srv": srv}, approvals=approvals)
+    pool = _make_pool(
+        {"fake_srv": srv},
+        approvals=approvals,
+        server_config_approvals=server_config_approvals,
+    )
     try:
         await pool.start()
         # The mismatch is detected via the real DB-loaded approval
@@ -248,24 +314,25 @@ async def test_pool_approval_from_real_db_table():
         await pool.aclose()
 
     # Now store the CORRECT hash and verify it works
-    raw_tool_descs = [
-        {"name": "echo", "description": "Echo back the message"},
-        {"name": "add", "description": "Add two numbers together"},
-        {"name": "read_file", "description": "Read a file from the server temp dir"},
-        {"name": "list_files", "description": "List files in the temp dir"},
-        {
-            "name": "get_env",
-            "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
-        },
-    ]
-    correct_hash = compute_description_hash(raw_tool_descs)
-    create_mcp_approval(conn, "fake_srv", correct_hash)
+    correct_hash = _fake_tool_hash()
+    create_mcp_approval(
+        conn,
+        "fake_srv",
+        correct_hash,
+        server_config_hash=compute_server_config_hash("fake_srv", srv),
+    )
 
     approvals2: dict[str, str] = {}
+    server_config_approvals2: dict[str, str] = {}
     for row in list_mcp_approvals(conn):
         approvals2[row["server"]] = row["description_hash"]
+        server_config_approvals2[row["server"]] = row["server_config_hash"]
 
-    pool2 = _make_pool({"fake_srv": srv}, approvals=approvals2)
+    pool2 = _make_pool(
+        {"fake_srv": srv},
+        approvals=approvals2,
+        server_config_approvals=server_config_approvals2,
+    )
     try:
         await pool2.start()
         assert pool2.started is True
@@ -277,16 +344,23 @@ async def test_pool_approval_from_real_db_table():
 
 
 @pytest.mark.asyncio
-async def test_pool_approval_db_no_row_means_first_time():
-    """When there is no approval row in the DB, the pool starts normally
-    (first-time setup — no approval to check against)."""
+async def test_pool_approval_db_no_row_requires_first_time_approval():
+    """When there is no approval row, the pool refuses before discovery."""
     srv = _fake_stdio_server_config()
-    pool = _make_pool({"fake_srv": srv}, approvals={})  # empty approvals
+    pool = _make_pool(
+        {"fake_srv": srv},
+        approvals={},
+        server_config_approvals={},
+    )
     try:
         await pool.start()
         assert pool.started is True
         status = pool.server_status()
-        assert status["fake_srv"] == "connected"
+        assert status["fake_srv"] == "approval_required"
+        assert pool.snapshot() == []
+        pending = pool.approval_pending()["fake_srv"]
+        assert pending["kind"] == "server_config"
+        assert pending["old_hash"] == ""
     finally:
         await pool.aclose()
 

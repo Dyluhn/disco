@@ -867,6 +867,7 @@ class ConfigState:
         pending = self._mcp_approval_pending()
         out: list[McpConnectionDTO] = []
         for name, srv in cfg.servers.items():
+            config_hash = self._mcp_server_config_hash(name, srv)
             url = (
                 srv.get("url", "") or srv.get("command", [""])[0]
                 if srv.get("command")
@@ -874,19 +875,24 @@ class ConfigState:
             )
             ap = approvals.get(name)
             pd = pending.get(name)
+            stored_config_hash = ap.get("server_config_hash") if ap else None
+            config_pending = config_hash if stored_config_hash != config_hash else None
+            new_hash = (
+                config_pending
+                if config_pending is not None
+                else (pd["new_hash"] if pd else None)
+            )
+            description_hash = ap["description_hash"] if ap and ap["description_hash"] else None
             out.append(
                 McpConnectionDTO(
                     id=name,
                     name=name,
                     url=url,
-                    status=_mcp_live_status(ap),
+                    status="approval_required" if new_hash else _mcp_live_status(ap),
                     transport=srv.get("transport"),
                     risk_tier=srv.get("risk_tier"),
-                    description_hash=ap["description_hash"] if ap else None,
-                    # E6: pass the AUTHORITATIVE new_hash through verbatim —
-                    # NEVER recompute here, the backend is the source of
-                    # truth. None when the server is in sync.
-                    new_description_hash=pd["new_hash"] if pd else None,
+                    description_hash=description_hash,
+                    new_description_hash=new_hash,
                     approved_at=ap["approved_at"] if ap else None,
                     enabled=srv.get("enabled", True),
                 )
@@ -970,17 +976,47 @@ class ConfigState:
         return True
 
     def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
-        """Approve or re-approve — mutates the single row, never inserts a second."""
+        """Approve or re-approve — mutates the single row, never trusts client hashes."""
         cfg = self._mcp_config()
         if name not in cfg.servers:
             raise KeyError(f"unknown server {name!r}")
         if self._db_conn is None:
             raise RuntimeError("no DB connection for approval persistence")
-        from disco.tools.mcp.migrations import create_mcp_approval, get_mcp_approval
+        from disco.tools.mcp.migrations import (
+            create_mcp_approval,
+            get_mcp_approval,
+            get_mcp_approval_pending,
+        )
 
-        create_mcp_approval(self._db_conn, name, body.description_hash)
+        srv = cfg.servers[name]
+        config_hash = self._mcp_server_config_hash(name, srv)
+        existing = get_mcp_approval(self._db_conn, name)
+        stored_config_hash = (existing or {}).get("server_config_hash")
+        config_pending = stored_config_hash != config_hash
+        pending = None if config_pending else get_mcp_approval_pending(self._db_conn, name)
+        expected = (
+            config_hash
+            if config_pending
+            else (pending["new_hash"] if pending else config_hash)
+        )
+        if body.description_hash != expected:
+            raise ValueError("approval hash does not match the server-side fingerprint")
+        description_hash = (
+            pending["new_hash"]
+            if pending
+            else ((existing or {}).get("description_hash") or "")
+        )
+        create_mcp_approval(
+            self._db_conn,
+            name,
+            description_hash,
+            server_config_hash=config_hash,
+        )
         ap = get_mcp_approval(self._db_conn, name)
-        srv = cfg.servers[name]; _origin_wiring.approve_mcp_server_origin(self._store, self._secrets, name, srv)
+        _origin_wiring.approve_mcp_server_origin(
+            self._store, self._secrets, name, srv
+        )
+        description = ap["description_hash"] if ap and ap["description_hash"] else None
         return McpConnectionDTO(
             id=name,
             name=name,
@@ -988,12 +1024,23 @@ class ConfigState:
             status=_mcp_live_status(ap),
             transport=srv.get("transport"),
             risk_tier=srv.get("risk_tier"),
-            description_hash=ap["description_hash"] if ap else None,
+            description_hash=description,
             approved_at=ap["approved_at"] if ap else None,
             enabled=srv.get("enabled", True),
         )
 
     def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]: return _origin_wiring.mcp_secret_refs(srv)
+
+    def _mcp_server_config_hash(self, name: str, srv: dict) -> str:
+        from disco.tools.mcp.approval import compute_server_config_hash
+        from disco.tools.mcp.config import McpServerConfig as TypedMcpServerConfig
+
+        raw = {"name": name, **srv}
+        risk = raw.get("risk_tier")
+        if isinstance(risk, str):
+            raw["risk_tier"] = risk.upper()
+        typed = TypedMcpServerConfig.model_validate(raw)
+        return compute_server_config_hash(name, typed)
 
     def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
         """Return old-vs-new hash diff for the approve UI. None = no diff or no

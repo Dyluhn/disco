@@ -15,6 +15,7 @@ from disco.core import SecurityRisk
 from disco.tools.mcp.approval import (
     ApprovalRequired,
     compute_description_hash,
+    compute_server_config_hash,
 )
 from disco.tools.mcp.config import McpServerConfig, McpSettings
 from disco.tools.mcp.pool import McpPool
@@ -39,16 +40,56 @@ def _fake_stdio_server_config(name: str = "test_srv") -> McpServerConfig:
 
 # Pre-computed hashes for the FakeStdioServer tools (deterministic).
 _FAKE_SERVER_RAW_TOOLS = [
-    {"name": "echo", "description": "Echo back the message"},
-    {"name": "add", "description": "Add two numbers together"},
-    {"name": "read_file", "description": "Read a file from the server temp dir"},
-    {"name": "list_files", "description": "List files in the temp dir"},
+    {
+        "name": "echo",
+        "description": "Echo back the message",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "add",
+        "description": "Add two numbers together",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "a": {"type": "integer"},
+                "b": {"type": "integer"},
+            },
+            "required": ["a", "b"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Read a file from the server temp dir",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "list_files",
+        "description": "List files in the temp dir",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     {
         "name": "get_env",
         "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
     },
 ]
 _FAKE_SERVER_EXPECTED_HASH = compute_description_hash(_FAKE_SERVER_RAW_TOOLS)
+
+
+def _server_config_approval(name: str, srv: McpServerConfig) -> dict[str, str]:
+    return {name: compute_server_config_hash(name, srv)}
 
 
 @pytest.mark.asyncio
@@ -73,6 +114,7 @@ async def test_poisoning_approval_mismatch_real_pool():
     pool1 = McpPool(
         McpSettings(enabled=True, servers={"poison_srv": srv}),
         approvals={"poison_srv": _FAKE_SERVER_EXPECTED_HASH},
+        server_config_approvals=_server_config_approval("poison_srv", srv),
     )
     try:
         await pool1.start()
@@ -93,6 +135,7 @@ async def test_poisoning_approval_mismatch_real_pool():
     pool2 = McpPool(
         McpSettings(enabled=True, servers={"poison_srv": srv}),
         approvals={"poison_srv": poison_hash},
+        server_config_approvals=_server_config_approval("poison_srv", srv),
     )
     try:
         await pool2.start()
@@ -134,6 +177,10 @@ async def test_poisoning_two_servers_one_poisoned():
         approvals={
             "good_srv": _FAKE_SERVER_EXPECTED_HASH,
             "bad_srv": "b" * 64,  # poisoned
+        },
+        server_config_approvals={
+            "good_srv": compute_server_config_hash("good_srv", good_srv),
+            "bad_srv": compute_server_config_hash("bad_srv", bad_srv),
         },
     )
     try:
