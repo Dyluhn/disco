@@ -20,7 +20,7 @@ Covers:
   * hello compatibility — seo folded onto a hello app changes only the spec
     (hello's generate ignores it, tree byte-identical);
   * the standalone `seo` primitive registration stub (registered, addable,
-    fillable, verify=None, minimal generate that ignores `app.seo`).
+    fillable, real verify hook, minimal generate that ignores `app.seo`).
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from disco.core.appkit.primitives import (
     resolve_primitive,
 )
 from disco.core.appkit.recipes import SiteRecipe
-from disco.core.appkit.seo_primitive import SeoSpec, apply_seo_spec, generate_seo
+from disco.core.appkit.seo_primitive import SeoSpec, apply_seo_spec, generate_seo, seo_verify
 from disco.core.appkit.spec import (
     AppSpec,
     DesignSpec,
@@ -339,7 +339,7 @@ def test_seo_primitive_registered_addable_and_minimal() -> None:
     assert prim.tier == "fillable"
     assert prim.host_contract == ()
     assert prim.spec_schema is SeoSpec
-    assert prim.verify is None
+    assert prim.verify is seo_verify
     assert prim.apply_spec is apply_seo_spec
 
     app = prim.default_app_spec("Meta Proof", _recipe())

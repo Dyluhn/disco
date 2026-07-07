@@ -9,6 +9,8 @@ Covers:
     apps used to fail the lead-gen bundle);
   * a broken hello tree (headline edited away) FAILS hello_headline AND the
     `primitive_verify:hello` record check (evidence names the failing sub-check);
+  * a lead_gen app with an applied form record runs the form verify hook and lands a
+    PASSING `primitive_verify:form` check;
   * a template_only primitive with verify=None applied to the app → the
     `primitive_verify:<id>` check FAILS the verdict (fail-closed: cannot ship
     unverified);
@@ -123,7 +125,7 @@ class _VerifySandbox:
             if not path.startswith(prefix):
                 continue
             matched = True
-            remainder = path[len(prefix):]
+            remainder = path[len(prefix) :]
             children.add(remainder.split("/", 1)[0] if "/" in remainder else remainder)
         if not matched and rel != "":
             raise FileNotFoundError(rel)
@@ -160,7 +162,7 @@ def stub_browser(monkeypatch):
                 "elements": [],
                 "console": [],
                 "network": [],
-                "appkit_sections": [],
+                "appkit_sections": ["hero", "features", "contact", "quote_request", "footer"],
                 "screenshot_path": ".pmx/screenshots/0001-navigate.png",
             },
         )
@@ -194,6 +196,36 @@ async def _hello_workspace(*applied: tuple[str, str]) -> dict[str, bytes]:
             _ctx(sbx),
         )
         assert added.success, added.content
+    return dict(sbx._fs)
+
+
+async def _form_workspace() -> dict[str, bytes]:
+    sbx = FakeSandboxInstance()
+    created = await AppCreateTool().run(
+        AppCreateArgs(recipe_id="editorial-ledger", primitive_id="lead_gen", brief="Acme Studio"),
+        _ctx(sbx),
+    )
+    assert created.success, created.content
+    added = await AppAddPrimitiveTool().run(
+        AppAddPrimitiveArgs(
+            primitive_id="form",
+            spec={
+                "form_id": "quote_request",
+                "title": "Request a quote",
+                "fields": [
+                    {
+                        "name": "email",
+                        "label": "Email",
+                        "kind": "email",
+                        "required": True,
+                    }
+                ],
+                "success_message": "Thanks, we will respond shortly.",
+            },
+        ),
+        _ctx(sbx),
+    )
+    assert added.success, added.content
     return dict(sbx._fs)
 
 
@@ -237,6 +269,15 @@ async def test_hello_app_without_applied_records_has_no_record_checks(stub_brows
     v = await _verify(files)
     names = set(_checks_by_name(v))
     assert not any(n.startswith("primitive_verify:") for n in names)
+    assert v["passed"] is True, v["summary"]
+
+
+async def test_applied_form_record_runs_form_verify_hook(stub_browser):
+    files = await _form_workspace()
+    v = await _verify(files)
+    checks = _checks_by_name(v)
+    assert checks["primitive_verify:form"]["passed"] is True
+    assert checks["primitive_verify:form"]["evidence"] == "4 passed / 0 failed"
     assert v["passed"] is True, v["summary"]
 
 
@@ -284,9 +325,7 @@ async def test_template_only_with_passing_verify_passes(stub_browser):
 async def test_stale_unknown_primitive_record_fails_closed(stub_browser):
     files = await _hello_workspace()
     stale = {"primitive_id": "wo_a3_ghost_primitive", "tier": "template_only", "spec": {}}
-    files[".disco/primitives/wo_a3_ghost_primitive.json"] = (
-        json.dumps(stale).encode("utf-8")
-    )
+    files[".disco/primitives/wo_a3_ghost_primitive.json"] = json.dumps(stale).encode("utf-8")
     v = await _verify(files)
     checks = _checks_by_name(v)
     record_check = checks["primitive_verify:wo_a3_ghost_primitive"]

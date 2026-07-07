@@ -1,5 +1,5 @@
 """The AppKit `form` primitive (Epic F3.1, scaffold half): a declarative,
-validated form that folds into an existing lead_gen-shaped Cloudflare/D1 app.
+validated form that folds into an existing Cloudflare/D1 app.
 
 An ADD-ON primitive, not a base scaffold: `app_add_primitive` validates a
 `FormSpec`, `apply_form_spec` folds it into the AppSpec (a submissions Entity +
@@ -14,18 +14,19 @@ The generated surface per form:
 
 * a D1 submissions table in `schema.sql` (+ the matching Drizzle table in
   `src/db/schema.ts`);
-* a Worker `POST /api/<table>` route whose validation MIRRORS the declared field
-  kinds + required flags (422 on any mismatch — the generalization of lead_gen's
-  capture route, which keeps its own byte-identical 400 contract);
+* a Worker submission route whose validation MIRRORS the declared field kinds +
+  required flags (422 on any mismatch — the generalization of lead_gen's capture
+  route, which keeps its own byte-identical 400 contract);
 * a React form component with one control per field (text/email/textarea/
   number/checkbox), inline required validation, and the spec'd success message.
 
-Host scope (deliberate): only apps that LOWER THROUGH the lead_gen base
-primitive (canonical `lead_gen` plus the legacy fallback kinds). `directory` is
-a static site with no D1 data plane, and `records` already owns every
-`/api/<table>` route with its own validation contract — folding a second,
-differently-contracted route for the same entity would require records-worker
-surgery, not a parameterized reuse. Both are REFUSED with guidance.
+Host scope (deliberate): `lead_gen` and legacy fallback kinds keep the original
+`POST /api/<table>` form route; `records` apps use `POST /api/forms/<form_id>` so
+records keeps exclusive ownership of `/api/<table>` CRUD routes. `directory` is
+still refused because it is a static site with no D1/Worker data plane; silently
+adding a form there would require upgrading the app shape and all deploy/verify
+contracts, not just folding a section. `hello` is also refused: it is the
+mount-proof primitive.
 
 SECURITY SCOPE — READ THIS: this scaffold has NO spam protection, NO captcha,
 NO rate limiting, and NO upload handling. The `template_only` tier upgrade and
@@ -51,6 +52,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .primitives import (
     FORM_PRIMITIVE_ID,
     LEAD_GEN_PRIMITIVE_ID,
+    RECORDS_PRIMITIVE_ID,
     PrimitiveDefinition,
     register_primitive,
     resolve_primitive,
@@ -238,12 +240,25 @@ def apply_form_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
         raise TypeError(f"apply_spec for {FORM_PRIMITIVE_ID!r} needs a FormSpec")
 
     base = resolve_primitive(app.app_kind)
-    if base.id != LEAD_GEN_PRIMITIVE_ID:
+    if base.id not in {LEAD_GEN_PRIMITIVE_ID, RECORDS_PRIMITIVE_ID}:
+        if base.id == "directory":
+            raise ValueError(
+                "the form primitive cannot fold into directory apps yet: directory is "
+                "a static site with no D1 binding, schema.sql data plane, or dynamic "
+                "submission Worker route. Supported hosts are lead_gen-shaped apps and "
+                "records apps; directory support must first upgrade the app shape to emit "
+                "a Worker + D1 schema for the form instead of shipping a build that cannot "
+                "verify or deploy."
+            )
+        if base.id == "hello":
+            raise ValueError(
+                "the form primitive cannot fold into hello apps: hello is the "
+                "mount-proof minimal primitive, not a Cloudflare/D1 host. Create a "
+                "lead_gen or records app first, then add the form primitive."
+            )
         raise ValueError(
-            f"the form primitive currently folds only into lead_gen-shaped apps; "
-            f"this app's app_kind {app.app_kind!r} lowers through {base.id!r}. "
-            "('directory' is a static site with no D1 data plane; 'records' already "
-            "owns every /api/<table> route with its own validation contract.)"
+            f"the form primitive can fold only into lead_gen-shaped apps or records "
+            f"apps; this app's app_kind {app.app_kind!r} lowers through {base.id!r}."
         )
     if not app.pages:
         raise ValueError("the app has no pages to place the form section on")
@@ -254,22 +269,19 @@ def apply_form_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
     elif spec.page_id in page_ids:
         target_page_id = spec.page_id
     else:
-        raise ValueError(
-            f"unknown page_id {spec.page_id!r}; known page ids: {', '.join(page_ids)}"
-        )
+        raise ValueError(f"unknown page_id {spec.page_id!r}; known page ids: {', '.join(page_ids)}")
 
     if any(e.id == spec.form_id for e in app.entities):
         raise ValueError(
             f"an entity with id {spec.form_id!r} already exists in this app — "
             "the form was likely already added; pick another form_id"
         )
-    from .generator import resolve_lead_entity
-
-    table = _entity_table(
-        Entity(id=spec.form_id, name=spec.title, fields=())
-    )
+    table = _entity_table(Entity(id=spec.form_id, name=spec.title, fields=()))
     taken_tables = {_entity_table(e) for e in app.entities}
-    taken_tables.add(_entity_table(resolve_lead_entity(app)))
+    if base.id == LEAD_GEN_PRIMITIVE_ID:
+        from .generator import resolve_lead_entity
+
+        taken_tables.add(_entity_table(resolve_lead_entity(app)))
     if table in taken_tables:
         raise ValueError(
             f"the form's submissions table {table!r} collides with an existing "
@@ -337,19 +349,23 @@ def apply_form_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
 # guarantee for the three pre-existing primitives.
 
 
-def form_entities_for(app: AppSpec, lead: Entity) -> tuple[Entity, ...]:
+def form_submission_entities_for(
+    app: AppSpec, *, reserved_entities: tuple[Entity, ...] = ()
+) -> tuple[Entity, ...]:
     """The app's form-submission entities, in entity order: entities targeted by a
-    `form` section's `content_ref` (the fold's marker), excluding the resolved lead
-    entity (a form section pointing at the lead renders the classic capture form).
-    Raises if two forms would lower to the same D1 table (invalid tree otherwise)."""
+    `form` section's `content_ref` (the fold's marker), excluding any reserved
+    entities owned by the host primitive (for lead_gen, the resolved lead entity).
+    Raises if two forms would lower to the same D1 table, or collide with a reserved
+    entity's table (invalid tree otherwise)."""
     targets = {
         s.content_ref
         for p in app.pages
         for s in p.sections
         if s.kind == "form" and s.content_ref is not None
     }
-    forms = tuple(e for e in app.entities if e.id in targets and e.id != lead.id)
-    seen: dict[str, str] = {_entity_table(lead): lead.id}
+    reserved_ids = {e.id for e in reserved_entities}
+    forms = tuple(e for e in app.entities if e.id in targets and e.id not in reserved_ids)
+    seen: dict[str, str] = {_entity_table(e): e.id for e in reserved_entities}
     for entity in forms:
         table = _entity_table(entity)
         if table in seen:
@@ -361,27 +377,43 @@ def form_entities_for(app: AppSpec, lead: Entity) -> tuple[Entity, ...]:
     return forms
 
 
+def form_entities_for(app: AppSpec, lead: Entity) -> tuple[Entity, ...]:
+    """Lead-gen compatibility wrapper: exclude the resolved lead entity so a form
+    section pointing at the lead renders the classic capture form."""
+    return form_submission_entities_for(app, reserved_entities=(lead,))
+
+
+def form_route_for(app: AppSpec, entity: Entity) -> str:
+    """The public POST route for one folded form entity.
+
+    lead_gen and legacy lead-shaped apps keep the original `/api/<table>` route.
+    records apps use `/api/forms/<form_id>` so records retains exclusive ownership
+    of its `/api/<table>` CRUD route table.
+    """
+    base = resolve_primitive(app.app_kind)
+    if base.id == RECORDS_PRIMITIVE_ID:
+        return f"/api/forms/{entity.id}"
+    return f"/api/{_entity_table(entity)}"
+
+
 def _field_kind(field_type: str) -> str:
     """The FormField kind a folded entity field's type maps back to (`text` for any
     unrecognized hand-authored type — the safe string fallback)."""
     return _KIND_BY_ENTITY_TYPE.get(field_type.strip().lower(), "text")
 
 
-def lower_form_schema_sql(lead: Entity, forms: tuple[Entity, ...]) -> str:
-    """`schema.sql`: the lead table (byte-identical base emitter) plus one
-    submissions table per form. Empty `forms` → the base output, unchanged."""
-    from .generator import _emit_schema_sql, _sql_type, _table_name
+def emit_form_schema_sql(forms: tuple[Entity, ...]) -> str:
+    """The form submissions table blocks that can be appended to any D1-backed
+    host primitive. Empty `forms` → empty string."""
+    from .generator import _sql_type, _table_name
 
-    base = _emit_schema_sql(lead)
-    if not forms:
-        return base
-    blocks = [base]
+    blocks: list[str] = []
     for entity in forms:
         cols = ['  "id" INTEGER PRIMARY KEY AUTOINCREMENT']
         for field in entity.fields:
             nullable = " NOT NULL" if field.required else ""
             cols.append(f'  "{field.name}" {_sql_type(field.type)}{nullable}')
-        cols.append('  "created_at" TEXT NOT NULL DEFAULT (datetime(\'now\'))')
+        cols.append("  \"created_at\" TEXT NOT NULL DEFAULT (datetime('now'))")
         body = ",\n".join(cols)
         blocks.append(
             f"-- Form primitive (F3.1): submissions table for the {entity.id!r} form.\n"
@@ -392,40 +424,53 @@ def lower_form_schema_sql(lead: Entity, forms: tuple[Entity, ...]) -> str:
     return "\n".join(blocks)
 
 
+def lower_form_schema_sql(lead: Entity, forms: tuple[Entity, ...]) -> str:
+    """`schema.sql`: the lead table (byte-identical base emitter) plus one
+    submissions table per form. Empty `forms` → the base output, unchanged."""
+    from .generator import _emit_schema_sql
+
+    base = _emit_schema_sql(lead)
+    if not forms:
+        return base
+    return "\n".join([base, emit_form_schema_sql(forms)])
+
+
 def _form_const_name(entity: Entity) -> str:
     """The Drizzle export const for a form's table. The `form_` prefix keeps it a
     valid, non-reserved TS identifier that can never collide with `leads`."""
     return f"form_{_entity_table(entity)}"
 
 
-def lower_form_drizzle_ts(lead: Entity, forms: tuple[Entity, ...]) -> str:
-    """`src/db/schema.ts`: the lead table (byte-identical base emitter) plus one
-    Drizzle sqliteTable export per form. Empty `forms` → the base output."""
-    from .generator import _drizzle_factory, _emit_drizzle_schema_ts, _table_name, _ts
+def emit_form_drizzle_ts(forms: tuple[Entity, ...]) -> str:
+    """The Drizzle sqliteTable exports for folded forms. Empty `forms` → empty string."""
+    from .generator import _drizzle_factory, _table_name, _ts
 
-    base = _emit_drizzle_schema_ts(lead)
-    if not forms:
-        return base
-    blocks = [base]
+    blocks: list[str] = []
     for entity in forms:
         cols = ['  id: integer("id").primaryKey({ autoIncrement: true }),']
         for field in entity.fields:
             chain = ".notNull()" if field.required else ""
             cols.append(
-                f"  {field.name}: {_drizzle_factory(field.type)}"
-                f"({_ts(field.name)}){chain},"
+                f"  {field.name}: {_drizzle_factory(field.type)}({_ts(field.name)}){chain},"
             )
-        cols.append(
-            "  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),"
-        )
+        cols.append("  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),")
         blocks.append(
             f"/* Form primitive (F3.1): submissions table for the {entity.id!r} form. */\n"
             f"export const {_form_const_name(entity)} = "
-            f"sqliteTable({_ts(_table_name(entity))}, {{\n"
-            + "\n".join(cols)
-            + "\n});\n"
+            f"sqliteTable({_ts(_table_name(entity))}, {{\n" + "\n".join(cols) + "\n});\n"
         )
     return "\n".join(blocks)
+
+
+def lower_form_drizzle_ts(lead: Entity, forms: tuple[Entity, ...]) -> str:
+    """`src/db/schema.ts`: the lead table (byte-identical base emitter) plus one
+    Drizzle sqliteTable export per form. Empty `forms` → the base output."""
+    from .generator import _emit_drizzle_schema_ts
+
+    base = _emit_drizzle_schema_ts(lead)
+    if not forms:
+        return base
+    return "\n".join([base, emit_form_drizzle_ts(forms)])
 
 
 def _replace_once(source: str, anchor: str, replacement: str) -> str:
@@ -521,7 +566,9 @@ def _form_value_line(field_name: str, kind: str) -> str:
     return f'    {key}: typeof rec[{key}] === "string" ? rec[{key}] : null,'
 
 
-def _emit_form_worker_defs(forms: tuple[Entity, ...]) -> str:
+def _emit_form_worker_defs(
+    forms: tuple[Entity, ...], route_by_entity_id: dict[str, str] | None = None
+) -> str:
     """The Worker's form plane: per-form validation metadata, the shared kind/
     required validator, one insert handler per form, and the route table. Appended
     to the lead worker just before `export default` (the lead code is untouched)."""
@@ -532,12 +579,15 @@ def _emit_form_worker_defs(forms: tuple[Entity, ...]) -> str:
     handlers: list[str] = []
     routes: list[str] = []
     for entity in forms:
-        route = f"/api/{_entity_table(entity)}"
+        route = (
+            route_by_entity_id[entity.id]
+            if route_by_entity_id is not None
+            else f"/api/{_entity_table(entity)}"
+        )
         const = _form_const_name(entity)
         fn = handler_names[entity.id]
         rules = {
-            f.name: {"kind": _field_kind(f.type), "required": f.required}
-            for f in entity.fields
+            f.name: {"kind": _field_kind(f.type), "required": f.required} for f in entity.fields
         }
         metas.append(f"  {_ts(route)}: {{ fields: {_ts(rules)} }},")
         value_lines = "\n".join(
@@ -579,9 +629,7 @@ def _emit_form_worker_defs(forms: tuple[Entity, ...]) -> str:
         + "\n".join(handlers)
         + "\n"
         "const APP_FORM_ROUTES: Record<string, (env: Env, body: unknown) => "
-        "Promise<Response>> = {\n"
-        + "\n".join(routes)
-        + "\n};\n\n"
+        "Promise<Response>> = {\n" + "\n".join(routes) + "\n};\n\n"
     )
 
 
@@ -596,6 +644,19 @@ _FORM_DISPATCH_TS = (
     '        return json({ error: "invalid JSON" }, 400);\n'
     "      }\n"
     "      return appFormRoute(env, body);\n"
+    "    }\n"
+)
+
+_FORM_AUTH_DISPATCH_TS = (
+    "    // Form primitive (F3.1): public app-form submissions "
+    "(422 on validation mismatch).\n"
+    "    const appFormRoute = APP_FORM_ROUTES[rawPath];\n"
+    '    if (appFormRoute && request.method === "POST") {\n'
+    "      const contentTypeError = requireJsonContentType(request);\n"
+    "      if (contentTypeError !== null) return contentTypeError;\n"
+    "      const parsed = await readJsonBody(request);\n"
+    "      if (!parsed.ok) return parsed.response;\n"
+    "      return appFormRoute(env, parsed.body);\n"
     "    }\n"
 )
 
@@ -621,6 +682,36 @@ def lower_form_worker_ts(lead: Entity, forms: tuple[Entity, ...]) -> str:
         "export default {\n",
         _emit_form_worker_defs(forms) + "export default {\n",
     )
+    return _replace_once(
+        out,
+        "    return env.ASSETS.fetch(request);\n",
+        _FORM_DISPATCH_TS + "    return env.ASSETS.fetch(request);\n",
+    )
+
+
+def lower_form_records_worker_ts(
+    worker_ts: str,
+    forms: tuple[Entity, ...],
+    route_by_entity_id: dict[str, str],
+    *,
+    auth_enabled: bool,
+) -> str:
+    """Splice the shared app-form submission plane into a records Worker.
+
+    Records keeps its own `/api/<table>` route table. Folded forms live under
+    `/api/forms/<form_id>` and use the same 422 validation contract as lead_gen
+    folded forms. Empty `forms` → the base worker byte-identically.
+    """
+    if not forms:
+        return worker_ts
+    defs = _emit_form_worker_defs(forms, route_by_entity_id)
+    out = _replace_once(worker_ts, "export default {\n", defs + "export default {\n")
+    if auth_enabled:
+        return _replace_once(
+            out,
+            "    const route = ROUTES[rawPath];\n",
+            _FORM_AUTH_DISPATCH_TS + "    const route = ROUTES[rawPath];\n",
+        )
     return _replace_once(
         out,
         "    return env.ASSETS.fetch(request);\n",
@@ -752,7 +843,9 @@ _FORM_COMPONENT_HANDLERS_TS = (
 )
 
 
-def emit_app_form_component(comp: str, section: Section, entity: Entity) -> str:
+def emit_app_form_component(
+    comp: str, section: Section, entity: Entity, *, post_path: str | None = None
+) -> str:
     """The React component for a folded form section: one control per entity field
     (kind derived back from the field type), inline required validation, a typed
     payload POSTed through the shared `postJson` client to the form's Worker route,
@@ -768,7 +861,8 @@ def emit_app_form_component(comp: str, section: Section, entity: Entity) -> str:
 
     layout = _variant_layout(section)
     classes = f"section kind-form variant-{layout} app-form"
-    post_path = f"/api/{_entity_table(entity)}"
+    if post_path is None:
+        post_path = f"/api/{_entity_table(entity)}"
     disco_attrs = _disco_section_attrs(section)
     kinds = {f.name: _field_kind(f.type) for f in entity.fields}
     labels = {f.name: _display_label(f.name, f.label) for f in entity.fields}
@@ -801,7 +895,7 @@ def emit_app_form_component(comp: str, section: Section, entity: Entity) -> str:
         f"const NUMBER_FIELDS: string[] = {_ts(number_fields)};\n"
         f"const CHECKBOX_FIELDS: string[] = {_ts(checkbox_fields)};\n"
         f"const FIELD_LABELS: Record<string, string> = {_ts(labels)};\n"
-        f"const SUCCESS_MESSAGE = {_ts(success)};\n\n"
+        f"const DEFAULT_SUCCESS_MESSAGE = {_ts(success)};\n\n"
         "type SubmitPhase =\n"
         '  | { kind: "idle" }\n'
         '  | { kind: "submitting" }\n'
@@ -818,9 +912,9 @@ def emit_app_form_component(comp: str, section: Section, entity: Entity) -> str:
         f"    <section className={_ts(classes)} id={_ts(section.id)}"
         f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
         '      <div className="app-main">\n'
-        "        {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
+        '        {c.eyebrow ? <p className="eyebrow">{c.eyebrow}</p> : null}\n'
         f"        {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
-        f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
+        f'        {{c.subheading ? <p className="subheading"{_disco_field_attr("subheading")}>'
         "{c.subheading}</p> : null}\n"
         '        <form className="lead-form app-form-fields" onSubmit={onSubmit} noValidate>\n'
         + inputs
@@ -831,7 +925,9 @@ def emit_app_form_component(comp: str, section: Section, entity: Entity) -> str:
         "          </button>\n"
         '          <div className="form-feedback" aria-live="polite">\n'
         '            {state.kind === "success" ? (\n'
-        '              <p className="form-status form-status-success">{SUCCESS_MESSAGE}</p>\n'
+        '              <p className="form-status form-status-success"'
+        f"{_disco_field_attr('success_message')}>"
+        "{c.successMessage ?? DEFAULT_SUCCESS_MESSAGE}</p>\n"
         "            ) : null}\n"
         '            {state.kind === "error" ? (\n'
         '              <p className="form-status form-status-error">{state.message}</p>\n'
@@ -845,6 +941,8 @@ def emit_app_form_component(comp: str, section: Section, entity: Entity) -> str:
 
 
 # ---- registration -----------------------------------------------------------------
+
+from .primitive_verify import form_verify  # noqa: E402
 
 
 def default_form_app_spec(name: str, recipe: SiteRecipe) -> AppSpec:
@@ -883,7 +981,7 @@ register_primitive(
         tier="fillable",
         host_contract=(),
         spec_schema=FormSpec,
-        verify=None,
+        verify=form_verify,
         apply_spec=apply_form_spec,
     )
 )
@@ -894,9 +992,15 @@ __all__ = [
     "FormField",
     "FormSpec",
     "apply_form_spec",
+    "emit_form_drizzle_ts",
+    "emit_form_schema_sql",
     "emit_app_form_component",
     "form_entities_for",
+    "form_route_for",
+    "form_submission_entities_for",
+    "form_verify",
     "lower_form_drizzle_ts",
+    "lower_form_records_worker_ts",
     "lower_form_schema_sql",
     "lower_form_worker_ts",
 ]

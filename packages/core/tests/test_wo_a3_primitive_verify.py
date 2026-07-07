@@ -5,6 +5,8 @@ Covers, pure (no sandbox, no browser):
     checks pass, in order) and missing-file failures with the tool's original
     evidence strings byte-asserted;
   * `directory_verify` over a REAL generated directory tree — happy + failures;
+  * `form_verify`, `seo_verify`, and `collection_verify` over folded generated
+    trees — happy + stale-output failures;
   * `hello_verify` — pass, wrong-headline fail, missing index.html fail, and the
     folded-HelloSpec subtitle contract;
   * `VerifyCheck` / `PrimitiveVerifyResult.checks` defaults (backward compatible);
@@ -23,6 +25,8 @@ from disco.core.appkit import (
     get_primitive,
     get_recipe,
 )
+from disco.core.appkit.collection_primitive import CollectionSpec, apply_collection_spec
+from disco.core.appkit.form_primitive import FormSpec, apply_form_spec, form_verify
 from disco.core.appkit.hello_primitive import (
     HelloSpec,
     apply_hello_spec,
@@ -30,8 +34,14 @@ from disco.core.appkit.hello_primitive import (
     generate_hello,
     hello_verify,
 )
-from disco.core.appkit.primitive_verify import directory_verify, lead_gen_verify
+from disco.core.appkit.primitive_verify import (
+    collection_verify,
+    directory_verify,
+    lead_gen_verify,
+    seo_verify,
+)
 from disco.core.appkit.primitives import PrimitiveVerifyResult, VerifyCheck
+from disco.core.appkit.seo_primitive import SeoSpec, apply_seo_spec
 
 _RECIPE = get_recipe("editorial-ledger")
 
@@ -46,6 +56,50 @@ def _directory_fixture():
     app = default_directory_app_spec("Town Directory", _RECIPE)
     design = _RECIPE.to_design_spec()
     return app, design, generate(app, design)
+
+
+def _form_fixture():
+    app = ensure_lead_entity(default_lead_gen_app_spec("Acme Leads", _RECIPE))
+    spec = FormSpec.model_validate(
+        {
+            "form_id": "quote_request",
+            "title": "Request a quote",
+            "fields": [{"name": "email", "label": "Email", "kind": "email", "required": True}],
+            "success_message": "Thanks, we will respond shortly.",
+        }
+    )
+    folded = apply_form_spec(app, spec)
+    design = _RECIPE.to_design_spec()
+    return folded, design, generate(folded, design)
+
+
+def _seo_fixture():
+    app = ensure_lead_entity(default_lead_gen_app_spec("Acme Leads", _RECIPE))
+    spec = SeoSpec(
+        site_description="Careful lead capture for growing teams.",
+        base_url="https://example.com",
+        site_name="Acme Leads",
+    )
+    folded = apply_seo_spec(app, spec)
+    design = _RECIPE.to_design_spec()
+    return folded, design, generate(folded, design)
+
+
+def _collection_fixture():
+    app = ensure_lead_entity(default_lead_gen_app_spec("Acme Leads", _RECIPE))
+    spec = CollectionSpec.model_validate(
+        {
+            "collection_id": "team",
+            "title": "Team",
+            "items": [
+                {"label": "Ana Ferreira", "detail": "Founder"},
+                {"label": "Bo Kim"},
+            ],
+        }
+    )
+    folded = apply_collection_spec(app, spec)
+    design = _RECIPE.to_design_spec()
+    return folded, design, generate(folded, design)
 
 
 def _by_name(res: PrimitiveVerifyResult) -> dict[str, VerifyCheck]:
@@ -165,10 +219,7 @@ def test_directory_verify_no_app_fails_listing_with_app_create_evidence():
     res = directory_verify(None, design, tree)
     checks = _by_name(res)
     assert checks["directory_listing"].passed is False
-    assert (
-        checks["directory_listing"].evidence
-        == "no .disco/appspec.json — run app_create first."
-    )
+    assert checks["directory_listing"].evidence == "no .disco/appspec.json — run app_create first."
 
 
 def test_directory_verify_missing_worker_fails_static_contract():
@@ -177,10 +228,7 @@ def test_directory_verify_missing_worker_fails_static_contract():
     res = directory_verify(app, design, tree)
     checks = _by_name(res)
     assert checks["static_worker_contract"].passed is False
-    assert (
-        checks["static_worker_contract"].evidence
-        == "no worker/index.ts in the workspace."
-    )
+    assert checks["static_worker_contract"].evidence == "no worker/index.ts in the workspace."
     assert checks["directory_listing"].passed is True
 
 
@@ -196,6 +244,87 @@ def test_directory_verify_worker_grown_lead_api_fails():
     checks = _by_name(res)
     assert checks["static_worker_contract"].passed is False
     assert "/api/leads" in checks["static_worker_contract"].evidence
+
+
+# ---- form_verify --------------------------------------------------------------------
+
+
+def test_form_verify_passes_on_folded_generated_tree():
+    app, design, tree = _form_fixture()
+    res = form_verify(app, design, tree)
+    assert res.ok, [c for c in res.checks if not c.passed]
+    assert res.detail == "4 passed / 0 failed"
+    assert [c.name for c in res.checks] == [
+        "form_schema_table",
+        "form_worker_validate_route",
+        "form_section_component",
+        "form_success_message",
+    ]
+
+
+def test_form_verify_fails_when_worker_route_removed():
+    app, design, tree = _form_fixture()
+    tree = dict(tree)
+    tree["worker/index.ts"] = tree["worker/index.ts"].replace(
+        '"/api/quote_requests"', '"/api/missing"'
+    )
+    res = form_verify(app, design, tree)
+    checks = _by_name(res)
+    assert checks["form_worker_validate_route"].passed is False
+    assert "/api/quote_requests" in checks["form_worker_validate_route"].evidence
+
+
+# ---- seo_verify ---------------------------------------------------------------------
+
+
+def test_seo_verify_passes_on_folded_generated_tree():
+    app, design, tree = _seo_fixture()
+    res = seo_verify(app, design, tree)
+    assert res.ok, [c for c in res.checks if not c.passed]
+    assert res.detail == "3 passed / 0 failed"
+    assert [c.name for c in res.checks] == [
+        "seo_head_metadata",
+        "seo_robots_txt",
+        "seo_sitemap_xml",
+    ]
+
+
+def test_seo_verify_fails_when_sitemap_loses_route():
+    app, design, tree = _seo_fixture()
+    tree = dict(tree)
+    tree["public/sitemap.xml"] = tree["public/sitemap.xml"].replace(
+        "<loc>https://example.com/</loc>", ""
+    )
+    res = seo_verify(app, design, tree)
+    checks = _by_name(res)
+    assert checks["seo_sitemap_xml"].passed is False
+    assert "expected" in checks["seo_sitemap_xml"].evidence
+
+
+# ---- collection_verify --------------------------------------------------------------
+
+
+def test_collection_verify_passes_on_folded_generated_tree():
+    app, design, tree = _collection_fixture()
+    res = collection_verify(app, design, tree)
+    assert res.ok, [c for c in res.checks if not c.passed]
+    assert res.detail == "2 passed / 0 failed"
+    assert [c.name for c in res.checks] == [
+        "collection_sections_render",
+        "collection_items_present",
+    ]
+
+
+def test_collection_verify_fails_when_content_item_missing():
+    app, design, tree = _collection_fixture()
+    tree = dict(tree)
+    tree["src/generated/content.ts"] = tree["src/generated/content.ts"].replace(
+        "Ana Ferreira — Founder", "Missing Person"
+    )
+    res = collection_verify(app, design, tree)
+    checks = _by_name(res)
+    assert checks["collection_items_present"].passed is False
+    assert "Ana Ferreira" in checks["collection_items_present"].evidence
 
 
 # ---- hello_verify -------------------------------------------------------------------
@@ -285,9 +414,15 @@ def test_registry_verify_hooks_wired_and_records_stays_none():
     directory = get_primitive("directory")
     records = get_primitive("records")
     hello = get_primitive("hello")
+    form = get_primitive("form")
+    seo = get_primitive("seo")
+    collection = get_primitive("collection")
     assert lead is not None and lead.verify is lead_gen_verify
     assert directory is not None and directory.verify is directory_verify
     assert hello is not None and hello.verify is hello_verify
+    assert form is not None and form.verify is form_verify
+    assert seo is not None and seo.verify is seo_verify
+    assert collection is not None and collection.verify is collection_verify
     # records stays verify=None ON PURPOSE: its apps fall through to the lead-gen
     # bundle exactly as they did before the dispatch existed.
     assert records is not None and records.verify is None

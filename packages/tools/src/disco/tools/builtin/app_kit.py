@@ -147,9 +147,7 @@ async def _read_spec_bytes(ctx: ToolContext, relpath: str) -> bytes | None:
 async def _load_app_spec(ctx: ToolContext) -> AppSpec:
     data = await _read_spec_bytes(ctx, APPSPEC_RELPATH)
     if data is None:
-        raise _AppKitError(
-            f"no {APPSPEC_RELPATH} in the workspace — run app_create first."
-        )
+        raise _AppKitError(f"no {APPSPEC_RELPATH} in the workspace — run app_create first.")
     try:
         return load_app_spec_from_bytes(data)
     except Exception as exc:  # noqa: BLE001
@@ -159,9 +157,7 @@ async def _load_app_spec(ctx: ToolContext) -> AppSpec:
 async def _load_design_spec(ctx: ToolContext) -> DesignSpec:
     data = await _read_spec_bytes(ctx, DESIGNSPEC_RELPATH)
     if data is None:
-        raise _AppKitError(
-            f"no {DESIGNSPEC_RELPATH} in the workspace — run app_create first."
-        )
+        raise _AppKitError(f"no {DESIGNSPEC_RELPATH} in the workspace — run app_create first.")
     try:
         return load_design_spec_from_bytes(data)
     except Exception as exc:  # noqa: BLE001
@@ -210,9 +206,7 @@ async def _save_app_spec(ctx: ToolContext, spec: AppSpec) -> None:
 
 async def _save_design_spec(ctx: ToolContext, spec: DesignSpec) -> None:
     assert ctx.sandbox is not None
-    await ctx.sandbox.write_file(
-        DESIGNSPEC_RELPATH, serialize_design_spec(spec).encode("utf-8")
-    )
+    await ctx.sandbox.write_file(DESIGNSPEC_RELPATH, serialize_design_spec(spec).encode("utf-8"))
 
 
 def _validate_variant(section: Section) -> None:
@@ -225,8 +219,7 @@ def _validate_variant(section: Section) -> None:
         raise _AppKitError(f"unknown section variant_id: {section.variant_id!r}")
     if variant.kind != section.kind:
         raise _AppKitError(
-            f"variant {section.variant_id!r} is a {variant.kind!r} layout, "
-            f"not {section.kind!r}"
+            f"variant {section.variant_id!r} is a {variant.kind!r} layout, not {section.kind!r}"
         )
 
 
@@ -498,6 +491,7 @@ class ContentUpdate(BaseModel):
     body: str | None = None
     cta_label: str | None = None
     items: list[str] | None = None
+    success_message: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -520,8 +514,8 @@ class AppUpdateContentArgs(BaseModel):
     page_id: str = Field(description="The page that holds the section.")
     section_id: str = Field(description="The section whose content to patch.")
     updates: ContentUpdate = Field(
-        description="Content slots to set/merge: heading, subheading, body, cta_label, items "
-        "(a list of strings). Unknown keys are rejected."
+        description="Content slots to set/merge: heading, subheading, body, cta_label, "
+        "items (a list of strings), success_message. Unknown keys are rejected."
     )
 
 
@@ -533,11 +527,11 @@ class AppUpdateContentTool:
     definition = ToolDef(
         name="app_update_content",
         description=(
-            "Patch a section's content (heading/subheading/body/cta_label/items) in the "
-            "current app's spec. Updates are merged onto the existing content and validated "
-            "(bounded length, no unknown keys). Re-saves .disco/appspec.json and regenerates "
-            "only the touched files (content.ts + manifest). Content lives in the spec, never "
-            "hand-edited in the generated tree."
+            "Patch a section's content (heading/subheading/body/cta_label/items/"
+            "success_message) in the current app's spec. Updates are merged onto the "
+            "existing content and validated (bounded length, no unknown keys). Re-saves "
+            ".disco/appspec.json and regenerates only the touched files. Content lives in "
+            "the spec, never hand-edited in the generated tree."
         ),
         args_model=AppUpdateContentArgs,
         needs=_FS,
@@ -555,18 +549,14 @@ class AppUpdateContentTool:
             page = next((p for p in data["pages"] if p["id"] == args.page_id), None)
             if page is None:
                 raise _AppKitError(f"no page with id {args.page_id!r}")
-            sec = next(
-                (s for s in page["sections"] if s["id"] == args.section_id), None
-            )
+            sec = next((s for s in page["sections"] if s["id"] == args.section_id), None)
             if sec is None:
-                raise _AppKitError(
-                    f"no section {args.section_id!r} on page {args.page_id!r}"
-                )
+                raise _AppKitError(f"no section {args.section_id!r} on page {args.page_id!r}")
             updates = args.updates.model_dump(mode="json", exclude_unset=True)
             if not updates:
                 raise _AppKitError(
                     "no updates provided — set at least one of "
-                    "heading/subheading/body/cta_label/items"
+                    "heading/subheading/body/cta_label/items/success_message"
                 )
             existing = sec.get("content") or {}
             merged = {**existing, **updates}
@@ -583,7 +573,7 @@ class AppUpdateContentTool:
                     f"values — nothing changed. Current content: "
                     f"{_json.dumps(existing, ensure_ascii=False)[:600]}. Send a "
                     "DIFFERENT value for a slot (heading/subheading/body/cta_label/"
-                    "items) or target another section."
+                    "items/success_message) or target another section."
                 )
             try:
                 # Validate the bounded content in isolation for a precise error.
@@ -610,9 +600,7 @@ class AppUpdateContentTool:
                 artifacts=sorted({*touched, APPSPEC_RELPATH}),
             )
         except _AppKitError as exc:
-            return ToolOutcome(
-                success=False, content=str(exc), error="app_update_content_refused"
-            )
+            return ToolOutcome(success=False, content=str(exc), error="app_update_content_refused")
 
 
 # ---- app_set_design -----------------------------------------------------------
@@ -660,9 +648,7 @@ class AppSetDesignTool:
         assert ctx.sandbox is not None
         try:
             if (args.recipe_id is None) == (args.design_spec is None):
-                raise _AppKitError(
-                    "provide exactly one of recipe_id (P0) or design_spec (P1)."
-                )
+                raise _AppKitError("provide exactly one of recipe_id (P0) or design_spec (P1).")
             app = await _load_app_spec(ctx)
 
             recipe = None
@@ -715,9 +701,7 @@ class AppSetDesignTool:
             label = f"recipe '{recipe.id}'" if recipe is not None else "a custom DesignSpec"
             return ToolOutcome(
                 success=True,
-                content=(
-                    f"app_set_design: applied {label} — updated {len(touched)} file(s)."
-                ),
+                content=(f"app_set_design: applied {label} — updated {len(touched)} file(s)."),
                 structured={"files_written": touched, "specs": specs},
                 artifacts=sorted({*touched, *specs}),
             )
@@ -745,9 +729,7 @@ async def _read_disk_text(ctx: ToolContext, relpath: str) -> str | None:
         return None
 
 
-def _compute_drift(
-    tree: dict[str, str], on_disk: dict[str, str | None]
-) -> dict[str, Any]:
+def _compute_drift(tree: dict[str, str], on_disk: dict[str, str | None]) -> dict[str, Any]:
     """Compare the spec-regenerated tree against what's actually on disk.
 
     `modified` = a generated file whose on-disk bytes differ; `missing` = a
@@ -959,9 +941,7 @@ class AppAddPrimitiveTool:
             try:
                 new_app = prim.apply_spec(app, validated)
             except Exception as exc:  # noqa: BLE001
-                raise _AppKitError(
-                    f"applying the {prim.id!r} spec failed: {exc}"
-                ) from exc
+                raise _AppKitError(f"applying the {prim.id!r} spec failed: {exc}") from exc
             if new_app.model_dump(mode="json") == app.model_dump(mode="json"):
                 # Same RC-M rule as the sibling tools: a no-op must refuse loudly,
                 # never report a hollow success the model will retry into the breaker.
@@ -1009,9 +989,7 @@ class AppAddPrimitiveTool:
                 artifacts=sorted({*touched, APPSPEC_RELPATH, record_relpath}),
             )
         except _AppKitError as exc:
-            return ToolOutcome(
-                success=False, content=str(exc), error="app_add_primitive_refused"
-            )
+            return ToolOutcome(success=False, content=str(exc), error="app_add_primitive_refused")
 
 
 APPKIT_V2_TOOLS: tuple[type, ...] = (
