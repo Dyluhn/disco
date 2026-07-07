@@ -824,6 +824,19 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
         fill_hex=theme.surface_2,
     ))
 
+    # Scrim behind the overlay text: generated artwork is often LIGHT (cream/
+    # off-white grounds), and white type straight on it is illegible — gauntlet
+    # run-1 landed exactly that on both full-bleed slides. A dark bottom band
+    # guarantees contrast for the white title/caption on ANY artwork.
+    if slide.title or slide.body:
+        scrim_h = 914_400 + 548_640  # title band + caption allowance
+        els.append(Element(
+            id=_uid(), kind="rect",
+            left=0, top=_SLIDE_H - scrim_h,
+            width=_SLIDE_W, height=scrim_h,
+            fill_hex="#111111",
+        ))
+
     # Optional title overlay (bottom-left)
     if slide.title:
         els.append(Element(
@@ -833,7 +846,7 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
             text=slide.title,
             font_name=_first_font(theme.font_display),
             font_size_pt=36.0,
-            hex_color="#ffffff",  # white overlay
+            hex_color="#ffffff",  # white overlay (scrim-backed above)
             bold=True,
         ))
 

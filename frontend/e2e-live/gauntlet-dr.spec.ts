@@ -105,20 +105,15 @@ test(`gauntlet DR ${LABEL}: report finishes with sections+citations, deck builds
   await buildDeck.click();
   await shot("09-deck-requested");
 
-  // Deck completion oracle: the deck surface/editor renders slides. Wait for a
-  // slide canvas to exist, then screenshot the rendered deck for visual review.
-  const deckReady = page
-    .locator('[data-disco-control="deck.export"], [data-deck-slide], .deck-slide, [data-disco-control="deck.download.pptx"]')
-    .first();
-  await deckReady.waitFor({ state: "visible", timeout: 1_200_000 });
-  await page.waitForTimeout(4_000);
-  await shot("10-deck-ready");
-
-  // Walk up to 14 slides for the visual-quality record (keys → next slide).
-  for (let i = 1; i <= 14; i++) {
-    await page.keyboard.press("ArrowRight");
-    await page.waitForTimeout(700);
-    await page.screenshot({ path: `${EVID}/deck-slide-${String(i).padStart(2, "0")}.png` });
-  }
-  fs.writeFileSync(`${EVID}/RESULT.txt`, `tier=${TIER}\ntopic=${TOPIC}\nfinished=yes\n`);
+  // Deck completion oracle: dr.build-deck HANDS OFF to a new autonomous AGENT
+  // conversation (/agent/:cid) that runs slides_generate. Completion = the agent
+  // run reaches Finished with a degraded-free deck message; the PPTX artifact is
+  // verified off-UI by the runner (converted to per-slide PNGs for review).
+  await page.waitForURL(/\/agent\//, { timeout: 60_000 });
+  await shot("10-agent-handoff");
+  await expect(page.getByText(/\bfinished\b/i).first()).toBeVisible({ timeout: 1_500_000 });
+  await shot("11-deck-run-finished");
+  const agentBody = await page.locator("body").innerText();
+  expect(agentBody, "deck degraded to the plain fallback renderer").not.toMatch(/DEGRADED/i);
+  fs.writeFileSync(`${EVID}/RESULT.txt`, `tier=${TIER}\ntopic=${TOPIC}\nfinished=yes\nagentUrl=${page.url()}\n`);
 });
