@@ -1192,3 +1192,34 @@ async def test_stage_assets_unconfigured_is_named_in_note():
     assert assets == {}
     assert stats.configured is False and stats.wanted == 1
     assert "NOT configured" in stats.note()
+
+
+def test_tableless_thin_comparison_demoted_to_bullets():
+    """Gauntlet s-arxiv 2026-07-07: comparison_table with table=None and a
+    3-line body rendered as two column headers + one lonely bullet (mostly
+    empty). Such slides are demoted to bullets at prepare time; a REAL table
+    or a body thick enough for balanced columns stays a comparison."""
+    from disco.tools.builtin._slides_pipeline import _prepare_filled_deck
+
+    deck = AuthoredDeck(
+        title="T",
+        slides=[
+            AuthoredSlide(
+                type="comparison", archetype="comparison_table",
+                title="Thin", body=["a vs b", "c vs d", "e vs f"],
+            ),
+            AuthoredSlide(
+                type="comparison", archetype="comparison_table",
+                title="Rich body", body=["a", "b", "c", "d"],
+            ),
+            AuthoredSlide(
+                type="table", archetype="comparison_table", title="Real table",
+                body=[],
+                table={"headers": ["x", "y"], "rows": [["1", "2"]]},
+            ),
+        ],
+    )
+    out = _prepare_filled_deck(deck)
+    assert out.slides[0].archetype == "bullets"          # thin + tableless → demoted
+    assert out.slides[1].archetype == "comparison_table"  # 4+ body lines → kept
+    assert out.slides[2].archetype == "comparison_table"  # real table → kept

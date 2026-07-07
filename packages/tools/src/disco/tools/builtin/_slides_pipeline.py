@@ -188,6 +188,9 @@ Deck craft rules:
   when the four items genuinely trade off along two axes, and give every quadrant a bold \
   headline PLUS one support line — four floating one-liners in big empty boxes is invalid; \
   if the content is really just four parallel facts, use bullets instead.
+- comparison_table REQUIRES the "table" field filled with real headers+rows. If you \
+  cannot produce an actual table, do NOT use comparison_table — use bullets or \
+  two_column instead (a comparison slide with a thin body renders mostly empty).
 - Commit a theme with 3-4 named accents, a non-default font pairing (never Inter, \
   Roboto, or Arial), a light/dark token pair, and one project-wide art_direction.
 - Image prompts are slots, not decoration: cover + section dividers + full_bleed_image \
@@ -683,8 +686,28 @@ def _prepare_outline_deck(deck: AuthoredDeck) -> AuthoredDeck:
     return _with_craft_defaults(deck)
 
 
+def _demote_tableless_comparisons(deck: AuthoredDeck) -> AuthoredDeck:
+    """Gauntlet s-arxiv 2026-07-07: a comparison_table slide with NO table
+    payload and a thin body (3 lines) rendered as two column headers + one
+    lonely bullet — a mostly-empty slide. A comparison NEEDS a real table (or
+    at least enough body lines for two balanced columns); anything thinner
+    reads better as plain bullets. Demote in place (render-time normalization —
+    the authored sidecar keeps the model's original)."""
+    for slide in deck.slides:
+        if (
+            slide.archetype == "comparison_table"
+            and slide.table is None
+            and slide.chart is None
+            and len(slide.body or []) < 4
+        ):
+            slide.archetype = "bullets"
+            slide.layout_hint = "bullets"
+    return deck
+
+
 def _prepare_filled_deck(deck: AuthoredDeck) -> AuthoredDeck:
     deck = _with_craft_defaults(deck)
+    deck = _demote_tableless_comparisons(deck)
     deck = _enforce_density_budgets(deck)
     return _ensure_image_slot_prompts(deck)
 
