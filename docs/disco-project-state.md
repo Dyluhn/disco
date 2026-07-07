@@ -84,10 +84,31 @@ These are real and were under-reported in the first draft of this doc:
 - **`check_arch_budget` fails on every commit** — ~19 pre-existing god-object violations (`AgentLoop` 1956 LOC, `ConversationRuntime` 3970, `synthesize_section`, …). It is a *red required-CI gate*; the primitive work added zero new violations, but the baseline debt is real and predates this campaign.
 - **`hello`-app verify quirk:** the pre-A3 verifier hard-failed hello apps (expected a `schema.sql` they don't have) → runs ended STUCK. WO-A3 gave hello its own verify hook, which *should* fix it — **unverified**; confirm before relying on hello apps in a soak.
 
-## In flight / not yet confirmed
+## Live end-to-end proof — CONFIRMED (PASS)
 
-- **Live end-to-end proof — NOT CONFIRMED.** The first live run FAILED and that failure pinned the scope bug that drove `4cbaa218`. A second run was launched after the fix; evidence is writing to `scratchpad/live-final/` but **no verdict (SUMMARY) has been captured** — it can still fail (the driver model previously even fabricated tool refusals). Until a SUMMARY shows a real model calling `app_add_primitive` successfully, the "a live model drives this" claim is UNPROVEN.
-- **Servers** on the box were restarted onto current HEAD during the proof run (systemd --user units, DISCO_INSPECT=1).
+A live model (`deepseek/deepseek-v4-pro` via OpenRouter) drove the real app on HEAD
+`172ce70d`, agent surface, appkit autonomous mode, in ~82s with zero retries:
+`app_create` (lead_gen) → **`app_add_primitive seo`** ("applied 'seo' … updated 4
+files") → **`app_add_primitive form`** ("applied 'form' … updated 7 files"). The
+model *chose and executed* the tool through the loop — not a scripted call.
+Provenance records (`.disco/primitives/{seo,form}.json`) carry the exact specs; the
+form + SEO fold render correctly (Firefox screenshots + a `generate()` fidelity
+check: all 18 captured files byte-identical). Evidence: `scratchpad/live-final/`.
+This closes the WO-A1 residual. (`collection`/`hello` not exercised in the run.)
+
+## NEW bug found by the live run — appkit autonomous FINISH deadlock (engine, not security)
+
+The primitive tool calls worked; the app then could not cleanly `finish` in appkit
+autonomous mode (run killed after the proof was captured). Three interacting causes
+— an extension of the known finish-path-drift class:
+1. **Dictated-content gate false positive:** a quoted tool argument (`'editorial-ledger'`) was treated as a required copy floor; finish refused for "a quoted user literal is missing from `index.html`/`styles.css`/`app.js`" — and `app.js` doesn't exist in the Vite/TSX scaffold.
+2. **Finish verify probe is impossible in appkit scope:** the verify machinery emits a `shell` probe that the appkit tool allowlist refuses, so that gate can never pass in appkit_mode.
+3. **Execution-nudge gate defeats the refusal caps:** after re-planning to "just finish," finish is refused ("plan not executed yet") and the nudge's own "continue by calling a tool" sends the model back into work, resetting the other gates' consecutive-refusal counters → deadlock.
+
+This is the highest-value known bug right now: it blocks a clean autonomous appkit
+build from terminating even when the actual work succeeded. Feature/engine work.
+
+- **Servers** on the box were restarted onto HEAD `172ce70d` during the proof (systemd --user units, DISCO_INSPECT=1) and left running.
 
 ## Next planned workstream: packaging (Epic P)
 

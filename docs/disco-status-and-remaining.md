@@ -20,7 +20,8 @@ Registered primitives in the tree: `lead_gen`, `directory`, `records`, `hello`, 
 
 **Honest edges on the shipped primitives:**
 - `form`: attaches to `lead_gen` apps only; **form-folded apps are refused at deploy** (deploy.py's worker check predates the form emitter); `success_message` not editable via `app_update_content`.
-- The live-model end-to-end proof that a real model calls `app_add_primitive` is **not yet confirmed** (a run is in flight; first run failed and found the now-fixed scope bug).
+- The live-model end-to-end proof is **CONFIRMED** — deepseek-v4-pro added `seo` + `form` to a real site via `app_add_primitive`, rendered correctly (see `docs/disco-project-state.md`).
+- **NEW top-priority bug the proof surfaced:** an appkit autonomous **finish deadlock** (dictated-content false positive on quoted tool args + finish-verify shell-probe blocked in appkit scope + execution-nudge resetting refusal caps). Tool work succeeds but the build can't cleanly terminate. Engine/feature work — detail in project-state.
 - Standing baseline: `check_arch_budget` fails (~19 pre-existing god-object violations) — not caused by this work, but it is a red required-CI gate.
 
 Licenses cleared for packaging (primary-source research): fastembed default ONNX weights are redistributable in a published image; Lago is AGPL → use OpenMeter (Apache) for future usage metering; Novu is heavy + partly proprietary → SMTP-first, revisit as an optional profile.
