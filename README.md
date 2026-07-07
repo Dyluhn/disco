@@ -18,6 +18,8 @@ every conversation (see [`sec-work-remaining/disco-security-state.md`](./sec-wor
 for the full security state). It is still local-first — keep the default
 loopback binding unless you put your own TLS in front of it.
 
+> 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
+
 ### Surfaces
 
 Four surfaces, one shared event log + agent core:

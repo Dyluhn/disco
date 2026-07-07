@@ -62,7 +62,7 @@
   in-sandbox DoD probes, sandbox-backend allowlist, and env/session hygiene.
 - The silently-dropped origin-approval ledger is now surfaced.
 - Waves 4-6 (MCP approval integrity, isolation/resource caps, output sinks +
-  share) are parked, not shipped; see `sec-work-remaining/disco-security-state.md`.
+  share) are parked, not shipped; see `sec-work-remaining/disco-security-state.md`. 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
 ## v0.1.0 - 2026-07-03
 

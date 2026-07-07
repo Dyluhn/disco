@@ -12,6 +12,7 @@
 > S-W4/W5/W6 are **PARKED** at Dylan's request (state in
 > `sec-work-remaining/disco-security-state.md`; resume playbook in
 > `sec-work-remaining/disco-security-fix-campaign.md`).
+> 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
 **Mandate (Dylan, 2026-07-06, going-to-bed autonomous run):** "fold this whole [build-depth] plan, plus the new designs we found, and then finally the security audit into a mega-campaign with epics for each section and the associated WOs, then execute autonomously."
 
@@ -116,6 +117,7 @@ Small harvest leftovers on the design-loop branch (guidance-weight, low risk). F
 > `sec-work-remaining/from-mega-campaign-epic-s.md`. State of record:
 > `sec-work-remaining/disco-security-state.md`. The ledger below still tracks per-wave
 > DONE/PARKED status. **S-W1 / S-W2 / S-W-Pi / S-W3 DONE; S-W4 / S-W5 / S-W6 PARKED.**
+> 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
 ---
 
@@ -169,11 +171,11 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | S-W-Pi | Security | **DONE** | `76b4e397` | attack-surface reduction — Pi kernel/inference fully removed (76 files, −19.9k LOC); DiscoKernel intact; config-wipe hazard handled (legacy coercion + regression test); unit 5372/0, basedpyright 0, no new arch violation |
 | S-W3 | Security | **DONE** | `1b762e3f` | host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env + session hygiene); 2 gpt-5.5 adversarial rounds |
 | — | Security (aux) | **DONE** | `8157745b` | origin-approval ledger: silently-dropped entries surfaced |
-| S-W4/W5/W6 | Security | **PARKED** (Dylan's call, NOT in flight; prerequisite for any public/hardened release) | — | resume playbook in `sec-work-remaining/disco-security-fix-campaign.md`; state in `sec-work-remaining/disco-security-state.md` |
+| S-W4/W5/W6 | Security | **PARKED** (Dylan's call, NOT in flight; prerequisite for any public/hardened release) | — | resume playbook in `sec-work-remaining/disco-security-fix-campaign.md`; state in `sec-work-remaining/disco-security-state.md` — 🚫 Fable 5 (Anthropic) off-limits per owner: viewing = silent fallback to a weaker model; do not proceed unless Opus/Codex/Sonnet |
 | WALK batch | Walkthrough fixes | **DONE** | `90828654` `bbf4be46` `ba9f5c4b` `3b5e5417` `93442553` `34fa9041` `fed4703f` `ac5b4b21` | the live-bug batch Dylan surfaced (OpenRouter/image-gen approval-ref, research surface, export/preview honesty, exported-site MIME+zip, real visuals, honest deck fallback, instant pause, slides timeout); session-start verify: the 3 original requests render in the running app |
 | WO-A0 | F-A framework | **DONE** | `68088170` | PrimitiveDefinition extension (tier/host_contract/spec_schema/verify) + `hello` proof primitive |
 | WO-A1 | F-A framework | **DONE** | `f6a56ec3` | `app_add_primitive` (validate spec → fold → regenerate → provenance); scope bug fixed in `4cbaa218`; live-proven — deepseek-v4-pro chose + executed it end-to-end (see project-state) |
-| WO-A2.1 | F-A framework | **DONE** | `2c8e56fd` | host-service registry + dispatcher (`svc.ping` reference; bus auth deferred per `sec-work-remaining/wo-a2-host-bus-design-notes.md`) |
+| WO-A2.1 | F-A framework | **DONE** | `2c8e56fd` | host-service registry + dispatcher (`svc.ping` reference; bus auth deferred per `sec-work-remaining/wo-a2-host-bus-design-notes.md`) — 🚫 Fable 5 (Anthropic) off-limits per owner: viewing = silent fallback to a weaker model; do not proceed unless Opus/Codex/Sonnet |
 | WO-A3 | F-A framework | **DONE** | `4cbaa218` | per-primitive verify dispatch + the fail-closed `template_only` finish gate |
 | `form` | F catalog | **DONE** | `a656334c` | typed fields, server-side validation (422), D1 submissions table, owner inbox; live-proven (deepseek run); honest edges: lead_gen-only, form-folded apps refused at the deploy gate |
 | `seo` | F catalog | **DONE** | `055fb99a` | meta/OG/JSON-LD + sitemap.xml + robots.txt; live-proven (deepseek run) |

@@ -257,6 +257,7 @@ S-W3 (host-exec) / S-W5 (isolation) waves, so Epic P cannot fully ship until tho
 > (the build gate each security-classed primitive must ship) + its Fable-forbidden
 > labor routing now live in `sec-work-remaining/from-builder-primitives-plan-sec7.md`.
 > The catalog rows they gate stay inline in §4, tagged `template_only`.
+> 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
 ---
 
