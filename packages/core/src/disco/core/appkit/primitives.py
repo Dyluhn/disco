@@ -54,6 +54,7 @@ DIRECTORY_PRIMITIVE_ID = "directory"
 RECORDS_PRIMITIVE_ID = "records"
 HELLO_PRIMITIVE_ID = "hello"
 FORM_PRIMITIVE_ID = "form"
+SEO_PRIMITIVE_ID = "seo"
 
 
 @dataclass(frozen=True)
@@ -189,6 +190,7 @@ __all__ = [
     "HELLO_PRIMITIVE_ID",
     "LEAD_GEN_PRIMITIVE_ID",
     "RECORDS_PRIMITIVE_ID",
+    "SEO_PRIMITIVE_ID",
     "HostService",
     "PrimitiveDefinition",
     "PrimitiveVerifyResult",

@@ -1326,6 +1326,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         _emit_vite_config,
         _emit_wrangler_toml,
         _iter_sections,
+        _seo_files,
     )
 
     db_name = _db_name(app, db_entity)
@@ -1387,6 +1388,8 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         files[f"src/components/{comp}.tsx"] = _emit_component(
             comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
         )
+    # F5.3: {} when app.seo is None — the no-seo tree is byte-identical.
+    files.update(_seo_files(app))
     return dict(sorted(files.items()))
 
 

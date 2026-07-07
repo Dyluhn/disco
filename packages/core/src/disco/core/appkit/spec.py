@@ -31,6 +31,7 @@ import json
 import re
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 
 from pydantic import (
     BaseModel,
@@ -441,6 +442,64 @@ class Action(BaseModel):
         return self
 
 
+# ---- SEO metadata (Epic F5.3) ---------------------------------------------------
+
+# Bounds for the SEO slots — shared with `seo_primitive.SeoSpec` (the fill-and-
+# validate schema mirrors this resolved model) so the two can never drift.
+MAX_SEO_DESCRIPTION = 300
+MAX_SEO_URL = 2048
+MAX_SEO_SITE_NAME = 200
+
+
+def validate_http_url(value: str, *, field: str) -> str:
+    """A SIMPLE absolute-URL shape check (stdlib urlparse, deliberately not a full
+    RFC validator): an explicit `https://`/`http://` scheme + a non-empty host.
+    Refuses the garbage classes that matter at the spec boundary — a bare domain,
+    a relative path, `javascript:`/`data:` schemes, a host-less `https://` — while
+    the emitters ALSO escape every URL they interpolate (belt-and-suspenders)."""
+    if not (value.startswith("https://") or value.startswith("http://")):
+        raise ValueError(
+            f"{field} must start with 'https://' or 'http://', got {value!r}"
+        )
+    if not urlparse(value).netloc:
+        raise ValueError(
+            f"{field} must have a host (e.g. 'https://example.com'), got {value!r}"
+        )
+    return value
+
+
+class SeoMeta(BaseModel):
+    """The RESOLVED SEO metadata the `seo` primitive (Epic F5.3) folds into an app —
+    what the SHARED emitters read to add the meta/OG/JSON-LD head block plus
+    `public/robots.txt` / `public/sitemap.xml` to the generated tree.
+
+    Mirrors `seo_primitive.SeoSpec`'s validated values (that module owns the
+    model-facing fill-and-validate schema); `site_name=None` resolves to
+    `AppSpec.name` at EMIT time, so a later app rename never strands a stale copy
+    here. STRICTLY additive: `AppSpec.seo` defaults to None and is EXCLUDED from
+    dumps when None, so every pre-F5.3 spec validates, serializes and generates
+    byte-identically."""
+
+    model_config = _STRICT
+
+    site_description: str = Field(min_length=1, max_length=MAX_SEO_DESCRIPTION)
+    base_url: str = Field(min_length=1, max_length=MAX_SEO_URL)
+    social_image_url: str | None = Field(default=None, max_length=MAX_SEO_URL)
+    site_name: str | None = Field(default=None, min_length=1, max_length=MAX_SEO_SITE_NAME)
+
+    @field_validator("base_url")
+    @classmethod
+    def _base_url_is_http(cls, value: str) -> str:
+        return validate_http_url(value, field="seo base_url")
+
+    @field_validator("social_image_url")
+    @classmethod
+    def _social_image_url_is_http(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_http_url(value, field="seo social_image_url")
+
+
 class AppSpec(BaseModel):
     """The app STRUCTURE the scaffold generator consumes.
 
@@ -461,6 +520,10 @@ class AppSpec(BaseModel):
     primary_actions: tuple[Action, ...] = Field(
         default_factory=tuple, max_length=_MAX_ACTIONS
     )
+    # Epic F5.3 — resolved SEO metadata, folded in by the `seo` primitive.
+    # `exclude_if` keeps a None out of every dump, so pre-F5.3 specs serialize
+    # byte-identically (and the 256 KiB cap math is unchanged for them).
+    seo: SeoMeta | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("roles")
     @classmethod

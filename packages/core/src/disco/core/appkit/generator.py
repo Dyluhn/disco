@@ -981,6 +981,93 @@ def _emit_main_tsx() -> str:
     )
 
 
+def _seo_abs_url(base_url: str, route: str) -> str:
+    """Join a validated http(s) base URL and a spec-validated ABSOLUTE route
+    (always starts with '/') with exactly one slash between them — a trailing-
+    slash base_url can never produce a '//' in sitemap/OG URLs."""
+    return base_url.rstrip("/") + route
+
+
+def _seo_head_extras(app: AppSpec) -> str:
+    """The Epic F5.3 `<head>` additions: meta description, the OG tags, and a
+    JSON-LD ``WebSite`` block. Returns the EMPTY STRING when `app.seo` is None —
+    `_emit_index_html` interpolates this directly, so the no-seo index.html is
+    PROVABLY byte-identical to the pre-F5.3 output (the hard constraint).
+
+    Every user-provided value lands attribute-escaped (`_html_text`). The JSON-LD
+    payload is json.dumps output (never hand-built JSON) with `&`/`<`/`>` forced
+    to \\uXXXX escapes afterwards — a legal transform inside JSON string
+    literals — so a hostile description can never close the `<script>` tag or
+    open markup inside it."""
+    seo = app.seo
+    if seo is None:
+        return ""
+    site_name = seo.site_name or app.name
+    canonical = _seo_abs_url(seo.base_url, "/")
+    lines = [
+        f'    <meta name="description" content="{_html_text(seo.site_description)}" />\n',
+        f'    <meta property="og:title" content="{_html_text(site_name)}" />\n',
+        f'    <meta property="og:description" content="{_html_text(seo.site_description)}" />\n',
+        '    <meta property="og:type" content="website" />\n',
+        f'    <meta property="og:url" content="{_html_text(canonical)}" />\n',
+    ]
+    if seo.social_image_url is not None:
+        lines.append(
+            f'    <meta property="og:image" content="{_html_text(seo.social_image_url)}" />\n'
+        )
+    ld_payload = (
+        json.dumps(
+            {
+                "@context": "https://schema.org",
+                "@type": "WebSite",
+                "name": site_name,
+                "url": canonical,
+                "description": seo.site_description,
+            },
+            ensure_ascii=False,
+        )
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
+    lines.append(f'    <script type="application/ld+json">{ld_payload}</script>\n')
+    return "".join(lines)
+
+
+def _seo_files(app: AppSpec) -> dict[str, str]:
+    """The Epic F5.3 crawler files — an EMPTY dict when `app.seo` is None (the
+    no-seo tree gains no files; the tree builders `files.update(...)` this).
+
+    Emitted under `public/` because Vite copies `publicDir` verbatim into
+    `dist/`, which is what wrangler's `[assets]` layer serves — a root-level
+    robots.txt would never reach production (a false affordance). sitemap.xml
+    carries one `<url>` per AppSpec page, absolute via `_seo_abs_url` (no
+    double-slash joins); `<loc>` values are escaped (routes are already
+    charset-constrained by the spec — belt-and-suspenders for the base URL)."""
+    seo = app.seo
+    if seo is None:
+        return {}
+    entries = "".join(
+        "  <url>\n"
+        f"    <loc>{_html_text(_seo_abs_url(seo.base_url, page.route))}</loc>\n"
+        "  </url>\n"
+        for page in app.pages
+    )
+    sitemap = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        f"{entries}"
+        "</urlset>\n"
+    )
+    robots = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "\n"
+        f"Sitemap: {_seo_abs_url(seo.base_url, '/sitemap.xml')}\n"
+    )
+    return {"public/robots.txt": robots, "public/sitemap.xml": sitemap}
+
+
 def _emit_index_html(app: AppSpec, design: DesignSpec) -> str:
     href = _google_fonts_href(design)
     ver = _md.attr(_md.DataDiscoAttr.VERSION, _md.METADATA_VERSION)
@@ -994,6 +1081,8 @@ def _emit_index_html(app: AppSpec, design: DesignSpec) -> str:
         '    <link rel="preconnect" href="https://fonts.googleapis.com" />\n'
         '    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n'
         f'    <link rel="stylesheet" href="{href}" />\n'
+        # F5.3: "" when app.seo is None — the no-seo output is byte-identical.
+        f"{_seo_head_extras(app)}"
         "  </head>\n"
         "  <body>\n"
         '    <div id="root"></div>\n'
@@ -1682,6 +1771,8 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
             )
         else:
             files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
+    # F5.3: {} when app_spec.seo is None — the no-seo tree is byte-identical.
+    files.update(_seo_files(app_spec))
     return dict(sorted(files.items()))
 
 
@@ -2039,6 +2130,8 @@ def _generate_directory(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str,
             files[f"src/components/{comp}.tsx"] = _emit_directory_listing_component(comp, page, section)
         else:
             files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
+    # F5.3: {} when app_spec.seo is None — the no-seo tree is byte-identical.
+    files.update(_seo_files(app_spec))
     return dict(sorted(files.items()))
 
 
@@ -2172,6 +2265,7 @@ register_primitive(
 importlib.import_module(".records_primitive", package=__package__)
 importlib.import_module(".hello_primitive", package=__package__)
 importlib.import_module(".form_primitive", package=__package__)
+importlib.import_module(".seo_primitive", package=__package__)
 
 
 __all__ = [
