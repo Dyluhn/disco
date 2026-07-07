@@ -114,6 +114,12 @@ services:
       MALLOC_ARENA_MAX: "2"
       # Where the agent-server reaches sandbox-published preview ports (host-gateway).
       DISCO_PREVIEW_HOST: "${DISCO_PREVIEW_HOST:-${PMX_PREVIEW_HOST:-host.docker.internal}}"
+      # gVisor: DISCO_LOCAL_RUNTIME=runsc runs every spawned sandbox container
+      # under gVisor (host prereq: runsc installed + registered in dockerd's
+      # runtimes — https://gvisor.dev/docs/user_guide/install/). Default runc
+      # keeps today's behavior:
+      #   DISCO_LOCAL_RUNTIME=runsc docker compose up -d
+      DISCO_LOCAL_RUNTIME: "${DISCO_LOCAL_RUNTIME:-runc}"
       # NOTE: DISCO_SANDBOX is intentionally UNSET — the backend stays Settings-driven
       # (defaults to `local`, which uses the mounted socket below).
     volumes:
