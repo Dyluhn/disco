@@ -9,7 +9,7 @@ implements it, so a maintainer can verify it.
 The operator-facing security narrative lives in
 [`docs/archive/self-host.md#security`](docs/archive/self-host.md) (archived — some of its
 line-level claims predate the security waves below). The **current internal security
-state** — what is done, parked, and deferred — is `docs/disco-security-state.md`; every
+state** — what is done, parked, and deferred — is `sec-work-remaining/disco-security-state.md`; every
 status claim in this file traces to it. If documents disagree, treat it as a bug and
 reconcile.
 
@@ -46,8 +46,8 @@ authentication layer since security wave S-W1 (commit `e028d2ac`).**
 
 ### Hardening status (done vs parked)
 
-Transcribed from `docs/disco-security-state.md` (the single source of truth for security
-status); wave-by-wave detail + resume playbook: `docs/disco-security-fix-campaign.md`.
+Transcribed from `sec-work-remaining/disco-security-state.md` (the single source of truth for security
+status); wave-by-wave detail + resume playbook: `sec-work-remaining/disco-security-fix-campaign.md`.
 
 | Wave | Scope | Status |
 |---|---|---|
@@ -64,7 +64,7 @@ item in the deploy path: the compose `agent-server` still mounts `/var/run/docke
 (root-equivalent on the host) **by default** — fine for a trusted single-user box,
 unacceptable as a default others inherit. Making the isolated gVisor (`runsc`) backend
 the documented default, with the docker-socket/process path behind an explicit opt-in,
-is open packaging work (`docs/disco-security-state.md` §6).
+is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
 
 ### What this DOES try to protect against
 
@@ -233,14 +233,14 @@ Three layers gate what the agent may do, before execution (`engine.py:2869-2932`
 > per-command human review. Human confirmation mainly fires for publish/deploy-class tools
 > and for actions that escape the sandbox scope.
 
-**S-W3 hardened this layer** (commit `1b762e3f`; `docs/disco-security-state.md` §1): the
+**S-W3 hardened this layer** (commit `1b762e3f`; `sec-work-remaining/disco-security-state.md` §1): the
 hard-deny floor was rewritten around command-position analysis (catching `\rm`,
 `command rm`, `sudo rm`, `bash -lc`, `find <root> -delete`, and `$(…)`-wrapped variants
 without false-positiving on e.g. `echo rm -rf /`); plan/DoD `command` predicates now
 execute **in the sandbox** instead of host-side `subprocess`; the sandbox backend selector
 is a fail-closed allowlist (the `process` backend is dev-only and fail-closed in
 production); and env/session hygiene closed the kernel-token argv leak. Details + honest
-residuals: `docs/disco-security-fix-campaign.md` (Wave 3).
+residuals: `sec-work-remaining/disco-security-fix-campaign.md` (Wave 3).
 
 ---
 
@@ -286,7 +286,7 @@ residuals: `docs/disco-security-fix-campaign.md` (Wave 3).
   (`disco.core.origin_approvals` — `OriginApprovalStore.is_approved(url, purpose, ref)`;
   approvals are minted via the admin-only `POST /api/security/approve-origin`). These are
   reusable building blocks used by the whole platform and the intended substrate for
-  generated-app outbound calls (`docs/disco-security-state.md` §1).
+  generated-app outbound calls (`sec-work-remaining/disco-security-state.md` §1).
 - **Never inside the sandbox.** No secret, credential, or host env is present anywhere
   agent-run code can read it (`tool-sandbox-contract.md:35`; enforced by the clean-env
   container/subprocess construction cited in §2).
@@ -314,12 +314,12 @@ deployment.
 - **Auth shipped (S-W1), but the hardening campaign is incomplete.** Waves W4 (MCP
   approval integrity), W5 (isolation + resource caps), and W6 (output sinks + share +
   low-severity cluster) are **PARKED** — prerequisites for any public/hardened release
-  (`docs/disco-security-state.md` §2). No TLS; single-operator; keep the loopback bind
+  (`sec-work-remaining/disco-security-state.md` §2). No TLS; single-operator; keep the loopback bind
   (`.env.example:5-8`).
 - **The `local`/Docker socket mount is root-equivalent** on the host; a full agent-server
   compromise can own the machine — and it is still the compose **default**. Mitigate with
   a rootless Podman socket (`docs/archive/self-host.md:73-95`); making the isolated gVisor
-  backend the documented default is open packaging work (`docs/disco-security-state.md` §6).
+  backend the documented default is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
 - **`process` backend = no isolation** and no real egress block — dev/try-out only
   (`process.py:1-16`).
 - **Egress is `open` by default on the Build surface** (`PMX_BUILD_EGRESS` defaults to

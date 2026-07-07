@@ -1,5 +1,5 @@
 > **SUPERSEDED / HISTORICAL (as of 2026-07-07).** Design-primitives catalog — the design reference is durable; the “current honest inventory” section (9 directions, “image-gen never used in slides”) is stale (now 22 directions, always-on art direction) — see `docs/disco-status-and-remaining.md`.
-> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `sec-work-remaining/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
 
 # Design Primitives Catalog — the "fantastic output" campaign basis
 

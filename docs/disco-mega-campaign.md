@@ -10,8 +10,8 @@
 > below. The "security is the closing epic" sequencing is **superseded by the
 > PARK decision**: S-W1 / S-W2 / S-W-Pi / S-W3 are DONE + committed, and
 > S-W4/W5/W6 are **PARKED** at Dylan's request (state in
-> `docs/disco-security-state.md`; resume playbook in
-> `docs/disco-security-fix-campaign.md`).
+> `sec-work-remaining/disco-security-state.md`; resume playbook in
+> `sec-work-remaining/disco-security-fix-campaign.md`).
 
 **Mandate (Dylan, 2026-07-06, going-to-bed autonomous run):** "fold this whole [build-depth] plan, plus the new designs we found, and then finally the security audit into a mega-campaign with epics for each section and the associated WOs, then execute autonomously."
 
@@ -111,17 +111,11 @@ Small harvest leftovers on the design-loop branch (guidance-weight, low risk). F
 
 # EPIC S — Security Hardening  (task #64)  — the closing epic
 
-Executes the **already-implementation-ready** `docs/disco-security-fix-campaign.md` (7-round adversarial Opus+codex convergence; **38 findings = 8 Critical · 17 High · 10 Medium · 3 Low**; PAUSED awaiting go — this campaign IS the go). **Root cause:** 38 findings are ~5 problems; **ROOT-A (no-auth + wildcard CORS) is the keystone** — fixing it removes the reachability of ~9 findings. Full per-task detail + acceptance tests live in that doc; the waves are the WOs:
-
-- **S-W1 — ROOT-A: auth + CORS + owner-scoping (keystone).** HttpOnly SameSite cookie + CSRF + strict WS Origin + scoped preview/artifact capabilities + generated route-inventory test + admin-only global app-server state. Closes C5,H6,H8; removes reachability of H2,H10,H13,H14,M2,M7. Tasks A1–A8 in the security doc.
-- **S-W2 — ROOT-B: secret-resolution + egress chokepoint.** SecretStore-only provider map (kill the os.environ fallthrough, C8), two egress classes (untrusted hard-deny private vs operator-configured origin-pinned), WeasyPrint asset allowlist, `runs_in` honesty for remote image/audio/slides backends. Closes C4,C8,H1,H11,H12,M3,M5,M7,C7.
-- **S-W3 — host-execution cluster (gVisor bypass).** Fail-closed backend Literal, plan/DoD command predicates run IN-sandbox, hardened deny floor, kernel-token hygiene. Closes C1,C2,C3,C6,H9,M1,H13.
-- **S-W4 — MCP approval integrity.** Pre-CONNECT approval, first-use approval, stdio host mislabel, risk-tier wiring, inputSchema in the approval hash. Closes H3,H4,H5,H7.
-- **S-W5 — availability / isolation.** Per-surface egress policy + host-enforced private+tailnet block + no sibling hairpin, real workspace quota, sandbox→host transfer caps, DoD no-auto-release, preview argv-not-shell. Closes H15,H16,H17,M8,M9,M10.
-- **S-W6 — output sinks + share/storage + lows.** Share point-in-time snapshot, storage-browse jail, xlsx formula injection, dead redaction, .env untrack, KDF note. Closes M4,M2,M6,L1,L2,L3.
-- **S-post — re-audit:** one more Opus+codex round-pair against the patched tree to confirm the tail collapsed.
-
-Per-wave HARD GATES (from the security doc): build + real-sample harness → **exercise the real exploit pre-fix (prove it works) then post-fix (prove it's closed)** → gpt-5.5 adversarial to SHIP → commit. Line numbers in the security doc are from 2026-06-20 and WILL have drifted — **match on content/symbol, not line number** (use Serena).
+> **Moved out of the project folder.** The full EPIC-S wave breakdown (S-W1..S-W6 +
+> S-post, their findings-closure map and HARD GATES) now lives in
+> `sec-work-remaining/from-mega-campaign-epic-s.md`. State of record:
+> `sec-work-remaining/disco-security-state.md`. The ledger below still tracks per-wave
+> DONE/PARKED status. **S-W1 / S-W2 / S-W-Pi / S-W3 DONE; S-W4 / S-W5 / S-W6 PARKED.**
 
 ---
 
@@ -175,11 +169,11 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | S-W-Pi | Security | **DONE** | `76b4e397` | attack-surface reduction — Pi kernel/inference fully removed (76 files, −19.9k LOC); DiscoKernel intact; config-wipe hazard handled (legacy coercion + regression test); unit 5372/0, basedpyright 0, no new arch violation |
 | S-W3 | Security | **DONE** | `1b762e3f` | host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env + session hygiene); 2 gpt-5.5 adversarial rounds |
 | — | Security (aux) | **DONE** | `8157745b` | origin-approval ledger: silently-dropped entries surfaced |
-| S-W4/W5/W6 | Security | **PARKED** (Dylan's call, NOT in flight; prerequisite for any public/hardened release) | — | resume playbook in `docs/disco-security-fix-campaign.md`; state in `docs/disco-security-state.md` |
+| S-W4/W5/W6 | Security | **PARKED** (Dylan's call, NOT in flight; prerequisite for any public/hardened release) | — | resume playbook in `sec-work-remaining/disco-security-fix-campaign.md`; state in `sec-work-remaining/disco-security-state.md` |
 | WALK batch | Walkthrough fixes | **DONE** | `90828654` `bbf4be46` `ba9f5c4b` `3b5e5417` `93442553` `34fa9041` `fed4703f` `ac5b4b21` | the live-bug batch Dylan surfaced (OpenRouter/image-gen approval-ref, research surface, export/preview honesty, exported-site MIME+zip, real visuals, honest deck fallback, instant pause, slides timeout); session-start verify: the 3 original requests render in the running app |
 | WO-A0 | F-A framework | **DONE** | `68088170` | PrimitiveDefinition extension (tier/host_contract/spec_schema/verify) + `hello` proof primitive |
 | WO-A1 | F-A framework | **DONE** | `f6a56ec3` | `app_add_primitive` (validate spec → fold → regenerate → provenance); scope bug fixed in `4cbaa218`; live-proven — deepseek-v4-pro chose + executed it end-to-end (see project-state) |
-| WO-A2.1 | F-A framework | **DONE** | `2c8e56fd` | host-service registry + dispatcher (`svc.ping` reference; bus auth deferred per `docs/wo-a2-host-bus-design-notes.md`) |
+| WO-A2.1 | F-A framework | **DONE** | `2c8e56fd` | host-service registry + dispatcher (`svc.ping` reference; bus auth deferred per `sec-work-remaining/wo-a2-host-bus-design-notes.md`) |
 | WO-A3 | F-A framework | **DONE** | `4cbaa218` | per-primitive verify dispatch + the fail-closed `template_only` finish gate |
 | `form` | F catalog | **DONE** | `a656334c` | typed fields, server-side validation (422), D1 submissions table, owner inbox; live-proven (deepseek run); honest edges: lead_gen-only, form-folded apps refused at the deploy gate |
 | `seo` | F catalog | **DONE** | `055fb99a` | meta/OG/JSON-LD + sitemap.xml + robots.txt; live-proven (deepseek run) |

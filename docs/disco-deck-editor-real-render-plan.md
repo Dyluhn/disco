@@ -1,5 +1,5 @@
 > **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era deck-editor real-WYSIWYG-render plan, frozen mid-execution.
-> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `sec-work-remaining/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
 
 # Deck editor: real WYSIWYG via iframe-substrate + measured overlays (#5d)
 

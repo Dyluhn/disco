@@ -1,5 +1,5 @@
 > **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era A1 click-to-edit design/decomposition doc, frozen mid-execution.
-> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `sec-work-remaining/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
 
 # A1 — Website/app click-to-edit: design + decomposition
 

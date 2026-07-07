@@ -6,7 +6,7 @@ reduction), and Wave 3 (`1b762e3f`) are **DONE + committed** on `disclaude/mega-
 a follow-up surfaced the silently-dropped origin-approval ledger entries (`8157745b`).
 Waves 4–6 are **PARKED** (not started) — prerequisites for any public/hardened release.
 The single source of truth for current security state (done/parked/deferred) is
-`docs/disco-security-state.md`; this file is the wave-by-wave campaign log + resume
+`sec-work-remaining/disco-security-state.md`; this file is the wave-by-wave campaign log + resume
 playbook it points to.
 
 **Plan history:** Dylan signed off "use best practices, go with your recommendations" + "continuously give it to codex until it is not blocked" (2026-06-20). Iterative codex gpt-5.5 plan-review loop **CONVERGED** (2 consecutive not-BLOCK): **r1 BLOCK (9) → r2 SHIP-WITH-FIXES (10) → r3 BLOCK (7) → r4 SHIP-WITH-FIXES (8) → r5 SHIP-WITH-FIXES (2 + impl note)** — ALL folded in (see §Plan-review changelog blocks). codex r5: "coverage complete; round-4 edits landed."
@@ -59,7 +59,7 @@ A2'. **[High] App-server GLOBAL-state authorization (DECISION)** — config/secr
 B2'''. **[impl note] Class-1 chokepoint = connect-time + proxy-independent** — use `trust_env=False` / a controlled transport, validate every RESOLVED sockaddr actually connected to (not just the hostname), and revalidate on redirect (defeats DNS-rebind). The DNS-rebind/redirect acceptance tests are the proof target.
 SEQ. Wave 1 alone does NOT close model-origin SSRF / PDF file-read (C4/C7 remain until Wave 2) — keep that framing.
 **Branch:** the executed waves landed on `disclaude/mega-campaign` (the plan was drafted on `build-surface-recovery-ux`; no remote, never push main).
-**Source:** the 7-round convergence audit (Opus 4.8 + codex gpt-5.5, adversarial, two independent reviewers). Finding ledger: the original `/tmp/sec_known.md` scratch file is gone — current status lives in `docs/disco-security-state.md`.
+**Source:** the 7-round convergence audit (Opus 4.8 + codex gpt-5.5, adversarial, two independent reviewers). Finding ledger: the original `/tmp/sec_known.md` scratch file is gone — current status lives in `sec-work-remaining/disco-security-state.md`.
 **Tally:** 8 Critical · 17 High · 10 Medium · 3 Low = 38 findings.
 
 > Threat model (verbatim from the audit): a MODEL-CONTROLLED agent can call tools, run code_exec/shell, author plans/DoD predicates, write files, drive a browser, and emit output persisted to events + streamed over WS + replayed into LLM context. "Unsafe" = the host (its filesystem, env, secrets, processes) or another tenant/conversation. Also in-scope: a hostile webpage the user visits (drive-by to the loopback API), and a caller who merely knows a `conversation_id`.

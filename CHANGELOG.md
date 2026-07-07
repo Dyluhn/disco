@@ -62,7 +62,7 @@
   in-sandbox DoD probes, sandbox-backend allowlist, and env/session hygiene.
 - The silently-dropped origin-approval ledger is now surfaced.
 - Waves 4-6 (MCP approval integrity, isolation/resource caps, output sinks +
-  share) are parked, not shipped; see `docs/disco-security-state.md`.
+  share) are parked, not shipped; see `sec-work-remaining/disco-security-state.md`.
 
 ## v0.1.0 - 2026-07-03
 

@@ -14,7 +14,7 @@ shape of the system.
 
 Disco is single-tenant software with a built-in auth layer: cookie sessions
 with CSRF protection, a single-use pairing-token mint, and owner-scoping of
-every conversation (see [`docs/disco-security-state.md`](./docs/disco-security-state.md)
+every conversation (see [`sec-work-remaining/disco-security-state.md`](./sec-work-remaining/disco-security-state.md)
 for the full security state). It is still local-first — keep the default
 loopback binding unless you put your own TLS in front of it.
 

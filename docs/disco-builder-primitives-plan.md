@@ -253,19 +253,10 @@ S-W3 (host-exec) / S-W5 (isolation) waves, so Epic P cannot fully ship until tho
 
 ## 7. Security tiers — the template-only set + its adversarial harnesses
 
-These are **LLM-FORBIDDEN** (Disco generates the code) and each ships a real exploit-style harness as its build
-gate, inheriting the security campaign's discipline:
-
-| Primitive | Failure = | Build-gate harness |
-|-----------|-----------|--------------------|
-| 2.1 RLS / multi-tenancy | cross-tenant breach | 2-tenant cross-read FAILS build |
-| 4.1 payment webhooks | double-fulfill / spoof | replay + forged-sig + idempotency-in-txn |
-| 1.2/3.4 uploads | RCE / malware / DoS | magic-byte + size + polyglot + /dev/zero |
-| 3.3/6.6 outbound webhooks/connectors | SSRF | internal-IP + DNS-rebind rejection |
-| 2.2 secrets | key leak | hardcoded-credential lint fails build |
-| 3.2/5.1 egress (email/AI) | exfiltration | host-mediated + origin-approved (F-D done) |
-| 6.3 auto-admin | privilege escalation | admin respects RLS/tenant isolation |
-| 7.1 runtime | tenant escape | long-lived multi-tenant isolation under load |
+> **Moved out of the project folder.** The template-only adversarial-harness table
+> (the build gate each security-classed primitive must ship) + its Fable-forbidden
+> labor routing now live in `sec-work-remaining/from-builder-primitives-plan-sec7.md`.
+> The catalog rows they gate stay inline in §4, tagged `template_only`.
 
 ---
 

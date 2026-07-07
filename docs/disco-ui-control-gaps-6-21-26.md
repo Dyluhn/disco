@@ -1,5 +1,5 @@
 > **SUPERSEDED / HISTORICAL (as of 2026-07-07).** June-era UI-control-gaps inventory, frozen mid-execution.
-> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `docs/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
+> Current status of record: `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md` (features + remaining), `sec-work-remaining/disco-security-state.md` (security). This file is kept for history and may contain stale claims.
 
 # Disco UI — what we do NOT have direct, deterministic control over (2026-06-21)
 

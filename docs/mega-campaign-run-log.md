@@ -100,7 +100,7 @@ Times are wall-clock local where noted; ordering is authoritative regardless.
 
 ### Honest remaining-scope read (for the morning)
 Landed + fully proven this run: **Epic A (designs), Epic C (Tier-3), B-W1 (deploy-proof), B-W2 (relational data), B-W3 (auth/RBAC — adversarially SHIP)**. That covers Dylan's two biggest asks (designs + auth) + the deploy/data foundation. B-W4 (reactivity, his 3rd ask) in flight.
-Remaining (next session): **Epic S (security, 6 waves — ALREADY fully spec'd in docs/disco-security-fix-campaign.md, implementation-ready)** and **Epic Z (soak)**. These are large focused blocks; S each wave needs real-exploit-before/after + gpt-5.5 adversarial (like the B-W3 auth cycle). They're teed up to execute directly from the security doc.
+Remaining (next session): **Epic S (security, 6 waves — ALREADY fully spec'd in sec-work-remaining/disco-security-fix-campaign.md, implementation-ready)** and **Epic Z (soak)**. These are large focused blocks; S each wave needs real-exploit-before/after + gpt-5.5 adversarial (like the B-W3 auth cycle). They're teed up to execute directly from the security doc.
 
 <!-- append below as work lands -->
 
@@ -138,7 +138,7 @@ mandate + the ephemeral→durable model (persistence demonstrated across restart
 
 ### Pivot → Epic S (security, the closer)
 Per Dylan's stated order (security is the closing epic), starting the 6-wave
-security fix campaign spec'd in docs/disco-security-fix-campaign.md. Each wave:
+security fix campaign spec'd in sec-work-remaining/disco-security-fix-campaign.md. Each wave:
 build → real-exploit-before/after → gpt-5.5 adversarial to SHIP → commit. Then
 Epic Z (big soak + debug).
 
@@ -146,7 +146,7 @@ Epic Z (big soak + debug).
 
 ## Epic S — Security Hardening (the closer) — STARTED
 
-Pivoted to the 6-wave security campaign (docs/disco-security-fix-campaign.md, a 7-round
+Pivoted to the 6-wave security campaign (sec-work-remaining/disco-security-fix-campaign.md, a 7-round
 Opus+gpt-5.5 converged plan, 38 findings, all decisions pre-resolved by Dylan). Per-wave
 discipline: real-exploit-before/after + gpt-5.5 xhigh adversarial to SHIP + commit.
 
@@ -401,7 +401,7 @@ the one explicitly-requested exception. S-W6 finished; W4 (wt-D) ran; none commi
 
 ## ⚠️ PARKED SECURITY WAVES — RESUME PLAYBOOK (2026-07-06)
 Waves S-W3/W4/W5/W6 are PARKED at Dylan's request. Their definitions + grounded recon live in
-`docs/disco-security-fix-campaign.md` + this run log (per-wave scratchpad specs were session-temp and may be
+`sec-work-remaining/disco-security-fix-campaign.md` + this run log (per-wave scratchpad specs were session-temp and may be
 gone — rebuild from the committed docs). Current campaign tip: **`9620eb92`** (post-Pi).
 
 **State of each:**
@@ -436,7 +436,7 @@ Two facts in the "⚠️ PARKED SECURITY WAVES — RESUME PLAYBOOK" section are 
 - **The campaign tip is no longer `9620eb92`** — the current tip is **`27dbf350`** (HEAD of
   `disclaude/mega-campaign`), so resume rebases target that, and the pi-leftover gotcha (step 3)
   still applies.
-S-W4/W5/W6 remain PARKED with nothing committed. `docs/disco-security-state.md` is now the
+S-W4/W5/W6 remain PARKED with nothing committed. `sec-work-remaining/disco-security-state.md` is now the
 single source of truth for security state; `docs/disco-project-state.md` is the master scoreboard.
 
 ## 2026-07-07 — Post-park work: walkthrough fixes, S-W3, the primitive framework + first catalog primitives, packaging recon, live e2e proof CONFIRMED
@@ -464,13 +464,13 @@ all render correctly in the running app.
 **S-W3 LANDED — commit `1b762e3f`** (the one wave un-parked and finished): the host-execution
 cluster / gVisor-bypass floor — rm-root floor, in-sandbox DoD probes, sandbox-backend allowlist,
 env hygiene, session hygiene — plus 2 gpt-5.5 adversarial rounds. Security state is now:
-**S-W1 / S-W2 / S-W-Pi / S-W3 DONE; S-W4/W5/W6 PARKED** (see `docs/disco-security-state.md`).
+**S-W1 / S-W2 / S-W-Pi / S-W3 DONE; S-W4/W5/W6 PARKED** (see `sec-work-remaining/disco-security-state.md`).
 
 **Primitive framework (Epic F-A) — DONE:**
 - `68088170` WO-A0: extend the AppKit primitive framework (tier/host_contract/spec_schema/verify) + a `hello` proof primitive.
 - `f6a56ec3` WO-A1: `app_add_primitive` — the spec fill-and-validate tool + the `apply_spec` seam.
 - Scoping docs in between: `9baf7316` (§10 execution scoping — F-A status, D1-vs-Postgres dual-track, WO-A2/A3/A4 decomposition) + `a619d8f8` (§9 license/footprint: Lago AGPL→OpenMeter, fastembed weights redistributable, Novu heavy→SMTP-first).
-- `2c8e56fd` WO-A2.1: host-service registry + dispatcher (`svc.ping` reference). NO bus auth yet — the per-app bearer layer is deferred with design notes (`docs/wo-a2-host-bus-design-notes.md`); `call_host_service` must not reach the sandbox without it.
+- `2c8e56fd` WO-A2.1: host-service registry + dispatcher (`svc.ping` reference). NO bus auth yet — the per-app bearer layer is deferred with design notes (`sec-work-remaining/wo-a2-host-bus-design-notes.md`); `call_host_service` must not reach the sandbox without it.
 - `4cbaa218` WO-A3: per-primitive verify dispatch + the **fail-closed `template_only` finish gate** ("cannot ship unverified"); also fixed a WO-A1 scope bug.
 
 **First catalog primitives — 3 shipped**, each addable via `app_add_primitive`:
@@ -486,7 +486,7 @@ gap-closing, not greenfield. Ordered work P1–P5 in `docs/disco-status-and-rema
 
 **Three status docs written (the new source of truth):**
 - `f09411da` sprint status → `113f67c9` `docs/disco-status-and-remaining.md` (feature catalog + remaining, pivot to packaging).
-- `d04340c4` `docs/disco-security-state.md` (security done / parked / deferred + the fail-closed gate).
+- `d04340c4` `sec-work-remaining/disco-security-state.md` (security done / parked / deferred + the fail-closed gate).
 - `3093a65f` `docs/disco-project-state.md` (the master epic scoreboard) + `06c93ee8` audit-gap corrections (seam branches committed, honest edges, red arch-gate baseline, live proof then-unconfirmed).
 
 **Live end-to-end proof — CONFIRMED (`27dbf350`, the current tip):** a live model
@@ -502,5 +502,5 @@ refusal caps) — detail in `docs/disco-project-state.md`. Servers restarted ont
 during the proof and left running.
 
 Status now lives in `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md`,
-and `docs/disco-security-state.md`; the campaign ledger (`docs/disco-mega-campaign.md`) is a
+and `sec-work-remaining/disco-security-state.md`; the campaign ledger (`docs/disco-mega-campaign.md`) is a
 historical detail record.

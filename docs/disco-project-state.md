@@ -3,7 +3,7 @@
 Branch `disclaude/mega-campaign` @ `d04340c4`. Working tree clean.
 This is the master index across every workstream. Detail docs:
 - `docs/disco-status-and-remaining.md` — primitive catalog + remaining features
-- `docs/disco-security-state.md` — security done/parked/deferred
+- `sec-work-remaining/disco-security-state.md` — security done/parked/deferred
 - `docs/disco-builder-primitives-plan.md` — the primitive campaign plan (§4 catalog, §6 packaging, §10 execution scoping)
 
 ---
@@ -15,7 +15,7 @@ This is the master index across every workstream. Detail docs:
 | A — Design directions | Expand the direction library + numeric design lint | **DONE** — 9→22 directions (`aef9c33d`), constraint lint (`10274058`) |
 | C — Tier-3 build guidance | think-gate, never-modify-tests, design-first nudges | **DONE** (`1dfedb15`) |
 | B — Build depth | Durable generated apps (persistence, records, auth, reactivity) | **DONE** (see below) |
-| Security waves | Auth, secrets, egress, host-exec, isolation | **W1–W3 DONE; W4/W5/W6 PARKED** — see `docs/disco-security-state.md` |
+| Security waves | Auth, secrets, egress, host-exec, isolation | **W1–W3 DONE; W4/W5/W6 PARKED** — see `sec-work-remaining/disco-security-state.md` |
 | Walkthrough/runthru fixes | The live-bug batch Dylan surfaced | **DONE** (see below) |
 | F-A — Primitive framework | The "add X" scaffolding system | **DONE** (see below) |
 | F catalog | 38-primitive catalog | **3 shipped this sprint; rest deferred** |
@@ -71,7 +71,7 @@ Registered primitives in the tree: `lead_gen`, `directory`, `records`, `hello`, 
 
 **Needs the persistent-runtime / Postgres track first (deferred — dual-track decided, Postgres runtime out of scope this sprint):** migrations/ORM, search (pgvector), cache, jobs/cron, multi-tenancy, audit, embedded AI/RAG, usage metering (OpenMeter), deployment/hosting.
 
-**Built as fail-closed scaffolds, committed on unmerged branches** — `disclaude/f41-stripe-seam` (`60436fa8`) and `disclaude/f33-webhook-seam` (`ec622888`). Preserved as real commits (worktrees removed); not registered, not in the shipped tree; their fills are documented per `docs/disco-security-state.md`.
+**Built as fail-closed scaffolds, committed on unmerged branches** — `disclaude/f41-stripe-seam` (`60436fa8`) and `disclaude/f33-webhook-seam` (`ec622888`). Preserved as real commits (worktrees removed); not registered, not in the shipped tree; their fills are documented per `sec-work-remaining/disco-security-state.md`.
 
 ---
 

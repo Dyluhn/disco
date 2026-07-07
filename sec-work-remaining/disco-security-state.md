@@ -4,7 +4,7 @@ Snapshot at `disclaude/mega-campaign` @ `113f67c9`. This file records everything
 security-related: what is DONE (committed), what is PARKED, what was DEFERRED
 during the primitive sprint, and the gate that currently protects the tree.
 
-Companion detail: `docs/disco-security-fix-campaign.md` (the wave-by-wave campaign
+Companion detail: `sec-work-remaining/disco-security-fix-campaign.md` (the wave-by-wave campaign
 log + resume playbook).
 
 ---
@@ -38,7 +38,7 @@ the intended substrate for generated-app outbound calls):
 | S-W5 | Isolation + resource caps |
 | S-W6 | Output sinks + share + low-severity cluster |
 
-Resume playbook lives in `docs/disco-security-fix-campaign.md` (rebase notes +
+Resume playbook lives in `sec-work-remaining/disco-security-fix-campaign.md` (rebase notes +
 the pi-kernel leftover). These are a prerequisite for any public/hardened release.
 
 ---
@@ -57,7 +57,7 @@ rebuild.
   per-app, conversation-bound bearer (minted host-side, injected as a Worker env
   var, never in the app tree). `call_host_service` MUST NOT be exposed to the
   sandbox without that layer.
-- **Design input:** `docs/wo-a2-host-bus-design-notes.md` (committed) — token
+- **Design input:** `sec-work-remaining/wo-a2-host-bus-design-notes.md` (committed) — token
   shape/TTL/revocation, the agent-server host surface, the sandbox→host
   reachability constraints, the open questions.
 
