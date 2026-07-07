@@ -1791,6 +1791,8 @@ class ConversationRuntime:
             default = cfg.model_for(ModelRole.AGENT_DRIVER)
         except Exception:  # noqa: BLE001 — no assignment → no default highlight
             default = None
+        if default not in {m["id"] for m in models}:
+            default = None
         return {"models": models, "default": default}
 
     def _retrieval_handlers(self) -> dict[str, Any]:

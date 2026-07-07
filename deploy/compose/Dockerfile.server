@@ -19,15 +19,36 @@
 # ---------------------------------------------------------------------------
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
+ARG DISCO_ENCODER_TIER=full
+
 # copy (not hardlink) into the venv, and pre-compile .pyc for faster cold start.
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    DISCO_ENCODER_TIER=${DISCO_ENCODER_TIER} \
+    FASTEMBED_CACHE_PATH=/opt/disco-cache/fastembed \
+    DISCO_TTS_DIR=/opt/disco-cache/tts
 
 WORKDIR /app
 
-# Workspace metadata + every member's source (uv builds the members editable
-# from src, so the full packages/ tree must be present at sync time).
+# Workspace metadata first: install third-party deps without the editable
+# workspace members so dependency and model-asset layers stay cacheable across
+# ordinary source edits. The final sync below still uses --all-packages.
 COPY pyproject.toml uv.lock ./
+COPY packages/core/pyproject.toml packages/core/pyproject.toml
+COPY packages/retrieval/pyproject.toml packages/retrieval/pyproject.toml
+COPY packages/tools/pyproject.toml packages/tools/pyproject.toml
+COPY packages/agent-server/pyproject.toml packages/agent-server/pyproject.toml
+COPY packages/app-server/pyproject.toml packages/app-server/pyproject.toml
+RUN uv sync --frozen --no-dev --all-packages --no-install-workspace
+
+# Baked runtime assets. Keep this after deps but before application source, or a
+# code-only edit would re-download several GB of ONNX/Kokoro weights.
+COPY scripts/prefetch_packaged_assets.py /tmp/prefetch_packaged_assets.py
+RUN /app/.venv/bin/python /tmp/prefetch_packaged_assets.py
+
+# Workspace source: uv builds members editable from src, so the full packages/
+# tree must be present for the final sync. Keep --all-packages: dropping it
+# prunes workspace members from the shared server venv.
 COPY packages/ ./packages/
 
 # Single incantation that lands all 5 members + the agent-server's bundled TTS
@@ -43,6 +64,8 @@ RUN uv sync --frozen --no-dev --all-packages
 # Stage 2 — runtime: slim python with only the native libs the servers need.
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim-bookworm
+
+ARG DISCO_ENCODER_TIER=full
 
 # WeasyPrint (RP-07 PDF export) needs pango/cairo/gdk-pixbuf + fontconfig + a
 # base font; tmux backs the agent shell-session tool. libgomp1 is required by
@@ -79,6 +102,7 @@ WORKDIR /app
 # so the source must land at exactly that path.
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/packages /app/packages
+COPY --from=builder /opt/disco-cache /opt/disco-cache
 
 # The compose entrypoint (prepares /data, seeds a first-run config, ensures a
 # PMX_SECRET_KEY) and the seed script it calls. compose sets
@@ -91,7 +115,10 @@ RUN chmod +x /entrypoint.sh
 # python:3.12-slim interpreter the venv was built against lives at the same
 # /usr/local path, so the venv symlinks resolve here).
 ENV PATH=/app/.venv/bin:$PATH \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DISCO_ENCODER_TIER=${DISCO_ENCODER_TIER} \
+    FASTEMBED_CACHE_PATH=/opt/disco-cache/fastembed \
+    DISCO_TTS_DIR=/opt/disco-cache/tts
 
 # Both servers default to PMX_HOST/PMX_DB/… from the environment; compose
 # supplies those plus the /data mount. The healthcheck hits the servers with
