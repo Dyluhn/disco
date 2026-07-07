@@ -158,6 +158,7 @@ _MAX_BODY = 4000
 _MAX_CTA_LABEL = 120
 _MAX_ITEM = 300
 _MAX_ITEMS = 24
+_MAX_SUCCESS_MESSAGE = 300
 
 # ---- bounded free-form string aliases ----------------------------------------
 #
@@ -225,6 +226,15 @@ class SectionContent(BaseModel):
     body: str | None = Field(default=None, max_length=_MAX_BODY)
     cta_label: str | None = Field(default=None, max_length=_MAX_CTA_LABEL)
     items: tuple[str, ...] = Field(default_factory=tuple, max_length=_MAX_ITEMS)
+    # The confirmation copy a `form` section shows after a successful submission
+    # (the F3.1 form primitive folds it in; the generator bakes it into the emitted
+    # form component). `exclude_if` keeps the slot OUT of every dump when unset, so
+    # pre-F3.1 specs serialize byte-identically (spec digests / manifests unchanged).
+    success_message: str | None = Field(
+        default=None,
+        max_length=_MAX_SUCCESS_MESSAGE,
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator("items")
     @classmethod
@@ -300,7 +310,12 @@ class EntityField(BaseModel):
     `references`, when set, names another Entity id whose implicit `id` column this
     field foreign-keys to. Referencing fields must be declared as integer-ish
     (`int`, `integer`, or `number`) and are emitted as INTEGER columns regardless of
-    other type spelling."""
+    other type spelling.
+
+    `label`, when set, is the human display label a generated input control shows
+    for this field (the F3.1 form primitive folds it from `FormField.label`); when
+    unset the generator derives one from `name`. `exclude_if` keeps it out of every
+    dump when unset, so pre-F3.1 specs serialize byte-identically."""
 
     model_config = _STRICT
 
@@ -308,6 +323,7 @@ class EntityField(BaseModel):
     type: _ShortStr
     required: bool = False
     references: _IdStr | None = Field(default=None, exclude_if=lambda value: value is None)
+    label: _NameStr | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("name")
     @classmethod

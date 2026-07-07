@@ -81,17 +81,38 @@ def synthesized_lead_entity() -> Entity:
     )
 
 
+def _form_target_ids(app_spec: AppSpec) -> frozenset[str]:
+    """Entity ids targeted by a `form` section's `content_ref` — the F3.1 form
+    primitive's fold marker. Such entities are FORM-SUBMISSION planes, never lead
+    candidates: without this skip, a folded form's `submit` action could flip
+    `resolve_lead_entity` onto the form entity and silently re-shape the whole
+    lead data plane. Empty for every pre-F3.1 spec (no form section sets
+    `content_ref`), so lead resolution there is byte-for-byte unchanged."""
+    return frozenset(
+        section.content_ref
+        for page in app_spec.pages
+        for section in page.sections
+        if section.kind == "form" and section.content_ref is not None
+    )
+
+
 def ensure_lead_entity(app_spec: AppSpec) -> AppSpec:
     """Return an AppSpec GUARANTEED to declare the lead entity it persists.
 
-    If the spec already resolves a lead entity (a `submit` target or an entity id
-    `lead`) it is returned unchanged; otherwise the synthesized name/email/message
-    entity is appended and the whole spec is re-validated. `app_create` calls this
-    so the on-disk `appspec.json` always contains the entity the generated
-    schema.sql / worker target — spec ⇄ tree never disagree about the lead shape."""
+    If the spec already resolves a lead entity (a non-form `submit` target or an
+    entity id `lead`) it is returned unchanged; otherwise the synthesized
+    name/email/message entity is appended and the whole spec is re-validated.
+    `app_create` calls this so the on-disk `appspec.json` always contains the
+    entity the generated schema.sql / worker target — spec ⇄ tree never disagree
+    about the lead shape. Form-entity submit targets (`_form_target_ids`) never
+    satisfy the lead requirement."""
     by_id = {e.id: e for e in app_spec.entities}
+    form_targets = _form_target_ids(app_spec)
     submit_targets = [a.target.strip() for a in app_spec.primary_actions if a.type == "submit"]
-    if any(t in by_id for t in submit_targets) or _DEFAULT_LEAD_ID in by_id:
+    if (
+        any(t in by_id and t not in form_targets for t in submit_targets)
+        or _DEFAULT_LEAD_ID in by_id
+    ):
         return app_spec
     data = app_spec.model_dump(mode="json")
     data["entities"] = [*data["entities"], synthesized_lead_entity().model_dump(mode="json")]
@@ -101,7 +122,8 @@ def ensure_lead_entity(app_spec: AppSpec) -> AppSpec:
 def resolve_lead_entity(app_spec: AppSpec) -> Entity:
     """The ONE lead entity the app persists. P0 derivation, in order:
 
-    1. the entity targeted by a `submit` primary action;
+    1. the entity targeted by a `submit` primary action — SKIPPING form-submission
+       entities (`_form_target_ids`), which own their own POST plane;
     2. an entity whose id is `lead`;
     3. otherwise the synthesized name/email/message default.
 
@@ -111,7 +133,10 @@ def resolve_lead_entity(app_spec: AppSpec) -> Entity:
         a.target.strip() for a in app_spec.primary_actions if a.type == "submit"
     ]
     by_id = {e.id: e for e in app_spec.entities}
+    form_targets = _form_target_ids(app_spec)
     for target in submit_targets:
+        if target in form_targets:
+            continue
         if target in by_id:
             return by_id[target]
     if _DEFAULT_LEAD_ID in by_id:
@@ -1598,8 +1623,26 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
 
     The lead entity is resolved (not mutated) from the AppSpec; `app_create` is
     responsible for persisting a synthesized entity back into the spec so the
-    on-disk spec and this tree never disagree."""
+    on-disk spec and this tree never disagree.
+
+    F3.1: folded FORM entities (form sections wired via `content_ref` — see
+    `form_primitive`) extend the schema/worker/drizzle output through the
+    `lower_form_*` wrappers and swap the wired form sections to the app-form
+    component. With no forms the wrappers return the base emitters' output
+    UNCHANGED, so every pre-F3.1 spec lowers byte-identically."""
+    # Lazy import (records-style): form_primitive is force-imported at the end of
+    # this module, so it is always loaded by the time generate() runs.
+    from .form_primitive import (
+        emit_app_form_component,
+        form_entities_for,
+        lower_form_drizzle_ts,
+        lower_form_schema_sql,
+        lower_form_worker_ts,
+    )
+
     lead = resolve_lead_entity(app_spec)
+    forms = form_entities_for(app_spec, lead)
+    form_by_id = {e.id: e for e in forms}
     db_name = _db_name(app_spec, lead)
     # ONE collision-free (page, section) → component-name map, shared by every emitter
     # so the imports / file paths / content keys / manifest never disagree.
@@ -1611,14 +1654,14 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         "tsconfig.json": _emit_tsconfig(),
         "vite.config.ts": _emit_vite_config(),
         "wrangler.toml": _emit_wrangler_toml(app_spec, lead),
-        "schema.sql": _emit_schema_sql(lead),
-        "worker/index.ts": _emit_worker_ts(lead),
+        "schema.sql": lower_form_schema_sql(lead, forms),
+        "worker/index.ts": lower_form_worker_ts(lead, forms),
         "src/main.tsx": _emit_main_tsx(),
         "src/App.tsx": _emit_app_tsx(app_spec, names),
         "src/api/client.ts": _emit_api_client_ts(),
         "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
         "src/styles.css": _emit_styles_css(design_spec),
-        "src/db/schema.ts": _emit_drizzle_schema_ts(lead),
+        "src/db/schema.ts": lower_form_drizzle_ts(lead, forms),
         "src/generated/content.ts": _emit_content_ts(app_spec, names),
         "src/generated/manifest.ts": _emit_manifest_ts(app_spec, design_spec, names),
         # Epic I — Cloudflare export deliverables (config completeness + owner guide).
@@ -1628,7 +1671,17 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
     }
     for page, section in _iter_sections(app_spec):
         comp = _comp_name(names, page, section)
-        files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
+        form_entity = (
+            form_by_id.get(section.content_ref)
+            if section.kind == "form" and section.content_ref is not None
+            else None
+        )
+        if form_entity is not None:
+            files[f"src/components/{comp}.tsx"] = emit_app_form_component(
+                comp, section, form_entity
+            )
+        else:
+            files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
     return dict(sorted(files.items()))
 
 
@@ -2118,6 +2171,7 @@ register_primitive(
 # Register sibling primitives that depend on the shared emitters defined above.
 importlib.import_module(".records_primitive", package=__package__)
 importlib.import_module(".hello_primitive", package=__package__)
+importlib.import_module(".form_primitive", package=__package__)
 
 
 __all__ = [
