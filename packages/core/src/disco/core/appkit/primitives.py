@@ -38,9 +38,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from .recipes import SiteRecipe
     from .spec import AppSpec, DesignSpec
 
@@ -50,19 +52,48 @@ if TYPE_CHECKING:
 LEAD_GEN_PRIMITIVE_ID = "lead_gen"
 DIRECTORY_PRIMITIVE_ID = "directory"
 RECORDS_PRIMITIVE_ID = "records"
+HELLO_PRIMITIVE_ID = "hello"
+
+
+@dataclass(frozen=True)
+class HostService:
+    """A runtime service the generated app calls at request time (e.g. "email.send",
+    "ai.chat", "storage.put"). Secrets resolve HOST-SIDE via S-W2; WO-A2 wires it.
+    WO-A0 only declares the shape."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class PrimitiveVerifyResult:
+    """Result of a primitive's adversarial build-gate verify hook. WO-A3 wires it
+    into the build gate; WO-A0 only defines the shape (default None = no extra verify)."""
+
+    ok: bool
+    detail: str = ""
 
 
 @dataclass(frozen=True)
 class PrimitiveDefinition:
     """One AppKit primitive: its id/aliases + the three pure spec→spec / spec→tree
     callables the generator and `app_create` dispatch through. Frozen so a
-    registered primitive can't be mutated after registration."""
+    registered primitive can't be mutated after registration.
+
+    The WO-A0 extension fields ALL default (`tier`/`host_contract`/`spec_schema`/
+    `verify`) so every pre-existing `PrimitiveDefinition(...)` construction — and
+    therefore its `generate()` output — is unaffected: `tier="fillable"` (the model
+    may author), no host services, no per-primitive spec schema, no extra verify
+    hook. Protect that anti-breakage guarantee when adding fields."""
 
     id: str
     default_app_spec: Callable[[str, SiteRecipe], AppSpec]
     prepare_app_spec: Callable[[AppSpec], AppSpec]
     generate: Callable[[AppSpec, DesignSpec], dict[str, str]]
     aliases: tuple[str, ...] = field(default_factory=tuple)
+    tier: Literal["fillable", "template_only"] = "fillable"
+    host_contract: tuple[HostService, ...] = ()
+    spec_schema: type[BaseModel] | None = None
+    verify: Callable[[AppSpec, DesignSpec, dict[str, str]], PrimitiveVerifyResult] | None = None
 
 
 # The registry, populated by `generator.py` at import time. Keyed by canonical id;
@@ -122,9 +153,12 @@ def primitive_ids() -> frozenset[str]:
 
 __all__ = [
     "DIRECTORY_PRIMITIVE_ID",
+    "HELLO_PRIMITIVE_ID",
     "LEAD_GEN_PRIMITIVE_ID",
     "RECORDS_PRIMITIVE_ID",
+    "HostService",
     "PrimitiveDefinition",
+    "PrimitiveVerifyResult",
     "get_primitive",
     "primitive_ids",
     "register_primitive",
