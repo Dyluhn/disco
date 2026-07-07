@@ -51,7 +51,13 @@ APPKIT_READ_TOOLS: frozenset[str] = frozenset(
 # The validated-patch AppKit mutators (spec mutate → regenerate, lint-gated). The
 # ONLY world-affecting tools offered in strict AppKit mode.
 APPKIT_MUTATORS: frozenset[str] = frozenset(
-    {"app_create", "app_add_section", "app_update_content", "app_set_design"}
+    {
+        "app_create",
+        "app_add_section",
+        "app_update_content",
+        "app_set_design",
+        "app_add_primitive",
+    }
 )
 
 # Design / readiness PROBES — verification, not productive edits. Available in the

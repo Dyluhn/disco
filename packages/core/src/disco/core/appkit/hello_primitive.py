@@ -13,10 +13,18 @@ the page subtitle.
 from __future__ import annotations
 
 import html
+import re
+from collections.abc import Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .primitives import HELLO_PRIMITIVE_ID, PrimitiveDefinition, register_primitive
+from .primitives import (
+    HELLO_PRIMITIVE_ID,
+    PrimitiveDefinition,
+    PrimitiveVerifyResult,
+    VerifyCheck,
+    register_primitive,
+)
 from .recipes import SiteRecipe
 from .spec import AppSpec, DesignSpec, Page
 
@@ -100,6 +108,77 @@ def generate_hello(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     }
 
 
+def hello_verify(
+    app: AppSpec | None, design: DesignSpec | None, tree: Mapping[str, str]
+) -> PrimitiveVerifyResult:
+    """The hello primitive's verify hook (WO-A3 proof): `index.html` is in the tree,
+    the `<h1>` carries the escaped app name, and — when pages exist — the `<p>`
+    subtitle equals the escaped first page's title (how a folded `HelloSpec`
+    headline becomes VISIBLE, see `generate_hello`). Pure: reads only `tree`."""
+    del design  # a static heading has no design surface — see default_hello_app_spec
+    checks: list[VerifyCheck] = []
+
+    index_html = tree.get("index.html")
+    checks.append(
+        VerifyCheck(
+            "hello_index_present",
+            index_html is not None,
+            "index.html is present in the workspace tree."
+            if index_html is not None
+            else "index.html is missing from the workspace — run app_create first.",
+        )
+    )
+
+    src = index_html or ""
+    h1 = re.search(r"<h1>(.*?)</h1>", src, re.DOTALL)
+    if app is None:
+        checks.append(
+            VerifyCheck(
+                "hello_headline",
+                False,
+                "no .disco/appspec.json — run app_create first.",
+            )
+        )
+    else:
+        title = html.escape(app.name)
+        headline_ok = h1 is not None and title in h1.group(1)
+        checks.append(
+            VerifyCheck(
+                "hello_headline",
+                headline_ok,
+                f"the <h1> carries the escaped app name ({title!r})."
+                if headline_ok
+                else f"index.html has no <h1> carrying the escaped app name ({title!r}).",
+            )
+        )
+
+    if app is not None and app.pages:
+        expected = html.escape(app.pages[0].title)
+        p = re.search(r"<p>(.*?)</p>", src, re.DOTALL)
+        subtitle_ok = p is not None and p.group(1) == expected
+        checks.append(
+            VerifyCheck(
+                "hello_subtitle",
+                subtitle_ok,
+                f"the <p> subtitle equals the escaped first page title ({expected!r})."
+                if subtitle_ok
+                else (
+                    f"the <p> subtitle does not equal the escaped first page title "
+                    f"({expected!r}); found {p.group(1)!r}."
+                    if p is not None
+                    else f"index.html has no <p> subtitle (expected {expected!r})."
+                ),
+            )
+        )
+
+    n_fail = sum(1 for c in checks if not c.passed)
+    return PrimitiveVerifyResult(
+        ok=n_fail == 0,
+        detail=f"{len(checks) - n_fail} passed / {n_fail} failed",
+        checks=tuple(checks),
+    )
+
+
 register_primitive(
     PrimitiveDefinition(
         id=HELLO_PRIMITIVE_ID,
@@ -109,7 +188,7 @@ register_primitive(
         tier="fillable",
         host_contract=(),
         spec_schema=HelloSpec,
-        verify=None,
+        verify=hello_verify,
         apply_spec=apply_hello_spec,
     )
 )
@@ -121,5 +200,6 @@ __all__ = [
     "apply_hello_spec",
     "default_hello_app_spec",
     "generate_hello",
+    "hello_verify",
     "prepare_hello_app_spec",
 ]

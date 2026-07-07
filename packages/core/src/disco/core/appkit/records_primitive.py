@@ -1404,6 +1404,11 @@ register_primitive(
         default_app_spec=default_records_app_spec,
         prepare_app_spec=prepare_records_app_spec,
         generate=generate_records,
+        # verify=None ON PURPOSE (WO-A3): records apps have ALWAYS fallen through to
+        # the verifier's lead-gen check bundle (the pre-dispatch else-branch), and the
+        # tool's dispatch fallback (`verify is None -> lead_gen_verify`) preserves that
+        # exactly. Give records its own verify only with its own contract checks.
+        verify=None,
     )
 )
 

@@ -2090,12 +2090,19 @@ def default_directory_app_spec(name: str, recipe: SiteRecipe) -> AppSpec:
 # `generate` is ever called or the tools resolve a primitive). lead_gen FIRST so it
 # is the fallback for any unrecognized app_kind. ------------------------------------
 
+# Imported HERE (not at the top) on purpose: primitive_verify imports THIS module
+# for the pure `resolve_lead_entity` (defined above), so the verify hooks can only
+# be imported once that name exists — the same bottom-of-module dance as the
+# importlib sibling-primitive imports below.
+from .primitive_verify import directory_verify, lead_gen_verify  # noqa: E402
+
 register_primitive(
     PrimitiveDefinition(
         id=LEAD_GEN_PRIMITIVE_ID,
         default_app_spec=default_lead_gen_app_spec,
         prepare_app_spec=ensure_lead_entity,
         generate=_generate_lead_gen,
+        verify=lead_gen_verify,
     )
 )
 register_primitive(
@@ -2104,6 +2111,7 @@ register_primitive(
         default_app_spec=default_directory_app_spec,
         prepare_app_spec=_identity_app_spec,
         generate=_generate_directory,
+        verify=directory_verify,
     )
 )
 
