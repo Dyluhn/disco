@@ -365,7 +365,7 @@ async def _call_llm(
     *,
     api_key: str | None = None,
     temperature: float = 0.7,
-    max_tokens: int = 8192,
+    max_tokens: int = 24576,
 ) -> str:
     """Call the OpenAI-compatible /chat/completions endpoint.  Returns raw text.
 
@@ -438,6 +438,35 @@ def _coerce_known_theme_aliases(data: dict) -> dict:
     if isinstance(theme, str) and theme in _THEME_ALIASES:
         data = {**data, "theme": _THEME_ALIASES[theme]}
     return data
+
+
+_VALID_LAYOUT_HINTS: frozenset[str] = frozenset(
+    get_args(get_args(AuthoredSlide.model_fields["layout_hint"].annotation)[0])
+)
+
+
+def _null_invalid_layout_hints(data: dict) -> dict:
+    """Null out off-enum ``layout_hint`` values instead of failing the deck.
+
+    ``layout_hint`` is OPTIONAL — the lowering infers a layout from ``type``/
+    ``archetype`` when it is None. Gauntlet run-1: MiniMax M3 authored creative
+    hints ("hero", "big_number") and the WHOLE outline hard-failed schema
+    validation over a nullable field, degrading the deck to the plain fallback.
+    Unknown hints now become None (a per-slide note in the retry already lists
+    the enum for fields that MUST be exact)."""
+    slides = data.get("slides")
+    if not isinstance(slides, list):
+        return data
+    fixed = []
+    changed = False
+    for s in slides:
+        if isinstance(s, dict):
+            hint = s.get("layout_hint")
+            if hint is not None and hint not in _VALID_LAYOUT_HINTS:
+                s = {**s, "layout_hint": None}
+                changed = True
+        fixed.append(s)
+    return {**data, "slides": fixed} if changed else data
 
 
 # ---------------------------------------------------------------------------
@@ -701,6 +730,7 @@ def _parse_authored_deck(raw: str) -> tuple[AuthoredDeck | None, str]:
     except json.JSONDecodeError as e:
         return None, f"JSON parse error: {e}"
     data = _coerce_known_theme_aliases(data)
+    data = _null_invalid_layout_hints(data)
     try:
         deck = AuthoredDeck.model_validate(data)
     except (ValidationError, Exception) as e:
