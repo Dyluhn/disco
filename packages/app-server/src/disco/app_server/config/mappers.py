@@ -82,6 +82,8 @@ def _endpoint_host(base_url: str | None) -> str | None:
 def _note(entry) -> str:
     """A quiet provenance caption from REAL config: context window, quant, endpoint
     — so the settings catalogue reflects what's actually deployed, not seed labels."""
+    if not entry.base_url:
+        return "not configured - add endpoint base URL"
     bits: list[str] = []
     ctx = entry.context_window
     bits.append(f"{ctx // 1000}K ctx" if ctx >= 1000 else f"{ctx} ctx")

@@ -112,6 +112,16 @@ def check_config(rt) -> Check:
         model = cfg.models.get(driver_key)
         if model is None:
             return Check("config", "FAIL", f"driver '{driver_key}' is not in the model catalogue")
+        if not model.base_url:
+            return Check(
+                "config",
+                "FAIL",
+                (
+                    "driver model is not configured: add an OpenAI-compatible "
+                    "endpoint in Settings -> Models & Providers, set it as the "
+                    "Default primary, then re-run disco-verify"
+                ),
+            )
         where = model.base_url or "(provider default)"
         return Check("config", "PASS", f"driver '{model.model_id}' → {where}")
     except Exception as exc:  # noqa: BLE001 — report the real error to the operator

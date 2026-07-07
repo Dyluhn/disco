@@ -1,17 +1,13 @@
 """First-run config seed for the container/compose deploy.
 
-`default_config()` seeds the developer's LAN model endpoints — useless to a stranger.
-This writes a RouterConfig pointed at the DEPLOYER's driver endpoint (from env) — but
-ONLY when no config file exists yet. After the first write, the file is authoritative
-and the Settings UI owns the catalogue (config_store treats it as the source of truth),
-so this never overwrites a user's edits. Run by the container entrypoint before the
-servers start.
+`default_config()` is a developer checkout seed and contains LAN endpoints that
+are not reachable on a stranger's machine. The compose image instead starts in
+an honest "model not configured" state: no driver endpoint is seeded, Settings
+owns the model catalogue, and `disco-verify` is the proof step after the user
+adds their local/LAN or paid OpenAI-compatible endpoint.
 
-Env it reads (all optional, with deploy-friendly defaults):
-  PMX_DRIVER_BASE_URL  the OpenAI-compatible /v1 endpoint of the local/BYO model
-  PMX_DRIVER_MODEL_ID  the model id the endpoint serves
-  PMX_DRIVER_CTX       its context window
-  PMX_PROJECTS_ROOT    where Build workspaces persist (a /data subdir in compose)
+This writes only when no config file exists yet. After the first write, the file
+is authoritative and the Settings UI owns the catalogue.
 """
 
 from __future__ import annotations
@@ -22,11 +18,11 @@ from disco.core.llm import (
     ConfigStore,
     ModelEntry,
     ProjectStorageSettings,
+    Requirement,
     default_config,
 )
-from disco.core.llm.types import ModelRole
 
-_DRIVER_KEY = "driver"
+_UNCONFIGURED_DRIVER_KEY = "driver-unconfigured"
 
 
 def main() -> None:
@@ -35,46 +31,49 @@ def main() -> None:
         print(f"[seed] config already at {store.path} — leaving it (Settings UI owns it)")
         return
 
-    # DISCO_* preferred, legacy PMX_* honored. No bundled driver anymore — the
-    # default points at a self-hosted OpenAI-compatible endpoint (Ollama) the
-    # deployer is expected to override in .env / Settings.
     def _env(name: str, default: str) -> str:
         return os.environ.get(f"DISCO_{name}") or os.environ.get(f"PMX_{name}", default)
 
-    base_url = _env("DRIVER_BASE_URL", "http://host.docker.internal:11434/v1")
-    model_id = _env("DRIVER_MODEL_ID", "local-model")
-    ctx = int(_env("DRIVER_CTX", "32768"))
     projects_root = _env("PROJECTS_ROOT", "/data/projects")
 
-    driver = ModelEntry(
-        model_id=model_id, provider=_DRIVER_KEY, context_window=ctx, base_url=base_url
+    unconfigured_driver = ModelEntry(
+        model_id="not-configured",
+        provider="unconfigured",
+        context_window=32_768,
+        base_url=None,
+        capabilities=frozenset(
+            {Requirement.TOOL_CALLING, Requirement.JSON_MODE, Requirement.LONG_CONTEXT}
+        ),
+        pricing_mode="free",
     )
 
     base = default_config()
-    # Keep the keyed-API fallback entries (OpenRouter — usable once the user pastes a
-    # key in Settings) but DROP the dev LAN-IP entries a stranger can't reach. Add the
-    # deployer's driver, and point every generative role at it (NLI still runs in-process
-    # via the bundled encoders, so its role assignment is just a resolvable placeholder).
+    # Keep the paid OpenRouter examples (usable after the user stores a key), but
+    # DROP every developer LAN endpoint. Empty assignments make every role fall
+    # back to the default model; once the user sets a real default, all roles can
+    # run without separately reassigning each row.
     kept = {
         k: v
         for k, v in base.models.items()
         if v.provider == "openrouter" or "openrouter" in (v.base_url or "")
     }
-    models = {_DRIVER_KEY: driver, **kept}
-    assignments = {role: _DRIVER_KEY for role in ModelRole}
+    models = {_UNCONFIGURED_DRIVER_KEY: unconfigured_driver, **kept}
 
     cfg = base.model_copy(
         update={
             "models": models,
-            "default_model": _DRIVER_KEY,
-            "assignments": assignments,
+            "default_model": _UNCONFIGURED_DRIVER_KEY,
+            "assignments": {},
             "projects": ProjectStorageSettings(projects_root=projects_root),
             # sandbox / search (ddgs) / extraction (local) / encoders (bundled ONNX)
             # keep their already-correct keyless defaults.
         }
     )
     store.save(cfg)
-    print(f"[seed] wrote {store.path}: driver '{model_id}' @ {base_url}, projects → {projects_root}")
+    print(
+        f"[seed] wrote {store.path}: model not configured yet; "
+        f"open Settings to add a driver endpoint; projects -> {projects_root}"
+    )
 
 
 if __name__ == "__main__":

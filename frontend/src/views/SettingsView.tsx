@@ -14,10 +14,20 @@ import { ProvidersSection } from "@/components/settings/ProvidersSection";
 import { RoleFallbackSection } from "@/components/settings/RoleFallbackSection";
 import { SandboxSection } from "@/components/settings/SandboxSection";
 import { SkillsSection } from "@/components/settings/SkillsSection";
-import { useImageGenConfig, useOpenRouterKey } from "@/hooks/useModels";
+import {
+  useAssignments,
+  useImageGenConfig,
+  useModels,
+  useOpenRouterKey,
+} from "@/hooks/useModels";
 import { useProjectsConfig } from "@/hooks/useProjectsConfig";
 import { useSecrets } from "@/hooks/useSecrets";
-import type { ImageGenConfig, OpenRouterKeyStatus } from "@/types/models";
+import type {
+  ImageGenConfig,
+  ModelAssignments,
+  ModelInfo,
+  OpenRouterKeyStatus,
+} from "@/types/models";
 
 const NAV = [
   { id: "models-providers", label: "Models & Providers" },
@@ -52,11 +62,28 @@ function imageGenIssue(
   return null;
 }
 
+function modelIssue(
+  models: ModelInfo[] | undefined,
+  assignments: ModelAssignments | undefined,
+): string | null {
+  if (!models || !assignments) return null;
+  const driver = models.find((m) => m.id === assignments.default_model);
+  if (!driver) {
+    return "The default primary model is missing from the catalogue.";
+  }
+  if (!(driver.base_url ?? "").trim()) {
+    return "Add an OpenAI-compatible base URL, then set that model as the Default primary.";
+  }
+  return null;
+}
+
 function SettingsAttentionBanner() {
   const { data: secrets } = useSecrets();
   const { data: openRouterKey } = useOpenRouterKey();
   const { data: imageGen } = useImageGenConfig();
   const { data: projects } = useProjectsConfig();
+  const { data: models } = useModels();
+  const { data: assignments } = useAssignments();
 
   const issues: { title: string; detail: string; href: string; cta: string }[] =
     [];
@@ -68,6 +95,15 @@ function SettingsAttentionBanner() {
       detail: "A stored key cannot be decrypted.",
       href: "#providers",
       cta: "Review providers",
+    });
+  }
+  const modelConfigIssue = modelIssue(models, assignments);
+  if (modelConfigIssue) {
+    issues.push({
+      title: "Driver model not configured",
+      detail: modelConfigIssue,
+      href: "#catalogue",
+      cta: "Configure model",
     });
   }
   const imageIssue = imageGenIssue(imageGen, openRouterKey);

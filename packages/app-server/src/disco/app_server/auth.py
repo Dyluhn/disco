@@ -129,6 +129,35 @@ def _consume_pairing_token() -> None:
     _PAIRING_TOKEN_CONSUMED = True
 
 
+def _public_ui_url() -> str:
+    explicit = (disco_env("PUBLIC_UI_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    port = (disco_env("UI_PORT", "8088") or "8088").strip() or "8088"
+    bind = (disco_env("BIND", "127.0.0.1") or "127.0.0.1").strip()
+    host = "localhost" if bind in {"", "0.0.0.0", "::"} or bind.startswith("127.") else bind
+    return f"http://{host}:{port}"
+
+
+def _print_boot_banner() -> None:
+    ui_url = _public_ui_url()
+    lines = [
+        "",
+        "================ Disco self-host boot ================",
+        f"UI: {ui_url}",
+        "First-run admin pairing:",
+        f"  Open {ui_url}",
+        "  If the browser asks for a pairing token, use this one-time token:",
+        f"  {_PAIRING_TOKEN}",
+        "After pairing, configure a driver model in Settings -> Models & Providers.",
+        "Proof step: docker compose exec agent-server disco-verify --quick",
+        "======================================================",
+        "",
+    ]
+    print("\n".join(lines), flush=True)
+    _LOG.info("Disco self-host UI: %s", ui_url)
+
+
 def _require_loopback_allowed_origin(request: Request) -> None:
     if not _is_loopback_client(request):
         raise HTTPException(status_code=403, detail={"reason": "loopback_required"})
@@ -206,6 +235,7 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
 def make_auth_router() -> APIRouter:
     router = APIRouter()
     signer = SessionSigner()
+    _print_boot_banner()
     _LOG.info("Disco one-time app-server pairing token: %s", _PAIRING_TOKEN)
 
     @router.post("/api/auth/mint")

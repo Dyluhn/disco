@@ -1,13 +1,11 @@
-# Build context trim for the server image (deploy/compose/Dockerfile.server) and
-# the sandbox image (deploy/sandbox/Dockerfile, which copies nothing). The server
-# build needs ONLY: pyproject.toml, uv.lock, packages/, scripts/, deploy/. Keep
-# everything else out of the daemon context — it's slow, and several of these
-# carry local state/secrets that must never land in an image layer.
+# Build context trim for the compose images. The server image needs
+# pyproject.toml, uv.lock, packages/, scripts/, deploy/. The frontend image is
+# built from the repo root because Vite imports two shared JS assets from
+# packages/agent-server. Keep local state/secrets out of every image context.
 
 # --- heavy / irrelevant ---
 .git
 .venv
-frontend            # built by its own frontend/Dockerfile
 node_modules
 **/__pycache__
 **/*.pyc
