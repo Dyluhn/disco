@@ -33,9 +33,8 @@ from disco.core.llm import (
 from disco.core.migration import migrate_event
 
 FIXTURE_PATH = (
-    Path(__file__).parent.parent.parent.parent
-    / "test-record"
-    / "marathon"
+    Path(__file__).parent
+    / "fixtures"
     / "events-conv_c1b4675689484c63b1f45d92d45b95be-attempt3-loop-snapshot.json"
 )
 
