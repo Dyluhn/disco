@@ -294,3 +294,101 @@ F-A framework + F-E creds ─► F-B data ─► F-C trust(RLS/secrets/WAF) ─�
 - **Novu footprint:** adds Mongo/Redis — reconcile with the single-command-deploy image-size goal in Epic P.
 - **Lago license:** confirm before bundling (may be AGPL).
 - **Parked security waves are a release prerequisite** — Epic Z must resume + finish W3/W4/W5/W6.
+
+---
+
+## 10. Execution scoping — post-WO-A1 ground truth (2026-07-07)
+
+### 10.0 F-A status
+
+| WO | Status | Commit | As-built notes (deviations from §2's sketch) |
+|----|--------|--------|-----------------------------------------------|
+| A0 | **DONE** | `68088170` | `PrimitiveDefinition` extended in place (not a new protocol): `tier` / `host_contract` / `spec_schema` / `verify`, all defaulted → the 3 existing primitives byte-identical. `HostService` + `PrimitiveVerifyResult` are frozen stdlib dataclasses (core stays stdlib-only at runtime; pydantic under TYPE_CHECKING). `hello` primitive = the mount proof. |
+| A1 | **DONE** | `f6a56ec3` | Tool is `app_add_primitive` (house `app_*` naming, plan said `add_primitive`). **Fold-into-AppSpec, not `generate(spec)→artifacts`:** a new defaulted `apply_spec(app, validated_spec)→AppSpec` hook folds the validated spec into the AppSpec and the app's own base primitive regenerates the WHOLE tree. Rationale: sandbox protocol has no delete → per-addon file overlays strand stale files (same failure app_create's cross-primitive guard refuses). Addable ⇔ `spec_schema` AND `apply_spec` both set. Validation refusals carry the expected JSON schema (self-recovering). Provenance at `.disco/primitives/<id>.json`. Free-form `spec` arg = justified ALLOW_SCHEMA_HOLES entries (both `default:` and `appkit_v2:` labels). Residual: no live AGENT call yet — lands with the first real addable primitive (3.1). |
+| A2 | scoped below | — | — |
+| A3 | scoped below | — | — |
+| A4 | scoped below | — | — |
+
+**Consequence for catalog primitives:** an addon contributes SPEC (entities/pages/actions via `apply_spec`);
+the generator's shared emitters learn to LOWER those spec shapes (exactly how `records` already lowers its
+entities to D1 + Worker routes). A per-addon `generate_addon()` file-overlay seam is NOT planned; if a future
+primitive truly needs one it must ship tree-GC first (delete support), else stale-file corruption.
+
+### 10.1 ⚠ Platform decision required BEFORE Epic F1/F2: D1/Workers vs Postgres
+
+Ground truth: every generated app today is a **Cloudflare Worker + D1 + React SPA** (wrangler.toml, workerd
+preview, D1 schema.sql — see `generator.py` / `verify_appkit_app.py`). The catalog (§4) is **Postgres-first**;
+the crown jewel 2.1 is *Postgres RLS* — **D1 has no RLS**, so 2.1 cannot exist on the current app shape, and
+1.1 (Alembic), 1.3 (pgvector), 2.4 (triggers) don't map either. Options:
+
+- **(a) Dual-track (recommended):** keep the CF shape for the existing verticals (lead_gen/directory/records
+  stay as-is); add a SECOND app shape — "persistent runtime app" (server framework + Postgres) — as the F-F
+  deliverable, and target the F1/F2/F4+ catalog at it. Mechanically: an `app_runtime` axis on AppSpec (e.g.
+  `"cf_worker" | "persistent"`) + per-primitive supported-runtimes, enforced at `app_add_primitive` time.
+  3.1 Forms can ship on the CF/D1 shape FIRST (D1 table + Worker validate route is enough for the reference
+  vertical) and gain the Postgres variant when F-F lands.
+- **(b) Postgres-only pivot:** replace the CF shape. Kills working, live-proven verticals + the deploy story
+  (wrangler) for a runtime that doesn't exist yet. Not recommended.
+- **(c) Stay D1-only:** caps the catalog at ~F3; forfeits RLS/pgvector/jobs. Not viable for the thesis.
+
+### 10.2 WO-A2 — host-service contract (decomposed)
+
+Transport ground truth: the generated Worker runs under wrangler/workerd INSIDE the sandbox; it cannot import
+host SDKs or hold secrets. So a host service call is an HTTP hop from the sandbox to the host plane, and the
+S-W2 chokepoints already implement everything security-critical about the outbound leg
+(`host_egress.guarded_request`, `secret_refs.resolve_provider_secret` + `secret_ref_allowed_for_origin`,
+`OriginApprovalStore`). Sub-orders:
+
+- **A2.1 — service registry (core, feature):** `disco.core.host_services` — `HostService.name` → handler;
+  handlers are thin adapters that ONLY compose existing S-W2 calls (resolve ref → check origin approval →
+  `guarded_request`). No new security logic permitted in handlers; a handler that needs a new enforcement
+  primitive is out of scope by definition and escalates.
+- **A2.2 — the bus endpoint (agent-server, feature + ONE security surface):** `/_disco/svc/{service}` on the
+  agent-server, reachable from the sandbox (mind the gVisor networking gotchas: reach-by-IP, no embedded DNS).
+  AUTH IS THE ONE NEW SECURITY SURFACE: v0 binds calls to the owning conversation via a per-app bearer minted
+  host-side and injected as a Worker env var (never in the tree); full minting/scopes/quota = WO-A4.
+  → the auth slice gets adversarial review (codex xhigh) + is NOT Fable-authored.
+- **A2.3 — the app-side client shim (Disco-owned, template_only-style):** generator emits `disco-client.ts`
+  (`svc("email.send", payload)` → fetch to the bus with the injected env token). The model never authors it;
+  add it to the emitted tree + `.dev.vars.example` documents the env.
+- **A2.4 — first service = `email.send` (SMTP adapter first, Novu later per locked decision #2):** acceptance
+  per plan: a generated app sends real mail with ZERO secret in code/bundle; egress origin-approved; the
+  harness greps the whole emitted tree + built bundle for the secret (build-time lint, 2.2's discipline).
+
+### 10.3 WO-A3 — verify build-gate (decomposed)
+
+- **A3.1 — dispatch (feature):** replace the hardcoded branch at `verify_appkit_app.py` (`if primitive_id ==
+  DIRECTORY... else lead_gen`, ~:1181) with `primitive.verify` dispatch; port the directory/lead_gen check
+  bundles INTO their `PrimitiveDefinition.verify` fields (behavior-preserving refactor, verdicts byte-equal).
+- **A3.2 — the gate (feature, ONE rule):** template_only primitives applied to an app ⇒ their `verify` MUST
+  pass at finish. Wire it INSIDE the shared `run_finish_verify_gates()` (`core/loop/finish/`) — **never** on
+  just one finish path (the notify/actionless valve skipped gates before; that's the finish-path-drift
+  lesson). `.disco/primitives/*.json` provenance records tell the gate WHICH primitives are applied.
+- **A3.3 — proof:** give `hello` a real `verify` (index.html exists + heading + subtitle match the folded
+  spec) and a live finish-gate run.
+- The ADVERSARIAL harness content for template_only primitives (2.1 cross-tenant, 4.1 replay, …) is per-
+  primitive Epic F work and security-classed (NOT Fable) — A3 only builds the hook they plug into.
+
+### 10.4 WO-A4 — scoped credentials / quota plane
+
+Two halves, different labor classes:
+- **Security half (NOT Fable):** token format/minting/rotation/scope model for per-app credentials; threat
+  model + codex adversarial pass. Prereq input: A2.2's v0 conversation-bound bearer.
+- **Feature half (Fable-safe):** per-app usage accounting (tokens/requests), quota config, 429 + retry-after
+  at the bus, per-service rate limits; `ai.chat` as the first metered consumer (5.1's prereq).
+
+### 10.5 Labor + sequencing map (who does what, what parallelizes)
+
+- **Serial spine (framework):** 10.1 decision → A2 → A3 → A4-feature-half → 3.1 Forms (reference vertical,
+  CF/D1 variant) → generalize. Framework WOs touch shared seams (generator, finish gates, agent-server) —
+  keep them single-writer, no fan-out.
+- **Security-classed (Opus/codex sessions, per standing rule — NOT Fable):** A2.2 auth slice, A4 security
+  half, every template_only adversarial harness (§7 table), parked S-W4/5/6 at Epic Z, Epic P3/P4
+  docker.sock flip.
+- **Fan-out-safe once 3.1 proves the pattern (worktree kit, ledger-driven):** fillable catalog primitives
+  with disjoint emitters — 1.4 cache, 6.1 analytics, 6.2 flags, 5.3 SEO, 2.4 audit-fillable-part. Each =
+  spec_schema + apply_spec + emitter + tests; the framework makes them mechanical.
+- **Big rocks needing their own campaigns:** F-F persistent runtime (7.1, XL — gates 2.3/6.4 and the
+  Postgres track per 10.1); 2.1 RLS (XL, crown jewel, template_only + harness); 6.6 MCP connectors (XL).
+- **Do-last (unchanged):** Epic Z mega-soak (resumes parked security waves) → Epic P packaging.
+
