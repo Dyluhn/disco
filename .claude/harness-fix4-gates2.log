@@ -1,7 +1,0 @@
-ERROR harness/build_soak/tests/test_bakeoff.py
-ERROR harness/build_soak/tests/test_provider_ledger_oracle.py
-!!!!!!!!!!!!!!!!!!! Interrupted: 2 errors during collection !!!!!!!!!!!!!!!!!!!!
-PYTEST_EXIT=2
-    Attribute "tool_call" is unknown (reportAttributeAccessIssue)
-37 errors, 0 warnings, 0 notes
-PYRIGHT_EXIT=1

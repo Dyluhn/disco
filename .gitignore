@@ -76,3 +76,24 @@ frontend/_*.mjs
 frontend/_a2harness*
 frontend/_a2-deck.json
 frontend/_a4_toggle*
+
+# --- close-out cull (2026-07-07) ---
+test-record/
+disco.db*
+disco-config.json*
+disco-approved-origins.json
+tmux-client-*.log
+.env
+.bashrc
+.bash_profile
+.zshrc
+.zprofile
+.profile
+.gitconfig
+.ripgreprc
+.idea/
+.vscode/
+.claude/*.log
+.claude/*.txt
+.claude/*-prompt.md
+.claude/*-review-prompt.md
