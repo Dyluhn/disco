@@ -16,6 +16,10 @@ generated tree:
 * `app_set_design`      — swap the DesignSpec (a recipe, or a raw spec only if the
                           regenerated output passes design_lint), re-save, and
                           regenerate the design/CSS files.
+* `app_add_primitive`   — (WO-A1) validate a spec against a registered primitive's
+                          declared `spec_schema`, fold it into the AppSpec via the
+                          primitive's `apply_spec`, and regenerate. The AppSpec stays
+                          the single source of truth — no per-addon file overlays.
 
 All four follow the SAME airtight cycle: load the specs from the sandbox →
 validate the mutation → regenerate the FULL tree from the mutated specs → run the
@@ -870,16 +874,159 @@ class AppSnapshotVersionTool:
             )
 
 
+# ---- app_add_primitive (WO-A1) --------------------------------------------------
+
+# Where the applied primitive specs land — under `.disco/` for the same reason as
+# the snapshots: they ride snapshot/rehydrate but are never emitted by `generate`.
+_PRIMITIVES_RELDIR = ".disco/primitives"
+
+
+def _addable_primitive_ids() -> list[str]:
+    """Primitives with BOTH a spec_schema and an apply_spec — the ones
+    app_add_primitive accepts. Base scaffolds (lead_gen, directory, …) are not."""
+    addable: list[str] = []
+    for pid in sorted(primitive_ids()):
+        prim = get_primitive(pid)
+        if prim is not None and prim.spec_schema is not None and prim.apply_spec is not None:
+            addable.append(pid)
+    return addable
+
+
+class AppAddPrimitiveArgs(BaseModel):
+    primitive_id: str = Field(
+        description="The registered ADDABLE primitive to apply (one with a declared "
+        "spec_schema). Base scaffold primitives are created with app_create instead."
+    )
+    spec: dict[str, Any] = Field(
+        description="The primitive's declarative spec (JSON), validated against the "
+        "primitive's spec_schema — a validation refusal names the offending fields "
+        "and carries the expected schema."
+    )
+
+
+class AppAddPrimitiveTool:
+    """[CONTRACT] Add a registered primitive to the CURRENT app: validate the given
+    spec against the primitive's declared `spec_schema`, fold it into the AppSpec via
+    the primitive's `apply_spec`, and regenerate the whole tree through the app's own
+    base primitive (write-on-diff). The validated spec is persisted under
+    `.disco/primitives/<id>.json` for provenance. For a `template_only` primitive the
+    model's role is spec-only: the generated output is Disco-owned."""
+
+    definition = ToolDef(
+        name="app_add_primitive",
+        description=(
+            "Add a primitive to the current app (validated patch): the `spec` JSON is "
+            "validated against the primitive's declared spec_schema, folded into the "
+            "app spec, and the tree is regenerated (write-on-diff). Requires an "
+            "existing app (run app_create first). Only spec-addable primitives are "
+            "accepted — base scaffolds (lead_gen/directory/records) are created via "
+            "app_create, not added. Re-saves .disco/appspec.json and records the "
+            "applied spec under .disco/primitives/."
+        ),
+        args_model=AppAddPrimitiveArgs,
+        needs=_FS,
+        base_risk=SecurityRisk.LOW,
+        runs_in="sandbox",
+    )
+
+    async def run(self, args: AppAddPrimitiveArgs, ctx: ToolContext) -> ToolOutcome:
+        assert ctx.sandbox is not None
+        try:
+            prim = get_primitive(args.primitive_id)
+            if prim is None:
+                raise _AppKitError(_unknown_primitive_msg(args.primitive_id))
+            if prim.spec_schema is None or prim.apply_spec is None:
+                addable = ", ".join(_addable_primitive_ids()) or "(none registered yet)"
+                raise _AppKitError(
+                    f"primitive {prim.id!r} is a base scaffold, not spec-addable — "
+                    f"create it with app_create (primitive_id={prim.id!r}) instead. "
+                    f"Addable primitives: {addable}."
+                )
+
+            app = await _load_app_spec(ctx)
+            design = await _load_design_spec(ctx)
+
+            try:
+                validated = prim.spec_schema.model_validate(args.spec)
+            except Exception as exc:  # noqa: BLE001
+                # Self-recovering refusal (RC-M): carry the expected schema so the
+                # model can correct the spec without a second discovery step.
+                schema_json = json.dumps(prim.spec_schema.model_json_schema())[:600]
+                raise _AppKitError(
+                    f"invalid {prim.id!r} spec: {exc}. Expected schema: {schema_json}"
+                ) from exc
+
+            try:
+                new_app = prim.apply_spec(app, validated)
+            except Exception as exc:  # noqa: BLE001
+                raise _AppKitError(
+                    f"applying the {prim.id!r} spec failed: {exc}"
+                ) from exc
+            if new_app.model_dump(mode="json") == app.model_dump(mode="json"):
+                # Same RC-M rule as the sibling tools: a no-op must refuse loudly,
+                # never report a hollow success the model will retry into the breaker.
+                raise _AppKitError(
+                    f"no-op: the app already reflects this {prim.id!r} spec — nothing "
+                    "changed. Send different values, or move on."
+                )
+
+            tree = generate(new_app, design)
+            _lint_gate(tree, design)
+            touched = await _apply_tree(ctx, tree)
+            await _save_app_spec(ctx, new_app)
+
+            record_relpath = f"{_PRIMITIVES_RELDIR}/{prim.id}.json"
+            record: dict[str, Any] = {
+                "primitive_id": prim.id,
+                "tier": prim.tier,
+                "applied_at": datetime.now(UTC).isoformat(),
+                "spec": validated.model_dump(mode="json"),
+            }
+            await ctx.sandbox.write_file(
+                record_relpath,
+                (json.dumps(record, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+            )
+
+            tier_note = (
+                " Its generated output is Disco-owned (template_only): contribute via "
+                "this spec only — do not hand-edit those files."
+                if prim.tier == "template_only"
+                else ""
+            )
+            return ToolOutcome(
+                success=True,
+                content=(
+                    f"app_add_primitive: applied '{prim.id}' to '{new_app.name}' — "
+                    f"updated {len(touched)} file(s).{tier_note}"
+                ),
+                structured={
+                    "primitive_id": prim.id,
+                    "tier": prim.tier,
+                    "files_written": touched,
+                    "spec_record": record_relpath,
+                    "spec": APPSPEC_RELPATH,
+                },
+                artifacts=sorted({*touched, APPSPEC_RELPATH, record_relpath}),
+            )
+        except _AppKitError as exc:
+            return ToolOutcome(
+                success=False, content=str(exc), error="app_add_primitive_refused"
+            )
+
+
 APPKIT_V2_TOOLS: tuple[type, ...] = (
     AppCreateTool,
     AppAddSectionTool,
     AppUpdateContentTool,
     AppSetDesignTool,
     AppSnapshotVersionTool,
+    AppAddPrimitiveTool,
 )
 
 
 __all__ = [
+    "AppAddPrimitiveArgs",
+    "AppAddPrimitiveTool",
     "AppAddSectionArgs",
     "AppAddSectionTool",
     "AppCreateArgs",

@@ -83,7 +83,14 @@ class PrimitiveDefinition:
     `verify`) so every pre-existing `PrimitiveDefinition(...)` construction — and
     therefore its `generate()` output — is unaffected: `tier="fillable"` (the model
     may author), no host services, no per-primitive spec schema, no extra verify
-    hook. Protect that anti-breakage guarantee when adding fields."""
+    hook. Protect that anti-breakage guarantee when adding fields.
+
+    WO-A1 adds `apply_spec` (also defaulted): fold a VALIDATED `spec_schema`
+    instance into an existing AppSpec — the `app_add_primitive` seam. A primitive
+    is "addable" iff BOTH `spec_schema` and `apply_spec` are set; the AppSpec stays
+    the single source of truth and the app's own base primitive regenerates the
+    whole tree from the folded spec (no per-addon file overlay — the sandbox
+    protocol has no delete, so overlays would strand stale files)."""
 
     id: str
     default_app_spec: Callable[[str, SiteRecipe], AppSpec]
@@ -94,6 +101,7 @@ class PrimitiveDefinition:
     host_contract: tuple[HostService, ...] = ()
     spec_schema: type[BaseModel] | None = None
     verify: Callable[[AppSpec, DesignSpec, dict[str, str]], PrimitiveVerifyResult] | None = None
+    apply_spec: Callable[[AppSpec, BaseModel], AppSpec] | None = None
 
 
 # The registry, populated by `generator.py` at import time. Keyed by canonical id;

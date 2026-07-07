@@ -31,9 +31,19 @@ from disco.tools.registry import ToolScope
 from disco.tools.workflow_scope import WorkflowPhaseState
 
 # Exact schema-location -> reason. Keep this painful: every truly free-form escape
-# must explain why a bounded object/array schema would be dishonest. Empty today
-# because all built-in tool arguments can advertise concrete structure.
-ALLOW_SCHEMA_HOLES: dict[str, str] = {}
+# must explain why a bounded object/array schema would be dishonest.
+_ADD_PRIMITIVE_SPEC_REASON = (
+    "genuinely per-primitive JSON: the spec's real shape is the target "
+    "primitive's declared spec_schema, known only at runtime and validated "
+    "there (a refusal carries the expected schema). A single static schema "
+    "for all primitives would be dishonest."
+)
+ALLOW_SCHEMA_HOLES: dict[str, str] = {
+    # the tool registers via BOTH the default registry and APPKIT_V2_TOOLS,
+    # so the same argument is scanned under two labels.
+    "default:app_add_primitive $.spec": _ADD_PRIMITIVE_SPEC_REASON,
+    "appkit_v2:app_add_primitive $.spec": _ADD_PRIMITIVE_SPEC_REASON,
+}
 
 
 @dataclass(frozen=True)

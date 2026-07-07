@@ -71,6 +71,7 @@ def test_existing_primitive_carries_wo_a0_defaults(prim_id: str) -> None:
     assert prim.host_contract == ()
     assert prim.spec_schema is None
     assert prim.verify is None
+    assert prim.apply_spec is None  # WO-A1 default: base scaffolds are not addable
 
 
 # ---- 2. the new fields exist and default on a fresh construction ---------------
@@ -89,6 +90,7 @@ def test_new_fields_default_on_fresh_definition() -> None:
     assert defn.host_contract == ()
     assert defn.spec_schema is None
     assert defn.verify is None
+    assert defn.apply_spec is None
 
 
 def test_new_fields_accept_explicit_values() -> None:
@@ -133,12 +135,16 @@ def test_primitive_verify_result_constructs_and_is_frozen() -> None:
 
 
 def test_hello_primitive_registered() -> None:
+    from disco.core.appkit.hello_primitive import HelloSpec, apply_hello_spec
+
     prim = get_primitive(HELLO_PRIMITIVE_ID)
     assert prim is not None
     assert prim.id == HELLO_PRIMITIVE_ID
     assert prim.tier == "fillable"
     assert prim.host_contract == ()
-    assert prim.spec_schema is None
+    # WO-A1 made hello ADDABLE: it declares the fill-and-validate pair.
+    assert prim.spec_schema is HelloSpec
+    assert prim.apply_spec is apply_hello_spec
     assert prim.verify is None
 
 
