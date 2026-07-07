@@ -165,6 +165,69 @@ def _sanitize_tool_name(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "", name)
 
 
+def _normalize_tool_call_ordering(msgs: list[dict]) -> list[dict]:
+    """Enforce the strict tool-call/result adjacency the wire format requires.
+
+    MiniMax (and, per the OpenAI spec, every compliant provider) rejects a
+    message list where a ``role:"tool"`` result does not IMMEDIATELY follow the
+    assistant message whose ``tool_calls`` declared its ``tool_call_id`` —
+    observed live as ``bad_request_error`` 2013, "tool call result does not
+    follow tool call". Our render pipeline (``view_render``) runs many history
+    transforms — microcompact tombstoning, context-pack insertion at index 1,
+    model-summarization condensation, prefix/tail snapshot injection, the
+    DR→agent workflow handoff — any of which can drop a turn or splice a message
+    between an assistant tool-call and its result, leaving the pair non-adjacent
+    (or the result orphaned). Lenient servers (llama.cpp, vLLM) tolerate it;
+    MiniMax does not. This is a harness-side wire-assembly defect, NOT a model
+    failure, so the repair belongs here at the serialization boundary — the
+    single choke point that owns the wire contract.
+
+    The pass rebuilds the list so that:
+      * each assistant ``tool_calls`` is immediately followed by its result
+        messages, in the SAME order the calls were declared;
+      * a declared tool_call with no result anywhere gets a minimal stub result
+        (a dropped/condensed observation — the model continues; it does not 400);
+      * an orphan ``role:"tool"`` result (its declaring assistant turn was
+        dropped) is removed.
+
+    It is a NO-OP (identical output ordering) when the list already satisfies the
+    invariant, so the cache-stable capable-model prefix is untouched on the
+    healthy path.
+    """
+    result_by_id: dict[str, dict] = {}
+    for m in msgs:
+        if m.get("role") == "tool":
+            cid = m.get("tool_call_id")
+            if cid is not None and cid not in result_by_id:
+                result_by_id[cid] = m
+
+    out: list[dict] = []
+    for m in msgs:
+        if m.get("role") == "tool":
+            # Re-emitted (in declaration order) right after its assistant turn
+            # below — skip the free-standing occurrence. An orphan result (no
+            # declaring assistant) is simply never re-emitted → dropped.
+            continue
+        out.append(m)
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                cid = tc.get("id")
+                if cid is None:
+                    continue
+                res = result_by_id.get(cid)
+                if res is not None:
+                    out.append(res)
+                else:
+                    out.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": cid,
+                            "content": "[tool result unavailable — omitted from context]",
+                        }
+                    )
+    return out
+
+
 class OpenAIProvider:
     """[CONTRACT — ModelProvider] A real OpenAI chat-completions backend."""
 
@@ -315,6 +378,10 @@ class OpenAIProvider:
 
         source_messages = [_shape(m) for m in req.messages]
         msgs = [self._message(m) for m in source_messages]
+        # Provider wire-contract guard: guarantee every tool result immediately
+        # follows the assistant tool_call that declared it (MiniMax 2013; OpenAI
+        # spec). No-op when the render pipeline already produced an adjacent list.
+        msgs = _normalize_tool_call_ordering(msgs)
         # B9: Assistant prefill. Append as a trailing
         # assistant message; compatible servers (llama.cpp, vLLM, Anthropic)
         # will continue from here.
