@@ -38,6 +38,7 @@ from .local_verify import (
     local_api_roundtrip,
 )
 from .primitives import (
+    BLOG_PRIMITIVE_ID,
     COLLECTION_PRIMITIVE_ID,
     DIRECTORY_PRIMITIVE_ID,
     FEATURE_FLAGS_PRIMITIVE_ID,
@@ -98,6 +99,8 @@ from .spec import (
     DESIGNSPEC_RELPATH,
     MAX_DESIGNSPEC_BYTES,
     Action,
+    BlogMeta,
+    BlogPostMeta,
     DesignSpec,
     Entity,
     EntityField,
@@ -155,6 +158,9 @@ __all__ = [
     "SEO_PRIMITIVE_ID",
     "STATIC_CF_EXPORT_FILES",
     "Action",
+    "BLOG_PRIMITIVE_ID",
+    "BlogMeta",
+    "BlogPostMeta",
     "BuildBrief",
     "CheckResult",
     "DesignSpec",

@@ -1306,6 +1306,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     app = prepare_records_app_spec(app)
     ordered = _fk_order_entities(app.entities)
     db_entity = ordered[0]
+    from .blog_primitive import emit_app_tsx_with_blog_routes, emit_blog_files, has_blog
     from .generator import (
         _comp_name,
         _component_names,
@@ -1372,7 +1373,11 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         "migrations/0001_init.sql": schema_sql,
         "worker/index.ts": worker_ts,
         "src/main.tsx": _emit_main_tsx(),
-        "src/App.tsx": _emit_index_app_tsx(app, names),
+        "src/App.tsx": (
+            emit_app_tsx_with_blog_routes(app, names)
+            if has_blog(app)
+            else _emit_index_app_tsx(app, names)
+        ),
         "src/api/client.ts": _emit_api_client_ts(),
         "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
         "src/styles.css": _emit_styles_css(design),
@@ -1389,6 +1394,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
             comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
         )
     # F5.3: {} when app.seo is None — the no-seo tree is byte-identical.
+    files.update(emit_blog_files(app))
     files.update(_seo_files(app))
     return dict(sorted(files.items()))
 

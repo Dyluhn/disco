@@ -23,6 +23,7 @@ from disco.core.appkit import (
     get_primitive,
     get_recipe,
 )
+from disco.core.appkit.blog_primitive import blog_verify
 from disco.core.appkit.hello_primitive import (
     HelloSpec,
     apply_hello_spec,
@@ -285,9 +286,11 @@ def test_registry_verify_hooks_wired_and_records_stays_none():
     directory = get_primitive("directory")
     records = get_primitive("records")
     hello = get_primitive("hello")
+    blog = get_primitive("blog")
     assert lead is not None and lead.verify is lead_gen_verify
     assert directory is not None and directory.verify is directory_verify
     assert hello is not None and hello.verify is hello_verify
+    assert blog is not None and blog.verify is blog_verify
     # records stays verify=None ON PURPOSE: its apps fall through to the lead-gen
     # bundle exactly as they did before the dispatch existed.
     assert records is not None and records.verify is None
