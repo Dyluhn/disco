@@ -221,9 +221,7 @@ def apply_collection_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
     else:
         page = next((p for p in pages if p["id"] == spec.page_id), None)
         if page is None:
-            raise ValueError(
-                f"unknown page_id {spec.page_id!r}; known pages: {known_page_ids}"
-            )
+            raise ValueError(f"unknown page_id {spec.page_id!r}; known pages: {known_page_ids}")
 
     section_id = section_id_for(spec.collection_id)
     # Build through the REAL Section/SectionContent models so every bound and
@@ -320,13 +318,13 @@ def generate_collection(app: AppSpec, design: DesignSpec) -> dict[str, str]:
             f"    <title>{title}</title>\n"
             "  </head>\n"
             "  <body>\n"
-            f"    <h1>{title}</h1>\n"
-            + "".join(blocks)
-            + "  </body>\n"
+            f"    <h1>{title}</h1>\n" + "".join(blocks) + "  </body>\n"
             "</html>\n"
         )
     }
 
+
+from .primitive_verify import collection_verify  # noqa: E402
 
 register_primitive(
     PrimitiveDefinition(
@@ -337,7 +335,7 @@ register_primitive(
         tier="fillable",
         host_contract=(),
         spec_schema=CollectionSpec,
-        verify=None,
+        verify=collection_verify,
         apply_spec=apply_collection_spec,
     )
 )
@@ -348,6 +346,7 @@ __all__ = [
     "CollectionItem",
     "CollectionSpec",
     "apply_collection_spec",
+    "collection_verify",
     "default_collection_app_spec",
     "generate_collection",
     "prepare_collection_app_spec",

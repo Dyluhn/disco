@@ -652,8 +652,7 @@ def ensure_workspace_dir(rel: Path | str, workspace_root: Path) -> Path:
         if cur.is_symlink():
             raise DeployRefused(
                 RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
-                f"A workspace dir component is a symlink: {part}. "
-                "Refusing to create through it.",
+                f"A workspace dir component is a symlink: {part}. Refusing to create through it.",
             )
         if cur.exists():
             if not cur.is_dir():
@@ -802,8 +801,7 @@ def _stage_deploy_tree(workspace: Path) -> Path:
     if workspace.is_symlink():
         raise DeployRefused(
             RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
-            "The workspace root is a symlink; refusing to stage/deploy through it "
-            "(fail closed).",
+            "The workspace root is a symlink; refusing to stage/deploy through it (fail closed).",
         )
     staged = Path(tempfile.mkdtemp(prefix="disco-deploy-stage-", dir=str(_deploy_stage_root())))
     try:
@@ -1106,8 +1104,26 @@ _SECRET_VALUE_RES: tuple[re.Pattern[str], ...] = (
 #: :data:`_DENY_DEPLOY_FILE_RE` is refused outright before content scanning.
 _SCANNED_TEXT_SUFFIXES = frozenset(
     {
-        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".json", ".toml", ".yaml", ".yml",
-        ".env", ".vars", ".txt", ".md", ".html", ".css", ".sql", ".sh", ".cfg", ".ini",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".mjs",
+        ".cjs",
+        ".json",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".env",
+        ".vars",
+        ".txt",
+        ".md",
+        ".html",
+        ".css",
+        ".sql",
+        ".sh",
+        ".cfg",
+        ".ini",
     }
 )
 #: Cap per-file scan size so a giant minified bundle / source map cannot turn the scan
@@ -1299,7 +1315,7 @@ def _assert_main_is_canonical(cfg: dict[str, object]) -> None:
         raise DeployRefused(
             RefusalReason.MAIN_NOT_CANONICAL,
             "wrangler.toml `main` does not EXACTLY name the canonical worker entry "
-            f"(main = \"worker/index.ts\"); got {main!r}. `wrangler deploy` runs whatever "
+            f'(main = "worker/index.ts"); got {main!r}. `wrangler deploy` runs whatever '
             "`main` points at, but the canonical-worker gate validates worker/index.ts — a "
             "non-canonical main (absolute path, '..' escape, or a look-alike dir like "
             "'....worker/index.ts') would deploy a DIFFERENT, unchecked Worker. Refusing "
@@ -1324,9 +1340,7 @@ def _assert_schema_safe_for_adopt(workspace: Path) -> None:
     existing database is REFUSED (fail closed) — a fresh ``d1 create`` is unaffected
     (empty DB), but adoption must never run owner-data-destroying SQL."""
     text = read_workspace_file(workspace / "schema.sql", workspace.resolve()) or ""
-    cleaned = "\n".join(
-        ln for ln in text.splitlines() if not ln.strip().startswith("--")
-    )
+    cleaned = "\n".join(ln for ln in text.splitlines() if not ln.strip().startswith("--"))
     for stmt in cleaned.split(";"):
         s = stmt.strip()
         if not s:
@@ -1620,8 +1634,15 @@ def _assert_worker_auth_verified(workspace: Path) -> None:
             if any(
                 k in r
                 for k in (
-                    "401", "ADMIN_TOKEN", "Bearer", "auth",
-                    "guard", "leak", "alias", "debug", "lead",
+                    "401",
+                    "ADMIN_TOKEN",
+                    "Bearer",
+                    "auth",
+                    "guard",
+                    "leak",
+                    "alias",
+                    "debug",
+                    "lead",
                 )
             )
         ] or reasons
@@ -1655,12 +1676,12 @@ def _assert_worker_is_canonical(staged: Path) -> None:
     game — every taint/route heuristic can be reworded around: a copy-of-alias token leak,
     a ``url.pathname.startsWith("/debug-leads")`` unauthenticated lead read, switch/regex
     dispatch), we REQUIRE the deployed Worker to equal the ONE Worker the generator
-    produces. The generated ``worker/index.ts`` is a PURE, deterministic function of the
-    app spec (``_emit_worker_ts(resolve_lead_entity(app_spec))`` — exactly what
-    ``generate()`` writes at that path), and it is NAMESPACE-INDEPENDENT (the SEC-30
-    namespace only renames the Worker/D1 in wrangler.toml, never the Worker source). So
-    there is no arbitrary Worker to analyse: a leak sink or an extra unauthenticated route
-    is, by construction, NOT the canonical Worker and is refused.
+    produces. The generated ``worker/index.ts`` is reconstructed by running the SAME
+    registered primitive generator that writes that path for the staged AppSpec. It is
+    NAMESPACE-INDEPENDENT (the SEC-30 namespace only renames the Worker/D1 in
+    wrangler.toml, never the Worker source). So there is no arbitrary Worker to analyse:
+    a leak sink or an extra unauthenticated route is, by construction, NOT the canonical
+    Worker and is refused.
 
     Runs on the POST-BUILD staged tree (after the sandboxed build + dist sync-back, BEFORE
     any Cloudflare mutation), which also closes the BUILD-1 TOCTOU: the pre-build auth gate
@@ -1685,8 +1706,13 @@ def _assert_worker_is_canonical(staged: Path) -> None:
             "unverifiable Worker (fail closed).",
         )
     try:
-        from disco.core.appkit.generator import _emit_worker_ts, resolve_lead_entity
-        from disco.core.appkit.spec import load_app_spec_from_bytes
+        from disco.core.appkit.generator import generate
+        from disco.core.appkit.spec import (
+            DesignSpec,
+            Palette,
+            Typography,
+            load_app_spec_from_bytes,
+        )
     except ImportError as exc:  # pragma: no cover - defensive; fail CLOSED
         raise DeployRefused(
             RefusalReason.WORKER_NOT_CANONICAL,
@@ -1695,10 +1721,26 @@ def _assert_worker_is_canonical(staged: Path) -> None:
         ) from exc
     try:
         app_spec = load_app_spec_from_bytes(spec_text)
-        canonical_worker = _emit_worker_ts(resolve_lead_entity(app_spec))
+        # The worker generators do not read design decisions; pass a fixed internal
+        # DesignSpec so reconstruction has no staged input beyond the frozen AppSpec.
+        canonical_design = DesignSpec(
+            schema_version=1,
+            typography=Typography(heading_font="Inter", body_font="Inter"),
+            palette=Palette(
+                primary="#111111",
+                surface="#ffffff",
+                text="#111111",
+                accent="#2563eb",
+            ),
+            layout_family="canonical",
+            component_style="plain",
+            density="comfortable",
+        )
+        canonical_worker = generate(app_spec, canonical_design)["worker/index.ts"]
     except Exception as exc:
-        # Malformed/oversize/schema-invalid spec, or an unresolvable lead entity: we
-        # cannot derive the canonical Worker, so we cannot trust the deployed one.
+        # Malformed/oversize/schema-invalid spec, an unloadable primitive, or a
+        # generator failure: we cannot derive the canonical Worker, so we cannot
+        # trust the deployed one.
         raise DeployRefused(
             RefusalReason.WORKER_NOT_CANONICAL,
             f"Could not regenerate the canonical Worker from the staged app spec ({exc}); "
@@ -1870,27 +1912,41 @@ def _deploy_steps(worker: str, db_name: str) -> list[DeployStep]:
     dir resolved at execute time; the display intentionally omits the secret-bearing env
     and the ADMIN_TOKEN value (piped on stdin, never argv)."""
     return [
-        DeployStep("Build the app", "npm ci && npm run build", mutating=False,
-                   note="Runs the workspace-controlled build INSIDE an isolating sandbox "
-                        "(no host-secret/filesystem access). `npm ci` installs exactly from "
-                        "the hash-covered lockfile; the built ./dist is synced back for deploy."),
-        DeployStep("Provision D1 (idempotent)",
-                   f"<wrangler> d1 list --json  ->  adopt or  <wrangler> d1 create {db_name}",
-                   mutating=True,
-                   note="Reuses the existing D1 DB by name if present; only creates when absent."),
-        DeployStep("Apply schema migrations",
-                   f"<wrangler> d1 execute {db_name} --remote --file=./schema.sql",
-                   mutating=True, note="Loads schema.sql into the remote D1 database."),
-        DeployStep("Deploy the Worker",
-                   "<wrangler> deploy --config <staged>/wrangler.toml", mutating=True,
-                   note="Publishes worker/index.ts + the built assets. Runs a TRUSTED "
-                        "wrangler binary (never `npx`) with --config pinned to the staged "
-                        "wrangler.toml (the sole config source)."),
-        DeployStep("Set the admin secret",
-                   "<wrangler> secret put ADMIN_TOKEN  (value via stdin)",
-                   mutating=True,
-                   note="ADMIN_TOKEN is piped on stdin, never argv. Deploys a new Worker "
-                        "version immediately (deploy-class)."),
+        DeployStep(
+            "Build the app",
+            "npm ci && npm run build",
+            mutating=False,
+            note="Runs the workspace-controlled build INSIDE an isolating sandbox "
+            "(no host-secret/filesystem access). `npm ci` installs exactly from "
+            "the hash-covered lockfile; the built ./dist is synced back for deploy.",
+        ),
+        DeployStep(
+            "Provision D1 (idempotent)",
+            f"<wrangler> d1 list --json  ->  adopt or  <wrangler> d1 create {db_name}",
+            mutating=True,
+            note="Reuses the existing D1 DB by name if present; only creates when absent.",
+        ),
+        DeployStep(
+            "Apply schema migrations",
+            f"<wrangler> d1 execute {db_name} --remote --file=./schema.sql",
+            mutating=True,
+            note="Loads schema.sql into the remote D1 database.",
+        ),
+        DeployStep(
+            "Deploy the Worker",
+            "<wrangler> deploy --config <staged>/wrangler.toml",
+            mutating=True,
+            note="Publishes worker/index.ts + the built assets. Runs a TRUSTED "
+            "wrangler binary (never `npx`) with --config pinned to the staged "
+            "wrangler.toml (the sole config source).",
+        ),
+        DeployStep(
+            "Set the admin secret",
+            "<wrangler> secret put ADMIN_TOKEN  (value via stdin)",
+            mutating=True,
+            note="ADMIN_TOKEN is piped on stdin, never argv. Deploys a new Worker "
+            "version immediately (deploy-class).",
+        ),
     ]
 
 
@@ -2247,6 +2303,33 @@ def assert_deploy_tree_symlink_free(workspace: Path, asset_dir_rel: str) -> Path
     return asset_dir
 
 
+def _record_deploy_step(
+    transcript: list[str],
+    label: str,
+    res: CommandResult | BuildResult,
+    secret_literals: tuple[str, ...],
+    *,
+    capture_output: bool = True,
+) -> None:
+    # ``capture_output=False`` records ONLY the label + returncode — used for the
+    # `wrangler secret put ADMIN_TOKEN` step, whose stdout/stderr could contain
+    # the admin token verbatim and must NEVER land in the transcript/record.
+    if not capture_output:
+        transcript.append(f"$ {label}\n[exit {res.returncode}]")
+        return
+
+    # Scrub literal secret values, then redact secret-shaped patterns, before
+    # anything enters the transcript. wrangler may echo ids/urls too.
+    out = res.stdout.strip()
+    err = res.stderr.strip()
+    for secret in secret_literals:
+        out = out.replace(secret, "[REDACTED]")
+        err = err.replace(secret, "[REDACTED]")
+    out = redact_text(out)
+    err = redact_text(err)
+    transcript.append(f"$ {label}\n[exit {res.returncode}]\n" + out + ("\n" + err if err else ""))
+
+
 async def _run_real_deploy(
     live_workspace: Path,
     staged: Path,
@@ -2289,35 +2372,19 @@ async def _run_real_deploy(
 
     transcript: list[str] = []
 
-    # P1: redact_text only knows FIXED secret-shaped patterns (cfut_, Bearer …) —
-    # NOT an arbitrary owner-provided ADMIN_TOKEN or this CF token's literal value.
-    # If wrangler ever echoes a secret we passed it (e.g. `secret put` echoing the
-    # stdin token), the literal value would survive redact_text. So scrub the
-    # LITERAL secret values from ANY recorded output FIRST, then apply the pattern
-    # redaction. Belt-and-suspenders alongside not recording the secret-put output.
-    _secret_literals = [s for s in (token, admin_token) if s and s.strip()]
-
-    def _scrub(text: str) -> str:
-        out = text
-        for secret in _secret_literals:
-            out = out.replace(secret, "[REDACTED]")
-        return redact_text(out)
+    # Scrub literal values before pattern redaction; the helper also avoids
+    # recording secret-put output.
+    secret_literals = tuple(s for s in (token, admin_token) if s and s.strip())
 
     def record(
         label: str, res: CommandResult | BuildResult, *, capture_output: bool = True
     ) -> None:
-        # ``capture_output=False`` records ONLY the label + returncode — used for the
-        # `wrangler secret put ADMIN_TOKEN` step, whose stdout/stderr could contain
-        # the admin token verbatim and must NEVER land in the transcript/record.
-        if not capture_output:
-            transcript.append(f"$ {label}\n[exit {res.returncode}]")
-            return
-        # Scrub literal secret values, then redact secret-shaped patterns, before
-        # anything enters the transcript. wrangler may echo ids/urls too.
-        out = _scrub(res.stdout.strip())
-        err = _scrub(res.stderr.strip())
-        transcript.append(
-            f"$ {label}\n[exit {res.returncode}]\n" + out + ("\n" + err if err else "")
+        _record_deploy_step(
+            transcript,
+            label,
+            res,
+            secret_literals,
+            capture_output=capture_output,
         )
 
     # CORR-1/SEC-1: validate the [assets].directory EARLY (absolute/`..` refused) so we
@@ -2489,8 +2556,13 @@ async def _run_real_deploy(
     # pre-planted file/hardlink at the (random) record path cannot be clobbered; later
     # updates rewrite the SAME file.
     attempt_record_path = _persist_record(
-        live_workspace, record_rel, plan, status="in_progress", mutations=mutations,
-        exclusive=True, store=store,
+        live_workspace,
+        record_rel,
+        plan,
+        status="in_progress",
+        mutations=mutations,
+        exclusive=True,
+        store=store,
     )
 
     def _fail(step: str, detail: str) -> DeployExecutionResult:
@@ -2528,7 +2600,11 @@ async def _run_real_deploy(
             return _fail("wrangler d1 create", f"d1 create failed (exit {created.returncode})")
         mutations.append(f"d1_create:{plan.db_name}")
         _persist_record(
-            live_workspace, record_rel, plan, status="in_progress", mutations=mutations,
+            live_workspace,
+            record_rel,
+            plan,
+            status="in_progress",
+            mutations=mutations,
             store=store,
         )
         database_id = _extract_database_id(created.stdout)
@@ -2563,7 +2639,12 @@ async def _run_real_deploy(
         )
     mutations.append("d1_migrate")
     _persist_record(
-        live_workspace, record_rel, plan, status="in_progress", mutations=mutations, store=store,
+        live_workspace,
+        record_rel,
+        plan,
+        status="in_progress",
+        mutations=mutations,
+        store=store,
     )
 
     # P0 (round 9): IMMEDIATELY before `wrangler deploy` — which FOLLOWS symlinks
@@ -2596,8 +2677,13 @@ async def _run_real_deploy(
     # CORR-7: persist the effective digest WITH the worker_deploy step, so a partial
     # failure AFTER the deploy (e.g. secret put) still records what was published.
     _persist_record(
-        live_workspace, record_rel, plan, status="in_progress", mutations=mutations,
-        deployed_url=_extract_url(deployed.stdout), effective_digest=effective_digest,
+        live_workspace,
+        record_rel,
+        plan,
+        status="in_progress",
+        mutations=mutations,
+        deployed_url=_extract_url(deployed.stdout),
+        effective_digest=effective_digest,
         store=store,
     )
 

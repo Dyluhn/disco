@@ -14,7 +14,7 @@ Covers, at the core layer:
   Worker route mirroring field kinds + required, the React form component with
   every field, and leaves the lead plane + content.ts intact;
 * the folded tree still PASSES the local_verify gates (schema/drizzle);
-* registration: addable (spec_schema + apply_spec), tier fillable, no verify.
+* registration: addable (spec_schema + apply_spec), tier fillable, real verify hook.
 """
 
 from __future__ import annotations
@@ -34,8 +34,8 @@ from disco.core.appkit.local_verify import (
     check_schema_sql,
 )
 from disco.core.appkit.primitives import get_primitive
-from disco.core.appkit.records_primitive import default_records_auth_app_spec
 from disco.core.appkit.recipes import get_recipe
+from disco.core.appkit.records_primitive import default_records_auth_app_spec
 from disco.core.appkit.spec import (
     Action,
     AppSpec,
@@ -159,15 +159,14 @@ def _legacy_lead_app() -> AppSpec:
                 fields=(EntityField(name="title", type="str", required=True),),
             ),
         ),
-        primary_actions=(
-            Action(id="send", label="Send", type="submit", target="enquiry"),
-        ),
+        primary_actions=(Action(id="send", label="Send", type="submit", target="enquiry"),),
     )
 
 
 def test_legacy_fallback_output_byte_identical():
-    assert _tree_hash(generate(_legacy_lead_app(), _DESIGN)) == (
-        _GOLDEN_HASHES["legacy_lead_fallback"]
+    assert (
+        _tree_hash(generate(_legacy_lead_app(), _DESIGN))
+        == (_GOLDEN_HASHES["legacy_lead_fallback"])
     )
 
 
@@ -192,7 +191,11 @@ def test_form_spec_happy_path_parses():
     spec = _form_spec()
     assert spec.form_id == "quote_request"
     assert [f.kind for f in spec.fields] == [
-        "text", "email", "textarea", "number", "checkbox",
+        "text",
+        "email",
+        "textarea",
+        "number",
+        "checkbox",
     ]
     assert spec.page_id is None
 
@@ -246,9 +249,7 @@ def test_form_spec_reserved_or_unsafe_field_name_refused(bad_name: str):
 def test_form_spec_field_count_bounds():
     with pytest.raises(ValidationError):
         _form_spec(fields=[])
-    too_many = [
-        {"name": f"field_{i}", "label": f"Field {i}", "kind": "text"} for i in range(13)
-    ]
+    too_many = [{"name": f"field_{i}", "label": f"Field {i}", "kind": "text"} for i in range(13)]
     with pytest.raises(ValidationError):
         _form_spec(fields=too_many)
 
@@ -275,7 +276,11 @@ def test_fold_appends_entity_section_and_action():
         ("subscribe", "bool", True),
     ]
     assert [f.label for f in entity.fields] == [
-        "Full name", "Email", "Project details", "Budget (USD)", "Subscribe",
+        "Full name",
+        "Email",
+        "Project details",
+        "Budget (USD)",
+        "Subscribe",
     ]
 
     page = folded.pages[0]
@@ -304,13 +309,33 @@ def test_fold_targets_explicit_page_and_refuses_unknown_page():
         apply_form_spec(app, _form_spec(page_id="pricing"))
 
 
-def test_fold_refused_on_non_lead_gen_hosts():
-    for prim_id in ("directory", "records", "hello"):
+def test_fold_refused_on_static_or_mount_proof_hosts():
+    for prim_id, msg in (
+        ("directory", "static site with no D1"),
+        ("hello", "mount-proof"),
+    ):
         prim = get_primitive(prim_id)
         assert prim is not None
         host = prim.prepare_app_spec(prim.default_app_spec("Host App", _RECIPE))
-        with pytest.raises(ValueError, match="lead_gen-shaped"):
+        with pytest.raises(ValueError, match=msg):
             apply_form_spec(host, _form_spec())
+
+
+def test_fold_records_host_generates_namespaced_form_route():
+    prim = get_primitive("records")
+    assert prim is not None
+    host = prim.prepare_app_spec(prim.default_app_spec("Host App", _RECIPE))
+    folded = apply_form_spec(host, _form_spec())
+    tree = generate(folded, _DESIGN)
+
+    assert any(e.id == "quote_request" for e in folded.entities)
+    assert 'CREATE TABLE IF NOT EXISTS "quote_requests"' in tree["schema.sql"]
+    assert '"/api/forms/quote_request"' in tree["worker/index.ts"]
+    assert '"/api/quote_requests"' not in tree["worker/index.ts"]
+    assert (
+        'const POST_PATH = "/api/forms/quote_request";'
+        in tree["src/components/HomeQuoteRequestSection.tsx"]
+    )
 
 
 def test_fold_reapply_refused_as_collision():
@@ -415,9 +440,12 @@ def test_folded_tree_keeps_classic_lead_form_and_content_ts_shape():
     _, tree = _folded_tree()
     # the original lead-capture section still posts through useSubmit("/api/leads")
     assert 'useSubmit("/api/leads")' in tree["src/components/HomeContactSection.tsx"]
-    # success_message is baked into the component, NOT content.ts (its shape and
-    # therefore every pre-F3.1 content.ts stays untouched)
-    assert "successMessage" not in tree["src/generated/content.ts"]
+    # success_message is now also in content.ts so app_update_content can reach it;
+    # the component keeps a spec-derived default literal for deterministic regeneration.
+    assert "successMessage" in tree["src/generated/content.ts"]
+    assert (
+        "Got it — we'll send a quote within two business days." in tree["src/generated/content.ts"]
+    )
 
 
 def test_folded_tree_passes_local_verify_gates():
@@ -446,7 +474,7 @@ def test_form_primitive_registered_as_addable_fillable():
     assert prim is not None
     assert prim.tier == "fillable"
     assert prim.host_contract == ()
-    assert prim.verify is None
+    assert prim.verify is not None
     assert prim.spec_schema is FormSpec
     assert prim.apply_spec is apply_form_spec
 

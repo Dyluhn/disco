@@ -123,9 +123,7 @@ def default_records_app_spec(name: str, recipe: SiteRecipe) -> AppSpec:
                 ),
             ),
         ),
-        primary_actions=(
-            Action(id="view_records", label="View records", type="nav", target="/"),
-        ),
+        primary_actions=(Action(id="view_records", label="View records", type="nav", target="/"),),
     )
 
 
@@ -213,8 +211,7 @@ def prepare_records_app_spec(app: AppSpec) -> AppSpec:
     """Validate a records app and persist it verbatim when it is already complete."""
     if app.app_kind != RECORDS_PRIMITIVE_ID:
         raise ValueError(
-            f"records primitive requires app_kind={RECORDS_PRIMITIVE_ID!r}, "
-            f"got {app.app_kind!r}"
+            f"records primitive requires app_kind={RECORDS_PRIMITIVE_ID!r}, got {app.app_kind!r}"
         )
     if not app.entities:
         raise ValueError("records primitive requires at least one entity")
@@ -243,9 +240,7 @@ def _fk_order_entities(entities: tuple[Entity, ...]) -> tuple[Entity, ...]:
         refs = {field.references for field in entity.fields if field.references is not None}
         missing = sorted(ref for ref in refs if ref not in by_id)
         if missing:
-            raise ValueError(
-                f"entity {entity.id!r} references unknown entity {missing[0]!r}"
-            )
+            raise ValueError(f"entity {entity.id!r} references unknown entity {missing[0]!r}")
         deps[entity.id] = set(refs)
 
     ordered: list[Entity] = []
@@ -318,22 +313,14 @@ def _emit_records_schema_sql(entities: tuple[Entity, ...]) -> str:
             cols.append(f'  "{field.name}" {col_type}{nullable}')
             if field.references is not None:
                 target = tables[field.references]
-                constraints.append(
-                    f'  FOREIGN KEY("{field.name}") REFERENCES "{target}"("id")'
-                )
-        cols.append('  "created_at" TEXT NOT NULL DEFAULT (datetime(\'now\'))')
+                constraints.append(f'  FOREIGN KEY("{field.name}") REFERENCES "{target}"("id")')
+        cols.append("  \"created_at\" TEXT NOT NULL DEFAULT (datetime('now'))")
         cols.extend(constraints)
         body = ",\n".join(cols)
-        blocks.append(
-            f'CREATE TABLE IF NOT EXISTS "{tables[entity.id]}" (\n'
-            f"{body}\n"
-            ");"
-        )
+        blocks.append(f'CREATE TABLE IF NOT EXISTS "{tables[entity.id]}" (\n{body}\n);')
     return (
         "-- Auto-generated D1 schema (records primitive).\n"
-        "-- Keep this migration in sync with src/db/schema.ts.\n"
-        + "\n\n".join(blocks)
-        + "\n"
+        "-- Keep this migration in sync with src/db/schema.ts.\n" + "\n\n".join(blocks) + "\n"
     )
 
 
@@ -345,7 +332,7 @@ def _emit_auth_tables_schema_sql() -> str:
         '  "password_hash" TEXT NOT NULL,\n'
         '  "password_salt" TEXT NOT NULL,\n'
         '  "role" TEXT NOT NULL,\n'
-        '  "created_at" TEXT NOT NULL DEFAULT(datetime(\'now\'))\n'
+        "  \"created_at\" TEXT NOT NULL DEFAULT(datetime('now'))\n"
         ");\n"
         "\n"
         'CREATE TABLE IF NOT EXISTS "sessions" (\n'
@@ -353,7 +340,7 @@ def _emit_auth_tables_schema_sql() -> str:
         '  "token_hash" TEXT NOT NULL UNIQUE,\n'
         '  "user_id" INTEGER NOT NULL,\n'
         '  "expires_at" TEXT NOT NULL,\n'
-        '  "created_at" TEXT NOT NULL DEFAULT(datetime(\'now\')),\n'
+        "  \"created_at\" TEXT NOT NULL DEFAULT(datetime('now')),\n"
         '  FOREIGN KEY("user_id") REFERENCES "users"("id")\n'
         ");"
     )
@@ -390,9 +377,7 @@ def _emit_records_drizzle_ts(entities: tuple[Entity, ...]) -> str:
             if field.required:
                 chain += ".notNull()"
             cols.append(f"  {field.name}: {factory}({_ts(field.name)}){chain},")
-        cols.append(
-            "  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),"
-        )
+        cols.append("  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),")
         blocks.append(
             f"export const {consts[entity.id]} = sqliteTable({_ts(tables[entity.id])}, {{\n"
             + "\n".join(cols)
@@ -402,9 +387,7 @@ def _emit_records_drizzle_ts(entities: tuple[Entity, ...]) -> str:
         "/* Auto-generated Drizzle schema - regenerated from .disco/appspec.json. */\n"
         'import { sql } from "drizzle-orm";\n'
         'import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";\n'
-        "\n"
-        + "\n\n".join(blocks)
-        + "\n"
+        "\n" + "\n\n".join(blocks) + "\n"
     )
 
 
@@ -436,10 +419,7 @@ def _emit_records_auth_drizzle_ts(entities: tuple[Entity, ...]) -> str:
         "/* Auto-generated Drizzle schema - regenerated from .disco/appspec.json. */\n"
         'import { sql } from "drizzle-orm";\n'
         'import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";\n'
-        "\n"
-        + _emit_auth_tables_drizzle_ts()
-        + "\n\n"
-        + body
+        "\n" + _emit_auth_tables_drizzle_ts() + "\n\n" + body
     )
 
 
@@ -514,9 +494,7 @@ def _ts_key(key: str) -> str:
     return _ts(key)
 
 
-def _emit_route_table(
-    entities: tuple[Entity, ...], funcs: dict[str, str]
-) -> str:
+def _emit_route_table(entities: tuple[Entity, ...], funcs: dict[str, str]) -> str:
     lines: list[str] = []
     for entity in entities:
         table = _records_table_name(entity)
@@ -531,9 +509,7 @@ def _emit_route_table(
     return "\n".join(lines)
 
 
-def _emit_auth_route_table(
-    entities: tuple[Entity, ...], funcs: dict[str, str]
-) -> str:
+def _emit_auth_route_table(entities: tuple[Entity, ...], funcs: dict[str, str]) -> str:
     from .generator import _ts
 
     lines: list[str] = []
@@ -552,11 +528,17 @@ def _emit_auth_route_table(
     return "\n".join(lines)
 
 
-def _emit_records_worker_ts(entities: tuple[Entity, ...]) -> str:
+def _emit_records_worker_ts(
+    entities: tuple[Entity, ...], form_entities: tuple[Entity, ...] = ()
+) -> str:
+    from .form_primitive import _form_const_name
+
     ordered = _fk_order_entities(entities)
     consts = _ts_const_names(entities)
     funcs = _function_names(entities)
-    imports = ", ".join(consts[entity.id] for entity in ordered)
+    imports = ", ".join(
+        [*(consts[entity.id] for entity in ordered), *(_form_const_name(e) for e in form_entities)]
+    )
     return (
         "/* Auto-generated Cloudflare Worker (records primitive): public inserts + "
         "AUTH-GATED list reads. */\n"
@@ -634,13 +616,21 @@ def _emit_records_worker_ts(entities: tuple[Entity, ...]) -> str:
     )
 
 
-def _emit_records_auth_worker_ts(app: AppSpec) -> str:
+def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...] = ()) -> str:
+    from .form_primitive import _form_const_name
     from .generator import _ts
 
     ordered = _fk_order_entities(app.entities)
     consts = _ts_const_names(app.entities)
     funcs = _function_names(app.entities)
-    imports = ", ".join(("users", "sessions", *(consts[entity.id] for entity in ordered)))
+    imports = ", ".join(
+        (
+            "users",
+            "sessions",
+            *(consts[entity.id] for entity in ordered),
+            *(_form_const_name(e) for e in form_entities),
+        )
+    )
     return (
         "/* Auto-generated Cloudflare Worker (records primitive): session auth + RBAC.\n"
         "   When roles are declared, every entity read/write requires a valid per-user\n"
@@ -847,10 +837,11 @@ def _emit_auth_crypto_ts() -> str:
         "const PBKDF2_ITERATIONS = 100000;\n"
         "const PASSWORD_BITS = 256;\n\n"
         'const DUMMY_LOGIN_SALT_HEX = "000102030405060708090a0b0c0d0e0f";\n\n'
-        'const DUMMY_LOGIN_HASH_HEX = "124e4e5ea9e8daf1710f215192eda6bf79ff9ce9b977e7e0d754392319f6fa68";\n\n'
+        'const DUMMY_LOGIN_HASH_HEX = "'
+        '124e4e5ea9e8daf1710f215192eda6bf79ff9ce9b977e7e0d754392319f6fa68";\n\n'
         "function bytesToHex(bytes: Uint8Array): string {\n"
         '  let out = "";\n'
-        "  for (const byte of bytes) out += byte.toString(16).padStart(2, \"0\");\n"
+        '  for (const byte of bytes) out += byte.toString(16).padStart(2, "0");\n'
         "  return out;\n"
         "}\n\n"
         "function hexToBytes(hex: string): Uint8Array | null {\n"
@@ -941,7 +932,7 @@ def _emit_auth_session_ts() -> str:
         '  const header = request.headers.get("Cookie") ?? "";\n'
         '  for (const piece of header.split(";")) {\n'
         "    const part = piece.trim();\n"
-        "    const eqAt = part.indexOf(\"=\");\n"
+        '    const eqAt = part.indexOf("=");\n'
         "    if (eqAt <= 0) continue;\n"
         "    if (part.slice(0, eqAt) === name) return part.slice(eqAt + 1);\n"
         "  }\n"
@@ -984,9 +975,10 @@ def _emit_auth_session_ts() -> str:
         "  if (!ROLES.includes(row.role)) return null;\n"
         "  return { tokenHash, userId: row.userId, role: row.role };\n"
         "}\n\n"
-        "function authorizeSession(session: UserSession | null, roles: string[]): Response | null {\n"
+        "function authorizeSession("
+        "session: UserSession | null, roles: string[]): Response | null {\n"
         '  if (session === null) return json({ error: "unauthorized" }, 401);\n'
-        '  if (roles.length > 0 && !roles.includes(session.role)) {\n'
+        "  if (roles.length > 0 && !roles.includes(session.role)) {\n"
         '    return json({ error: "forbidden" }, 403);\n'
         "  }\n"
         "  return null;\n"
@@ -1014,7 +1006,8 @@ def _emit_auth_endpoints_ts() -> str:
         "  env: Env,\n"
         "  body: unknown\n"
         "): Promise<Response> {\n"
-        '  if (!(await isAdminAuthorized(request, env))) return json({ error: "unauthorized" }, 401);\n'
+        "  if (!(await isAdminAuthorized(request, env))) "
+        'return json({ error: "unauthorized" }, 401);\n'
         "  const check = validateRegister(body);\n"
         "  if (!check.ok) return json({ error: check.error }, 400);\n"
         "  const db = drizzle(env.DB);\n"
@@ -1098,7 +1091,8 @@ def _emit_auth_fetch_ts() -> str:
         '  return json({ error: "unsupported media type" }, 415);\n'
         "}\n\n"
         "function rawPathname(requestUrl: string, origin: string): string {\n"
-        "  const rest = requestUrl.startsWith(origin) ? requestUrl.slice(origin.length) : requestUrl;\n"
+        "  const rest = requestUrl.startsWith(origin) "
+        "? requestUrl.slice(origin.length) : requestUrl;\n"
         "  const end = rest.search(/[?#]/);\n"
         "  const path = end === -1 ? rest : rest.slice(0, end);\n"
         '  return path === "" ? "/" : path;\n'
@@ -1304,7 +1298,30 @@ def _emit_records_legacy_manifest_ts(
 def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     """Lower a records AppSpec into a Cloudflare app tree."""
     app = prepare_records_app_spec(app)
-    ordered = _fk_order_entities(app.entities)
+    from .form_primitive import (
+        emit_app_form_component,
+        emit_form_drizzle_ts,
+        emit_form_schema_sql,
+        form_route_for,
+        form_submission_entities_for,
+        lower_form_records_worker_ts,
+    )
+
+    form_entities = form_submission_entities_for(app)
+    form_entity_ids = {entity.id for entity in form_entities}
+    record_entities = tuple(entity for entity in app.entities if entity.id not in form_entity_ids)
+    if not record_entities:
+        raise ValueError("records primitive requires at least one non-form entity")
+    if form_entities:
+        data = app.model_dump(mode="json")
+        data["entities"] = [
+            entity for entity in data["entities"] if entity["id"] not in form_entity_ids
+        ]
+        records_app = AppSpec.model_validate(data)
+    else:
+        records_app = app
+    form_routes = {entity.id: form_route_for(app, entity) for entity in form_entities}
+    ordered = _fk_order_entities(record_entities)
     db_entity = ordered[0]
     from .blog_primitive import emit_app_tsx_with_blog_routes, emit_blog_files, has_blog
     from .generator import (
@@ -1334,20 +1351,29 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     names = _component_names(app)
     auth_enabled = bool(app.roles)
     schema_sql = (
-        _emit_records_auth_schema_sql(app.entities)
+        _emit_records_auth_schema_sql(record_entities)
         if auth_enabled
-        else _emit_records_schema_sql(app.entities)
+        else _emit_records_schema_sql(record_entities)
     )
+    form_schema = emit_form_schema_sql(form_entities)
+    if form_schema:
+        schema_sql = "\n".join([schema_sql, form_schema])
     worker_ts = (
-        _emit_records_auth_worker_ts(app)
+        _emit_records_auth_worker_ts(records_app, form_entities)
         if auth_enabled
-        else _emit_records_worker_ts(app.entities)
+        else _emit_records_worker_ts(record_entities, form_entities)
+    )
+    worker_ts = lower_form_records_worker_ts(
+        worker_ts, form_entities, form_routes, auth_enabled=auth_enabled
     )
     drizzle_ts = (
-        _emit_records_auth_drizzle_ts(app.entities)
+        _emit_records_auth_drizzle_ts(record_entities)
         if auth_enabled
-        else _emit_records_drizzle_ts(app.entities)
+        else _emit_records_drizzle_ts(record_entities)
     )
+    form_drizzle = emit_form_drizzle_ts(form_entities)
+    if form_drizzle:
+        drizzle_ts = "\n".join([drizzle_ts, form_drizzle])
     owner_guide = (
         _emit_records_auth_owner_guide_md(app, db_name)
         if auth_enabled
@@ -1390,18 +1416,26 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     }
     for page, section in _iter_sections(app):
         comp = _comp_name(names, page, section)
-        files[f"src/components/{comp}.tsx"] = _emit_component(
-            comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
+        form_entity = (
+            next((entity for entity in form_entities if entity.id == section.content_ref), None)
+            if section.kind == "form" and section.content_ref is not None
+            else None
         )
+        if form_entity is not None:
+            files[f"src/components/{comp}.tsx"] = emit_app_form_component(
+                comp, section, form_entity, post_path=form_routes[form_entity.id]
+            )
+        else:
+            files[f"src/components/{comp}.tsx"] = _emit_component(
+                comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
+            )
     # F5.3: {} when app.seo is None — the no-seo tree is byte-identical.
     files.update(emit_blog_files(app))
     files.update(_seo_files(app))
     return dict(sorted(files.items()))
 
 
-def _emit_index_app_tsx(
-    app: AppSpec, names: dict[tuple[str, str], str]
-) -> str:
+def _emit_index_app_tsx(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
     from .generator import _emit_app_tsx
 
     return _emit_app_tsx(app, names)

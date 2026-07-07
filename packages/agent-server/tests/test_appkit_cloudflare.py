@@ -41,6 +41,7 @@ from disco.core.appkit import (
     get_recipe,
     save_app_spec,
 )
+from disco.core.appkit.form_primitive import FormSpec, apply_form_spec
 from disco.core.llm.secrets import SecretBox, SecretStore
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import ProjectStore
@@ -108,8 +109,7 @@ class _RouteTestClient:
                 "query_string": parsed.query.encode("ascii"),
                 "root_path": "",
                 "headers": [
-                    (k.lower().encode("latin-1"), v.encode("latin-1"))
-                    for k, v in headers.items()
+                    (k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in headers.items()
                 ],
                 "client": ("testclient", 50000),
                 "server": ("testserver", 80),
@@ -309,9 +309,7 @@ class FakeRunner:
         self.wrangler_toml_at_deploy: str | None = None
 
     async def run(self, argv, *, cwd, env, stdin=None):  # noqa: ANN001
-        self.calls.append(
-            {"argv": list(argv), "env": dict(env), "stdin": stdin, "cwd": str(cwd)}
-        )
+        self.calls.append({"argv": list(argv), "env": dict(env), "stdin": stdin, "cwd": str(cwd)})
         joined = " ".join(argv)
         if self._fail_on and self._fail_on in joined:
             return CommandResult(1, "", f"boom: {self._fail_on}")
@@ -540,8 +538,12 @@ async def test_gate_autonomous_refused(workspace: Path, connected: SecretStore):
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation="anything",
-            autonomous=True, runner=runner,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation="anything",
+            autonomous=True,
+            runner=runner,
         )
     )
     assert reason == RefusalReason.AUTONOMOUS
@@ -612,8 +614,12 @@ async def test_real_deploy_token_in_env_not_argv(workspace: Path, connected: Sec
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(),
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
         admin_token="super-secret-admin-token-xyz",
     )
     assert result.executed and not result.dry_run
@@ -639,8 +645,12 @@ async def test_real_deploy_record_has_no_secret(workspace: Path, connected: Secr
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(),
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
         admin_token="super-secret-admin-token-xyz",
     )
     rec = Path(result.record_path).read_text()
@@ -670,9 +680,7 @@ def test_cross_process_lock_path_is_outside_workspace(workspace: Path, tmp_path:
     assert cf._deploy_lock_path(workspace) == p
 
 
-async def test_deploy_refused_when_cross_process_lock_held(
-    workspace: Path, connected: SecretStore
-):
+async def test_deploy_refused_when_cross_process_lock_held(workspace: Path, connected: SecretStore):
     """SEC-25: when ANOTHER process (simulated by an independent fd holding the flock on
     the SAME lockfile) holds the cross-process lock, a real deploy is REFUSED fast with
     DEPLOY_IN_PROGRESS and the critical section never runs (the runner is untouched)."""
@@ -688,8 +696,13 @@ async def test_deploy_refused_when_cross_process_lock_held(
     try:
         with pytest.raises(cf.DeployRefused) as ei:
             await cf.execute_deploy(
-                workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-                runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+                workspace,
+                connected,
+                dry_run=False,
+                confirmation=plan.confirmation_phrase,
+                runner=runner,
+                build_backend=FakeBuildBackend(),
+                admin_token=_APP_ADMIN_TOKEN,
             )
         assert ei.value.reason is RefusalReason.DEPLOY_IN_PROGRESS
         # The critical section did NOT run — no wrangler call, no deployment record.
@@ -709,8 +722,13 @@ async def test_uncontended_deploy_acquires_and_releases_lock(
 
     plan = cf.build_plan(workspace, connected)
     r1 = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=FakeRunner(),
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert r1.executed and r1.succeeded
     # The lock is RELEASED: an independent fd can immediately re-acquire it non-blocking.
@@ -724,9 +742,13 @@ async def test_uncontended_deploy_acquires_and_releases_lock(
     # And a fresh redeploy (lock free) runs to completion again.
     plan2 = cf.build_plan(workspace, connected)
     r2 = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan2.confirmation_phrase,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan2.confirmation_phrase,
         runner=FakeRunner(worker_exists=True, d1_list_has=plan2.db_name),
-        build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert r2.executed and r2.succeeded
 
@@ -746,8 +768,13 @@ async def test_stale_lockfile_does_not_deadlock(workspace: Path, connected: Secr
     assert lock_path.exists()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=FakeRunner(),
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
 
@@ -763,8 +790,13 @@ async def test_non_posix_host_degrades_to_in_process_lock(
     plan = cf.build_plan(workspace, connected)
     with caplog.at_level(logging.WARNING, logger=cf._log.name):
         result = await cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=FakeRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     assert result.executed and result.succeeded
     assert any("process-local only" in r.message for r in caplog.records)
@@ -775,8 +807,13 @@ async def test_idempotent_redeploy_adopts_existing_d1(workspace: Path, connected
     _seed_ownership_record(workspace, plan, connected)  # SEC-10: a prior record proves ownership
     runner = FakeRunner(d1_list_has=plan.db_name)  # DB already exists by name
     await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     # d1 create must NOT be called when the DB is already present.
     assert not any(_is_d1_create(c["argv"]) for c in runner.calls)
@@ -794,8 +831,13 @@ async def test_build_dispatched_to_sandbox_not_host_subprocess(
     build_backend = FakeBuildBackend()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=build_backend, admin_token="app-admin-token-xyz",
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=build_backend,
+        admin_token="app-admin-token-xyz",
     )
     assert result.executed and result.succeeded
     # The build was dispatched to the sandbox backend exactly once.
@@ -816,8 +858,12 @@ async def test_real_deploy_refused_when_build_cannot_be_sandboxed(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=None,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=None,
         )
     )
     assert reason == RefusalReason.BUILD_NOT_SANDBOXED
@@ -825,8 +871,12 @@ async def test_real_deploy_refused_when_build_cannot_be_sandboxed(
     # A non-isolating backend (e.g. the same-user `process` backend) is also refused.
     reason2 = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(isolated=False),
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(isolated=False),
         )
     )
     assert reason2 == RefusalReason.BUILD_NOT_SANDBOXED
@@ -841,8 +891,13 @@ async def test_build_install_is_deterministic_npm_ci(workspace: Path, connected:
     build_backend = FakeBuildBackend()
     plan = cf.build_plan(workspace, connected)
     await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=build_backend, admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=build_backend,
+        admin_token=_APP_ADMIN_TOKEN,
     )
     call = build_backend.calls[0]
     # `npm ci` installs EXACTLY from the hash-covered package-lock.json — not a
@@ -863,8 +918,13 @@ async def test_database_id_substituted_before_deploy_on_create(
     runner = FakeRunner()  # d1_list empty → create path
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     # At the moment deploy ran, the placeholder was already gone, replaced by the id.
@@ -882,8 +942,13 @@ async def test_database_id_substituted_before_deploy_on_adopt(
     _seed_ownership_record(workspace, plan, connected)  # SEC-10: prior record proves ownership
     runner = FakeRunner(d1_list_has=plan.db_name)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.succeeded
     assert runner.wrangler_toml_at_deploy is not None
@@ -891,9 +956,7 @@ async def test_database_id_substituted_before_deploy_on_adopt(
     assert "REPLACE_WITH_D1_DATABASE_ID" not in runner.wrangler_toml_at_deploy
 
 
-async def test_deploy_aborts_when_database_id_unresolved(
-    workspace: Path, connected: SecretStore
-):
+async def test_deploy_aborts_when_database_id_unresolved(workspace: Path, connected: SecretStore):
     # If wrangler output yields no usable database_id, FAIL CLOSED — never deploy a
     # Worker with an unbound (placeholder) D1 binding.
     class _NoIdRunner(FakeRunner):
@@ -906,8 +969,13 @@ async def test_deploy_aborts_when_database_id_unresolved(
     plan = cf.build_plan(workspace, connected)
     runner = _NoIdRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert not result.succeeded and not result.executed
     assert "database_id" in (result.failed_step or "")
@@ -925,8 +993,13 @@ async def test_asset_dir_passed_through_to_build(workspace: Path, connected: Sec
     bb = FakeBuildBackend()
     plan = cf.build_plan(workspace, connected)
     await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=bb, admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=bb,
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert bb.calls[0]["asset_dir"] == "dist"
 
@@ -941,8 +1014,13 @@ async def test_custom_asset_dir_synced(workspace: Path, connected: SecretStore):
     bb = FakeBuildBackend()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=bb, admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=bb,
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert bb.calls[0]["asset_dir"] == "build"
@@ -958,8 +1036,13 @@ async def test_root_asset_dir_refused(workspace: Path, connected: SecretStore):
     plan = cf.build_plan(workspace, connected)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=FakeRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.ASSET_DIR_UNSAFE
@@ -974,8 +1057,13 @@ async def test_relative_path_wrangler_refused(workspace: Path, connected: Secret
     plan = cf.build_plan(workspace, connected)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=FakeRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WRANGLER_NOT_TRUSTED
@@ -993,8 +1081,13 @@ async def test_wrangler_extra_key_rejected(workspace: Path, connected: SecretSto
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WRANGLER_CONFIG_REJECTED
@@ -1021,8 +1114,13 @@ async def test_alt_wrangler_json_config_refused(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.ALT_WRANGLER_CONFIG
@@ -1035,15 +1133,18 @@ async def test_wrangler_redirect_config_refused_and_excluded_from_staging(
     # Plant a `.wrangler/deploy/config.json` redirect pointing at an arbitrary alt config.
     redirect = workspace / ".wrangler" / "deploy" / "config.json"
     redirect.parent.mkdir(parents=True, exist_ok=True)
-    redirect.write_text(
-        json.dumps({"configPath": "../../evil/wrangler.jsonc"}), encoding="utf-8"
-    )
+    redirect.write_text(json.dumps({"configPath": "../../evil/wrangler.jsonc"}), encoding="utf-8")
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.ALT_WRANGLER_CONFIG
@@ -1086,8 +1187,12 @@ async def test_build_emitted_alt_config_refused_before_wrangler(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=_AltConfigEmittingBuildBackend(),
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=_AltConfigEmittingBuildBackend(),
             admin_token=_APP_ADMIN_TOKEN,
         )
     )
@@ -1113,15 +1218,18 @@ async def test_ancestor_wrangler_redirect_refused(
     stage_root = _isolated_deploy_stage_dir
     redirect = stage_root / ".wrangler" / "deploy" / "config.json"
     redirect.parent.mkdir(parents=True, exist_ok=True)
-    redirect.write_text(
-        json.dumps({"configPath": "../../evil/wrangler.jsonc"}), encoding="utf-8"
-    )
+    redirect.write_text(json.dumps({"configPath": "../../evil/wrangler.jsonc"}), encoding="utf-8")
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.ANCESTOR_WRANGLER_CONFIG
@@ -1138,8 +1246,13 @@ async def test_ancestor_wrangler_dir_alone_refused(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.ANCESTOR_WRANGLER_CONFIG
@@ -1162,8 +1275,13 @@ async def test_ancestor_wrangler_symlink_not_dereferenced(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.ANCESTOR_WRANGLER_CONFIG
@@ -1176,8 +1294,13 @@ async def test_clean_ancestor_chain_deploys(workspace: Path, connected: SecretSt
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_deploy(c["argv"]) for c in runner.calls)  # wrangler deploy DID run
@@ -1209,8 +1332,13 @@ async def test_config_account_id_refused(workspace: Path, connected: SecretStore
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WRANGLER_CONFIG_REJECTED
@@ -1225,8 +1353,13 @@ async def test_deploy_argv_pins_config_to_staged_wrangler_toml(
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     deploy_call = next(c for c in runner.calls if _is_deploy(c["argv"]))
@@ -1243,8 +1376,13 @@ async def test_weak_admin_token_rejected(workspace: Path, connected: SecretStore
     plan = cf.build_plan(workspace, connected)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token="short",
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=FakeRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token="short",
         )
     )
     assert reason == RefusalReason.ADMIN_TOKEN_WEAK
@@ -1261,8 +1399,13 @@ async def test_malformed_toml_refuses_not_500(tmp_path: Path, connected: SecretS
     assert not plan.export_ready
     reason = await _refusal(
         cf.execute_deploy(
-            ws, connected, dry_run=False, confirmation="x",
-            runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            ws,
+            connected,
+            dry_run=False,
+            confirmation="x",
+            runner=FakeRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.EXPORT_NOT_READY
@@ -1291,8 +1434,13 @@ async def test_d1_list_non_uuid_rejected_no_fallback(workspace: Path, connected:
 
     runner = _BadIdRunner(d1_list_has=plan.db_name)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert not result.succeeded and not result.executed
     assert "database_id" in (result.failed_step or "")
@@ -1306,8 +1454,13 @@ async def test_adopt_unrelated_d1_refused(workspace: Path, connected: SecretStor
     runner = FakeRunner(d1_list_has=plan.db_name)  # exists, but no ownership record
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.UNRELATED_RESOURCE
@@ -1325,8 +1478,13 @@ async def test_destructive_schema_refused_on_adopt(workspace: Path, connected: S
     runner = FakeRunner(d1_list_has=plan.db_name)  # adopt path
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.SCHEMA_UNSAFE
@@ -1341,8 +1499,13 @@ async def test_pre_mutation_attempt_record_and_partial_failure_recorded(
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner(fail_on="d1 execute")  # create ok, migrate fails
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert not result.succeeded
     assert result.attempt_record_path is not None
@@ -1362,8 +1525,13 @@ async def test_success_records_all_mutations(workspace: Path, connected: SecretS
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert result.attempt_record_path == result.record_path
@@ -1376,15 +1544,18 @@ async def test_success_records_all_mutations(workspace: Path, connected: SecretS
 # ---- P1-5: a failed step ABORTS before later mutations ----------------------
 
 
-async def test_failed_build_aborts_before_any_mutation(
-    workspace: Path, connected: SecretStore
-):
+async def test_failed_build_aborts_before_any_mutation(workspace: Path, connected: SecretStore):
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     # The SANDBOXED build fails → abort before any Cloudflare mutation.
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(fail=True), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(fail=True),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert not result.succeeded and not result.executed
     assert result.failed_step == "npm ci && npm run build"
@@ -1393,14 +1564,17 @@ async def test_failed_build_aborts_before_any_mutation(
     assert not any(_is_wrangler(c["argv"]) for c in runner.calls)
 
 
-async def test_failed_migration_aborts_before_deploy(
-    workspace: Path, connected: SecretStore
-):
+async def test_failed_migration_aborts_before_deploy(workspace: Path, connected: SecretStore):
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner(fail_on="d1 execute")  # migration fails
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token="app-admin-token-xyz",
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token="app-admin-token-xyz",
     )
     assert not result.succeeded
     assert "migrate" in (result.failed_step or "")
@@ -1738,7 +1912,8 @@ async def test_build_allows_local_only_with_explicit_override(tmp_path: Path):
     (ws / "package.json").write_text('{"name":"app"}', encoding="utf-8")
     svc = _ConfigurableService(_RecordingSandboxInstance(), name="local")
     backend = sb.SandboxBuildBackend(
-        _ConfigurableRuntime(svc), allow_local_isolation=True  # type: ignore[arg-type]
+        _ConfigurableRuntime(svc),
+        allow_local_isolation=True,  # type: ignore[arg-type]
     )
     result = await backend.build(ws, install_cmd="npm ci", build_cmd="npm run build")
 
@@ -2452,14 +2627,17 @@ class _AdminEchoRunner(FakeRunner):
         return res
 
 
-async def test_admin_token_never_in_transcript_or_record(
-    workspace: Path, connected: SecretStore
-):
+async def test_admin_token_never_in_transcript_or_record(workspace: Path, connected: SecretStore):
     runner = _AdminEchoRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     # The fake wrangler DID echo the token (prove the test is exercising the leak).
@@ -2496,8 +2674,13 @@ async def test_admin_token_literal_scrubbed_even_if_echoed_in_a_recorded_step(
     runner = _DeployEchoRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed
     joined = "\n".join(result.transcript)
@@ -2517,8 +2700,13 @@ async def test_real_deploy_requires_admin_token(workspace: Path, connected: Secr
     backend = FakeBuildBackend()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=backend, admin_token=None,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=backend,
+            admin_token=None,
         )
     )
     assert reason == RefusalReason.ADMIN_TOKEN_REQUIRED
@@ -2526,8 +2714,13 @@ async def test_real_deploy_requires_admin_token(workspace: Path, connected: Secr
     # A whitespace-only admin_token is likewise refused.
     reason2 = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=FakeRunner(), build_backend=FakeBuildBackend(), admin_token="   ",
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=FakeRunner(),
+            build_backend=FakeBuildBackend(),
+            admin_token="   ",
         )
     )
     assert reason2 == RefusalReason.ADMIN_TOKEN_REQUIRED
@@ -2595,19 +2788,28 @@ def _build_app(
             # A global CORS that REFLECTS an arbitrary Origin (credentialed) — the
             # strict middleware must still strip it on the deploy paths (CORR-26).
             app.add_middleware(
-                CORSMiddleware, allow_origin_regex=".*", allow_credentials=True,
-                allow_methods=["*"], allow_headers=["*"],
+                CORSMiddleware,
+                allow_origin_regex=".*",
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
             )
         else:
             app.add_middleware(
-                CORSMiddleware, allow_origins=["*"], allow_credentials=False,
-                allow_methods=["*"], allow_headers=["*"],
+                CORSMiddleware,
+                allow_origins=["*"],
+                allow_credentials=False,
+                allow_methods=["*"],
+                allow_headers=["*"],
             )
         app.add_middleware(CloudflareDeployCorsMiddleware)
     app.include_router(
         make_cloudflare_router(
-            SqliteEventStore(":memory:"), _FakeRuntime(ps),
-            runner=runner, build_backend=build_backend, verifier=verifier or FakeVerifier(),
+            SqliteEventStore(":memory:"),
+            _FakeRuntime(ps),
+            runner=runner,
+            build_backend=build_backend,
+            verifier=verifier or FakeVerifier(),
         )
     )
     return app, ps, cid
@@ -2628,7 +2830,10 @@ def _client(
     # default. ``owner_auth=False`` builds an UNauthenticated client (→ 401).
     monkeypatch.setenv("DISCO_ADMIN_TOKEN", _OWNER_TOKEN)
     app, ps, cid = _build_app(
-        tmp_path, runner=runner, build_backend=build_backend, verifier=verifier,
+        tmp_path,
+        runner=runner,
+        build_backend=build_backend,
+        verifier=verifier,
         cors=("strict" if with_cors else cors),
     )
     headers = dict(_OWNER_HEADERS) if owner_auth else {}
@@ -2654,12 +2859,8 @@ def test_route_deploy_plan_dry_run(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     client, _ps, cid = _client(tmp_path, monkeypatch)
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
-    plan = client.post(
-        "/api/appkit/cloudflare/deploy-plan", json={"conversation_id": cid}
-    ).json()
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
+    plan = client.post("/api/appkit/cloudflare/deploy-plan", json={"conversation_id": cid}).json()
     assert plan["export_ready"] and plan["connected"]
     assert plan["confirmation_phrase"]
 
@@ -2671,9 +2872,7 @@ def test_route_deploy_default_dry_run_then_real(tmp_path: Path, monkeypatch):
     client, _ps, cid = _client(
         tmp_path, monkeypatch, runner=runner, build_backend=FakeBuildBackend()
     )
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     # default dry-run: executes nothing.
     res = client.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid})
     assert res.status_code == 200
@@ -2684,7 +2883,9 @@ def test_route_deploy_default_dry_run_then_real(tmp_path: Path, monkeypatch):
     res2 = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": phrase,
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -2697,9 +2898,7 @@ def test_route_deploy_refusal_no_confirmation(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     client, _ps, cid = _client(tmp_path, monkeypatch, runner=FakeRunner())
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     res = client.post(
         "/api/appkit/cloudflare/deploy", json={"conversation_id": cid, "dry_run": False}
     )
@@ -2715,9 +2914,7 @@ def test_route_deploy_refused_without_isolating_sandbox(tmp_path: Path, monkeypa
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     runner = FakeRunner()
     client, _ps, cid = _client(tmp_path, monkeypatch, runner=runner)  # build_backend=None
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     dry = client.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid}).json()
     phrase = dry["plan"]["confirmation_phrase"]
     res = client.post(
@@ -2734,9 +2931,7 @@ def test_route_deploy_refusal_autonomous_env(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     monkeypatch.setenv("DISCO_AUTONOMOUS", "1")
     client, _ps, cid = _client(tmp_path, monkeypatch, runner=FakeRunner())
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={"conversation_id": cid, "dry_run": False, "confirmation": "whatever"},
@@ -2756,11 +2951,13 @@ def test_route_requires_owner_auth(tmp_path: Path, monkeypatch):
     client, _ps, cid = _client(tmp_path, monkeypatch, runner=runner, owner_auth=False)
     for method, path, body in [
         ("get", "/api/appkit/cloudflare/status", None),
-        ("post", "/api/appkit/cloudflare/connect",
-         {"token": _CF_TOKEN, "account_id": _ACCOUNT}),
+        ("post", "/api/appkit/cloudflare/connect", {"token": _CF_TOKEN, "account_id": _ACCOUNT}),
         ("post", "/api/appkit/cloudflare/deploy-plan", {"conversation_id": cid}),
-        ("post", "/api/appkit/cloudflare/deploy",
-         {"conversation_id": cid, "dry_run": False, "confirmation": "x"}),
+        (
+            "post",
+            "/api/appkit/cloudflare/deploy",
+            {"conversation_id": cid, "dry_run": False, "confirmation": "x"},
+        ),
     ]:
         res = getattr(client, method)(path, json=body) if body else getattr(client, method)(path)
         assert res.status_code == 401, f"{path} should require owner auth"
@@ -2785,9 +2982,7 @@ def test_route_deploy_cors_not_wildcard(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     client, _ps, _cid = _client(tmp_path, monkeypatch, with_cors=True)
-    res = client.get(
-        "/api/appkit/cloudflare/status", headers={"Origin": "https://evil.example"}
-    )
+    res = client.get("/api/appkit/cloudflare/status", headers={"Origin": "https://evil.example"})
     assert res.status_code == 200
     assert res.headers.get("access-control-allow-origin") != "*"
     assert "access-control-allow-origin" not in res.headers  # evil origin not allowlisted
@@ -2798,9 +2993,7 @@ def test_route_deploy_cors_reflects_allowlisted_origin(tmp_path: Path, monkeypat
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     monkeypatch.setenv("DISCO_OWNER_ORIGIN", "https://owner.example, https://ops.example")
     client, _ps, _cid = _client(tmp_path, monkeypatch, with_cors=True)
-    res = client.get(
-        "/api/appkit/cloudflare/status", headers={"Origin": "https://owner.example"}
-    )
+    res = client.get("/api/appkit/cloudflare/status", headers={"Origin": "https://owner.example"})
     assert res.headers.get("access-control-allow-origin") == "https://owner.example"
 
 
@@ -2820,16 +3013,16 @@ def test_route_default_runner_is_real_and_functional(tmp_path: Path, monkeypatch
     # runner=None → real default (patched above). A fake isolating build backend is
     # injected so the build-sandbox gate passes; we're proving the RUNNER default here.
     client, _ps, cid = _client(tmp_path, monkeypatch, build_backend=FakeBuildBackend())
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     dry = client.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid}).json()
     assert fake.calls == []  # dry-run still zero-side-effect
     phrase = dry["plan"]["confirmation_phrase"]
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": phrase,
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -2849,15 +3042,15 @@ def test_route_real_deploy_threads_admin_token_runs_secret_put(tmp_path: Path, m
     client, _ps, cid = _client(
         tmp_path, monkeypatch, runner=runner, build_backend=FakeBuildBackend()
     )
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     dry = client.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid}).json()
     phrase = dry["plan"]["confirmation_phrase"]
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": phrase,
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -2877,9 +3070,7 @@ def test_route_real_deploy_refused_without_admin_token(tmp_path: Path, monkeypat
     client, _ps, cid = _client(
         tmp_path, monkeypatch, runner=runner, build_backend=FakeBuildBackend()
     )
-    client.post(
-        "/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT}
-    )
+    client.post("/api/appkit/cloudflare/connect", json={"token": _CF_TOKEN, "account_id": _ACCOUNT})
     dry = client.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid}).json()
     phrase = dry["plan"]["confirmation_phrase"]
     res = client.post(
@@ -2923,16 +3114,19 @@ async def test_deploy_refused_on_symlinked_file_in_dist(
     # digest, so the digest never saw it) → REFUSE before wrangler deploy runs.
     host_secret = tmp_path / "host_secret.txt"
     host_secret.write_text("TOP-SECRET-HOST-CREDENTIAL", encoding="utf-8")
-    backend = _SymlinkEmittingBuildBackend(
-        link_rel="dist/leak.txt", link_target=host_secret
-    )
+    backend = _SymlinkEmittingBuildBackend(link_rel="dist/leak.txt", link_target=host_secret)
 
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)  # clean tree (no dist yet) → plan ok
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=backend, admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=backend,
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WORKSPACE_SYMLINK_ESCAPE
@@ -2958,8 +3152,13 @@ async def test_deploy_refused_on_symlinked_subdir_in_dist(
     plan = cf.build_plan(workspace, connected)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WORKSPACE_SYMLINK_ESCAPE
@@ -2985,25 +3184,33 @@ async def test_deploy_refused_on_symlinked_dist_root(
     plan = cf.build_plan(workspace, connected)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WORKSPACE_SYMLINK_ESCAPE
     assert not any(_is_deploy(c["argv"]) for c in runner.calls)
 
 
-async def test_clean_dist_reaches_wrangler_deploy(
-    workspace: Path, connected: SecretStore
-):
+async def test_clean_dist_reaches_wrangler_deploy(workspace: Path, connected: SecretStore):
     # The companion: a symlink-FREE dist (the FakeBuildBackend writes a plain
     # dist/index.html) passes the scan and reaches `wrangler deploy` — the guard only
     # refuses symlinks, never a normal regular file/dir in the upload tree.
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_deploy(c["argv"]) for c in runner.calls)
@@ -3109,17 +3316,20 @@ def test_stage_copies_regular_files_symlink_free(tmp_path: Path):
         shutil.rmtree(staged, ignore_errors=True)
 
 
-async def test_deploy_runs_from_staged_copy_not_live_tree(
-    workspace: Path, connected: SecretStore
-):
+async def test_deploy_runs_from_staged_copy_not_live_tree(workspace: Path, connected: SecretStore):
     # The real deploy must build + run wrangler from the IMMUTABLE staged COPY, never
     # the live mutable workspace (defeats check-then-use TOCTOU).
     runner = FakeRunner()
     backend = FakeBuildBackend()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=backend, admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=backend,
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     # The build backend received the STAGED path, not the live workspace.
@@ -3165,8 +3375,13 @@ async def test_concurrent_deploys_serialize_on_lock(workspace: Path, connected: 
 
     async def _one():
         return await cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=phrase,
-            runner=FakeRunner(), build_backend=backend, admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=phrase,
+            runner=FakeRunner(),
+            build_backend=backend,
+            admin_token=_APP_ADMIN_TOKEN,
         )
 
     r1, r2 = await asyncio.gather(_one(), _one())
@@ -3233,8 +3448,13 @@ async def test_deploy_uses_pinned_trusted_wrangler_never_npx_or_workspace(
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed
     wrangler_calls = [c for c in runner.calls if _is_wrangler(c["argv"])]
@@ -3362,9 +3582,7 @@ def test_assert_no_plaintext_secrets_allows_nonsecret(tmp_path: Path):
     cf._assert_no_plaintext_secrets(ws)  # no raise
 
 
-async def test_deploy_refused_on_env_plaintext_secret(
-    workspace: Path, connected: SecretStore
-):
+async def test_deploy_refused_on_env_plaintext_secret(workspace: Path, connected: SecretStore):
     # A .env carrying a plaintext secret in the deploy tree → real deploy refused
     # (the secret would ship). Written BEFORE the plan so the phrase matches the tree.
     (workspace / ".env").write_text("API_TOKEN=sk-live-xyz\n", encoding="utf-8")
@@ -3372,8 +3590,13 @@ async def test_deploy_refused_on_env_plaintext_secret(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.PLAINTEXT_SECRET_REFUSED
@@ -3409,8 +3632,13 @@ async def test_deploy_refused_on_credential_swap_mid_deploy(
     )
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=backend, admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=backend,
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.NO_CONNECTED_ACCOUNT
@@ -3426,8 +3654,13 @@ async def test_deploy_uses_snapshotted_token_not_relive_read(
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed
     for c in runner.calls:
@@ -3442,8 +3675,13 @@ async def test_record_carries_effective_digest(workspace: Path, connected: Secre
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     data = json.loads(Path(result.record_path).read_text())
     # The effective (post-build, post-D1-substitution) digest is bound into the audit
@@ -3475,8 +3713,13 @@ async def test_deploy_refused_when_worker_does_not_fail_closed(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WORKER_AUTH_UNVERIFIED
@@ -3497,24 +3740,32 @@ async def test_deploy_refused_when_worker_leaks_admin_token(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WORKER_AUTH_UNVERIFIED
     assert not any(_is_wrangler(c["argv"]) for c in runner.calls)
 
 
-async def test_deploy_proceeds_with_verified_worker_auth(
-    workspace: Path, connected: SecretStore
-):
+async def test_deploy_proceeds_with_verified_worker_auth(workspace: Path, connected: SecretStore):
     # The canonical generated Worker enforces the admin gate + never leaks the token, so
     # the SEC-4 gate PASSES and the deploy proceeds to publish.
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_deploy(c["argv"]) for c in runner.calls)
@@ -3556,12 +3807,35 @@ def _canonical_worker_src() -> str:
     return generate(spec, recipe.to_design_spec())["worker/index.ts"]
 
 
+def _form_folded_app_spec():
+    recipe = get_recipe("editorial-ledger")
+    assert recipe is not None
+    spec = default_lead_gen_app_spec("Acme Leads", recipe)
+    form = FormSpec.model_validate(
+        {
+            "form_id": "quote_request",
+            "title": "Request a quote",
+            "fields": [{"name": "email", "label": "Email", "kind": "email", "required": True}],
+            "success_message": "Thanks, we will respond shortly.",
+        }
+    )
+    return apply_form_spec(spec, form)
+
+
+def _form_folded_worker_src() -> str:
+    recipe = get_recipe("editorial-ledger")
+    assert recipe is not None
+    spec = _form_folded_app_spec()
+    return generate(spec, recipe.to_design_spec())["worker/index.ts"]
+
+
 def _staged_tree_with_worker(
     base: Path,
     worker_src: str,
     *,
     with_spec: bool = True,
     wrangler_main: str | None = "worker/index.ts",
+    app_spec=None,
 ) -> Path:
     """A minimal STAGED-shape tree for the canonical-match unit gate: the frozen
     `.disco/appspec.json` the gate regenerates from + a `worker/index.ts` + a
@@ -3581,7 +3855,7 @@ def _staged_tree_with_worker(
     if with_spec:
         recipe = get_recipe("editorial-ledger")
         assert recipe is not None
-        save_app_spec(ws, default_lead_gen_app_spec("Acme Leads", recipe))
+        save_app_spec(ws, app_spec or default_lead_gen_app_spec("Acme Leads", recipe))
     return ws
 
 
@@ -3618,6 +3892,26 @@ def test_canonical_worker_passes_canonical_gate(tmp_path: Path):
     # The pristine generated worker (regenerated from the staged spec) MATCHES → no raise.
     ws = _staged_tree_with_worker(tmp_path, _canonical_worker_src())
     cf._assert_worker_is_canonical(ws)  # must not raise
+
+
+def test_form_folded_worker_passes_canonical_gate(tmp_path: Path):
+    # The canonical reconstruction goes through generate(app_spec, ...), so folded
+    # primitive worker additions are canonical instead of being compared to pre-fold lead_gen.
+    folded = _form_folded_app_spec()
+    ws = _staged_tree_with_worker(tmp_path, _form_folded_worker_src(), app_spec=folded)
+    cf._assert_worker_is_canonical(ws)  # must not raise
+
+
+def test_form_folded_canonical_gate_refuses_extra_route(tmp_path: Path):
+    folded = _form_folded_app_spec()
+    malicious = _inject_route(
+        _form_folded_worker_src(),
+        '    if (url.pathname === "/api/forms/debug") return new Response("nope");\n',
+    )
+    ws = _staged_tree_with_worker(tmp_path, malicious, app_spec=folded)
+    with pytest.raises(cf.DeployRefused) as exc:
+        cf._assert_worker_is_canonical(ws)
+    assert exc.value.reason == RefusalReason.WORKER_NOT_CANONICAL
 
 
 def test_canonical_gate_tolerates_cosmetic_reformat(tmp_path: Path):
@@ -3763,9 +4057,7 @@ class _WranglerEmittingBuildBackend(FakeBuildBackend):
         )
         toml = workspace / "wrangler.toml"
         toml.write_text(
-            toml.read_text().replace(
-                'main = "worker/index.ts"', f'main = "{self._emitted_main}"'
-            ),
+            toml.read_text().replace('main = "worker/index.ts"', f'main = "{self._emitted_main}"'),
             encoding="utf-8",
         )
         return res
@@ -3782,7 +4074,10 @@ async def test_build_emitting_main_redirect_refused_before_wrangler(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
             runner=runner,
             build_backend=_WranglerEmittingBuildBackend("....worker/index.ts"),
             admin_token=_APP_ADMIN_TOKEN,
@@ -3800,9 +4095,9 @@ async def test_authored_non_canonical_main_refused_at_export_gate(
     # wrangler is never invoked. (The deploy-time MAIN_NOT_CANONICAL gates are the
     # defense-in-depth for a post-export redirect; see the build-emit test above.)
     (workspace / "wrangler.toml").write_text(
-        (workspace / "wrangler.toml").read_text().replace(
-            'main = "worker/index.ts"', 'main = "....worker/index.ts"'
-        ),
+        (workspace / "wrangler.toml")
+        .read_text()
+        .replace('main = "worker/index.ts"', 'main = "....worker/index.ts"'),
         encoding="utf-8",
     )
     plan = cf.build_plan(workspace, connected)
@@ -3810,8 +4105,13 @@ async def test_authored_non_canonical_main_refused_at_export_gate(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase or "x",
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase or "x",
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.EXPORT_NOT_READY
@@ -3848,8 +4148,12 @@ async def _refuse_real_deploy_with_emitted_worker(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=_WorkerEmittingBuildBackend(emitted_worker),
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=_WorkerEmittingBuildBackend(emitted_worker),
             admin_token=_APP_ADMIN_TOKEN,
         )
     )
@@ -3879,9 +4183,7 @@ async def test_build_emitting_startswith_unguarded_lead_read_refused(
     assert not any(_is_deploy(c["argv"]) for c in runner.calls)
 
 
-async def test_build_emitting_arbitrary_worker_refused(
-    workspace: Path, connected: SecretStore
-):
+async def test_build_emitting_arbitrary_worker_refused(workspace: Path, connected: SecretStore):
     # BUILD-1 (core): the sandbox build replaces worker/index.ts with an arbitrary worker
     # (here: auth stripped entirely). The deployed worker != the regenerated canonical
     # worker → WORKER_NOT_CANONICAL, before `wrangler deploy` ever runs.
@@ -3891,16 +4193,19 @@ async def test_build_emitting_arbitrary_worker_refused(
     assert not any(_is_deploy(c["argv"]) for c in runner.calls)
 
 
-async def test_canonical_worker_build_proceeds_to_deploy(
-    workspace: Path, connected: SecretStore
-):
+async def test_canonical_worker_build_proceeds_to_deploy(workspace: Path, connected: SecretStore):
     # The honest path: the build does NOT touch the worker, so the staged worker stays the
     # canonical one → the canonical-match gate passes and the deploy proceeds to publish.
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_deploy(c["argv"]) for c in runner.calls)
@@ -3909,17 +4214,20 @@ async def test_canonical_worker_build_proceeds_to_deploy(
 # ---- WAVE 3 SEC-10: ownership-gate an existing same-name Worker overwrite ----
 
 
-async def test_existing_unrelated_worker_overwrite_refused(
-    workspace: Path, connected: SecretStore
-):
+async def test_existing_unrelated_worker_overwrite_refused(workspace: Path, connected: SecretStore):
     # SEC-10: a Worker of this name already exists but NO prior Disco record proves we own
     # it → refuse rather than overwrite an unrelated script. No deploy runs.
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner(worker_exists=True)  # exists remotely; no ownership record seeded
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.UNRELATED_RESOURCE
@@ -3933,16 +4241,19 @@ async def test_existing_owned_worker_is_adopted(workspace: Path, connected: Secr
     _seed_ownership_record(workspace, plan, connected)
     runner = FakeRunner(worker_exists=True)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_deploy(c["argv"]) for c in runner.calls)
 
 
-async def test_malformed_worker_deployments_list_aborts(
-    workspace: Path, connected: SecretStore
-):
+async def test_malformed_worker_deployments_list_aborts(workspace: Path, connected: SecretStore):
     # SEC-10/SEC-15: a SUCCESSFUL `deployments list` with a non-array body must ABORT,
     # never fall open to overwriting a possibly-unrelated Worker.
     plan = cf.build_plan(workspace, connected)
@@ -3956,8 +4267,13 @@ async def test_malformed_worker_deployments_list_aborts(
 
     runner = _BadDeploymentsRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert not result.executed and not result.succeeded
     assert "deployments list" in (result.failed_step or "")
@@ -3998,8 +4314,13 @@ async def test_worker_preflight_error_fails_closed(workspace: Path, connected: S
     )
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.WORKER_PREFLIGHT_FAILED
@@ -4019,8 +4340,13 @@ async def test_worker_preflight_documented_not_found_proceeds(
         preflight_stderr="✘ [ERROR] workers.api.error.script_not_found [code: 10007]"
     )
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_deploy(c["argv"]) for c in runner.calls)
@@ -4058,8 +4384,13 @@ async def test_planted_unsigned_ownership_record_does_not_authorize_overwrite(
     runner = FakeRunner(worker_exists=True)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.UNRELATED_RESOURCE
@@ -4076,8 +4407,13 @@ async def test_planted_forged_signature_ownership_record_does_not_authorize_adop
     runner = FakeRunner(d1_list_has=plan.db_name)  # DB exists remotely
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.UNRELATED_RESOURCE
@@ -4118,24 +4454,32 @@ async def test_signed_record_for_other_account_does_not_authorize(
     runner = FakeRunner(worker_exists=True)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.UNRELATED_RESOURCE
 
 
-async def test_signed_ownership_record_authorizes_adopt(
-    workspace: Path, connected: SecretStore
-):
+async def test_signed_ownership_record_authorizes_adopt(workspace: Path, connected: SecretStore):
     # SEC-10-B (positive): a legitimately server-SIGNED record (account + resource +
     # proof mutation) DOES authorize adopting the existing D1 + overwriting the Worker.
     plan = cf.build_plan(workspace, connected)
     _seed_ownership_record(workspace, plan, connected)
     runner = FakeRunner(d1_list_has=plan.db_name, worker_exists=True)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_deploy(c["argv"]) for c in runner.calls)
@@ -4170,8 +4514,13 @@ async def test_malformed_d1_list_aborts(workspace: Path, connected: SecretStore)
 
     runner = _BadD1ListRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert not result.executed and not result.succeeded
     assert "d1 list" in (result.failed_step or "")
@@ -4190,9 +4539,7 @@ def test_invalid_worker_name_refused(workspace: Path, connected: SecretStore):
     # the hash — the test tracks the generator and still proves the bad name is refused.
     current = cf.build_plan(workspace, connected).worker_name
     toml.write_text(
-        toml.read_text(encoding="utf-8").replace(
-            f'name = "{current}"', 'name = "Bad Name!"'
-        ),
+        toml.read_text(encoding="utf-8").replace(f'name = "{current}"', 'name = "Bad Name!"'),
         encoding="utf-8",
     )
     with pytest.raises(cf.DeployRefused) as exc:
@@ -4217,8 +4564,13 @@ async def test_runner_unavailable_refused(workspace: Path, connected: SecretStor
     plan = cf.build_plan(workspace, connected)
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=None, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=None,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.RUNNER_UNAVAILABLE
@@ -4261,8 +4613,13 @@ async def test_effective_digest_recorded_on_partial_failure_after_deploy(
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner(fail_on="secret put")
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert not result.succeeded
     assert result.attempt_record_path is not None  # CORR-7: exposed on the failed result
@@ -4275,16 +4632,19 @@ async def test_effective_digest_recorded_on_partial_failure_after_deploy(
 # ---- WAVE 3 SEC-17/18: deployable-file denylist + secret-shaped value scan ----
 
 
-async def test_deploy_refused_on_credential_file_in_tree(
-    workspace: Path, connected: SecretStore
-):
+async def test_deploy_refused_on_credential_file_in_tree(workspace: Path, connected: SecretStore):
     (workspace / "server.pem").write_text("-----BEGIN PRIVATE KEY-----\nx\n", encoding="utf-8")
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.PLAINTEXT_SECRET_REFUSED
@@ -4301,8 +4661,13 @@ async def test_deploy_refused_on_secret_shaped_value_in_source(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=FakeBuildBackend(),
+            admin_token=_APP_ADMIN_TOKEN,
         )
     )
     assert reason == RefusalReason.PLAINTEXT_SECRET_REFUSED
@@ -4349,15 +4714,11 @@ class _SecretEmittingBuildBackend(FakeBuildBackend):
             )
         if self._emit_file:
             # A credential-named file dropped into the published dir (SEC-17 denylist).
-            (out / self._emit_file_name).write_text(
-                self._emit_file_body, encoding="utf-8"
-            )
+            (out / self._emit_file_name).write_text(self._emit_file_body, encoding="utf-8")
         return res
 
 
-async def test_post_build_secret_value_rescan_refuses(
-    workspace: Path, connected: SecretStore
-):
+async def test_post_build_secret_value_rescan_refuses(workspace: Path, connected: SecretStore):
     # SEC-18: the authored tree is clean (passes the pre-build scan), but the build BAKES a
     # secret-shaped value into ./dist. The POST-build rescan must catch it and refuse
     # BEFORE any Cloudflare mutation.
@@ -4366,8 +4727,12 @@ async def test_post_build_secret_value_rescan_refuses(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=_SecretEmittingBuildBackend(emit_value=True),
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=_SecretEmittingBuildBackend(emit_value=True),
             admin_token=_APP_ADMIN_TOKEN,
         )
     )
@@ -4376,17 +4741,19 @@ async def test_post_build_secret_value_rescan_refuses(
     assert not any(_is_wrangler(c["argv"]) for c in runner.calls)
 
 
-async def test_post_build_credential_file_rescan_refuses(
-    workspace: Path, connected: SecretStore
-):
+async def test_post_build_credential_file_rescan_refuses(workspace: Path, connected: SecretStore):
     # SEC-17: the build emits a credential-NAMED file (.env.production) into ./dist. The
     # post-build denylist rescan refuses before any mutation.
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-            runner=runner, build_backend=_SecretEmittingBuildBackend(emit_file=True),
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
+            runner=runner,
+            build_backend=_SecretEmittingBuildBackend(emit_file=True),
             admin_token=_APP_ADMIN_TOKEN,
         )
     )
@@ -4420,7 +4787,10 @@ async def test_post_build_credential_file_variant_refuses(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
             runner=runner,
             build_backend=_SecretEmittingBuildBackend(emit_file=True, emit_file_name=credfile),
             admin_token=_APP_ADMIN_TOKEN,
@@ -4530,9 +4900,7 @@ def test_assert_no_secret_shaped_files_refuses_skip_root_served_dir(
     assert exc.value.reason == RefusalReason.ASSET_DIR_UNSAFE
 
 
-def test_served_tree_scanned_unconditionally_even_under_skip_root(
-    tmp_path: Path, monkeypatch
-):
+def test_served_tree_scanned_unconditionally_even_under_skip_root(tmp_path: Path, monkeypatch):
     # SEC-17 closure (2), defense in depth: even if some path resolved a served dir UNDER a
     # normally-skipped root (here forced past closure (1) by monkeypatching the resolver),
     # the scan walks the served tree DIRECTLY — so a token in .disco/public/leak.js (a path
@@ -4551,9 +4919,7 @@ def test_served_tree_scanned_unconditionally_even_under_skip_root(
         cf._assert_no_secret_shaped_files(ws)
 
 
-async def test_deploy_refused_on_disco_public_assets_dir(
-    workspace: Path, connected: SecretStore
-):
+async def test_deploy_refused_on_disco_public_assets_dir(workspace: Path, connected: SecretStore):
     # SEC-17 (the codex bypass, end-to-end): the wrangler [assets].directory pointed at
     # .disco/public → execute_deploy refuses at the asset-dir gate (ASSET_DIR_UNSAFE) BEFORE
     # the build runs and BEFORE wrangler is ever invoked. Surgically swap ONLY the served-dir
@@ -4570,10 +4936,14 @@ async def test_deploy_refused_on_disco_public_assets_dir(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
             runner=runner,
             build_backend=_SecretEmittingBuildBackend(
-                emit_file=True, emit_file_name="leak.js",
+                emit_file=True,
+                emit_file_name="leak.js",
                 emit_file_body='var k="cfut_' + "y" * 32 + '";\n',
             ),
             admin_token=_APP_ADMIN_TOKEN,
@@ -4623,7 +4993,10 @@ async def test_deploy_refused_on_template_credential_file_in_served_dir(
     runner = FakeRunner()
     reason = await _refusal(
         cf.execute_deploy(
-            workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
+            workspace,
+            connected,
+            dry_run=False,
+            confirmation=plan.confirmation_phrase,
             runner=runner,
             build_backend=_SecretEmittingBuildBackend(
                 emit_file=True, emit_file_name="secrets.env.example", emit_file_body=body
@@ -4643,10 +5016,13 @@ async def test_canonical_root_dev_vars_example_still_deploys(
     assert (workspace / ".dev.vars.example").exists()  # the canonical generator ships it
     runner = FakeRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=cf.build_plan(
-            workspace, connected
-        ).confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=cf.build_plan(workspace, connected).confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed and result.succeeded
     assert any(_is_wrangler(c["argv"]) for c in runner.calls)
@@ -4664,9 +5040,7 @@ def test_assert_no_secret_shaped_files_refuses_real_variants(tmp_path: Path, cre
         cf._assert_no_secret_shaped_files(ws)
 
 
-async def test_post_build_benign_files_still_deploy(
-    workspace: Path, connected: SecretStore
-):
+async def test_post_build_benign_files_still_deploy(workspace: Path, connected: SecretStore):
     # A build emitting only benign assets (index.html / style.css) deploys cleanly — the
     # broadened denylist must not over-match legitimate static assets.
     class _BenignBuildBackend(FakeBuildBackend):
@@ -4682,8 +5056,13 @@ async def test_post_build_benign_files_still_deploy(
     plan = cf.build_plan(workspace, connected)
     runner = FakeRunner()
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=_BenignBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=_BenignBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed
     assert any(_is_wrangler(c["argv"]) for c in runner.calls)
@@ -4714,17 +5093,20 @@ def test_deploy_env_drops_dangerous_vars(monkeypatch, tmp_path: Path):
     assert "/usr/bin" in env["PATH"]
 
 
-async def test_real_deploy_env_is_minimized(
-    workspace: Path, connected: SecretStore, monkeypatch
-):
+async def test_real_deploy_env_is_minimized(workspace: Path, connected: SecretStore, monkeypatch):
     monkeypatch.setenv("NODE_OPTIONS", "--require /tmp/evil.js")
     monkeypatch.setenv("npm_config_registry", "https://evil.example")
     monkeypatch.setenv("HOME", "/home/victim")
     runner = FakeRunner()
     plan = cf.build_plan(workspace, connected)
     result = await cf.execute_deploy(
-        workspace, connected, dry_run=False, confirmation=plan.confirmation_phrase,
-        runner=runner, build_backend=FakeBuildBackend(), admin_token=_APP_ADMIN_TOKEN,
+        workspace,
+        connected,
+        dry_run=False,
+        confirmation=plan.confirmation_phrase,
+        runner=runner,
+        build_backend=FakeBuildBackend(),
+        admin_token=_APP_ADMIN_TOKEN,
     )
     assert result.executed
     wcall = next(c for c in runner.calls if _is_wrangler(c["argv"]))
@@ -4732,6 +5114,8 @@ async def test_real_deploy_env_is_minimized(
     assert "npm_config_registry" not in wcall["env"]
     assert wcall["env"].get("HOME") != "/home/victim"  # throwaway home
     assert wcall["env"].get("CLOUDFLARE_API_TOKEN") == _CF_TOKEN
+
+
 # ---- CLUSTER C (deploy-security): routes hardening ----------------------------
 # SEC-25 per-conversation deploy lock / CORR-25 accurate status mapping / CORR-26
 # CORS / SEC-27 bounded secret input / SEC-28 owner-auth rate limit + audit /
@@ -4769,9 +5153,7 @@ async def test_concurrent_deploy_for_same_conversation_second_gets_409(tmp_path,
             # Hold the in-flight slot: signal we're inside the deploy, then block.
             started.set()
             await gate.wait()
-            return await super().build(
-                workspace, install_cmd=install_cmd, build_cmd=build_cmd
-            )
+            return await super().build(workspace, install_cmd=install_cmd, build_cmd=build_cmd)
 
     runner = FakeRunner()
     app, _ps, cid = _build_app(tmp_path, runner=runner, build_backend=_BlockingBackend())
@@ -4783,12 +5165,12 @@ async def test_concurrent_deploy_for_same_conversation_second_gets_409(tmp_path,
             "/api/appkit/cloudflare/connect",
             json={"token": _CF_TOKEN, "account_id": _ACCOUNT},
         )
-        dry = (
-            await ac.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid})
-        ).json()
+        dry = (await ac.post("/api/appkit/cloudflare/deploy", json={"conversation_id": cid})).json()
         phrase = dry["plan"]["confirmation_phrase"]
         body = {
-            "conversation_id": cid, "dry_run": False, "confirmation": phrase,
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
             "admin_token": _APP_ADMIN_TOKEN,
         }
         # First real deploy enters and BLOCKS inside the (sandboxed) build, holding
@@ -4810,7 +5192,9 @@ async def test_concurrent_deploy_for_same_conversation_second_gets_409(tmp_path,
         res3 = await ac.post(
             "/api/appkit/cloudflare/deploy",
             json={
-                "conversation_id": cid, "dry_run": False, "confirmation": phrase2,
+                "conversation_id": cid,
+                "dry_run": False,
+                "confirmation": phrase2,
                 "admin_token": _APP_ADMIN_TOKEN,
             },
         )
@@ -4834,7 +5218,9 @@ def test_route_deploy_aborted_step_is_not_200(tmp_path, monkeypatch):
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": phrase,
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -4856,7 +5242,9 @@ def test_route_deploy_missing_workspace_is_404(tmp_path, monkeypatch):
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": other, "dry_run": False, "confirmation": "x",
+            "conversation_id": other,
+            "dry_run": False,
+            "confirmation": "x",
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -4893,7 +5281,9 @@ def test_route_deploy_overlong_admin_token_is_400_and_not_echoed(tmp_path, monke
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": phrase,
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
             "admin_token": huge,
         },
     )
@@ -4913,9 +5303,7 @@ def test_route_deploy_cors_strips_reflected_arbitrary_origin(tmp_path, monkeypat
     monkeypatch.setenv("DISCO_SECRET_KEY", _APP_SECRET)
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     client, _ps, _cid = _client(tmp_path, monkeypatch, cors="reflect")
-    res = client.get(
-        "/api/appkit/cloudflare/status", headers={"Origin": "https://evil.example"}
-    )
+    res = client.get("/api/appkit/cloudflare/status", headers={"Origin": "https://evil.example"})
     assert res.status_code == 200
     assert res.headers.get("access-control-allow-origin") != "https://evil.example"
     assert "access-control-allow-origin" not in res.headers  # arbitrary origin stripped
@@ -4928,9 +5316,7 @@ def test_route_deploy_cors_reflect_allows_only_allowlisted_origin(tmp_path, monk
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     monkeypatch.setenv("DISCO_OWNER_ORIGIN", "https://owner.example")
     client, _ps, _cid = _client(tmp_path, monkeypatch, cors="reflect")
-    res = client.get(
-        "/api/appkit/cloudflare/status", headers={"Origin": "https://owner.example"}
-    )
+    res = client.get("/api/appkit/cloudflare/status", headers={"Origin": "https://owner.example"})
     assert res.headers.get("access-control-allow-origin") == "https://owner.example"
 
 
@@ -4974,16 +5360,22 @@ def test_owner_auth_success_clears_failure_tally(tmp_path, monkeypatch):
     monkeypatch.setenv("DISCO_SECRETS", str(tmp_path / "secrets.json"))
     client, _ps, _cid = _client(tmp_path, monkeypatch, owner_auth=False)
     for _ in range(_AUTH_FAIL_LIMIT - 1):
-        assert client.get(
-            "/api/appkit/cloudflare/status", headers={"X-Disco-Owner-Token": "nope"}
-        ).status_code == 401
+        assert (
+            client.get(
+                "/api/appkit/cloudflare/status", headers={"X-Disco-Owner-Token": "nope"}
+            ).status_code
+            == 401
+        )
     # A correct token now succeeds and clears the tally.
     ok = client.get("/api/appkit/cloudflare/status", headers=_OWNER_HEADERS)
     assert ok.status_code == 200
     # Subsequent failures start counting from zero again (not instantly throttled).
-    assert client.get(
-        "/api/appkit/cloudflare/status", headers={"X-Disco-Owner-Token": "nope"}
-    ).status_code == 401
+    assert (
+        client.get(
+            "/api/appkit/cloudflare/status", headers={"X-Disco-Owner-Token": "nope"}
+        ).status_code
+        == 401
+    )
 
 
 # ---- SEC-26: responses carry NO absolute host paths -------------------------
@@ -5001,7 +5393,9 @@ def test_route_deploy_response_has_no_absolute_host_paths(tmp_path, monkeypatch)
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": phrase,
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": phrase,
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -5230,9 +5624,7 @@ def test_validate_account_id_unit():
 def test_scrub_paths_unit():
     # An absolute host path is replaced with an opaque marker; a relative path
     # (a workspace-relative record path) is left intact; None/empty pass through.
-    assert _scrub_paths("read /home/dylan/projects/x/secrets.json failed") == (
-        "read <path> failed"
-    )
+    assert _scrub_paths("read /home/dylan/projects/x/secrets.json failed") == ("read <path> failed")
     assert _scrub_paths(".disco/cloudflare/deployments/rec.json") == (
         ".disco/cloudflare/deployments/rec.json"
     )
@@ -5309,7 +5701,9 @@ def test_route_deploy_success_scrubs_internal_paths_in_freetext_fields(tmp_path,
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": "phrase",
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": "phrase",
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -5347,7 +5741,9 @@ def test_route_deploy_refusal_message_scrubs_absolute_host_path(tmp_path, monkey
     res = client.post(
         "/api/appkit/cloudflare/deploy",
         json={
-            "conversation_id": cid, "dry_run": False, "confirmation": "x",
+            "conversation_id": cid,
+            "dry_run": False,
+            "confirmation": "x",
             "admin_token": _APP_ADMIN_TOKEN,
         },
     )
@@ -5543,16 +5939,12 @@ async def test_token_verifier_non_object_json_body_is_structured_failure(monkeyp
 async def test_token_verifier_non_dict_result_field_is_structured_failure(monkeypatch):
     # ``result`` present but not an object (a malformed/hostile body) must also not
     # crash — handled as inactive/structured failure.
-    _patch_verify_httpx(
-        monkeypatch, response=_FakeVerifyResp(200, {"result": "not-an-object"})
-    )
+    _patch_verify_httpx(monkeypatch, response=_FakeVerifyResp(200, {"result": "not-an-object"}))
     ok, detail = await HttpTokenVerifier().verify("cfut_sometoken")
     assert not ok and "expected 'active'" in detail
 
 
 async def test_token_verifier_non_json_body_is_structured_failure(monkeypatch):
-    _patch_verify_httpx(
-        monkeypatch, response=_FakeVerifyResp(200, ValueError("not json"))
-    )
+    _patch_verify_httpx(monkeypatch, response=_FakeVerifyResp(200, ValueError("not json")))
     ok, detail = await HttpTokenVerifier().verify("cfut_sometoken")
     assert not ok and "non-JSON" in detail

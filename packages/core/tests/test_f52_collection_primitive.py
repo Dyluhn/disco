@@ -12,7 +12,7 @@ Covers:
   * re-apply semantics — same collection_id REPLACES the section's content in
     place (preserving variant_id), identical re-apply returns an EQUAL app (so
     app_add_primitive's no-op refusal fires);
-  * registration — fillable, addable (spec_schema + apply_spec), verify=None,
+  * registration — fillable, addable (spec_schema + apply_spec), real verify hook,
     empty host_contract; standalone generate renders folded items (no silent
     drop).
 """
@@ -24,6 +24,7 @@ from disco.core.appkit.collection_primitive import (
     CollectionItem,
     CollectionSpec,
     apply_collection_spec,
+    collection_verify,
     default_collection_app_spec,
     generate_collection,
     section_id_for,
@@ -237,7 +238,7 @@ def test_registered_as_fillable_and_addable() -> None:
     assert prim.tier == "fillable"
     assert prim.spec_schema is CollectionSpec
     assert prim.apply_spec is apply_collection_spec
-    assert prim.verify is None
+    assert prim.verify is collection_verify
     assert prim.host_contract == ()
 
 

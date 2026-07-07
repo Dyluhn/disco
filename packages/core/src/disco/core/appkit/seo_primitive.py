@@ -166,6 +166,8 @@ def generate_seo(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     }
 
 
+from .primitive_verify import seo_verify  # noqa: E402
+
 register_primitive(
     PrimitiveDefinition(
         id=SEO_PRIMITIVE_ID,
@@ -175,9 +177,7 @@ register_primitive(
         tier="fillable",
         host_contract=(),
         spec_schema=SeoSpec,
-        # verify stays None ON PURPOSE: the verify signature is being evolved on
-        # another branch — do not add a verify fn here without rebasing on it.
-        verify=None,
+        verify=seo_verify,
         apply_spec=apply_seo_spec,
     )
 )
@@ -190,4 +190,5 @@ __all__ = [
     "default_seo_app_spec",
     "generate_seo",
     "prepare_seo_app_spec",
+    "seo_verify",
 ]

@@ -75,9 +75,7 @@ def synthesized_lead_entity() -> Entity:
     return Entity(
         id=_DEFAULT_LEAD_ID,
         name="Lead",
-        fields=tuple(
-            EntityField(name=n, type=t, required=r) for n, t, r in _DEFAULT_LEAD_FIELDS
-        ),
+        fields=tuple(EntityField(name=n, type=t, required=r) for n, t, r in _DEFAULT_LEAD_FIELDS),
     )
 
 
@@ -129,9 +127,7 @@ def resolve_lead_entity(app_spec: AppSpec) -> Entity:
 
     Pure + deterministic — no spec mutation; `app_create` is what writes a
     synthesized entity back into the persisted AppSpec so spec ⇄ tree stay in sync."""
-    submit_targets = [
-        a.target.strip() for a in app_spec.primary_actions if a.type == "submit"
-    ]
+    submit_targets = [a.target.strip() for a in app_spec.primary_actions if a.type == "submit"]
     by_id = {e.id: e for e in app_spec.entities}
     form_targets = _form_target_ids(app_spec)
     for target in submit_targets:
@@ -249,9 +245,7 @@ def _component_names(app: AppSpec) -> dict[tuple[str, str], str]:
     return mapping
 
 
-def _comp_name(
-    names: dict[tuple[str, str], str], page: Page, section: Section
-) -> str:
+def _comp_name(names: dict[tuple[str, str], str], page: Page, section: Section) -> str:
     """The unique component name for a section, read from the prebuilt collision-free
     `_component_names` map (built once per `generate`)."""
     return names[(page.id, section.id)]
@@ -302,8 +296,7 @@ def _variant_layout(section: Section) -> str:
         variant = get_variant(section.variant_id)
         if variant is None:
             raise ValueError(
-                f"section {section.id!r} references unknown variant_id "
-                f"{section.variant_id!r}"
+                f"section {section.id!r} references unknown variant_id {section.variant_id!r}"
             )
         if variant.kind != section.kind:
             raise ValueError(
@@ -354,8 +347,17 @@ def _font_stack(family: str, *, serifish: bool) -> str:
 def _looks_serif(family: str) -> bool:
     low = family.lower()
     serif_tokens = (
-        "serif", "garamond", "fraunces", "newsreader", "lora", "domine",
-        "playfair", "cormorant", "georgia", "times", "merriweather",
+        "serif",
+        "garamond",
+        "fraunces",
+        "newsreader",
+        "lora",
+        "domine",
+        "playfair",
+        "cormorant",
+        "georgia",
+        "times",
+        "merriweather",
     )
     if "sans" in low:
         return False
@@ -478,7 +480,8 @@ def _emit_styles_css(design: DesignSpec) -> str:
         "  padding-top: 0.75rem;\n"
         "}\n"
         ".recent-submissions h3 { margin: 0 0 0.5rem; font-size: 1rem; }\n"
-        ".recent-submissions ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; }\n"
+        ".recent-submissions ul { list-style: none; margin: 0; padding: 0; "
+        "display: grid; gap: 0.5rem; }\n"
         ".recent-submissions li {\n"
         "  border: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);\n"
         "  border-radius: var(--radius); padding: 0.65rem;\n"
@@ -505,7 +508,8 @@ def _emit_styles_css(design: DesignSpec) -> str:
 #
 # The file is ALWAYS `.disco/appspec.json` (where `app_update_content` mutates), and
 # the field names are AppSpec slot names — `cta_label` (NOT the `ctaLabel` content.ts
-# key), `heading`, `subheading`, `body`, `items` — exactly the keys the tool accepts.
+# key), `heading`, `subheading`, `body`, `items`, `success_message` — exactly the
+# keys the tool accepts.
 
 _DISCO_SPEC_FILE = ".disco/appspec.json"
 
@@ -552,9 +556,9 @@ def _render_body(comp_id: str) -> str:
     never requires regenerating the component). Each content-bearing element carries
     a `data-disco-field` slot tag (Epic J) so a UI click maps back to the spec slot."""
     return (
-        "      {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
+        '      {c.eyebrow ? <p className="eyebrow">{c.eyebrow}</p> : null}\n'
         f"      {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
-        f"      {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
+        f'      {{c.subheading ? <p className="subheading"{_disco_field_attr("subheading")}>'
         "{c.subheading}</p> : null}\n"
         f"      {{c.body ? <p{_disco_field_attr('body')}>{{c.body}}</p> : null}}\n"
     )
@@ -574,8 +578,8 @@ def _emit_component(
     disco_attrs = _disco_section_attrs(section)
 
     header = (
-        '/* Auto-generated section component — do NOT hand-edit; regenerated from '
-        '.disco/appspec.json. */\n'
+        "/* Auto-generated section component — do NOT hand-edit; regenerated from "
+        ".disco/appspec.json. */\n"
         'import { CONTENT } from "../generated/content";\n\n'
         f"export default function {comp}() {{\n"
         f"  const c = CONTENT[{_ts(comp_id)}] ?? {{}};\n"
@@ -584,12 +588,12 @@ def _emit_component(
     if kind == "hero":
         body = (
             f"  return (\n"
-            f'    <section className={_ts("hero " + classes)} id={_ts(section.id)}'
+            f"    <section className={_ts('hero ' + classes)} id={_ts(section.id)}"
             f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
             f'      <div className="app-main">\n'
-            "        {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
+            '        {c.eyebrow ? <p className="eyebrow">{c.eyebrow}</p> : null}\n'
             f"        {{c.heading ? <h1{_disco_field_attr('heading')}>{{c.heading}}</h1> : null}}\n"
-            f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
+            f'        {{c.subheading ? <p className="subheading"{_disco_field_attr("subheading")}>'
             "{c.subheading}</p> : null}\n"
             f"        {{c.body ? <p{_disco_field_attr('body')}>{{c.body}}</p> : null}}\n"
             "        {c.ctaLabel ? (\n"
@@ -609,14 +613,16 @@ def _emit_component(
         item_tag = "li" if list_cls == "stacked-list" else "div"
         body = (
             f"  return (\n"
-            f'    <section className={_ts(classes)} id={_ts(section.id)}'
+            f"    <section className={_ts(classes)} id={_ts(section.id)}"
             f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
             f'      <div className="app-main">\n'
-            + "  " + _render_body(comp_id)
+            + "  "
+            + _render_body(comp_id)
             + f"        {wrap_open} className={_ts(list_cls)}>\n"
             "          {(c.items ?? []).map((item, i) => (\n"
             f'            <{item_tag} className="feature-item" key={{i}}'
-            f'{_disco_field_attr("items")}{_disco_item_attrs(section, index_expr="i", item_kind="item")}>'
+            f"{_disco_field_attr('items')}"
+            f"{_disco_item_attrs(section, index_expr='i', item_kind='item')}>"
             f"{{item}}</{item_tag}>\n"
             "          ))}\n"
             f"        {wrap_close}\n"
@@ -629,10 +635,11 @@ def _emit_component(
     if kind == "cta":
         body = (
             f"  return (\n"
-            f'    <section className={_ts(classes)} id={_ts(section.id)}'
+            f"    <section className={_ts(classes)} id={_ts(section.id)}"
             f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
             f'      <div className="app-main">\n'
-            + "  " + _render_body(comp_id)
+            + "  "
+            + _render_body(comp_id)
             + "        {c.ctaLabel ? (\n"
             f'          <p><a className="btn" href="#lead-form"{_disco_field_attr("cta_label")}>'
             "{c.ctaLabel}</a></p>\n"
@@ -646,7 +653,7 @@ def _emit_component(
     if kind == "footer":
         body = (
             f"  return (\n"
-            f'    <footer className={_ts("site-footer " + classes)} id={_ts(section.id)}'
+            f"    <footer className={_ts('site-footer ' + classes)} id={_ts(section.id)}"
             f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
             f'      <div className="app-main">\n'
             f"        {{c.heading ? <p{_disco_field_attr('heading')}>{{c.heading}}</p> : null}}\n"
@@ -662,11 +669,9 @@ def _emit_component(
     # verify_appkit_app section-coverage + click-to-edit work for custom sections too.)
     body = (
         f"  return (\n"
-        f'    <section className={_ts(classes)} id={_ts(section.id)}'
+        f"    <section className={_ts(classes)} id={_ts(section.id)}"
         f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
-        f'      <div className="app-main">\n'
-        + "  " + _render_body(comp_id)
-        + "      </div>\n"
+        f'      <div className="app-main">\n' + "  " + _render_body(comp_id) + "      </div>\n"
         "    </section>\n"
         "  );\n}\n"
     )
@@ -684,21 +689,21 @@ def _input_for(field: EntityField) -> str:
     error_id = f"{field_id}-error"
     required = " required" if field.required else ""
     described_by = (
-        f' aria-describedby={{fieldErrors[{key}] ? {_ts(error_id)} : undefined}}'
+        f" aria-describedby={{fieldErrors[{key}] ? {_ts(error_id)} : undefined}}"
         if field.required
         else ""
     )
     invalid = f' aria-invalid={{fieldErrors[{key}] ? "true" : undefined}}'
     if is_textarea:
         control = (
-            f'          <textarea id={_ts(field_id)} name={_ts(field.name)}'
-            f" value={{form[{key}] ?? \"\"}}{required}{invalid}{described_by}\n"
+            f"          <textarea id={_ts(field_id)} name={_ts(field.name)}"
+            f' value={{form[{key}] ?? ""}}{required}{invalid}{described_by}\n'
             f"            onChange={{(e) => updateField({key}, e.target.value)}} />"
         )
     else:
         control = (
-            f'          <input id={_ts(field_id)} type={_ts(input_type)}'
-            f" name={_ts(field.name)} value={{form[{key}] ?? \"\"}}{required}"
+            f"          <input id={_ts(field_id)} type={_ts(input_type)}"
+            f' name={_ts(field.name)} value={{form[{key}] ?? ""}}{required}'
             f"{invalid}{described_by}\n"
             f"            onChange={{(e) => updateField({key}, e.target.value)}} />"
         )
@@ -723,13 +728,13 @@ def _emit_api_client_ts() -> str:
         '  if (typeof body !== "object" || body === null || !("error" in body)) {\n'
         "    return null;\n"
         "  }\n"
-        '  const value = (body as { error: unknown }).error;\n'
+        "  const value = (body as { error: unknown }).error;\n"
         '  return typeof value === "string" && value.trim() ? value : null;\n'
         "}\n\n"
         "async function readError(response: Response): Promise<string> {\n"
         "  try {\n"
         "    const body: unknown = await response.json();\n"
-        "    return (errorFromBody(body) ?? response.statusText) || \"Request failed\";\n"
+        '    return (errorFromBody(body) ?? response.statusText) || "Request failed";\n'
         "  } catch {\n"
         '    return response.statusText || "Request failed";\n'
         "  }\n"
@@ -771,7 +776,7 @@ def _emit_submit_hook_ts() -> str:
         "  values: Record<string, string>;\n"
         "}\n\n"
         "function entryId(): string {\n"
-        '  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;\n'
+        "  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;\n"
         "}\n\n"
         "export function useSubmit(path: string) {\n"
         '  const [state, setState] = useState<SubmitState>({ kind: "idle" });\n'
@@ -818,9 +823,23 @@ def _emit_form_component(
     required_fields = [f.name for f in lead.fields if f.required]
     labels = {f.name: f.name.replace("_", " ").title() for f in lead.fields}
     recent_fields = [f.name for f in lead.fields[:2]]
+    success = section.content.success_message if section.content is not None else None
+    if success is None:
+        success_const = ""
+        success_feedback = (
+            '              <p className="form-status form-status-success">'
+            "Thanks — we will be in touch.</p>\n"
+        )
+    else:
+        success_const = f"const DEFAULT_SUCCESS_MESSAGE = {_ts(success)};\n\n"
+        success_feedback = (
+            '              <p className="form-status form-status-success"'
+            f"{_disco_field_attr('success_message')}>"
+            "{c.successMessage ?? DEFAULT_SUCCESS_MESSAGE}</p>\n"
+        )
     return (
-        '/* Auto-generated lead-capture component — do NOT hand-edit; regenerated from '
-        '.disco/appspec.json. */\n'
+        "/* Auto-generated lead-capture component — do NOT hand-edit; regenerated from "
+        ".disco/appspec.json. */\n"
         'import type { FormEvent } from "react";\n'
         'import { useState } from "react";\n'
         'import { CONTENT } from "../generated/content";\n\n'
@@ -828,6 +847,7 @@ def _emit_form_component(
         f"const REQUIRED_FIELDS = {_ts(required_fields)} as const;\n"
         f"const RECENT_FIELDS = {_ts(recent_fields)} as const;\n"
         f"const FIELD_LABELS: Record<string, string> = {_ts(labels)};\n\n"
+        f"{success_const}"
         f"export default function {comp}() {{\n"
         f"  const c = CONTENT[{_ts(comp_id)}] ?? {{}};\n"
         "  const [form, setForm] = useState<Record<string, string>>({});\n"
@@ -846,7 +866,7 @@ def _emit_form_component(
         "  function validateRequired(): boolean {\n"
         "    const nextErrors: Record<string, string> = {};\n"
         "    for (const field of REQUIRED_FIELDS) {\n"
-        "      if (!(form[field] ?? \"\").trim()) {\n"
+        '      if (!(form[field] ?? "").trim()) {\n'
         "        nextErrors[field] = `${FIELD_LABELS[field] ?? field} is required.`;\n"
         "      }\n"
         "    }\n"
@@ -864,19 +884,18 @@ def _emit_form_component(
         f'    <section className={_ts(classes)} id="lead-form"'
         f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
         f'      <div className="app-main">\n'
-        "        {c.eyebrow ? <p className=\"eyebrow\">{c.eyebrow}</p> : null}\n"
+        '        {c.eyebrow ? <p className="eyebrow">{c.eyebrow}</p> : null}\n'
         f"        {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
-        f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
+        f'        {{c.subheading ? <p className="subheading"{_disco_field_attr("subheading")}>'
         "{c.subheading}</p> : null}\n"
-        '        <form className="lead-form" onSubmit={onSubmit} noValidate>\n'
-        + inputs + "\n"
+        '        <form className="lead-form" onSubmit={onSubmit} noValidate>\n' + inputs + "\n"
         f'          <button className="btn" type="submit" disabled={{state.kind === "submitting"}}'
-        f'{_disco_field_attr("cta_label")}>\n'
+        f"{_disco_field_attr('cta_label')}>\n"
         '            {state.kind === "submitting" ? "Sending…" : c.ctaLabel ?? "Submit"}\n'
         "          </button>\n"
         '          <div className="form-feedback" aria-live="polite">\n'
         '            {state.kind === "success" ? (\n'
-        '              <p className="form-status form-status-success">Thanks — we will be in touch.</p>\n'
+        f"{success_feedback}"
         "            ) : null}\n"
         '            {state.kind === "error" ? (\n'
         '              <p className="form-status form-status-error">{state.message}</p>\n'
@@ -890,7 +909,8 @@ def _emit_form_component(
         '                      <div className="recent-submission-fields">\n'
         "                        {RECENT_FIELDS.map((field) => (\n"
         '                          <span className="recent-submission-field" key={field}>\n'
-        "                            <strong>{FIELD_LABELS[field] ?? field}:</strong> {entry.values[field] ?? \"\"}\n"
+        "                            <strong>{FIELD_LABELS[field] ?? field}:</strong> "
+        '{entry.values[field] ?? ""}\n'
         "                          </span>\n"
         "                        ))}\n"
         "                      </div>\n"
@@ -913,6 +933,10 @@ def _iter_sections(app: AppSpec) -> list[tuple[Page, Section]]:
 
 def _emit_content_ts(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
     entries: list[str] = []
+    has_success_message = any(
+        section.content is not None and section.content.success_message is not None
+        for _page, section in _iter_sections(app)
+    )
     for page, section in _iter_sections(app):
         comp_id = _comp_name(names, page, section)
         content = section.content
@@ -928,8 +952,11 @@ def _emit_content_ts(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
                 slot["ctaLabel"] = content.cta_label
             if content.items:
                 slot["items"] = list(content.items)
+            if has_success_message and content.success_message is not None:
+                slot["successMessage"] = content.success_message
         entries.append(f"  {_ts(comp_id)}: {_ts(slot)},")
     body = "\n".join(entries)
+    success_message_field = "  successMessage?: string;\n" if has_success_message else ""
     return (
         "/* Auto-generated section content — regenerated from .disco/appspec.json. */\n"
         "export interface SectionContent {\n"
@@ -939,9 +966,9 @@ def _emit_content_ts(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
         "  body?: string;\n"
         "  ctaLabel?: string;\n"
         "  items?: string[];\n"
+        f"{success_message_field}"
         "}\n\n"
-        "export const CONTENT: Record<string, SectionContent> = {\n"
-        + body + "\n};\n"
+        "export const CONTENT: Record<string, SectionContent> = {\n" + body + "\n};\n"
     )
 
 
@@ -954,11 +981,11 @@ def _emit_app_tsx(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
         renders.append(f"      <{comp} />")
     return (
         "/* Auto-generated app shell — regenerated from .disco/appspec.json. */\n"
-        + "\n".join(imports) + "\n\n"
+        + "\n".join(imports)
+        + "\n\n"
         "export default function App() {\n"
         "  return (\n"
-        '    <div className="app-main">\n'
-        + "\n".join(renders) + "\n"
+        '    <div className="app-main">\n' + "\n".join(renders) + "\n"
         "    </div>\n"
         "  );\n}\n"
     )
@@ -1064,12 +1091,7 @@ def _seo_files(app: AppSpec) -> dict[str, str]:
         f"{entries}"
         "</urlset>\n"
     )
-    robots = (
-        "User-agent: *\n"
-        "Allow: /\n"
-        "\n"
-        f"Sitemap: {_seo_abs_url(seo.base_url, '/sitemap.xml')}\n"
-    )
+    robots = f"User-agent: *\nAllow: /\n\nSitemap: {_seo_abs_url(seo.base_url, '/sitemap.xml')}\n"
     return {"public/robots.txt": robots, "public/sitemap.xml": sitemap}
 
 
@@ -1136,7 +1158,7 @@ def _emit_schema_sql(lead: Entity) -> str:
     for field in lead.fields:
         nullable = " NOT NULL" if field.required else ""
         cols.append(f'  "{field.name}" {_sql_type(field.type)}{nullable}')
-    cols.append('  "created_at" TEXT NOT NULL DEFAULT (datetime(\'now\'))')
+    cols.append("  \"created_at\" TEXT NOT NULL DEFAULT (datetime('now'))")
     body = ",\n".join(cols)
     return (
         "-- Auto-generated D1 schema (Epic E). The ONE lead entity -> one table.\n"
@@ -1168,13 +1190,8 @@ def _emit_drizzle_schema_ts(lead: Entity) -> str:
     cols = ['  id: integer("id").primaryKey({ autoIncrement: true }),']
     for field in lead.fields:
         chain = ".notNull()" if field.required else ""
-        cols.append(
-            f"  {field.name}: {_drizzle_factory(field.type)}"
-            f"({_ts(field.name)}){chain},"
-        )
-    cols.append(
-        "  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),"
-    )
+        cols.append(f"  {field.name}: {_drizzle_factory(field.type)}({_ts(field.name)}){chain},")
+    cols.append("  created_at: text(\"created_at\").notNull().default(sql`(datetime('now'))`),")
     return (
         "/* Auto-generated Drizzle schema - regenerated from .disco/appspec.json.\n"
         "   This typed table and schema.sql are lowered from the same resolved lead\n"
@@ -1182,8 +1199,7 @@ def _emit_drizzle_schema_ts(lead: Entity) -> str:
         'import { sql } from "drizzle-orm";\n'
         'import { integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";\n'
         "\n"
-        f"export const leads = sqliteTable({_ts(table)}, {{\n"
-        + "\n".join(cols) + "\n"
+        f"export const leads = sqliteTable({_ts(table)}, {{\n" + "\n".join(cols) + "\n"
         "});\n"
     )
 
@@ -1304,8 +1320,8 @@ def _emit_worker_ts(lead: Entity) -> str:
         '    .replace(/&/g, "&amp;")\n'
         '    .replace(/</g, "&lt;")\n'
         '    .replace(/>/g, "&gt;")\n'
-        "    .replace(/\"/g, \"&quot;\")\n"
-        "    .replace(/'/g, \"&#39;\");\n"
+        '    .replace(/"/g, "&quot;")\n'
+        '    .replace(/\'/g, "&#39;");\n'
         "}\n\n"
         "// Constant-token check; a missing ADMIN_TOKEN denies all reads (fail closed).\n"
         "function isAuthorized(request: Request, env: Env): boolean {\n"
@@ -1382,7 +1398,7 @@ def _emit_worker_ts(lead: Entity) -> str:
         "// Server-rendered leads table — EVERY cell escaped via escapeHtml (no raw\n"
         "// interpolation of lead values into HTML).\n"
         "function adminTable(rows: Record<string, unknown>[]): Response {\n"
-        "  const head = COLUMNS.map((c) => `<th>${escapeHtml(c)}</th>`).join(\"\");\n"
+        '  const head = COLUMNS.map((c) => `<th>${escapeHtml(c)}</th>`).join("");\n'
         "  const body = rows\n"
         "    .map(\n"
         "      (r) =>\n"
@@ -1513,9 +1529,7 @@ def _emit_vite_config() -> str:
     )
 
 
-def _emit_manifest_ts(
-    app: AppSpec, design: DesignSpec, names: dict[tuple[str, str], str]
-) -> str:
+def _emit_manifest_ts(app: AppSpec, design: DesignSpec, names: dict[tuple[str, str], str]) -> str:
     """A deterministic digest of BOTH specs + the section inventory. Any spec change
     (structure, content, or design) changes the digest, so the manifest is part of
     the touched set on every mutation — a cheap, single 'specs ⇄ tree are in sync'
@@ -2052,12 +2066,12 @@ def _emit_directory_listing_component(comp: str, page: Page, section: Section) -
         "    [items, query]\n"
         "  );\n"
         "  return (\n"
-        f'    <section className={_ts(classes)} id={_ts(section.id)}'
+        f"    <section className={_ts(classes)} id={_ts(section.id)}"
         f" data-appkit-section={_ts(section.id)}{disco_attrs}>\n"
         '      <div className="app-main">\n'
         '        {c.eyebrow ? <p className="eyebrow">{c.eyebrow}</p> : null}\n'
         f"        {{c.heading ? <h2{_disco_field_attr('heading')}>{{c.heading}}</h2> : null}}\n"
-        f"        {{c.subheading ? <p className=\"subheading\"{_disco_field_attr('subheading')}>"
+        f'        {{c.subheading ? <p className="subheading"{_disco_field_attr("subheading")}>'
         "{c.subheading}</p> : null}\n"
         '        <label className="directory-search">\n'
         "          <span>Search</span>\n"
@@ -2068,7 +2082,7 @@ def _emit_directory_listing_component(comp: str, page: Page, section: Section) -
         '        <ul className="stacked-list">\n'
         "          {filtered.map((item, i) => (\n"
         f'            <li className="feature-item" key={{i}}{_disco_field_attr("items")}'
-        f'{_disco_item_attrs(section, index_expr="i", item_kind="item")}>{{item}}</li>\n'
+        f"{_disco_item_attrs(section, index_expr='i', item_kind='item')}>{{item}}</li>\n"
         "          ))}\n"
         "        </ul>\n"
         "      </div>\n"
@@ -2077,9 +2091,7 @@ def _emit_directory_listing_component(comp: str, page: Page, section: Section) -
     )
 
 
-def _emit_directory_app_tsx(
-    app: AppSpec, names: dict[tuple[str, str], str]
-) -> str:
+def _emit_directory_app_tsx(app: AppSpec, names: dict[tuple[str, str], str]) -> str:
     """A ROUTE-AWARE app shell: each page renders ONLY its own sections, selected by
     `window.location.pathname`. A directory site is multi-route (`/` + `/directory`),
     so unlike the single-page lead-gen shell this dispatches per route. (Lead-gen
@@ -2098,12 +2110,7 @@ def _emit_directory_app_tsx(
         )
         body = (renders + "\n") if renders else ""
         page_funcs.append(
-            f"function {fn}(): ReactElement {{\n"
-            "  return (\n"
-            "    <>\n"
-            f"{body}"
-            "    </>\n"
-            "  );\n}\n"
+            f"function {fn}(): ReactElement {{\n  return (\n    <>\n{body}    </>\n  );\n}}\n"
         )
         # Normalize the ROUTES key the SAME way the browser path is normalized below
         # (trim trailing slashes except root `/`), so a schema-valid trailing-slash
@@ -2116,10 +2123,11 @@ def _emit_directory_app_tsx(
         "/* Auto-generated route-aware app shell (Epic N) — regenerated from "
         ".disco/appspec.json. */\n"
         'import { type ReactElement } from "react";\n'
-        + "\n".join(imports) + "\n\n"
-        + "\n".join(page_funcs) + "\n"
-        "const ROUTES: Record<string, () => ReactElement> = {\n"
-        + "\n".join(route_entries) + "\n"
+        + "\n".join(imports)
+        + "\n\n"
+        + "\n".join(page_funcs)
+        + "\n"
+        "const ROUTES: Record<string, () => ReactElement> = {\n" + "\n".join(route_entries) + "\n"
         "};\n\n"
         "export default function App(): ReactElement {\n"
         '  const path = window.location.pathname.replace(/\\/+$/, "") || "/";\n'

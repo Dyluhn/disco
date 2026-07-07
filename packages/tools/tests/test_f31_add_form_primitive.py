@@ -19,6 +19,8 @@ from disco.tools.builtin.app_kit import (
     AppAddPrimitiveTool,
     AppCreateArgs,
     AppCreateTool,
+    AppUpdateContentArgs,
+    AppUpdateContentTool,
 )
 from tool_fakes import FakeSandboxInstance
 
@@ -49,9 +51,7 @@ def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
 
 async def _create_app(sbx: FakeSandboxInstance, primitive_id: str) -> ToolOutcome:
     return await AppCreateTool().run(
-        AppCreateArgs(
-            recipe_id="editorial-ledger", primitive_id=primitive_id, brief="Acme Studio"
-        ),
+        AppCreateArgs(recipe_id="editorial-ledger", primitive_id=primitive_id, brief="Acme Studio"),
         _ctx(sbx),
     )
 
@@ -113,6 +113,35 @@ async def test_add_form_happy_path_regenerates_tree_and_persists_record():
     assert len(record["spec"]["fields"]) == 5
 
 
+async def test_form_success_message_edit_regenerates_component_and_content_surface():
+    sbx = FakeSandboxInstance()
+    assert (await _create_app(sbx, "lead_gen")).success is True
+    assert (await _add_form(sbx, _FORM_SPEC)).success is True
+
+    out = await AppUpdateContentTool().run(
+        AppUpdateContentArgs(
+            page_id="home",
+            section_id="quote_request",
+            updates={"success_message": "Thanks, your quote request is queued."},
+        ),
+        _ctx(sbx),
+    )
+
+    assert out.success is True, out.content
+    touched = set(out.artifacts)
+    assert APPSPEC_RELPATH in touched
+    assert "src/generated/content.ts" in touched
+    assert "src/components/HomeQuoteRequestSection.tsx" in touched
+    app_data = json.loads(sbx._fs[APPSPEC_RELPATH])
+    form_section = next(s for s in app_data["pages"][0]["sections"] if s["id"] == "quote_request")
+    assert form_section["content"]["success_message"] == "Thanks, your quote request is queued."
+    comp = sbx._fs["src/components/HomeQuoteRequestSection.tsx"].decode("utf-8")
+    content = sbx._fs["src/generated/content.ts"].decode("utf-8")
+    assert "Thanks, your quote request is queued." in comp
+    assert "successMessage" in content
+    assert "Thanks, your quote request is queued." in content
+
+
 # ---- refusals ------------------------------------------------------------------------
 
 
@@ -157,7 +186,25 @@ async def test_directory_host_refused_with_guidance():
     assert (await _create_app(sbx, "directory")).success is True
     out = await _add_form(sbx, _FORM_SPEC)
     assert out.success is False
-    assert "lead_gen-shaped" in out.content
+    assert "directory is a static site with no D1 binding" in out.content
+    assert "cannot verify or deploy" in out.content
+
+
+async def test_records_host_uses_namespaced_form_route():
+    sbx = FakeSandboxInstance()
+    assert (await _create_app(sbx, "records")).success is True
+    out = await _add_form(sbx, _FORM_SPEC)
+    assert out.success is True, out.content
+
+    schema = sbx._fs["schema.sql"].decode("utf-8")
+    worker = sbx._fs["worker/index.ts"].decode("utf-8")
+    comp = sbx._fs["src/components/HomeQuoteRequestSection.tsx"].decode("utf-8")
+
+    assert 'CREATE TABLE IF NOT EXISTS "quote_requests"' in schema
+    assert '"/api/forms/quote_request"' in worker
+    assert '"/api/quote_requests"' not in worker
+    assert 'const POST_PATH = "/api/forms/quote_request";' in comp
+    assert "return json({ error: check.error }, 422);" in worker
 
 
 async def test_app_create_with_form_primitive_fails_with_addon_guidance():
