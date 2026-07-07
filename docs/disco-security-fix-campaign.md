@@ -1,6 +1,15 @@
-# Disco Security Fix Campaign — plan for review
+# Disco Security Fix Campaign — wave-by-wave log + resume playbook
 
-**Status:** PLAN ONLY — no code changed yet. Dylan signed off "use best practices, go with your recommendations" + "continuously give it to codex until it is not blocked" (2026-06-20). Iterative codex gpt-5.5 plan-review loop **CONVERGED** (2 consecutive not-BLOCK): **r1 BLOCK (9) → r2 SHIP-WITH-FIXES (10) → r3 BLOCK (7) → r4 SHIP-WITH-FIXES (8) → r5 SHIP-WITH-FIXES (2 + impl note)** — ALL folded in (see §Plan-review changelog blocks). codex r5: "coverage complete; round-4 edits landed." Plan is implementation-ready. **PAUSED before Wave 1 — awaiting Dylan's go.**
+**Status (2026-07-06): W1–W3 EXECUTED — W4/W5/W6 PARKED.** Wave 1 (`e028d2ac`), Wave 2
+(`2408e40f`), Wave-Pi (`76b4e397` — removed the Pi integration, attack-surface
+reduction), and Wave 3 (`1b762e3f`) are **DONE + committed** on `disclaude/mega-campaign`;
+a follow-up surfaced the silently-dropped origin-approval ledger entries (`8157745b`).
+Waves 4–6 are **PARKED** (not started) — prerequisites for any public/hardened release.
+The single source of truth for current security state (done/parked/deferred) is
+`docs/disco-security-state.md`; this file is the wave-by-wave campaign log + resume
+playbook it points to.
+
+**Plan history:** Dylan signed off "use best practices, go with your recommendations" + "continuously give it to codex until it is not blocked" (2026-06-20). Iterative codex gpt-5.5 plan-review loop **CONVERGED** (2 consecutive not-BLOCK): **r1 BLOCK (9) → r2 SHIP-WITH-FIXES (10) → r3 BLOCK (7) → r4 SHIP-WITH-FIXES (8) → r5 SHIP-WITH-FIXES (2 + impl note)** — ALL folded in (see §Plan-review changelog blocks). codex r5: "coverage complete; round-4 edits landed."
 
 ## Plan-review changelog (codex gpt-5.5, BLOCK → addressed)
 1. **[BLOCKER] Auth transport** — a JS-readable bearer token leaks (hostile page loads `/env.js` cross-origin) AND can't be sent by browser WS / preview iframes / artifact downloads. → Wave 1 rewritten to **HttpOnly SameSite cookie + CSRF + strict WS `Origin` check + short-lived signed preview/artifact URLs**, with an explicit auth-transport matrix.
@@ -49,8 +58,8 @@ D1'. **[High] Tailnet/host-publish hairpin to sibling sandboxes** — even with 
 A2'. **[High] App-server GLOBAL-state authorization (DECISION)** — config/secrets/MCP/skills are global mutable state (`skills.py:18`, `config.py:31`, `secrets.py:47`, `mcp.py:22`; enabled skills injected into ALL prompts `runtime.py:705`). Auth+CSRF closes the drive-by (H14) but not multi-owner impact (any authenticated owner could inject a global skill / change everyone's provider keys). **DECIDED: app-server settings = operator/ADMIN-only global state** (they configure the whole install, not per-conversation user data; single-operator local today, stays admin-only when hosted). Route-inventory test (A8) asserts the required auth CLASS (admin vs authenticated), not merely "authenticated." Acceptance: a non-admin owner CANNOT create a globally-visible skill or mutate provider/secrets/MCP.
 B2'''. **[impl note] Class-1 chokepoint = connect-time + proxy-independent** — use `trust_env=False` / a controlled transport, validate every RESOLVED sockaddr actually connected to (not just the hostname), and revalidate on redirect (defeats DNS-rebind). The DNS-rebind/redirect acceptance tests are the proof target.
 SEQ. Wave 1 alone does NOT close model-origin SSRF / PDF file-read (C4/C7 remain until Wave 2) — keep that framing.
-**Branch:** `build-surface-recovery-ux` (no remote; never push main).
-**Source:** the 7-round convergence audit (Opus 4.8 + codex gpt-5.5, adversarial, two independent reviewers). Ledger: `/tmp/sec_known.md`.
+**Branch:** the executed waves landed on `disclaude/mega-campaign` (the plan was drafted on `build-surface-recovery-ux`; no remote, never push main).
+**Source:** the 7-round convergence audit (Opus 4.8 + codex gpt-5.5, adversarial, two independent reviewers). Finding ledger: the original `/tmp/sec_known.md` scratch file is gone — current status lives in `docs/disco-security-state.md`.
 **Tally:** 8 Critical · 17 High · 10 Medium · 3 Low = 38 findings.
 
 > Threat model (verbatim from the audit): a MODEL-CONTROLLED agent can call tools, run code_exec/shell, author plans/DoD predicates, write files, drive a browser, and emit output persisted to events + streamed over WS + replayed into LLM context. "Unsafe" = the host (its filesystem, env, secrets, processes) or another tenant/conversation. Also in-scope: a hostile webpage the user visits (drive-by to the loopback API), and a caller who merely knows a `conversation_id`.
@@ -90,7 +99,7 @@ Per-wave discipline (the HARD GATES, every wave):
 
 ---
 
-## Wave 1 — ROOT-A: authentication, CORS, owner-scoping  *(keystone)*
+## Wave 1 — ROOT-A: authentication, CORS, owner-scoping  *(keystone)* — **DONE (`e028d2ac`)**
 
 **Closes:** C5, H6, H8; removes reachability of H2, H10, H13, H14, M2, M7. (NOT M4 — share bundles are public-by-token, so owner-scoping doesn't touch them; M4 is fixed in Wave 6.)
 
@@ -119,7 +128,7 @@ Tasks:
 
 ---
 
-## Wave 2 — ROOT-B: secret-resolution + egress chokepoint (host-side)
+## Wave 2 — ROOT-B: secret-resolution + egress chokepoint (host-side) — **DONE (`2408e40f`; follow-up `8157745b` surfaced the silently-dropped origin-approval ledger entries)**
 
 **Closes:** C4, C8, H1, H11, H12, M3, M5, M7(host side), C7(fetch side); subsumes L3. (H11/H12 fully via B2 egress + B6 runs_in.)
 
@@ -139,7 +148,7 @@ Tasks:
 
 ---
 
-## Wave 3 — STANDALONE host-execution cluster (gVisor bypass)
+## Wave 3 — STANDALONE host-execution cluster (gVisor bypass) — **DONE (`1b762e3f`)**
 
 **Closes:** C1, C2, C3, C6, H9, M1, H13.
 
@@ -151,7 +160,7 @@ Tasks:
 
 **Acceptance:** a plan/DoD `command: "rm -rf -- /"` (and the 5 other bypass variants) is DENIED; a DoD `command` predicate runs in the container (proven by it not seeing a host-only file); `backend:"garbage"` fails closed (no host downgrade).
 
-**STATUS: DONE + gpt-5.5-reviewed (2026-07-06).** All five sub-fixes landed with tests (old-vs-new proof for C-3, canary-leak proof for C-4, routing proof for C-2). Two adversarial-review rounds; the C-3 floor was rewritten to command-position analysis (shlex `_command_word_index`) catching `\rm`/`'r'm`/`command rm`/`sudo rm`/`bash -lc`/`find <root> -delete`/path-traversal/`$(…)` while NOT false-positiving on `echo rm -rf /` or `find . -delete`. C-2 also hardened the plan-step predicate path (floor before exec_shell AND the host fallback). C-1 coercion forces `runtime=runsc` (not just `backend=gvisor`).
+**STATUS: DONE + gpt-5.5-reviewed (2026-07-06, commit `1b762e3f`).** All five sub-fixes landed with tests (old-vs-new proof for C-3, canary-leak proof for C-4, routing proof for C-2). Two adversarial-review rounds; the C-3 floor was rewritten to command-position analysis (shlex `_command_word_index`) catching `\rm`/`'r'm`/`command rm`/`sudo rm`/`bash -lc`/`find <root> -delete`/path-traversal/`$(…)` while NOT false-positiving on `echo rm -rf /` or `find . -delete`. C-2 also hardened the plan-step predicate path (floor before exec_shell AND the host fallback). C-1 coercion forces `runtime=runsc` (not just `backend=gvisor`).
 
 **Acknowledged residuals (deferred to Wave 5 — isolation — NOT host-exec regressions):**
 - **DoD command predicates are skipped on container backends** (`workspace_path is None` → gate dark). This is *pre-existing* and safe (no host exec); the C-2 fix targets the local/process backends that DID host-exec. To ALSO verify command/http predicates in-sandbox on gVisor, relax the `_DoDWorkspaceUnavailable` short-circuit when `exec_shell` exists — a finish-gate behavior change needing soak.
@@ -160,7 +169,7 @@ Tasks:
 
 ---
 
-## Wave 4 — STANDALONE MCP approval integrity
+## Wave 4 — STANDALONE MCP approval integrity — **PARKED (not started)**
 
 **Closes:** H3, H4, H5, H7.
 
@@ -174,7 +183,7 @@ Tasks:
 
 ---
 
-## Wave 5 — ROOT-C: availability / isolation hardening
+## Wave 5 — ROOT-C: availability / isolation hardening — **PARKED (not started)**
 
 **Closes:** H15, H16, H17, M8, M9, M10.
 
@@ -196,7 +205,7 @@ Tasks:
 
 ---
 
-## Wave 6 — output sinks + share/storage + lows + ops hardening
+## Wave 6 — output sinks + share/storage + lows + ops hardening — **PARKED (not started)**
 
 **Closes:** M4, M2, M6, L1, L2, L3 (if not already in B3), + Fernet KDF.
 
