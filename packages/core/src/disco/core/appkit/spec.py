@@ -450,6 +450,12 @@ MAX_SEO_DESCRIPTION = 300
 MAX_SEO_URL = 2048
 MAX_SEO_SITE_NAME = 200
 
+# Bounds/defaults for the analytics primitive's resolved metadata. The fillable
+# AnalyticsSpec mirrors these so the model-facing schema and persisted AppSpec
+# cannot drift.
+DEFAULT_ANALYTICS_DASHBOARD_PAGE_TITLE = "Analytics"
+MAX_ANALYTICS_DASHBOARD_PAGE_TITLE = 120
+
 
 def validate_http_url(value: str, *, field: str) -> str:
     """A SIMPLE absolute-URL shape check (stdlib urlparse, deliberately not a full
@@ -500,6 +506,28 @@ class SeoMeta(BaseModel):
         return validate_http_url(value, field="seo social_image_url")
 
 
+class AnalyticsMeta(BaseModel):
+    """Resolved first-party analytics metadata folded into an app by the
+    `analytics` primitive. Strictly additive: unset analytics is excluded from
+    dumps, so pre-analytics specs serialize and generate exactly as before."""
+
+    model_config = _STRICT
+
+    dashboard_page_title: str = Field(
+        default=DEFAULT_ANALYTICS_DASHBOARD_PAGE_TITLE,
+        min_length=1,
+        max_length=MAX_ANALYTICS_DASHBOARD_PAGE_TITLE,
+    )
+
+    @field_validator("dashboard_page_title")
+    @classmethod
+    def _title_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("analytics dashboard_page_title must not be blank")
+        return stripped
+
+
 class AppSpec(BaseModel):
     """The app STRUCTURE the scaffold generator consumes.
 
@@ -520,10 +548,15 @@ class AppSpec(BaseModel):
     primary_actions: tuple[Action, ...] = Field(
         default_factory=tuple, max_length=_MAX_ACTIONS
     )
-    # Epic F5.3 — resolved SEO metadata, folded in by the `seo` primitive.
+    # Epic F5.3 - resolved SEO metadata, folded in by the `seo` primitive.
     # `exclude_if` keeps a None out of every dump, so pre-F5.3 specs serialize
     # byte-identically (and the 256 KiB cap math is unchanged for them).
     seo: SeoMeta | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Epic 6.1 - resolved first-party analytics metadata, folded in by the
+    # `analytics` primitive. Hidden when unset, matching the SEO additive pattern.
+    analytics: AnalyticsMeta | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("roles")
     @classmethod

@@ -56,6 +56,7 @@ HELLO_PRIMITIVE_ID = "hello"
 FORM_PRIMITIVE_ID = "form"
 SEO_PRIMITIVE_ID = "seo"
 COLLECTION_PRIMITIVE_ID = "collection"
+ANALYTICS_PRIMITIVE_ID = "analytics"
 
 
 @dataclass(frozen=True)
@@ -186,6 +187,7 @@ def primitive_ids() -> frozenset[str]:
 
 
 __all__ = [
+    "ANALYTICS_PRIMITIVE_ID",
     "COLLECTION_PRIMITIVE_ID",
     "DIRECTORY_PRIMITIVE_ID",
     "FORM_PRIMITIVE_ID",
