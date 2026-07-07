@@ -557,6 +557,42 @@ class DeepResearchService:
             await self._rt._propose_deep_research_plan(conversation_id, events)
             return
 
+        # Phase 1R: PLAN REVISION (live STUCK 2026-07-07). A plan exists but is
+        # NOT approved and the user sent revision text. Two ingress shapes:
+        #   * the PlanPanel "Send revision" → request_plan → loop.enter_planning
+        #     emits RUNNING/'planning' (the status this branch keys on);
+        #   * a plain message typed while AWAITING_PLAN_APPROVAL (fresh user
+        #     message newer than the latest plan).
+        # Without this branch the dispatcher fell through EVERY phase (Phase 2
+        # requires detail=='plan_approved') and returned having done nothing —
+        # the runtime backstop then marked the conversation STUCK within
+        # milliseconds ('loop ended without reaching a terminal state').
+        # Re-decompose with every post-question user message folded in as plan
+        # constraints and re-propose (revision = prev+1).
+        if not reports:
+            last_status = next(
+                (e for e in reversed(events) if isinstance(e, StatusEvent)), None
+            )
+            in_revision_planning = (
+                state.execution_status == ConversationStatus.RUNNING
+                and last_status is not None
+                and last_status.detail == "planning"
+            )
+            latest_plan_seq = plans[-1].seq or 0
+            fresh_msg_while_awaiting = (
+                state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+                and any(
+                    isinstance(e, MessageEvent)
+                    and e.source == EventSource.USER
+                    and (e.seq or 0) > latest_plan_seq
+                    and (e.message.content or "").strip()
+                    for e in events
+                )
+            )
+            if in_revision_planning or fresh_msg_while_awaiting:
+                await self._rt._propose_deep_research_plan(conversation_id, events)
+                return
+
         # Phase 2b: RESUME a stopped run (status PAUSED) → continue from the
         # checkpoint. The plan is already approved; flip back to RUNNING and execute,
         # carrying the partial ReportEvent's completed sections so the engine skips
@@ -596,21 +632,37 @@ class DeepResearchService:
     async def _propose_deep_research_plan(
         self, conversation_id: str, events: list
     ) -> None:
-        """Decompose the latest user query into sub-questions and emit a
-        synthetic PlanEvent + AWAITING_PLAN_APPROVAL. Same shape Build's plan
-        gate uses — the UI reuses the existing approve_plan / request_plan
-        affordances without modification."""
-        # Find the most recent USER message — the query.
-        query = next(
-            (
-                e.message.content
-                for e in reversed(events)
-                if isinstance(e, MessageEvent) and e.source == EventSource.USER
-            ),
-            None,
-        )
-        if not query or not query.strip():
+        """Decompose the user's query into sub-questions and emit a synthetic
+        PlanEvent + AWAITING_PLAN_APPROVAL. Same shape Build's plan gate uses —
+        the UI reuses the existing approve_plan / request_plan affordances
+        without modification.
+
+        REVISION-AWARE (live STUCK 2026-07-07): the research QUESTION is the
+        FIRST user message; every LATER user message is plan feedback ("do not
+        include X", "focus on Y"). The old code took the LATEST user message as
+        the query, so a re-propose after a revision would have planned the
+        REVISION TEXT itself ("do not include any models not released within H1
+        of 2026") instead of the revised question. Fold later messages in as
+        explicit constraints; the engine's query (first message, see
+        _execute_deep_research) stays consistent."""
+        user_texts = [
+            (e.message.content or "").strip()
+            for e in events
+            if isinstance(e, MessageEvent)
+            and e.source == EventSource.USER
+            and (e.message.content or "").strip()
+        ]
+        if not user_texts:
             return  # nothing to plan; wait
+        query = user_texts[0]
+        if len(user_texts) > 1:
+            constraints = "\n".join(f"- {t}" for t in user_texts[1:])
+            query = (
+                f"{query}\n\n"
+                f"The user revised the research plan with these instructions — "
+                f"the sub-questions MUST honor them:\n{constraints}"
+            )
+        prior_plans = sum(1 for e in events if isinstance(e, PlanEvent))
 
         # P1-2: the DR INITIAL KICK previously bypassed the driver pre-flight (it
         # lived only in the build path of _run_with_persistence and in the
@@ -717,7 +769,7 @@ class DeepResearchService:
         plan = PlanEvent(
             summary=summary,
             steps=steps,
-            revision=1,
+            revision=prior_plans + 1,
             context=(
                 f"**Query:** {query.strip()}\n\n"
                 f"**Depth tier:** {tier.value}\n\n"
