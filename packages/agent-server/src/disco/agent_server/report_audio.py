@@ -277,7 +277,14 @@ async def _authenticated_call_llm(
         if key:
             headers["Authorization"] = f"Bearer {key}"
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
+        # 600s read (connect stays snappy): a REASONING driver (MiniMax M3)
+        # legitimately thinks past 120s on a long turn script — the identical
+        # 120s ReadTimeout silently broke deck authoring (fixed in d5478305 at
+        # 600s); keep the audio script call aligned. TTS synthesis itself is
+        # local and deliberately UNBOUNDED (slow CPUs must never be cut off).
+        timeout=httpx.Timeout(600.0, connect=30.0),
+        trust_env=False,
+        follow_redirects=False,
     ) as client:
         resp = await client.post(
             f"{llm_url}/chat/completions",
