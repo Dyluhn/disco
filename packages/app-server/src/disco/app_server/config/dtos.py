@@ -181,7 +181,9 @@ class SandboxConfigDTO(BaseModel):
     fix for the switch-blanks-the-other-backend outage. It's read-only context for the
     client; the server is authoritative and merges it on save."""
 
-    backend: str  # "process" | "gvisor" | "local" | "podman"
+    # W3 C-1: fail-CLOSED at the API boundary — an unknown backend is rejected with
+    # a 422 here, so a poisoned value never reaches the ConfigStore or the dispatch.
+    backend: Literal["gvisor", "local", "podman", "process"]
     docker_socket: str
     podman_url: str
     runtime: str

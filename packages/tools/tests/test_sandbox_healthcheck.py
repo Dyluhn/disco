@@ -150,6 +150,18 @@ def test_service_from_config_maps_each_backend():
     assert service_from_config(SandboxConfig(backend="gvisor")).name == "gvisor"
     assert service_from_config(SandboxConfig(backend="local")).name == "local"
     assert service_from_config(SandboxConfig(backend="podman")).name == "podman"
-    # Unknown / "process" → the dev backend.
+    # `process` is reachable ONLY when named explicitly.
     assert service_from_config(SandboxConfig(backend="process")).name == "process"
-    assert service_from_config(SandboxConfig(backend="???")).name == "process"
+
+
+def test_service_from_config_fails_closed_on_unknown_backend():
+    # W3 C-1: an unknown backend no longer falls through to the host `process`
+    # backend. It's rejected at construction (Literal), and even if a bad value
+    # is force-constructed past validation, the dispatch RAISES (never host exec).
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        SandboxConfig(backend="???")
+    with pytest.raises(ValueError, match="unknown sandbox backend"):
+        service_from_config(SandboxConfig.model_construct(backend="???"))

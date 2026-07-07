@@ -726,6 +726,16 @@ class PlanStepConditions:
         / fake-executor paths (mirroring the `file_exists` fallback design). The
         5 s timeout is preserved for both paths."""
         timeout = 5.0
+        # W3 C-2/C-3: the predicate command is model-authored (copied from the
+        # plan's done_condition). Apply the destructive-command hard-deny FLOOR
+        # before EITHER branch (sandbox exec_shell OR the host subprocess fallback),
+        # so a done_condition like `rm -rf --no-preserve-root /` is refused, never
+        # run — matching the DoD command runner's floor.
+        from ..security.analyzers import hard_deny_reason
+
+        _deny = hard_deny_reason(predicate.cmd)
+        if _deny is not None:
+            return (False, f"command({predicate.cmd!r}): hard-denied ({_deny})")
         sbx = getattr(self._loop.executor, "sandbox", None)
 
         # Sandbox-aware path: execute the predicate command INSIDE THE BOX so it

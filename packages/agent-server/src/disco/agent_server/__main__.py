@@ -27,9 +27,20 @@ def _sandbox_service():
     """An OPTIONAL startup OVERRIDE of the Build sandbox backend. Unset → the runtime
     reads the backend from the persisted Settings (the Sandbox section) per request.
     Set DISCO_SANDBOX=process|local|gvisor|podman to force one (with the env connection)."""
-    backend = disco_env("SANDBOX")
-    if not backend:
+    backend_raw = disco_env("SANDBOX")
+    if not backend_raw:
         return None  # config-driven (the Settings selector)
+    # W3 C-1: validate the dev override against the fail-CLOSED allowlist — a typo'd
+    # DISCO_SANDBOX must error loudly, never silently fall through to host execution.
+    from typing import Literal, cast
+
+    backend = backend_raw.strip().lower()
+    if backend not in ("gvisor", "local", "podman", "process"):
+        raise ValueError(
+            f"DISCO_SANDBOX={backend_raw!r} is not a valid sandbox backend "
+            "(expected one of: gvisor, local, podman, process)"
+        )
+    backend = cast(Literal["gvisor", "local", "podman", "process"], backend)
     from disco.core.llm import SandboxSettings
 
     from .runtime import build_sandbox_service
@@ -44,7 +55,7 @@ def _sandbox_service():
     assert sandbox_image is not None
     return build_sandbox_service(
         SandboxSettings(
-            backend=backend.lower(),
+            backend=backend,
             runtime=local_runtime,
             docker_socket=local_socket,
             image=sandbox_image,

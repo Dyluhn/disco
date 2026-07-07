@@ -185,7 +185,9 @@ class SandboxSettings(BaseModel):
     idle_ttl_s: int = 1800
     # which backend is active. "process" (dev, host) | "gvisor" (strong, remote) |
     # "local" (container, same host) | "podman" (remote; a STUB in this environment).
-    backend: str = "local"
+    # W3 C-1: a fail-CLOSED Literal allowlist — an unknown value can no longer flow
+    # downstream and silently resolve to host execution (`service_from_config`).
+    backend: Literal["gvisor", "local", "podman", "process"] = "local"
     # gVisor / Docker host endpoint — a local socket OR Docker-over-SSH (ssh://user@host).
     docker_socket: str = "unix:///var/run/docker.sock"
     # Podman native remote (rootless socket over Tailscale SSH).
@@ -199,6 +201,26 @@ class SandboxSettings(BaseModel):
     # switches so a flip of `backend` restores that backend's last-known setup. Empty on a
     # fresh/legacy config; seeded from the active flat fields on the first save/merge.
     connections: dict[str, SandboxConnection] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_unknown_backend(cls, data: object) -> object:
+        """W3 C-1: an unknown persisted `backend` (manual edit / corruption / a
+        future-removed value) must NOT crash `ConfigStore.load()` — which catches
+        the ValidationError and discards the WHOLE user config back to the seed
+        (see RouterConfig._migrate_legacy_provider). Coerce it to `gvisor`, the
+        MOST-isolated backend, so the fallback is fail-CLOSED (never `process`/host)
+        while the rest of the config is preserved.
+
+        Also force `runtime="runsc"` (the gVisor OCI runtime): coercing only the
+        backend name while leaving a `runc` runtime would yield a plain-runc
+        container *labelled* gVisor — isolation weaker than advertised. The gVisor
+        host contract owns docker_socket, but runsc is the load-bearing bit."""
+        if isinstance(data, dict):
+            b = data.get("backend")
+            if isinstance(b, str) and b not in ("gvisor", "local", "podman", "process"):
+                return {**data, "backend": "gvisor", "runtime": "runsc"}
+        return data
 
     def active_connection(self) -> SandboxConnection:
         """The flat fields as a connection block (the live/active backend's setup)."""

@@ -522,10 +522,10 @@ async def test_default_command_runner_refuses_destructive_commands(
     # Reason names the deny + the predicate is recorded as denied=True.
     assert "hard-denied" in verdict.results[0].reason
     assert verdict.results[0].details.get("denied") is True
-    # And the deny reason names the root-fs delete (the engine's own
-    # deny string for `rm -rf /`).
+    # And the deny reason names the protected-path delete (the engine's own
+    # deny string for `rm -rf /` — W3 C-3 reworded it to "protected system path").
     deny = verdict.results[0].details.get("deny_reason", "")
-    assert "root" in deny.lower() or "rm" in deny.lower()
+    assert "protected" in deny.lower() or "root" in deny.lower() or "rm" in deny.lower()
 
 
 # ---- Path-escape safety ---------------------------------------------------

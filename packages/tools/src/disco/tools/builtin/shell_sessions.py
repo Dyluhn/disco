@@ -15,6 +15,21 @@ def _fail(msg: str) -> ToolOutcome:
     return ToolOutcome(success=False, content=msg, error=msg)
 
 
+def _reject_reserved_session(session: str) -> ToolOutcome | None:
+    """W3 C-5: `__`-prefixed session names are RESERVED for the platform's
+    internal sessions (e.g. `__kernel`, whose pane holds the kernel-gateway
+    launch line and its auth token). A model-driven shell tool must never reach
+    them — otherwise `shell_view(session="__kernel")` exfiltrates the token and
+    `shell_exec`/`_kill` could hijack or tear down the gateway. Returns a refusal
+    outcome for a reserved name, else None."""
+    if session.startswith("__"):
+        return _fail(
+            f"session {session!r} is reserved for internal platform use and "
+            "cannot be accessed. Use an ordinary session name (e.g. 'main')."
+        )
+    return None
+
+
 class ShellExecArgs(BaseModel):
     session: str = Field(default="main", description="Name of the shell session.")
     exec_dir: str = Field(default="", description="Directory to run the command in.")
@@ -45,6 +60,8 @@ class ShellExecTool:
     async def run(self, args: ShellExecArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
             return _fail("Session manager not available.")
+        if (reserved := _reject_reserved_session(args.session)) is not None:
+            return reserved
         try:
             outcome = await ctx.sessions.exec(
                 args.session, args.command, args.exec_dir if args.exec_dir else None
@@ -85,6 +102,8 @@ class ShellViewTool:
     async def run(self, args: ShellViewArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
             return _fail("Session manager not available.")
+        if (reserved := _reject_reserved_session(args.session)) is not None:
+            return reserved
         try:
             view = await ctx.sessions.view(args.session)
             state = "running" if view.running else "idle"
@@ -112,6 +131,8 @@ class ShellWaitTool:
     async def run(self, args: ShellWaitArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
             return _fail("Session manager not available.")
+        if (reserved := _reject_reserved_session(args.session)) is not None:
+            return reserved
         try:
             view = await ctx.sessions.wait(args.session, args.seconds)
             state = "running" if view.running else "idle"
@@ -140,6 +161,8 @@ class ShellWriteTool:
     async def run(self, args: ShellWriteArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
             return _fail("Session manager not available.")
+        if (reserved := _reject_reserved_session(args.session)) is not None:
+            return reserved
         try:
             await ctx.sessions.write(args.session, args.input, args.press_enter)
             return ToolOutcome(success=True, content=f"Wrote to session '{args.session}'.")
@@ -167,6 +190,8 @@ class ShellKillTool:
     async def run(self, args: ShellKillArgs, ctx: ToolContext) -> ToolOutcome:
         if not ctx.sessions:
             return _fail("Session manager not available.")
+        if (reserved := _reject_reserved_session(args.session)) is not None:
+            return reserved
         try:
             res = await ctx.sessions.kill_foreground(args.session)
             return ToolOutcome(success=True, content=res)

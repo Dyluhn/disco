@@ -500,6 +500,12 @@ class ShellSessionManager:
                     break
             if prefix_match is not None:
                 name = line[len(prefix_match):]
+                # W3 C-5: never enumerate internal, `__`-prefixed sessions (e.g.
+                # `__kernel`, whose pane holds the gateway launch line). This is
+                # the single choke point every listing consumer inherits — the
+                # model-facing `server_status` tool and any other caller.
+                if name.startswith("__"):
+                    continue
                 view = await self.view(name, tail_chars=1000)
                 last_lines = "\n".join(view.output.split("\n")[-3:])
                 sessions.append(SessionInfo(name=name, busy=view.running, last_lines=last_lines))

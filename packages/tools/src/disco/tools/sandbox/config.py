@@ -11,6 +11,7 @@ backend (gvisor / process / remote) reuses one config pattern, not a parallel on
 from __future__ import annotations
 
 import math
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
 
@@ -30,7 +31,9 @@ class SandboxConfig(BaseModel):
     model_config = ConfigDict()
 
     # which backend the settings layer selected (positions on one interface).
-    backend: str = "gvisor"  # "process" | "gvisor" | "podman" | "local"
+    # W3 C-1: a fail-CLOSED allowlist — an unknown backend is rejected at
+    # construction, never silently downgraded to host execution downstream.
+    backend: Literal["gvisor", "local", "podman", "process"] = "gvisor"
 
     # --- gVisor / Docker host (VM 201 contract) ---
     docker_socket: str = "unix:///var/run/docker.sock"  # local socket, no TCP/TLS

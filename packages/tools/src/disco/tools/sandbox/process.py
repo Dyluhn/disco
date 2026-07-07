@@ -148,11 +148,11 @@ class ProcessSandboxInstance:
 
     def _clean_env(self) -> dict[str, str]:
         # No os.environ — nothing from the host (incl. any real secret) leaks in.
-        return {
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
-            "HOME": str(self._workspace),
-            "TMPDIR": str(self._workspace),
-        }
+        # Shared with the jupyter kernel launcher (kernel.py) so the two cannot
+        # drift — see base.clean_sandbox_env (W3 C-4).
+        from .base import clean_sandbox_env
+
+        return clean_sandbox_env(self._workspace)
 
     def _rewrite_workspace_paths(self, cmd: str) -> str:
         """ROOT-1 (slides spiral): make a literal ``/workspace`` resolve in the shell.

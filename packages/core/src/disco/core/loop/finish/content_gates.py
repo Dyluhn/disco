@@ -465,7 +465,53 @@ class _ContentGateMixin(_FinishGateProto):
 
             http_probe = _in_sandbox_http_probe
 
-        return DoDEvaluator(Path(workspace), http_probe=http_probe)
+        # W3 C-2/C-4: a DoD `command` predicate is model-authored (it is copied
+        # from the plan's `done_condition`). It must NEVER run as a host-side
+        # `subprocess(shell=True)` — the DoDEvaluator's default runner does exactly
+        # that. Mirror the http probe: route the command through the box via
+        # `exec_shell`, so on a container backend it executes in the sandbox and
+        # on the process backend it at least stays behind the hard-deny floor
+        # (the deeper guarantee is OS isolation on the container backends). Without
+        # this, `command: "curl … | sh"` in a plan step ran on the host at `finish`.
+        command_runner = None
+        if sbx is not None and hasattr(sbx, "exec_shell"):
+            from ...dod_evaluator import CommandResult
+            from ...dod_util import _hard_deny_reason
+
+            async def _in_sandbox_command_runner(command: str) -> CommandResult:
+                deny = _hard_deny_reason(command)
+                if deny is not None:
+                    return CommandResult(
+                        exit_code=None,
+                        error_message=f"hard-denied: {deny}",
+                        denied=True,
+                        deny_reason=deny,
+                    )
+                try:
+                    res = await sbx.exec_shell(command, timeout_s=30)
+                except Exception as exc:  # noqa: BLE001 — a check failure is "not run", never a crash
+                    return CommandResult(
+                        exit_code=None,
+                        error_message=f"sandbox exec error: {type(exc).__name__}: {exc}",
+                    )
+                if getattr(res, "timed_out", False):
+                    return CommandResult(
+                        exit_code=None,
+                        stdout=res.stdout or "",
+                        stderr=res.stderr or "",
+                        error_message="timeout after 30s in sandbox",
+                    )
+                return CommandResult(
+                    exit_code=int(res.exit_code),
+                    stdout=res.stdout or "",
+                    stderr=res.stderr or "",
+                )
+
+            command_runner = _in_sandbox_command_runner
+
+        return DoDEvaluator(
+            Path(workspace), command_runner=command_runner, http_probe=http_probe
+        )
 
     async def gate_execution_nudge(self, step: AgentStep, events: list[Event]) -> Disp:
         # PLAN-MODE EXECUTION GATE — a forcing function, NOT a prompt. If

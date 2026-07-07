@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets as _secrets
+import shlex
 import time
 import uuid
 from collections.abc import Callable
@@ -132,11 +133,23 @@ class ProcessKernel(KernelSession):
 
     async def start(self) -> None:
         from jupyter_client.manager import AsyncKernelManager
+
+        from .base import clean_sandbox_env
+
         self._km = AsyncKernelManager(kernel_name="python3")
         # Ensure the kernel runs in the workspace directory
         self._km.extra_arguments = ["--ProjectManager.root_dir=" + str(self._workspace)]
 
-        await self._km.start_kernel(cwd=str(self._workspace))
+        # W3 C-4: launch with a SCRUBBED env (PATH/HOME/TMPDIR only). Without this,
+        # jupyter_client defaults the child env to os.environ, so untrusted model
+        # `code_exec` on this backend could read `os.environ['DISCO_SECRET_KEY']`
+        # and the OpenRouter key. The connection info is passed via the connection
+        # file (argv), not the env, so a minimal env is sufficient. Same allowlist
+        # as the shell path (base.clean_sandbox_env) so they cannot drift.
+        await self._km.start_kernel(
+            cwd=str(self._workspace),
+            env=clean_sandbox_env(self._workspace),
+        )
         self._kc = self._km.client()
         assert self._kc is not None  # client() always returns a KernelClient
         self._kc.start_channels()
@@ -366,12 +379,18 @@ class GatewayKernel(KernelSession):
         # container tmux default dir (WORKDIR /workspace), so kernels spawned by the
         # gateway inherit the workspace as cwd — user code's relative paths resolve
         # against the same tree the file API serves.
-        # --auth_token requires every caller (REST + WS) to present the token;
+        #
+        # The gateway requires every caller (REST + WS) to present the token;
         # without it the gateway is an unauthenticated RCE endpoint on whatever
-        # interface the port is published to. The token is hex (shell-safe).
+        # interface the port is published to. W3 C-5: pass the token via the
+        # KG_AUTH_TOKEN *environment variable* (Kernel Gateway reads it natively)
+        # as an inline assignment, NOT as `--auth_token=<hex>` in argv — argv is
+        # world-readable via `ps`/`/proc/<pid>/cmdline` to any process sharing the
+        # sandbox's PID namespace, so an argv token is a self-exfiltrating secret.
+        # The token is hex, but quote defensively regardless.
         cmd = (
+            f"KG_AUTH_TOKEN={shlex.quote(self._token)} "
             f"jupyter kernelgateway --KernelGatewayApp.api=kernel_gateway.jupyter_websocket "
-            f"--KernelGatewayApp.auth_token={self._token} "
             f"--ip 0.0.0.0 --port {port}"
         )
         await self._sessions.exec("__kernel", cmd, None)

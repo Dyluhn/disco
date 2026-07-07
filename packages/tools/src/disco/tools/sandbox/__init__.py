@@ -30,7 +30,8 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
     """[W-48] Map a SandboxConfig to its concrete backend service — the ONE shared
     backend↔config mapping used by BOTH the agent-server's live builder
     (`build_sandbox_service`) and the Settings connectivity preflight
-    (`ConfigState.test_sandbox`). `process`/unknown → the dev backend (runs on host)."""
+    (`ConfigState.test_sandbox`). An EXPLICIT `process` → the dev backend (runs on
+    host); an unknown backend FAILS CLOSED (raises) — never a silent host downgrade."""
     if cfg.backend == "gvisor":
         return GvisorSandboxService(cfg)
     if cfg.backend == "local":
@@ -52,7 +53,19 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
         return LocalSandboxService(cfg)
     if cfg.backend == "podman":
         return PodmanSandboxService(cfg)
-    return ProcessSandboxService()
+    if cfg.backend == "process":
+        # The unisolated dev backend (shares the host PID + net namespace).
+        # Reaching it requires an EXPLICIT backend=="process"; the Build/soak path
+        # additionally gates it behind the dev opt-out (preflight_build_sandbox_backend).
+        return ProcessSandboxService()
+    # W3 C-1: FAIL CLOSED. An unknown / garbage backend must NEVER silently fall
+    # through to host execution — that turned a typo or a poisoned config write into
+    # an un-sandboxed run. Refuse it here; the caller surfaces the error rather than
+    # downgrading the isolation boundary.
+    raise ValueError(
+        f"unknown sandbox backend {cfg.backend!r} "
+        "(expected one of: gvisor, local, podman, process)"
+    )
 
 
 # EPIC H (P0) — the dev-only opt-out that re-permits the unisolated `process` backend on

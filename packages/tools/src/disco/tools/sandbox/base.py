@@ -16,6 +16,23 @@ from pydantic import BaseModel, ConfigDict
 from ..anatomy import Capability
 
 
+def clean_sandbox_env(workspace: object) -> dict[str, str]:
+    """The allowlisted child environment for host-visible sandbox subprocesses on
+    the `process` (dev) backend — the shell path AND the jupyter kernel path.
+
+    W3 C-4: nothing from `os.environ` is inherited, so the master `DISCO_SECRET_KEY`,
+    the OpenRouter key, and every other host secret stay out of reach of the
+    untrusted model code that runs here. Factored to ONE place so the shell and
+    kernel launchers cannot drift (the kernel path used to inherit `os.environ`
+    wholesale and leaked the master key to `code_exec`)."""
+    ws = str(workspace)
+    return {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": ws,
+        "TMPDIR": ws,
+    }
+
+
 def strip_redundant_workspace_prefix(path: str) -> str:
     """ROOT-2 (runthru-v2): the sandbox cwd IS the workspace, but the build/agent
     prompts say files live in '/workspace', so the model often writes paths like

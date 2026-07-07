@@ -151,6 +151,13 @@ Tasks:
 
 **Acceptance:** a plan/DoD `command: "rm -rf -- /"` (and the 5 other bypass variants) is DENIED; a DoD `command` predicate runs in the container (proven by it not seeing a host-only file); `backend:"garbage"` fails closed (no host downgrade).
 
+**STATUS: DONE + gpt-5.5-reviewed (2026-07-06).** All five sub-fixes landed with tests (old-vs-new proof for C-3, canary-leak proof for C-4, routing proof for C-2). Two adversarial-review rounds; the C-3 floor was rewritten to command-position analysis (shlex `_command_word_index`) catching `\rm`/`'r'm`/`command rm`/`sudo rm`/`bash -lc`/`find <root> -delete`/path-traversal/`$(…)` while NOT false-positiving on `echo rm -rf /` or `find . -delete`. C-2 also hardened the plan-step predicate path (floor before exec_shell AND the host fallback). C-1 coercion forces `runtime=runsc` (not just `backend=gvisor`).
+
+**Acknowledged residuals (deferred to Wave 5 — isolation — NOT host-exec regressions):**
+- **DoD command predicates are skipped on container backends** (`workspace_path is None` → gate dark). This is *pre-existing* and safe (no host exec); the C-2 fix targets the local/process backends that DID host-exec. To ALSO verify command/http predicates in-sandbox on gVisor, relax the `_DoDWorkspaceUnavailable` short-circuit when `exec_shell` exists — a finish-gate behavior change needing soak.
+- **The in-sandbox model can reach its OWN kernel session/token** (`/proc/<gw>/environ`, or a raw `tmux capture-pane -t disco-__kernel` from a normal session). NOT a privilege escalation — the model already has authorized `code_exec`, and the token is `HMAC(master, sandbox_id)` (per-sandbox, can't drive another). True isolation = internal sessions on a separate tmux socket + a distinct PID/UID namespace (Wave 5). The C-5 fixes still close the argv leak, the casual `shell_view("__kernel")` path, and listing enumeration.
+- **Process backend `code_exec` can read the agent-server's `/proc/*/environ`.** The process backend is dev-only and FAIL-CLOSED in production (C-1 preflight refuses it absent `DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV`). Inherent to an unisolated dev backend; the C-4 env-scrub is defense-in-depth.
+
 ---
 
 ## Wave 4 — STANDALONE MCP approval integrity
