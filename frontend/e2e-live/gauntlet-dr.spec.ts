@@ -63,14 +63,21 @@ test(`gauntlet DR ${LABEL}: report finishes with sections+citations, deck builds
   await page.keyboard.press("Enter");
   await shot("04-submitted");
 
-  // FAIL FAST on a dead submit: a transport/origin failure renders inline —
+  // FAIL FAST on a dead submit: transport/origin/auth failures render inline —
   // don't burn the whole budget waiting for a report that never started.
   await page.waitForTimeout(4_000);
   const early = await page.locator("body").innerText();
-  expect(early, "submit failed at the transport layer").not.toMatch(/NetworkError|Failed to fetch/i);
+  expect(early, "submit failed before the run started").not.toMatch(
+    /NetworkError|Failed to fetch|csrf required|auth mint|forbidden|unauthorized/i,
+  );
 
   // Plan approval gates DR — approve when offered (autonomous may skip).
-  const approve = page.getByRole("button", { name: /approve & build/i });
+  // Live label is "Approve research plan" (fix-c #1); tolerate older variants
+  // and the stable control hook.
+  const approve = page
+    .locator('[data-disco-control="approve-plan"]')
+    .or(page.getByRole("button", { name: /approve (research plan|& build)/i }))
+    .first();
   try {
     await approve.waitFor({ state: "visible", timeout: 240_000 });
     await shot("05-plan");

@@ -371,7 +371,17 @@ async def _call_llm(
 
     Sends a Bearer Authorization header when `api_key` is provided so a remote
     driver (OpenRouter / paid endpoint) authenticates; local keyless endpoints
-    pass api_key=None and send no auth header (unchanged)."""
+    pass api_key=None and send no auth header (unchanged).
+
+    Gauntlet run-1 root cause (2026-07-07): reasoning drivers (MiniMax M3) think
+    for minutes on outline/fill-sized prompts — the old 120s cap produced
+    ``httpx.ReadTimeout`` whose ``str()`` is EMPTY, so the degraded note carried a
+    blank reason and every deck silently fell back to the plain renderer. Read
+    timeout is now generous (the deck author is a background step, not a UI
+    turn), timeouts raise with a NAMED reason, and the returned content goes
+    through the canonical think-strip — this raw path bypasses the router, so
+    nothing else removes a reasoning model's ``<think>`` span before JSON
+    parsing."""
     payload = {
         "model": model,
         "messages": messages,
@@ -381,17 +391,28 @@ async def _call_llm(
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
-    ) as client:
-        resp = await client.post(
-            f"{llm_url}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(600.0, connect=30.0),
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            resp = await client.post(
+                f"{llm_url}/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.TimeoutException as e:
+        raise RuntimeError(
+            f"{type(e).__name__} after 600s from {llm_url} (reasoning models can "
+            "exceed short caps; the driver endpoint may be slow or wedged)"
+        ) from e
+    from disco.core.think import strip_think_spans
+
+    content = data["choices"][0]["message"]["content"] or ""
+    return strip_think_spans(content)
 
 
 # ---------------------------------------------------------------------------
@@ -713,7 +734,7 @@ async def _stage_outline(
     try:
         raw = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
-        return None, "", f"LLM outline call failed: {e}"
+        return None, "", f"LLM outline call failed: {type(e).__name__}: {e}"
 
     deck, err = _parse_authored_deck(raw)
     if deck is not None:
@@ -758,7 +779,7 @@ async def _stage_fill(
     try:
         raw = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
-        return None, f"LLM fill call failed: {e}"
+        return None, f"LLM fill call failed: {type(e).__name__}: {e}"
 
     deck, err = _parse_authored_deck(raw)
     if deck is not None:
