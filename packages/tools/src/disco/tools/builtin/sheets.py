@@ -3,8 +3,8 @@
 (rows, columns, formulas) and this tool writes it via openpyxl.
 
 Formula whitelist: only pure functions (SUM/AVERAGE/IF/VLOOKUP/INDEX/MATCH/DATE
-and similar) are allowed. External-fetch / indirection functions like IMPORTXML,
-INDIRECT, WEBSERVICE, HYPERLINK are REJECTED with a clear error.
+and similar) are written as live formulas. External-fetch / indirection formulas
+and formula-injection trigger strings are written as inert text literals.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ _ALLOWED_FUNCTIONS: frozenset[str] = frozenset(
     }
 )
 
-# Functions that are EXPLICITLY REJECTED with a clear error.
+# Functions that are never allowed as live formulas.
 _REJECTED_FUNCTIONS: frozenset[str] = frozenset(
     {
         "IMPORTXML",
@@ -158,11 +158,13 @@ _REJECTED_FUNCTIONS: frozenset[str] = frozenset(
 # nested parens or string literals; a string literal containing "IMPORTXML("
 # would false-positive, but that's the safe direction for a deny-list (fail-safe).
 _FORMULA_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.IGNORECASE)
+_FORMULA_TRIGGER_CHARS = frozenset("=+-@|![")
+_BLOCKED_FORMULA_CHARS = frozenset("|![")
 
 
 def _validate_formula(formula: str, *, cell_ref: str) -> None:
     """Check every function name in `formula` against the whitelist.
-    Raises ValueError with a clear message if a rejected function is found."""
+    Raises ValueError if a function is not safe to write live."""
     for m in _FORMULA_NAME_RE.finditer(formula):
         name = m.group(1).upper()
         if name in _REJECTED_FUNCTIONS:
@@ -178,6 +180,31 @@ def _validate_formula(formula: str, *, cell_ref: str) -> None:
                 f"VLOOKUP, INDEX, MATCH, DATE, etc. Rejected: IMPORTXML, INDIRECT, "
                 f"WEBSERVICE, HYPERLINK, IMPORTRANGE."
             )
+
+
+def _is_allowed_formula(formula: str, *, cell_ref: str) -> bool:
+    if not formula.startswith("="):
+        return False
+    body = formula[1:]
+    if not body or not body[0].isalpha():
+        return False
+    if any(ch in body for ch in _BLOCKED_FORMULA_CHARS):
+        return False
+    try:
+        _validate_formula(formula, cell_ref=cell_ref)
+    except ValueError:
+        return False
+    return True
+
+
+def _write_untrusted_cell(cell, value: SheetCell, *, cell_ref: str) -> None:
+    if isinstance(value, str) and value[:1] in _FORMULA_TRIGGER_CHARS:
+        if _is_allowed_formula(value, cell_ref=cell_ref):
+            cell.value = value
+        else:
+            cell.value = "'" + value
+        return
+    cell.value = value
 
 
 # ---- args model --------------------------------------------------------------
@@ -224,7 +251,7 @@ class SheetsTool:
             "data. Cells starting with '=' are written as Excel formulas (e.g. "
             "'=SUM(A2:A10)', '=VLOOKUP(D2, A:B, 2, FALSE)'). Formulas are validated "
             "against a whitelist — external-fetch functions like IMPORTXML/INDIRECT "
-            "are rejected."
+            "and formula-injection trigger strings are written as inert text."
         ),
         args_model=SheetGenerateArgs,
         needs=frozenset({Capability.FILESYSTEM}),
@@ -242,27 +269,7 @@ class SheetsTool:
         # outside the workspace where the DeliverableEvent can't resolve it.
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
 
-        # 1. Validate all formulas before writing anything.
-        errors: list[str] = []
-        for _si, sheet_spec in enumerate(args.sheets):
-            for ri, row in enumerate(sheet_spec.rows):
-                for ci, cell_val in enumerate(row):
-                    if isinstance(cell_val, str) and cell_val.startswith("="):
-                        col_letter = get_column_letter(ci + 1)
-                        cell_ref = f"'{sheet_spec.name}'!{col_letter}{ri + 2}"
-                        try:
-                            _validate_formula(cell_val, cell_ref=cell_ref)
-                        except ValueError as e:
-                            errors.append(str(e))
-
-        if errors:
-            return ToolOutcome(
-                success=False,
-                content="\n".join(errors),
-                error="Formula validation failed. " + errors[0],
-            )
-
-        # 2. Build the workbook.
+        # 1. Build the workbook.
         wb = openpyxl.Workbook()
         # Remove the default sheet; we add our own.
         default_ws = wb.active
@@ -274,7 +281,10 @@ class SheetsTool:
 
             # Write column headers (row 1).
             for ci, col_name in enumerate(sheet_spec.columns):
-                ws.cell(row=1, column=ci + 1, value=col_name)
+                cell = ws.cell(row=1, column=ci + 1)
+                assert not isinstance(cell, MergedCell)
+                cell_ref = f"'{sheet_spec.name}'!{get_column_letter(ci + 1)}1"
+                _write_untrusted_cell(cell, col_name, cell_ref=cell_ref)
 
             # Style the header row.
             from openpyxl.styles import Font
@@ -290,12 +300,9 @@ class SheetsTool:
                     # ws.cell() returns Cell | MergedCell; we never merge cells
                     # in this tool, so a real Cell is provable here.
                     assert not isinstance(cell, MergedCell)
-                    if isinstance(cell_val, str) and cell_val.startswith("="):
-                        # Write as a formula — openpyxl stores it as the formula
-                        # STRING, NOT the evaluated value.
-                        cell.value = cell_val
-                    else:
-                        cell.value = cell_val
+                    col_letter = get_column_letter(ci + 1)
+                    cell_ref = f"'{sheet_spec.name}'!{col_letter}{ri + 2}"
+                    _write_untrusted_cell(cell, cell_val, cell_ref=cell_ref)
 
             # Auto-fit column widths (approximate).
             for ci in range(len(sheet_spec.columns)):
@@ -305,7 +312,7 @@ class SheetsTool:
                     max_width = max(max_width, len(str(val)))
                 ws.column_dimensions[get_column_letter(ci + 1)].width = min(max_width + 2, 40)
 
-        # 3. Render to an in-memory buffer, then write THROUGH the sandbox so the
+        # 2. Render to an in-memory buffer, then write THROUGH the sandbox so the
         #    path is jailed and the artifact lands in the conversation workspace.
         buf = io.BytesIO()
         wb.save(buf)
@@ -318,7 +325,8 @@ class SheetsTool:
             content=(
                 f"Workbook '{args.title}' written to {args.filename}\n"
                 f"Sheets: {', '.join(sheet_names)}\n"
-                f"NOTE: formulas are NOT evaluated — open in a spreadsheet app to compute."
+                "NOTE: allowed formulas are NOT evaluated — open in a spreadsheet "
+                "app to compute. Unsafe formula-like values are escaped as text."
             ),
             artifacts=[args.filename],
             structured={

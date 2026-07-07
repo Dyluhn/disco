@@ -6,8 +6,12 @@ external services). Each test gets a fresh in-memory store via create_app.
 
 from __future__ import annotations
 
-import pytest
+import json
+from collections.abc import AsyncIterator
+from unittest import mock
+
 import httpx
+import pytest
 from disco.agent_server import create_app
 from disco.core import SqliteEventStore
 from fastapi.testclient import TestClient
@@ -149,6 +153,77 @@ def test_file_stream_ephemeral_payload_is_normalized_for_ws_frame():
         "delta": "return <main>Live</main>;\n",
         "field": "new",
     }
+
+
+def test_file_stream_ephemeral_frame_is_redacted_on_ws_path():
+    store = SqliteEventStore(":memory:")
+    client = TestClient(create_app(store))
+    cid = _create(client)
+    secret = "OPENAI_API_KEY=sk_live_1234567890abcdefghijklmnop"
+
+    with client.websocket_connect(f"/ws/conversations/{cid}") as ws:
+        assert ws.receive_json()["type"] == "state"
+        ws.send_json({"type": "ping"})
+        assert ws.receive_json()["type"] == "pong"
+
+        store.publish_ephemeral(
+            cid,
+            {
+                "type": "file_stream",
+                "tool": "file_write",
+                "path": "secrets.txt",
+                "index": 0,
+                "delta": secret,
+                "field": "content",
+            },
+        )
+        frame = ws.receive_json()
+
+    serialized = json.dumps(frame)
+    assert frame["type"] == "file_stream"
+    assert secret not in serialized
+    assert "REDACTED" in serialized
+
+
+def test_persisted_event_frame_is_redacted_on_ws_path():
+    store = SqliteEventStore(":memory:")
+    client = TestClient(create_app(store))
+    cid = _create(client)
+    secret = "OPENAI_API_KEY=sk_live_1234567890abcdefghijklmnop"
+    posted = client.post(f"/conversations/{cid}/messages", json={"content": secret})
+    assert posted.status_code == 200, posted.text
+
+    with client.websocket_connect(f"/ws/conversations/{cid}") as ws:
+        assert ws.receive_json()["type"] == "state"
+        frame = ws.receive_json()
+
+    serialized = json.dumps(frame)
+    assert frame["type"] == "event"
+    assert secret not in serialized
+    assert "REDACTED" in serialized
+
+
+def test_research_stream_frame_is_redacted_on_ws_path():
+    store = SqliteEventStore(":memory:")
+    secret = "OPENAI_API_KEY=sk_live_1234567890abcdefghijklmnop"
+
+    async def _fake_stream(*_args, **_kwargs) -> AsyncIterator[dict]:
+        yield {"type": "token", "token": secret}
+        yield {"type": "final", "answer": {"markdown": secret}}
+
+    fake_rt = mock.MagicMock()
+    fake_rt.research_stream = mock.MagicMock(side_effect=_fake_stream)
+    fake_rt.get_last_selected_model = mock.MagicMock(return_value=None)
+    client = TestClient(create_app(store, runtime=fake_rt))
+
+    with client.websocket_connect("/ws/research") as ws:
+        ws.send_json({"query": "redaction check"})
+        token_frame = ws.receive_json()
+        final_frame = ws.receive_json()
+
+    serialized = json.dumps([token_frame, final_frame])
+    assert secret not in serialized
+    assert "REDACTED" in serialized
 
 
 def test_malformed_frame_gets_error_and_socket_survives(client):

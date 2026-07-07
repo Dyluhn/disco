@@ -1,0 +1,3 @@
+export PYTHONPATH=/var/home/dylan/projects/disclaude-wt-C/packages/core/src:/var/home/dylan/projects/disclaude-wt-C/packages/retrieval/src:/var/home/dylan/projects/disclaude-wt-C/packages/tools/src:/var/home/dylan/projects/disclaude-wt-C/packages/agent-server/src:/var/home/dylan/projects/disclaude-wt-C/packages/app-server/src
+export VIRTUAL_ENV=/var/home/dylan/projects/disclaude/.venv
+export PATH=/var/home/dylan/projects/disclaude/.venv/bin:$PATH

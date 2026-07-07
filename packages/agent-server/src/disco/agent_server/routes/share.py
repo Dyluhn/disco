@@ -130,9 +130,9 @@ def make_share_router(
     @router.get("/api/share/{token}/bundle")
     async def share_bundle(token: str) -> dict:
         """Fetch the scrubbed bundle for a valid share token. The endpoint
-        rebuilds the bundle on every call from the live event log (the
-        log is append-only; re-export is deterministic). 404 for missing
-        or revoked tokens."""
+        rebuilds the bundle on every call from the token's captured seq
+        boundary, so later appends are not included. 404 for missing or
+        revoked tokens."""
         if runtime is None:
             raise HTTPException(
                 status_code=503, detail={"ok": False, "reason": "no_runtime"}
@@ -144,7 +144,9 @@ def make_share_router(
             # token string sees 404 every time.
             raise HTTPException(status_code=404, detail={"ok": False, "reason": "not_found"})
         result = await runtime.share_export(
-            row["conversation_id"], owner_id=row["owner_id"]
+            row["conversation_id"],
+            owner_id=row["owner_id"],
+            before_seq=row["bundle_seq"],
         )
         if not result.get("ok"):
             raise HTTPException(

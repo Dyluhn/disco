@@ -29,8 +29,10 @@ from disco.core import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     SqliteEventStore,
     StatusEvent,
+    ToolResult,
 )
 from disco.core.events import ActionEvent, ToolCall
 from fastapi.testclient import TestClient
@@ -136,6 +138,81 @@ def test_get_bundle_for_valid_token(client_with_runtime: TestClient) -> None:
     # The share envelope is included.
     assert bundle["share"]["token"] == token
     assert bundle["share"]["bundle_seq_at_issue"] == r["bundle_seq"]
+
+
+def test_share_token_bundle_is_bounded_to_issue_seq() -> None:
+    import asyncio
+
+    store = SqliteEventStore(":memory:")
+    runtime = ConversationRuntime(store)
+    client = TestClient(create_app(store, runtime=runtime))
+    cid = "conv_share_snapshot"
+    store.create_conversation(cid, owner_id="local", surface="deep_research")
+
+    async def append_search_pair(query: str) -> list[str]:
+        action = await store.append(
+            cid,
+            ActionEvent(
+                thought=f"search {query}",
+                tool_call=ToolCall(
+                    tool_name="ddgs.search",
+                    arguments={"query": query, "limit": 1, "deny": []},
+                ),
+            ),
+        )
+        obs = await store.append(
+            cid,
+            ObservationEvent(
+                action_id=action.id,
+                tool_result=ToolResult(
+                    call_id=f"call-{query}",
+                    tool_name="ddgs.search",
+                    success=True,
+                    content=f"{query} hit",
+                    structured={"results": [{"url": f"https://{query}.example"}]},
+                ),
+            ),
+        )
+        return [action.id, obs.id]
+
+    async def seed_before_share() -> None:
+        await store.append(
+            cid,
+            MessageEvent(
+                source=EventSource.USER,
+                message=LLMMessage(role="user", content="before share"),
+            ),
+        )
+        await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+        await append_search_pair("pre-share")
+
+    async def append_after_share() -> list[str]:
+        ids = await append_search_pair("post-share")
+        status = await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+        return [*ids, status.id]
+
+    asyncio.run(seed_before_share())
+    issued = client.post(f"/api/conversations/{cid}/share")
+    assert issued.status_code == 200, issued.text
+    share = issued.json()
+    token = share["token"]
+    bundle_seq = share["bundle_seq"]
+
+    post_share_ids = asyncio.run(append_after_share())
+    bundle_resp = client.get(f"/api/share/{token}/bundle")
+    assert bundle_resp.status_code == 200, bundle_resp.text
+    bundle = bundle_resp.json()
+
+    assert bundle["last_seq"] == bundle_seq
+    assert bundle["state"]["last_seq"] == bundle_seq
+    assert bundle["state"]["execution_status"] == ConversationStatus.RUNNING.value
+    assert max(event["seq"] for event in bundle["events"]) == bundle_seq
+    event_ids = {event["id"] for event in bundle["events"]}
+    assert event_ids.isdisjoint(post_share_ids)
+
+    cassette_queries = {row["input"]["query"] for row in bundle["cassette"]}
+    assert cassette_queries == {"pre-share"}
+    assert bundle["share"]["bundle_seq_at_issue"] == bundle_seq
 
 
 def test_get_bundle_404_for_unknown_token(client_with_runtime: TestClient) -> None:
