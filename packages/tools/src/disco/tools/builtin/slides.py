@@ -42,11 +42,15 @@ class SlidesGenerateArgs(BaseModel):
     goal: str | None = Field(
         default=None,
         description=(
-            "Natural-language description of the desired slide deck (e.g. "
-            "'A 6-slide investor pitch for an EV battery startup'). "
-            "When provided, the C2 structured pipeline generates the deck "
-            "automatically via outline → fill → render stages. "
-            "Takes priority over ``markdown`` when both are supplied."
+            "REQUIRED for deck generation (unless you supply ``markdown``). The deck's "
+            "content AND intent, in natural language — e.g. 'A 7-slide technical brief "
+            "on post-training quantization for LLMs: executive summary, the methods "
+            "landscape, weight-only vs weight+activation, bit-width as the dominant "
+            "degradation driver, model-scale effects, a cross-source comparison, and "
+            "limitations'. The C2 pipeline builds a structured, themed, image-bearing "
+            "deck from this. This tool CANNOT see the conversation or any research "
+            "report — the content must be in ``goal`` (``theme``, ``slide_count``, and "
+            "``format`` carry no content). Takes priority over ``markdown``."
         ),
     )
     markdown: str = Field(
@@ -388,6 +392,32 @@ class SlidesTool:
                 success=False,
                 content=f"Unsupported format: {fmt!r}. Use 'html', 'pdf', or 'pptx'.",
                 error=f"Unsupported format: {fmt!r}.",
+            )
+
+        # NO-CONTENT GUARD (gauntlet root-cause 2026-07-07): the tool has TWO content
+        # sources — `goal` (→ C2 structured pipeline) and `markdown` (→ Marp path) —
+        # and it cannot see the conversation/report. A capable driver sometimes calls
+        # slides_generate with only theme/slide_count/format (deck INTENT) but omits
+        # `goal`; the old `use_c2 = bool(args.goal)` gate then silently fell through to
+        # the Marp path with EMPTY content → a 1-slide, zero-text deck reported as
+        # success (the media-only export-render heuristic passed it). Fail LOUDLY and
+        # actionably instead so the driver re-calls with `goal` populated (→ real deck),
+        # rather than shipping a blank deliverable. Covers mode="markdown" with empty
+        # markdown too — there is genuinely nothing to render either way.
+        if not (args.goal and args.goal.strip()) and not args.markdown.strip():
+            return ToolOutcome(
+                success=False,
+                content=(
+                    "slides_generate has no deck content to render. Provide `goal` — a "
+                    "natural-language description AND the source content for the deck "
+                    "(the C2 pipeline builds a structured, themed, image-bearing deck "
+                    "from it) — OR `markdown` (Marp source with '---' slide separators). "
+                    "You supplied neither, so there is nothing to turn into slides. This "
+                    "tool CANNOT see the conversation or the research report: you must "
+                    "pass the report's key content/instructions in `goal` (theme, "
+                    "slide_count, and format do not carry any content on their own)."
+                ),
+                error="slides_generate called with neither goal nor markdown content",
             )
 
         # ---- C2 deck pipeline (primary path when goal is supplied) ----
