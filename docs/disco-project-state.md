@@ -71,14 +71,22 @@ Registered primitives in the tree: `lead_gen`, `directory`, `records`, `hello`, 
 
 **Needs the persistent-runtime / Postgres track first (deferred — dual-track decided, Postgres runtime out of scope this sprint):** migrations/ORM, search (pgvector), cache, jobs/cron, multi-tenancy, audit, embedded AI/RAG, usage metering (OpenMeter), deployment/hosting.
 
-**Built as fail-closed scaffolds, left unmerged in worktree branches** (`disclaude/f41-stripe-seam`, `disclaude/f33-webhook-seam`) — not registered, not in the tree; their fills are documented per `docs/disco-security-state.md`.
+**Built as fail-closed scaffolds, committed on unmerged branches** — `disclaude/f41-stripe-seam` (`60436fa8`) and `disclaude/f33-webhook-seam` (`ec622888`). Preserved as real commits (worktrees removed); not registered, not in the shipped tree; their fills are documented per `docs/disco-security-state.md`.
 
 ---
 
-## In flight / loose ends
+## Known gaps & honest edges (shipped, but not clean)
 
-- **Live end-to-end proof** — a real model driving `app_add_primitive` through the running app. The scope fix (`4cbaa218`) unblocked it; a proof run was launched and its evidence is being written to `scratchpad/live-final/` (no verdict captured here yet). This closes the last verification residual on the primitive sprint.
-- **Two unmerged worktree branches** preserved (the fail-closed scaffolds above).
+These are real and were under-reported in the first draft of this doc:
+- **Form-folded apps are refused at deploy.** `deploy.py`'s canonical-worker check reconstructs the worker without the form emitter, so a site with an added form builds + verifies but is **rejected at export/deploy** until that gate learns the form-aware path. (Feature gap, not a security item.)
+- **Forms attach to `lead_gen` apps only** — directory/records/hello refuse with guidance.
+- **Form `success_message` isn't editable** via `app_update_content` (baked into the component).
+- **`check_arch_budget` fails on every commit** — ~19 pre-existing god-object violations (`AgentLoop` 1956 LOC, `ConversationRuntime` 3970, `synthesize_section`, …). It is a *red required-CI gate*; the primitive work added zero new violations, but the baseline debt is real and predates this campaign.
+- **`hello`-app verify quirk:** the pre-A3 verifier hard-failed hello apps (expected a `schema.sql` they don't have) → runs ended STUCK. WO-A3 gave hello its own verify hook, which *should* fix it — **unverified**; confirm before relying on hello apps in a soak.
+
+## In flight / not yet confirmed
+
+- **Live end-to-end proof — NOT CONFIRMED.** The first live run FAILED and that failure pinned the scope bug that drove `4cbaa218`. A second run was launched after the fix; evidence is writing to `scratchpad/live-final/` but **no verdict (SUMMARY) has been captured** — it can still fail (the driver model previously even fabricated tool refusals). Until a SUMMARY shows a real model calling `app_add_primitive` successfully, the "a live model drives this" claim is UNPROVEN.
 - **Servers** on the box were restarted onto current HEAD during the proof run (systemd --user units, DISCO_INSPECT=1).
 
 ## Next planned workstream: packaging (Epic P)

@@ -70,10 +70,15 @@ rebuild.
 Built as `tier="template_only"` with `verify=None` so they are FAIL-CLOSED (see §4).
 Left in worktree branches — NOT registered, NOT in the tree.
 
-| Scaffold | Branch | Security-fill spec |
-|----------|--------|--------------------|
-| Payment checkout seam | `disclaude/f41-stripe-seam` | `docs/wo-f41-stripe-security-spec.md` (in that branch) |
-| Webhook endpoint seam | `disclaude/f33-webhook-seam` | `docs/wo-f33-webhook-security-spec.md` (in that branch) |
+| Scaffold | Branch (commit) | Security-fill spec |
+|----------|-----------------|--------------------|
+| Payment checkout seam | `disclaude/f41-stripe-seam` (`60436fa8`) | `docs/wo-f41-stripe-security-spec.md` (on that branch) |
+| Webhook endpoint seam | `disclaude/f33-webhook-seam` (`ec622888`) | `docs/wo-f33-webhook-security-spec.md` (on that branch) |
+
+Both are now committed on their branches (worktrees removed) — the work is durably
+preserved, not just dirty worktree state. The generator force-import that would
+register each primitive is on the branch only, so neither is registered in
+`mega-campaign`.
 
 The specs enumerate exactly what the security session must build to flip each from
 `verify=None` to a real harness: host-side secret custody, signature verification,
