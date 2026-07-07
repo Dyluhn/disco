@@ -692,6 +692,12 @@ def _release_process_memory() -> None:
         pass
 
 
+def _default_in_catalog(default: str | None, models: list[dict[str, object]]) -> str | None:
+    """Only highlight a default the returned catalog actually contains — a stale
+    assignment (model removed/renamed) must not point the UI at a ghost entry."""
+    return default if any(m["id"] == default for m in models) else None
+
+
 class ConversationRuntime:
     """Builds a router from the CURRENT persisted config per request, plus one
     AgentLoop per conversation. `kick(cid)` schedules the loop in the background.
@@ -1791,9 +1797,7 @@ class ConversationRuntime:
             default = cfg.model_for(ModelRole.AGENT_DRIVER)
         except Exception:  # noqa: BLE001 — no assignment → no default highlight
             default = None
-        if default not in {m["id"] for m in models}:
-            default = None
-        return {"models": models, "default": default}
+        return {"models": models, "default": _default_in_catalog(default, models)}
 
     def _retrieval_handlers(self) -> dict[str, Any]:
         """Lazily build the search/extract capability handlers from the research
