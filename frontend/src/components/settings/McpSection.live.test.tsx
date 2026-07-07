@@ -211,9 +211,9 @@ describe("McpSection — live CRUD over the real fetch path", () => {
           url === "/api/mcp/servers" && init?.method?.toUpperCase() === "POST",
       );
       expect(post).toBeTruthy();
-      expect(
-        (post![1] as RequestInit).headers as Record<string, string>,
-      ).toMatchObject({ "content-type": "application/json" });
+      expect(new Headers((post![1] as RequestInit).headers).get("content-type")).toBe(
+        "application/json",
+      );
       expect(JSON.parse((post![1] as RequestInit).body as string)).toMatchObject({
         name: "MyServer",
         url: "https://my.mcp.server",

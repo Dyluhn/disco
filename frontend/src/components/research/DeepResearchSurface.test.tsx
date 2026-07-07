@@ -97,7 +97,7 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(within(gate).getByRole("button", { name: /revise/i })).toBeEnabled();
   });
 
-  it("after approve, streams the progress + assembles the report + shows bounded notice", async () => {
+  it("after approve, streams the progress + assembles the report without a false rounds notice", async () => {
     const user = userEvent.setup();
     renderSurface();
     await user.type(
@@ -108,21 +108,21 @@ describe("Deep Research surface — full lifecycle", () => {
     await waitFor(() => screen.getByRole("button", { name: /approve research plan/i }), { timeout: 5000 });
     await user.click(screen.getByRole("button", { name: /approve research plan/i }));
 
-    // wait for the bounded notice to appear (it only renders after ReportEvent
-    // arrives → confirms the report has been emitted + reduced into state).
+    // Wait for the report to appear. `bounded_by: "rounds"` is a depth cap, not a
+    // coverage truncation, so the current product contract suppresses the bounded
+    // notice for this fixture.
     await waitFor(
       () =>
         expect(
-          screen.getByText(/Reached 3 of 6 planned sub-questions/i),
-        ).toBeInTheDocument(),
+          screen.getAllByText(/As of early 2026/i).length,
+        ).toBeGreaterThan(0),
       { timeout: 10000 },
     );
-    // report section header
     expect(
       screen.getByRole("heading", { name: /Which solid-state battery products are in mass or pilot production/i }),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/Reached 3 of 6 planned sub-questions/i)).not.toBeInTheDocument();
     // executive summary appears (lead with the finding, no "this report begins by")
-    expect(screen.getAllByText(/As of early 2026/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/this report begins by/i)).not.toBeInTheDocument();
     // 3-tier sources panel
     expect(screen.getByRole("tab", { name: /Cited/i })).toBeInTheDocument();
@@ -135,7 +135,7 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("button", { name: /^PDF$/ })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /^DOCX$/ })).not.toBeInTheDocument();
     expect(screen.getByText(/need(s)? .*server/i)).toBeInTheDocument();
-  });
+  }, 15000);
 });
 
 // ---- WALK-02 / WALK-08 surface-level tests (isolated stream mocks) ----------

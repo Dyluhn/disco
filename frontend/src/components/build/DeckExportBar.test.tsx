@@ -27,6 +27,8 @@ vi.mock("@/hooks/useTemplates", () => ({
 vi.mock("@/api/client", () => ({
   agentLive: () => true,
   agentHttpBase: () => "http://agent.test",
+  agentFetch: (pathOrUrl: string, init?: RequestInit) =>
+    fetch(pathOrUrl.startsWith("http") ? pathOrUrl : `http://agent.test${pathOrUrl}`, init),
 }));
 
 const CID = "conv_deck_export_1";

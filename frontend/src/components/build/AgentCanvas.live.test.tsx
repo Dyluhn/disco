@@ -25,8 +25,8 @@ vi.mock("@/hooks/useModels", async (importOriginal) => {
   };
 });
 
-// agentGet is path-aware: /browser/live-ready drives streamability, /browser/live-url
-// performs the auto-start. Per-test we override these via the `live` controller.
+// agentGet is path-aware for /browser/live-ready; agentSend handles /browser/live-url
+// auto-start and teardown. Per-test we override live-url via the `live` controller.
 const OK_URL = { ready: true, novnc_path: "/vnc.html?autoconnect=1&view_only=1", port: 6080 };
 const live = {
   ready: { ready: true, reason: "ready" } as Record<string, unknown>,
@@ -50,7 +50,10 @@ vi.mock("@/api/client", async (importOriginal) => {
     ...actual,
     agentGet: vi.fn((path: string) => {
       if (path.includes("/browser/live-ready")) return Promise.resolve(live.ready);
-      if (path.includes("/browser/live-url")) {
+      return Promise.resolve({});
+    }),
+    agentSend: vi.fn((method: string, path: string) => {
+      if (method === "POST" && path.includes("/browser/live-url")) {
         live.urlCalls += 1;
         try {
           return Promise.resolve(live.urlFor(live.urlCalls));
@@ -58,10 +61,14 @@ vi.mock("@/api/client", async (importOriginal) => {
           return Promise.reject(e);
         }
       }
-      return Promise.resolve({});
+      return Promise.resolve({ ok: true });
     }),
-    agentSend: vi.fn().mockResolvedValue({ ok: true }),
     agentHttpBase: vi.fn(() => "http://localhost:8000"),
+    previewBootstrapUrl: vi.fn((cid: string, port: number, targetPath = "/") =>
+      Promise.resolve(
+        `http://${cid.replace(/^conv_/, "").slice(0, 8)}-${port}.localhost:8000${targetPath}`,
+      ),
+    ),
   };
 });
 
@@ -120,10 +127,13 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
   it("(c) enabled + streamable → AUTO-starts (no click) and shows the green-blink Live badge on iframe load", async () => {
     await enable(true);
     wrap(<AgentCanvas {...baseProps} />);
-    const { agentGet } = await import("@/api/client");
+    const { agentSend } = await import("@/api/client");
     // auto-start: live-url is called WITHOUT any user click.
     await waitFor(() =>
-      expect(agentGet).toHaveBeenCalledWith(expect.stringContaining("/browser/live-url")),
+      expect(agentSend).toHaveBeenCalledWith(
+        "POST",
+        expect.stringContaining("/browser/live-url"),
+      ),
     );
     const iframe = (await screen.findByTestId("novnc-iframe")) as HTMLIFrameElement;
     expect(iframe.src).toContain("view_only=1");
@@ -165,9 +175,12 @@ describe("AgentCanvas — live browser (auto-stream redesign)", () => {
     await enable(true);
     live.urlFor = () => rejectReason("no_upstream"); // live-ready streamable, but the start blows up
     wrap(<AgentCanvas {...baseProps} />);
-    const { agentGet } = await import("@/api/client");
+    const { agentSend } = await import("@/api/client");
     await waitFor(() =>
-      expect(agentGet).toHaveBeenCalledWith(expect.stringContaining("/browser/live-url")),
+      expect(agentSend).toHaveBeenCalledWith(
+        "POST",
+        expect.stringContaining("/browser/live-url"),
+      ),
     );
     // no iframe, no badge, and crucially NO scary banner — just the screenshot empty-state.
     await waitFor(() =>
