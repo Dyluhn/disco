@@ -292,7 +292,18 @@ F-A framework + F-E creds ─► F-B data ─► F-C trust(RLS/secrets/WAF) ─�
 - **Encoder weights lazy-download, not bundled** (confirmed): `disco:full` needs a build-time pre-bake step to be
   genuinely offline; confirm fastembed ONNX weight licenses in P5.
 - **Novu footprint:** adds Mongo/Redis — reconcile with the single-command-deploy image-size goal in Epic P.
-- **Lago license:** confirm before bundling (may be AGPL).
+- **Lago license: RESOLVED 2026-07-07 (researched, primary sources):** AGPL-3.0 across lago/lago-api/lago-front.
+  Compose-aggregation over HTTP is legally clean (LOW-MED), but AGPL in the manifest taints enterprise adoption —
+  prefer **OpenMeter (Apache-2.0)** for 4.2 usage metering; Kill Bill (Apache-2.0) if full billing is ever needed.
+- **fastembed weights: RESOLVED 2026-07-07:** library Apache-2.0; default model BAAI/bge-small-en-v1.5 — runtime
+  download is Qdrant/bge-small-en-v1.5-onnx-Q (Apache-2.0, converted from BAAI MIT). Pre-baking in `disco:full`
+  images is LICENSE-OK (ship MIT+Apache texts + BAAI/Qdrant attribution). P2/P5 unblocked.
+- **Novu footprint: RESOLVED 2026-07-07:** community compose = 6 containers (api/worker/ws/dashboard + mongo:8 +
+  redis), ~1.1GB Novu images alone, 8GB-RAM single-VM recommendation; license = MIT core + PROPRIETARY EE dirs
+  (enterprise/, apps/*/src/ee — no redistribution). Verdict: too heavy to bake into single-command deploy —
+  3.2 goes **plain SMTP first** (as §10.2 A2.4 already sequences); revisit Novu as an optional compose profile
+  only; ntfy (Apache-2.0, single binary) is the light push alternative. Flag: don't redistribute Novu ghcr images
+  (possible EE code inside) — users pull from ghcr directly.
 - **Parked security waves are a release prerequisite** — Epic Z must resume + finish W3/W4/W5/W6.
 
 ---
