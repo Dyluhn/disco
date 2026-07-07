@@ -128,8 +128,10 @@ services:
     ports:
       - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_AGENT_PORT:-${PMX_AGENT_PORT:-8000}}:8000"
     depends_on:
-      sandbox-image:
-        condition: service_completed_successfully # build surfaces need the image pre-existing
+      # NOTE: no container-state dependency on sandbox-image — it exits 0 by design
+      # and podman-compose rejects an exited dependency ("container state improper").
+      # `up --build` still builds it by default; the agent only needs the IMAGE to
+      # exist in the daemon, not a running container.
       app-server:
         condition: service_healthy # the seed runs once; let app-server win the race
     healthcheck:
