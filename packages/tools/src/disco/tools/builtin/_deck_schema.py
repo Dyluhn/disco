@@ -824,12 +824,24 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
         fill_hex=theme.surface_2,
     ))
 
-    # Scrim behind the overlay text: generated artwork is often LIGHT (cream/
-    # off-white grounds), and white type straight on it is illegible — gauntlet
-    # run-1 landed exactly that on both full-bleed slides. A dark bottom band
-    # guarantees contrast for the white title/caption on ANY artwork.
+    # Bottom band: title stacked ABOVE the caption with REAL height accounting.
+    # Gauntlet s-arxiv: a two-line wrapped title overprinted the caption because
+    # both boxes were independently bottom-anchored ("letters stacked on
+    # letters"). Estimate the title's wrapped line count from its length and
+    # stack the boxes; the scrim is sized from the same numbers, so the white
+    # type is always on the dark band regardless of artwork or title length.
+    overflow: list[str] = []
+    shown = _visible_body_count_without_orphan(len(slide.body), 1)
+    caption_line_h = 274_320          # one 14pt italic line
+    caption_pad = 137_160             # breathing room under the title block
+    caption_block_h = (caption_line_h * max(0, shown) + caption_pad) if slide.body else 0
+    _TITLE_CHARS_PER_LINE = 46        # 36pt bold across _CW — conservative
+    title_lines = max(1, -(-len(slide.title) // _TITLE_CHARS_PER_LINE)) if slide.title else 0
+    title_line_h = 548_640            # 36pt line + leading
+    title_block_h = title_lines * title_line_h
+
     if slide.title or slide.body:
-        scrim_h = 914_400 + 548_640  # title band + caption allowance
+        scrim_h = title_block_h + caption_block_h + _MARGIN + 137_160
         els.append(Element(
             id=_uid(), kind="rect",
             left=0, top=_SLIDE_H - scrim_h,
@@ -837,12 +849,13 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
             fill_hex="#111111",
         ))
 
-    # Optional title overlay (bottom-left)
+    # Title block sits directly above the caption block (both above margin).
     if slide.title:
         els.append(Element(
             id=_uid(), kind="text",
-            left=_MARGIN, top=_SLIDE_H - 914_400 - _MARGIN,
-            width=_CW, height=914_400,
+            left=_MARGIN,
+            top=_SLIDE_H - _MARGIN - caption_block_h - title_block_h,
+            width=_CW, height=title_block_h,
             text=slide.title,
             font_name=_first_font(theme.font_display),
             font_size_pt=36.0,
@@ -850,19 +863,12 @@ def _layout_full_image(slide: AuthoredSlide, theme: Theme) -> tuple[list[Element
             bold=True,
         ))
 
-    # Optional caption (single body line, no overflow). Box height allows a
-    # TWO-line wrap — gauntlet run-2's title-slide subtitle clipped mid-phrase
-    # in a single-line box; the scrim band above already reserves this room.
-    overflow: list[str] = []
-    shown = _visible_body_count_without_orphan(len(slide.body), 1)
-    caption_h = 460_000
-    caption_block_h = caption_h * max(1, shown)
-    caption_top = _SLIDE_H - caption_block_h - _MARGIN
+    caption_top = _SLIDE_H - _MARGIN - (caption_line_h * max(0, shown))
     for i, line in enumerate(slide.body[:shown]):
         els.append(Element(
             id=_uid(), kind="text",
-            left=_MARGIN, top=caption_top + i * caption_h,
-            width=_CW, height=caption_h,
+            left=_MARGIN, top=caption_top + i * caption_line_h,
+            width=_CW, height=caption_line_h * 2,  # wrap room, next line is band
             text=line,
             font_name=_first_font(theme.font_reading),
             font_size_pt=14.0,
