@@ -15,8 +15,9 @@ services:
   # Build-only: deposits the sandbox image into the host daemon so the agent-server
   # (talking to the mounted socket) finds it. The agent never pulls — the image must
   # pre-exist. `entrypoint: true` makes the container exit 0 immediately after build.
+  # Builds by DEFAULT: the Build/Agent surfaces need this image to exist. Comment
+  # this service out (and the agent-server depends_on below) for a lean stack.
   sandbox-image:
-    profiles: ["sandbox"]
     build:
       context: .
       dockerfile: deploy/sandbox/Dockerfile
@@ -127,6 +128,8 @@ services:
     ports:
       - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_AGENT_PORT:-${PMX_AGENT_PORT:-8000}}:8000"
     depends_on:
+      sandbox-image:
+        condition: service_completed_successfully # build surfaces need the image pre-existing
       app-server:
         condition: service_healthy # the seed runs once; let app-server win the race
     healthcheck:

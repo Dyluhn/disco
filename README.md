@@ -121,12 +121,7 @@ docker compose exec agent-server disco-verify --quick
 ```
 
 Copy `.env.example` to `.env` only when you need to override ports, bind
-addresses, provider keys, or the sandbox socket. The optional sandbox image is
-built with:
-
-```bash
-docker compose --profile sandbox up -d --build
-```
+addresses, provider keys, or the sandbox socket.
 
 See [`docs/self-host.md`](./docs/self-host.md) for Podman notes, offline asset
 smoke commands, and the bundled-weight license inventory.

@@ -32,20 +32,18 @@ docker compose exec agent-server disco-verify --quick
 | `frontend` | 8088 | Nginx-served web UI with runtime `/env.js`. |
 | `app-server` | 8800 | Settings, auth pairing, library API. |
 | `agent-server` | 8000 | Conversation runtime, tools, retrieval, TTS. |
-| `sandbox-image` | none | Build-only image, opt-in with the `sandbox` profile. |
+| `sandbox-image` | none | Build-only; builds by default so Build/Agent surfaces work out of the box. |
 
 All durable application state lives in the `disco-data` volume. The default
 server image already contains the fastembed ONNX models and Kokoro TTS weights
 under `/opt/disco-cache`, so the `/data` volume does not hide them.
 
-## Sandbox Profile
+## Sandbox Image
 
-The default boot does not build the sandbox image. To add the local container
-sandbox image build:
-
-```bash
-docker compose --profile sandbox up -d --build
-```
+The default boot builds the sandbox image, so the Build and Agent surfaces work
+out of the box. For a lean stack without build capability, comment out the
+`sandbox-image` service and the agent-server `depends_on` entry in
+`compose.yaml`.
 
 TODO(security-track): the agent-server still mounts the host container socket by
 default for the local sandbox backend. That is root-equivalent on a Docker host.
@@ -54,7 +52,7 @@ For Podman, prefer a rootless socket:
 ```bash
 systemctl --user enable --now podman.socket
 DISCO_SANDBOX_SOCKET=/run/user/$(id -u)/podman/podman.sock \
-  docker compose --profile sandbox up -d --build
+  docker compose up -d --build
 ```
 
 ## Models
