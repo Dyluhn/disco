@@ -1721,6 +1721,16 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
     UNCHANGED, so every pre-F3.1 spec lowers byte-identically."""
     # Lazy import (records-style): form_primitive is force-imported at the end of
     # this module, so it is always loaded by the time generate() runs.
+    from .feature_flags_primitive import (
+        emit_feature_flags_admin_component,
+        emit_feature_flags_hook_ts,
+        feature_flags_for,
+        is_feature_flags_admin_section,
+        lower_feature_flags_drizzle_ts,
+        lower_feature_flags_schema_sql,
+        lower_feature_flags_styles_css,
+        lower_feature_flags_worker_ts,
+    )
     from .form_primitive import (
         emit_app_form_component,
         form_entities_for,
@@ -1731,6 +1741,7 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
 
     lead = resolve_lead_entity(app_spec)
     forms = form_entities_for(app_spec, lead)
+    flags = feature_flags_for(app_spec)
     form_by_id = {e.id: e for e in forms}
     db_name = _db_name(app_spec, lead)
     # ONE collision-free (page, section) → component-name map, shared by every emitter
@@ -1743,14 +1754,22 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         "tsconfig.json": _emit_tsconfig(),
         "vite.config.ts": _emit_vite_config(),
         "wrangler.toml": _emit_wrangler_toml(app_spec, lead),
-        "schema.sql": lower_form_schema_sql(lead, forms),
-        "worker/index.ts": lower_form_worker_ts(lead, forms),
+        "schema.sql": lower_feature_flags_schema_sql(
+            lower_form_schema_sql(lead, forms), flags
+        ),
+        "worker/index.ts": lower_feature_flags_worker_ts(
+            lower_form_worker_ts(lead, forms), flags
+        ),
         "src/main.tsx": _emit_main_tsx(),
         "src/App.tsx": _emit_app_tsx(app_spec, names),
         "src/api/client.ts": _emit_api_client_ts(),
         "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
-        "src/styles.css": _emit_styles_css(design_spec),
-        "src/db/schema.ts": lower_form_drizzle_ts(lead, forms),
+        "src/styles.css": lower_feature_flags_styles_css(
+            _emit_styles_css(design_spec), flags
+        ),
+        "src/db/schema.ts": lower_feature_flags_drizzle_ts(
+            lower_form_drizzle_ts(lead, forms), flags
+        ),
         "src/generated/content.ts": _emit_content_ts(app_spec, names),
         "src/generated/manifest.ts": _emit_manifest_ts(app_spec, design_spec, names),
         # Epic I — Cloudflare export deliverables (config completeness + owner guide).
@@ -1758,6 +1777,8 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         ".dev.vars.example": _emit_dev_vars_example(),
         ".gitignore": _emit_gitignore(),
     }
+    if flags:
+        files["src/hooks/useFlag.ts"] = emit_feature_flags_hook_ts(flags)
     for page, section in _iter_sections(app_spec):
         comp = _comp_name(names, page, section)
         form_entity = (
@@ -1768,6 +1789,10 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         if form_entity is not None:
             files[f"src/components/{comp}.tsx"] = emit_app_form_component(
                 comp, section, form_entity
+            )
+        elif is_feature_flags_admin_section(section):
+            files[f"src/components/{comp}.tsx"] = emit_feature_flags_admin_component(
+                comp, section, flags
             )
         else:
             files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
@@ -2267,6 +2292,7 @@ importlib.import_module(".hello_primitive", package=__package__)
 importlib.import_module(".form_primitive", package=__package__)
 importlib.import_module(".seo_primitive", package=__package__)
 importlib.import_module(".collection_primitive", package=__package__)
+importlib.import_module(".feature_flags_primitive", package=__package__)
 
 
 __all__ = [

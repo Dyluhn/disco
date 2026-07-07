@@ -40,6 +40,7 @@ from .local_verify import (
 from .primitives import (
     COLLECTION_PRIMITIVE_ID,
     DIRECTORY_PRIMITIVE_ID,
+    FEATURE_FLAGS_PRIMITIVE_ID,
     FORM_PRIMITIVE_ID,
     HELLO_PRIMITIVE_ID,
     LEAD_GEN_PRIMITIVE_ID,
@@ -73,8 +74,8 @@ from .recipes import (
     recipe_ids,
 )
 from .records_primitive import (
-    default_records_auth_app_spec,
     default_records_app_spec,
+    default_records_auth_app_spec,
     generate_records,
     prepare_records_app_spec,
 )
@@ -143,6 +144,7 @@ __all__ = [
     "COLLECTION_PRIMITIVE_ID",
     "COVERED_KINDS",
     "DIRECTORY_PRIMITIVE_ID",
+    "FEATURE_FLAGS_PRIMITIVE_ID",
     "FORM_PRIMITIVE_ID",
     "HELLO_PRIMITIVE_ID",
     "LEAD_GEN_PRIMITIVE_ID",
