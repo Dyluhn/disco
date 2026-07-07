@@ -38,6 +38,7 @@ from .local_verify import (
     local_api_roundtrip,
 )
 from .primitives import (
+    BLOG_PRIMITIVE_ID,
     COLLECTION_PRIMITIVE_ID,
     DIRECTORY_PRIMITIVE_ID,
     FORM_PRIMITIVE_ID,
@@ -73,8 +74,8 @@ from .recipes import (
     recipe_ids,
 )
 from .records_primitive import (
-    default_records_auth_app_spec,
     default_records_app_spec,
+    default_records_auth_app_spec,
     generate_records,
     prepare_records_app_spec,
 )
@@ -97,6 +98,8 @@ from .spec import (
     DESIGNSPEC_RELPATH,
     MAX_DESIGNSPEC_BYTES,
     Action,
+    BlogMeta,
+    BlogPostMeta,
     DesignSpec,
     Entity,
     EntityField,
@@ -153,6 +156,9 @@ __all__ = [
     "SEO_PRIMITIVE_ID",
     "STATIC_CF_EXPORT_FILES",
     "Action",
+    "BLOG_PRIMITIVE_ID",
+    "BlogMeta",
+    "BlogPostMeta",
     "BuildBrief",
     "CheckResult",
     "DesignSpec",

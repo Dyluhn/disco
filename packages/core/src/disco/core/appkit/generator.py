@@ -1047,11 +1047,16 @@ def _seo_files(app: AppSpec) -> dict[str, str]:
     seo = app.seo
     if seo is None:
         return {}
+    routes = [page.route for page in app.pages]
+    if app.blog is not None:
+        from .blog_primitive import blog_routes_for
+
+        routes.extend(blog_routes_for(app))
     entries = "".join(
         "  <url>\n"
-        f"    <loc>{_html_text(_seo_abs_url(seo.base_url, page.route))}</loc>\n"
+        f"    <loc>{_html_text(_seo_abs_url(seo.base_url, route))}</loc>\n"
         "  </url>\n"
-        for page in app.pages
+        for route in routes
     )
     sitemap = (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
@@ -1721,6 +1726,7 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
     UNCHANGED, so every pre-F3.1 spec lowers byte-identically."""
     # Lazy import (records-style): form_primitive is force-imported at the end of
     # this module, so it is always loaded by the time generate() runs.
+    from .blog_primitive import emit_app_tsx_with_blog_routes, emit_blog_files, has_blog
     from .form_primitive import (
         emit_app_form_component,
         form_entities_for,
@@ -1746,7 +1752,11 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         "schema.sql": lower_form_schema_sql(lead, forms),
         "worker/index.ts": lower_form_worker_ts(lead, forms),
         "src/main.tsx": _emit_main_tsx(),
-        "src/App.tsx": _emit_app_tsx(app_spec, names),
+        "src/App.tsx": (
+            emit_app_tsx_with_blog_routes(app_spec, names)
+            if has_blog(app_spec)
+            else _emit_app_tsx(app_spec, names)
+        ),
         "src/api/client.ts": _emit_api_client_ts(),
         "src/hooks/useSubmit.ts": _emit_submit_hook_ts(),
         "src/styles.css": _emit_styles_css(design_spec),
@@ -1772,6 +1782,7 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
         else:
             files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
     # F5.3: {} when app_spec.seo is None — the no-seo tree is byte-identical.
+    files.update(emit_blog_files(app_spec))
     files.update(_seo_files(app_spec))
     return dict(sorted(files.items()))
 
@@ -2103,6 +2114,8 @@ def _generate_directory(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str,
     tsconfig/vite) and adds the directory-specific files: a route-aware App shell, a
     static-only Worker, a table-free schema.sql, a D1-free wrangler/package/owner
     guide, and a searchable listing component for each `list` section."""
+    from .blog_primitive import emit_app_tsx_with_blog_routes, emit_blog_files, has_blog
+
     names = _component_names(app_spec)
     files: dict[str, str] = {
         "index.html": _emit_index_html(app_spec, design_spec),
@@ -2113,7 +2126,11 @@ def _generate_directory(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str,
         "schema.sql": _emit_directory_schema_sql(),
         "worker/index.ts": _emit_static_worker_ts(),
         "src/main.tsx": _emit_main_tsx(),
-        "src/App.tsx": _emit_directory_app_tsx(app_spec, names),
+        "src/App.tsx": (
+            emit_app_tsx_with_blog_routes(app_spec, names)
+            if has_blog(app_spec)
+            else _emit_directory_app_tsx(app_spec, names)
+        ),
         "src/styles.css": _emit_styles_css(design_spec),
         "src/generated/content.ts": _emit_content_ts(app_spec, names),
         "src/generated/manifest.ts": _emit_manifest_ts(app_spec, design_spec, names),
@@ -2127,10 +2144,13 @@ def _generate_directory(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str,
     for page, section in _iter_sections(app_spec):
         comp = _comp_name(names, page, section)
         if section.kind == "list":
-            files[f"src/components/{comp}.tsx"] = _emit_directory_listing_component(comp, page, section)
+            files[f"src/components/{comp}.tsx"] = _emit_directory_listing_component(
+                comp, page, section
+            )
         else:
             files[f"src/components/{comp}.tsx"] = _emit_component(comp, page, section, lead)
     # F5.3: {} when app_spec.seo is None — the no-seo tree is byte-identical.
+    files.update(emit_blog_files(app_spec))
     files.update(_seo_files(app_spec))
     return dict(sorted(files.items()))
 
@@ -2267,6 +2287,7 @@ importlib.import_module(".hello_primitive", package=__package__)
 importlib.import_module(".form_primitive", package=__package__)
 importlib.import_module(".seo_primitive", package=__package__)
 importlib.import_module(".collection_primitive", package=__package__)
+importlib.import_module(".blog_primitive", package=__package__)
 
 
 __all__ = [

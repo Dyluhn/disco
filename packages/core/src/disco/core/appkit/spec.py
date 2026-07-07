@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlparse
@@ -500,6 +501,93 @@ class SeoMeta(BaseModel):
         return validate_http_url(value, field="seo social_image_url")
 
 
+# ---- Blog content (Epic 5.3-lite) ----------------------------------------------
+
+MAX_BLOG_POSTS = 50
+MAX_BLOG_TITLE = 200
+MAX_BLOG_SUMMARY = 300
+MAX_BLOG_BODY_MD = 4000
+MAX_BLOG_INDEX_TITLE = 200
+MAX_BLOG_SLUG = 64
+
+_BLOG_SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def validate_blog_slug(value: str, *, field: str) -> str:
+    """A safe blog URL slug. Blog routes are emitted as `/blog/<slug>`, so slugs
+    are lower-case path segments with no slash, dot, spaces, or punctuation."""
+    if not _BLOG_SLUG_RE.match(value):
+        raise ValueError(
+            f"{field} must match {_BLOG_SLUG_RE.pattern!r}: lower-case letters, "
+            f"digits and hyphens, starting with a letter/digit; got {value!r}"
+        )
+    return value
+
+
+def validate_iso_date(value: str, *, field: str) -> str:
+    """Validate a `YYYY-MM-DD` ISO calendar date while preserving the JSON string."""
+    try:
+        date.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO date like '2026-07-07'") from exc
+    return value
+
+
+class BlogPostMeta(BaseModel):
+    """One resolved blog post stored on AppSpec. The blog primitive owns the
+    model-facing spec, but the generated tree must remain regenerable from
+    `.disco/appspec.json`, so the folded post bodies live here."""
+
+    model_config = _STRICT
+
+    slug: str = Field(min_length=1, max_length=MAX_BLOG_SLUG)
+    title: str = Field(min_length=1, max_length=MAX_BLOG_TITLE)
+    date: str = Field(min_length=1, max_length=10)
+    summary: str | None = Field(default=None, min_length=1, max_length=MAX_BLOG_SUMMARY)
+    body_md: str = Field(min_length=1, max_length=MAX_BLOG_BODY_MD)
+
+    @field_validator("slug")
+    @classmethod
+    def _slug_is_safe(cls, value: str) -> str:
+        return validate_blog_slug(value, field="blog slug")
+
+    @field_validator("date")
+    @classmethod
+    def _date_is_iso(cls, value: str) -> str:
+        return validate_iso_date(value, field="blog date")
+
+    @field_validator("title", "summary", "body_md")
+    @classmethod
+    def _text_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("blog text fields must not be blank")
+        return value
+
+
+class BlogMeta(BaseModel):
+    """Resolved blog content folded into an app by the `blog` primitive. `None`
+    stays absent from dumps, so pre-blog specs and generated trees are unchanged."""
+
+    model_config = _STRICT
+
+    posts: tuple[BlogPostMeta, ...] = Field(min_length=1, max_length=MAX_BLOG_POSTS)
+    index_page_title: str | None = Field(
+        default=None, min_length=1, max_length=MAX_BLOG_INDEX_TITLE
+    )
+
+    @field_validator("index_page_title")
+    @classmethod
+    def _index_title_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("blog index_page_title must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _slugs_unique(self) -> BlogMeta:
+        _require_unique((post.slug for post in self.posts), what="blog post slug")
+        return self
+
+
 class AppSpec(BaseModel):
     """The app STRUCTURE the scaffold generator consumes.
 
@@ -524,6 +612,10 @@ class AppSpec(BaseModel):
     # `exclude_if` keeps a None out of every dump, so pre-F5.3 specs serialize
     # byte-identically (and the 256 KiB cap math is unchanged for them).
     seo: SeoMeta | None = Field(default=None, exclude_if=lambda value: value is None)
+    # Epic 5.3-lite blog — resolved static posts folded in by the `blog` primitive.
+    # The generator lowers these into SPA routes + RSS. Absent means no blog files
+    # and keeps legacy specs/trees byte-identical.
+    blog: BlogMeta | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("roles")
     @classmethod
