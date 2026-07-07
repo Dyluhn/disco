@@ -2635,6 +2635,7 @@ importlib.import_module(".collection_primitive", package=__package__)
 importlib.import_module(".analytics_primitive", package=__package__)
 importlib.import_module(".blog_primitive", package=__package__)
 importlib.import_module(".feature_flags_primitive", package=__package__)
+importlib.import_module(".webhook_primitive", package=__package__)
 
 
 __all__ = [
