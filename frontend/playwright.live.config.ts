@@ -17,7 +17,9 @@ import { defineConfig, devices } from "@playwright/test";
  * Run: npx playwright test --config playwright.live.config.ts <spec>
  * Precondition: agent-server up on 127.0.0.1:8000 (the spec fails fast if not).
  */
-const PORT = 5174;
+// LIVE_PORT lets the gauntlet run several browsers concurrently on distinct
+// ports (5174/5175/5176 …) against the SAME live servers — parallel DR lanes.
+const PORT = Number(process.env.LIVE_PORT ?? 5174);
 const BASE_URL = `http://localhost:${PORT}`;
 
 export default defineConfig({
