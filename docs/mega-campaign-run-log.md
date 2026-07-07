@@ -425,3 +425,82 @@ gone — rebuild from the committed docs). Current campaign tip: **`9620eb92`** 
    gate output is false-green (tool aborts before running).
 4. Then run each wave's full discipline fresh: real exploit harness + 5 gates + gpt-5.5 xhigh adversarial-to-SHIP
    (they were NEVER adversarially reviewed — do not trust the parked codex output).
+
+---
+
+## 2026-07-07 — CORRECTION to the parked-waves playbook above (appended note; history left as written)
+
+Two facts in the "⚠️ PARKED SECURITY WAVES — RESUME PLAYBOOK" section are now stale:
+- **S-W3 is DONE**, not "NOT started" — committed **`1b762e3f`** (narrated below). It was
+  un-parked and executed with the full wave discipline (2 gpt-5.5 adversarial rounds).
+- **The campaign tip is no longer `9620eb92`** — the current tip is **`27dbf350`** (HEAD of
+  `disclaude/mega-campaign`), so resume rebases target that, and the pi-leftover gotcha (step 3)
+  still applies.
+S-W4/W5/W6 remain PARKED with nothing committed. `docs/disco-security-state.md` is now the
+single source of truth for security state; `docs/disco-project-state.md` is the master scoreboard.
+
+## 2026-07-07 — Post-park work: walkthrough fixes, S-W3, the primitive framework + first catalog primitives, packaging recon, live e2e proof CONFIRMED
+
+Everything landed on `disclaude/mega-campaign` after the park, in commit order.
+
+**Planning docs first** — `ab958aa5` (the parked-waves resume playbook above) + `525b525d`
+(the execution-ready builder-primitives + OSS-packaging plan v2) set the post-park agenda.
+
+**Walkthrough-fix batch (9 commits)** — the live-bug batch Dylan surfaced, all shipped:
+- `90828654` fix(config): OpenRouter model + image gen broken by an approval-ref canonicalization gap
+- `bbf4be46` fix(research): Notify highlight, wire "New research", sources Settings-only
+- `ba9f5c4b` fix(export,preview): suppress non-truncating "bounded by rounds"; podman previews honestly
+- `3b5e5417` fix(build): exported sites load (web-asset MIME types) + site .zip download
+- `93442553` fix(build): sites/apps ship real visuals — always-on art direction + SVG fallback
+- `34fa9041` fix(slides): plain-deck fallback is now HONEST, not a silent success
+- `fed4703f` fix(loop): breaker pause/question surfaces INSTANTLY, not after a model-call-long wait
+- `8157745b` harden(security): surface the silently-dropped origin-approval ledger
+- `ac5b4b21` fix(slides): slides_generate gets a real timeout (was dying at the generic 300s cap)
+
+Also verified at session start: the three original requests (artisan woodworking site with real
+SVGs, 2D parallax platformer without idle-thrash, 22KB research-report → 13-slide styled deck)
+all render correctly in the running app.
+
+**S-W3 LANDED — commit `1b762e3f`** (the one wave un-parked and finished): the host-execution
+cluster / gVisor-bypass floor — rm-root floor, in-sandbox DoD probes, sandbox-backend allowlist,
+env hygiene, session hygiene — plus 2 gpt-5.5 adversarial rounds. Security state is now:
+**S-W1 / S-W2 / S-W-Pi / S-W3 DONE; S-W4/W5/W6 PARKED** (see `docs/disco-security-state.md`).
+
+**Primitive framework (Epic F-A) — DONE:**
+- `68088170` WO-A0: extend the AppKit primitive framework (tier/host_contract/spec_schema/verify) + a `hello` proof primitive.
+- `f6a56ec3` WO-A1: `app_add_primitive` — the spec fill-and-validate tool + the `apply_spec` seam.
+- Scoping docs in between: `9baf7316` (§10 execution scoping — F-A status, D1-vs-Postgres dual-track, WO-A2/A3/A4 decomposition) + `a619d8f8` (§9 license/footprint: Lago AGPL→OpenMeter, fastembed weights redistributable, Novu heavy→SMTP-first).
+- `2c8e56fd` WO-A2.1: host-service registry + dispatcher (`svc.ping` reference). NO bus auth yet — the per-app bearer layer is deferred with design notes (`docs/wo-a2-host-bus-design-notes.md`); `call_host_service` must not reach the sandbox without it.
+- `4cbaa218` WO-A3: per-primitive verify dispatch + the **fail-closed `template_only` finish gate** ("cannot ship unverified"); also fixed a WO-A1 scope bug.
+
+**First catalog primitives — 3 shipped**, each addable via `app_add_primitive`:
+- `a656334c` F3.1 `form` — typed fields, server-side validation (422), D1 submissions table, owner inbox. Honest edges: attaches to `lead_gen` apps only; **form-folded apps are refused at the deploy gate** (deploy.py's canonical-worker check predates the form emitter); `success_message` not editable via `app_update_content`.
+- `055fb99a` F5.3-lite `seo` — meta/OG/JSON-LD + sitemap.xml + robots.txt.
+- `172ce70d` F5.2-lite `collection` — structured content collections (team/menu/testimonials).
+Two fail-closed seams durably preserved as commits on unmerged branches (NOT registered, gated closed by WO-A3): `disclaude/f41-stripe-seam` (`60436fa8`) + `disclaude/f33-webhook-seam` (`ec622888`).
+
+**Packaging recon (Epic P — next, not started):** `compose.yaml`,
+`deploy/compose/Dockerfile.server` + `entrypoint.sh`, `frontend/Dockerfile`,
+`deploy/sandbox/Dockerfile`, `.env.example` all already in-tree — Epic P is hardening +
+gap-closing, not greenfield. Ordered work P1–P5 in `docs/disco-status-and-remaining.md`.
+
+**Three status docs written (the new source of truth):**
+- `f09411da` sprint status → `113f67c9` `docs/disco-status-and-remaining.md` (feature catalog + remaining, pivot to packaging).
+- `d04340c4` `docs/disco-security-state.md` (security done / parked / deferred + the fail-closed gate).
+- `3093a65f` `docs/disco-project-state.md` (the master epic scoreboard) + `06c93ee8` audit-gap corrections (seam branches committed, honest edges, red arch-gate baseline, live proof then-unconfirmed).
+
+**Live end-to-end proof — CONFIRMED (`27dbf350`, the current tip):** a live model
+(`deepseek/deepseek-v4-pro` via OpenRouter) drove the real app on HEAD `172ce70d` (agent
+surface, appkit autonomous mode, ~82s, zero retries): `app_create` (lead_gen) →
+`app_add_primitive seo` → `app_add_primitive form` — the model *chose and executed* the tool
+through the loop. Provenance records carry the exact specs; the folds render correctly
+(Firefox screenshots + an 18/18 byte-identical `generate()` fidelity check). Closes the WO-A1
+residual (`collection`/`hello` not exercised). The run also surfaced the NEW top-priority
+engine bug: an **appkit autonomous FINISH deadlock** (dictated-content false positive on quoted
+tool args + finish-verify shell probe refused in appkit scope + execution-nudge resetting the
+refusal caps) — detail in `docs/disco-project-state.md`. Servers restarted onto `172ce70d`
+during the proof and left running.
+
+Status now lives in `docs/disco-project-state.md` (master), `docs/disco-status-and-remaining.md`,
+and `docs/disco-security-state.md`; the campaign ledger (`docs/disco-mega-campaign.md`) is a
+historical detail record.

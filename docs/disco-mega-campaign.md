@@ -2,6 +2,17 @@
 
 **Created:** 2026-07-06 · **Branch:** `disclaude/mega-campaign` (off `disclaude/design-loop-harvest` tip `10274058`) · **Owner-run:** Fable orchestrating; codex primary worker; parallel worktrees per epic.
 
+> **⚠️ 2026-07-07 — READ THIS FIRST: the master scoreboard is now
+> `docs/disco-project-state.md`; this ledger is a historical detail record.**
+> Since the original A/B/C/S/Z plan, three epics were added — **F-A (primitive
+> framework)**, **F catalog (builder primitives — first 3 shipped)**, and
+> **P (OSS packaging — next up, not started)**; see the sections and ledger rows
+> below. The "security is the closing epic" sequencing is **superseded by the
+> PARK decision**: S-W1 / S-W2 / S-W-Pi / S-W3 are DONE + committed, and
+> S-W4/W5/W6 are **PARKED** at Dylan's request (state in
+> `docs/disco-security-state.md`; resume playbook in
+> `docs/disco-security-fix-campaign.md`).
+
 **Mandate (Dylan, 2026-07-06, going-to-bed autonomous run):** "fold this whole [build-depth] plan, plus the new designs we found, and then finally the security audit into a mega-campaign with epics for each section and the associated WOs, then execute autonomously."
 
 This is the last big push before v0.1 is "basically it." Four epics. Autonomous execution discipline below is **non-negotiable** — every landed WO is built + gated + **live-proven** (a real model / real runtime / real exploit, never a cassette) + committed in isolation. Anything not reached stays **QUEUED**, never mislabeled done. Dylan's #1 pain is code that *looks* finished but was never run — we do not produce that.
@@ -123,6 +134,28 @@ Per-wave HARD GATES (from the security doc): build + real-sample harness → **e
 
 ---
 
+# EPICS ADDED POST-PARK (2026-07-07) — F-A, F catalog, P
+
+Added after Dylan parked security waves W4/W5/W6 (superseding the "security closes
+the campaign" sequencing above). Detail lives in the status docs, not here.
+
+- **EPIC F-A — primitive framework.** The "add X" scaffolding system: a primitive is a
+  `PrimitiveDefinition` (id / tier / host_contract / spec_schema / verify / apply_spec);
+  the agent picks a primitive and fills its spec, Disco validates + folds + regenerates.
+  **DONE** — WO-A0 / WO-A1 (`app_add_primitive`) / WO-A2.1 (host-service bus) / WO-A3
+  (verify dispatch + the fail-closed `template_only` finish gate). See ledger rows.
+- **EPIC F catalog — the builder-primitive catalog** (`docs/disco-builder-primitives-plan.md`
+  §4/§10). **3 shipped this sprint** (`form`, `seo`, `collection`); the rest deferred
+  (D1-shape items are fan-out-safe; the Postgres-track items wait on the persistent-runtime
+  decision). Two fail-closed seams preserved on unmerged branches: `disclaude/f41-stripe-seam`
+  (`60436fa8`) + `disclaude/f33-webhook-seam` (`ec622888`) — not registered, gated closed.
+- **EPIC P — OSS packaging** (single-command self-host deploy). **NOT STARTED — next up.**
+  Recon done: `compose.yaml`, `deploy/compose/Dockerfile.server` + `entrypoint.sh`,
+  `frontend/Dockerfile`, `deploy/sandbox/Dockerfile`, `.env.example` all exist, so Epic P is
+  hardening + gap-closing, not greenfield. Ordered P1–P5 in `docs/disco-status-and-remaining.md`.
+
+---
+
 ## Run log
 
 Everything that happens this run is appended to **`docs/mega-campaign-run-log.md`** (timestamped, per Dylan's "keep a log of everything"). That file is the chronological narrative; this ledger is the state snapshot.
@@ -140,7 +173,18 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | S-W1 | Security | **DONE** (keystone) | `e028d2ac` | from-scratch auth/CSRF/owner-scoping; 19-proof real-exploit harness + route-inventory test; adversarially SHIP'd over 4 gpt-5.5 rounds (BLOCK 9→3→2→SHIP); UI-still-works Firefox screenshot = the one human-verify item |
 | S-W2 | Security | **DONE** | `2408e40f` | secret-ref resolution + egress origin-approval chokepoint (`core/host_egress.py` SSRF guard + `core/origin_approvals.py` out-of-band HMAC approvals + `secret_refs.py` origin-pinning); every egress sink swept; admin-gated `/api/security/approve-origin`; 962-line real-exploit harness (17 green); adversarially SHIP'd (gpt-5.5 xhigh, 4 rounds); ConfigState kept at 935 baseline via `origin_approval_wiring.py` extraction |
 | S-W-Pi | Security | **DONE** | `76b4e397` | attack-surface reduction — Pi kernel/inference fully removed (76 files, −19.9k LOC); DiscoKernel intact; config-wipe hazard handled (legacy coercion + regression test); unit 5372/0, basedpyright 0, no new arch violation |
-| S-W3..W6 | Security | QUEUED / W6 in flight | — | — |
+| S-W3 | Security | **DONE** | `1b762e3f` | host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env + session hygiene); 2 gpt-5.5 adversarial rounds |
+| — | Security (aux) | **DONE** | `8157745b` | origin-approval ledger: silently-dropped entries surfaced |
+| S-W4/W5/W6 | Security | **PARKED** (Dylan's call, NOT in flight; prerequisite for any public/hardened release) | — | resume playbook in `docs/disco-security-fix-campaign.md`; state in `docs/disco-security-state.md` |
+| WALK batch | Walkthrough fixes | **DONE** | `90828654` `bbf4be46` `ba9f5c4b` `3b5e5417` `93442553` `34fa9041` `fed4703f` `ac5b4b21` | the live-bug batch Dylan surfaced (OpenRouter/image-gen approval-ref, research surface, export/preview honesty, exported-site MIME+zip, real visuals, honest deck fallback, instant pause, slides timeout); session-start verify: the 3 original requests render in the running app |
+| WO-A0 | F-A framework | **DONE** | `68088170` | PrimitiveDefinition extension (tier/host_contract/spec_schema/verify) + `hello` proof primitive |
+| WO-A1 | F-A framework | **DONE** | `f6a56ec3` | `app_add_primitive` (validate spec → fold → regenerate → provenance); scope bug fixed in `4cbaa218`; live-proven — deepseek-v4-pro chose + executed it end-to-end (see project-state) |
+| WO-A2.1 | F-A framework | **DONE** | `2c8e56fd` | host-service registry + dispatcher (`svc.ping` reference; bus auth deferred per `docs/wo-a2-host-bus-design-notes.md`) |
+| WO-A3 | F-A framework | **DONE** | `4cbaa218` | per-primitive verify dispatch + the fail-closed `template_only` finish gate |
+| `form` | F catalog | **DONE** | `a656334c` | typed fields, server-side validation (422), D1 submissions table, owner inbox; live-proven (deepseek run); honest edges: lead_gen-only, form-folded apps refused at the deploy gate |
+| `seo` | F catalog | **DONE** | `055fb99a` | meta/OG/JSON-LD + sitemap.xml + robots.txt; live-proven (deepseek run) |
+| `collection` | F catalog | **DONE** | `172ce70d` | structured content collections (team/menu/testimonials); not exercised in the live run |
+| P1–P5 | Packaging | **NOT STARTED** (recon done — next up) | — | — |
 | Z1–Z3 | Soak+debug | QUEUED (final) | — | — |
 
 **Rule:** a row moves to DONE only when committed AND live-proven. Partial work stays IN-PROGRESS with a note. Nothing is ever marked done on a green unit-test count alone.
