@@ -884,3 +884,45 @@ def test_lower_deck_brand_override_uses_direction_tokens() -> None:
     assert deck.theme == theme
     assert deck.theme.accent == "#c23616"
     assert authored.theme == "disco-light"
+
+
+def test_empty_image_slot_renders_art_fallback_not_dead_box() -> None:
+    """Gauntlet 2026-07-07: when image generation fails/is unconfigured, image
+    slots must render the THEMED ART fallback — inline SVG in HTML, native
+    vector shapes in PPTX — never the dead '[image]' placeholder box."""
+    import io
+
+    from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+    from disco.tools.builtin._pptx_render import render_html, render_pptx
+    from pptx import Presentation
+
+    authored = AuthoredDeck(
+        title="T", theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="image_right", archetype="bullets", title="With image",
+                body=["point one"],
+                image_prompt="art; subject: thing; slot: side; no words",
+            )
+        ],
+    )
+    deck = lower_deck(authored)  # NO image_assets → empty slot
+
+    html_str = render_html(deck)
+    assert "[image]" not in html_str
+    assert "<svg" in html_str  # the themed art fallback
+
+    prs = Presentation(io.BytesIO(render_pptx(deck)))
+    all_text = " ".join(
+        s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame
+    )
+    assert "[image]" not in all_text
+    # The art fallback draws multiple EMPTY autoshapes (base field + accents) —
+    # python-pptx autoshapes all carry a text_frame, so count empty-text shapes:
+    # baseline layout has 1 (the accent bar); the art adds at least 3 more.
+    empty_shapes = [
+        s
+        for s in prs.slides[0].shapes
+        if s.has_text_frame and not s.text_frame.text.strip()
+    ]
+    assert len(empty_shapes) >= 4, f"art fallback shapes missing: {len(empty_shapes)}"

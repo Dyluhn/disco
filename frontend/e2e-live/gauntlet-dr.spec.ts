@@ -81,6 +81,31 @@ test(`gauntlet DR ${LABEL}: report finishes with sections+citations, deck builds
   try {
     await approve.waitFor({ state: "visible", timeout: 240_000 });
     await shot("05-plan");
+
+    // DR_REVISE: live revision exercise (the 2026-07-07 STUCK regression path —
+    // revision → Phase 1R re-propose → a REVISED plan gate, never STUCK).
+    // Set DR_REVISE to a revision instruction to enable for this run.
+    const revise = process.env.DR_REVISE;
+    if (revise) {
+      await page
+        .locator('[data-disco-control="revise-plan-open"]')
+        .or(page.getByRole("button", { name: /revise/i }))
+        .first()
+        .click();
+      await page.getByRole("textbox").last().fill(revise);
+      await page
+        .locator('[data-disco-control="revise-plan"]')
+        .or(page.getByRole("button", { name: /send revision/i }))
+        .first()
+        .click();
+      await shot("05b-revision-sent");
+      // The revised plan gate must come back (NOT a STUCK banner).
+      await approve.waitFor({ state: "visible", timeout: 240_000 });
+      const bodyNow = await page.locator("body").innerText();
+      expect(bodyNow, "revision must re-propose, not STUCK").not.toMatch(/\bSTUCK\b/i);
+      await shot("05c-revised-plan");
+    }
+
     await approve.click();
   } catch {
     /* no approval gate offered — autonomous path */

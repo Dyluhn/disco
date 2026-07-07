@@ -569,20 +569,64 @@ def _layout_image_right_slide(prs_slide, slide: DeckSlide, theme: Theme) -> None
 
 
 def _image_placeholder(prs_slide, left: int, top: int, w: int, h: int, theme: Theme) -> None:  # type: ignore[type-arg]
-    """Render a styled image-placeholder box (used when image_url is None)."""
+    """Themed generative-art fallback for an empty image slot (image gen failed
+    or is unconfigured). Replaces the old flat gray "[image]" box (Dylan
+    2026-07-07: 'if image gen doesn't work then generate SVGs') — an abstract,
+    deterministic geometric composition in the deck's own palette, drawn with
+    native vector shapes (the PPTX analogue of the HTML renderer's inline-SVG
+    fallback). Variant is seeded from the slot geometry so repeated slots in one
+    deck differ but re-renders are byte-stable."""
+    from pptx.enum.shapes import MSO_SHAPE
     from pptx.util import Emu
 
-    box = prs_slide.shapes.add_shape(1, Emu(left), Emu(top), Emu(w), Emu(h))
-    box.fill.solid()
-    box.fill.fore_color.rgb = _rgb_from_hex(theme.surface_2)
-    box.line.color.rgb = _rgb_from_hex(theme.hairline)
-    tf = box.text_frame
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    from pptx.enum.text import PP_ALIGN
-    p.alignment = PP_ALIGN.CENTER
-    run = p.add_run()
-    _set_run_style(run, "[image]", _first_font(theme.font_ui), 14, theme.text_faint)
+    # Base field.
+    base = prs_slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(left), Emu(top), Emu(w), Emu(h))
+    base.fill.solid()
+    base.fill.fore_color.rgb = _rgb_from_hex(theme.surface_1)
+    base.line.color.rgb = _rgb_from_hex(theme.hairline)
+
+    # Deterministic per-slot variant; distinct primes mix the geometry so a
+    # cover slot and a side slot land on different compositions.
+    variant = (left * 7 + top * 13 + w * 3 + h * 5) // 9_525 % 3
+    cx, cy = left + w // 2, top + h // 2
+    r_big = min(w, h) * 2 // 3
+    r_mid = r_big // 2
+    r_dot = max(r_big // 7, 91_440)
+
+    def _circle(x: int, y: int, r: int, hex_color: str, outline: bool = False) -> None:
+        c = prs_slide.shapes.add_shape(MSO_SHAPE.OVAL, Emu(x - r // 2), Emu(y - r // 2), Emu(r), Emu(r))
+        if outline:
+            c.fill.background()
+            c.line.color.rgb = _rgb_from_hex(hex_color)
+            c.line.width = Emu(19_050)
+        else:
+            c.fill.solid()
+            c.fill.fore_color.rgb = _rgb_from_hex(hex_color)
+            c.line.fill.background()
+
+    def _bar(x: int, y: int, bw: int, bh: int, hex_color: str) -> None:
+        b = prs_slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Emu(x), Emu(y), Emu(bw), Emu(bh))
+        b.fill.solid()
+        b.fill.fore_color.rgb = _rgb_from_hex(hex_color)
+        b.line.fill.background()
+
+    if variant == 0:
+        # Off-center large disc + outlined echo + accent dot.
+        _circle(left + w * 2 // 3, top + h // 3, r_big, theme.surface_2)
+        _circle(left + w * 2 // 3, top + h // 3, r_big + r_mid // 2, theme.hairline_strong, outline=True)
+        _circle(left + w // 4, top + h * 3 // 4, r_dot, theme.accent)
+        _bar(left + w // 8, top + h * 5 // 6, w // 3, 27_432, theme.hairline_strong)
+    elif variant == 1:
+        # Horizon band + rising disc (accent) + faint moon.
+        _bar(left, top + h * 2 // 3, w, h // 24 + 18_288, theme.surface_2)
+        _circle(left + w // 3, top + h * 2 // 3, r_mid, theme.accent)
+        _circle(left + w * 4 // 5, top + h // 4, r_dot * 2, theme.surface_2)
+    else:
+        # Column rhythm + accent square.
+        for i in range(4):
+            _bar(left + w * (2 * i + 1) // 9, top + h // 5, w // 18 + 9_525, h * 3 // 5, theme.surface_2)
+        sq = max(r_dot, 137_160)
+        _bar(left + w * 3 // 4, top + h * 2 // 3, sq, sq, theme.accent)
 
 
 # ---------------------------------------------------------------------------
@@ -1188,6 +1232,37 @@ def _img_src(el: Element) -> str | None:
     return None
 
 
+def _art_fallback_svg(variant: int = 0, *, style: str = "") -> str:
+    """Inline-SVG generative-art fallback for an empty image slot (the HTML
+    analogue of the PPTX `_image_placeholder` shape composition). Uses the
+    deck's CSS custom properties so it re-themes with the template. Dylan
+    2026-07-07: 'if image gen doesn't work then generate SVGs'."""
+    v = variant % 3
+    if v == 0:
+        art = (
+            '<circle cx="66" cy="30" r="24" fill="var(--surface-2)"/>'
+            '<circle cx="66" cy="30" r="30" fill="none" stroke="var(--hairline-strong)" stroke-width="0.6"/>'
+            '<circle cx="25" cy="68" r="4" fill="var(--accent)"/>'
+            '<rect x="12" y="82" width="34" height="1.2" fill="var(--hairline-strong)"/>'
+        )
+    elif v == 1:
+        art = (
+            '<rect x="0" y="62" width="100" height="5" fill="var(--surface-2)"/>'
+            '<circle cx="33" cy="62" r="12" fill="var(--accent)"/>'
+            '<circle cx="80" cy="24" r="7" fill="var(--surface-2)"/>'
+        )
+    else:
+        cols = "".join(
+            f'<rect x="{22 * i + 11}" y="20" width="6" height="56" fill="var(--surface-2)"/>'
+            for i in range(4)
+        )
+        art = cols + '<rect x="74" y="64" width="9" height="9" fill="var(--accent)"/>'
+    return (
+        f'<svg viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" '
+        f'aria-hidden="true" style="background:var(--surface-1);{style}">{art}</svg>'
+    )
+
+
 def render_html(deck: Deck | MinimalDeck) -> str:  # noqa: C901
     """Render *deck* to a self-contained 16:9 brand HTML string.
 
@@ -1702,9 +1777,8 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
         bullets_html = f'<ul class="slide-bullets">{bullet_items}</ul>' if bullet_items else ""
 
         if layout == "full_image":
-            img_html = (
-                '<div class="slide-full-image-placeholder">[image]</div>'
-            )
+            # Themed art fallback (not a dead '[image]' box) — full-bleed slot.
+            img_html = _art_fallback_svg(0, style="position:absolute;inset:0;width:100%;height:100%;")
             if images:
                 img_src = _img_src(images[0])
                 if img_src:
@@ -1724,11 +1798,9 @@ def _html_for_c1_slide(slide: Slide, theme: Theme, *, slide_idx: int = 0) -> str
             if img_src:
                 img_html = f'<img src="{img_src}" alt="" style="max-width:48%;max-height:90%;object-fit:contain;">'
             else:
-                img_html = (
-                    '<div style="width:46%;height:80%;background:var(--surface-2);'
-                    'border:1px solid var(--hairline);display:flex;align-items:center;'
-                    'justify-content:center;color:var(--text-faint);'
-                    'font-family:var(--ui);font-size:1.2vw;">[image]</div>'
+                # Themed art fallback (not a dead '[image]' box) — side slot.
+                img_html = _art_fallback_svg(
+                    2, style="width:46%;height:80%;border:1px solid var(--hairline);"
                 )
 
         text_div = (
@@ -1814,12 +1886,8 @@ def _html_for_slide(slide: DeckSlide, theme: Theme) -> str:
                 f'alt="" style="max-width:48%;max-height:90%;object-fit:contain;">'
             )
         else:
-            img_html = (
-                '<div style="width:46%;height:80%;background:var(--surface-2);'
-                'border:1px solid var(--hairline);display:flex;align-items:center;'
-                'justify-content:center;color:var(--text-faint);'
-                'font-family:var(--ui);font-size:1.2vw;">[image]</div>'
-            )
+            # Themed art fallback (not a dead '[image]' box) — side slot.
+            img_html = _art_fallback_svg(1, style="width:46%;height:80%;border:1px solid var(--hairline);")
         return (
             f'<div style="display:flex;gap:4%;width:100%;height:100%;'
             f'align-items:center;">'

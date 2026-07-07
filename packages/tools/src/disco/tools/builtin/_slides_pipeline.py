@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, get_args
 
 import httpx
@@ -845,12 +846,46 @@ def _is_raster_bytes(data: bytes) -> bool:
     return data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"
 
 
+@dataclass
+class ImageGenStats:
+    """Honest per-deck image-generation outcome, surfaced all the way to the
+    slides_generate ToolOutcome (gauntlet 2026-07-07: a mis-configured flux
+    model failed EVERY slide image and the agent had no way to know — the
+    failures died in a server-side log warning)."""
+
+    configured: bool = False
+    wanted: int = 0
+    generated: int = 0
+    failed: list[int] = field(default_factory=list)
+    sample_error: str | None = None
+
+    def note(self) -> str:
+        """One-line human/agent-facing summary for the tool result content."""
+        if self.wanted == 0:
+            return ""
+        if not self.configured:
+            return (
+                f"\nImages: 0/{self.wanted} — image generation is NOT configured; "
+                "themed art fallback used for every image slot. Configure "
+                "Settings → Image generation (and use its Test button) for real images."
+            )
+        if self.failed:
+            reason = f" (first error: {self.sample_error})" if self.sample_error else ""
+            return (
+                f"\nImages: {self.generated}/{self.wanted} generated — "
+                f"{len(self.failed)} FAILED{reason}; themed art fallback used for the "
+                "failed slots. The configured image model may not support image "
+                "output — verify it with Settings → Image generation → Test."
+            )
+        return f"\nImages: {self.generated}/{self.wanted} generated."
+
+
 async def _stage_assets(
     authored: AuthoredDeck,
     ctx: ToolContext,
     backend: ImageBackend | None,
     filename_base: str,
-) -> dict[int, bytes]:
+) -> tuple[dict[int, bytes], ImageGenStats]:
     """For each slide with image_prompt, generate the image, write it to the sandbox
     as a standalone artifact, AND return {authored_slide_index: image_bytes}.
 
@@ -859,17 +894,24 @@ async def _stage_assets(
     bytes were written to disk but never reached the renderer, so every image slide
     fell back to the ``[image]`` placeholder. The on-disk copy is kept too (a
     browsable artifact + back-compat for any path-based consumer).
+
+    Also returns ImageGenStats so the caller can put the REAL image outcome in
+    the tool result instead of burying failures in a log line.
     """
     import hashlib
 
     assets: dict[int, bytes] = {}
+    stats = ImageGenStats(
+        configured=backend is not None,
+        wanted=sum(1 for s in authored.slides if s.image_prompt),
+    )
     # W-50: image generation is OPTIONAL for a deck. When no real image backend is
     # configured (select_image_backend() raised → caller passed None), DEGRADE to
-    # text-only slides — omit images rather than crash. Configure ComfyUI/OpenAI/
-    # OpenRouter in Settings → Image generation to include real images.
+    # art-fallback slides — omit real images rather than crash. Configure ComfyUI/
+    # OpenAI/OpenRouter in Settings → Image generation to include real images.
     if backend is None:
         _LOG.info("no image backend configured — generating image-less (text-only) slides")
-        return assets
+        return assets, stats
     wanted = 0  # slides that requested an image
     failed: list[int] = []  # slide indices whose image generation errored/was rejected
     for i, slide in enumerate(authored.slides):
@@ -917,18 +959,23 @@ async def _stage_assets(
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Image generation failed for slide %d: %s", i, e)
             failed.append(i)
+            if stats.sample_error is None:
+                stats.sample_error = f"{type(e).__name__}: {e}"[:200]
     if failed:
         # One aggregate signal instead of scattered per-slide lines — a backend that
         # is configured but erroring (out of credits, rate-limited) otherwise produced
         # an image-less deck invisibly.
         _LOG.warning(
             "Deck image generation: %d of %d requested slide image(s) failed (slides %s) "
-            "— those slides fall back to the placeholder box.",
+            "— those slides fall back to the themed art placeholder.",
             len(failed),
             wanted,
             ", ".join(str(x) for x in failed),
         )
-    return assets
+    stats.wanted = wanted
+    stats.failed = failed
+    stats.generated = len(assets)
+    return assets, stats
 
 
 # ---------------------------------------------------------------------------
@@ -962,18 +1009,20 @@ async def generate_deck(
     backend: ImageBackend | None,
     *,
     slide_count: int = 5,
-) -> tuple[Deck | None, str | None, str | None, str | None]:
+) -> tuple[Deck | None, str | None, str | None, str | None, ImageGenStats | None]:
     """Run the full C2 generation pipeline.
 
     Returns:
-        (c1_deck, fallback_markdown, error_msg, authored_sidecar)
+        (c1_deck, fallback_markdown, error_msg, authored_sidecar, image_stats)
 
     ``authored_sidecar`` is the ``{filename}.authored.json`` path IFF this run wrote
     it successfully (else None) — the caller advertises the in-app editor only on a
     real, fresh sidecar, never a stale leftover from a prior run whose write failed.
+    ``image_stats`` carries the honest image-generation outcome (configured /
+    generated / failed + first error) for the tool result.
 
-    On success: (Deck, None, None, sidecar-or-None)
-    On fill-stage failure: (None, fallback_markdown_str, error_msg, None)
+    On success: (Deck, None, None, sidecar-or-None, stats)
+    On fill-stage failure: (None, fallback_markdown_str, error_msg, None, None)
     """
     # ROOT-5: honor the CONVERSATION's effective (override-aware) driver model when the
     # executor supplied it — so a deck authored in a conversation that picked a specific
@@ -989,14 +1038,14 @@ async def generate_deck(
         cfg = store.load()
         purpose = _purpose_for_model_endpoint(cfg, llm_url, api_key_env)
         if not store.origin_approved(llm_url, purpose, api_key_env):
-            return None, _outline_to_markdown(None, goal), "LLM origin not approved", None
+            return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
         if not secret_ref_allowed_for_origin(api_key_env, llm_url):
-            return None, _outline_to_markdown(None, goal), "LLM secret_ref not allowed", None
+            return None, _outline_to_markdown(None, goal), "LLM secret_ref not allowed", None, None
         api_key = _resolve_llm_key(api_key_env)
     else:
         llm_url, model, api_key = _resolve_slides_llm()
     if not llm_url:
-        return None, _outline_to_markdown(None, goal), "LLM origin not approved", None
+        return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
     system = _WEAK_SYSTEM if ctx.assist else _CAPABLE_SYSTEM
 
     # Stage 1: Outline
@@ -1007,7 +1056,7 @@ async def generate_deck(
     if outline is None:
         _LOG.warning("Outline stage failed: %s", outline_err)
         fallback_md = _outline_to_markdown(None, goal)
-        return None, fallback_md, outline_err, None
+        return None, fallback_md, outline_err, None, None
 
     # Stage 2: Fill
     filled, fill_err = await _stage_fill(outline, system, llm_url, model, api_key)
@@ -1015,10 +1064,10 @@ async def generate_deck(
     if filled is None:
         _LOG.warning("Fill stage failed: %s — using outline as fallback", fill_err)
         fallback_md = _outline_to_markdown(outline, goal)
-        return None, fallback_md, fill_err, None
+        return None, fallback_md, fill_err, None, None
 
     # Stage 3: Assets (image_prompt → image bytes + sandbox files)
-    image_assets = await _stage_assets(filled, ctx, backend, filename)
+    image_assets, image_stats = await _stage_assets(filled, ctx, backend, filename)
 
     # Stage 4: Lower to C1 Deck (carry generated image bytes so they embed — C7)
     try:
@@ -1032,7 +1081,7 @@ async def generate_deck(
     except Exception as e:  # noqa: BLE001
         _LOG.warning("lower_deck failed: %s — falling back to Marp", e)
         fallback_md = _outline_to_markdown(filled, goal)
-        return None, fallback_md, str(e), None
+        return None, fallback_md, str(e), None, None
 
     # A2.0: persist the editable AuthoredDeck source alongside the renders so the
     # in-app deck editor (+ deck_patch tool) can read it back. Best-effort: a write
@@ -1050,4 +1099,4 @@ async def generate_deck(
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Failed to persist authored.json for %s: %s", filename, e)
 
-    return deck, None, None, authored_sidecar
+    return deck, None, None, authored_sidecar, image_stats

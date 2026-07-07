@@ -554,7 +554,7 @@ class SlidesTool:
         except ImageGenNotConfigured:
             backend = None
 
-        c1_deck, fallback_md, err, authored_sidecar = await generate_deck(
+        c1_deck, fallback_md, err, authored_sidecar, image_stats = await generate_deck(
             args.goal,
             args.filename,
             ctx,
@@ -566,7 +566,9 @@ class SlidesTool:
             # C2 succeeded — render via C3. authored_sidecar is the fresh editable
             # source (or None if the sidecar write failed) → gates the editor.
             return await self._render_c1_deck(
-                c1_deck, args, ctx, fmt, editable_source=authored_sidecar
+                c1_deck, args, ctx, fmt,
+                editable_source=authored_sidecar,
+                image_stats=image_stats,
             )
 
         # C2 failed → fall back to Marp/html fallback with the generated markdown.
@@ -619,13 +621,17 @@ class SlidesTool:
         fmt: str,
         *,
         editable_source: str | None = None,
+        image_stats=None,
     ) -> ToolOutcome:
         """Render a C1 Deck to the sandbox and return a ToolOutcome.
 
         ``editable_source`` is the ``{name}.authored.json`` path IFF this generation
         freshly wrote it (from generate_deck). It gates the in-app editor: a swallowed
         sidecar-write failure → None → no "Edit Slides" affordance, and never an
-        affordance pointing at a stale leftover sidecar (no false affordance)."""
+        affordance pointing at a stale leftover sidecar (no false affordance).
+        ``image_stats`` (ImageGenStats) carries the honest image outcome — its note
+        goes in the CONTENT (so the agent knows images failed / were unconfigured)
+        and its numbers in `structured.images`."""
         from disco.tools.builtin._pptx_render import convert_to_pdf, render_html, render_pptx
 
         if ctx.sandbox is None:
@@ -637,6 +643,20 @@ class SlidesTool:
         editable: dict[str, str] = (
             {"editable_source": editable_source} if editable_source else {}
         )
+        img_note = image_stats.note() if image_stats is not None else ""
+        img_structured: dict = (
+            {
+                "images": {
+                    "configured": image_stats.configured,
+                    "wanted": image_stats.wanted,
+                    "generated": image_stats.generated,
+                    "failed": len(image_stats.failed),
+                    "sample_error": image_stats.sample_error,
+                }
+            }
+            if image_stats is not None
+            else {}
+        )
 
         if fmt == "html":
             html_str = render_html(deck)
@@ -646,7 +666,7 @@ class SlidesTool:
                 content=(
                     f"Slide deck '{args.filename}' written to {out_filename}\n"
                     f"Format: HTML (C3 brand renderer)\n"
-                    f"Slides: {len(deck.slides)}"
+                    f"Slides: {len(deck.slides)}{img_note}"
                 ),
                 artifacts=[out_filename],
                 structured={
@@ -655,6 +675,7 @@ class SlidesTool:
                     "format": "html",
                     "slide_count": len(deck.slides),
                     "renderer": "c3-brand",
+                    **img_structured,
                     # A2.0/A2.2: editable_source (the AuthoredDeck sidecar) is present
                     # ONLY when the sidecar write actually succeeded — its presence is
                     # what gates the in-app deck editor tab.
@@ -690,7 +711,7 @@ class SlidesTool:
                 content=(
                     f"Slide deck '{args.filename}' written to {out_filename}\n"
                     f"Format: PPTX (C3 native editable — real text boxes)\n"
-                    f"Slides: {len(deck.slides)}{pdf_note}"
+                    f"Slides: {len(deck.slides)}{img_note}{pdf_note}"
                 ),
                 artifacts=artifacts,
                 structured={
@@ -699,6 +720,7 @@ class SlidesTool:
                     "format": "pptx",
                     "slide_count": len(deck.slides),
                     "renderer": "pptx-native",
+                    **img_structured,
                     # A2.0/A2.2: present only when the sidecar write actually succeeded.
                     **editable,
                     "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
@@ -722,7 +744,7 @@ class SlidesTool:
                 content=(
                     f"Slide deck '{args.filename}' written to {out_filename}\n"
                     f"Format: PDF (via LibreOffice + C3 PPTX)\n"
-                    f"Slides: {len(deck.slides)}"
+                    f"Slides: {len(deck.slides)}{img_note}"
                 ),
                 artifacts=[out_filename, pptx_name],
                 structured={
@@ -731,6 +753,7 @@ class SlidesTool:
                     "format": "pdf",
                     "slide_count": len(deck.slides),
                     "renderer": "libreoffice",
+                    **img_structured,
                     # A2: a fresh sidecar makes even a pdf-format deck editable (the
                     # editor re-renders html/pptx; the pdf is flagged stale on save).
                     **editable,

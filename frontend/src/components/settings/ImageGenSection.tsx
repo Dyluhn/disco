@@ -273,8 +273,8 @@ export function ImageGenSection() {
             disabled={!agentLive() || fieldsDirty}
             disabledHint={
               fieldsDirty
-                ? "save changes to test"
-                : "connect the agent server to test"
+                ? "unsaved changes — click Save first, then Test"
+                : "agent server offline — start it to test"
             }
           />
 

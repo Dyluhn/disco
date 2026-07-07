@@ -112,7 +112,12 @@ export function ProbeButton({
       <span aria-live="polite" data-probe-status={statusAttr} data-probe-ok={okAttr}>
         {chip}
         {disabled && disabledHint && state.phase === "idle" ? (
-          <span className="font-ui text-[0.74rem] text-text-faint">{disabledHint}</span>
+          // Walkthrough 2026-07-07: this hint was 0.74rem text-faint — invisible
+          // enough that a disabled Test button read as "the test button doesn't
+          // work". A disabled control must SAY why, loudly (warn tone).
+          <span className="font-ui text-[0.8rem] text-warn" role="status">
+            {disabledHint}
+          </span>
         ) : null}
       </span>
     </div>

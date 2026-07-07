@@ -50,14 +50,14 @@ async def test_unconfigured_backend_omits_deck_images():
     """W-50: no configured image backend (backend=None) → the deck degrades to
     text-only (no images embedded), never a placeholder, never a crash."""
     ctx = ToolContext.model_construct(sandbox=None)
-    assets = await _stage_assets(_deck_with_image(), ctx, None, "f")
+    assets, _ = await _stage_assets(_deck_with_image(), ctx, None, "f")
     assert assets == {}, "an unconfigured image backend must omit images, not crash"
 
 
 async def test_real_backend_still_stages_images():
     """A connected provider DOES embed images (the fix must not break real image decks)."""
     ctx = ToolContext.model_construct(sandbox=None)
-    assets = await _stage_assets(_deck_with_image(), ctx, _RealBackend(), "f")
+    assets, _ = await _stage_assets(_deck_with_image(), ctx, _RealBackend(), "f")
     assert 0 in assets, "a real backend must still stage images"
     assert assets[0].startswith(b"\x89PNG")
 
