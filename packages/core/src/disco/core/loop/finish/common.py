@@ -117,6 +117,8 @@ def _appkit_scope_active(loop: AgentLoop) -> bool:
     """
 
     executor = getattr(loop, "executor", None)
+    if executor is None:
+        return False
     try:
         return any(
             getattr(tool, "name", None) == "verify_appkit_app"
