@@ -58,6 +58,7 @@ SEO_PRIMITIVE_ID = "seo"
 COLLECTION_PRIMITIVE_ID = "collection"
 FEATURE_FLAGS_PRIMITIVE_ID = "feature_flags"
 BLOG_PRIMITIVE_ID = "blog"
+ANALYTICS_PRIMITIVE_ID = "analytics"
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,7 @@ def primitive_ids() -> frozenset[str]:
 
 
 __all__ = [
+    "ANALYTICS_PRIMITIVE_ID",
     "COLLECTION_PRIMITIVE_ID",
     "BLOG_PRIMITIVE_ID",
     "DIRECTORY_PRIMITIVE_ID",

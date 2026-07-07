@@ -38,6 +38,7 @@ from .local_verify import (
     local_api_roundtrip,
 )
 from .primitives import (
+    ANALYTICS_PRIMITIVE_ID,
     BLOG_PRIMITIVE_ID,
     COLLECTION_PRIMITIVE_ID,
     DIRECTORY_PRIMITIVE_ID,
@@ -99,6 +100,7 @@ from .spec import (
     DESIGNSPEC_RELPATH,
     MAX_DESIGNSPEC_BYTES,
     Action,
+    AnalyticsMeta,
     BlogMeta,
     BlogPostMeta,
     DesignSpec,
@@ -127,6 +129,7 @@ from .spec import (
 
 __all__ = [
     "APPSPEC_RELPATH",
+    "ANALYTICS_PRIMITIVE_ID",
     "DESIGNSPEC_RELPATH",
     "CANONICAL_CHOICE_KEYS",
     "CF_EXPORT_FILES",
@@ -158,6 +161,7 @@ __all__ = [
     "SEO_PRIMITIVE_ID",
     "STATIC_CF_EXPORT_FILES",
     "Action",
+    "AnalyticsMeta",
     "BLOG_PRIMITIVE_ID",
     "BlogMeta",
     "BlogPostMeta",
