@@ -316,9 +316,11 @@ F-A framework + F-E creds ─► F-B data ─► F-C trust(RLS/secrets/WAF) ─�
 |----|--------|--------|-----------------------------------------------|
 | A0 | **DONE** | `68088170` | `PrimitiveDefinition` extended in place (not a new protocol): `tier` / `host_contract` / `spec_schema` / `verify`, all defaulted → the 3 existing primitives byte-identical. `HostService` + `PrimitiveVerifyResult` are frozen stdlib dataclasses (core stays stdlib-only at runtime; pydantic under TYPE_CHECKING). `hello` primitive = the mount proof. |
 | A1 | **DONE** | `f6a56ec3` | Tool is `app_add_primitive` (house `app_*` naming, plan said `add_primitive`). **Fold-into-AppSpec, not `generate(spec)→artifacts`:** a new defaulted `apply_spec(app, validated_spec)→AppSpec` hook folds the validated spec into the AppSpec and the app's own base primitive regenerates the WHOLE tree. Rationale: sandbox protocol has no delete → per-addon file overlays strand stale files (same failure app_create's cross-primitive guard refuses). Addable ⇔ `spec_schema` AND `apply_spec` both set. Validation refusals carry the expected JSON schema (self-recovering). Provenance at `.disco/primitives/<id>.json`. Free-form `spec` arg = justified ALLOW_SCHEMA_HOLES entries (both `default:` and `appkit_v2:` labels). Residual: no live AGENT call yet — lands with the first real addable primitive (3.1). |
-| A2 | scoped below | — | — |
-| A3 | scoped below | — | — |
-| A4 | scoped below | — | — |
+| A2 | slice 1 **DONE** | `2c8e56fd` | host-service registry + dispatcher + svc.ping (disco.core.host_services). Remaining slices: out of scope for now. |
+| A3 | **DONE** | `4cbaa218` | verify dispatch live: worker_inspect.py + primitive_verify.py in core; verify_appkit_app dispatches prim.verify (lead_gen fallback); applied-primitive checks from .disco/primitives/*.json land in the W-45 verdict. Also fixed the WO-A1 tool-visibility bug (APPKIT_MUTATORS). |
+| A4 | out of scope | — | — |
+
+**Catalog shipped 2026-07-07 (sprint):** F3.1 `form` (`a656334c`), F5.3-lite `seo` (`055fb99a`), F5.2-lite `collection` (`172ce70d`) — all addable via app_add_primitive on the D1 shape, all merged with full suites + gates green.
 
 **Consequence for catalog primitives:** an addon contributes SPEC (entities/pages/actions via `apply_spec`);
 the generator's shared emitters learn to LOWER those spec shapes (exactly how `records` already lowers its
