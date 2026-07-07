@@ -109,6 +109,23 @@ _HOST_VERIFY_AUTHORITATIVE_FLAG = "HOST_VERIFY_AUTHORITATIVE"
 _FALSY = frozenset({"0", "false", "no", "off"})
 
 
+def _appkit_scope_active(loop: AgentLoop) -> bool:
+    """True when the loop is running under the strict AppKit tool surface.
+
+    The build-phase tool-surface signal is ``verify_appkit_app``: it is present in
+    the AppKit-only allowlist and absent from normal build surfaces.
+    """
+
+    executor = getattr(loop, "executor", None)
+    try:
+        return any(
+            getattr(tool, "name", None) == "verify_appkit_app"
+            for tool in executor.available_tools()
+        )
+    except Exception:  # noqa: BLE001 — introspection failure is not an AppKit signal
+        return False
+
+
 def host_verify_authoritative_enabled() -> bool:
     """Default ON unless DISCO_HOST_VERIFY_AUTHORITATIVE is explicitly falsy.
 

@@ -17,6 +17,7 @@ from .common import (
     _LOG,
     _PREVIEW_PORTS,
     _VERIFY_MARKER_PREFIX,
+    _appkit_scope_active,
     _artifact_record_kind,
     _bounded_verifier_check_results,
     _browser_content_meaningful,
@@ -76,6 +77,13 @@ class _FinishVerifyMixin(_FinishGateProto):
         MEDIUM and run unimpeded. Returns (passed, malformed): `passed` is True
         iff the check ran and passed; `malformed` is True iff the verify command
         itself is broken (command-not-found / SyntaxError) rather than the task."""
+        if _appkit_scope_active(self._loop):
+            # Strict AppKit has no raw shell surface. Its authoritative finish
+            # verification is the structured `verify_appkit_app` gate that runs
+            # later in the shared finish path, so the model-authored shell probe is
+            # a redundant impossible check here.
+            return True, False
+
         call = ToolCall(tool_name="shell", arguments={"command": command})
         # meta marker: this shell action is the GATE'S probe, not the agent's
         # work. Phase-B re-run #6 (2026-06-10): an unmarked probe counted as a

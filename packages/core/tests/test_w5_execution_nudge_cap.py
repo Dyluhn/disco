@@ -157,3 +157,37 @@ async def test_execution_nudge_release_is_loud():
     )
     # And it lands AWAITING_USER/approve_plan_no_execution, not FINISHED.
     assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")
+
+
+@pytest.mark.asyncio
+async def test_genuinely_unexecuted_finish_only_plan_still_stucks():
+    plan_agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "finish-only no-op",
+                    "steps": [{"title": "Finish and hand off the result"}],
+                },
+            ),
+        ]
+    )
+    loop, store = build_loop(
+        plan_agent,
+        conversation_id="conv-finish-only-no-exec",
+        executor=_PlanExecutor(),
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message("finish this")
+    await loop.run()
+    await loop.approve_plan()
+
+    loop.agent = ScriptedAgent([finish_step()])
+    state = await loop.run()
+
+    events = await store.get_events("conv-finish-only-no-exec")
+    env = _env_messages(events)
+    assert state.execution_status != ConversationStatus.FINISHED
+    assert sum("The approved plan has not been executed" in m for m in env) == 3
+    assert_blocked_question_landing(events, legacy_detail="approve_plan_no_execution")
