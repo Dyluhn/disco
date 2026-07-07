@@ -181,6 +181,12 @@ Deck craft rules:
   HARD RULE for decks of 8+ slides: at least TWO slides must be image-bearing \
   (section_divider, full_bleed_image, or photo_grid) — a long deck with zero imagery \
   slides is invalid.
+- VARIETY RULE: no specialty archetype (two_by_two, timeline, diagram, comparison_table, \
+  big_number, quote) more than TWICE per deck — three near-identical layouts in one deck \
+  reads as a template, not a design. A two_by_two is a 2x2 ANALYTICAL grid: use it only \
+  when the four items genuinely trade off along two axes, and give every quadrant a bold \
+  headline PLUS one support line — four floating one-liners in big empty boxes is invalid; \
+  if the content is really just four parallel facts, use bullets instead.
 - Commit a theme with 3-4 named accents, a non-default font pairing (never Inter, \
   Roboto, or Arial), a light/dark token pair, and one project-wide art_direction.
 - Image prompts are slots, not decoration: cover + section dividers + full_bleed_image \

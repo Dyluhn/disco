@@ -1003,8 +1003,12 @@ def _render_two_by_two_pptx(prs_slide, slide: Slide, theme: Theme) -> None:  # t
     from pptx.util import Emu
 
     body = _body_strings(slide)
-    axis_x = body[0] if len(body) >= 6 else "Higher impact"
-    axis_y = body[1] if len(body) >= 6 else "Higher certainty"
+    # Axis labels ONLY when the model authored them (6+ body lines: x, y, 4 cells).
+    # The old fallback INVENTED "Higher impact/certainty" on 4-cell content — a
+    # fabricated analytical framing the quadrants never plotted (no false
+    # affordances; gauntlet e-news visual review 2026-07-07).
+    axis_x = body[0] if len(body) >= 6 else None
+    axis_y = body[1] if len(body) >= 6 else None
     cells = body[2:6] if len(body) >= 6 else body[:4]
     while len(cells) < 4:
         cells.append("")
@@ -1053,34 +1057,36 @@ def _render_two_by_two_pptx(prs_slide, slide: Slide, theme: Theme) -> None:  # t
             color=theme.text,
             bold=True,
         )
-    _add_pptx_text(
-        prs_slide,
-        axis_x,
-        left=left + grid_w - 1_828_800,
-        top=top + grid_h + 91_440,
-        width=1_828_800,
-        height=274_320,
-        theme=theme,
-        font_name=_first_font(theme.font_ui),
-        size_pt=10.0,
-        color=theme.accent,
-        bold=True,
-        align="RIGHT",
-    )
-    _add_pptx_text(
-        prs_slide,
-        axis_y,
-        left=left - 914_400,
-        top=top,
-        width=822_960,
-        height=274_320,
-        theme=theme,
-        font_name=_first_font(theme.font_ui),
-        size_pt=10.0,
-        color=theme.accent,
-        bold=True,
-        align="RIGHT",
-    )
+    if axis_x:
+        _add_pptx_text(
+            prs_slide,
+            axis_x,
+            left=left + grid_w - 1_828_800,
+            top=top + grid_h + 91_440,
+            width=1_828_800,
+            height=274_320,
+            theme=theme,
+            font_name=_first_font(theme.font_ui),
+            size_pt=10.0,
+            color=theme.accent,
+            bold=True,
+            align="RIGHT",
+        )
+    if axis_y:
+        _add_pptx_text(
+            prs_slide,
+            axis_y,
+            left=left - 914_400,
+            top=top,
+            width=822_960,
+            height=274_320,
+            theme=theme,
+            font_name=_first_font(theme.font_ui),
+            size_pt=10.0,
+            color=theme.accent,
+            bold=True,
+            align="RIGHT",
+        )
 
 
 def _render_archetype_pptx(prs_slide, slide: Slide, theme: Theme) -> bool:  # type: ignore[type-arg]
@@ -1540,8 +1546,11 @@ def _html_two_by_two(
     body: list[Element],
     body_eid: BodyEidFn,
 ) -> str:
-    axis_x = "Higher impact"
-    axis_y = "Higher certainty"
+    # Axis labels ONLY when the model authored them (6+ body lines: x, y, 4 cells).
+    # Same no-false-affordances rule as the PPTX path: never invent an analytical
+    # framing ("Higher impact/certainty") the quadrants don't actually plot.
+    axis_x: str | None = None
+    axis_y: str | None = None
     cells = body[:4]
     if len(body) >= 6:
         axis_x = _plain_element_text(body[0])
@@ -1555,12 +1564,16 @@ def _html_two_by_two(
             f'<div class="slide-two-by-two-cell" data-quadrant="{j + 1}" '
             f'data-element-id="{body_eid(body_pos)}" data-slide-id="{sid}">{text}</div>'
         )
+    axis_html = ""
+    if axis_x:
+        axis_html += f'<div class="slide-two-by-two-axis x-end">{html.escape(axis_x)}</div>'
+    if axis_y:
+        axis_html += f'<div class="slide-two-by-two-axis y-end">{html.escape(axis_y)}</div>'
     return (
         '<div class="slide-two-by-two-layout">'
         f'{title_html}<div class="slide-rule"></div>'
         '<div class="slide-two-by-two-grid">'
-        f'<div class="slide-two-by-two-axis x-end">{html.escape(axis_x)}</div>'
-        f'<div class="slide-two-by-two-axis y-end">{html.escape(axis_y)}</div>'
+        f'{axis_html}'
         f'{"".join(cell_html)}'
         '</div></div>'
     )
