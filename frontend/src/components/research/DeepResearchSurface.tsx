@@ -47,7 +47,9 @@ import { DeepProgressStrip } from "./DeepProgressStrip";
 import { asGroundedAnswer, DeepReportView } from "./DeepReportView";
 import { DepthTierSelector, type Tier } from "./DepthTierSelector";
 import { RecencySelector } from "./RecencySelector";
-import { IterativeToggle } from "./IterativeToggle";
+// IterativeToggle removed from the UI 2026-07-07 (Dylan): iterative grounding
+// takes 30+ minutes and burns tokens. The backend path stays as a default-off
+// stub (conversations.py `iterative: bool = False`) for later re-introduction.
 import { TieredSourcePanel } from "./TieredSourcePanel";
 import { NeedMoreCard } from "./NeedMoreCard";
 import { FollowUpStatus } from "./FollowUpStatus";
@@ -216,7 +218,7 @@ export function DeepResearchSurface({
                 <>
                   <DepthTierSelector value={r.depthTier as Tier} onChange={r.setDepthTier} />
                   <RecencySelector value={r.recencyWindow} onChange={r.setRecencyWindow} />
-                  <IterativeToggle value={r.iterative} onChange={r.setIterative} />
+                  {/* IterativeToggle removed 2026-07-07 — backend stub stays default-off */}
                   <SourcePicker
                     selected={r.selectedSources}
                     onChange={r.setSelectedSources}

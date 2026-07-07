@@ -57,18 +57,14 @@ describe("Deep Research surface — full lifecycle", () => {
     expect(screen.getByRole("button", { name: /Depth tier: Standard-deep/i })).toBeInTheDocument();
   });
 
-  it("A4: renders the iterative-grounding toggle on the DR scope, default OFF, and toggling flips it ON", async () => {
-    const user = userEvent.setup();
+  it("does NOT render the iterative-grounding toggle (removed 2026-07-07; backend stub stays default-off)", () => {
     renderSurface();
-    const toggle = screen.getByRole("button", { name: /Iterative grounding/i });
-    expect(toggle).toBeInTheDocument();
-    // default OFF — the value flows into submit's create frame as iterative:false
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    await user.click(toggle);
-    // toggling ON flips the controlled state (which threads into the request)
+    // Iterative grounding takes 30+ minutes and burns tokens — the control was
+    // removed from the UI. The API field remains a default-false stub, so the
+    // create frame still carries iterative:false (see deepResearch.test.ts).
     expect(
-      screen.getByRole("button", { name: /Iterative grounding/i }),
-    ).toHaveAttribute("aria-pressed", "true");
+      screen.queryByRole("button", { name: /Iterative grounding/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("after submit, shows the plan gate with editable sub-questions", async () => {

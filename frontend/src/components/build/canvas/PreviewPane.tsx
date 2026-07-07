@@ -495,21 +495,20 @@ export function PreviewPane({
     mentionable && srcDoc !== null,
   );
 
-  // PRIORITY (the fix): default to the RENDERED view, because the backend's bare
-  // `python -m http.server` shows a useless directory LISTING (file paths) when
-  // there's no index.html at the served root — which is most of the time. The
-  // rendered view shows the real HTML instead. A live dev server (a real bundler
-  // app, e.g. Vite) is one click away via the toggle / Open, and is used
-  // automatically when there's no renderable file to show.
-  //
-  // runthru-v2 #4: when a live preview server is available, DEFAULT TO LIVE — it
-  // serves the real built site (correct asset resolution for css/js subpaths, which
-  // the srcdoc can't do reliably, and which is why the preview showed only a few
-  // stray lines/emojis). Previously only bundler-entry HTML defaulted to live and
-  // static sites fell to the broken srcdoc. The user can still toggle to "rendered".
-  // (Pairs with ROOT-2: files now land at the workspace root the server serves.)
+  // Gauntlet walkthrough 2026-07-07 (Dylan): default to the RENDERED view.
+  // The live proxy is one click away via the toggle; auto-preferring it made
+  // the pane land on a half-booted/blank live server instead of the
+  // always-correct render. (Supersedes runthru-v2 #4's default-to-live.)
+  // TWO honest exceptions (no false affordances):
+  //   * a BUNDLER entry (E2): the srcdoc physically cannot load dev-server
+  //     virtual modules (`/src/main.tsx`, `/@vite/client`) — rendering it
+  //     shows a falsely-broken build, so those still default to LIVE;
+  //   * srcDoc == null: nothing client-renderable — an empty rendered pane
+  //     would be a false blank, so fall through to LIVE below.
+  const isBundlerEntry =
+    srcDoc != null && /<script[^>]+type="module"[^>]+src="\/(src|@vite)\//.test(srcDoc);
   const [mode, setMode] = useState<"rendered" | "live">(() =>
-    proxyAvailable ? "live" : "rendered",
+    proxyAvailable && isBundlerEntry ? "live" : "rendered",
   );
   const showLive = proxyAvailable && (mode === "live" || srcDoc == null);
 

@@ -177,7 +177,7 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     expect(screen.getByText("live server")).toBeInTheDocument();
   });
 
-  it("defaults to the live server even for plain static HTML when a proxy is available (runthru-v2 #4)", () => {
+  it("defaults to RENDERED for plain static HTML even when a proxy is available (2026-07-07 walkthrough)", () => {
     useBuildPreviewMock.mockReturnValue({
       data: {
         available: true,
@@ -190,14 +190,14 @@ describe("PreviewPane — E2: bundler entry defaults to live server when proxy i
     render(
       withClient(<ExecutionCanvas events={[HTML]} status="RUNNING" cid="conv_e2static" />),
     );
-    // runthru-v2 #4: whenever a live preview server is available the pane DEFAULTS
-    // TO LIVE — it serves the real built site with correct css/js asset resolution,
-    // which the srcdoc can't do reliably. The old bundler-vs-static split was
-    // dropped. Static HTML is still renderable on demand via the "Rendered" toggle.
-    expect(screen.getByTitle("Live preview")).toBeInTheDocument();
-    expect(screen.queryByTitle("Static preview")).not.toBeInTheDocument();
-    // The client-side srcDoc still exists, so the "Rendered" toggle is offered.
-    expect(screen.getByRole("button", { name: /rendered/i })).toBeInTheDocument();
+    // 2026-07-07 (supersedes runthru-v2 #4): static HTML defaults to the
+    // always-correct RENDERED view; auto-preferring live landed users on a
+    // half-booted/blank dev server. Live stays one click away via the toggle.
+    // Only bundler entries (broken srcdoc) and srcDoc==null still default live.
+    expect(screen.getByTitle("Static preview")).toBeInTheDocument();
+    expect(screen.queryByTitle("Live preview")).not.toBeInTheDocument();
+    // The live proxy is available, so the "Live" toggle is offered.
+    expect(screen.getByRole("button", { name: /live/i })).toBeInTheDocument();
   });
 });
 
