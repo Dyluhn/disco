@@ -277,6 +277,28 @@ def test_html_table_content_escapes_cells():
     assert "&lt;Col&gt;" in result
 
 
+def test_html_table_content_headerless_still_renders():
+    """Gauntlet 2026-07-07: a comparison table came back with headers==[] but 7 full
+    rows. The old gate discarded every row and rendered '(no table data)'. A
+    headerless-but-populated table must render all its rows."""
+    from disco.core.brand import resolve_theme
+    theme = resolve_theme("disco", "light")
+    spec = TableSpec(
+        headers=[],
+        rows=[
+            ["Cost model", "Hardware CapEx", "Per-token OpEx"],
+            ["Latency", "Single-digit ms on-prem", "Network round-trip"],
+            ["Data privacy", "Stays on device", "Vendor policy"],
+        ],
+    )
+    result = html_table_content("Seven Dimensions of Comparison", spec, theme)
+    assert "<table" in result
+    assert "(no table data)" not in result
+    # every row's data is present
+    for cell in ("Cost model", "Latency", "Data privacy", "Stays on device"):
+        assert cell in result
+
+
 # ---------------------------------------------------------------------------
 # PPTX layout — chart slide
 # ---------------------------------------------------------------------------
@@ -304,6 +326,40 @@ def test_pptx_chart_slide_has_chart_or_table_shape():
         f"Expected a chart (type=3) or table (type=19) shape; "
         f"found shape_types={shape_types}"
     )
+
+
+def test_pptx_headerless_table_renders_rows():
+    """A headerless-but-populated table slide must render a real native table shape
+    carrying its row data — NOT the empty-chart placeholder (gauntlet 2026-07-07)."""
+    from pptx import Presentation
+
+    deck = MinimalDeck(
+        title="Comparison",
+        slides=[
+            DeckSlide(
+                title="Seven Dimensions of Comparison",
+                layout="table",
+                table=TableSpec(
+                    headers=[],
+                    rows=[
+                        ["Cost model", "Hardware CapEx", "Per-token OpEx"],
+                        ["Latency", "Single-digit ms on-prem", "Network round-trip"],
+                    ],
+                ),
+            )
+        ],
+    )
+    data = render_pptx(deck)
+    prs = Presentation(io.BytesIO(data))
+    slide = prs.slides[0]
+
+    # A native table shape (MSO_SHAPE_TYPE.TABLE == 19) must be present.
+    tables = [s for s in slide.shapes if s.has_table]
+    assert tables, "headerless table dropped to placeholder — no table shape rendered"
+    cells_text = " ".join(
+        c.text for t in tables for row in t.table.rows for c in row.cells
+    )
+    assert "Cost model" in cells_text and "Network round-trip" in cells_text
 
 
 def test_pptx_chart_slide_has_title_text():
