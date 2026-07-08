@@ -2040,9 +2040,12 @@ class AgentLoop:
                 and signals.is_revision_intent(text)
             ):
                 evs = await self._events()
-                if any(
-                    isinstance(e, StatusEvent) and e.detail == "plan_approved"
-                    for e in evs
+                if (
+                    not signals.current_blocked_question_landing(evs)
+                    and any(
+                        isinstance(e, StatusEvent) and e.detail == "plan_approved"
+                        for e in evs
+                    )
                 ):
                     await self._enter_revision_planning(text)
         return await self.get_state()
@@ -2466,6 +2469,12 @@ class AgentLoop:
         if not any(
             isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
         ):
+            return False
+        # A reply to the shared blocked lander is the answer to the agent's
+        # pending question, not a host-side revision steer. Deliver it in the
+        # next model context and let the model call propose_plan_update if it
+        # decides the answer changes scope.
+        if signals.latest_user_answers_blocked_question(events):
             return False
         # PRIMARY (live WS/kernel steer): a durable, sequence-stable
         # `revision_steer_pending` marker the kernel ingress appended. Consumed

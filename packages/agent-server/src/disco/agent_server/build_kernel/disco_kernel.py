@@ -86,7 +86,11 @@ class DiscoKernel:
         if steer:
             from disco.core.loop import signals as _signals
 
-            if _signals.is_revision_intent(text):
+            if _signals.is_revision_intent(text) and not (
+                _signals.current_blocked_question_landing(
+                    await self._rt._store.get_events(conversation_id)
+                )
+            ):
                 await self._rt._store.append(
                     conversation_id,
                     StatusEvent(
