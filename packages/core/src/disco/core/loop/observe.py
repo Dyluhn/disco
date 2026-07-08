@@ -388,8 +388,9 @@ class Observer:
                 )
                 _w39_text = _w39_text_candidate
         # K1 — elision-marker execution guard. A weak model can copy the
-        # `_snip_args` placeholder (rendered into the action history as a context-
-        # saving stand-in for content it already wrote) back into a REAL tool
+        # `_snip_args` placeholder (rendered into the action history as the
+        # [[DISCO-ELIDED: ...]] context-saving stand-in for content it already
+        # wrote) back into a REAL tool
         # argument — e.g. a file_write body. Executing that would overwrite real
         # content with the ~72-byte placeholder (DATA LOSS) and re-feed the marker
         # into the next read (the reproduced 88× read loop). Reject BEFORE
@@ -503,12 +504,12 @@ class Observer:
                     AgentErrorEvent(
                         error=(
                             f"Argument(s) {_k1_bad} contain an internal elision "
-                            "placeholder (e.g. text inside angle brackets saying the "
-                            "content was elided / that the body was already applied), "
-                            "not real content. That marker "
+                            "placeholder (e.g. '[[DISCO-ELIDED: ...]]' or historical "
+                            "angle-bracket elision text), not real content. That marker "
                             "is a context-saving stand-in for content you ALREADY wrote "
                             "— it is NOT the content itself, and it was NOT executed. Do "
-                            "not copy the placeholder into a tool call. Read the "
+                            "not copy the placeholder into a tool call. Re-issue the "
+                            "call with real content, or read the "
                             + _k1_recover
                         ),
                         action_id=action.id,

@@ -20,10 +20,9 @@ workspace-block pointer; assist-OFF uses a neutral file_read pointer (an elided 
 is a write body, not the file's current content, so a block claim would dangle).
 It NEVER runs the tool with a marker.
 
-The detector (`find_elided_arg_markers`) matches the marker STRUCTURE
-(`<N chars … {elided|full content} …>`), not the exact wording, so the marker can
-be reworded without the guard going blind — both the legacy "…elided…" form and
-the reworded "…full content…" form are caught.
+The detector (`find_elided_arg_markers`) matches the canonical
+`[[DISCO-ELIDED: N chars ...]]` marker and historical angle-bracket markers, so
+the marker can be reworded without the guard going blind.
 
 # Acceptance (this file)
 
@@ -391,7 +390,8 @@ def test_retarget_preserved_for_count_markers_paraphrase_untouched():
     )
     out = retarget_elided_arg_markers([msg])
     rewritten = out[0].tool_calls[0]["arguments"]["content"]
-    assert "4,441 chars elided" in rewritten  # count preserved → neutral marker rebuilt
+    assert "[[DISCO-ELIDED: 4,441 chars" in rewritten
+    assert "history display only" in rewritten
     # ...and a PARAPHRASE (no count to reconstruct) is left untouched by retarget — the
     # new broad detector is for REJECTION only, NOT retargeting.
     msgp = LLMMessage(
@@ -409,12 +409,23 @@ def test_retarget_preserved_for_count_markers_paraphrase_untouched():
     assert outp[0].tool_calls[0]["arguments"]["content"] == _PARAPHRASE_MARKER
 
 
-def test_snip_args_rewords_to_snapshot_pointer_and_round_trips():
+def test_elision_marker_regex_matches_new_and_legacy_markers():
+    from disco.core.events import _ELISION_MARKER_RE
+
+    marker = _snip_args({"content": "z" * 2000})["content"]
+    assert _ELISION_MARKER_RE.search(marker) is not None
+    assert _ELISION_MARKER_RE.search(_LEGACY_MARKER) is not None
+
+
+def test_snip_args_rewords_to_sentinel_and_round_trips():
     out = _snip_args({"content": "z" * 2000})["content"]
-    # The reworded marker points at the workspace snapshot, NOT "use file_read".
-    assert "CURRENT WORKSPACE" in out
-    assert "file_read" not in out
-    assert "do not copy" in out
+    # The marker is an instruction-like sentinel, not prose that resembles file
+    # content or a command body.
+    assert out.startswith("[[DISCO-ELIDED:")
+    assert out.endswith("]]")
+    assert "history display only" in out
+    assert "file_read" in out
+    assert "CURRENT WORKSPACE" not in out
     # Round-trip: the shaper's own output is detected by the guard (so a copied
     # placeholder is always caught regardless of future rewording).
     assert find_elided_arg_markers({"content": out}) == ["content"]

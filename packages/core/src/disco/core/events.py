@@ -323,16 +323,23 @@ WORKSPACE_SNAPSHOT_SENTINEL = "# CURRENT WORKSPACE"
 # K1 — the elision-marker family. `_snip_args` renders an over-long arg as a
 # placeholder in the action history. A weak model can COPY that placeholder back
 # into a REAL tool argument (e.g. a file_write body), which — if executed — would
-# write the ~72-byte placeholder over real content (DATA LOSS) and re-feed the
-# marker into the next file_read (an 88× read loop, reproduced live). The marker
-# is reworded to point at the live CURRENT WORKSPACE snapshot (never "use
-# file_read", which invites the read loop). The DETECTOR below matches the marker
-# STRUCTURE — `<N chars … {elided|full content} …>` — not the exact wording, so
-# the marker can be reworded freely without the execution guard going blind.
-_ELISION_MARKER_RE = re.compile(r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>")
+# write the marker over real content (DATA LOSS) and re-feed the marker into the
+# next file_read (an 88× read loop, reproduced live). The emitted marker is an
+# instruction-like sentinel, not flowing prose. The detector below matches BOTH
+# the canonical sentinel and historical angle-bracket markers, so old histories
+# stay guarded while new histories are less copyable.
+_ELISION_MARKER_RE = re.compile(
+    r"(?:"
+    r"\[\[\s*DISCO-ELIDED:\s*\d[\d,]*\s*chars\b[^\]]*?\]\]"
+    r"|"
+    r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full content)\b[^>]*>"
+    r")"
+)
 # CW P1-a — capture the char count from an existing marker so the assist-OFF retarget
 # pass can re-render it (pinned vs non-pinned) without re-deriving the original length.
-_ELISION_COUNT_RE = re.compile(r"<\s*(\d[\d,]*)\s*chars\b")
+_ELISION_COUNT_RE = re.compile(
+    r"(?:<\s*|\[\[\s*DISCO-ELIDED:\s*)(\d[\d,]*)\s*chars\b"
+)
 
 # BW-02 (trace conv_20fa8482) — a model can PARAPHRASE the neutral marker, dropping the
 # leading "<N chars …>" anchor while copying the marker's stable TAIL prose verbatim into
@@ -359,48 +366,30 @@ _ELISION_PARAPHRASE_RE = re.compile(
 )
 
 
-# CW P1-c — the DEFAULT / assist-ON elided-arg marker: the pre-CW-3 directional bytes.
-# For assist-ON the CURRENT WORKSPACE block stays in the TAIL (after the history), so
-# "below" is CORRECT, and this is the byte-identical pre-CW-3 wording. `_snip_args`
-# (the View.of render, which has no tier context) always emits THIS; assist-OFF then
-# rewrites it via `retarget_elided_arg_markers` (below) to the NEUTRAL marker because
-# that tier moved the block to the cacheable PREFIX, where a directional word is wrong.
+def _arg_snip_marker(n: int) -> str:
+    return (
+        f"[[DISCO-ELIDED: {n:,} chars — history display only; "
+        "file_read the path if you need this content]]"
+    )
+
+
+# Back-compat helper name: callers/tests may still import the old assist-ON marker
+# constructor, but the emitted format is now one canonical sentinel.
 def _arg_snip_marker_below(n: int) -> str:
-    return (
-        f"<{n:,} chars — full content is in the CURRENT WORKSPACE block "
-        "below; do not copy this placeholder into a tool argument>"
-    )
+    return _arg_snip_marker(n)
 
 
-# CW P1-a (round-2) — the assist-OFF elided-arg marker: a NON-DANGLING, ALWAYS-TRUE
-# marker, used UNCONDITIONALLY (no per-arg pinned-vs-omitted guessing). It claims only
-# what is universally true — the full content is recoverable by re-issuing the call or
-# file_read'ing the path. A "the content is in the CURRENT WORKSPACE block" pointer is
-# UNSAFE for an elided arg even when the call's target path is pinned: an elided arg is
-# a write/edit ARG VALUE (an attempted or NEW body), NOT the file's current content, so
-# the block does not carry it. (And a pinned file is already fully visible in the block,
-# so the model needs no pointer to it anyway.) Kept angle-bracketed + "elided"/"full
-# content" so the K1 execution guard (`_ELISION_MARKER_RE`) still detects a copy-back.
+# Back-compat helper name: the assist-OFF retarget pass now also emits the same
+# sentinel, preserving one canonical marker across render paths.
 def _arg_snip_marker_neutral(n: int) -> str:
-    # DE-TEMPTIFIED (elision redesign slice 1): the old wording told the model to
-    # "re-issue the call" — which M3 took LITERALLY, copying this marker back into a new
-    # tool call → K1 reject → re-issue → STUCK. The body is ALREADY applied; nothing to
-    # re-issue. Render as inert metadata. KEEP the "<N chars … elided …>" grammar so the K1
-    # guard (`_ELISION_MARKER_RE`) + `_ELISION_PARAPHRASE_RE` still detect a copy-back.
-    return (
-        f"<{n:,} chars elided — body already applied to the workspace; this is a history "
-        "placeholder, NOT a tool argument: do not copy or re-send it. file_read the path "
-        "if you need the content again>"
-    )
+    return _arg_snip_marker(n)
 
 
 def _snip_args(arguments: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for k, v in arguments.items():
         if isinstance(v, str) and len(v) > _ARG_SNIP_CHARS:
-            # Always the assist-ON / pre-CW-3 directional marker. assist-OFF retargets
-            # it (per pinned-in-full path) in ViewBuilder; assist-ON keeps it as-is.
-            out[k] = _arg_snip_marker_below(len(v))
+            out[k] = _arg_snip_marker(len(v))
         else:
             out[k] = v
     return out
@@ -410,17 +399,10 @@ def retarget_elided_arg_markers(messages: list[LLMMessage]) -> list[LLMMessage]:
     """CW P1-a (round-2) — assist-OFF render pass: rewrite each elided tool-call
     ARGUMENT marker to the NEUTRAL, non-dangling marker.
 
-    `_snip_args` emits the directional `_arg_snip_marker_below` unconditionally (it runs
-    inside `View.of`, which has no tier context). For assist-OFF the CURRENT WORKSPACE
-    block moved to the cacheable PREFIX, where the directional "below" is wrong AND a
-    "the content is in the block" pointer is UNSAFE: an elided arg is a write/edit body
-    (an attempted or NEW value), NOT the file's current content, so the block does not
-    carry it even when the call's target path is pinned in full. So this pass rewrites
-    EVERY elided arg to `_arg_snip_marker_neutral` — which claims only the always-true
-    re-issue / file_read recovery — with NO per-arg pinned-vs-omitted guessing.
-
-    assist-ON never calls this (the directional marker is correct + pre-CW-3 byte-
-    identical for the tail-placed block). Pure: returns a new list; input unchanged.
+    Historical render paths emitted tier-specific angle-bracket markers. This
+    pass now rewrites any count-bearing elision marker to the canonical sentinel
+    with NO per-arg pinned-vs-omitted guessing. Pure: returns a new list; input
+    unchanged.
     """
     out: list[LLMMessage] = []
     for msg in messages:
@@ -467,8 +449,9 @@ def find_elided_arg_markers(arguments: dict[str, object]) -> list[str]:
     elision placeholder (the `_snip_args` marker copied back by a weak model).
     Empty list ⇒ the arguments are clean and safe to execute. Pure + deterministic.
 
-    Matches BOTH the structural `<N chars … {elided|full content} …>` marker AND a
-    model-PARAPHRASED placeholder that dropped the count anchor but kept the marker's
+    Matches BOTH the canonical `[[DISCO-ELIDED: N chars ...]]` marker, historical
+    structural `<N chars … {elided|full content} …>` markers, and a model-
+    PARAPHRASED placeholder that dropped the count anchor but kept the marker's
     signature tail prose (BW-02). Rejection-only — the retarget pass is unaffected."""
     return [
         k

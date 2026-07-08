@@ -233,6 +233,52 @@ async def _serve_path_missing(loop, path: str) -> bool:  # noqa: ANN001 — Agen
         return False
 
 
+def _strip_redundant_workspace_prefix_for_serve(path: str) -> str:
+    """Normalize model-facing /workspace paths using the sandbox helper when present.
+
+    Core is installable without the tools package, so keep the fallback byte-for-byte
+    with disco.tools.sandbox.base.strip_redundant_workspace_prefix.
+    """
+    try:
+        from disco.tools.sandbox.base import strip_redundant_workspace_prefix
+
+        return strip_redundant_workspace_prefix(path)
+    except Exception:  # noqa: BLE001 — core-only install path
+        for prefix in ("/workspace/", "workspace/"):
+            if path.startswith(prefix):
+                return path[len(prefix):]
+        if path in ("/workspace", "workspace"):
+            return ""
+        return path
+
+
+def _normalize_serve_path(path: str) -> str:
+    return _strip_redundant_workspace_prefix_for_serve(path.strip())
+
+
+def _serve_path_is_workspace_root(path: str) -> bool:
+    return path in {"", ".", "./"}
+
+
+def _serve_root_refusal() -> str:
+    return (
+        "serve refused: serve takes the entry FILE path, not the workspace root. "
+        "For a site pass 'index.html' (or your entry file). If index.html exists "
+        "at the root it will be served from there."
+    )
+
+
+async def _coerce_serve_entry_path(loop, raw_path: str) -> tuple[str, bool, bool]:  # noqa: ANN001
+    """Return (normalized_path, root_like, coerced_to_index)."""
+    path = _normalize_serve_path(raw_path)
+    if not _serve_path_is_workspace_root(path):
+        return path, False, False
+    if await _serve_path_verified_present(loop, "index.html"):
+        _LOG.info("serve path %r points at the workspace root; auto-coerced to index.html", raw_path)
+        return "index.html", True, True
+    return path, True, False
+
+
 async def _serve_path_verified_present(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
     """Fail-CLOSED twin of _serve_path_missing: True only when the sandbox
     POSITIVELY confirms the path exists. The fresh-session gate's exception
@@ -1519,9 +1565,10 @@ class MetaToolHandlers:
         # without busywork, so a VERIFIED-present path passes. Fail-CLOSED here
         # (unverifiable → still refuse); the output-truth gate below stays
         # fail-open — different stakes.
-        _early_path = str((step.tool_call.arguments or {}).get("path") or "").strip()
-        if _early_path in (".", "./"):
-            _early_path = "index.html"
+        _early_raw_path = str((step.tool_call.arguments or {}).get("path") or "").strip()
+        _early_path, _, _ = await _coerce_serve_entry_path(
+            self._loop, _early_raw_path
+        )
         if signals.actions_since_last_resume(events) == 0 and not (
             _early_path and await _serve_path_verified_present(self._loop, _early_path)
         ):
@@ -1538,11 +1585,10 @@ class MetaToolHandlers:
             self._loop._invisible_steps += 1
         else:
             title = str(step.tool_call.arguments.get("title") or "").strip()
-            path = str(step.tool_call.arguments.get("path") or "").strip()
-            # Whole-site handoffs arrive as "." — resolve to the entry file
-            # instead of refusing a finished site (dtsite autopsy).
-            if path in (".", "./") and await _serve_path_verified_present(self._loop, "index.html"):
-                path = "index.html"
+            raw_path = str(step.tool_call.arguments.get("path") or "").strip()
+            path, root_like, coerced_to_index = await _coerce_serve_entry_path(
+                self._loop, raw_path
+            )
             kind = str(step.tool_call.arguments.get("kind") or "app").strip()
             # F3: a sandbox-internal/loopback serve address (e.g. 127.0.0.1:8000) is
             # NOT reachable from the host — drop it so consumers fall back to the
@@ -1550,7 +1596,14 @@ class MetaToolHandlers:
             url = _canonical_deployment_url(str(step.tool_call.arguments.get("url") or ""))
             if kind not in ("app", "files"):
                 kind = "app"
-            if not (title and path):
+            if not title:
+                self._loop._invisible_steps += 1
+            elif root_like and not coerced_to_index:
+                return await self._loop._valve.refuse_fresh_session(
+                    step,
+                    _serve_root_refusal(),
+                )
+            elif not path:
                 self._loop._invisible_steps += 1
             elif any(
                 isinstance(e, DeliverableEvent)
@@ -1570,10 +1623,11 @@ class MetaToolHandlers:
                 # (serve is the SHOW handoff, not verification — the verify gate still proves it works.)
                 return await self._loop._valve.refuse_fresh_session(
                     step,
-                    f"serve refused: the deliverable path {path!r} does not exist in the "
-                    "workspace yet. Create it (write the file / build the app at that path), "
-                    "then serve it. Serve takes the entry FILE path — for a site that is "
-                    "usually index.html.",
+                    f"serve refused: checked normalized deliverable path {path!r}, "
+                    "but it does not exist in the workspace. Serve takes the entry "
+                    "FILE path; for a site that is usually 'index.html'. If the file "
+                    "is elsewhere, pass that workspace-relative entry path; otherwise "
+                    "build or write the intended entry file first, then serve that file.",
                 )
             else:
                 await self._loop._emit(

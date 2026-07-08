@@ -3,7 +3,7 @@
 # Contract
 
 `events._snip_args` renders an over-long tool argument as a short placeholder in
-the action HISTORY (`<N chars elided — re-issue the call or file_read …>`). A weak
+the action HISTORY (`[[DISCO-ELIDED: N chars ...]]`). A weak
 model can COPY that placeholder back into a REAL tool argument on a later turn.
 
 The Observer rejects this before `executor.execute` (see core/test_k1_elision_guard),

@@ -498,7 +498,7 @@ class DefaultToolExecutor:
 
         # 1.5 K1 executor-boundary elision guard (generic; ALL tools / ALL paths).
         # A weak model can COPY the `_snip_args` placeholder it sees in its own
-        # action history (`<N chars elided — re-issue the call or file_read …>`)
+        # action history (`[[DISCO-ELIDED: N chars ...]]`)
         # back into a REAL tool argument — e.g. file_replace_lines.new_text. The
         # Observer runs the same find_elided_arg_markers() check before it reaches
         # here, but NOT every execution path goes through the Observer; this is the
@@ -516,10 +516,10 @@ class DefaultToolExecutor:
                 call,
                 "invalid_arguments",
                 f"argument(s) {_elided} contain the elision placeholder text "
-                "('<N chars elided …>' / 'do not copy this placeholder into a tool "
-                "argument') instead of real content — this call was NOT executed. "
-                "Re-issue the call with the FULL content, or file_read the path "
-                "first to recover the current content, then resend.",
+                "('[[DISCO-ELIDED: ...]]') instead of real content — this call "
+                "was NOT executed. Re-issue the call with the FULL real content, "
+                "or file_read the path first to recover the current content, then "
+                "resend.",
             )
 
         # 2. validate args (invalid_arguments with schema; never coerce/execute)

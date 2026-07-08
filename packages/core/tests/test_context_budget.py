@@ -118,10 +118,10 @@ def test_large_file_body_is_elided_in_the_action_message():
     args = msg.tool_calls[0]["arguments"]
     assert args["path"] == "app.js"  # small arg untouched
     assert big not in str(args["content"])  # the 50k body is gone from the prompt
-    # K1 reworded the placeholder to point at the live CURRENT WORKSPACE snapshot
-    # (away from "use file_read", which invited the read loop). The recoverable
-    # marker's structural signature is "<N chars … full content …>".
-    assert "chars" in args["content"] and "full content" in args["content"]
+    assert str(args["content"]).startswith("[[DISCO-ELIDED:")
+    assert "history display only" in str(args["content"])
+    # The recoverable marker's structural signature is the DISCO-ELIDED sentinel.
+    assert "chars" in args["content"] and "file_read the path" in args["content"]
 
 
 def test_small_args_are_left_intact():

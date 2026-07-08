@@ -188,11 +188,20 @@ def _clear_grounding(conv_id: str, path: str) -> None:
 
 
 # CD-TOOLS-1 — the internal elision-marker family, re-expressed locally so the tools
-# package does not import from disco.core (layering). Mirrors core.events
-# _ELISION_MARKER_RE / _ELISION_PARAPHRASE_RE: an "<N chars … elided|full content …>"
-# render marker the model must never echo back into source.
+# package does not import from disco.core here. Mirrors core.events
+# _ELISION_MARKER_RE / _ELISION_PARAPHRASE_RE: the canonical
+# "[[DISCO-ELIDED: N chars ...]]" sentinel and historical angle-bracket render
+# markers the model must never echo back into source.
 _EDIT_ELISION_RE = re.compile(
-    r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full\s+content|placeholder)\b[^>]*>",
+    r"(?:"
+    r"\[\[\s*DISCO-ELIDED:\s*\d[\d,]*\s*chars\b[^\]]*?\]\]"
+    r"|"
+    r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full\s+content|placeholder)\b[^>]*>"
+    r"|"
+    r"<(?=[^>]*\b(?:elided|full\s+content|placeholder)\b)[^>]*"
+    r"(?:re-issue the call or file_read the path|do not copy this placeholder"
+    r"|do not copy or re-send|already applied to the workspace)[^>]*>"
+    r")",
     re.IGNORECASE,
 )
 
@@ -570,8 +579,9 @@ def guard_fresh_edit(
             error="ELISION_MARKER_REJECTED",
             content=(
                 f"Edit refused — the edit text for {path} contains an internal elision "
-                "placeholder (e.g. '<… chars elided …>'); that marker is render-only and must "
-                "never be written into a file. Read the file, then edit with the real text."
+                "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); that marker is render-only "
+                "and must never be written into a file. Read the file, then edit with the "
+                "real text."
             ),
             structured={
                 "kind": "elision_marker_rejected",
@@ -2028,7 +2038,7 @@ class ExactReplaceTool:
                     error="ELISION_MARKER_REJECTED",
                     content=(
                         f"exact_replace refused — an edit for {args.path} contains an internal elision "
-                        "placeholder (e.g. '<… chars elided …>'); read the file and use the real text."
+                        "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); read the file and use the real text."
                     ),
                     structured={
                         "kind": "elision_marker_rejected",
@@ -2194,7 +2204,7 @@ class SafeWriteFileTool:
                 error="ELISION_MARKER_REJECTED",
                 content=(
                     f"safe_write_file refused — content for {args.path} contains an internal elision "
-                    "placeholder (e.g. '<… chars elided …>'); read the file and write the real text."
+                    "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); read the file and write the real text."
                 ),
                 structured={
                     "kind": "elision_marker_rejected",
