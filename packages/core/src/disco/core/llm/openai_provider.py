@@ -613,7 +613,6 @@ class OpenAIProvider:
         if (
             finish_reason == "stop"
             and content_len == 0
-            and reasoning_len > 0
             and tool_call_count == 0
         ):
             return {

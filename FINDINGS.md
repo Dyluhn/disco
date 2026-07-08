@@ -1,3 +1,64 @@
+# GLM Dead-Turn Widen Findings
+
+## What changed
+
+- Widened the OpenAI-compatible provider's empty-turn metadata classification:
+  `finish_reason=="stop"`, zero visible content, and zero tool calls now
+  classifies whether or not reasoning text was present. The existing
+  `empty_reasoning_only` metadata key and payload shape are unchanged.
+- Added a loop-level one-shot repair for execution-mode prose noops: when a
+  build step returns visible prose with no tool call, the driver emits an
+  ENVIRONMENT diagnostic/reminder marked `prose_noop_repair`, retries once with
+  a transient reminder, and avoids counting that first repaired turn as a noop.
+- Made the prose repair segment-scoped via the event log, so it survives loop
+  recreation and does not fire a second time later in the same execution
+  segment.
+- Added provider and scripted fake-provider loop regressions for truly blank
+  turns, prose noops, retry fallthrough, second prose noops, planning-mode prose,
+  and independent empty/prose repair counters.
+
+## Reproduction Evidence
+
+- Before the source fix, the focused regression command failed as expected:
+  `test_streaming_blank_stop_response_is_flagged` raised `KeyError:
+  'empty_reasoning_only'`, and
+  `test_prose_noop_in_execution_retries_once_and_executes_tool` showed the next
+  request still ended with the model's prose instead of the transient
+  tool-call reminder.
+
+## Verification
+
+- `PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m pytest packages/core/tests/test_openai_provider.py packages/core/tests/test_loop_integration.py -q`
+  passed, `34 passed`.
+- Focused affected tests plus touched integration/provider tests passed,
+  `36 passed`.
+- `PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m pytest packages/core/tests -q`
+  completed with only the two known baseline F5 failures:
+  - `packages/core/tests/test_f5_thinking_budget.py::test_user_and_tool_literal_think_is_NOT_stripped`
+  - `packages/core/tests/test_f5_thinking_budget.py::test_assist_truncation_still_fires_for_non_assistant_role`
+- `PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m pytest packages/agent-server/tests -q`
+  completed with one unrelated timing failure:
+  `packages/agent-server/tests/test_host_proxy_C2.py::test_5xx_passthrough_no_retry`
+  observed `0.181s` for an assertion requiring `<0.1s`; the same assertion also
+  proved no retry occurred (`request_count == 1`).
+- The isolated agent-server timing test passed on rerun.
+- `PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m ruff check --select F packages/core/src/disco/core/llm/openai_provider.py packages/core/src/disco/core/loop/driver.py packages/core/src/disco/core/loop/signals.py packages/core/tests/test_openai_provider.py packages/core/tests/test_loop_integration.py packages/core/tests/test_dc05_loop.py packages/core/tests/test_loop_extra.py`
+  passed.
+
+## Deviations / Code-Reality Notes
+
+- Kept `_empty_reasoning_only_metadata(...)` and the
+  `EMPTY_REASONING_ONLY_METADATA_KEY` name stable even though the classification
+  now also covers truly blank stop finals.
+- The loop-level prose diagnostic records `content_len`, `tool_call_count`, and
+  `llm_response_id`. It does not record `finish_reason` because `AgentStep`
+  does not carry provider finish metadata across the agent/driver boundary.
+- The prose nudge is per execution segment, not per consecutive-noop streak.
+  Real actions do not re-arm it; fresh user/resume/plan-approval boundaries do.
+- Existing scripted `AgentStep` tests that used prose-only noops were adjusted
+  because the repair is intentionally loop-level and applies to scripted fake
+  agents as well as the router-backed fake provider.
+
 # Mode Desync Findings
 
 ## Root Cause

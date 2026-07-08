@@ -43,12 +43,13 @@ def _last_status_detail(events):
 
 @pytest.mark.asyncio
 async def test_actionless_breaker_halts():
-    """3 no-tool-call steps with an incomplete plan explains and asks the user."""
+    """3 counted no-tool-call steps with an incomplete plan ask the user."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
         noop_step("a"),
         noop_step("b"),
         noop_step("c"),
+        noop_step("d"),
         finish_step(),
     ])
     loop, store = build_loop(agent)

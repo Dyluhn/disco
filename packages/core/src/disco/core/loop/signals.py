@@ -104,6 +104,7 @@ _ACTIONABLE_BUILD_VERB_RE = re.compile(
 )
 
 SYNTHETIC_FINISH_ATTEMPT_DETAIL = "synthetic_finish_attempted"
+PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
 
 
 def _event_seq(event: Event, fallback: int) -> int:
@@ -571,6 +572,36 @@ def consecutive_noops(events: list[Event]) -> int:
             count += 1
             continue
     return count
+
+
+def prose_noop_repair_seen_current_execution_segment(events: list[Event]) -> bool:
+    """Has the one-shot execution prose repair already fired in this segment?
+
+    The repair marker is durable so retry bounds survive loop recreation. The
+    segment boundary mirrors the existing actionless runway boundaries that can
+    make a new execution attempt legitimate: a fresh user message, a resume
+    boundary, or a newly approved plan. Real actions do not clear this marker;
+    the nudge is a per-segment correction, not a per-streak correction.
+    """
+    for e in reversed(events):
+        if isinstance(e, MessageEvent):
+            if e.source == EventSource.USER:
+                break
+            if (
+                e.source == EventSource.ENVIRONMENT
+                and e.meta.get("diagnostic") == PROSE_NOOP_REPAIR_DIAGNOSTIC
+            ):
+                return True
+        if isinstance(e, StatusEvent):
+            if e.status == ConversationStatus.PAUSED:
+                break
+            if e.status == ConversationStatus.RUNNING and e.detail in (
+                "plan_approved",
+                "resumed",
+                "planning",
+            ):
+                break
+    return False
 
 
 def auto_continue_attempts(events: list[Event]) -> int:
