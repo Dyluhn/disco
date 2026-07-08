@@ -668,6 +668,37 @@ def in_planning_for_revision(events: list[Event]) -> bool:
     return approved_seq is None or planning_seq > approved_seq
 
 
+def effective_mode(
+    events: list[Event],
+    *,
+    planning: OperatingMode = OperatingMode.PLANNING,
+    execution: OperatingMode = OperatingMode.LONG_HORIZON,
+    default: OperatingMode = OperatingMode.PLANNING,
+) -> OperatingMode:
+    """Return the event-log-derived operating mode for a plan-gated loop.
+
+    A ``plan_approved`` marker moves the loop into execution until a later
+    ``planning`` marker re-enters the plan gate. With no lifecycle marker, the
+    caller's default is used so non-plan surfaces can keep their configured mode
+    while build loops still default to PLANNING.
+    """
+    planning_seq: int | None = None
+    approved_seq: int | None = None
+    for event in events:
+        if isinstance(event, StatusEvent):
+            if event.detail == "planning":
+                planning_seq = event.seq or 0
+            elif event.detail == "plan_approved":
+                approved_seq = event.seq or 0
+    if approved_seq is not None and (
+        planning_seq is None or approved_seq > planning_seq
+    ):
+        return execution
+    if planning_seq is not None:
+        return planning
+    return default
+
+
 def revision_force_submit(events: list[Event]) -> bool:
     """True iff a REVISION re-plan has been ESCALATED to forced-submit and not yet
     satisfied. The engine emits a StatusEvent(detail="force_submit_plan") marker after

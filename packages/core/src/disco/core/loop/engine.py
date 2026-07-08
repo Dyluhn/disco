@@ -949,6 +949,25 @@ class AgentLoop:
 
     # ---- plan-mode helpers (Build) ------------------------------------------
 
+    def _effective_mode(self, events: list[Event]) -> OperatingMode:
+        return signals.effective_mode(
+            events,
+            execution=self._execution_mode,
+            default=self.mode,
+        )
+
+    def _reconcile_mode_from_events(self, events: list[Event]) -> OperatingMode:
+        mode = self._effective_mode(events)
+        if self.mode != mode:
+            _LOG.warning(
+                "Reconciling loop mode for %s from %s to %s using event-log markers",
+                self.conversation_id,
+                self.mode.value,
+                mode.value,
+            )
+            self.mode = mode
+        return mode
+
     def _readonly_tool_names(self) -> frozenset[str] | None:
         """Delegates to Driver.readonly_tool_names (used by the Observer F9 gate)."""
         return self._driver.readonly_tool_names()
@@ -1146,7 +1165,7 @@ class AgentLoop:
         #      before proposing (the Claude-Code-style "Phase 1: gather context").
         #   3. No tool call at all (a prose answer) → nudge back to planning.
         # The plan tool itself is NEVER executed.
-        if self.mode == OperatingMode.PLANNING:
+        if self._reconcile_mode_from_events(events) == OperatingMode.PLANNING:
             tc = step.tool_call
             if (
                 tc is not None
@@ -1559,27 +1578,10 @@ class AgentLoop:
             # FINISHED/STUCK/ERROR/AWAITING_USER_*/no new work → idle.
             if not self._has_unprocessed_user_message(await self._events()):
                 return state
-        # Restore execution mode after a server restart. `self.mode` is in-memory only;
-        # a fresh loop always starts in PLANNING mode regardless of what the event log
-        # says. Scan the event log to determine whether the current lifecycle is in
-        # execution mode (plan was approved and not subsequently re-entered planning).
-        # This fixes post-restart resumes: without it, finish triggers PLAN_NUDGE.
-        if self.mode == OperatingMode.PLANNING and self._execution_mode != OperatingMode.PLANNING:
-            _boot_events = await self._events()
-            _plan_approved_seq: int | None = None
-            _reenter_planning_seq: int | None = None
-            for _e in _boot_events:
-                if isinstance(_e, StatusEvent):
-                    if _e.detail == "plan_approved":
-                        _plan_approved_seq = _e.seq or 0
-                    elif _e.detail == "planning":  # request_plan re-enters planning mode
-                        _reenter_planning_seq = _e.seq or 0
-            # In execution mode if: plan approved AND not re-entered planning after that.
-            if _plan_approved_seq is not None and (
-                _reenter_planning_seq is None
-                or _plan_approved_seq > _reenter_planning_seq
-            ):
-                self.mode = self._execution_mode
+        # Restore/reconcile the in-memory mode from the event log. `self.mode`
+        # is only a cache; phase truth is the latest planning/plan_approved
+        # marker so preamble and re-kick paths cannot drift.
+        self._reconcile_mode_from_events(await self._events())
 
         # Bug 12 (§11.4) — FINISHED→followup path. A change/revision follow-up on
         # an approved/finished build re-enters PLANNING here (the planning gate
@@ -1636,6 +1638,7 @@ class AgentLoop:
             action_to_execute: ActionEvent | None = None
             async with self._lock:
                 events = await self._events()
+                self._reconcile_mode_from_events(events)
                 state = ConversationState.reconstruct(
                     self.conversation_id, events, max_iterations=self.max_iterations
                 )
@@ -2010,6 +2013,7 @@ class AgentLoop:
                     meta={"steer": True} if steer else {},
                 )
             )
+            self._reconcile_mode_from_events(await self._events())
             if state.execution_status in (
                 ConversationStatus.FINISHED,
                 ConversationStatus.STUCK,
@@ -2452,6 +2456,7 @@ class AgentLoop:
         mode, with a fresh unprocessed user turn whose intent is a CHANGE
         (`signals.is_revision_intent`). A pure Q&A follow-up ("what font did you
         use?") is exempt — it is answered without a forced re-plan."""
+        self._reconcile_mode_from_events(events)
         # Already (re)planning → nothing to do (also guards against re-firing on
         # the same follow-up once we've emitted the planning marker below).
         if self.mode == OperatingMode.PLANNING:

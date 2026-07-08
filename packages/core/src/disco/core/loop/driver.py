@@ -25,7 +25,6 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
-    StatusEvent,
 )
 from ..llm import (
     BudgetExceeded,
@@ -96,6 +95,13 @@ _PLANNING_TOOL_REFUSAL_NEEDLE = "is not available in PLANNING mode"
 _PLANNING_TOOL_REFUSAL_ESCALATE_AT = 2
 _PLANNING_TOOL_REFUSAL_NARROW_AT = 3
 _PLANNING_TOOL_REFUSAL_READ_TOOLS = frozenset({"file_read"})
+
+
+def _view_has_current_objective(view: View) -> bool:
+    return any(
+        "<current-objective>" in (message.content or "")
+        for message in view.messages
+    )
 
 
 def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
@@ -285,6 +291,7 @@ class Driver:
         suppress_meta_tools: bool = False,
         force_submit_only: bool = False,
         force_read_tools: frozenset[str] | None = None,
+        mode: OperatingMode | None = None,
     ) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the
@@ -319,8 +326,9 @@ class Driver:
             _serve_tool_singleton,
         )
 
+        effective_mode = mode or self._loop.mode
         tools = self._loop.executor.available_tools()
-        if self._loop.mode == OperatingMode.PLANNING:
+        if effective_mode == OperatingMode.PLANNING:
             # FORCED-SUBMIT RECOVERY (prose planning). When the engine has escalated a
             # stuck prose-planning segment, narrow the offered
             # tools to submit_plan + READ tools (file_read/file_list) — NOT submit-only.
@@ -543,18 +551,31 @@ class Driver:
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
         # Withhold the meta/handoff virtuals until this session's first
         # real action (see _tools_for_step docstring — Phase-B re-run #4).
+        cached_mode = self._loop.mode
+        mode = self._loop._reconcile_mode_from_events(events)
+        if (
+            cached_mode == OperatingMode.PLANNING
+            and mode != OperatingMode.PLANNING
+            and _view_has_current_objective(view)
+        ):
+            _LOG.error(
+                "Mode desync corrected for %s at composition: cached=%s effective=%s",
+                self._loop.conversation_id,
+                cached_mode.value,
+                mode.value,
+            )
         fresh_session = (
-            self._loop.mode != OperatingMode.PLANNING
+            mode != OperatingMode.PLANNING
             and signals.actions_since_last_resume(events) == 0
         )
         # Forced-submit recovery narrows the offered tools to submit_plan plus a bounded
         # read set. Prose-plan loops key off a replayed event marker; repeated planning
         # refusals key off the tail refusal streak in the same event log.
         planning_refusal_force = (
-            self._loop.mode == OperatingMode.PLANNING
+            mode == OperatingMode.PLANNING
             and planning_tool_refusal_streak(events) >= _PLANNING_TOOL_REFUSAL_NARROW_AT
         )
-        force_submit_only = self._loop.mode == OperatingMode.PLANNING and (
+        force_submit_only = mode == OperatingMode.PLANNING and (
             signals.prose_plan_force_submit(events) or planning_refusal_force
         )
         force_read_tools = (
@@ -585,8 +606,9 @@ class Driver:
                             suppress_meta_tools=fresh_session,
                             force_submit_only=force_submit_only,
                             force_read_tools=force_read_tools,
+                            mode=mode,
                         ),
-                        mode=self._loop.mode,
+                        mode=mode,
                         overflow_signal=view_render.overflow_signal(events),
                         on_stream=self.build_stream_hook(),
                         temperature=escape_temp,
@@ -643,6 +665,7 @@ class Driver:
                                 suppress_meta_tools=fresh_session,
                                 force_submit_only=force_submit_only,
                                 force_read_tools=force_read_tools,
+                                mode=mode,
                             )
                             offered_names = {t.name for t in offered_tools}
                             # Mirror the assistant's turn so the next call's
