@@ -25,7 +25,6 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
-    StatusEvent,
 )
 from ..llm import (
     BudgetExceeded,
@@ -36,6 +35,7 @@ from ..llm import (
     LLMTransientError,
     OperatingMode,
 )
+from ..llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
 from ..view import View, repair_tool_call_adjacency
 from . import signals, view_render
 from .boundaries import AgentStep
@@ -96,6 +96,10 @@ _PLANNING_TOOL_REFUSAL_NEEDLE = "is not available in PLANNING mode"
 _PLANNING_TOOL_REFUSAL_ESCALATE_AT = 2
 _PLANNING_TOOL_REFUSAL_NARROW_AT = 3
 _PLANNING_TOOL_REFUSAL_READ_TOOLS = frozenset({"file_read"})
+_EMPTY_REASONING_REPAIR_REMINDER = (
+    "Your previous response produced no visible text and no tool call — call exactly "
+    "one tool now, or say in plain text what you need."
+)
 
 
 def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
@@ -148,6 +152,18 @@ def planning_tool_refusal_streak(events: list[Event]) -> int:
 class Driver:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
+
+    async def _persist_empty_reasoning_diagnostic(self, diagnostic: dict) -> None:
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=_EMPTY_REASONING_REPAIR_REMINDER),
+                meta={
+                    "diagnostic": EMPTY_REASONING_ONLY_METADATA_KEY,
+                    **diagnostic,
+                },
+            )
+        )
 
     def build_stream_hook(self) -> StreamHook | None:
         """Per-step watch-it-write hook (or None if no sink is wired). Decodes the
@@ -384,9 +400,10 @@ class Driver:
                 return True
 
             planner_tools = [t for t in tools if _planner_ok(getattr(t, "name", None))]
-            # Append the VIRTUAL ask_user + questions_v2 + clarify even while planning: an under-specified
-            # task most needs clarification BEFORE a plan is committed (the user
-            # named a detail only they know). ask_user is read-only-safe — the loop
+            # Append the VIRTUAL ask_user + questions_v2 + clarify even while
+            # planning: an under-specified task most needs clarification BEFORE a
+            # plan is committed (the user named a detail only they know).
+            # ask_user is read-only-safe — the loop
             # intercepts it (never executes it against the sandbox) and halts at the
             # Ask-gate, same as in execution. questions_v2 is the structured §K
             # batch-intake variant; clarify stays as a legacy alias. Without this
@@ -565,6 +582,7 @@ class Driver:
             requery_count = 0
             provider_retry_count = 0  # P2: tracks LLMProviderUnavailable occurrences
             protocol_repair_count = 0
+            empty_reasoning_repair_count = 0
             transient_messages: list[LLMMessage] = []
             repaired_view: View | None = None
             while True:
@@ -608,6 +626,20 @@ class Driver:
                             else None
                         ),
                     )
+
+                    if step.empty_reasoning_diagnostic is not None:
+                        await self._persist_empty_reasoning_diagnostic(
+                            step.empty_reasoning_diagnostic
+                        )
+                        if empty_reasoning_repair_count < 1:
+                            empty_reasoning_repair_count += 1
+                            transient_messages.append(
+                                LLMMessage(
+                                    role="user",
+                                    content=_EMPTY_REASONING_REPAIR_REMINDER,
+                                )
+                            )
+                            continue
 
                     # Rung 7: Invalid-tool reroute (weak-model FC kit).
                     # Valid JSON but unknown tool name -> if we haven't

@@ -112,3 +112,48 @@ High confidence in the loop-level mechanism: the sequence numbers, no-op arithme
 Medium confidence in the exact historical provider bytes for the two invisible turns before each pause, because the raw GLM responses were not persisted. The event log proves they were event-invisible no-work steps; the live probe proves GLM-5.2 can produce the adapter-invisible `stop` shape on the same endpoint.
 
 The single experiment that would raise confidence to high on the model-side trigger is to add temporary raw driver telemetry for GLM-5.2 - per call: `finish_reason`, `content_len`, `reasoning_content_len`, and structured `tool_call_count` - then rerun/resume a comparable build until the first actionless pause. Seeing the missing turns as `stop/content_len=0/tool_call_count=0/reasoning_content_len>0` would close the last gap.
+
+## FINDINGS - 2026-07-08 repair implementation
+
+Implemented the empty-reasoning repair:
+
+1. `OpenAIProvider` now classifies the exact shape `finish_reason=="stop"`,
+   provider-visible content length 0, final tool-call count 0, and non-empty
+   `reasoning_content`/reasoning buffer. The flag is surfaced through
+   `CompletionResponse.response_metadata["empty_reasoning_only"]` with
+   `finish_reason`, `content_len`, `reasoning_len`, and `tool_call_count`.
+2. `RouterAgent` maps that response metadata onto `AgentStep` without changing
+   ordinary tool-call, prose, or truncation handling.
+3. `Driver.drive_step` persists an environment diagnostic event for every
+   classified empty turn. The first classified turn in a driver step is retried
+   once with the targeted reminder: "Your previous response produced no visible
+   text and no tool call — call exactly one tool now, or say in plain text what
+   you need." If the retry is classified again, the second diagnostic is also
+   persisted and the existing no-op/invisible-step breaker path handles it.
+4. The actionless breaker cap and `_invisible_steps` semantics are unchanged.
+
+Deviations and code-reality notes:
+
+- `CompletionResponse` had no metadata field, so the smallest contract change was
+  adding `response_metadata: dict[str, Any]` with a default. `AgentStep` gained a
+  matching optional diagnostic dict for the loop boundary.
+- This worktree does not contain `_host_speaks_chat_template_kwargs`; the repair
+  does not set `enable_thinking` or add any `chat_template_kwargs`. It is a
+  prompt-level protocol repair only, independent of `req.assist`.
+- The same classification is also applied in the non-streaming `_to_response`
+  path for fallback parity, although the live driver path uses streaming.
+
+Verification:
+
+- Targeted provider/loop tests:
+  `PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m pytest packages/core/tests/test_openai_provider.py packages/core/tests/test_loop_integration.py -q`
+  passed: 27 passed.
+- Core suite:
+  `PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m pytest packages/core/tests -q`
+  failed only the two expected baseline `test_f5_thinking_budget` tests:
+  `test_user_and_tool_literal_think_is_NOT_stripped` and
+  `test_assist_truncation_still_fires_for_non_assistant_role`.
+- Full requested scope:
+  `PYTHONPATH=$(ls -d $PWD/packages/*/src | tr "\n" ":") /var/home/dylan/projects/disclaude/.venv/bin/python -m pytest packages/core/tests packages/agent-server/tests -q`
+  failed only the same two expected baseline `test_f5_thinking_budget` tests.
+- Touched-file Ruff check passed.
