@@ -483,7 +483,7 @@ async def test_serve_before_any_work_refused():
     agent = ScriptedAgent([
         action_step("serve", {"title": "app", "path": "."}),  # zero work → refused
         action_step("shell", {}),                              # real work
-        action_step("serve", {"title": "app", "path": "."}),  # now allowed
+        action_step("serve", {"title": "app", "path": "index.html"}),  # now allowed
         finish_step(),
     ])
     loop, store = build_loop(agent)

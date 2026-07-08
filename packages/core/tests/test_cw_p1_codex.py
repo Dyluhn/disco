@@ -1,12 +1,10 @@
 """Codex P1 fixes on the context-management change (CW-1..CW-7).
 
 P1-a (CORRECTNESS — reachable dangling pointer): the elided tool-call ARGUMENT
-marker claimed the full content was "in the CURRENT WORKSPACE block". For assist-OFF
-that is a reachable LIE: an elided arg is a write/edit BODY (an attempted or new
-value), NOT the file's current content, so the block never carries it — even when the
-call's target path is pinned in full. assist-OFF now rewrites EVERY elided arg to the
-NEUTRAL non-dangling marker (re-issue / file_read recovery only); the K1 rejection text
-is likewise tier-gated to a neutral file_read pointer for assist-OFF.
+marker must not claim the full content is in the CURRENT WORKSPACE block. An
+elided arg is a write/edit BODY (an attempted or new value), NOT the file's
+current content. Elided args now render as one canonical DISCO-ELIDED sentinel;
+historical markers are still retargeted to that sentinel.
 
 P1-c (assist-ON strict byte-identity): CW-3 reworded assist-ON-visible prose
 (preamble / pointer / arg marker) for the location-independent PREFIX placement —
@@ -49,13 +47,6 @@ _PRE_CW3_PREAMBLE = (
     "'the workspace shows…', 'good, the content is here', etc.). "
     "Just continue the work.\n\n"
 )
-
-# The EXACT pre-CW-3 elided-arg marker (assist-ON), for an arg of N chars.
-_PRE_CW3_MARKER_TAIL = (
-    " chars — full content is in the CURRENT WORKSPACE block "
-    "below; do not copy this placeholder into a tool argument>"
-)
-
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -120,8 +111,8 @@ def _assistant_tool_args(view: View, path: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# P1-a (round-2) — the assist-OFF arg marker is ALWAYS the NEUTRAL non-dangling
-# marker (no "it's in the workspace block" claim), even when the path IS pinned:
+# P1-a (round-2) — every elided arg marker is the same non-dangling sentinel
+# (no "it's in the workspace block" claim), even when the path IS pinned:
 # an elided arg is a write/edit body, NOT the file's current content, so the block
 # does not carry it. No per-arg pinned-vs-omitted guessing.
 # ---------------------------------------------------------------------------
@@ -142,13 +133,15 @@ def test_retarget_uses_neutral_marker_for_pinned_and_unpinned_alike():
     out = retarget_elided_arg_markers([msg])
     pinned = out[0].tool_calls[0]["arguments"]["content"]
     unpinned = out[0].tool_calls[1]["arguments"]["content"]
-    # BOTH get the neutral marker — NEITHER claims the content is in the block (the
+    # BOTH get the canonical marker — NEITHER claims the content is in the block (the
     # arg value is a write body, not the file's current content, so the block does not
     # carry it even for the pinned path).
     assert "CURRENT WORKSPACE block" not in pinned
     assert "CURRENT WORKSPACE block" not in unpinned
-    assert "do not copy or re-send" in pinned
-    assert "do not copy or re-send" in unpinned
+    assert pinned.startswith("[[DISCO-ELIDED:")
+    assert unpinned.startswith("[[DISCO-ELIDED:")
+    assert "history display only" in pinned
+    assert "history display only" in unpinned
     # Both stay detectable by the K1 copy-back execution guard.
     assert find_elided_arg_markers({"content": pinned}) == ["content"]
     assert find_elided_arg_markers({"content": unpinned}) == ["content"]
@@ -167,7 +160,8 @@ def test_retarget_argument_without_a_path_uses_nondangling_marker():
     out = retarget_elided_arg_markers([msg])
     marker = out[0].tool_calls[0]["arguments"]["command"]
     assert "CURRENT WORKSPACE block" not in marker
-    assert "do not copy or re-send" in marker
+    assert marker.startswith("[[DISCO-ELIDED:")
+    assert "history display only" in marker
 
 
 def test_assist_off_build_marks_every_elided_arg_nondangling():
@@ -187,16 +181,17 @@ def test_assist_off_build_marks_every_elided_arg_nondangling():
     # NEITHER arg marker claims the content is in the block (pinned or not).
     assert "CURRENT WORKSPACE block" not in small_marker
     assert "CURRENT WORKSPACE block" not in big_marker
-    # De-temptified neutral marker: an elided-arg placeholder with the anti-copy
-    # instruction, and crucially NO "re-issue the call" affordance (the copy-back bait).
+    # Canonical sentinel: an elided-arg placeholder with no workspace-block claim
+    # and no "re-issue the call" affordance (the copy-back bait).
     for marker in (small_marker, big_marker):
-        assert "elided" in marker
-        assert "do not copy or re-send" in marker
+        assert marker.startswith("[[DISCO-ELIDED:")
+        assert "history display only" in marker
         assert "re-issue the call" not in marker
 
 
 # ---------------------------------------------------------------------------
-# P1-c — assist-ON renders the pre-CW-3 bytes (no wording drift)
+# P1-c — assist-ON keeps the pre-CW-3 workspace preamble while elision markers
+# use the canonical sentinel.
 # ---------------------------------------------------------------------------
 
 
@@ -218,24 +213,26 @@ def test_assist_on_preamble_is_byte_identical_to_pre_cw3():
     assert "in this block" not in content.content
 
 
-def test_assist_on_snip_marker_is_byte_identical_to_pre_cw3():
+def test_assist_on_snip_marker_uses_canonical_sentinel():
     long = "x" * 4_000
     marker = _snip_args({"path": "a.py", "content": long})["content"]
-    assert marker == f"<{len(long):,}{_PRE_CW3_MARKER_TAIL}"
-    assert "below" in marker  # the directional word is restored for assist-ON
+    assert marker.startswith(f"[[DISCO-ELIDED: {len(long):,} chars")
+    assert "history display only" in marker
+    assert "below" not in marker
     # Still caught by the K1 execution guard.
     assert find_elided_arg_markers({"content": marker}) == ["content"]
 
 
-def test_assist_on_build_keeps_directional_marker_and_pre_cw3_preamble():
-    # Full assist-ON ViewBuilder build: the marker stays directional ("below", NOT
-    # retargeted) and the snapshot preamble is the pre-CW-3 text.
+def test_assist_on_build_keeps_canonical_marker_and_pre_cw3_preamble():
+    # Full assist-ON ViewBuilder build: the marker is the canonical sentinel and
+    # the snapshot preamble is still the pre-CW-3 text.
     sbx = _FakeSandbox({"app.js": b"const x = 1;\n"})
     builder = ViewBuilder(_FakeLoop(assist=True, sandbox=sbx))
     long = "w" * (_ARG_SNIP_CHARS + 1)
     view = asyncio.run(builder.build([_write("app.js", long)]))
     marker = _assistant_tool_args(view, "app.js")["content"]
-    assert marker == f"<{len(long):,}{_PRE_CW3_MARKER_TAIL}"
+    assert marker.startswith(f"[[DISCO-ELIDED: {len(long):,} chars")
+    assert "history display only" in marker
     snap = next(
         m for m in view.messages if m.role == "user" and m.content.startswith("# CURRENT WORKSPACE")
     )

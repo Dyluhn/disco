@@ -127,7 +127,7 @@ def _f8_confirmed_file_writes(events: list[Event]) -> dict[str, tuple[str, str]]
     ORIGINAL ``tool_call.arguments["content"]`` (the event-stored bytes),
     NOT the snipped version in the rendered message. Returning the
     original lets the F8 transform emit a real 200-char prefix instead
-    of a generic "<N chars elided>" marker.
+    of a generic "[[DISCO-ELIDED: N chars ...]]" marker.
 
     Returns a dict keyed by call_id so the message-render pass can
     correlate each assistant message's ``tool_calls[i]["id"]`` to the
