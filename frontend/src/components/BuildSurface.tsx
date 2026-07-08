@@ -404,6 +404,7 @@ export function BuildSurface({
             onResume={b.canResume ? b.resume : undefined}
             events={b.events}
             modelId={b.modelId}
+            seq={b.maxSeq}
           />
           <div className="flex items-center justify-between gap-inline">
             <h1 className="font-display text-[1.3rem] font-medium leading-tight tracking-tight text-text">

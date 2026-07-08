@@ -136,12 +136,24 @@ async def check_completion(rt) -> Check:
         req = CompletionRequest(
             profile=_profile(),
             messages=[LLMMessage(role="user", content="Reply with exactly the word: ok")],
-            max_tokens=16,
+            # Budget must fit a reasoning model's think pass AND a short answer. A tiny
+            # cap (the old 16) is spent entirely in `reasoning_content` by any reasoning
+            # driver (MiniMax M3, DeepSeek V4, Qwen3.x …), which returns empty `text` —
+            # a false "endpoint dead" verdict. Give it room to think and still answer.
+            max_tokens=2048,
         )
         t0 = time.monotonic()
         resp = await router.complete(req)
         ms = int((time.monotonic() - t0) * 1000)
-        if not (resp.text or "").strip() and not resp.tool_calls:
+        # A live endpoint proves itself three ways: answer text, a tool call, OR hitting
+        # the token budget mid-generation (finish_reason="length" — the reasoning-model
+        # case where the think pass consumed the budget before the answer surfaced).
+        alive = (
+            bool((resp.text or "").strip())
+            or bool(resp.tool_calls)
+            or resp.finish_reason == "length"
+        )
+        if not alive:
             return Check("completion", "FAIL", f"empty response from '{resp.model_used}'", ms)
         return Check("completion", "PASS", f"'{resp.model_used}' replied in {ms} ms", ms)
     except Exception as exc:  # noqa: BLE001

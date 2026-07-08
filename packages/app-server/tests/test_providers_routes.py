@@ -141,7 +141,7 @@ def test_delete_refuses_while_catalogue_models_reference_provider(client, monkey
 
     enabled = client.post(
         "/api/providers/openai/enable",
-        json={"model_id": "gpt-4o-mini", "label": "GPT-4o mini"},
+        json={"model_id": "gpt-4o-mini", "label": "GPT-4o mini", "context_window": 128000},
     )
     assert enabled.status_code == 200
     model = next(m for m in enabled.json() if m["api_key_env"] == "provider_openai")
@@ -263,3 +263,40 @@ async def test_provider_catalogue_ttl_cache_singleflight(state, monkeypatch):
         again = await ac.get("/api/providers/openai/models")
         assert again.status_code == 200
         assert calls == 1
+
+
+def test_enable_requires_context_when_catalogue_silent(client) -> None:
+    """The engine budgets context from context_window — enabling without one
+    (provider catalogue silent, none supplied) must refuse, never default."""
+    created = client.post(
+        "/api/providers",
+        json={
+            "label": "Relay",
+            "base_url": "https://relay.example/v1",
+            "kind": "openai-compat",
+            "api_key": "sk-relay",
+        },
+    )
+    assert created.status_code in (200, 201)
+    refused = client.post(
+        "/api/providers/relay/enable",
+        json={"model_id": "some-model"},
+    )
+    assert refused.status_code == 400
+    assert "context window required" in refused.json()["detail"]
+
+    ok = client.post(
+        "/api/providers/relay/enable",
+        json={"model_id": "some-model", "context_window": 131072},
+    )
+    assert ok.status_code == 200
+    entry = next(m for m in ok.json() if m["model_id"] == "some-model")
+    # Unreported pricing is UNKNOWN, never "free" — a fake $0 must not render
+    # as verified-no-charge.
+    assert entry["pricing_mode"] == "unknown"
+    # And the label carries the model, not the internal prov- id scaffolding.
+    assert not entry["label"].lower().startswith("prov ")
+    # Capability default: catalogue reported none → driver-grade table stakes,
+    # so the model is actually usable as a Build/agent driver (tool-calling
+    # gate) — plus long_context, since 131072 clears its >~64k semantics.
+    assert set(entry["capabilities"]) >= {"tool_calling", "json_mode", "long_context"}

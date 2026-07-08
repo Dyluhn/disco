@@ -877,6 +877,12 @@ class ConversationRuntime:
         # transient drop, then terminalize honestly to STUCK so a wedged build is
         # VISIBLE, never RUNNING forever. Reset whenever a run reaches a real status.
         self._nonterminal_rekicks: dict[str, int] = {}
+        # Progress watermark for the non-terminal re-kick budget: the highest
+        # seq of a SUCCESSFUL PRODUCTIVE action we'd seen at the last non-terminal
+        # return. A long, working iteration ends non-terminal across many turn
+        # boundaries; only a NO-PROGRESS wedge should terminalize to STUCK, so a
+        # new productive action since the last re-kick resets the budget.
+        self._last_rekick_progress_seq: dict[str, int] = {}
         # [W-48 P1] Last status a run task ENDED at, per cid (in-process). The sync
         # `_evict_stale_backend` (called at kick) can't await the store, so it reads
         # this to SKIP a conversation PARKED at a gate — evicting a gated conv on a
@@ -2555,7 +2561,11 @@ class ConversationRuntime:
             ConversationStatus.AWAITING_USER_QUESTION,
         }
     )
-    _MAX_NONTERMINAL_REKICKS = 1
+    # Consecutive NO-PROGRESS non-terminal returns tolerated before STUCK. The
+    # counter resets whenever a run makes a new successful productive action
+    # (see `_finalize_clean_return`), so a long, working iteration never trips it
+    # — only a genuine no-progress wedge accrues toward this cap.
+    _MAX_NONTERMINAL_REKICKS = 3
 
     # Statuses at which a run is BETWEEN turns (terminal or idle) — the kernel pin
     # is released so the next run re-resolves the current selection (finding #1).
@@ -2806,6 +2816,7 @@ class ConversationRuntime:
         if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
             # Healthy ending → reset the per-cid re-kick budget for the next segment.
             self._nonterminal_rekicks.pop(conversation_id, None)
+            self._last_rekick_progress_seq.pop(conversation_id, None)
             if status in self._CONCLUDED_STATUSES or status is ConversationStatus.IDLE:
                 self._emit_toolscope_audit_summary(conversation_id, status)
             # A run that ended between turns (done/errored/stuck/idle) releases the
@@ -2834,19 +2845,45 @@ class ConversationRuntime:
             return
         # Still RUNNING (the loop emits RUNNING at entry and only leaves it by emitting
         # a different status): the turn ended without concluding.
+        # Progress-reset: a long, WORKING iteration ends non-terminal across many
+        # turn boundaries (each continuation returns RUNNING before the next kick).
+        # Reset the wedge budget whenever a NEW successful productive action landed
+        # since the last non-terminal return — only a run making NO progress across
+        # `_MAX_NONTERMINAL_REKICKS` returns is genuinely wedged. Reads/browser
+        # probes are NOT productive (see signals), so a read-only spin still STUCKs.
+        try:
+            events = await self._store.get_events(conversation_id)
+            successful = signals.successful_action_ids(events)
+            last_prod_seq = max(
+                (
+                    (event.seq or 0)
+                    for event in events
+                    if signals.is_successful_productive_action(event, successful)
+                ),
+                default=0,
+            )
+        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
+            last_prod_seq = self._last_rekick_progress_seq.get(conversation_id, 0)
+        if last_prod_seq > self._last_rekick_progress_seq.get(conversation_id, 0):
+            self._nonterminal_rekicks[conversation_id] = 0  # forward progress → not wedged
+        self._last_rekick_progress_seq[conversation_id] = last_prod_seq
+
         attempts = self._nonterminal_rekicks.get(conversation_id, 0)
         if attempts < self._MAX_NONTERMINAL_REKICKS:
             self._nonterminal_rekicks[conversation_id] = attempts + 1
             logger.warning(
-                "run task for %s returned at %s without concluding; re-kicking once "
-                "(silent-stall recovery)",
+                "run task for %s returned at %s without concluding; re-kicking "
+                "(silent-stall recovery, no-progress attempt %d/%d)",
                 conversation_id,
                 status.value,
+                attempts + 1,
+                self._MAX_NONTERMINAL_REKICKS,
             )
             self.kick(conversation_id)
             return
         # Already re-kicked and STILL non-terminal → stop spinning, mark STUCK honestly.
         self._nonterminal_rekicks.pop(conversation_id, None)
+        self._last_rekick_progress_seq.pop(conversation_id, None)
         try:
             # Re-read under the (rare) race where the re-kick concluded between checks.
             state = await self._store.get_state(conversation_id)
@@ -4172,6 +4209,7 @@ class ConversationRuntime:
             self._run_generation,
             self._loops,
             self._nonterminal_rekicks,
+            self._last_rekick_progress_seq,
             self._last_status,
             self._cancel_flags,
             self._model_override,

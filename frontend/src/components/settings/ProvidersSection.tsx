@@ -207,6 +207,7 @@ function BrowseProvider({
   const disable = useDisableProviderModel(provider.id);
   const [q, setQ] = useState("");
   const [manualId, setManualId] = useState("");
+  const [manualCtx, setManualCtx] = useState("");
   const [optimistic, setOptimistic] = useState<Record<string, boolean>>({});
   const [toggleError, setToggleError] = useState<string | null>(null);
 
@@ -231,9 +232,18 @@ function BrowseProvider({
   }, [data, enabledByModel, q]);
 
   const pending = enable.isPending || disable.isPending;
+  // Context-required enable: the engine budgets context from context_window, so
+  // when the catalogue doesn't report one we ASK instead of silently defaulting
+  // (the pre-fix 8192 default poisoned every enabled model's context budget).
+  const [ctxAsk, setCtxAsk] = useState<{ modelId: string; value: string } | null>(null);
   const toggle = (m: ProviderCatalogueModel) => {
     const catalogueEntry = enabledByModel.get(m.model_id);
     const nextEnabled = !catalogueEntry;
+    if (nextEnabled && m.context_window == null) {
+      setCtxAsk({ modelId: m.model_id, value: "" });
+      setToggleError(null);
+      return;
+    }
     setOptimistic((current) => ({ ...current, [m.model_id]: nextEnabled }));
     setToggleError(null);
     const cleanup = () =>
@@ -249,20 +259,41 @@ function BrowseProvider({
       });
     } else {
       enable.mutate(
-        { model_id: m.model_id, label: m.label },
+        { model_id: m.model_id, label: m.label, context_window: m.context_window },
         { onError: (err) => setToggleError(errorText(err)), onSettled: cleanup },
       );
     }
   };
 
+  const confirmCtxEnable = (m: ProviderCatalogueModel, ctx: number) => {
+    setOptimistic((current) => ({ ...current, [m.model_id]: true }));
+    setCtxAsk(null);
+    enable.mutate(
+      { model_id: m.model_id, label: m.label, context_window: ctx },
+      {
+        onError: (err) => setToggleError(errorText(err)),
+        onSettled: () =>
+          setOptimistic((current) => {
+            const next = { ...current };
+            delete next[m.model_id];
+            return next;
+          }),
+      },
+    );
+  };
+
   const manualAdd = (e: React.FormEvent) => {
     e.preventDefault();
     const modelId = manualId.trim();
-    if (!modelId) return;
+    const ctx = Number(manualCtx);
+    if (!modelId || !(Number.isFinite(ctx) && ctx >= 1024)) return;
     enable.mutate(
-      { model_id: modelId, label: modelId },
+      { model_id: modelId, label: modelId, context_window: ctx },
       {
-        onSuccess: () => setManualId(""),
+        onSuccess: () => {
+          setManualId("");
+          setManualCtx("");
+        },
         onError: (err) => setToggleError(errorText(err)),
       },
     );
@@ -303,10 +334,18 @@ function BrowseProvider({
               placeholder="model ID"
               className={cn(field, "font-mono")}
             />
+            <input
+              value={manualCtx}
+              onChange={(e) => setManualCtx(e.target.value)}
+              inputMode="numeric"
+              aria-label={`Context window for manual model on ${provider.label}`}
+              placeholder="context window"
+              className={cn(field, "w-36 font-mono")}
+            />
             <button
               type="submit"
               data-disco-control="settings.provider-manual-add"
-              disabled={!manualId.trim() || enable.isPending}
+              disabled={!manualId.trim() || !(Number(manualCtx) >= 1024) || enable.isPending}
               className="shrink-0 rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
             >
               Add model ID
@@ -337,15 +376,53 @@ function BrowseProvider({
                     </span>
                   </div>
                   <p className="break-all font-mono text-[0.7rem] text-text-faint">
-                    {m.model_id} · {contextLabel(m.context_window)} · {priceLabel(m)}
+                    {m.model_id} ·{" "}
+                    {contextLabel(catalogueEntry?.context_window ?? m.context_window)} ·{" "}
+                    {priceLabel(m)}
                   </p>
                 </div>
-                <ToggleSwitch
-                  checked={enabled}
-                  busy={pending}
-                  label={`${enabled ? "Disable" : "Enable"} ${m.model_id}`}
-                  onClick={() => toggle(m)}
-                />
+                <div className="flex shrink-0 flex-col items-end gap-hair">
+                  <ToggleSwitch
+                    checked={enabled}
+                    busy={pending}
+                    label={`${enabled ? "Disable" : "Enable"} ${m.model_id}`}
+                    onClick={() => toggle(m)}
+                  />
+                  {ctxAsk?.modelId === m.model_id && (
+                    <form
+                      className="flex items-center gap-hair"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const ctx = Number(ctxAsk.value);
+                        if (Number.isFinite(ctx) && ctx >= 1024) confirmCtxEnable(m, ctx);
+                      }}
+                    >
+                      <input
+                        autoFocus
+                        inputMode="numeric"
+                        value={ctxAsk.value}
+                        onChange={(e) => setCtxAsk({ modelId: m.model_id, value: e.target.value })}
+                        aria-label={`Context window for ${m.model_id}`}
+                        placeholder="context window (tokens)"
+                        className={cn(field, "w-44 font-mono text-[0.74rem]")}
+                      />
+                      <button
+                        type="submit"
+                        data-disco-control="settings.provider-ctx-confirm"
+                        disabled={!(Number(ctxAsk.value) >= 1024)}
+                        className="shrink-0 rounded-control border border-hairline px-inline py-hair font-ui text-[0.74rem] text-text-muted transition-colors hover:text-text disabled:opacity-50"
+                      >
+                        Enable
+                      </button>
+                    </form>
+                  )}
+                  {ctxAsk?.modelId === m.model_id && (
+                    <p className="max-w-56 text-right font-ui text-[0.7rem] text-text-faint">
+                      {provider.label} doesn't report context windows — enter this
+                      model's real limit.
+                    </p>
+                  )}
+                </div>
               </li>
             );
           })}

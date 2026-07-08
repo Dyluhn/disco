@@ -196,6 +196,7 @@ describe("ProvidersSection — generic provider objects", () => {
       expect(lastEnableBody).toEqual({
         model_id: "gpt-4o-mini",
         label: "GPT-4o mini",
+        context_window: 128000,
       }),
     );
     await waitFor(() => expect(screen.getByText(/1 enabled/i)).toBeInTheDocument());
@@ -225,7 +226,14 @@ describe("ProvidersSection — generic provider objects", () => {
     fireEvent.change(screen.getByLabelText("Manual model ID for OpenAI"), {
       target: { value: "relay/model-1" },
     });
+    // Context is REQUIRED for manual adds (no catalogue to trust) — the button
+    // stays disabled until a plausible window is entered; nothing defaults.
     const add = screen.getByRole("button", { name: /Add model ID/i });
+    expect(add).toBeDisabled();
+    fireEvent.change(
+      screen.getByLabelText("Context window for manual model on OpenAI"),
+      { target: { value: "131072" } },
+    );
     expect(add).toBeEnabled();
     fireEvent.click(add);
 
@@ -233,6 +241,7 @@ describe("ProvidersSection — generic provider objects", () => {
       expect(lastEnableBody).toEqual({
         model_id: "relay/model-1",
         label: "relay/model-1",
+        context_window: 131072,
       }),
     );
     expect(screen.queryByText("sk-bad-relay")).not.toBeInTheDocument();

@@ -157,6 +157,30 @@ def _truncate_think_block(content: str) -> str:
     return _F5_THINK_BLOCK_RE.sub(_maybe, content)
 
 
+def _host_speaks_chat_template_kwargs(base_url: str) -> bool:
+    """`chat_template_kwargs` is a llama.cpp / vLLM SERVER extension, not part of
+    the OpenAI schema. Lenient clouds ignore it, but strict ones (e.g. Fireworks
+    behind an aggregator) reject the whole request: HTTP 400 "Extra inputs are
+    not permitted" — one hidden field bricks the model. Send it only to hosts
+    that plausibly run a self-hosted server: loopback / RFC-1918 / CGNAT
+    (tailscale) IPs, dot-less LAN hostnames, or explicitly local suffixes."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(base_url).hostname or "").lower()
+    if not host:
+        return False
+    if host.endswith((".ts.net", ".local", ".lan", ".home.arpa", ".internal")):
+        return True
+    if "." not in host:  # bare intranet hostname (e.g. "blackbox")
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")
+
+
 def _sanitize_tool_name(name: str) -> str:
     """Sanitize tool names for OpenAI boundary (dots are forbidden).
     Strip everything before the last dot and filter to [a-zA-Z0-9_-]."""
@@ -247,6 +271,7 @@ class OpenAIProvider:
         self._key = api_key
         self._timeout = timeout_s
         self._enable_thinking = enable_thinking
+        self._speaks_ctk = _host_speaks_chat_template_kwargs(base_url)
         self._caps = frozenset(capabilities)
         self._transport = transport  # test seam (httpx.MockTransport); None = real
 
@@ -436,7 +461,7 @@ class OpenAIProvider:
         # capable-model path free of that risk.
         if req.assist and (req.attempt or 1) >= 2:
             et = False
-        if et is not None:
+        if et is not None and self._speaks_ctk:
             body["chat_template_kwargs"] = {"enable_thinking": et}
         if stream:
             body["stream_options"] = {"include_usage": True}

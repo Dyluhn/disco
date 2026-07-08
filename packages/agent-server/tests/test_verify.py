@@ -19,12 +19,14 @@ from disco.core.llm.types import (
 )
 
 
-def _resp(*, text: str = "", tool_calls=None, model: str = "fake-model") -> CompletionResponse:
+def _resp(
+    *, text: str = "", tool_calls=None, model: str = "fake-model", finish_reason=None
+) -> CompletionResponse:
     return CompletionResponse(
         text=text,
         tool_calls=tool_calls or [],
         usage=TokenUsage(input_tokens=1, output_tokens=1),
-        finish_reason="tool_calls" if tool_calls else "stop",
+        finish_reason=finish_reason or ("tool_calls" if tool_calls else "stop"),
         model_used=model,
     )
 
@@ -99,6 +101,21 @@ async def test_completion_fail_empty():
 
     c = await verify.check_completion(_rt(router=R()))
     assert c.status == "FAIL" and "empty" in c.detail
+
+
+async def test_completion_pass_reasoning_model_budget_capped():
+    """Regression: a reasoning model (MiniMax M3, DeepSeek V4, Qwen3.x …) can spend
+    the whole probe budget in its think pass and return empty answer `text` with
+    finish_reason='length'. That is a LIVE endpoint mid-generation, not a dead one —
+    the probe must PASS it, not report a false 'empty response'. (Was the max_tokens=16
+    bug that slandered every reasoning driver in `disco-verify`.)"""
+
+    class R:
+        async def complete(self, req, **k):
+            return _resp(text="", finish_reason="length")
+
+    c = await verify.check_completion(_rt(router=R()))
+    assert c.status == "PASS"
 
 
 async def test_completion_fail_surfaces_verbatim_error():

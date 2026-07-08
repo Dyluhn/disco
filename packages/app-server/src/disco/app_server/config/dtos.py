@@ -22,7 +22,7 @@ class ModelDTO(BaseModel):
     price_out_per_m: float
     # W-05: pay model — "metered" | "subscription" | "free". None → the frontend
     # derives it from price/provider for back-compat (price 0 → free, else metered).
-    pricing_mode: Literal["metered", "subscription", "free"] | None = None
+    pricing_mode: Literal["metered", "subscription", "free", "unknown"] | None = None
     capabilities: list[str]
     note: str | None = None
     # raw editable fields (so the edit form prefills the real config, not a view):
@@ -49,7 +49,7 @@ class ModelUpsert(BaseModel):
     price_out_per_m: float = 0.0
     # W-05: how the user pays — threaded so an edited/added subscription model keeps
     # its mode. None → derive (back-compat); not surfaced as free for "subscription".
-    pricing_mode: Literal["metered", "subscription", "free"] | None = None
+    pricing_mode: Literal["metered", "subscription", "free", "unknown"] | None = None
 
 
 class OpenRouterModelDTO(BaseModel):
@@ -133,6 +133,9 @@ class ProviderCatalogueModelDTO(BaseModel):
 class ProviderEnableBody(BaseModel):
     model_id: str
     label: str | None = None
+    # Required when the provider's catalogue doesn't report a context window —
+    # silently defaulting (the old 8192) poisons the engine's context budgeting.
+    context_window: int | None = None
 
 
 class SecretBody(BaseModel):

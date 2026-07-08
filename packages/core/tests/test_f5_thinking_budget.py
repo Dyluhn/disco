@@ -673,3 +673,33 @@ async def test_default_attempt_is_one_thinking_unchanged():
     body = captured[0]
     # attempt=1 (default) → F5 disable-repair gate does NOT fire.
     assert body["chat_template_kwargs"]["enable_thinking"] is True
+
+
+# --- chat_template_kwargs host gate (glm-5.2-on-Go regression, 2026-07-08) -----
+# `chat_template_kwargs` is a llama.cpp/vLLM extension; strict clouds (Fireworks
+# behind OpenCode Go) 400 the whole request over it. The provider must send it
+# only to self-hosted-looking hosts.
+
+from disco.core.llm.openai_provider import _host_speaks_chat_template_kwargs
+
+
+def test_ctk_gate_public_hosts_refused():
+    for url in (
+        "https://opencode.ai/zen/go/v1",
+        "https://openrouter.ai/api/v1",
+        "https://api.openai.com/v1",
+        "https://api.fireworks.ai/inference/v1",
+    ):
+        assert _host_speaks_chat_template_kwargs(url) is False, url
+
+
+def test_ctk_gate_self_hosted_allowed():
+    for url in (
+        "http://127.0.0.1:8080/v1",
+        "http://localhost:8085/v1",  # dot-less hostname
+        "http://192.168.1.50:8085/v1",
+        "http://100.81.82.115:8000/v1",  # tailscale CGNAT
+        "http://blackbox:8085/v1",
+        "https://blackbox.taile518f9.ts.net/v1",
+    ):
+        assert _host_speaks_chat_template_kwargs(url) is True, url

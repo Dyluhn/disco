@@ -1020,6 +1020,96 @@ class FileReadTool:
         return ToolOutcome(success=True, content=header + "\n".join(out))
 
 
+# MONO-1 — monolith write gate (all tiers, like F1/ROOT-2). A single giant source
+# file is a build-killing trap: every later edit must be grounded through the
+# read-before-edit gates, and on a 1,700-line file that becomes a paginated
+# read→edit→refuse spiral (live forensics: one 71KB index.html cost 32 edit
+# refusals and the whole Playwright budget; multi-file builds of the same scope
+# paid 4-6 and passed). Prevention has to happen AT CREATION — linting is too
+# late — so file_write/file_append refuse to create or GROW a web-source file
+# past the cap, with a nudge naming the split. Targeted edit tools are exempt so
+# an existing monolith stays repairable, and shrinking rewrites are always
+# allowed (len(new) <= len(old)) so cleanup is never blocked.
+_MONOLITH_SOURCE_EXTS = frozenset(
+    {"html", "htm", "css", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte"}
+)
+_MONOLITH_MAX_LINES = 800
+_MONOLITH_MAX_BYTES = 48 * 1024
+
+
+# Per-extension split recipes: the refusal must tell the agent EXACTLY what to do
+# with the content it just tried to write — a bare "split it up" leaves it guessing
+# and re-attempting. The agent still holds the full content, so the recipe is
+# phrased as "re-issue it as these smaller writes".
+_MONOLITH_RECIPES: dict[str, str] = {
+    "html": (
+        "Re-issue this content as several smaller writes: (1) move everything inside "
+        "your <style> tags into styles.css and replace them with "
+        '<link rel="stylesheet" href="styles.css">; (2) move your <script> bodies '
+        'into app.js and replace them with <script src="app.js"></script>; '
+        "(3) if it contains several pages or large independent sections, write each "
+        "as its own .html file and link between them."
+    ),
+    "css": (
+        "Re-issue this content as several smaller stylesheets split by concern — "
+        "e.g. base.css (reset/typography/variables), layout.css (grid/sections), "
+        "components.css (cards/forms/buttons) — and add one <link> per sheet."
+    ),
+    "js": (
+        "Re-issue this content as several ES modules split by concern (one feature "
+        "per file), wire them with import/export, and load the entry with "
+        '<script type="module" src="app.js"></script>.'
+    ),
+}
+for _alias, _canon in (("htm", "html"), ("mjs", "js"), ("cjs", "js"), ("jsx", "js"),
+                       ("ts", "js"), ("tsx", "js"), ("vue", "js"), ("svelte", "js")):
+    _MONOLITH_RECIPES[_alias] = _MONOLITH_RECIPES[_canon]
+
+
+def _monolith_refusal(
+    path: str, *, tool_name: str, n_lines: int, n_bytes: int
+) -> ToolOutcome:
+    # Name the exact tripwire — the agent must know precisely what flagged it.
+    tripped = []
+    if n_lines > _MONOLITH_MAX_LINES:
+        tripped.append(f"{n_lines} lines > the {_MONOLITH_MAX_LINES}-line cap")
+    if n_bytes > _MONOLITH_MAX_BYTES:
+        tripped.append(
+            f"{n_bytes / 1024:.1f}KB > the {_MONOLITH_MAX_BYTES // 1024}KB cap"
+        )
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    recipe = _MONOLITH_RECIPES.get(ext, _MONOLITH_RECIPES["html"])
+    return ToolOutcome(
+        success=False,
+        error="monolith_write",
+        content=(
+            f"{tool_name} refused — single-source-file size gate: {path} would be "
+            f"{' and '.join(tripped)} (per-file limit for source files). Nothing was "
+            f"written; you still have the full content in hand. {recipe} Smaller "
+            f"files keep every later edit cheap and reliable — this is a hard gate, "
+            f"so re-attempting the same oversized write will be refused again."
+        ),
+    )
+
+
+def _monolith_gate(
+    path: str, *, tool_name: str, new_bytes: bytes, old_len: int | None
+) -> ToolOutcome | None:
+    """Refuse creating/growing a web-source file past the monolith cap.
+    old_len None = new file. Shrinking/equal rewrites always pass."""
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext not in _MONOLITH_SOURCE_EXTS:
+        return None
+    if old_len is not None and len(new_bytes) <= old_len:
+        return None  # never block a shrink/cleanup, even of a legacy monolith
+    n_lines = new_bytes.count(b"\n") + (0 if new_bytes.endswith(b"\n") else 1)
+    if len(new_bytes) <= _MONOLITH_MAX_BYTES and n_lines <= _MONOLITH_MAX_LINES:
+        return None
+    return _monolith_refusal(
+        path, tool_name=tool_name, n_lines=n_lines, n_bytes=len(new_bytes)
+    )
+
+
 class FileWriteArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to write.")
     content: str = Field(description="Full UTF-8 content to write.")
@@ -1033,7 +1123,10 @@ class FileWriteTool:
             "(preferred over shell redirection for new files). To change an EXISTING "
             "file, make a targeted edit with file_edit / file_replace_lines instead — "
             "only rewrite a whole existing file when a targeted edit cannot express "
-            "the change."
+            "the change. Source files (.html/.css/.js/…) are capped at "
+            f"{_MONOLITH_MAX_LINES} lines / {_MONOLITH_MAX_BYTES // 1024}KB each — "
+            "structure sites as separate files (index.html + styles.css + app.js; "
+            "one HTML file per page), never one monolith."
         ),
         args_model=FileWriteArgs,
         needs=_FS,
@@ -1108,6 +1201,16 @@ class FileWriteTool:
                 tool_name="file_write",
                 current_bytes=old_bytes,
             )
+        # MONO-1 — refuse creating/growing a source-file monolith (see gate docstring).
+        if (
+            m := _monolith_gate(
+                args.path,
+                tool_name="file_write",
+                new_bytes=raw,
+                old_len=len(old_bytes) if old_bytes is not None else None,
+            )
+        ) is not None:
+            return m
         gated = await _gated_write(ctx, args.path, raw, old_text)
         if gated is not None:
             return gated
@@ -1137,7 +1240,9 @@ class FileAppendTool:
         description=(
             "Append UTF-8 content to a workspace file (creating it if absent). Use "
             "this instead of shell `>>` — raw-shell append corrupts on special "
-            "characters."
+            "characters. Growing a source file (.html/.css/.js/…) past "
+            f"{_MONOLITH_MAX_LINES} lines / {_MONOLITH_MAX_BYTES // 1024}KB is "
+            "refused — put new sections/pages in their own files instead."
         ),
         args_model=FileAppendArgs,
         needs=_FS,
@@ -1169,6 +1274,25 @@ class FileAppendTool:
                 tool_name="file_append",
                 current_bytes=existing,
             )
+        # MONO-1 — an append that grows a source file PAST the monolith cap is the
+        # same trap as a monolith file_write, arriving in installments. Refuse only
+        # the CROSSING (the RESULTING size is what's judged, not this chunk); a file
+        # already over the cap (legacy, pre-gate) stays freely appendable so repairs
+        # of an existing monolith are never obstructed — the gate's job is to stop
+        # new monoliths forming, not to wall off old ones mid-fix.
+        already_over = old_text is not None and (
+            len(existing) > _MONOLITH_MAX_BYTES
+            or existing.count(b"\n") + 1 > _MONOLITH_MAX_LINES
+        )
+        if not already_over and (
+            m := _monolith_gate(
+                args.path,
+                tool_name="file_append",
+                new_bytes=combined,
+                old_len=None,  # judge the resulting size outright (no shrink case here)
+            )
+        ) is not None:
+            return m
         # W3 — syntax gate: write combined; auto-revert to old if errors introduced.
         gated = await _gated_write(ctx, args.path, combined, old_text)
         if gated is not None:

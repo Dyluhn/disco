@@ -334,27 +334,57 @@ class ConfigState:
         catalogue_id = self._unique_provider_catalogue_id(
             provider.id, model_id, body.label or (catalogue_model.label if catalogue_model else None)
         )
+        # Context: NEVER silently default — context_window drives the engine's
+        # context budgeting, so a wrong-low guess (the old 8192) over-snips every
+        # build on a big model. The caller must supply it when the provider's
+        # catalogue doesn't report one.
+        context_window = (
+            body.context_window
+            if body.context_window is not None
+            else (catalogue_model.context_window if catalogue_model else None)
+        )
+        if context_window is None:
+            raise ValueError(
+                f"context window required: {provider.label} does not report context "
+                "windows — pass context_window with the model's real limit"
+            )
+        # Pricing: only claim a pay model the catalogue actually reported.
+        # Absent pricing → "unknown" (rendered as such), never a fake Free.
+        prices_known = catalogue_model is not None and (
+            catalogue_model.price_in_per_m is not None
+            or catalogue_model.price_out_per_m is not None
+        )
+        # Capabilities: provider catalogues rarely report them (Go reports none),
+        # and an EMPTY set silently disqualifies the model from the Build/agent
+        # driver pickers (tool-calling gate) — the enable "works" but the model
+        # only surfaces in capability-agnostic roles, which reads as broken.
+        # Default modern-serving table stakes (tool_calling + json_mode; +
+        # long_context per its >~64k semantics); a genuinely tool-less model
+        # fails loudly at run time, which is diagnosable — invisibility is not.
+        # ANCHORED_EDIT stays opt-in by design (unknown models must not get it).
+        capabilities = catalogue_model.capabilities if catalogue_model else []
+        if not capabilities:
+            capabilities = ["tool_calling", "json_mode"] + (
+                ["long_context"] if context_window >= 65536 else []
+            )
         upsert = ModelUpsert(
             id=catalogue_id,
             model_id=model_id,
             base_url=provider.base_url,
             api_key_env=provider.secret_name,
-            context_window=(
-                catalogue_model.context_window
-                if catalogue_model and catalogue_model.context_window is not None
-                else 8192
-            ),
-            capabilities=catalogue_model.capabilities if catalogue_model else [],
+            context_window=context_window,
+            capabilities=capabilities,
             price_in_per_m=(
                 catalogue_model.price_in_per_m
-                if catalogue_model and catalogue_model.price_in_per_m is not None
+                if prices_known and catalogue_model.price_in_per_m is not None
                 else 0.0
             ),
             price_out_per_m=(
                 catalogue_model.price_out_per_m
-                if catalogue_model and catalogue_model.price_out_per_m is not None
+                if prices_known and catalogue_model.price_out_per_m is not None
                 else 0.0
             ),
+            pricing_mode="metered" if prices_known else "unknown",
         )
         return self.add_model(upsert)
 

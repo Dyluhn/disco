@@ -19,7 +19,7 @@ export const CAPABILITY_LABEL: Record<Capability, string> = {
 /** How the user pays for a model — the single source of truth for the cost
  * surfaces (W-05). "subscription" = a flat-rate plan: NO per-token price, shown as
  * "Subscription" (never "Free", never a $ rate). undefined → derive from price. */
-export type PricingMode = "metered" | "subscription" | "free";
+export type PricingMode = "metered" | "subscription" | "free" | "unknown";
 
 export interface ModelInfo {
   id: string; // catalogue key, e.g. "driver-local"
@@ -123,6 +123,8 @@ export interface ProviderCatalogueModel {
 export interface ProviderEnableBody {
   model_id: string;
   label?: string | null;
+  /** Required when the provider's catalogue doesn't report a context window. */
+  context_window?: number | null;
 }
 
 /** Create/edit payload for a catalogue model (mirrors the backend ModelUpsert). */
@@ -151,7 +153,15 @@ export function isFree(m: ModelInfo): boolean {
   if (m.pricing_mode === "subscription") return false;
   if (m.pricing_mode === "free") return true;
   if (m.pricing_mode === "metered") return false;
+  // "unknown" (provider reported no pricing) is NOT free — an unverified $0
+  // must never render as verified-no-charge.
+  if (m.pricing_mode === "unknown") return false;
   return m.provider === "local" || (m.price_in_per_m === 0 && m.price_out_per_m === 0);
+}
+
+/** Pay model unverified: the provider's catalogue reported no pricing. */
+export function isPricingUnknown(m: ModelInfo): boolean {
+  return m.pricing_mode === "unknown";
 }
 
 /** Metered = pay per token → the $ rate / cost meter applies. A subscription or

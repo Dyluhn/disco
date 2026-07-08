@@ -45,20 +45,30 @@ async function isVisible(page: Page, sel: string): Promise<boolean> {
 }
 
 /** Drive the run to a FRESH Finished state, servicing whatever gates appear.
- * `requireActive`: iteration mode — refuse the stale Finished label until the
- * run has been seen ACTIVE (Working status, a gate, or "Reading your message").
- * Returns counters for the evidence log. Throws on budget exhaustion or
- * question-thrash (>2 question gates in one phase). */
+ *
+ * Freshness oracle (v3): state VERSION, not observed transitions. v2 required
+ * WITNESSING an active phase before accepting FINISHED — but the chip is fed by
+ * the UI's live stream, and on a page alive 45+ minutes that stream can die
+ * silently. Frozen chip → never "saw" active → a genuinely fresh FINISHED
+ * refused forever → wedged 3 complete runs (2026-07-08). Now the chip exposes
+ * data-seq (highest event seq observed); a FINISHED with seq > startSeq (the
+ * seq before we sent the edit) IS fresh, whether or not we watched it happen.
+ * A watchdog reload heals dead streams: no seq movement for 3 min → reload;
+ * the state frame re-fetch reports current status + last_seq regardless of
+ * stream health. Throws on budget exhaustion or question-thrash. */
 async function driveToFinished(
   page: Page,
   budgetMs: number,
   phase: string,
   requireActive: boolean,
+  startSeq: number,
 ): Promise<{ approvals: number; questions: number }> {
   const deadline = Date.now() + budgetMs;
   let sawActive = !requireActive;
   let approvals = 0;
   let questions = 0;
+  let lastSeq = -1;
+  let lastSeqMoveAt = Date.now();
 
   while (Date.now() < deadline) {
     // Gate 1: plan approval (initial plan or a steer's revised plan).
@@ -97,14 +107,46 @@ async function driveToFinished(
       continue;
     }
 
-    const body = await page.locator("body").innerText();
-    // Dead states fail immediately — that IS the gauntlet's job.
-    if (/\bSTUCK\b/i.test(body)) throw new Error(`${phase}: STUCK`);
+    // Read phase + state-version DETERMINISTICALLY from the status chip — NEVER
+    // by regexing the page body (agent prose false-matches "working"/"finished").
+    // Null until the first state frame lands → keep polling.
+    const chip = page.locator('[data-disco-control="build.status"]').first();
+    const runStatus = await chip.getAttribute("data-status").catch(() => null);
+    const chipSeq = Number((await chip.getAttribute("data-seq").catch(() => null)) ?? "0") || 0;
 
-    if (!sawActive && /\bWorking\b|\bReading your message\b|\bRunning\b/i.test(body)) {
+    // Dead states fail immediately — that IS the gauntlet's job.
+    if (runStatus === "STUCK") throw new Error(`${phase}: STUCK`);
+    if (runStatus === "ERROR") throw new Error(`${phase}: ERROR`);
+
+    // Watchdog: the chip is stream-fed; a long-lived page's stream can die
+    // silently and freeze the chip mid-run. No seq movement for 3 min while the
+    // server should be working → reload; the fresh state frame reports current
+    // status + last_seq without needing a healthy stream.
+    if (chipSeq > lastSeq) {
+      lastSeq = chipSeq;
+      lastSeqMoveAt = Date.now();
+    } else if (Date.now() - lastSeqMoveAt > 180_000) {
+      await page.reload();
+      await page.waitForTimeout(3_000);
+      lastSeqMoveAt = Date.now();
+      continue;
+    }
+
+    // Witnessing an active/gated phase still counts (fast acceptance)...
+    if (
+      runStatus === "RUNNING" ||
+      runStatus === "PAUSED" ||
+      runStatus === "AWAITING_PLAN_APPROVAL" ||
+      runStatus === "AWAITING_USER_QUESTION" ||
+      runStatus === "AWAITING_USER_DECISION" ||
+      runStatus === "WAITING_FOR_CONFIRMATION"
+    ) {
       sawActive = true;
     }
-    if (sawActive && /\bfinished\b/i.test(body) && !/\bWorking\b/i.test(body)) {
+    // ...but the AUTHORITATIVE freshness signal is the state version: events
+    // exist beyond the seq recorded before this phase's edit was sent.
+    const fresh = chipSeq > startSeq;
+    if ((sawActive || fresh) && runStatus === "FINISHED") {
       // Fresh finish — require the deliverable handoff too.
       await expect(page.locator(DELIVER).first()).toBeVisible({ timeout: 60_000 });
       return { approvals, questions };
@@ -114,18 +156,68 @@ async function driveToFinished(
   throw new Error(`${phase}: budget exhausted without a fresh Finished`);
 }
 
+/** Current state-version from the chip (0 if unmounted/no frame yet). */
+async function chipSeqNow(page: Page): Promise<number> {
+  const raw = await page
+    .locator('[data-disco-control="build.status"]')
+    .first()
+    .getAttribute("data-seq")
+    .catch(() => null);
+  return Number(raw ?? "0") || 0;
+}
+
 test(`gauntlet BUILD ${LABEL}: build finishes, then ${EDITS.length} clean iterations`, async ({ page }) => {
   test.setTimeout(BUDGET + EDITS.length * ITER_BUDGET + 600_000);
   expect(BRIEF, "B_BRIEF env is required").toBeTruthy();
   fs.mkdirSync(EVID, { recursive: true });
   const shot = (n: string) => page.screenshot({ path: `${EVID}/${n}.png`, fullPage: true });
 
+  // Remote-fleet mode: the packaged deploy can't auto-pair from a remote browser,
+  // so the runner pre-mints a session (pairing-token mint via the deploy host) and
+  // hands us the cookie. Same-host cookies reach both servers (shared signer).
+  const sessionCookie = process.env.LIVE_SESSION_COOKIE ?? "";
+  if (sessionCookie) {
+    const base = process.env.LIVE_BASE_URL ?? "";
+    await page.context().addCookies([
+      { name: "disco_session", value: sessionCookie, url: base || "http://localhost" },
+    ]);
+  }
+
   await page.goto("/");
-  await page.getByText("build", { exact: true }).first().click();
+  // Force a FRESH build compose. Clicking the build chip alone RESUMES the most
+  // recent ACTIVE build conversation (resumeTargetFor → /build/:cid), so a
+  // suspended orphan from a prior run hijacks the surface and there is no blank
+  // composer to type into. "New" (shell.nav-new) calls markAllModesFresh(),
+  // which flips every mode's resume target back to the splash composer — click
+  // it BEFORE the build chip so the chip lands on a clean build session.
+  await page.locator('[data-disco-control="shell.nav-new"]').first().click();
+  await page.waitForTimeout(600);
+  await page.locator('[data-disco-control="shell.mode-build"]').first().click();
   await page.waitForTimeout(1_200);
   await shot("01-build-surface");
 
-  const input = page.locator("textarea, [contenteditable=true], input[type=text]").first();
+  // Guard: a fresh compose must not carry a prior run's plan-review / kill UI.
+  const pre = await page.locator("body").innerText();
+  expect(pre, "expected a fresh build composer, not a resumed run").not.toMatch(
+    /Reviewing plan|\bKill\b/i,
+  );
+
+  // Autonomous (headless) mode: auto-approves its own plan, won't ask
+  // questions, and stops CLEANLY instead of dangling at "what next?". This is
+  // the hands-off "build + 5 quick edits, no pause" scenario the gauntlet is
+  // meant to prove, and it routes an actionless-after-completed-edit through
+  // the synthesize-finish ladder rather than the non-autonomous ask-user path.
+  // Default is OFF (fresh browser context) → a single click enables it.
+  const autoToggle = page.locator('[data-disco-control="build.autonomous-toggle"]').first();
+  if (await autoToggle.isVisible().catch(() => false)) {
+    await autoToggle.click();
+    await page.waitForTimeout(400);
+    await shot("01b-autonomous-on");
+  }
+
+  const input = page
+    .locator("textarea:visible, [contenteditable=true]:visible, input[type=text]:visible")
+    .first();
   await input.click();
   await input.fill(BRIEF);
   await page.keyboard.press("Enter");
@@ -135,7 +227,7 @@ test(`gauntlet BUILD ${LABEL}: build finishes, then ${EDITS.length} clean iterat
   const early = await page.locator("body").innerText();
   expect(early).not.toMatch(/NetworkError|Failed to fetch|csrf required/i);
 
-  const initial = await driveToFinished(page, BUDGET, "initial build", false);
+  const initial = await driveToFinished(page, BUDGET, "initial build", false, 0);
   await shot("04-finished");
   fs.appendFileSync(
     `${EVID}/RESULT.txt`,
@@ -144,13 +236,16 @@ test(`gauntlet BUILD ${LABEL}: build finishes, then ${EDITS.length} clean iterat
 
   for (let i = 0; i < EDITS.length; i++) {
     const n = i + 1;
+    // Record the state version BEFORE the edit: anything beyond this seq is
+    // work caused by (or after) this edit — the freshness baseline.
+    const preEditSeq = await chipSeqNow(page);
     const composer = page.locator("textarea:visible, [contenteditable=true]:visible").last();
     await composer.click();
     await composer.fill(EDITS[i]);
     await page.keyboard.press("Enter");
     await shot(`10-iter${n}-sent`);
 
-    const r = await driveToFinished(page, ITER_BUDGET, `iteration ${n}`, true);
+    const r = await driveToFinished(page, ITER_BUDGET, `iteration ${n}`, true, preEditSeq);
     await shot(`11-iter${n}-finished`);
     fs.appendFileSync(
       `${EVID}/RESULT.txt`,

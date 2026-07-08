@@ -97,3 +97,4 @@ tmux-client-*.log
 .claude/*.txt
 .claude/*-prompt.md
 .claude/*-review-prompt.md
+.wire-dump/

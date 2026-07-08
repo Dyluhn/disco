@@ -98,6 +98,12 @@ export interface BuildStreamState {
    *  may clear the suspended badge — a fresh page load replays the whole run,
    *  and its historical RUNNING events must not erase what the frame just said. */
   frameSeq: number;
+  /** Highest event seq observed from ANY source (state frames or events).
+   *  Monotonic per conversation and survives reconnects/reloads (the state
+   *  frame re-reports last_seq) — a state-VERSION the live gauntlet reads via
+   *  data-seq to judge "did this FINISHED happen after my edit?" without
+   *  trusting an eternally-healthy stream to show it the transitions. */
+  maxSeq: number;
   error: string | null;
 }
 
@@ -115,6 +121,7 @@ const initial: BuildStreamState = {
   autonomous: false,
   assist: false,
   frameSeq: 0,
+  maxSeq: 0,
   error: null,
 };
 
@@ -132,6 +139,18 @@ type Action =
   | { type: "local_message"; event: AgentEvent };
 
 function reducer(state: BuildStreamState, action: Action): BuildStreamState {
+  const next = reducerInner(state, action);
+  // Fold the highest seen seq in ONE place rather than at every return site:
+  // state frames report last_seq; events carry their own seq (absent on
+  // optimistic/live-only frames). Reset passes through untouched (back to 0).
+  if (action.type !== "frame") return next;
+  const f = action.frame;
+  const seen =
+    f.type === "state" ? (f.state.last_seq ?? 0) : f.type === "event" ? (f.event.seq ?? 0) : 0;
+  return seen > next.maxSeq ? { ...next, maxSeq: seen } : next;
+}
+
+function reducerInner(state: BuildStreamState, action: Action): BuildStreamState {
   if (action.type === "reset") return initial;
   if (action.type === "local_message") {
     // Optimistic echo: render the user's just-sent steer/revise message

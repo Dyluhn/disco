@@ -68,9 +68,12 @@ class ModelEntry(BaseModel):
     #   "subscription" — a flat-rate plan (e.g. a MiniMax/Claude subscription proxied
     #                    locally): NO per-token price, shown as "Subscription", not "Free".
     #   "free"         — genuinely free (local / no charge).
+    #   "unknown"      — pay model NOT verified (the provider's catalogue reports no
+    #                    pricing). Shown as "pricing unknown", never as Free: a 0
+    #                    price with unknown mode must not read as verified-no-charge.
     # None → DERIVE for back-compat: price 0 → free, else metered (so existing
     # catalogues keep working without a migration).
-    pricing_mode: Literal["metered", "subscription", "free"] | None = None
+    pricing_mode: Literal["metered", "subscription", "free", "unknown"] | None = None
     # [EXTENSION] §8 requires a model family for prompt selection but §7's
     # ModelEntry omitted the field. Optional here: if None, the family is
     # derived from model_id (prompts.derive_family). Set it to pin a [VERIFY]

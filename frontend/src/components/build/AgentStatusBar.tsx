@@ -59,6 +59,7 @@ export function AgentStatusBar({
   onResume,
   events = [],
   modelId,
+  seq,
 }: {
   status: ConversationStatus;
   /** BP-15: null until the first state frame — renders muted '…'. */
@@ -78,6 +79,10 @@ export function AgentStatusBar({
   events?: AgentEvent[];
   /** RP-14: the currently selected model id for rate lookup. */
   modelId?: string | null;
+  /** Highest observed event seq (stream maxSeq) — exposed as data-seq so the
+   *  live gauntlet judges finish-freshness by state VERSION, not by having
+   *  witnessed the transitions on a possibly-dead stream. */
+  seq?: number;
 }) {
   const active = ACTIVE.includes(status);
 
@@ -112,6 +117,13 @@ export function AgentStatusBar({
     <div className="flex items-center justify-between gap-inline">
       <div className="flex items-center gap-inline">
         <span
+          // The raw ConversationStatus is exposed on data-status so tests read the
+          // real phase deterministically — never by regexing the page body, where the
+          // status label collides with agent chat prose (an agent SAYING "working" is
+          // not the run being RUNNING). The visible text stays the friendly label.
+          data-disco-control="build.status"
+          data-status={status}
+          data-seq={seq ?? 0}
           className={cn(
             "flex items-center gap-hair font-ui text-[0.8rem]",
             waiting ? "text-warn" : active ? "text-text" : "text-text-muted",
