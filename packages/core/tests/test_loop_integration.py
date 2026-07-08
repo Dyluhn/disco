@@ -16,14 +16,61 @@ from disco.core import (
     ConversationStatus,
     ErrorEvent,
     EventSource,
+    LLMMessage,
     MessageEvent,
+    PlanEvent,
+    StatusEvent,
 )
-from disco.core.llm import DefaultLLMRouter, LLMContentFiltered, ProposedToolCall
-from disco.core.loop import NeverConfirm, RouterAgent
+from disco.core.llm import DefaultLLMRouter, LLMContentFiltered, OperatingMode, ProposedToolCall
+from disco.core.llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
+from disco.core.loop import BuildAgent, NeverConfirm, RouterAgent
 from llm_fakes import FakeModelProvider, simple_config  # the router-contract test config
 from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
+_EMPTY_REASONING_REPAIR_REMINDER = (
+    "Your previous response produced no visible text and no tool call — call exactly "
+    "one tool now, or say in plain text what you need."
+)
+
+
+def _empty_reasoning_response(reasoning_len: int = 17) -> dict:
+    return {
+        "text": "",
+        "finish_reason": "stop",
+        "response_metadata": {
+            EMPTY_REASONING_ONLY_METADATA_KEY: {
+                "finish_reason": "stop",
+                "content_len": 0,
+                "reasoning_len": reasoning_len,
+                "tool_call_count": 0,
+            }
+        },
+    }
+
+
+def _diagnostic_events(events: list):
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == EMPTY_REASONING_ONLY_METADATA_KEY
+    ]
+
+
+async def _seed_approved_incomplete_plan(store):
+    await store.append(
+        CID,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="build it"),
+        ),
+    )
+    await store.append(CID, PlanEvent(summary="build it", steps=[{"title": "ship"}]))
+    await store.append(
+        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+    )
 
 
 async def test_loop_router_event_contracts_compose():
@@ -74,6 +121,176 @@ async def test_loop_router_event_contracts_compose():
     replayed = ConversationState.reconstruct(CID, events)
     assert replayed.execution_status == ConversationStatus.FINISHED
     assert replayed == ConversationState.reconstruct(CID, events)  # pure
+
+
+async def test_empty_reasoning_turn_retries_once_and_executes_tool():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=23),
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert provider.calls == 3
+    assert provider.seen[1].messages[-1].content == _EMPTY_REASONING_REPAIR_REMINDER
+
+    events = await store.get_events(CID)
+    diagnostics = _diagnostic_events(events)
+    assert len(diagnostics) == 1
+    assert diagnostics[0].meta["finish_reason"] == "stop"
+    assert diagnostics[0].meta["content_len"] == 0
+    assert diagnostics[0].meta["reasoning_len"] == 23
+    assert diagnostics[0].meta["tool_call_count"] == 0
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+
+
+async def test_empty_reasoning_retry_empty_counts_into_actionless_breaker():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=11),
+            _empty_reasoning_response(reasoning_len=13),
+            {"text": "ordinary no-op 1"},
+            {"text": "ordinary no-op 2"},
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop.mode = OperatingMode.LONG_HORIZON
+    await _seed_approved_incomplete_plan(store)
+
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert len(_diagnostic_events(events)) == 2
+    assert [
+        e.message.content
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.message.content.startswith("ordinary no-op")
+    ] == ["ordinary no-op 1", "ordinary no-op 2"]
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert provider.calls == 4
+
+
+async def test_ordinary_prose_noop_does_not_empty_reasoning_retry():
+    provider = SequenceProvider(
+        [
+            {"text": "plain no-op"},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("check cwd")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 3
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    events = await store.get_events(CID)
+    assert _diagnostic_events(events) == []
+    assert not any(
+        _EMPTY_REASONING_REPAIR_REMINDER in m.content
+        for req in provider.seen
+        for m in req.messages
+    )
+
+
+async def test_ordinary_tool_call_turn_is_untouched_by_empty_reasoning_repair():
+    provider = SequenceProvider(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("check cwd")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 2
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert _diagnostic_events(await store.get_events(CID)) == []
+
+
+async def test_finish_length_empty_turn_uses_existing_truncation_repair():
+    provider = SequenceProvider(
+        [
+            {"text": "", "finish_reason": "length"},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("check cwd")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 3
+    events = await store.get_events(CID)
+    assert _diagnostic_events(events) == []
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "cut off mid-sentence" in e.message.content
+        for e in events
+    )
+    assert not any(
+        _EMPTY_REASONING_REPAIR_REMINDER in m.content
+        for req in provider.seen
+        for m in req.messages
+    )
 
 
 async def test_truncated_prose_does_not_end_run_and_injects_continue_reminder():

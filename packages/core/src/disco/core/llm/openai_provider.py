@@ -38,6 +38,7 @@ from .errors import (
 )
 from .toolcall_recovery import recover_tool_calls
 from .types import (
+    EMPTY_REASONING_ONLY_METADATA_KEY,
     CompletionRequest,
     CompletionResponse,
     ProposedToolCall,
@@ -601,11 +602,37 @@ class OpenAIProvider:
             or 0
         )
 
+    @staticmethod
+    def _empty_reasoning_only_metadata(
+        *,
+        finish_reason: FinishReason,
+        content_len: int,
+        reasoning_len: int,
+        tool_call_count: int,
+    ) -> dict:
+        if (
+            finish_reason == "stop"
+            and content_len == 0
+            and reasoning_len > 0
+            and tool_call_count == 0
+        ):
+            return {
+                EMPTY_REASONING_ONLY_METADATA_KEY: {
+                    "finish_reason": finish_reason,
+                    "content_len": content_len,
+                    "reasoning_len": reasoning_len,
+                    "tool_call_count": tool_call_count,
+                }
+            }
+        return {}
+
     def _to_response(self, req: CompletionRequest, model: str, data: dict) -> CompletionResponse:
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
         usage = data.get("usage") or {}
         model_content = msg.get("content") or ""
+        reasoning_content = msg.get("reasoning_content")
+        reasoning_len = len(reasoning_content) if isinstance(reasoning_content, str) else 0
         # B9: Completion is a continuation of the prefill.
         text = (req.assistant_prefill or "") + model_content
         # F1: weak-model recovery. When the structured tool_calls channel is empty
@@ -617,12 +644,13 @@ class OpenAIProvider:
         recovered: list[ProposedToolCall] = []
         finish_reason = _map_finish(choice.get("finish_reason"))
         if not raw_tool_calls and req.assist:
-            recovered = recover_tool_calls(model_content, msg.get("reasoning_content"))
+            recovered = recover_tool_calls(model_content, reasoning_content)
             if recovered:
                 finish_reason = "tool_calls"
+        tool_calls = raw_tool_calls or recovered
         return CompletionResponse(
             text=text,
-            tool_calls=raw_tool_calls or recovered,
+            tool_calls=tool_calls,
             usage=TokenUsage(
                 input_tokens=int(usage.get("prompt_tokens", 0) or 0),
                 output_tokens=int(usage.get("completion_tokens", 0) or 0),
@@ -633,6 +661,12 @@ class OpenAIProvider:
             model_used=data.get("model", model),
             request_id=req.request_id,
             routing=None,  # the router attaches the RoutingDecision (RT1)
+            response_metadata=self._empty_reasoning_only_metadata(
+                finish_reason=finish_reason,
+                content_len=len(model_content),
+                reasoning_len=reasoning_len,
+                tool_call_count=len(tool_calls),
+            ),
         )
 
     @staticmethod
@@ -882,6 +916,7 @@ class OpenAIProvider:
             raise LLMTransientError(f"connection error: {exc}", provider=self.name) from exc
 
         accumulated_text = "".join(content)
+        reasoning_content = "".join(reasoning_buf)
         tool_calls: list[ProposedToolCall] = self._tool_calls(
             [
                 {
@@ -898,7 +933,7 @@ class OpenAIProvider:
         # see byte-identical behavior to today.
         finish_reason = _map_finish(finish)
         if not tool_calls and req.assist:
-            recovered = recover_tool_calls(accumulated_text, "".join(reasoning_buf))
+            recovered = recover_tool_calls(accumulated_text, reasoning_content)
             if recovered:
                 tool_calls = recovered
                 finish_reason = "tool_calls"
@@ -915,6 +950,12 @@ class OpenAIProvider:
             model_used=model_used,
             request_id=req.request_id,
             routing=None,
+            response_metadata=self._empty_reasoning_only_metadata(
+                finish_reason=finish_reason,
+                content_len=len(accumulated_text) - len(req.assistant_prefill or ""),
+                reasoning_len=len(reasoning_content),
+                tool_call_count=len(tool_calls),
+            ),
         )
         yield StreamChunk(done=True, final=final)
 

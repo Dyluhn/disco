@@ -207,6 +207,7 @@ class SequenceProvider:
             model_used=model,
             request_id=req.request_id,
             routing=None,
+            response_metadata=spec.get("response_metadata", {}),
         )
 
     async def stream_complete(self, req, *, model):
