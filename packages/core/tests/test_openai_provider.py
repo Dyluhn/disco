@@ -203,6 +203,20 @@ async def test_streaming_empty_reasoning_only_response_is_flagged():
     }
 
 
+async def test_streaming_blank_stop_response_is_flagged():
+    content = _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+
+    _, final, _ = await _collect(_stream_provider(content))
+
+    assert final is not None
+    assert final.response_metadata[EMPTY_REASONING_ONLY_METADATA_KEY] == {
+        "finish_reason": "stop",
+        "content_len": 0,
+        "reasoning_len": 0,
+        "tool_call_count": 0,
+    }
+
+
 @pytest.mark.parametrize(
     "content",
     [
@@ -223,7 +237,7 @@ async def test_streaming_empty_reasoning_only_response_is_flagged():
             {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
             {"choices": [{"delta": {}, "finish_reason": "length"}]},
         ),
-        _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]}),
+        _sse({"choices": [{"delta": {}, "finish_reason": "length"}]}),
     ],
 )
 async def test_streaming_empty_reasoning_only_neighbors_are_not_flagged(content: bytes):

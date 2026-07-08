@@ -32,6 +32,11 @@ _EMPTY_REASONING_REPAIR_REMINDER = (
     "Your previous response produced no visible text and no tool call — call exactly "
     "one tool now, or say in plain text what you need."
 )
+_PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
+_PROSE_NOOP_REPAIR_REMINDER = (
+    "You described the next action instead of performing it — call the tool for it "
+    "in THIS turn."
+)
 
 
 def _empty_reasoning_response(reasoning_len: int = 17) -> dict:
@@ -56,6 +61,16 @@ def _diagnostic_events(events: list):
         if isinstance(e, MessageEvent)
         and e.source == EventSource.ENVIRONMENT
         and e.meta.get("diagnostic") == EMPTY_REASONING_ONLY_METADATA_KEY
+    ]
+
+
+def _prose_noop_diagnostic_events(events: list):
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == _PROSE_NOOP_REPAIR_DIAGNOSTIC
     ]
 
 
@@ -163,13 +178,43 @@ async def test_empty_reasoning_turn_retries_once_and_executes_tool():
     )
 
 
+async def test_truly_blank_turn_retries_once_and_executes_tool():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=0),
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert provider.calls == 3
+    assert provider.seen[1].messages[-1].content == _EMPTY_REASONING_REPAIR_REMINDER
+
+    diagnostics = _diagnostic_events(await store.get_events(CID))
+    assert len(diagnostics) == 1
+    assert diagnostics[0].meta["reasoning_len"] == 0
+
+
 async def test_empty_reasoning_retry_empty_counts_into_actionless_breaker():
     provider = SequenceProvider(
         [
             _empty_reasoning_response(reasoning_len=11),
             _empty_reasoning_response(reasoning_len=13),
-            {"text": "ordinary no-op 1"},
-            {"text": "ordinary no-op 2"},
+            {"text": ""},
+            {"text": ""},
         ]
     )
     router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
@@ -182,13 +227,6 @@ async def test_empty_reasoning_retry_empty_counts_into_actionless_breaker():
 
     events = await store.get_events(CID)
     assert len(_diagnostic_events(events)) == 2
-    assert [
-        e.message.content
-        for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.AGENT
-        and e.message.content.startswith("ordinary no-op")
-    ] == ["ordinary no-op 1", "ordinary no-op 2"]
     assert any(
         isinstance(e, StatusEvent)
         and e.status == ConversationStatus.PAUSED
@@ -197,6 +235,195 @@ async def test_empty_reasoning_retry_empty_counts_into_actionless_breaker():
     )
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     assert provider.calls == 4
+
+
+async def test_prose_noop_in_execution_retries_once_and_executes_tool():
+    provider = SequenceProvider(
+        [
+            {"text": "Let me list the files next."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert provider.calls == 3
+    assert provider.seen[1].messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
+
+    events = await store.get_events(CID)
+    diagnostics = _prose_noop_diagnostic_events(events)
+    assert len(diagnostics) == 1
+    assert diagnostics[0].meta["content_len"] == len("Let me list the files next.")
+    assert not any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.message.content == "Let me list the files next."
+        for e in events
+    )
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+
+
+async def test_prose_noop_retry_prose_again_counts_into_actionless_breaker():
+    provider = SequenceProvider(
+        [
+            {"text": "I will inspect the files next."},
+            {"text": "Still about to inspect."},
+            {"text": "ordinary no-op 2"},
+            {"text": "ordinary no-op 3"},
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop.mode = OperatingMode.LONG_HORIZON
+    await _seed_approved_incomplete_plan(store)
+
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert len(_prose_noop_diagnostic_events(events)) == 1
+    assert [
+        e.message.content
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and (
+            e.message.content.startswith("Still")
+            or e.message.content.startswith("ordinary")
+        )
+    ] == ["Still about to inspect.", "ordinary no-op 2", "ordinary no-op 3"]
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert provider.calls == 4
+
+
+async def test_second_prose_noop_in_same_execution_segment_gets_no_second_nudge():
+    provider = SequenceProvider(
+        [
+            {"text": "Let me list the files next."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {"text": "Now I will check the current directory."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("inspect the workspace")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell", "shell"]
+    events = await store.get_events(CID)
+    assert len(_prose_noop_diagnostic_events(events)) == 1
+    assert sum(
+        1
+        for req in provider.seen
+        if req.messages and req.messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
+    ) == 1
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.message.content == "Now I will check the current directory."
+        for e in events
+    )
+
+
+async def test_planning_mode_prose_turn_gets_no_prose_noop_nudge():
+    provider = SequenceProvider(
+        [
+            {"text": "I will gather context and then submit a plan."},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="submit_plan",
+                        arguments={"summary": "p", "steps": [{"title": "do it"}]},
+                    )
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop.mode = OperatingMode.PLANNING
+
+    await loop.send_message("build it")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert _prose_noop_diagnostic_events(events) == []
+    assert not any(
+        _PROSE_NOOP_REPAIR_REMINDER in m.content
+        for req in provider.seen
+        for m in req.messages
+    )
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.message.content == "I will gather context and then submit a plan."
+        for e in events
+    )
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+async def test_empty_reasoning_and_prose_noop_repairs_are_independent():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=19),
+            {"text": "I will list the files next."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    events = await store.get_events(CID)
+    assert len(_diagnostic_events(events)) == 1
+    assert len(_prose_noop_diagnostic_events(events)) == 1
+    assert provider.seen[1].messages[-1].content == _EMPTY_REASONING_REPAIR_REMINDER
+    assert provider.seen[2].messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
 
 
 async def test_ordinary_prose_noop_does_not_empty_reasoning_retry():

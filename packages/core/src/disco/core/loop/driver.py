@@ -100,6 +100,10 @@ _EMPTY_REASONING_REPAIR_REMINDER = (
     "Your previous response produced no visible text and no tool call — call exactly "
     "one tool now, or say in plain text what you need."
 )
+_PROSE_NOOP_REPAIR_REMINDER = (
+    "You described the next action instead of performing it — call the tool for it "
+    "in THIS turn."
+)
 
 
 def _view_has_current_objective(view: View) -> bool:
@@ -168,6 +172,20 @@ class Driver:
                 meta={
                     "diagnostic": EMPTY_REASONING_ONLY_METADATA_KEY,
                     **diagnostic,
+                },
+            )
+        )
+
+    async def _persist_prose_noop_diagnostic(self, step: AgentStep) -> None:
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=_PROSE_NOOP_REPAIR_REMINDER),
+                meta={
+                    "diagnostic": signals.PROSE_NOOP_REPAIR_DIAGNOSTIC,
+                    "content_len": len(step.thought),
+                    "tool_call_count": 0,
+                    "llm_response_id": step.llm_response_id,
                 },
             )
         )
@@ -605,6 +623,7 @@ class Driver:
             provider_retry_count = 0  # P2: tracks LLMProviderUnavailable occurrences
             protocol_repair_count = 0
             empty_reasoning_repair_count = 0
+            prose_noop_repair_count = 0
             transient_messages: list[LLMMessage] = []
             repaired_view: View | None = None
             while True:
@@ -663,6 +682,27 @@ class Driver:
                                 )
                             )
                             continue
+
+                    if (
+                        mode != OperatingMode.PLANNING
+                        and step.tool_call is None
+                        and not step.finished
+                        and not step.truncated
+                        and step.thought.strip()
+                        and prose_noop_repair_count < 1
+                        and not signals.prose_noop_repair_seen_current_execution_segment(
+                            events
+                        )
+                    ):
+                        prose_noop_repair_count += 1
+                        await self._persist_prose_noop_diagnostic(step)
+                        transient_messages.append(
+                            LLMMessage(
+                                role="user",
+                                content=_PROSE_NOOP_REPAIR_REMINDER,
+                            )
+                        )
+                        continue
 
                     # Rung 7: Invalid-tool reroute (weak-model FC kit).
                     # Valid JSON but unknown tool name -> if we haven't
