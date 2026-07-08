@@ -296,6 +296,7 @@ def _line_refusal_read(
     current_bytes: bytes,
     sha: str,
     attempted_lines: tuple[int, int] | None,
+    window_radius: int = _LINE_REFUSAL_WINDOW_RADIUS,
 ) -> tuple[str, dict[str, Any]]:
     """Render and record the fresh content carried by a line-edit refusal.
 
@@ -308,7 +309,7 @@ def _line_refusal_read(
     if full:
         start, end = (1, max(total, 1))
     else:
-        start, end = _line_span(total, attempted_lines, _LINE_REFUSAL_WINDOW_RADIUS)
+        start, end = _line_span(total, attempted_lines, window_radius)
 
     canon = _canonical(path)
     st = _conv_state(conv_id)
@@ -484,33 +485,75 @@ def _old_text_not_found_refusal(
     path: str,
     *,
     current_bytes: bytes,
-    base_content: str,
+    attempted_old: str,
+    attempted_new: str,
     error: str,
+    tool_name: str = "file_edit",
+    base_content: str | None = None,
 ) -> ToolOutcome:
     """REL-6: anchored old-text misses are self-recovering refusal reads."""
     import hashlib
 
     count = _increment_old_text_not_found_count(conv_id, path)
-    content = base_content
+    text = current_bytes.decode("utf-8", errors="replace")
+    already_applied = _find_text_lines(text, attempted_new)
+    if already_applied is not None:
+        start, end = already_applied
+        content = (
+            f"the replacement text is already present at lines {start}-{end} — "
+            "the edit already applied; do not re-issue it."
+        )
+    else:
+        content = (
+            f"{tool_name} refused: your `old` text was not found in {path} "
+            "(the file has changed since you composed it, or the anchor differs in whitespace / "
+            "unicode — e.g. decorative characters often drift)."
+        )
+        if base_content:
+            content += "\n\n" + base_content
     structured: dict[str, Any] = {
         "kind": "old_text_not_found",
         "path": path,
         "old_text_not_found_count": count,
     }
-    delivered_content = len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES
+    delivered_content = False
+    if already_applied is not None:
+        delivered_content = len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES
+        attempted_lines = already_applied if delivered_content else None
+    else:
+        match_lines = _best_fuzzy_old_match_lines(text, attempted_old)
+        delivered_content = (
+            len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES or match_lines is not None
+        )
+        attempted_lines = match_lines
     if delivered_content:
         sha = hashlib.sha256(current_bytes).hexdigest()
+        if len(current_bytes) > _REFUSAL_READ_FULL_MAX_BYTES and attempted_lines is not None:
+            content += "\n\nBest fuzzy match region in the current file:"
         fresh_content, delivered = _line_refusal_read(
             conv_id,
             path,
             current_bytes=current_bytes,
             sha=sha,
-            attempted_lines=None,
+            attempted_lines=attempted_lines,
+            window_radius=10,
         )
         content += fresh_content
         structured["delivered_read"] = delivered
+    elif len(current_bytes) > _REFUSAL_READ_FULL_MAX_BYTES:
+        content += (
+            "\n\nNo plausible fuzzy match was found, and the file is larger than the "
+            "64KB refusal-read cap. Read the exact region you want to change, then retry."
+        )
+    if already_applied is None:
+        content += (
+            "\n\nAnchor your next edit on the CURRENT text shown above (copy it exactly), "
+            "or use file_replace_lines with the line numbers shown."
+        )
     if count >= 2:
-        if delivered_content:
+        if already_applied is not None:
+            content += "\n\nRepeated already-applied edit: do not re-send this replacement."
+        elif delivered_content:
             content += (
                 "\n\nRepeated old-text miss: your `old` text does not appear in the file "
                 "— do NOT re-send it; the exact current content is above, copy the region "
@@ -528,6 +571,63 @@ def _old_text_not_found_refusal(
         content=content,
         structured=structured,
     )
+
+
+def _find_text_lines(text: str, needle: str) -> tuple[int, int] | None:
+    """Return the 1-based line span where ``needle`` first appears, if it is non-empty."""
+    if not needle.strip():
+        return None
+    idx = text.find(needle)
+    if idx < 0:
+        return None
+    start = text.count("\n", 0, idx) + 1
+    line_count = max(1, len(needle.splitlines()))
+    return (start, start + line_count - 1)
+
+
+def _best_fuzzy_old_match_lines(text: str, old: str) -> tuple[int, int] | None:
+    """Find a plausible current line span for a stale anchored edit."""
+    from difflib import SequenceMatcher
+
+    old = _strip_line_numbers(old).strip("\n")
+    if not old.strip():
+        return None
+
+    lines = text.splitlines()
+    if not lines:
+        return None
+
+    old_lines = old.splitlines() or [old]
+    target = _norm_ws(old)
+    target_nonblank = "\n".join(ln.strip() for ln in old_lines if ln.strip())
+    if target_nonblank:
+        target = target_nonblank
+    if not target:
+        return None
+
+    target_line_count = max(1, len([ln for ln in old_lines if ln.strip()]) or len(old_lines))
+    candidate_sizes = sorted(
+        {
+            max(1, target_line_count - 1),
+            target_line_count,
+            target_line_count + 1,
+        }
+    )
+    best: tuple[float, int, int] | None = None
+    for size in candidate_sizes:
+        if size > len(lines):
+            continue
+        for idx in range(0, len(lines) - size + 1):
+            candidate = "\n".join(ln.strip() for ln in lines[idx : idx + size] if ln.strip())
+            if not candidate:
+                continue
+            score = SequenceMatcher(None, target, candidate).ratio()
+            if best is None or score > best[0]:
+                best = (score, idx + 1, idx + size)
+
+    if best is None or best[0] < 0.55:
+        return None
+    return (best[1], best[2])
 
 
 def _line_success_content(
@@ -1447,7 +1547,7 @@ class FileEditTool:
         _elines = (
             (text.count("\n", 0, _idx) + 1, text.count("\n", 0, _idx) + 1 + args.old.count("\n"))
             if _idx >= 0
-            else None
+            else _best_fuzzy_old_match_lines(text, args.old)
         )
         _blocked = guard_fresh_edit(
             ctx.conversation_id,
@@ -1466,6 +1566,8 @@ class FileEditTool:
                 ctx.conversation_id,
                 args.path,
                 current_bytes=_raw,
+                attempted_old=args.old,
+                attempted_new=args.new,
                 error="old_text_not_found",
                 base_content=(
                     f"`old` not found in {args.path} (tried exact + whitespace-tolerant)."
@@ -1768,7 +1870,7 @@ class FileStrReplaceTool:
         _elines = (
             (text.count("\n", 0, _idx) + 1, text.count("\n", 0, _idx) + 1 + args.old_str.count("\n"))
             if _idx >= 0
-            else None
+            else _best_fuzzy_old_match_lines(text, args.old_str)
         )
         _blocked = guard_fresh_edit(
             ctx.conversation_id, args.path, current_bytes=_raw,
@@ -1816,7 +1918,10 @@ class FileStrReplaceTool:
                 ctx.conversation_id,
                 args.path,
                 current_bytes=_raw,
+                attempted_old=args.old_str,
+                attempted_new=args.new_str,
                 error="old_str_not_found",
+                tool_name="file_str_replace",
                 base_content=(
                     f"`old_str` did not appear verbatim in {args.path}. Copy the exact "
                     "current region you want to replace."
@@ -2076,7 +2181,10 @@ class ExactReplaceTool:
                     ctx.conversation_id,
                     args.path,
                     current_bytes=raw,
+                    attempted_old=e.old_string,
+                    attempted_new=e.new_string,
                     error="EXACT_REPLACE_NO_MATCH",
+                    tool_name="exact_replace",
                     base_content=(
                         f"exact_replace: old_string not found in {args.path}: "
                         f"{e.old_string[:60]!r}."

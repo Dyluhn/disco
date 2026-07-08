@@ -218,10 +218,11 @@ async def test_file_edit_old_text_not_found_carries_content_and_delivered_read_f
 
     assert out.success is False
     assert out.error == "old_text_not_found"
-    assert "`old` not found in config.py" in out.content
+    assert "file_edit refused: your `old` text was not found in config.py" in out.content
     assert "Fresh full current file for config.py" in out.content
     assert "\talpha = 1" in out.content
     assert "\tbeta = 2" in out.content
+    assert "Anchor your next edit on the CURRENT text shown above" in out.content
     assert (out.structured or {})["kind"] == "old_text_not_found"
     assert (out.structured or {})["old_text_not_found_count"] == 1
     assert (out.structured or {})["delivered_read"]["full"] is True
@@ -229,8 +230,10 @@ async def test_file_edit_old_text_not_found_carries_content_and_delivered_read_f
 
 
 @pytest.mark.asyncio
-async def test_file_edit_large_old_text_not_found_skips_content_but_counts_and_escalates():
-    large_text = "\n".join(f"line {i} {'x' * 100}" for i in range(1, 701)) + "\n"
+async def test_file_edit_large_old_text_not_found_carries_best_match_window():
+    lines = [f"line {i} {'x' * 100}" for i in range(1, 701)]
+    lines[359] = "line 360 target_value = 'current live value'"
+    large_text = "\n".join(lines) + "\n"
     assert len(large_text.encode("utf-8")) > 64 * 1024
     sbx = _FakeSandbox(large_text)
     ctx = _Ctx(
@@ -241,30 +244,59 @@ async def test_file_edit_large_old_text_not_found_skips_content_but_counts_and_e
     assert (await FileReadTool().run(FileReadArgs(path="large.txt"), ctx)).success
 
     first = await FileEditTool().run(
-        FileEditArgs(path="large.txt", old="definitely missing old text", new="replacement"),
+        FileEditArgs(
+            path="large.txt",
+            old="line 360 target_value = 'stale composed value'",
+            new="replacement",
+        ),
         ctx,
     )
     second = await FileEditTool().run(
-        FileEditArgs(path="large.txt", old="still definitely missing", new="replacement"),
+        FileEditArgs(
+            path="large.txt",
+            old="line 360 target_value = 'stale composed value'",
+            new="replacement",
+        ),
         ctx,
     )
 
     assert first.success is False
     assert first.error == "old_text_not_found"
     assert "Fresh full current file" not in first.content
-    assert "Fresh current window" not in first.content
-    assert "line 120" not in first.content
-    assert "delivered_read" not in (first.structured or {})
+    assert "Best fuzzy match region in the current file" in first.content
+    assert "Fresh current window for large.txt" in first.content
+    assert "\tline 360 target_value = 'current live value'" in first.content
+    assert "\tline 1 " not in first.content
+    assert "\tline 700 " not in first.content
+    assert (first.structured or {})["delivered_read"]["full"] is False
     assert (first.structured or {})["old_text_not_found_count"] == 1
 
     assert second.success is False
     assert second.error == "old_text_not_found"
     assert "Fresh full current file" not in second.content
-    assert "Fresh current window" not in second.content
+    assert "Fresh current window for large.txt" in second.content
     assert "do NOT re-send it" in second.content
-    assert "too large to include without a match anchor" in second.content
-    assert "delivered_read" not in (second.structured or {})
+    assert (second.structured or {})["delivered_read"]["full"] is False
     assert (second.structured or {})["old_text_not_found_count"] == 2
+    assert sbx.writes == []
+
+
+@pytest.mark.asyncio
+async def test_file_edit_old_text_not_found_reports_replacement_already_present():
+    sbx = _FakeSandbox("alpha = 1\nbeta = 20\n")
+
+    out = await FileEditTool().run(
+        FileEditArgs(path="config.py", old="beta = 02", new="beta = 20"),
+        _Ctx(sbx),
+    )
+
+    assert out.success is False
+    assert out.error == "old_text_not_found"
+    assert (
+        "the replacement text is already present at lines 2-2 — the edit already "
+        "applied; do not re-issue it."
+    ) in out.content
+    assert "Anchor your next edit" not in out.content
     assert sbx.writes == []
 
 
@@ -318,6 +350,37 @@ async def test_file_edit_corrected_retry_after_old_text_not_found_delivered_cont
     assert (refused.structured or {})["delivered_read"]["full"] is True
     assert retry.success is True, retry.content
     assert sbx.writes and b"beta = 20" in sbx.writes[-1]
+
+
+@pytest.mark.asyncio
+async def test_file_edit_unicode_decorative_drift_finds_fuzzy_window():
+    lines = [f"line {i} {'x' * 100}" for i in range(1, 701)]
+    lines[419] = "line 420 # ═══ Section: pricing controls"
+    large_text = "\n".join(lines) + "\n"
+    assert len(large_text.encode("utf-8")) > 64 * 1024
+    sbx = _FakeSandbox(large_text)
+    ctx = _Ctx(
+        sbx,
+        conv_id="conv-edit-guards-unicode-drift",
+        read_char_budget=len(large_text) + 1024,
+    )
+    assert (await FileReadTool().run(FileReadArgs(path="large.txt"), ctx)).success
+
+    out = await FileEditTool().run(
+        FileEditArgs(
+            path="large.txt",
+            old="line 420 # === Section: pricing controls",
+            new="line 420 # Pricing controls",
+        ),
+        ctx,
+    )
+
+    assert out.success is False
+    assert out.error == "old_text_not_found"
+    assert "Best fuzzy match region in the current file" in out.content
+    assert "\tline 420 # ═══ Section: pricing controls" in out.content
+    assert (out.structured or {})["delivered_read"]["full"] is False
+    assert sbx.writes == []
 
 
 @pytest.mark.asyncio
