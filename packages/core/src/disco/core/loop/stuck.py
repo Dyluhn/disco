@@ -114,7 +114,14 @@ _WAIT_POLL_TOOLS = frozenset({
 # in signals.py — kept inline so stuck.py stays self-contained; a new tool
 # added to _BOOKKEEPING_TOOLS must also be added here.
 _PLAN_META_TOOLS = frozenset(
-    {"submit_plan", "propose_plan_update", "plan_step", "update_plan_progress", "finish"}
+    {
+        "submit_plan",
+        "propose_plan_update",
+        "plan_step",
+        "update_plan_progress",
+        "finish",
+        "think",
+    }
 )
 
 

@@ -36,7 +36,14 @@ if TYPE_CHECKING:
 # from "did the agent act?" accounting everywhere (valve taxonomy + the
 # actionless streak) so a model can't look productive by shuffling plan state.
 _BOOKKEEPING_TOOLS = frozenset(
-    {"submit_plan", "propose_plan_update", "plan_step", "update_plan_progress", "finish"}
+    {
+        "submit_plan",
+        "propose_plan_update",
+        "plan_step",
+        "update_plan_progress",
+        "finish",
+        "think",
+    }
 )
 
 # The tool names that don't count as "productive work" for the execution gate:
@@ -49,6 +56,7 @@ _BOOKKEEPING_TOOLS = frozenset(
 _NON_PRODUCTIVE_TOOLS = frozenset(
     {
         "submit_plan",
+        "think",
         "plan_step",
         "update_plan_progress",  # declarative progress snapshot — pure UI signal, no work
         "ask_user",

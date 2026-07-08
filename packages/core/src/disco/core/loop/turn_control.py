@@ -71,12 +71,54 @@ _BOOKKEEPING_PLAN_SLACK = 2
 # plan's steps are byte-identical to the immediately-prior plan for >= this many
 # consecutive auto-approved revisions, feed the existing bookkeeping-stuck valve.
 _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
+_IDENTICAL_PLAN_NUDGE_DIAGNOSTIC = "identical_plan_nudge"
+_IDENTICAL_PLAN_NUDGE_TEXT = (
+    "This revision is IDENTICAL to the already-approved plan — proposing it "
+    "again does nothing. The plan is current: continue executing its steps, "
+    "mark progress with update_plan_progress, or finish. One more identical "
+    "proposal will halt the run."
+)
 
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass
 # the user can always pick at the circuit-breaker gate to reset the failure streak
 # and let the agent keep going. The frontend renders it as a distinct button;
 # pick_alternative special-cases it (reset streak + resume) rather than running a tool.
 _CONTINUE_OPTION_ID = "__continue__"
+
+
+def _step_titles(plan: PlanEvent) -> list[str]:
+    return [step.title for step in plan.steps]
+
+
+def _prior_plan_and_productive_action_between(
+    events: list[Event], new_plan: PlanEvent
+) -> tuple[PlanEvent | None, bool]:
+    current_idx: int | None = None
+    for idx, event in enumerate(events):
+        if isinstance(event, PlanEvent) and event.id == new_plan.id:
+            current_idx = idx
+    if current_idx is None:
+        return None, False
+
+    prior_idx: int | None = None
+    prior_plan: PlanEvent | None = None
+    for idx in range(current_idx - 1, -1, -1):
+        event = events[idx]
+        if isinstance(event, PlanEvent):
+            prior_idx = idx
+            prior_plan = event
+            break
+    if prior_idx is None or prior_plan is None:
+        return None, False
+
+    for event in events[prior_idx + 1 : current_idx]:
+        if (
+            isinstance(event, ActionEvent)
+            and event.tool_call is not None
+            and event.tool_call.tool_name not in signals._BOOKKEEPING_TOOLS
+        ):
+            return prior_plan, True
+    return prior_plan, False
 
 
 
@@ -1928,7 +1970,9 @@ class MetaToolHandlers:
     async def handle_propose_plan_update(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         new_plan = self._loop._plan_from_args(step.tool_call.arguments, events)
-        await self._loop._emit(new_plan)
+        emitted_plan = await self._loop._emit(new_plan)
+        if isinstance(emitted_plan, PlanEvent):
+            new_plan = emitted_plan
         if self._loop._autonomous:
             # No human to approve a mid-run plan revision → auto-approve
             # inline, emitting exactly what approve_plan() would (mode flip
@@ -1941,27 +1985,24 @@ class MetaToolHandlers:
             # C8 (T11): bound the propose_plan_update loop. A weak model
             # in autonomous mode can hammer the same plan revision over
             # and over, never realizing there's no human to approve it.
-            # Compare new_plan.steps to the immediately-prior plan's steps
-            # (ignore summary; an appended/added step counts as DIFFERENT
-            # because list lengths differ). Increment the consecutive-
-            # identical counter on a match, reset on a diff. At >= the
-            # cap, feed the existing bookkeeping-stuck valve (emit the
-            # same `bookkeeping_only` warning + STUCK status the (c.3)
-            # valve emits) — do NOT invent a new halt path. Only in
-            # autonomous mode; interactive path is byte-identical.
-            prior_plan: PlanEvent | None = None
-            for e in reversed(events):
-                if e is new_plan:
-                    continue  # skip the just-emitted new_plan
-                if isinstance(e, PlanEvent):
-                    prior_plan = e
-                    break
-            if (
-                prior_plan is not None
-                and [s.title for s in prior_plan.steps]
-                == [s.title for s in new_plan.steps]
-            ):
-                self._loop._identical_plan_revisions += 1
+            # Compare new_plan.steps to the immediately-prior plan's steps (ignore
+            # summary; an appended/added step counts as DIFFERENT because list
+            # lengths differ). Identical revisions are a streak only while no
+            # non-bookkeeping ActionEvent appears between the two PlanEvents in
+            # the persisted log; real work starts a fresh streak at 1. At >= the
+            # cap, feed the existing bookkeeping-stuck valve (emit the same
+            # `bookkeeping_only` warning + STUCK status the (c.3) valve emits) —
+            # do NOT invent a new halt path. Only in autonomous mode; interactive
+            # path is byte-identical.
+            events_with_new_plan = await self._loop._events()
+            prior_plan, productive_between = _prior_plan_and_productive_action_between(
+                events_with_new_plan, new_plan
+            )
+            if prior_plan is not None and _step_titles(prior_plan) == _step_titles(new_plan):
+                if productive_between:
+                    self._loop._identical_plan_revisions = 1
+                else:
+                    self._loop._identical_plan_revisions += 1
             else:
                 self._loop._identical_plan_revisions = 0
             if (
@@ -1980,6 +2021,17 @@ class MetaToolHandlers:
                     legacy_detail="bookkeeping_only",
                 )
                 return Disp.HALT
+            if (
+                self._loop._identical_plan_revisions
+                == _PROPOSE_PLAN_UPDATE_REPEAT_CAP - 1
+            ):
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=_IDENTICAL_PLAN_NUDGE_TEXT),
+                        meta={"diagnostic": _IDENTICAL_PLAN_NUDGE_DIAGNOSTIC},
+                    )
+                )
             self._loop.mode = self._loop._execution_mode
             await self._loop._emit(
                 StatusEvent(
