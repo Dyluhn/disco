@@ -23,7 +23,7 @@ from disco.tools.sandbox.port_owner import port_owner
 from disco.tools.sandbox.process import ProcessSandboxService
 from disco.tools.sandbox.session import SandboxSession
 
-_PORT = 8188  # free on dev hosts; NOT 8000 (the agent-server owns that here)
+_PORT = 18188  # NOT 8000 (agent-server) and NOT 8188 — ComfyUI's default on dev hosts
 
 
 # ---------------------------------------------------------------------------
