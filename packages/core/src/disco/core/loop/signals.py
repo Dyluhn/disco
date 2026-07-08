@@ -780,6 +780,48 @@ def pending_revision_steer(events: list[Event]) -> bool:
     return False
 
 
+def current_blocked_question_landing(events: list[Event]) -> bool:
+    """True iff the current user-question gate is a blocked landing.
+
+    Blocked landings preserve their legacy PAUSED/STUCK marker, then supersede it
+    with ``AWAITING_USER_QUESTION`` carrying ``meta.blocked_landing``. A user
+    answer appended after that status does not clear the gate; only a later
+    status transition does. Therefore the current gate is determined by the
+    latest StatusEvent, not by the latest event of any kind.
+    """
+    for e in reversed(events):
+        if isinstance(e, StatusEvent):
+            return (
+                e.status == ConversationStatus.AWAITING_USER_QUESTION
+                and (e.meta or {}).get("blocked_landing") is True
+            )
+    return False
+
+
+def latest_user_answers_blocked_question(events: list[Event]) -> bool:
+    """True iff the latest USER message is an answer to a blocked landing.
+
+    ``AgentLoop.run`` emits a bare RUNNING marker before its drive loop. After
+    that, ``current_blocked_question_landing`` is no longer true, but the latest
+    user message is still the answer to the blocked question. Look backward from
+    that user message to the preceding status gate so re-plan guards can keep
+    treating the text as answer-context until an agent action/message consumes it.
+    """
+    latest_user_index: int | None = None
+    for index, e in enumerate(events):
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            latest_user_index = index
+    if latest_user_index is None:
+        return False
+    for e in reversed(events[:latest_user_index]):
+        if isinstance(e, StatusEvent):
+            return (
+                e.status == ConversationStatus.AWAITING_USER_QUESTION
+                and (e.meta or {}).get("blocked_landing") is True
+            )
+    return False
+
+
 def latest_user_text(events: list[Event]) -> str | None:
     """The most recent USER MessageEvent content — NOT gated on "unprocessed". Supplies the
     re-plan framing text for the marker-driven path (`pending_revision_steer`), where
