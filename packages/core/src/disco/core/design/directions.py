@@ -1234,6 +1234,10 @@ def render_design_direction(direction: DesignDirection) -> str:
             "- Keep typography, density, imagery, and motion aligned with this contract.",
             "",
             "DON'T:",
+            "- Do not use emoji anywhere in the site — not as icons, not in "
+            "headings, buttons, or copy. Use real SVG icons or plain text; emoji "
+            "glyphs read as placeholder-grade design (the lint flags them, but "
+            "don't write them in the first place).",
             "- Do not use Inter, Roboto, or Arial as primary fonts.",
             "- Do not use the H8 template tells: purple-blue gradient default, "
             "indigo-600 CTA, reflexive hover:scale-105, three identical feature cards, "
