@@ -295,15 +295,24 @@ async def test_user_and_tool_literal_think_is_NOT_stripped():
     `<think>...</think>` (task data, a tool observation echoing model output)
     is left UNCHANGED — stripping non-assistant content would corrupt data."""
     user = LLMMessage(role="user", content="<think>x</think>y")
+    # The tool result must be PAIRED with an assistant tool_call — the adjacency
+    # repair (a later, correct mechanism) drops orphaned tool results before the
+    # wire, so an unpaired fixture never reaches the strip under test.
+    caller = LLMMessage(
+        role="assistant",
+        content="",
+        tool_calls=[{"id": "c1", "name": "shell", "arguments": {}}],
+    )
     tool = LLMMessage(
         role="tool", content="<think>x</think>y", tool_call_id="c1"
     )
-    req = _req(messages=[user, tool], assist=False)
+    req = _req(messages=[user, caller, tool], assist=False)
     captured: list[dict] = []
     await _provider(captured).complete(req, model="m1")
     msgs = captured[0]["messages"]
     assert msgs[0]["content"] == "<think>x</think>y"  # user unchanged
-    assert msgs[1]["content"] == "<think>x</think>y"  # tool unchanged
+    tool_wire = next(m for m in msgs if m.get("role") == "tool")
+    assert tool_wire["content"] == "<think>x</think>y"  # tool unchanged
 
 
 async def test_no_think_assistant_is_byte_identical():
@@ -334,13 +343,23 @@ async def test_assist_truncation_still_fires_for_non_assistant_role():
     assist: a tool observation echoing an over-long `<think>` block is
     budget-trimmed (not stripped — strip is assistant-only)."""
     big_think = _long_think(_F5_THINK_BUDGET_CHARS * 3)
+    caller = LLMMessage(
+        role="assistant",
+        content="",
+        tool_calls=[{"id": "c1", "name": "shell", "arguments": {}}],
+    )
     tool = LLMMessage(
         role="tool", content=f"{big_think}\nobserved", tool_call_id="c1"
     )
-    req = _req(messages=[tool, LLMMessage(role="user", content="continue")], assist=True)
+    req = _req(
+        messages=[caller, tool, LLMMessage(role="user", content="continue")],
+        assist=True,
+    )
     captured: list[dict] = []
     await _provider(captured).complete(req, model="m1")
-    on_wire = captured[0]["messages"][0]["content"]
+    on_wire = next(
+        m for m in captured[0]["messages"] if m.get("role") == "tool"
+    )["content"]
     # Truncated (head+tail+marker), NOT stripped — the tags survive.
     assert "<think>" in on_wire and "</think>" in on_wire
     assert "F5 truncated" in on_wire
