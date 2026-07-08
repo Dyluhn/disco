@@ -37,6 +37,7 @@ from ..events import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     PlanEvent,
     PlanStep,
     StatusEvent,
@@ -337,6 +338,26 @@ def _planning_tool_refusal_message(
             "\nThe next turn will offer only `submit_plan` + `file_read`."
         )
     return f"<system-reminder>\n{detail}\n</system-reminder>"
+
+
+def _read_churn_nudge_message(path: str, count: int) -> str:
+    if count == 5:
+        return (
+            f"You have read {path} {count} times in small windows without changing "
+            "anything. Read it ONCE whole (omit offset/limit — files under the size "
+            "cap fit in a single read), then act."
+        )
+    if count == 10:
+        return (
+            f"{count} small reads of {path}, still no change. STOP paging through it. "
+            f"Your next action must be a whole-file read of {path}, an edit, or a "
+            "plain statement of what is blocking you."
+        )
+    return (
+        f"FINAL WARNING: {count} reads of {path} with no action. From the 20th read "
+        "on, further small reads of this file count as no-ops and will pause the "
+        "run. Act now."
+    )
 
 
 def _hint_text(text: str) -> str:
@@ -1086,6 +1107,49 @@ class AgentLoop:
         """Delegates to Valve.post_noop_valve (self._valve). Called by FinishGate
         and the planning-mode gate."""
         return await self._valve.post_noop_valve()
+
+    async def _maybe_apply_read_churn_valve(self, action: ActionEvent) -> Disp:
+        if self.mode == OperatingMode.PLANNING:
+            return Disp.FALLTHROUGH
+        if action.tool_call is None or action.tool_call.tool_name != "file_read":
+            return Disp.FALLTHROUGH
+        events = await self._events()
+        if not any(
+            isinstance(event, ObservationEvent)
+            and event.action_id == action.id
+            and event.tool_result.success
+            for event in events
+        ):
+            return Disp.FALLTHROUGH
+        state = signals.read_churn_state(events)
+        if state is None:
+            return Disp.FALLTHROUGH
+        if state.warning_count is not None:
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=_read_churn_nudge_message(
+                            state.path, state.warning_count
+                        ),
+                    ),
+                    meta={
+                        "diagnostic": signals.READ_CHURN_NUDGE_DIAGNOSTIC,
+                        "path": state.path,
+                        "count": state.warning_count,
+                        "streak": state.warning_count,
+                    },
+                )
+            )
+            events = await self._events()
+        if state.invisible_noops <= 0:
+            return Disp.FALLTHROUGH
+        self._invisible_steps = max(self._invisible_steps, state.invisible_noops)
+        noops = signals.consecutive_noops(events) + self._invisible_steps
+        if await self._valve.actionless_valve(events, noops):
+            return Disp.HALT
+        return Disp.FALLTHROUGH
 
     async def _land_blocked(
         self,
@@ -1993,6 +2057,8 @@ class AgentLoop:
                 )
                 continue
             await self._execute_and_observe(action_to_execute)
+            if await self._maybe_apply_read_churn_valve(action_to_execute) is Disp.HALT:
+                return await self.get_state()
             # loop continues
 
     # _has_unprocessed_user_message delegates to signals (external callers + run()).

@@ -9,6 +9,7 @@ no instance state, no emission, and no I/O. They were `@staticmethod`s on
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..think import strip_think_spans
@@ -105,6 +106,35 @@ _ACTIONABLE_BUILD_VERB_RE = re.compile(
 
 SYNTHETIC_FINISH_ATTEMPT_DETAIL = "synthetic_finish_attempted"
 PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
+READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
+
+_READ_CHURN_SMALL_LIMIT = 25
+_READ_CHURN_WARNING_COUNTS = frozenset({5, 10, 15})
+_READ_CHURN_LADDER_AT = 20
+_READ_LINES_HEADER_RE = re.compile(r"\[lines\s+(\d+)-(\d+)\s+of\s+(\d+)")
+_READ_CHURN_RESET_TOOLS = frozenset(
+    {
+        "file_write",
+        "file_edit",
+        "file_append",
+        "shell",
+        "shell_exec",
+        "run_project_script",
+        "browser",
+        "design_lint",
+        "update_plan_progress",
+        "submit_plan",
+        "finish",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ReadChurnState:
+    path: str
+    count: int
+    warning_count: int | None
+    invisible_noops: int
 
 
 def _event_seq(event: Event, fallback: int) -> int:
@@ -602,6 +632,145 @@ def prose_noop_repair_seen_current_execution_segment(events: list[Event]) -> boo
             ):
                 break
     return False
+
+
+def _read_churn_path(action: ActionEvent) -> str | None:
+    if action.tool_call is None or action.tool_call.tool_name != "file_read":
+        return None
+    path = action.tool_call.arguments.get("path")
+    return path if isinstance(path, str) and path else None
+
+
+def _read_churn_limit(action: ActionEvent) -> int | None:
+    if action.tool_call is None:
+        return None
+    value = action.tool_call.arguments.get("limit")
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _read_churn_successful_observations(events: list[Event]) -> dict[str, ObservationEvent]:
+    return {
+        event.action_id: event
+        for event in events
+        if isinstance(event, ObservationEvent) and event.tool_result.success
+    }
+
+
+def _file_read_covers_remainder(observation: ObservationEvent | None) -> bool:
+    if observation is None:
+        return False
+    match = _READ_LINES_HEADER_RE.search(observation.tool_result.content or "")
+    if match is None:
+        return False
+    _start, end, total = (int(group) for group in match.groups())
+    return end >= total
+
+
+def _is_whole_file_read(action: ActionEvent, observation: ObservationEvent | None) -> bool:
+    if action.tool_call is None or action.tool_call.tool_name != "file_read":
+        return False
+    # A no-limit read (including offset-to-EOF) is the model moving out of tiny
+    # paging. The tool result header lets range reads that reach EOF reset too.
+    return _read_churn_limit(action) is None or _file_read_covers_remainder(observation)
+
+
+def _is_small_file_read(action: ActionEvent, observation: ObservationEvent | None) -> bool:
+    if observation is None or action.tool_call is None:
+        return False
+    if action.tool_call.tool_name != "file_read":
+        return False
+    limit = _read_churn_limit(action)
+    return limit is not None and limit <= _READ_CHURN_SMALL_LIMIT
+
+
+def _is_read_churn_reset_action(action: ActionEvent) -> bool:
+    if action.tool_call is None:
+        return False
+    tool = action.tool_call.tool_name
+    return (
+        tool in _READ_CHURN_RESET_TOOLS
+        or tool.startswith("preview_")
+        or (tool.startswith("file_") and tool.endswith("_lines"))
+    )
+
+
+def read_churn_state(events: list[Event]) -> ReadChurnState | None:
+    """Current same-target tiny ``file_read`` streak in execution.
+
+    The scan is intentionally event-log-derived: diagnostics already emitted in
+    the current streak suppress duplicate warnings, while any reset action before
+    the streak makes old diagnostics irrelevant and re-arms the ladder.
+    """
+    successful = _read_churn_successful_observations(events)
+    diagnostics_seen: set[tuple[str, int]] = set()
+    target: str | None = None
+    count = 0
+
+    for event in reversed(events):
+        if isinstance(event, MessageEvent):
+            if event.source == EventSource.USER:
+                break
+            if event.source == EventSource.AGENT:
+                break
+            if (
+                event.source == EventSource.ENVIRONMENT
+                and event.meta.get("diagnostic") == READ_CHURN_NUDGE_DIAGNOSTIC
+            ):
+                path = event.meta.get("path")
+                n = event.meta.get("count", event.meta.get("streak"))
+                if isinstance(path, str) and isinstance(n, int):
+                    diagnostics_seen.add((path, n))
+            continue
+        if isinstance(event, StatusEvent):
+            if event.detail in ("plan_approved", "planning"):
+                break
+            continue
+        if isinstance(event, PlanEvent):
+            break
+        if isinstance(event, ObservationEvent | AgentErrorEvent):
+            continue
+        if not isinstance(event, ActionEvent):
+            continue
+
+        observation = successful.get(event.id)
+        path = _read_churn_path(event)
+        if target is None:
+            if path is None or not _is_small_file_read(event, observation):
+                if _is_read_churn_reset_action(event):
+                    break
+                continue
+            target = path
+            count = 1
+            continue
+
+        if path is not None:
+            if path != target:
+                break
+            if _is_whole_file_read(event, observation):
+                break
+            if _is_small_file_read(event, observation):
+                count += 1
+                continue
+            break
+        if _is_read_churn_reset_action(event):
+            break
+
+    if target is None or count == 0:
+        return None
+    warning_count = (
+        count
+        if count in _READ_CHURN_WARNING_COUNTS and (target, count) not in diagnostics_seen
+        else None
+    )
+    invisible_noops = max(0, count - (_READ_CHURN_LADDER_AT - 1))
+    return ReadChurnState(
+        path=target,
+        count=count,
+        warning_count=warning_count,
+        invisible_noops=invisible_noops,
+    )
 
 
 def auto_continue_attempts(events: list[Event]) -> int:

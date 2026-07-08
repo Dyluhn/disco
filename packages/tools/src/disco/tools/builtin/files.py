@@ -898,8 +898,8 @@ class FileReadTool:
             "For large files pass `offset` (1-based start line) + `limit` (line "
             "count) to read a slice. Prefer `file_edit` (pass the exact text you see "
             "as `old`) for targeted changes; the line numbers also let you target "
-            "`file_replace_lines`, but re-read right before each line edit since they "
-            "shift after every change."
+            "`file_replace_lines`, but re-read the RANGE you are about to edit right "
+            "before a line edit (numbers shift after every change)."
         ),
         args_model=FileReadArgs,
         needs=_FS,

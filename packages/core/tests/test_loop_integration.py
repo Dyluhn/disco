@@ -21,7 +21,13 @@ from disco.core import (
     PlanEvent,
     StatusEvent,
 )
-from disco.core.llm import DefaultLLMRouter, LLMContentFiltered, OperatingMode, ProposedToolCall
+from disco.core.llm import (
+    DefaultLLMRouter,
+    LLMContentFiltered,
+    OperatingMode,
+    ProposedToolCall,
+    ToolSpec,
+)
 from disco.core.llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
 from disco.core.loop import BuildAgent, NeverConfirm, RouterAgent
 from llm_fakes import FakeModelProvider, simple_config  # the router-contract test config
@@ -37,6 +43,7 @@ _PROSE_NOOP_REPAIR_REMINDER = (
     "You described the next action instead of performing it — call the tool for it "
     "in THIS turn."
 )
+_READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
 
 
 def _empty_reasoning_response(reasoning_len: int = 17) -> dict:
@@ -72,6 +79,58 @@ def _prose_noop_diagnostic_events(events: list):
         and e.source == EventSource.ENVIRONMENT
         and e.meta.get("diagnostic") == _PROSE_NOOP_REPAIR_DIAGNOSTIC
     ]
+
+
+def _read_churn_diagnostic_events(events: list):
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == _READ_CHURN_NUDGE_DIAGNOSTIC
+    ]
+
+
+def _tool_specs(*names: str) -> list[ToolSpec]:
+    return [
+        ToolSpec(name=name, description=name, parameters_schema={})
+        for name in names
+    ]
+
+
+def _tool_step(tool_name: str, arguments: dict) -> dict:
+    return {
+        "tool_calls": [
+            ProposedToolCall(tool_name=tool_name, arguments=arguments),
+        ]
+    }
+
+
+def _small_read_step(path: str = "index.html", *, offset: int = 1, limit: int = 6) -> dict:
+    return _tool_step("file_read", {"path": path, "offset": offset, "limit": limit})
+
+
+def _whole_read_step(path: str = "index.html") -> dict:
+    return _tool_step("file_read", {"path": path})
+
+
+def _finish_tool_step(summary: str = "done") -> dict:
+    return _tool_step("finish", {"summary": summary})
+
+
+async def _run_scripted_execution(
+    steps: list[dict],
+    *,
+    tool_names: tuple[str, ...] = ("file_read",),
+):
+    provider = SequenceProvider(steps)
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor(tools=_tool_specs(*tool_names))
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("work")
+    state = await loop.run()
+    return state, await store.get_events(CID), provider, executor
 
 
 async def _seed_approved_incomplete_plan(store):
@@ -317,6 +376,147 @@ async def test_prose_noop_retry_prose_again_counts_into_actionless_breaker():
     )
     assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
     assert provider.calls == 4
+
+
+async def test_same_path_small_file_reads_warn_then_feed_actionless_ladder():
+    provider = SequenceProvider(
+        [_small_read_step(offset=i) for i in range(1, 24)]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor(tools=_tool_specs("file_read"))
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+    loop.mode = OperatingMode.LONG_HORIZON
+    await _seed_approved_incomplete_plan(store)
+
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    diagnostics = _read_churn_diagnostic_events(events)
+    assert [d.meta["count"] for d in diagnostics] == [5, 10, 15]
+    assert all(d.meta["path"] == "index.html" for d in diagnostics)
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+
+
+async def test_read_churn_resets_after_edit_before_warning_threshold():
+    steps = (
+        [_small_read_step(offset=i) for i in range(1, 5)]
+        + [
+            _tool_step(
+                "file_edit",
+                {"path": "index.html", "old": "before", "new": "after"},
+            )
+        ]
+        + [_small_read_step(offset=i) for i in range(5, 9)]
+        + [_finish_tool_step()]
+    )
+
+    state, events, _provider, executor = await _run_scripted_execution(
+        steps, tool_names=("file_read", "file_edit")
+    )
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [call.tool_name for call in executor.calls] == [
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_edit",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+    ]
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_whole_file_read_resets_streak_after_first_warning():
+    steps = (
+        [_small_read_step(offset=i) for i in range(1, 7)]
+        + [_whole_read_step()]
+        + [_small_read_step(offset=i) for i in range(7, 11)]
+        + [_finish_tool_step()]
+    )
+
+    state, events, _provider, _executor = await _run_scripted_execution(steps)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    diagnostics = _read_churn_diagnostic_events(events)
+    assert [d.meta["count"] for d in diagnostics] == [5]
+
+
+async def test_read_churn_alternating_paths_do_not_warn():
+    steps = [
+        _small_read_step("index.html" if i % 2 == 0 else "styles.css", offset=i)
+        for i in range(1, 13)
+    ] + [_finish_tool_step()]
+
+    state, events, _provider, _executor = await _run_scripted_execution(steps)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_full_file_reads_do_not_warn():
+    steps = [_whole_read_step() for _ in range(3)] + [_finish_tool_step()]
+
+    state, events, _provider, _executor = await _run_scripted_execution(steps)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_planning_mode_reads_do_not_warn():
+    provider = SequenceProvider(
+        [_small_read_step(offset=i) for i in range(1, 7)]
+        + [
+            _tool_step(
+                "submit_plan",
+                {"summary": "p", "steps": [{"title": "do it"}]},
+            )
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor(tools=_tool_specs("file_read"))
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+    loop.mode = OperatingMode.PLANNING
+
+    await loop.send_message("plan")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_rearms_after_reset():
+    steps = (
+        [_small_read_step(offset=i) for i in range(1, 6)]
+        + [
+            _tool_step(
+                "file_edit",
+                {"path": "index.html", "old": "before", "new": "after"},
+            )
+        ]
+        + [_small_read_step(offset=i) for i in range(6, 11)]
+        + [_finish_tool_step()]
+    )
+
+    state, events, _provider, _executor = await _run_scripted_execution(
+        steps, tool_names=("file_read", "file_edit")
+    )
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    diagnostics = _read_churn_diagnostic_events(events)
+    assert [d.meta["count"] for d in diagnostics] == [5, 5]
+    assert [d.meta["path"] for d in diagnostics] == ["index.html", "index.html"]
 
 
 async def test_second_prose_noop_in_same_execution_segment_gets_no_second_nudge():
