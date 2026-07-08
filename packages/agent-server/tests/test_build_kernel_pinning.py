@@ -203,6 +203,7 @@ def _finalize_fake(store: SqliteEventStore) -> types.SimpleNamespace:
     fake._run_generation = {}
     fake._last_status = {}
     fake._nonterminal_rekicks = {}
+    fake._last_rekick_progress_seq = {}  # STUCK-fix watermark, popped at finalize
 
     async def _no_auto_resume(cid, status, generation):
         return False
