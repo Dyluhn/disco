@@ -126,8 +126,14 @@ async function driveToFinished(
       lastSeq = chipSeq;
       lastSeqMoveAt = Date.now();
     } else if (Date.now() - lastSeqMoveAt > 180_000) {
-      await page.reload();
-      await page.waitForTimeout(3_000);
+      // The reload can race the outer test-timeout teardown; a closed page must
+      // surface as THIS phase's budget verdict, not a cryptic page.reload error.
+      try {
+        await page.reload();
+        await page.waitForTimeout(3_000);
+      } catch {
+        throw new Error(`${phase}: budget exhausted (page closed during watchdog reload)`);
+      }
       lastSeqMoveAt = Date.now();
       continue;
     }
