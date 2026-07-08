@@ -10,7 +10,14 @@
 from __future__ import annotations
 
 from disco.agent_server import ConversationRuntime, create_app
-from disco.core import DEFAULT_OWNER_ID, SqliteEventStore
+from disco.core import (
+    DEFAULT_OWNER_ID,
+    ConversationStatus,
+    EventSource,
+    MessageEvent,
+    SqliteEventStore,
+    StatusEvent,
+)
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
 from fastapi.testclient import TestClient
 
@@ -157,23 +164,48 @@ def test_create_conversation_no_pick_ever_uses_default(tmp_path, monkeypatch):
     assert rt._model_override.get(cid) is None
 
 
-def test_create_conversation_stale_last_selected_ignored(tmp_path, monkeypatch):
+async def test_create_conversation_stale_last_selected_falls_back_loudly(
+    tmp_path, monkeypatch, caplog
+):
     """A persisted last-selected key that is NOT in cfg.models must be ignored
-    (fail-safe: never compose an invalid routing decision)."""
+    (fail-safe: never compose an invalid routing decision), with a visible note
+    and a cleaned sticky sidecar so the warning does not repeat forever."""
     client, rt, _ = _make_app_with_model(tmp_path, monkeypatch)
 
     # Persist a model key that doesn't exist in the catalogue
-    rt.set_last_selected_model("or-model-that-was-deleted")
+    stale = "or-model-that-was-deleted"
+    default = "local-default"
+    rt.set_last_selected_model(stale)
 
-    resp = client.post(
-        "/conversations",
-        json={"surface": "build", "owner_id": DEFAULT_OWNER_ID},
-    )
+    with caplog.at_level("WARNING", logger="disco.agent_server.routes.conversations"):
+        resp = client.post(
+            "/conversations",
+            json={"surface": "build", "owner_id": DEFAULT_OWNER_ID},
+        )
     assert resp.status_code == 200
     cid = resp.json()["conversation_id"]
 
     # Unknown key → no override (falls to default_model)
     assert rt._model_override.get(cid) is None
+    assert rt.get_last_selected_model() is None
+
+    note = (
+        f"your previously selected model '{stale}' is no longer available; "
+        f"using the default '{default}'"
+    )
+    events = await rt._store.get_events(cid)
+    assert any(
+        isinstance(event, MessageEvent)
+        and event.source is EventSource.ENVIRONMENT
+        and event.message.content.startswith("⚠ ")
+        and note in event.message.content
+        for event in events
+    )
+    assert not any(
+        isinstance(event, StatusEvent) and event.status is ConversationStatus.ERROR
+        for event in events
+    )
+    assert any(note in record.getMessage() for record in caplog.records)
 
 
 # ---- GET endpoint -----------------------------------------------------------
