@@ -141,6 +141,7 @@ def _public_ui_url() -> str:
 
 def _print_boot_banner() -> None:
     ui_url = _public_ui_url()
+    remote_origins = allowed_frontend_origins() if disco_env("FRONTEND_ORIGINS", "") else ()
     lines = [
         "",
         "================ Disco self-host boot ================",
@@ -149,11 +150,22 @@ def _print_boot_banner() -> None:
         f"  Open {ui_url}",
         "  If the browser asks for a pairing token, use this one-time token:",
         f"  {_PAIRING_TOKEN}",
-        "After pairing, configure a driver model in Settings -> Models & Providers.",
-        "Proof step: docker compose exec agent-server disco-verify --quick",
-        "======================================================",
-        "",
     ]
+    if remote_origins:
+        lines.extend(
+            [
+                f"Remote browser origins allowed: {', '.join(remote_origins)}",
+                "From a remote browser you will be asked for the one-time pairing token above.",
+            ]
+        )
+    lines.extend(
+        [
+            "After pairing, configure a driver model in Settings -> Models & Providers.",
+            "Proof step: docker compose exec agent-server disco-verify --quick",
+            "======================================================",
+            "",
+        ]
+    )
     print("\n".join(lines), flush=True)
     _LOG.info("Disco self-host UI: %s", ui_url)
 
@@ -240,14 +252,27 @@ def make_auth_router() -> APIRouter:
 
     @router.post("/api/auth/mint")
     async def mint_session(body: MintSessionBody, request: Request, response: Response) -> dict:
-        _require_loopback_allowed_origin(request)
-        auto_pair = _auto_pair_enabled()
-        token_ok = _pairing_token_ok(body.pairing_token)
-        if not (auto_pair or token_ok):
-            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
-        cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
-        if token_ok and not auto_pair:
+        origin = request.headers.get("origin")
+        if origin is not None and not origin_allowed(origin):
+            raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
+
+        if body.pairing_token and _pairing_token_ok(body.pairing_token):
+            cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
             _consume_pairing_token()
+            set_session_cookie(response, cookie, session)
+            return {
+                "ok": True,
+                "owner_id": session.owner_id,
+                "csrf_token": session.csrf_token,
+                "admin": session.is_admin,
+            }
+
+        if not _is_loopback_client(request):
+            raise HTTPException(status_code=403, detail={"reason": "loopback_required"})
+        if not _auto_pair_enabled():
+            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
+
+        cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
         set_session_cookie(response, cookie, session)
         return {
             "ok": True,

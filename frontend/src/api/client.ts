@@ -150,6 +150,13 @@ export class ApiError extends Error {
   }
 }
 
+type AuthFailureBody = {
+  reason?: string;
+  detail?: string | { reason?: string };
+};
+
+let activePairingPrompt: Promise<string | null> | null = null;
+
 async function parse<T>(res: Response): Promise<T> {
   if (!res.ok) {
     // Preserve the real backend error content — never flatten it.
@@ -162,6 +169,131 @@ async function parse<T>(res: Response): Promise<T> {
     return undefined as T;
   }
   return (await res.json()) as T;
+}
+
+async function authFailureReason(response: Response): Promise<string | undefined> {
+  const body = await response.clone().json().catch(() => null) as AuthFailureBody | null;
+  if (!body || typeof body !== "object") return undefined;
+  if (typeof body.reason === "string") return body.reason;
+  const detail = body.detail;
+  if (detail && typeof detail === "object" && typeof detail.reason === "string") {
+    return detail.reason;
+  }
+  return undefined;
+}
+
+function mintAuthSession(base: string, pairingToken?: string): Promise<Response> {
+  return fetch(`${base}/api/auth/mint`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: pairingToken ? JSON.stringify({ pairing_token: pairingToken }) : "{}",
+  });
+}
+
+function requestPairingToken(): Promise<string | null> {
+  if (activePairingPrompt) return activePairingPrompt;
+  activePairingPrompt = renderPairingPrompt().finally(() => {
+    activePairingPrompt = null;
+  });
+  return activePairingPrompt;
+}
+
+function renderPairingPrompt(): Promise<string | null> {
+  const doc = globalThis.document;
+  if (!doc?.body) {
+    const token = globalThis.prompt?.(
+      "Enter the one-time pairing token from the server boot banner.",
+    );
+    return Promise.resolve(token?.trim() || null);
+  }
+
+  return new Promise((resolve) => {
+    const priorFocus = doc.activeElement instanceof HTMLElement ? doc.activeElement : null;
+    const overlay = doc.createElement("div");
+    overlay.setAttribute("data-disco-pairing-prompt", "true");
+    overlay.className = "fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-body";
+
+    const panel = doc.createElement("div");
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-labelledby", "disco-pairing-title");
+    panel.className =
+      "flex w-[min(32rem,92vw)] flex-col rounded-card border border-hairline bg-bg p-body pmx-rise";
+
+    const title = doc.createElement("h2");
+    title.id = "disco-pairing-title";
+    title.className = "font-ui text-[0.98rem] font-semibold text-text";
+    title.textContent = "Pair this browser";
+
+    const description = doc.createElement("p");
+    description.className = "mt-hair font-ui text-[0.8rem] text-text-muted";
+    description.textContent =
+      "Enter the one-time pairing token shown in the server boot banner.";
+
+    const form = doc.createElement("form");
+    form.className = "mt-body flex flex-col gap-inline";
+
+    const label = doc.createElement("label");
+    label.className = "font-ui text-[0.75rem] font-medium text-text-muted";
+    label.setAttribute("for", "disco-pairing-token");
+    label.textContent = "One-time pairing token";
+
+    const input = doc.createElement("input");
+    input.id = "disco-pairing-token";
+    input.name = "pairing_token";
+    input.autocomplete = "one-time-code";
+    input.className =
+      "h-10 rounded-control border border-hairline bg-bg-elevated px-inline font-mono text-[0.85rem] text-text outline-none transition-colors focus:border-accent";
+
+    const actions = doc.createElement("div");
+    actions.className = "mt-inline flex justify-end gap-inline";
+
+    const cancel = doc.createElement("button");
+    cancel.type = "button";
+    cancel.className =
+      "h-9 rounded-control border border-hairline px-inline font-ui text-[0.8rem] text-text-muted transition-colors hover:text-text";
+    cancel.textContent = "Cancel";
+
+    const submit = doc.createElement("button");
+    submit.type = "submit";
+    submit.className =
+      "h-9 rounded-control bg-accent px-inline font-ui text-[0.8rem] font-medium text-accent-foreground transition-opacity hover:opacity-90";
+    submit.textContent = "Pair";
+
+    const cleanup = (token: string | null) => {
+      overlay.remove();
+      priorFocus?.focus();
+      resolve(token);
+    };
+
+    cancel.addEventListener("click", () => cleanup(null));
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") cleanup(null);
+    });
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const token = input.value.trim();
+      if (!token) {
+        input.focus();
+        return;
+      }
+      cleanup(token);
+    });
+
+    actions.append(cancel, submit);
+    form.append(label, input, actions);
+    panel.append(title, description, form);
+    overlay.append(panel);
+    doc.body.appendChild(overlay);
+    queueMicrotask(() => input.focus());
+  });
+}
+
+async function mintWithEnteredPairingToken(base: string): Promise<Response | null> {
+  const token = await requestPairingToken();
+  if (!token) return null;
+  return mintAuthSession(base, token);
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -209,30 +341,31 @@ async function initializeSession(base: string): Promise<void> {
       return;
     }
   }
-  let minted = await fetch(`${base}/api/auth/mint`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: "{}",
-  });
-  if (minted.status === 401) {
+  let minted = await mintAuthSession(base);
+  if (!minted.ok && minted.status === 401) {
     const pairing = await fetch(`${base}/api/auth/pairing-token`, {
       credentials: "include",
       headers: { accept: "application/json" },
     });
+    let fetchedLoopbackToken = false;
     if (pairing.ok) {
       const body = await pairing.json().catch(() => null) as
         | { pairing_token?: string }
         | null;
       if (body?.pairing_token) {
-        minted = await fetch(`${base}/api/auth/mint`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ pairing_token: body.pairing_token }),
-        });
+        fetchedLoopbackToken = true;
+        minted = await mintAuthSession(base, body.pairing_token);
       }
     }
+    if (!fetchedLoopbackToken && !minted.ok) {
+      minted = (await mintWithEnteredPairingToken(base)) ?? minted;
+    }
+  } else if (
+    !minted.ok
+    && minted.status === 403
+    && (await authFailureReason(minted)) === "loopback_required"
+  ) {
+    minted = (await mintWithEnteredPairingToken(base)) ?? minted;
   }
   if (!minted.ok) throw new ApiError("auth mint failed", minted.status);
   const body = await minted.json() as { csrf_token?: string };

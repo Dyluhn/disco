@@ -230,14 +230,27 @@ def make_auth_router() -> APIRouter:
 
     @router.post("/api/auth/mint")
     async def mint_session(body: MintSessionBody, request: Request, response: Response) -> dict:
-        _require_loopback_allowed_origin(request)
-        auto_pair = _auto_pair_enabled()
-        token_ok = _pairing_token_ok(body.pairing_token)
-        if not (auto_pair or token_ok):
-            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
-        cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
-        if token_ok and not auto_pair:
+        origin = request.headers.get("origin")
+        if origin is not None and not origin_allowed(origin):
+            raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
+
+        if body.pairing_token and _pairing_token_ok(body.pairing_token):
+            cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
             _consume_pairing_token()
+            set_session_cookie(response, cookie, session)
+            return {
+                "ok": True,
+                "owner_id": session.owner_id,
+                "csrf_token": session.csrf_token,
+                "admin": session.is_admin,
+            }
+
+        if not _is_loopback_client(request):
+            raise HTTPException(status_code=403, detail={"reason": "loopback_required"})
+        if not _auto_pair_enabled():
+            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
+
+        cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
         set_session_cookie(response, cookie, session)
         return {
             "ok": True,
