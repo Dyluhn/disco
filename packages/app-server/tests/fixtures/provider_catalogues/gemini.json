@@ -1,0 +1,13 @@
+{
+  "models": [
+    {
+      "name": "models/gemini-1.5-pro",
+      "version": "001",
+      "displayName": "Gemini 1.5 Pro",
+      "description": "Mid-size multimodal model that supports up to 1 million tokens",
+      "inputTokenLimit": 1048576,
+      "outputTokenLimit": 8192,
+      "supportedGenerationMethods": ["generateContent", "countTokens"]
+    }
+  ]
+}

@@ -81,6 +81,60 @@ class OpenRouterKeyBody(BaseModel):
     key: str
 
 
+ProviderKind = Literal["openai-compat", "anthropic", "gemini"]
+
+
+class ProviderDTO(BaseModel):
+    id: str
+    label: str
+    base_url: str
+    kind: ProviderKind
+    secret_name: str
+    has_key: bool
+
+
+class ProviderPresetDTO(BaseModel):
+    id: str
+    label: str
+    base_url: str
+    kind: ProviderKind
+    requires_base_url: bool = False
+
+
+class ProviderCreate(BaseModel):
+    label: str
+    base_url: str
+    kind: ProviderKind
+    api_key: str
+
+
+class ProviderPatch(BaseModel):
+    label: str | None = None
+    base_url: str | None = None
+    kind: ProviderKind | None = None
+    api_key: str | None = None
+
+
+class ProviderMutationResult(BaseModel):
+    provider: ProviderDTO
+    catalogue_ok: bool
+    catalogue_error: str | None = None
+
+
+class ProviderCatalogueModelDTO(BaseModel):
+    model_id: str
+    label: str
+    context_window: int | None = None
+    price_in_per_m: float | None = None
+    price_out_per_m: float | None = None
+    capabilities: list[str] = []
+
+
+class ProviderEnableBody(BaseModel):
+    model_id: str
+    label: str | None = None
+
+
 class SecretBody(BaseModel):
     """Set-request body for a generic named provider secret."""
 

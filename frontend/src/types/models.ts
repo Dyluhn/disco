@@ -72,6 +72,59 @@ export interface OpenRouterKeyStatus {
   can_store: boolean; // PMX_SECRET_KEY present, so a key can be saved
 }
 
+export type ProviderKind = "openai-compat" | "anthropic" | "gemini";
+
+export interface ProviderInfo {
+  id: string;
+  label: string;
+  base_url: string;
+  kind: ProviderKind;
+  secret_name: string;
+  has_key: boolean;
+}
+
+export interface ProviderPreset {
+  id: string;
+  label: string;
+  base_url: string;
+  kind: ProviderKind;
+  requires_base_url?: boolean;
+}
+
+export interface ProviderCreate {
+  label: string;
+  base_url: string;
+  kind: ProviderKind;
+  api_key: string;
+}
+
+export interface ProviderPatch {
+  label?: string;
+  base_url?: string;
+  kind?: ProviderKind;
+  api_key?: string;
+}
+
+export interface ProviderMutationResult {
+  provider: ProviderInfo;
+  catalogue_ok: boolean;
+  catalogue_error?: string | null;
+}
+
+export interface ProviderCatalogueModel {
+  model_id: string;
+  label: string;
+  context_window?: number | null;
+  price_in_per_m?: number | null;
+  price_out_per_m?: number | null;
+  capabilities: Capability[];
+}
+
+export interface ProviderEnableBody {
+  model_id: string;
+  label?: string | null;
+}
+
 /** Create/edit payload for a catalogue model (mirrors the backend ModelUpsert). */
 export interface ModelUpsert {
   id: string;
