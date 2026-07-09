@@ -115,3 +115,58 @@ def test_health_route_without_runtime_degrades_not_500(cfg_path):
     body = r.json()
     assert body["reachable"] is False
     assert "runtime unavailable" in body["detail"]
+
+
+def test_health_route_reports_injected_backend_not_persisted(cfg_path, monkeypatch):
+    """A DISCO_SANDBOX startup override injects a service that can differ from the
+    persisted Settings backend. The banner must name the ACTIVE (injected) backend —
+    not the stale persisted one — or it points the user at the wrong thing. Regression
+    for the probe-active-sandbox backend-label fix (codex defect #2)."""
+    monkeypatch.setenv("DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV", "1")
+    ConfigStore(cfg_path).save_sandbox(SandboxSettings(backend="local"))
+
+    class _FakeGvisor:
+        name = "gvisor"
+
+        async def healthcheck(self) -> None:  # reachable
+            return None
+
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store, sandbox_service=_FakeGvisor())
+    client = TestClient(create_app(rt._store, runtime=rt))
+    body = client.get("/api/sandbox/health").json()
+    assert body["reachable"] is True
+    # persisted says 'local'; the injected override is 'gvisor' → report the override
+    assert body["backend"] == "gvisor"
+
+
+def test_test_route_local_probes_env_effective_runtime(cfg_path, monkeypatch):
+    """'Test connection' for `local` must probe the SAME runtime the run path builds —
+    DISCO_LOCAL_RUNTIME, not the DTO default `runc` — else it false-greens on a
+    runsc-only host while real builds fail their _require_runtime check. Regression for
+    the effective_local_runtime parity fix (codex defect #1). We capture the runtime the
+    probe actually builds with by stubbing service_from_config."""
+    monkeypatch.setenv("DISCO_LOCAL_RUNTIME", "runsc")
+    captured = {}
+
+    class _OkService:
+        async def healthcheck(self) -> None:
+            return None
+
+    import disco.tools.sandbox as sbx
+
+    def _fake_service_from_config(cfg):
+        captured["runtime"] = cfg.runtime
+        captured["backend"] = cfg.backend
+        return _OkService()
+
+    monkeypatch.setattr(sbx, "service_from_config", _fake_service_from_config)
+    client = _runtime_client(cfg_path)
+    body = client.post(
+        "/api/sandbox/test",
+        # DTO carries runc (the UI hides runtime for local); the env must win
+        json={"backend": "local", "runtime": "runc"},
+    ).json()
+    assert body["ok"] is True
+    assert captured["backend"] == "local"
+    assert captured["runtime"] == "runsc"  # env override applied, NOT the runc default

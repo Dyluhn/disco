@@ -483,22 +483,32 @@ def _has_unfinished_plan(events: list) -> bool:
     return not has_finished
 
 
+def effective_local_runtime(backend: str, runtime: str) -> str:
+    """The OCI runtime the `local` (Docker/Podman socket) backend ACTUALLY runs under.
+
+    DISCO_LOCAL_RUNTIME is the deployment knob for it — set it to `runsc` on a gVisor
+    host so config-driven local sandboxes actually run under gVisor. It was previously
+    honored ONLY on the DISCO_SANDBOX override path (__main__), so with the compose
+    default (DISCO_SANDBOX unset → config-driven) it was SILENTLY IGNORED and local
+    sandboxes ran under plain runc despite the operator asking for runsc (found live
+    2026-07-09). Scoped to `local` (the runtime isn't user-selectable in Settings for it,
+    so this can't clash with a UI choice); gVisor/podman carry their own runtimes.
+
+    Shared by the run path (`build_sandbox_service`) AND the Settings 'Test connection'
+    probe (`probe_sandbox_config`) so they build the SAME runtime — otherwise Test
+    connection validates `runc` (the DTO default) and false-greens on a runsc-only host
+    while the real run path (runsc) fails its `_require_runtime` healthcheck."""
+    if backend == "local":
+        return disco_env("LOCAL_RUNTIME", runtime) or runtime
+    return runtime
+
+
 def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
     """Map the persisted SandboxSettings → the concrete SandboxBackend — the ONE place
     that knows the backend↔config mapping (settings drive the active backend). Podman is
     real, verified backend code, but a STUB in THIS environment (VM 202 destroyed) — it
     constructs but isn't live/verifiable here; completed at the Meta deployment."""
-    # DISCO_LOCAL_RUNTIME is the deployment knob for the `local` (Docker/Podman socket)
-    # backend's OCI runtime — set it to `runsc` on a gVisor host so config-driven local
-    # sandboxes actually run under gVisor. It was previously honored ONLY on the
-    # DISCO_SANDBOX override path (__main__), so with the compose default (DISCO_SANDBOX
-    # unset → config-driven) it was SILENTLY IGNORED and local sandboxes ran under plain
-    # runc despite the operator asking for runsc (found live 2026-07-09). Apply it here so
-    # BOTH paths agree. Scoped to `local` (the runtime isn't user-selectable in Settings,
-    # so this can't clash with a UI choice); gVisor/podman carry their own runtimes.
-    runtime = settings.runtime
-    if settings.backend == "local":
-        runtime = disco_env("LOCAL_RUNTIME", settings.runtime) or settings.runtime
+    runtime = effective_local_runtime(settings.backend, settings.runtime)
     cfg = SandboxConfig(
         backend=settings.backend,
         docker_socket=settings.docker_socket,
@@ -1252,18 +1262,25 @@ class ConversationRuntime:
         from disco.tools.sandbox import probe_sandbox_reachability, sandbox_endpoint_label
 
         settings = self._config_store.load().sandbox
-        endpoint = sandbox_endpoint_label(
-            settings.backend, settings.docker_socket, settings.podman_url
-        )
         try:
             service = self._sandbox_service_now()
         except Exception as exc:  # noqa: BLE001 — a construction failure is a RESULT
+            endpoint = sandbox_endpoint_label(
+                settings.backend, settings.docker_socket, settings.podman_url
+            )
             return False, settings.backend, f"{endpoint}: {exc}"
+        # Report the ACTIVE backend the service ACTUALLY probes, not the persisted config:
+        # a DISCO_SANDBOX override injects a service that can differ from Settings, so
+        # trust the service being probed (service.name) so the banner names the real one.
+        backend = getattr(service, "name", settings.backend) or settings.backend
+        endpoint = sandbox_endpoint_label(
+            backend, settings.docker_socket, settings.podman_url
+        )
         ok, _status, detail = await probe_sandbox_reachability(service, endpoint)
-        return ok, settings.backend, ("" if ok else detail)
+        return ok, backend, ("" if ok else detail)
 
     async def probe_sandbox_config(
-        self, settings: "SandboxSettings"
+        self, settings: SandboxSettings
     ) -> tuple[bool, str, str]:
         """Probe a GIVEN sandbox config (the Settings 'Test connection' preflight, before
         it is saved) — same environment + classifier as the active-backend probe.
@@ -1283,7 +1300,9 @@ class ConversationRuntime:
                 backend=settings.backend,
                 docker_socket=settings.docker_socket,
                 podman_url=settings.podman_url,
-                runtime=settings.runtime,
+                # Same env-effective runtime the run path uses (build_sandbox_service),
+                # so 'Test connection' can't false-green under a runsc-only host.
+                runtime=effective_local_runtime(settings.backend, settings.runtime),
                 image=settings.image,
                 workspace_root=settings.workspace_root,
             )
