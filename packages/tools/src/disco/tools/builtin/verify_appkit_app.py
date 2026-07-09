@@ -123,6 +123,7 @@ from disco.core.appkit.worker_inspect import (
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ._outcomes import fail_outcome
 from .browser import BrowserArgs, BrowserTool
 from .design_lint import DesignLintArgs, DesignLintTool
 from .verify_app import VerifyWebAppArgs, VerifyWebAppTool
@@ -442,9 +443,7 @@ class VerifyAppKitAppTool:
             verdict = build_verdict(checks, embedded)
             return ToolOutcome(success=True, content=_render(verdict), structured=verdict)
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a verdict-shaped error
-            return ToolOutcome(
-                success=False, content="", error=f"verify_appkit_app error: {e}"
-            )
+            return fail_outcome(f"verify_appkit_app error: {e}")
 
     def _primitive_result_checks(
         self, result: PrimitiveVerifyResult, prim: object

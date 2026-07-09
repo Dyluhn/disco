@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from disco.core.events import ActionEvent, SecurityRisk, ToolCall
-from disco.core.llm.prompts import _EXECUTION_DRIVER_PROMPT, _PLANNING_DRIVER_PROMPT
+from disco.core.llm.prompts import (
+    _EXECUTION_DRIVER_PROMPT,
+    _EXECUTION_DRIVER_PROMPT_SMALL,
+    _HOST_VERIFY_MANDATE_CAPABLE,
+    _HOST_VERIFY_MANDATE_SMALL,
+    _PLANNING_DRIVER_PROMPT,
+    _SELF_VERIFY_MANDATE_CAPABLE,
+    _SELF_VERIFY_MANDATE_SMALL,
+)
 from disco.core.loop import signals
 from disco.core.security.analyzers import RuleBasedAnalyzer, hard_deny_reason
 
@@ -69,6 +77,39 @@ def test_prompt_contract_text():
     assert "run_server" not in _EXECUTION_DRIVER_PROMPT
     assert "restart_preview" not in _EXECUTION_DRIVER_PROMPT
 
+def test_scanfix_prompt_surgery_contract():
+    assert "TALKING vs FINISHING — know what each tool is for" in _EXECUTION_DRIVER_PROMPT
+    assert "three distinct tools" not in _EXECUTION_DRIVER_PROMPT
+
+    assert "step BOUNDARIES" in _EXECUTION_DRIVER_PROMPT
+    assert "not per action" in _EXECUTION_DRIVER_PROMPT
+    assert "ARRAY OF OBJECTS" not in _EXECUTION_DRIVER_PROMPT
+
+    assert "A successful edit's observation shows the updated region" in _EXECUTION_DRIVER_PROMPT
+    assert "do not re-read after your own successful edit" in _EXECUTION_DRIVER_PROMPT
+    assert "Read a file immediately BEFORE editing it" not in _EXECUTION_DRIVER_PROMPT
+
+    assert _EXECUTION_DRIVER_PROMPT.lower().count("monolith") == 1
+    assert "single monolithic file" not in _EXECUTION_DRIVER_PROMPT_SMALL
+
+    assert "verify_web_app" in _EXECUTION_DRIVER_PROMPT
+    assert "browser tool once" not in _EXECUTION_DRIVER_PROMPT
+
+
+def test_verify_mandates_lead_with_structured_verifier():
+    mandates = [
+        _SELF_VERIFY_MANDATE_CAPABLE,
+        _HOST_VERIFY_MANDATE_CAPABLE,
+        _SELF_VERIFY_MANDATE_SMALL,
+        _HOST_VERIFY_MANDATE_SMALL,
+    ]
+    for mandate in mandates:
+        assert "verify_web_app" in mandate
+        assert "single pass/fail verdict" in mandate
+        assert "never a guessed :8000" in mandate
+        assert "Verify once and stop" in mandate
+        assert "browser tool once" not in mandate
+
 def test_planning_prompt_environment():
     # Planning prompt MUST contain the new environment paragraph + the preview_start
     # contract (preview is a PLATFORM concern; no fixed-port assumption).
@@ -76,3 +117,7 @@ def test_planning_prompt_environment():
     assert "preview_start" in _PLANNING_DRIVER_PROMPT
     assert "auto-served on port 8000" not in _PLANNING_DRIVER_PROMPT
     assert "persistent shell SESSIONS" in _PLANNING_DRIVER_PROMPT
+    assert (
+        "`shell`, `code_exec`, and all write tools are LOCKED until the plan is approved"
+        in _PLANNING_DRIVER_PROMPT
+    )

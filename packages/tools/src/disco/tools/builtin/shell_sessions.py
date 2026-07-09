@@ -7,12 +7,8 @@ from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..sandbox.shell_sessions import SessionBusy
-
-
-def _fail(msg: str) -> ToolOutcome:
-    # DEFECT-2: failure diagnostics must travel in error AND content so the
-    # relay (executor → AgentErrorEvent) never collapses them to "tool failed".
-    return ToolOutcome(success=False, content=msg, error=msg)
+from ._outcomes import fail_outcome as _fail
+from ._shell_caps import cap_shell_observation
 
 
 def _reject_reserved_session(session: str) -> ToolOutcome | None:
@@ -39,6 +35,8 @@ class ShellExecTool:
     definition = ToolDef(
         name="shell_exec",
         description=(
+            "Session-based: use ONLY when you need a process that outlives the call "
+            "(watchers, daemons) or stdin interaction — otherwise use `shell`. "
             "Execute a shell command in a persistent session. One foreground "
             "process per session — it FAILS with 'session busy' if a previous "
             "command is still running. So ALWAYS background a long-running process "
@@ -74,8 +72,9 @@ class ShellExecTool:
             content = f"{header}\n{outcome.output}"
             if outcome.note:
                 content += f"\nNote: {outcome.note}"
-
-            return ToolOutcome(success=True, content=content.strip())
+            content, cap_meta = cap_shell_observation(content.strip())
+            structured = cap_meta if cap_meta is not None else None
+            return ToolOutcome(success=True, content=content, structured=structured)
         except SessionBusy as e:
             return _fail(str(e))
         except Exception as e:
