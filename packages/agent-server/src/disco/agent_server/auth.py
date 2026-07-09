@@ -18,6 +18,7 @@ from disco.core.auth import (
     allowed_frontend_origins,
     configured_admin_token,
     origin_allowed,
+    pairing_token,
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
@@ -28,8 +29,10 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 _LOG = logging.getLogger(__name__)
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
-_PAIRING_TOKEN = secrets.token_urlsafe(32)
-_PAIRING_TOKEN_CONSUMED = False
+# Derived LIVE from the shared session secret at each use: identical to the
+# app-server's token and stable across restarts, so ONE pasted token pairs both
+# origins. See disco.core.auth.pairing_token. Re-usable (secret is the root of
+# trust); computed live (not cached at import) so no import-order fragility.
 _ADMIN_PREFIXES = (
     "/api/mcp",
     "/api/tts",
@@ -137,16 +140,8 @@ def set_session_cookie(response: Response, token: str, session: AuthSession) -> 
 
 
 def _pairing_token_ok(presented: str | None) -> bool:
-    return bool(
-        presented
-        and not _PAIRING_TOKEN_CONSUMED
-        and secrets.compare_digest(presented, _PAIRING_TOKEN)
-    )
-
-
-def _consume_pairing_token() -> None:
-    global _PAIRING_TOKEN_CONSUMED
-    _PAIRING_TOKEN_CONSUMED = True
+    # Constant-time compare against the derived token; re-usable by design.
+    return bool(presented and secrets.compare_digest(presented, pairing_token()))
 
 
 def _require_loopback_allowed_origin(request: Request) -> None:
@@ -226,18 +221,25 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
 def make_auth_router() -> APIRouter:
     router = APIRouter()
     signer = SessionSigner()
-    _LOG.info("Disco one-time pairing token: %s", _PAIRING_TOKEN)
+    _LOG.info("Disco pairing token (derived, shared across servers): %s", pairing_token())
 
     @router.post("/api/auth/mint")
     async def mint_session(body: MintSessionBody, request: Request, response: Response) -> dict:
-        _require_loopback_allowed_origin(request)
+        # See app_server.auth for the full rationale: origin must be allowed;
+        # a valid token pairs from ANY allowed origin (remote self-host); a
+        # tokenless client gets pairing_required unless it's a loopback dev
+        # client with auto-pair on. (2026-07-09 remote fresh-install fix.)
+        origin = request.headers.get("origin")
+        if not origin_allowed(origin):
+            raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
         auto_pair = _auto_pair_enabled()
         token_ok = _pairing_token_ok(body.pairing_token)
-        if not (auto_pair or token_ok):
-            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
+        if not token_ok:
+            if _is_loopback_client(request) and auto_pair:
+                pass  # loopback dev convenience: mint without a token
+            else:
+                raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
         cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
-        if token_ok and not auto_pair:
-            _consume_pairing_token()
         set_session_cookie(response, cookie, session)
         return {
             "ok": True,
@@ -247,11 +249,11 @@ def make_auth_router() -> APIRouter:
         }
 
     @router.get("/api/auth/pairing-token")
-    async def pairing_token(request: Request) -> dict:
+    async def pairing_token_route(request: Request) -> dict:
+        # Loopback-only convenience (see app_server.auth); remote browsers paste
+        # the token from the server logs into the pairing prompt instead.
         _require_loopback_pairing_channel(request)
-        if _PAIRING_TOKEN_CONSUMED:
-            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
-        return {"pairing_token": _PAIRING_TOKEN}
+        return {"pairing_token": pairing_token()}
 
     @router.get("/api/auth/session")
     async def auth_session(request: Request) -> dict:

@@ -11,10 +11,10 @@ import base64
 import hashlib
 import hmac
 import json
-from pathlib import Path
 import secrets
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .env import disco_env
@@ -38,6 +38,11 @@ _DEFAULT_ALLOWED_ORIGINS = (
     "http://127.0.0.1:8000",
     "http://localhost:8800",
     "http://127.0.0.1:8800",
+    # The compose self-host frontend (nginx :8088). Missing from this list, even
+    # the documented localhost quickstart had its API responses CORS-blocked —
+    # found live 2026-07-09 on the first browser test of a fresh compose deploy.
+    "http://localhost:8088",
+    "http://127.0.0.1:8088",
 )
 
 
@@ -62,10 +67,18 @@ class PreviewCapability:
 
 def allowed_frontend_origins() -> tuple[str, ...]:
     raw = disco_env("FRONTEND_ORIGINS", "")
-    if not raw:
-        return _DEFAULT_ALLOWED_ORIGINS
-    origins = [part.strip().rstrip("/") for part in raw.replace(",", " ").split()]
-    return tuple(origin for origin in origins if origin)
+    if raw:
+        origins = [part.strip().rstrip("/") for part in raw.replace(",", " ").split()]
+        return tuple(origin for origin in origins if origin)
+    # Zero-config remote access: when the deployment declares its public UI URL
+    # (DISCO_PUBLIC_UI_URL — the same value the boot banner prints), that origin
+    # is allowed alongside the localhost defaults. Without this, a LAN/tailnet
+    # browser passes the env.js host derivation but then has every API response
+    # CORS-blocked — the second layer of the 2026-07-09 remote fresh-install bug.
+    public_ui = (disco_env("PUBLIC_UI_URL", "") or "").strip().rstrip("/")
+    if public_ui:
+        return (*_DEFAULT_ALLOWED_ORIGINS, public_ui)
+    return _DEFAULT_ALLOWED_ORIGINS
 
 
 def origin_allowed(origin: str | None) -> bool:
@@ -77,6 +90,34 @@ def session_secret() -> str:
     if configured:
         return configured
     return _load_or_create_install_secret()
+
+
+def pairing_token() -> str:
+    """The first-run admin pairing token — DERIVED from the shared session secret,
+    not random per process.
+
+    Two properties this buys, both load-bearing for containerized self-host
+    (found live 2026-07-09):
+
+      1. IDENTICAL across the app-server and agent-server. Each used to mint its
+         OWN random ``secrets.token_urlsafe`` token, so a browser pairing both
+         origins would need TWO different tokens from TWO different container
+         logs. Deriving from the secret both servers already share (DISCO_SECRET_KEY)
+         means ONE token pairs everything — and since the session-signing secret
+         is shared too, one server's cookie is already valid at the other.
+
+      2. STABLE across restarts. The operator (who set the secret, or can read it
+         from the logs) can always re-pair a new browser / cleared cookies without
+         hunting a freshly-randomised token. Possession of the token is the
+         operator proof; the secret is the root of trust, exactly like the session
+         signer. It is NEVER the secret itself — it's an HMAC tag over a fixed
+         label, so leaking the pairing token does not leak the signing secret."""
+    tag = hmac.new(
+        session_secret().encode("utf-8"),
+        b"disco-pairing-token-v1",
+        hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(tag).decode("ascii").rstrip("=")
 
 
 def _load_or_create_install_secret() -> str:
