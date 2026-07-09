@@ -2,9 +2,15 @@
 # Generate /env.js from container env at startup.
 #
 # Explicit URLs (DISCO_PUBLIC_API_BASE / DISCO_PUBLIC_AGENT_BASE) win when set.
-# When empty (the zero-config default), the emitted JS falls back to localhost.
-# The API session cookie is host-only, so keep the API servers on the canonical
-# loopback host and never derive 127.0.0.1 or a LAN host into the cookie flow.
+# When empty (the zero-config default), the emitted JS derives the API host from
+# the BROWSER'S OWN hostname (location.hostname) + the configured ports — so
+# localhost, LAN, and tailnet access all work with zero config (the promise the
+# compose.yaml comment makes). This is also the cookie-safe choice: the session
+# cookie is host-only and cookies ignore ports, so page-host == API-host keeps
+# the cookie flowing for WHATEVER host the user browses from. (The old hardcoded
+# `localhost` fallback was the opposite: it MIXED hosts whenever the page was
+# not loaded from localhost, sending every API call to the visitor's own
+# machine — found live 2026-07-09 on the first remote fresh-install test.)
 # DISCO_* preferred; legacy PMX_* honored as a fallback (the rename compat path).
 set -eu
 
@@ -17,8 +23,8 @@ PUBLIC_AGENT="${DISCO_PUBLIC_AGENT_BASE:-${PMX_PUBLIC_AGENT_BASE:-}}"
 # fires in the browser (zero-config localhost default).
 cat > /usr/share/nginx/html/env.js <<EOF
 window.__DISCO_ENV = {
-  API_BASE:   "${PUBLIC_API}"   || (location.protocol + "//localhost:${API_PORT}"),
-  AGENT_BASE: "${PUBLIC_AGENT}" || (location.protocol + "//localhost:${AGENT_PORT}"),
+  API_BASE:   "${PUBLIC_API}"   || (location.protocol + "//" + location.hostname + ":${API_PORT}"),
+  AGENT_BASE: "${PUBLIC_AGENT}" || (location.protocol + "//" + location.hostname + ":${AGENT_PORT}"),
 };
 EOF
 

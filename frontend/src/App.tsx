@@ -17,6 +17,7 @@ import { AgentSurface } from "@/components/AgentSurface";
 import { ResearchSurface } from "@/components/ResearchSurface";
 import { DeepResearchSurface } from "@/components/research/DeepResearchSurface";
 import { ModeProvider } from "@/shell/ModeProvider";
+import { PairingGate } from "@/components/PairingGate";
 import { ToastProvider } from "@/components/Toast";
 import { Shell } from "@/shell/Shell";
 import { useMode } from "@/shell/mode";
@@ -246,6 +247,10 @@ export default function App() {
       <Router>
         <ModeProvider>
           <ToastProvider>
+          {/* First-run auth gate: bootstraps a session and prompts for the pairing
+              token when the deployment needs it (remote/containerized self-host).
+              Transparent (renders children immediately) in fixture/demo mode. */}
+          <PairingGate>
           {/* W6: evidence-harness bridge — inert in production without opt-in */}
           <E2EBridgeMounter />
           <Routes>
@@ -265,6 +270,7 @@ export default function App() {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>
+          </PairingGate>
           </ToastProvider>
         </ModeProvider>
       </Router>

@@ -195,6 +195,32 @@ async function ensureSessionFor(base: string): Promise<void> {
   return pending;
 }
 
+/** Thrown when a base needs the operator's pairing token and none could be
+ * auto-obtained (the containerized / remote self-host case: the browser is not
+ * on the server's loopback, so the token-fetch convenience is refused). The
+ * app-root <PairingGate> catches this and prompts for the token. */
+export class PairingRequiredError extends Error {
+  constructor(readonly base: string) {
+    super("pairing required");
+    this.name = "PairingRequiredError";
+  }
+}
+
+function mintSession(base: string, token: string | null): Promise<Response> {
+  return fetch(`${base}/api/auth/mint`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(token ? { pairing_token: token } : {}),
+  });
+}
+
+async function adoptMinted(base: string, minted: Response): Promise<void> {
+  const body = (await minted.json()) as { csrf_token?: string };
+  if (!body.csrf_token) throw new ApiError("auth mint missing csrf", minted.status);
+  csrfByBase.set(base, body.csrf_token);
+}
+
 async function initializeSession(base: string): Promise<void> {
   const current = await fetch(`${base}/api/auth/session`, {
     credentials: "include",
@@ -209,13 +235,13 @@ async function initializeSession(base: string): Promise<void> {
       return;
     }
   }
-  let minted = await fetch(`${base}/api/auth/mint`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: "{}",
-  });
+  // Tokenless mint: succeeds when a shared cookie already exists, or on a
+  // loopback dev host with auto-pair. A 401 means a pairing token is required.
+  let minted = await mintSession(base, null);
   if (minted.status === 401) {
+    // Loopback convenience: a SAME-HOST browser can read the token off the
+    // server directly (the endpoint refuses remote clients). In a container the
+    // browser is never loopback, so this simply fails over to the paste prompt.
     const pairing = await fetch(`${base}/api/auth/pairing-token`, {
       credentials: "include",
       headers: { accept: "application/json" },
@@ -224,20 +250,41 @@ async function initializeSession(base: string): Promise<void> {
       const body = await pairing.json().catch(() => null) as
         | { pairing_token?: string }
         | null;
-      if (body?.pairing_token) {
-        minted = await fetch(`${base}/api/auth/mint`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ pairing_token: body.pairing_token }),
-        });
-      }
+      if (body?.pairing_token) minted = await mintSession(base, body.pairing_token);
     }
   }
+  // Still unauthorized → the operator must paste the token (from server logs).
+  if (minted.status === 401) throw new PairingRequiredError(base);
   if (!minted.ok) throw new ApiError("auth mint failed", minted.status);
-  const body = await minted.json() as { csrf_token?: string };
-  if (!body.csrf_token) throw new ApiError("auth mint missing csrf", minted.status);
-  csrfByBase.set(base, body.csrf_token);
+  await adoptMinted(base, minted);
+}
+
+/** Explicit auth bootstrap for the app-root <PairingGate>: ensure a session for
+ * BOTH live bases. No-op in fixture/demo mode (no base configured). Propagates
+ * PairingRequiredError so the gate can prompt for the token. */
+export async function bootstrapSessions(): Promise<void> {
+  if (isLive()) await ensureApiSession();
+  if (agentLive()) await ensureAgentSession();
+}
+
+/** Pair with the operator's pasted token. Mints the FIRST live base with the
+ * token — which sets the session cookie BOTH servers share (same host + signing
+ * secret) — then lets every other base ADOPT that cookie via its own session
+ * check. A second mint is deliberately avoided: it would replace the cookie the
+ * first base's CSRF token is bound to (the documented shared-cookie race). */
+export async function pairWithToken(token: string): Promise<void> {
+  const bases = [BASE, AGENT_BASE].filter((b) => b.length > 0);
+  if (bases.length === 0) return;
+  const minted = await mintSession(bases[0], token);
+  if (minted.status === 401) throw new PairingRequiredError(bases[0]);
+  if (!minted.ok) throw new ApiError("pairing failed", minted.status);
+  await adoptMinted(bases[0], minted);
+  sessionInitByBase.set(bases[0], Promise.resolve());
+  for (const base of bases.slice(1)) {
+    sessionInitByBase.delete(base); // clear any failed init so it re-runs clean
+    csrfByBase.delete(base);
+    await ensureSessionFor(base); // adopts the shared cookie via /api/auth/session
+  }
 }
 
 async function authFetch(base: string, pathOrUrl: string, init: RequestInit): Promise<Response> {
