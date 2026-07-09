@@ -39,12 +39,17 @@ from disco.tools.verify.web_app_probe import (
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ._outcomes import fail_outcome
 from .browser import BROWSER_UNAVAILABLE_MSG, BrowserArgs, BrowserTool
 
 # `_PREVIEW_PORTS` (imported above): SINGLE SOURCE OF TRUTH lives in core's finish
 # gate so the gate's preview detection (P1-1) and this tool's auto-detect stay
 # byte-identical (8000 is Disco's canonical user-visible port; NOVNC_PORT is
 # deliberately excluded — it's the live-view bridge, never the app under test).
+_VERIFY_WEB_APP_FAILURE_RECIPE = (
+    "Check preview_status (is a preview running?) and preview_logs, then re-run "
+    "verify_web_app once."
+)
 
 
 def _failure_fingerprint(
@@ -205,8 +210,8 @@ class VerifyWebAppTool:
                 structured=verdict,
             )
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a verdict-shaped error
-            return ToolOutcome(
-                success=False, content="", error=f"verify_web_app error: {e}"
+            return fail_outcome(
+                f"verify_web_app error: {e}\n{_VERIFY_WEB_APP_FAILURE_RECIPE}"
             )
 
     async def _capture_game_interaction(

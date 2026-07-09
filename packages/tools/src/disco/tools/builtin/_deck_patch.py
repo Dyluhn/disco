@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..registry import Tool
+from ._outcomes import fail_outcome
 
 # ─── RFC-6902 minimal implementation ─────────────────────────────────────────
 
@@ -365,20 +366,12 @@ class DeckPatchTool:
         try:
             raw_bytes = await ctx.sandbox.read_file(args.deck_file)
         except Exception as exc:
-            return ToolOutcome(
-                success=False,
-                content="",
-                error=f"Could not read deck file {args.deck_file!r}: {exc}",
-            )
+            return fail_outcome(f"Could not read deck file {args.deck_file!r}: {exc}")
 
         try:
             authored_json: dict = json.loads(raw_bytes)
         except json.JSONDecodeError as exc:
-            return ToolOutcome(
-                success=False,
-                content="",
-                error=f"deck file is not valid JSON: {exc}",
-            )
+            return fail_outcome(f"deck file is not valid JSON: {exc}")
 
         # ── 2. Apply the RFC-6902 patch (in memory only) ─────────────────────
         try:
@@ -389,23 +382,17 @@ class DeckPatchTool:
                 [op.model_dump(exclude_none=True) if hasattr(op, "model_dump") else op for op in args.patch],
             )
         except PatchError as exc:
-            return ToolOutcome(
-                success=False,
-                content="",
-                error=f"Patch application failed: {exc}",
-            )
+            return fail_outcome(f"Patch application failed: {exc}")
 
         # ── 3. Validate against AuthoredDeck schema ───────────────────────────
         try:
             authored_deck = AuthoredDeck.model_validate(patched_json)
         except Exception as exc:
-            return ToolOutcome(
-                success=False,
-                content="",
-                error=(
+            return fail_outcome(
+                (
                     f"Patched document fails AuthoredDeck schema validation: {exc}. "
                     "Workspace NOT modified — patch reverted."
-                ),
+                )
             )
 
         # ── 4. Determine the deck stem (needed to reload image assets) ────────
@@ -442,11 +429,7 @@ class DeckPatchTool:
             html_str = render_html(deck)           # Deck → HTML string
             pptx_bytes = render_pptx(deck)         # Deck → PPTX bytes
         except Exception as exc:
-            return ToolOutcome(
-                success=False,
-                content="",
-                error=f"Re-render failed: {exc}. Workspace NOT modified.",
-            )
+            return fail_outcome(f"Re-render failed: {exc}. Workspace NOT modified.")
 
         # ── 5. Determine output filenames ─────────────────────────────────────
 
@@ -464,11 +447,7 @@ class DeckPatchTool:
             await ctx.sandbox.write_file(pptx_out, pptx_bytes)
             written.append(pptx_out)
         except Exception as exc:
-            return ToolOutcome(
-                success=False,
-                content="",
-                error=f"Write failed after successful patch+render: {exc}",
-            )
+            return fail_outcome(f"Write failed after successful patch+render: {exc}")
 
         # Build a concise summary
         n_slides = len(authored_deck.slides)
