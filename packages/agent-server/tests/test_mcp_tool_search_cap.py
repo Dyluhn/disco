@@ -163,3 +163,48 @@ def test_over_cap_readonly_tool_names_from_allowed_not_advertised():
     assert pre_readonly <= post_readonly, (
         "readonly_tool_names shrank after cap wiring — planner backstop weakened"
     )
+
+
+# ---- pre-existing advertise split survives MCP registration (codex #1) -------
+#
+# The runtime may hand _apply_mcp_scope an executor whose scope already withholds
+# a tool (scaffold_starter when no starter kit resolves). Registration must not
+# resurrect it: over the cap, the advertised rebuild must start from the ADVERTISED
+# set (not allowed_tools); under the cap, the explicit advertised set must be
+# EXTENDED with the MCP names (or they'd all be hidden).
+
+
+def _executor_with_withheld(withheld: str) -> DefaultToolExecutor:
+    _policy = ModelExecutionPolicy.standard()
+    scope = agent_scope(model_policy=_policy)
+    advertised = (
+        scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
+    )
+    scope = scope.model_copy(update={"advertised_tools": advertised - {withheld}})
+    return DefaultToolExecutor(build_default_registry(), scope, model_policy=_policy)
+
+
+def test_over_cap_does_not_resurrect_withheld_tools():
+    ex = _executor_with_withheld("scaffold_starter")
+    _apply_mcp_scope(ex, _fake_mcp_tools(25), _FakeCallTarget(), max_active_schemas=20)
+    advertised = ex._scope.advertised_tools
+    assert advertised is not None
+    assert "scaffold_starter" not in advertised, (
+        "over-cap advertised rebuild must start from the prior ADVERTISED set — "
+        "rebuilding from allowed_tools silently re-advertises withheld tools"
+    )
+    assert "scaffold_starter" in ex._scope.allowed_tools  # still callable
+    assert "tool_search" in advertised
+
+
+def test_under_cap_extends_explicit_advertised_with_mcp_names():
+    ex = _executor_with_withheld("scaffold_starter")
+    _apply_mcp_scope(ex, _fake_mcp_tools(3), _FakeCallTarget(), max_active_schemas=20)
+    advertised = ex._scope.advertised_tools
+    assert advertised is not None
+    assert "scaffold_starter" not in advertised  # split preserved
+    for i in range(3):
+        assert f"mcp__srv__tool_{i}" in advertised, (
+            "under-cap MCP tools must be ADDED to an explicit advertised set — "
+            "leaving it untouched would hide every MCP tool"
+        )

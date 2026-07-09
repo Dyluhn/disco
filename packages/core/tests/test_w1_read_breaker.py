@@ -396,3 +396,30 @@ def test_pure_repeat_run_broken_by_any_observation():
         "an intervening observation must break the pure-repeat run "
         "(the model demonstrably waited and the world answered)"
     )
+
+
+def test_page_text_screenshot_paths_are_not_normalized():
+    """codex four-fix defect #3: normalization is END-anchored — the browser tool
+    appends its screenshot line AFTER the content fence (always last), while page
+    TEXT lives inside the fence. A page whose own copy shows a changing
+    'screenshot: /assets/screenshots/frame-N.png' line is genuinely CHANGING
+    content and must NOT be flattened into a false repeat."""
+    d = StuckDetector()
+    events = [user_msg("click through the gallery")]
+    for i in range(4):
+        page_text = f"Gallery\nscreenshot: /assets/screenshots/frame-{i:03d}.png\nnext"
+        events += [
+            _click(),
+            observation(
+                tool="browser",
+                # page text INSIDE the fence (mid-content), volatile tool line at END
+                content=(
+                    f"TEXT:\n{page_text}\n[END]\n"
+                    f"screenshot: .pmx/screenshots/{20 + i:04d}-click.png"
+                ),
+            ),
+        ]
+    assert d.is_stuck(events) is False, (
+        "changing PAGE content mentioning screenshot paths must not be "
+        "normalized into a false pattern-1 repeat (end-anchored volatiles only)"
+    )

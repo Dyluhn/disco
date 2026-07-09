@@ -35,8 +35,16 @@ _VOLATILE_FIELDS = {"id", "seq", "timestamp", "meta"}
 # dead click loops (2026-07-09 deck-run autopsy). Applied ONLY when the caller opts
 # in via `ignore_volatile_content=True` (stuck detection); dedup/idempotency callers
 # keep byte-exact comparison.
+#
+# END-ANCHORED ($, no MULTILINE): the browser tool appends its screenshot line
+# AFTER the untrusted-content fence, so it is always the LAST thing in the
+# observation — while page TEXT lives inside the fence and can never be at the
+# end. Without the anchor, a page legitimately displaying
+# "screenshot: /assets/screenshots/frame-001.png" in its own copy would be
+# normalized too, and a dead loop over genuinely-CHANGING page content could be
+# misread as stuck (codex four-fix review defect #3).
 _VOLATILE_CONTENT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"(screenshot: )\S*screenshots/\S+"), r"\1<screenshot>"),
+    (re.compile(r"(screenshot: )\S*screenshots/\S+$"), r"\1<screenshot>"),
 )
 
 

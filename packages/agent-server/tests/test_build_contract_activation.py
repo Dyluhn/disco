@@ -173,3 +173,25 @@ def test_scaffold_starter_advertised_when_kind_resolves_a_kit() -> None:
     assert "scaffold_starter" in advertised, (
         "an activated contract WITH a starter kit must advertise scaffold_starter"
     )
+
+
+def test_set_build_kind_evicts_cached_loop_and_executor() -> None:
+    """codex four-fix defect #2: the executor bakes contract-derived state at
+    build time (starter-kit ToolContext stamp + scaffold advertise split), so a
+    cached loop/executor must be evicted when the kind changes — otherwise a
+    later activation keeps serving the OLD contract. Reuses the guarded
+    settings-eviction path (never evicts under a live run)."""
+    rt = _runtime()
+    rt._loops["c-act"] = MagicMock()
+    rt._executors["c-act"] = MagicMock(_sandbox=None)
+    rt.set_build_kind("c-act", "static.site")
+    assert "c-act" not in rt._loops
+    assert "c-act" not in rt._executors
+    # ...and the newly-resolved contract now advertises the starter tool.
+    from disco.tools import artifact_scope
+
+    scope = rt._narrow_scope_for_starter(artifact_scope(), "c-act")
+    advertised = (
+        scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
+    )
+    assert "scaffold_starter" in advertised

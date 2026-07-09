@@ -415,11 +415,24 @@ def _apply_mcp_scope(
 
     mcp_names = frozenset(t.name for t in all_mcp_tools)
     non_mcp_allowed = executor._scope.allowed_tools
+    # Preserve any pre-existing advertise/callable split (e.g. scaffold_starter
+    # withheld when no starter kit resolves — codex four-fix review defect #1):
+    # the over-cap advertised rebuild below must start from what was ADVERTISED,
+    # not from the wider allowed set, or it silently re-advertises withheld tools.
+    non_mcp_advertised = (
+        executor._scope.advertised_tools
+        if executor._scope.advertised_tools is not None
+        else non_mcp_allowed
+    )
 
     # Extend the security allowlist: ALL MCP tools are callable by qualified name.
-    executor._scope = executor._scope.model_copy(
-        update={"allowed_tools": non_mcp_allowed | mcp_names}
-    )
+    # When a pre-existing advertise split is in place, extend IT too — under the
+    # cap every MCP tool is meant to be visible, and an untouched explicit
+    # advertised set would silently hide them all (complement of defect #1).
+    scope_update: dict[str, Any] = {"allowed_tools": non_mcp_allowed | mcp_names}
+    if executor._scope.advertised_tools is not None:
+        scope_update["advertised_tools"] = non_mcp_advertised | mcp_names
+    executor._scope = executor._scope.model_copy(update=scope_update)
     for tdef in all_mcp_tools:
         executor._registry.register(_MCPToolWrapper(tdef, call_target))
 
@@ -437,7 +450,7 @@ def _apply_mcp_scope(
         executor._scope = executor._scope.model_copy(
             update={
                 "allowed_tools": executor._scope.allowed_tools | {"tool_search"},
-                "advertised_tools": non_mcp_allowed | {"tool_search"},
+                "advertised_tools": non_mcp_advertised | {"tool_search"},
             }
         )
     elif executor._scope.advertised_tools is not None:
@@ -1510,6 +1523,13 @@ class ConversationRuntime:
             self._build_kind.pop(conversation_id, None)
         self._build_trackers.pop(conversation_id, None)
         self._build_audit_trackers.pop(conversation_id, None)
+        # The executor bakes contract-derived state at build time (the starter-kit
+        # ToolContext stamp + the scaffold_starter advertise split), so a cached
+        # loop/executor would keep serving the OLD contract after activation
+        # (codex four-fix review defect #2). Reuse the settings-change eviction:
+        # guarded against live runs, and it re-parks the live sandbox session so
+        # the rebuilt loop adopts the SAME workspace.
+        self._evict_loop_for_model_change(conversation_id)
 
     def expected_delivery_mode(self, conversation_id: str) -> str | None:
         """P5: the host-owned delivery SHAPE ("app"|"files") the conversation's build
