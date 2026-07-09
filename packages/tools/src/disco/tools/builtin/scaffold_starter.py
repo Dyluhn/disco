@@ -41,9 +41,18 @@ class ScaffoldStarterTool:
         assert ctx.sandbox is not None
         starter_id = getattr(ctx, "starter_kit", None)
         if not starter_id:
+            # Deliberately NOT "the contract declares no starter_kit": the contract
+            # may well declare one, but activation (set_build_kind) hasn't resolved
+            # it for this run — the old wording sent the 2026-07-09 autopsy down
+            # the wrong path. Normally unreachable now that the runtime withholds
+            # this tool from the advertised set when no kit resolves; kept as the
+            # typed backstop for qualified-name calls.
             return ToolOutcome(
                 success=False, error="no_starter",
-                content="this build has no starter kit (its contract declares no starter_kit) — author the artifact directly.",
+                content=(
+                    "no starter kit resolved for this run — author the artifact "
+                    "directly with file_write."
+                ),
             )
         kit = StarterKitRegistry.default().get(starter_id)
         if kit is None:

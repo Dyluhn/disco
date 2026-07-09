@@ -1539,6 +1539,25 @@ class ConversationRuntime:
         self._build_scope_guard(conversation_id)  # resolve + cache (contract, tracker)
         return self._build_trackers[conversation_id][0].artifact.starter_kit
 
+    def _narrow_scope_for_starter(self, scope: ToolScope, conversation_id: str) -> ToolScope:
+        """P7 truth-in-advertising (2026-07-09 coffee-shop autopsy): scaffold_starter
+        only works when the ACTIVE contract resolves a starter kit. Today no
+        production path calls set_build_kind (CONTRACT-ACTIVATE is unwired — see
+        the wiring campaign note), so every run resolves the CUSTOM contract and
+        the tool failed `no_starter` on 100% of calls — a false affordance the
+        model dutifully tripped over on its very first build action. Withhold it
+        from the ADVERTISED set when no starter kit resolves; it stays in
+        allowed_tools (callable by qualified name; the typed error remains the
+        backstop), and reappears automatically once activation resolves a kit."""
+        if self._starter_kit_for(conversation_id) is not None:
+            return scope
+        advertised = (
+            scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
+        )
+        if "scaffold_starter" not in advertised:
+            return scope
+        return scope.model_copy(update={"advertised_tools": advertised - {"scaffold_starter"}})
+
     def _finalizer_alias_for(self, conversation_id: str) -> str | None:
         """P6: the contract's verification finalizer to advertise as a `finish` alias —
         ONLY for a RESOLVED, NON-CUSTOM contract. A plain build, a declared "custom" kind,
@@ -2161,7 +2180,10 @@ class ConversationRuntime:
         # C6: artifact_mode selects a narrow scope (NO shell/browser/plan-gate);
         # file_str_replace is excluded from ARTIFACT_TOOLS regardless of policy.
         _art_mode = self._effective_artifact_mode(conversation_id)
-        _scope = artifact_scope() if _art_mode else agent_scope(model_policy=model_policy)
+        _scope = self._narrow_scope_for_starter(
+            artifact_scope() if _art_mode else agent_scope(model_policy=model_policy),
+            conversation_id,
+        )
         # CW-6: derive the capability-aware file_read page budget from the SAME
         # (assist, live-context-window) inputs the snapshot caps use, so a file that
         # fits the assist-OFF snapshot pin also reads in ONE shot. assist-ON resolves

@@ -48,22 +48,27 @@ def main() -> None:
     )
 
     base = default_config()
-    # Keep the paid OpenRouter examples (usable after the user stores a key), but
-    # DROP every developer LAN endpoint. Empty assignments make every role fall
-    # back to the default model; once the user sets a real default, all roles can
-    # run without separately reassigning each row.
-    kept = {
-        k: v
-        for k, v in base.models.items()
-        if v.provider == "openrouter" or "openrouter" in (v.base_url or "")
-    }
-    models = {_UNCONFIGURED_DRIVER_KEY: unconfigured_driver, **kept}
+    # A brand-new install ships EXACTLY ONE catalogue entry: the honest
+    # "not configured" driver. No developer LAN endpoints, and no pre-seeded
+    # paid models either — the old seed kept the OpenRouter examples
+    # (claude-3.5-sonnet as `driver-overflow`, gemini-3-flash), which surfaced
+    # in Settings as models the user never added and cannot use without a key
+    # (a false affordance, found on the 2026-07-09 fresh-install walkthrough).
+    # Users add models through Settings → provider browse, which is the flow
+    # that also stores the key. Empty assignments make every role fall back to
+    # the default model; once the user sets a real default, all roles run
+    # without separately reassigning each row.
+    models = {_UNCONFIGURED_DRIVER_KEY: unconfigured_driver}
 
     cfg = base.model_copy(
         update={
             "models": models,
             "default_model": _UNCONFIGURED_DRIVER_KEY,
             "assignments": {},
+            # dev default points at the (dropped) or-gemini-3-flash entry; a
+            # None target simply disables vision escalation until the user
+            # picks a vision-capable model.
+            "vision_escalation_model": None,
             "projects": ProjectStorageSettings(projects_root=projects_root),
             # sandbox / search (ddgs) / extraction (local) / encoders (bundled ONNX)
             # keep their already-correct keyless defaults.

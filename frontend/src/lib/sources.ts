@@ -16,10 +16,27 @@ export function monogram(url: string): string {
   return cleanDomain(url).charAt(0).toUpperCase() || "•";
 }
 
-/** 1-based citation numeral for a passage = its position in the cited set. */
+/** 1-based citation numeral for a passage = the position of its SOURCE in
+ * first-seen `source_url` order — NOT the passage's raw index. One source often
+ * contributes several passages, and the Sources panel (deriveSourceTiers) shows
+ * ONE row per source in the same first-seen order; numbering chips by raw
+ * passage index drifted +1 after every duplicate (found live 2026-07-09: the
+ * chip said [5] where the sources list said [4]). Passages from the same source
+ * now share that source's number, matching the panel row they deep-link to.
+ * A passage with no URL gets its own number (keyed by its id) rather than a
+ * bogus [0]. */
 export function citationNumbers(answer: GroundedAnswer): Map<string, number> {
+  const bySource = new Map<string, number>();
   const m = new Map<string, number>();
-  answer.passages.forEach((p, i) => m.set(p.id, i + 1));
+  for (const p of answer.passages) {
+    const key = p.source_url || `#${p.id}`;
+    let n = bySource.get(key);
+    if (n === undefined) {
+      n = bySource.size + 1;
+      bySource.set(key, n);
+    }
+    m.set(p.id, n);
+  }
   return m;
 }
 

@@ -392,6 +392,11 @@ export function deriveSourceTiers(report: ReportEvent | null): SourceTiers {
   // Dedup the cited tier BY URL — a single page can produce many passages, but
   // the user-facing list is one row per source. Keep the first passage per URL
   // so the citation chip's deep-link stays stable across replays.
+  // INVARIANT (2026-07-09 off-by-one fix): the row order here — first-seen
+  // source_url over report.passages — IS the numbering base `citationNumbers`
+  // (lib/sources.ts) assigns to the inline chips. Row [i+1] must equal the chip
+  // number of every passage from that source; change one, change both (the
+  // alignment test in sources.test.ts pins this).
   const citedByUrl = new Map<string, Record<string, unknown>>();
   for (const p of report.passages) {
     const url = String((p as Record<string, unknown>).source_url ?? "");

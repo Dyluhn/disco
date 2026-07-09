@@ -127,3 +127,49 @@ async def test_forget_conversation_evicts_build_state() -> None:
     assert "c6" in rt._build_trackers and "c6" in rt._build_kind
     await rt.forget_conversation("c6")
     assert "c6" not in rt._build_trackers and "c6" not in rt._build_kind
+
+
+# ---------------------------------------------------------------------------
+# P7 truth-in-advertising (2026-07-09 coffee-shop autopsy): scaffold_starter is
+# withheld from the ADVERTISED set whenever no starter kit resolves — which,
+# with CONTRACT-ACTIVATE unwired in production, is every run today. It stays in
+# allowed_tools (typed no_starter error remains the backstop) and reappears the
+# moment a kind with a starter kit is activated.
+# ---------------------------------------------------------------------------
+
+
+def test_scaffold_starter_not_advertised_without_starter_kit() -> None:
+    from disco.core.llm import ModelExecutionPolicy
+    from disco.tools import agent_scope, artifact_scope
+
+    rt = _runtime()
+    # No set_build_kind (the production reality) → no starter kit resolves.
+    for base in (
+        artifact_scope(),
+        agent_scope(model_policy=ModelExecutionPolicy()),
+    ):
+        scope = rt._narrow_scope_for_starter(base, "c-nokit")
+        advertised = (
+            scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
+        )
+        assert "scaffold_starter" not in advertised, (
+            "scaffold_starter must NOT be advertised when no starter kit resolves "
+            "(it would fail no_starter on every call — the false affordance)"
+        )
+        # …but stays CALLABLE (security allowlist unchanged) so the typed
+        # backstop error, replay, and qualified-name calls keep working.
+        assert "scaffold_starter" in scope.allowed_tools
+
+
+def test_scaffold_starter_advertised_when_kind_resolves_a_kit() -> None:
+    from disco.tools import artifact_scope
+
+    rt = _runtime()
+    rt.set_build_kind("c-site", "static.site")  # contract declares app_shell
+    scope = rt._narrow_scope_for_starter(artifact_scope(), "c-site")
+    advertised = (
+        scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
+    )
+    assert "scaffold_starter" in advertised, (
+        "an activated contract WITH a starter kit must advertise scaffold_starter"
+    )

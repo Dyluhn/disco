@@ -14,6 +14,8 @@ the event schema, not of the loop that consumes it.
 
 from __future__ import annotations
 
+import re
+
 from .events import (
     ActionEvent,
     AgentErrorEvent,
@@ -25,8 +27,32 @@ from .events import (
 # Envelope-level volatile fields excluded from the generic fallback comparison.
 _VOLATILE_FIELDS = {"id", "seq", "timestamp", "meta"}
 
+# Tool-payload volatiles: substrings inside `tool_result.content` that legitimately
+# differ between otherwise-identical observations. The one known class today is the
+# browser tool's per-action screenshot path (".pmx/screenshots/0006-click.png" — the
+# counter increments EVERY action), which made every browser observation compare
+# unequal and blinded the identical-action→observation stuck pattern to genuinely
+# dead click loops (2026-07-09 deck-run autopsy). Applied ONLY when the caller opts
+# in via `ignore_volatile_content=True` (stuck detection); dedup/idempotency callers
+# keep byte-exact comparison.
+_VOLATILE_CONTENT_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"(screenshot: )\S*screenshots/\S+"), r"\1<screenshot>"),
+)
 
-def event_content_eq(a: Event, b: Event, *, ignore_thought: bool = False) -> bool:
+
+def _normalized_content(content: str) -> str:
+    for pattern, repl in _VOLATILE_CONTENT_PATTERNS:
+        content = pattern.sub(repl, content)
+    return content
+
+
+def event_content_eq(
+    a: Event,
+    b: Event,
+    *,
+    ignore_thought: bool = False,
+    ignore_volatile_content: bool = False,
+) -> bool:
     """[CONTRACT] True if two events are semantically equal ignoring volatile
     fields. Used by stuck detection and idempotency reasoning. Same-type only.
 
@@ -35,6 +61,10 @@ def event_content_eq(a: Event, b: Event, *, ignore_thought: bool = False) -> boo
     that paraphrases its reasoning each turn while emitting the identical tool
     call must still be detected as a repeat. Leave idempotency / dedup callers
     on the default so genuinely different reasoning is preserved.
+
+    When `ignore_volatile_content=True`, known tool-payload volatiles inside
+    ObservationEvent content (the browser's incrementing screenshot path) are
+    normalized before comparison. Same rule: stuck-detection call-sites only.
     """
     if type(a) is not type(b) or a.source != b.source:
         return False
@@ -46,9 +76,12 @@ def event_content_eq(a: Event, b: Event, *, ignore_thought: bool = False) -> boo
             and a.tool_call.arguments == b.tool_call.arguments
         )
     if isinstance(a, ObservationEvent) and isinstance(b, ObservationEvent):
+        content_a, content_b = a.tool_result.content, b.tool_result.content
+        if ignore_volatile_content:
+            content_a, content_b = _normalized_content(content_a), _normalized_content(content_b)
         return (
             a.tool_result.tool_name == b.tool_result.tool_name
-            and a.tool_result.content == b.tool_result.content
+            and content_a == content_b
             and a.tool_result.success == b.tool_result.success
         )
     if isinstance(a, AgentErrorEvent) and isinstance(b, AgentErrorEvent):
