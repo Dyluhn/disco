@@ -50,11 +50,11 @@ class ThinkTool:
         name="think",
         description=(
             "NO-OP reasoning scratchpad. Use to think out loud between actions "
-            "without taking any side effect on the workspace. Ideal for "
-            "decomposing a problem, weighing options, or sequencing the next "
-            "few steps before you commit to a tool call. Takes a single "
-            "`thought` string and returns a short acknowledgement; the "
-            "thought itself is NOT echoed back and is never persisted."
+            "without taking any side effect on the workspace. Ideal for decomposing "
+            "a problem or sequencing the next few steps ONCE — then act. The thought "
+            "is recorded in the run history. Do NOT chain think calls or use it in "
+            "place of real work: consecutive bookkeeping-only turns (think / plan "
+            "updates) count toward the run's stall limits."
         ),
         args_model=ThinkArgs,
         base_risk=SecurityRisk.LOW,

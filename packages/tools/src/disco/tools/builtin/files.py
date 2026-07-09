@@ -995,8 +995,8 @@ class FileReadTool:
         name="file_read",
         description=(
             "Read a UTF-8 text file from the workspace, with 1-based LINE NUMBERS. "
-            "For large files pass `offset` (1-based start line) + `limit` (line "
-            "count) to read a slice. Prefer `file_edit` (pass the exact text you see "
+            "Files under the source-size cap fit in ONE whole read — omit "
+            "offset/limit by default; slice only genuinely large files. Prefer `file_edit` (pass the exact text you see "
             "as `old`) for targeted changes; the line numbers also let you target "
             "`file_replace_lines`, but re-read the RANGE you are about to edit right "
             "before a line edit (numbers shift after every change)."
@@ -1424,7 +1424,7 @@ class FileListArgs(BaseModel):
 class FileListTool:
     definition = ToolDef(
         name="file_list",
-        description="List the entries of a directory in the workspace.",
+        description="List the entries of ONE directory level in the workspace (not recursive) — names + kind; descend by listing subdirectories.",
         args_model=FileListArgs,
         needs=_FS,
         runs_in="sandbox",

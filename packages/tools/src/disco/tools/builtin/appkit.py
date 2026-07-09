@@ -206,8 +206,8 @@ class AppReorderSectionTool:
 
 # --- app_set_design / app_set_tweak -------------------------------------------
 class AppSetKVArgs(BaseModel):
-    key: str
-    value: str
+    key: str = Field(description="Tweak key exactly as defined in .disco/tweaks.json (e.g. 'lead.include_phone').")
+    value: str = Field(description="New value, as a string; validated against the tweak's spec (e.g. 'true').")
 
 
 class AppSetDesignTool:

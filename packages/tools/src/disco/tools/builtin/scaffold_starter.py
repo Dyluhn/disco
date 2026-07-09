@@ -12,13 +12,13 @@ from __future__ import annotations
 
 from disco.core import SecurityRisk
 from disco.core.kits import StarterKitRegistry
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 
 
 class ScaffoldStarterArgs(BaseModel):
-    title: str
+    title: str = Field(description="The artifact/site title the starter frame should carry (page <title> and header).")
 
 
 class ScaffoldStarterTool:
