@@ -317,3 +317,49 @@ async def test_autonomous_propose_plan_update_changed_steps_do_not_trip():
         "changing a step must reset the streak — bookkeeping_only STUCK "
         "should NOT have fired"
     )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_auto_approval_is_acknowledged_in_band():
+    """2026-07-09 overnight-soak fix: the auto-approval of a plan revision was
+    only a StatusEvent — invisible to the model — so it re-proposed the same
+    revision until the C8 cap STUCK the run (steer scenario, wave 2). The
+    approval must now land IN-BAND as an environment message naming the next
+    step, so the re-propose motive never forms."""
+    from disco.core import SqliteEventStore as Store
+
+    script = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "build the page"}]}),
+            action_step("shell", {"command": "echo one"}),
+            # ONE revision with CHANGED steps (the normal, healthy steer path).
+            action_step(
+                "propose_plan_update",
+                {"summary": "p2", "steps": [{"title": "build the page"}, {"title": "add contact"}]},
+            ),
+            action_step("shell", {"command": "echo two"}),
+            finish_step("done"),
+        ]
+    )
+    store = Store(":memory:")
+    loop, store = build_loop(script, store=store)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    loop._autonomous = True
+
+    await loop.send_message("go")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    acks = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == "auto_approval_ack"
+    ]
+    assert len(acks) == 1, "the auto-approved revision must be acknowledged in-band"
+    body = acks[0].message.content
+    assert "APPROVED" in body
+    assert "build the page" in body  # names the next step
+    assert "not another plan proposal" in body

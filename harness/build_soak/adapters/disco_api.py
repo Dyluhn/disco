@@ -1905,11 +1905,53 @@ def _classify_conn_error(exc: Exception) -> str:
 
 class HttpTransport:
     """httpx + websockets transport against a running agent-server. Imported lazily
-    so the deterministic test path never needs the live deps loaded."""
+    so the deterministic test path never needs the live deps loaded.
+
+    AUTH (2026-07-09): the agent-server now requires a paired session on every
+    non-public route (the fresh-install pairing work), so the transport bootstraps
+    one lazily via POST /api/auth/mint. Against the loopback-bound dev posture the
+    localhost auto-pair admits a tokenless mint (Origin == base_url == localhost);
+    an exposed/remote target can supply DISCO_SOAK_PAIRING_TOKEN instead. The
+    session cookie + CSRF header then ride every request (and the WS connect)."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:8000", *, timeout_s: float = 120.0) -> None:
         self.base_url = base_url.rstrip("/")
         self._timeout = timeout_s
+        self._cookie: str | None = None  # "disco_session=<value>"
+        self._csrf: str | None = None
+
+    async def _ensure_session(self) -> None:
+        if self._cookie is not None:
+            return
+        import httpx
+
+        body: dict[str, Any] = {}
+        token = os.environ.get("DISCO_SOAK_PAIRING_TOKEN")
+        if token:
+            body["pairing_token"] = token
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            r = await client.post(
+                f"{self.base_url}/api/auth/mint",
+                json=body,
+                headers={"Origin": self.base_url},
+            )
+        if r.status_code != 200:
+            raise RuntimeError(
+                f"soak transport could not pair with the agent-server: HTTP {r.status_code} "
+                f"{r.text[:200]} — on a non-loopback target set DISCO_SOAK_PAIRING_TOKEN"
+            )
+        data = _safe_json(r)
+        self._csrf = str(data.get("csrf_token") or "")
+        cookie = r.cookies.get("disco_session")
+        if not cookie:
+            raise RuntimeError("mint succeeded but no disco_session cookie was set")
+        self._cookie = f"disco_session={cookie}"
+
+    def _headers(self, *, unsafe: bool) -> dict[str, str]:
+        h = {"Origin": self.base_url, "Cookie": self._cookie or ""}
+        if unsafe and self._csrf:
+            h["X-Disco-CSRF"] = self._csrf
+        return h
 
     def _ws_url(self, conversation_id: str) -> str:
         scheme = "wss" if self.base_url.startswith("https") else "ws"
@@ -1919,29 +1961,39 @@ class HttpTransport:
     async def post_json(self, path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         import httpx
 
+        await self._ensure_session()
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            r = await client.post(f"{self.base_url}{path}", json=body)
+            r = await client.post(
+                f"{self.base_url}{path}", json=body, headers=self._headers(unsafe=True)
+            )
             return r.status_code, _safe_json(r)
 
     async def get_json(self, path: str) -> tuple[int, dict[str, Any]]:
         import httpx
 
+        await self._ensure_session()
         async with httpx.AsyncClient(timeout=self._timeout) as client:
-            r = await client.get(f"{self.base_url}{path}")
+            r = await client.get(f"{self.base_url}{path}", headers=self._headers(unsafe=False))
             return r.status_code, _safe_json(r)
 
     async def get_text(self, path: str) -> tuple[int, str, dict[str, str]]:
         import httpx
 
+        await self._ensure_session()
         async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
-            r = await client.get(f"{self.base_url}{path}")
+            r = await client.get(f"{self.base_url}{path}", headers=self._headers(unsafe=False))
             return r.status_code, r.text, dict(r.headers)
 
     async def ws_control(self, conversation_id: str, frame: dict[str, Any]) -> None:
         import websockets
 
+        await self._ensure_session()
         url = self._ws_url(conversation_id)
-        async with websockets.connect(url, open_timeout=self._timeout) as ws:
+        # websockets>=12 renamed extra_headers → additional_headers.
+        headers = [("Origin", self.base_url), ("Cookie", self._cookie or "")]
+        async with websockets.connect(
+            url, open_timeout=self._timeout, additional_headers=headers
+        ) as ws:
             # Drain the initial state frame the server sends on connect, then send
             # the control frame. We do NOT wait for an ack — truth is the event log.
             try:

@@ -37,7 +37,9 @@ def _provider() -> OpenAIProvider:
         lambda request: httpx.Response(
             200,
             json={
-                "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "choices": [
+                    {"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                ],
                 "usage": {},
             },
         )

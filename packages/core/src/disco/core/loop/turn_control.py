@@ -2038,6 +2038,33 @@ class MetaToolHandlers:
                     status=ConversationStatus.RUNNING, detail="plan_approved"
                 )
             )
+            # 2026-07-09 overnight-soak fix (steer scenario → identical-revision
+            # churn → bookkeeping_only STUCK): the auto-approval above was
+            # INVISIBLE to the model — a StatusEvent is not rendered into its
+            # transcript, so from the model's seat the proposal went unanswered
+            # and it re-proposed the same revision until the C8 cap halted the
+            # run. Acknowledge the approval IN-BAND with a directive naming the
+            # next step, so the re-propose motive never forms. Autonomous-only
+            # (interactive approval already lands as a user-visible turn).
+            _next_step = new_plan.steps[0].title if new_plan.steps else "the first step"
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            f"Plan revision {new_plan.revision} is APPROVED "
+                            "(auto-approved — no human gate in autonomous mode). Do "
+                            "NOT propose it again. Continue executing now — next "
+                            f"step: '{_next_step}'. Your next output must be a real "
+                            "tool call (file/shell/etc.), not another plan proposal."
+                            "\n</system-reminder>"
+                        ),
+                    ),
+                    meta={"diagnostic": "auto_approval_ack"},
+                )
+            )
             # C1c: arm the DoD gate (write-once → a mid-run revision's re-arm is swallowed;
             # this is the hook point where the monotonic steer-scope extension will land).
             await self._loop._arm_dod_from_plan()
