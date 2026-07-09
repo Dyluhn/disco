@@ -21,7 +21,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import time
 from collections.abc import AsyncIterator, Iterable
 from typing import Any, Literal
 
@@ -785,7 +787,36 @@ class OpenAIProvider:
 
     # -- the ModelProvider protocol -------------------------------------------
 
+    def _ledger_emit(self, req: CompletionRequest, model: str) -> None:
+        """Provider-request ledger (2026-07-09): when DISCO_PROVIDER_LEDGER names a
+        file, append one relay-format JSONL record per outbound completion request —
+        {ts (epoch float), host, model, has_tools, conversation_id}. This is the
+        DIRECT-driver equivalent of the MiniMax relay's log: the build-soak harness
+        adjudicates provider-after-terminal (runaway loops) from it, and previously
+        REFUSED to run against direct drivers (no relay in the path = nothing to
+        audit). Schema matches harness provider_ledger.parse_relay_log's structured
+        branch; conversation_id scoping keeps PARALLEL soak lanes from
+        cross-contaminating each other's after-terminal counts. Best-effort:
+        ledger failure must never fail a live request. Unset env ⇒ zero overhead."""
+        path = os.environ.get("DISCO_PROVIDER_LEDGER")
+        if not path:
+            return
+        try:
+            raw_cid = (req.metadata or {}).get("conversation_id")
+            rec = {
+                "ts": time.time(),
+                "host": httpx.URL(self._base).host or self._base,
+                "model": model,
+                "has_tools": bool(req.tools),
+                "conversation_id": str(raw_cid).strip() if raw_cid else None,
+            }
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except Exception:  # noqa: BLE001 — auditing must never break the request path
+            pass
+
     async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
+        self._ledger_emit(req, model)
         try:
             async with self._client() as client:
                 resp = await client.post(
@@ -821,6 +852,7 @@ class OpenAIProvider:
         finish: str | None = None
         usage: dict = {}
         model_used = model
+        self._ledger_emit(req, model)
         try:
             async with self._client() as client:
                 async with client.stream(
