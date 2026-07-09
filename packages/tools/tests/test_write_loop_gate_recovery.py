@@ -81,7 +81,10 @@ async def test_grounding_read_satisfies_gate_and_write_succeeds_in_one_step():
 
     # 1. Blind rewrite of an existing un-read file → gate refuses (today's behavior).
     refused = await ex.execute(
-        ToolCall(tool_name="file_write", arguments={"path": "app.js", "content": "X\n"})
+        ToolCall(
+            tool_name="file_write",
+            arguments={"path": "app.js", "content": "const updated = 2;\n"},
+        )
     )
     assert refused.success is False
     assert "file_read" in (refused.content or "")
@@ -94,10 +97,13 @@ async def test_grounding_read_satisfies_gate_and_write_succeeds_in_one_step():
     # 3. The same write now SUCCEEDS — the model had the current content; the gate
     #    no longer dead-ends it.
     ok = await ex.execute(
-        ToolCall(tool_name="file_write", arguments={"path": "app.js", "content": "X\n"})
+        ToolCall(
+            tool_name="file_write",
+            arguments={"path": "app.js", "content": "const updated = 2;\n"},
+        )
     )
     assert ok.success is True
-    assert sbx._fs["app.js"] == b"X\n"
+    assert sbx._fs["app.js"] == b"const updated = 2;\n"
 
 
 @pytest.mark.asyncio

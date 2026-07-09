@@ -204,7 +204,7 @@ _EXPECTED_AGENT_TOOLS = [
     "browser",
     "code_exec",
     "context_memory",  # CXT-2: durable .disco/context working memory
-    "deck_patch",   # C-EDIT-4: RFC-6902 deck edits
+    "deck_patch",  # C-EDIT-4: RFC-6902 deck edits
     "delegate_explore",
     "design_lint",  # B3 appkit port — read-only design-slop probe (nightly EPIC D3 parity)
     "doc_export",  # §E doc-assembly — host assembles the document at the P10 choke
@@ -217,18 +217,14 @@ _EXPECTED_AGENT_TOOLS = [
     "file_list",
     "file_read",
     "file_replace_lines",
-    "file_str_replace",  # W4 — anchored str-replace; withheld from weak-tier advertised set
     "file_write",
-    "find_and_edit",  # H3 — regex fan-out refactor tool for the agent/custom-build lane
     "image_generate",
-    "plan_step",
     # EPIC F: platform-owned preview surface — supersedes the old `deploy_preview`.
     "preview_logs",
     "preview_start",
     "preview_status",
     "preview_stop",
     "run_project_script",  # CD-TOOLS-7 — buffered transactional batch of file transforms
-    "safe_write_file",  # CD-TOOLS-3 — guarded whole-file writer (shrink/governed/atomic)
     "scaffold_starter",  # P7: materialize the contract's host-owned starter frame
     "search",
     "server_status",

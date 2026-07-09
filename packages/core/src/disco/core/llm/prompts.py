@@ -294,9 +294,10 @@ _EXECUTION_DRIVER_PROMPT = (
     "range, or `file_insert_lines(path, after_line, text)` to ADD a block without replacing. "
     "These target by line number, so they work reliably regardless of file size. This is the "
     "right way to add a feature to a big existing file: read → find the lines → replace/insert.\n"
-    "  • For a FULL REWRITE: `file_read` the file first, then `safe_write_file` with the complete "
-    "new content — it is the guarded writer (it refuses an accidental truncation/clobber). Plain "
-    "`file_write` also works; skipping the read will be refused either way.\n"
+    "  • For a FULL REWRITE: `file_read` the file first, then `file_write` with the complete "
+    "new content. It is guarded: accidental >50% shrinks are refused unless you pass "
+    "`allow_shrink=true`, .disco/ host artifacts are refused, elision placeholders are rejected, "
+    "and successful writes commit atomically.\n"
     "  • For MANY edits at once: `run_project_script` applies a batch of read/replace_text/save "
     "operations as ONE atomic transaction — all commit together, or none do (a clean rollback on "
     "any failure). Use it for a multi-file refactor instead of many separate edits.\n"
@@ -427,8 +428,8 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "regardless of file size and do NOT require a prior read.\n"
     "  • For MANY edits at once: `run_project_script` runs a batch of read / "
     "replace_text / save operations as ONE transaction — all apply together, or "
-    "none do. For a guarded full rewrite use `safe_write_file` (it refuses an "
-    "accidental truncation).\n"
+    "none do. For a guarded full rewrite use `file_write` after reading first; "
+    "pass allow_shrink=true only for an intentional >50% shrink.\n"
     "  • NEVER copy an elided `[[DISCO-ELIDED: ...]]` placeholder from your history into a tool "
     "argument — it is render-only; `file_read` to get the real text.\n"
     "  • NEVER use shell for file work: no `cat <<EOF`, no `>`/`>>`, no in-place "
@@ -586,9 +587,8 @@ _WORKFLOW_ROUTER_DRIVER_PROMPT = (
     "in ROUTER phase."
 )
 
-# [runthru-v2 #3] `plan_step` is RETIRED from the advertised tool surface for ALL
-# tiers (it caused plan-state drift; the declarative `update_plan_progress` replaced
-# it for capable models).  It is therefore named in NO planning block — the single
+# [runthru-v2 #3] the legacy incremental progress tool is retired from the advertised
+# surface for ALL tiers.  It is therefore named in NO planning block — the single
 # capability block above already omits it, so weak and standard share one block.
 # update_plan_progress is not mentioned in any planning block either, so no per-tier
 # variant is needed.
@@ -656,7 +656,7 @@ class DriverPrompts:
         # write tools (read_only=False) from the PLANNING schema for BOTH the build and
         # agent flavors, so BOTH need this hint — appending it agent-only made build-flavor
         # plans (e.g. the DR→slides handoff) insist they "can't use slides_generate".
-        # [runthru-v2 #3] One capability block for both tiers: `plan_step` is retired
+        # [runthru-v2 #3] One capability block for both tiers: the legacy progress tool is retired
         # from the advertised tool surface for ALL tiers, so it is named in NO planning
         # prompt (no per-tier variant needed — prompting a tool that isn't in the tool
         # list causes the model to call a tool it can't).
@@ -681,7 +681,7 @@ class DriverPrompts:
                 "moving on.\n"
             )
 
-        # [CD-TOOLS-8] Anchored-edit bullet: NAMES exact_replace / file_str_replace ONLY for an
+        # [CD-TOOLS-8] Anchored-edit bullet: names exact_replace only for an
         # anchored-edit-capable driver — the SAME capability the tool surface withholds on (a
         # standard-but-non-anchored model is NOT offered exact_replace), so naming it here can
         # never be a false affordance. Mirrors the VISION-bullet capabilities gate.
@@ -690,7 +690,7 @@ class DriverPrompts:
             anchored_bullet = (
                 "  • For a PRECISE targeted edit, prefer `exact_replace` (an atomic exact-string "
                 "replace — `file_read` first so your `old` matches the file verbatim) over a broad "
-                "rewrite; `file_str_replace` is the single-occurrence variant.\n"
+                "rewrite.\n"
             )
 
         bullets = vision_bullet + anchored_bullet
@@ -716,7 +716,7 @@ class DriverPrompts:
             if self._workflow_router_is_active():
                 return self._with_skills(_WORKFLOW_ROUTER_DRIVER_PROMPT, capabilities)
             if mode == OperatingMode.PLANNING:
-                # [runthru-v2 #3] `plan_step` is retired from the advertised tool
+                # [runthru-v2 #3] the legacy progress tool is retired from the advertised tool
                 # surface for ALL tiers, so the single planning prompt names it for
                 # NEITHER tier — weak and standard share self._planning.
                 return self._with_skills(self._planning, capabilities)

@@ -559,6 +559,12 @@ async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_retur
                 await asyncio.wait_for(release_write.wait(), timeout=10)
             await super().write_file(path, data)
 
+        async def atomic_write(self, path: str, data: bytes) -> None:
+            if not write_started.is_set():
+                write_started.set()
+                await asyncio.wait_for(release_write.wait(), timeout=10)
+            await super().atomic_write(path, data)
+
         async def destroy(self) -> None:
             self.destroy_calls += 1
             await super().destroy()

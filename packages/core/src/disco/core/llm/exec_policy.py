@@ -45,36 +45,25 @@ class ModelExecutionPolicy:
 
     @property
     def withheld_tools(self) -> frozenset[str]:
-        """The single place the advertised tool surface is narrowed for this policy —
-        reconciling what used to be two independent gates:
-          • no anchored-edit capability → withhold `file_str_replace` (line-anchored edit);
-          • ALL tiers → withhold `plan_step` (see below);
+        """The single place the advertised tool surface is narrowed for this policy:
+          • no anchored-edit capability → withhold `exact_replace`;
           • weak tier → ALSO withhold `update_plan_progress` (weak models get the honest
             NL plan + done-at-finish, never a per-step bookkeeping burden they drop).
 
-        `plan_step` is RETIRED from the advertised surface for EVERY tier (runthru-v2 #3):
-        incremental per-step `plan_step` updates caused plan-state drift and failed across
-        ALL models (capable and small alike). The declarative `update_plan_progress`
-        replaced it. We never advertise `plan_step` to anyone — previously the capable
-        (standard) surface still offered BOTH, so a capable model like MiniMax-M3 was given
-        `plan_step` and `update_plan_progress` and picked between them inconsistently. The
-        engine still HANDLES stray `plan_step` calls defensively (backward-compat for any
-        out-of-band call), but it is no longer offered. `plan_step` stays in the security
-        allowlist (callable) — only its *advertisement* is withdrawn here.
+        Legacy edit/progress tools that are no longer in AGENT_TOOLS do not need to be
+        listed here; they stay registered for workflow/replay paths but are outside the
+        agent scope before advertisement is considered.
         """
         out: set[str] = set()
         if not self.anchored_edit:
-            out.add("file_str_replace")
             out.add("exact_replace")  # CD-TOOLS-2 — anchored exact-match batch edit (capable tier)
-        # Retired for ALL tiers (state-drift); kept callable for defensive back-compat.
-        out.add("plan_step")
         if self.tier == "weak":
             out.add("update_plan_progress")
         return frozenset(out)
 
     @classmethod
     def standard(cls) -> ModelExecutionPolicy:
-        """The no-compensation default — a capable model with anchored edits and no weak-model compensations (it still withholds the universally-retired `plan_step`)."""
+        """The no-compensation default — a capable model with anchored edits and no weak-model compensations."""
         return cls(tier="standard", anchored_edit=True)
 
 

@@ -164,9 +164,11 @@ async def test_assist_on_head_only_marks_path_as_read_for_f3_happy_path():
     assert "HEAD-ONLY" in read_out.content
 
     # A subsequent file_write must go through on the FIRST try (the read
-    # lifted the guard), exactly as today's small-file read does.
+    # lifted the read-before-write guard). The new shrink guard is explicitly
+    # opted into because this fixture intentionally replaces a large file with
+    # a tiny body.
     write_out = await FileWriteTool().run(
-        FileWriteArgs(path="big.py", content="new body\n"), ctx
+        FileWriteArgs(path="big.py", content="new body\n", allow_shrink=True), ctx
     )
     assert write_out.success is True
     assert sbx._fs["big.py"] == b"new body\n"
