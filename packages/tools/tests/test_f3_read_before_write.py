@@ -329,7 +329,7 @@ async def test_path_alias_collapse_workspace_prefix():
     assert read_out.success is True
     # Write via the bare path — should be allowed because aliases collapse
     write_out = await FileWriteTool().run(
-        FileWriteArgs(path="x.py", content="new\n"), ctx
+        FileWriteArgs(path="x.py", content="replacement\n"), ctx
     )
     assert write_out.success is True
     # Write again: the prior write's success observation grounds the canonical path.

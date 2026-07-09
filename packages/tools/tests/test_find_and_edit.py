@@ -11,7 +11,7 @@ from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.appkit_scope import APPKIT_MUTATORS, APPKIT_PROBES, APPKIT_READ_TOOLS
 from disco.tools.builtin import FindAndEditTool, build_default_registry
 from disco.tools.builtin.files import reset_read_tracker
-from disco.tools.registry import agent_scope
+from disco.tools.registry import ToolScope, agent_scope
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix
 
 
@@ -213,14 +213,15 @@ async def test_sha_drift_skips_file_without_corrupting_current_bytes() -> None:
     assert match["reason"] == "exact_replace_failed:STALE_FILE_CONTEXT"
 
 
-def test_registered_in_agent_scope_but_not_strict_appkit_scope() -> None:
+def test_registered_but_not_agent_or_strict_appkit_scope() -> None:
     registry = build_default_registry()
     scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
-    tool = registry.get("find_and_edit", scope=scope)
+    tool = registry.get("find_and_edit", scope=ToolScope(allowed_tools=frozenset({"find_and_edit"})))
 
     assert tool is not None
     assert tool.definition.name == "find_and_edit"
     assert tool.definition.runs_in == "sandbox"
     assert tool.definition.read_only is False
     assert Capability.FILESYSTEM in tool.definition.needs
+    assert registry.get("find_and_edit", scope=scope) is None
     assert "find_and_edit" not in (APPKIT_READ_TOOLS | APPKIT_MUTATORS | APPKIT_PROBES)

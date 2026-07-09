@@ -979,12 +979,12 @@ async def _gated_write(
     pre = _syntax_errors(path, old_text) if old_text is not None else []
     post = _syntax_errors(path, new_text)
     introduced = [e for e in post if e not in pre]
-    await ctx.sandbox.write_file(path, new_bytes)
+    await _atomic_write(ctx.sandbox, path, new_bytes)
     if not introduced:
         return None
     if old_text is not None:
         # AUTO-REVERT: restore previous content so the workspace stays consistent.
-        await ctx.sandbox.write_file(path, old_text.encode("utf-8"))
+        await _atomic_write(ctx.sandbox, path, old_text.encode("utf-8"))
         kept = "it was NOT applied (previous content kept)"
     else:
         kept = "it was applied (new file; no prior content to revert)"
@@ -1243,6 +1243,10 @@ def _monolith_gate(
 class FileWriteArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to write.")
     content: str = Field(description="Full UTF-8 content to write.")
+    allow_shrink: bool = Field(
+        default=False,
+        description="Set true to permit a write that shrinks an existing file by >50% (otherwise refused).",
+    )
 
 
 class FileWriteTool:
@@ -1253,7 +1257,10 @@ class FileWriteTool:
             "(preferred over shell redirection for new files). To change an EXISTING "
             "file, make a targeted edit with file_edit / file_replace_lines instead — "
             "only rewrite a whole existing file when a targeted edit cannot express "
-            "the change. Source files (.html/.css/.js/…) are capped at "
+            "the change. Whole-file rewrites are guarded: read the file first, do not "
+            "copy elision placeholders, and pass allow_shrink=true only when a >50% "
+            "shrink is intentional. Writes to host-managed .disco/ artifacts are "
+            "refused, and successful writes commit atomically. Source files (.html/.css/.js/…) are capped at "
             f"{_MONOLITH_MAX_LINES} lines / {_MONOLITH_MAX_BYTES // 1024}KB each — "
             "structure sites as separate files (index.html + styles.css + app.js; "
             "one HTML file per page), never one monolith."
@@ -1271,6 +1278,24 @@ class FileWriteTool:
             )
         ) is not None:
             return g
+        if _has_elision_marker(args.content):
+            return ToolOutcome(
+                success=False,
+                error="ELISION_MARKER_REJECTED",
+                content=(
+                    f"file_write refused — content for {args.path} contains an internal elision "
+                    "placeholder (for example '[[DISCO-ELIDED: ...]]'). That marker is only a "
+                    "rendered transcript placeholder, not file content. Recipe: call file_read "
+                    "for the current file or source region, then retry file_write with the real "
+                    "complete text."
+                ),
+                structured={
+                    "kind": "elision_marker_rejected",
+                    "path": args.path,
+                    "next_required_action": "file_read",
+                    "suggested_args": {"path": args.path},
+                },
+            )
         # Read existing content once — used by both the F1 guard and the W3 syntax gate.
         old_bytes: bytes | None = None
         old_text: str | None = None
@@ -1325,6 +1350,35 @@ class FileWriteTool:
                 args.path,
                 tool_name="file_write",
                 current_bytes=old_bytes,
+            )
+        if (
+            old_text is not None
+            and len(args.content) < 0.5 * len(old_text)
+            and not args.allow_shrink
+        ):
+            return ToolOutcome(
+                success=False,
+                error="FILE_WRITE_SHRINK_REJECTED",
+                content=(
+                    f"file_write refused — this would shrink {args.path} from {len(old_text)} "
+                    f"to {len(args.content)} chars (>50% smaller), which usually means an "
+                    "accidental truncation or stale full-file rewrite. Recipe: if the shrink "
+                    "is intentional, retry with allow_shrink=true after confirming the current "
+                    "file content; otherwise use file_edit, file_replace_lines, or "
+                    "file_insert_lines for the targeted change."
+                ),
+                structured={
+                    "kind": "file_write_shrink_rejected",
+                    "path": args.path,
+                    "old_chars": len(old_text),
+                    "new_chars": len(args.content),
+                    "next_required_action": "file_write",
+                    "suggested_args": {
+                        "path": args.path,
+                        "content": args.content,
+                        "allow_shrink": True,
+                    },
+                },
             )
         # MONO-1 — refuse creating/growing a source-file monolith (see gate docstring).
         if (

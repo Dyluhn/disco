@@ -39,14 +39,13 @@ from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
 
 @pytest.fixture
 def weak_policy() -> ModelExecutionPolicy:
-    """Weak (assist) tier — no anchored-edit, both progress tools withheld."""
+    """Weak (assist) tier — no anchored-edit, progress snapshots withheld."""
     return ModelExecutionPolicy(tier="weak", anchored_edit=False)
 
 
 @pytest.fixture
 def standard_policy() -> ModelExecutionPolicy:
-    """Standard (capable) tier — no weak-model compensations; withholds only the
-    universally-retired plan_step (runthru-v2 #3)."""
+    """Standard (capable) tier — no weak-model compensations."""
     return ModelExecutionPolicy.standard()
 
 
@@ -298,40 +297,17 @@ def test_no_contamination_weak_scope_excludes_withheld_tools(
             )
 
 
-def test_no_contamination_standard_scope_withholds_exactly_plan_step(
+def test_no_contamination_standard_scope_withholds_nothing(
     standard_policy: ModelExecutionPolicy,
 ) -> None:
-    """Standard policy withholds EXACTLY {plan_step} — nothing unintended leaks in.
-
-    plan_step is retired for ALL tiers (runthru-v2 #3 state-drift), so even standard
-    withholds it. file_str_replace and exact_replace are withheld only by
-    anchored_edit=False; update_plan_progress is withheld only on the weak tier. The
-    anti-contamination intent is intact: this still fails if any UNINTENDED tool joins
-    the withheld set.
-    """
-    # Standard with anchored_edit → withheld set is exactly the retired plan_step
-    assert standard_policy.withheld_tools == frozenset({"plan_step"}), (
-        "standard policy (anchored_edit=True, tier=standard) must withhold exactly "
-        "{plan_step} (the universally-retired tool) and nothing else"
-    )
+    """Standard anchored policy advertises the whole remaining agent scope."""
+    assert standard_policy.withheld_tools == frozenset()
 
 
-def test_no_contamination_non_anchored_standard_withholds_str_replace_and_plan_step() -> None:
-    """Non-anchored standard withholds {plan_step, file_str_replace, exact_replace}.
-
-    plan_step is retired for ALL tiers (runthru-v2 #3), and file_str_replace plus
-    exact_replace are dropped when anchored_edit=False. A capable model that can't do
-    anchored edits still gets update_plan_progress — that one is gated by tier, not by
-    anchored_edit.
-    """
+def test_no_contamination_non_anchored_standard_withholds_exact_replace() -> None:
+    """Non-anchored standard withholds exact_replace only."""
     non_anchored = ModelExecutionPolicy(tier="standard", anchored_edit=False)
-    assert non_anchored.withheld_tools == frozenset(
-        {"plan_step", "file_str_replace", "exact_replace"}
-    ), (
-        "non-anchored standard must withhold plan_step (retired for all tiers) and "
-        "file_str_replace/exact_replace (capability-gated), but NOT "
-        "update_plan_progress (tier-gated)"
-    )
+    assert non_anchored.withheld_tools == frozenset({"exact_replace"})
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -440,7 +416,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_weak(tmp_path
             f"but runtime.is_assist={rt.is_assist(cid)!r} — policy not threaded"
         )
 
-        # Tool surface agrees: plan_step must be withheld for the weak tier
+        # Tool surface agrees: retired plan_step is absent and weak progress snapshots are hidden.
         advertised = {t.name for t in executor.available_tools()}
         assert "plan_step" not in advertised
         assert "update_plan_progress" not in advertised
@@ -541,8 +517,7 @@ async def test_runtime_threads_policy_through_to_executor_and_loop_standard(tmp_
             "executor must carry standard policy when assist=False is set"
         )
 
-        # Standard tier advertises update_plan_progress but NOT the retired plan_step
-        # (plan_step is withheld for ALL tiers — runthru-v2 #3 state-drift).
+        # Standard tier advertises update_plan_progress but NOT the retired plan_step.
         advertised = {t.name for t in executor.available_tools()}
         assert "plan_step" not in advertised
         assert "update_plan_progress" in advertised

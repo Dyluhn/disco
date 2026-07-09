@@ -2,15 +2,10 @@
 
 The policy is the single source of truth for model-tier execution. These lock in the
 two properties the whole refactor relies on: (1) `standard` runs the pre-assist code
-path with NO weak-model compensations — its ONLY tool-surface change is the universal
-`plan_step` retirement (see below), and (2) the tier + anchored-edit capability live on
-ONE object so the tool surface and the compensations can't disagree. Plus the resolve
-precedence is behavior-preserving.
-
-`plan_step` retirement (runthru-v2 #3): incremental per-step `plan_step` updates caused
-plan-state drift and failed across ALL models, so `plan_step` is withheld from the
-advertised surface for EVERY tier (the declarative `update_plan_progress` replaced it).
-Standard therefore withholds exactly {plan_step}; it is no longer a pure no-op.
+path with NO weak-model compensations, and (2) the tier + anchored-edit capability live
+on ONE object so the tool surface and the compensations can't disagree. Plus the resolve
+precedence is behavior-preserving. Retired tools that are no longer in AGENT_TOOLS stay
+out of `withheld_tools`; the policy only withholds tools still present in the surface.
 """
 
 from __future__ import annotations
@@ -18,37 +13,29 @@ from __future__ import annotations
 from disco.core.llm import ModelExecutionPolicy, resolve_policy
 
 
-def test_standard_retires_only_plan_step():
-    """Standard runs the no-op (no-compensation) path: assist is off and the ONLY
-    advertised-surface change is the universal `plan_step` retirement (runthru-v2 #3 —
-    incremental plan_step caused state-drift across ALL tiers). It withholds nothing
-    else; `update_plan_progress` remains advertised for standard."""
+def test_standard_withholds_nothing():
+    """Standard anchored runs the no-op path and advertises the full remaining scope."""
     p = ModelExecutionPolicy.standard()
     assert p.tier == "standard"
     assert p.assist is False
-    # plan_step is retired for EVERY tier; standard withholds exactly that and nothing more
-    assert p.withheld_tools == frozenset({"plan_step"})
+    assert p.withheld_tools == frozenset()
 
 
 def test_weak_withholds_progress_tools():
     p = ModelExecutionPolicy(tier="weak", anchored_edit=True)
     assert p.assist is True
-    # weak models get the honest NL plan — no per-step bookkeeping tools
-    assert p.withheld_tools == frozenset({"plan_step", "update_plan_progress"})
+    # weak models get the honest NL plan — no declarative progress snapshot burden
+    assert p.withheld_tools == frozenset({"update_plan_progress"})
 
 
 def test_anchored_edit_capability_is_independent_of_tier():
-    # a capable (standard) model that still lacks anchored edit loses file_str_replace —
-    # plus plan_step, which is retired for ALL tiers (runthru-v2 #3 state-drift)
+    # a capable (standard) model that still lacks anchored edit loses exact_replace
     p = ModelExecutionPolicy(tier="standard", anchored_edit=False)
     assert p.assist is False
-    # CD-TOOLS-2 added exact_replace to the anchored-edit set withheld when !anchored_edit.
-    assert p.withheld_tools == frozenset({"plan_step", "file_str_replace", "exact_replace"})
+    assert p.withheld_tools == frozenset({"exact_replace"})
     # weak + non-anchored withholds those plus update_plan_progress
     q = ModelExecutionPolicy(tier="weak", anchored_edit=False)
-    assert q.withheld_tools == frozenset(
-        {"plan_step", "update_plan_progress", "file_str_replace", "exact_replace"}
-    )
+    assert q.withheld_tools == frozenset({"update_plan_progress", "exact_replace"})
 
 
 def test_resolve_precedence_override_wins():

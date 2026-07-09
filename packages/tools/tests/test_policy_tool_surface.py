@@ -4,12 +4,10 @@ Contract: the SAME ModelExecutionPolicy object that drives the assist compensati
 also drives the advertised tool surface (executor.available_tools) and the prompt
 text (DriverPrompts.system_prompt).  These tests are the acceptance gate:
 
-  1. weak policy  → available_tools() EXCLUDES plan_step + update_plan_progress
-  2. standard     → available_tools() EXCLUDES plan_step (RETIRED for ALL tiers per
-                    runthru-v2 #3 — state-drift; declarative update_plan_progress replaced
-                    it) but still INCLUDES update_plan_progress
-  3. standard + anchored_edit=False → withholds file_str_replace (plan_step is already
-                    withheld for every tier)
+  1. weak policy  → available_tools() EXCLUDES update_plan_progress
+  2. standard     → available_tools() EXCLUDES retired plan_step (not in AGENT_TOOLS)
+                    but still INCLUDES update_plan_progress
+  3. standard + anchored_edit=False → withholds exact_replace
   4. prompt-contamination: NO prompt (weak OR standard, planning OR execution) names
      `plan_step` — it is RETIRED from the advertised surface for every tier, so naming
      it anywhere is a false affordance (unknown-tool error). Positive gate: the standard
@@ -48,15 +46,15 @@ def _tool_names(policy: ModelExecutionPolicy) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# 1. weak policy — plan_step and update_plan_progress excluded
+# 1. weak policy — retired plan_step absent; update_plan_progress excluded
 # ---------------------------------------------------------------------------
 
 
 def test_weak_policy_excludes_plan_step():
-    """Weak tier withholds plan_step from available_tools()."""
+    """Weak tier does not expose retired plan_step in available_tools()."""
     names = _tool_names(_WEAK)
     assert "plan_step" not in names, (
-        "weak policy must NOT advertise plan_step (it is withheld for the weak tier)"
+        "weak policy must NOT advertise plan_step (it is not in the agent scope)"
     )
 
 
@@ -68,13 +66,10 @@ def test_weak_policy_excludes_update_plan_progress():
     )
 
 
-def test_weak_policy_still_advertises_file_str_replace_when_anchored():
-    """Weak tier with anchored_edit=True: file_str_replace is NOT withheld
-    (only the progress tools are; anchored-edit capability is independent)."""
+def test_weak_policy_still_advertises_exact_replace_when_anchored():
+    """Weak tier with anchored_edit=True advertises exact_replace."""
     names = _tool_names(_WEAK)
-    assert "file_str_replace" in names, (
-        "weak + anchored_edit=True should still advertise file_str_replace"
-    )
+    assert "exact_replace" in names
 
 
 # ---------------------------------------------------------------------------
@@ -82,7 +77,7 @@ def test_weak_policy_still_advertises_file_str_replace_when_anchored():
 # ---------------------------------------------------------------------------
 
 
-def test_standard_policy_advertises_plan_step():
+def test_standard_policy_excludes_plan_step():
     """Standard tier must NOT offer plan_step — it is RETIRED from the advertised
     surface for EVERY tier (runthru-v2 #3: incremental plan_step caused plan-state
     drift across all models; the declarative update_plan_progress replaced it). It
@@ -97,27 +92,25 @@ def test_standard_policy_advertises_update_plan_progress():
     assert "update_plan_progress" in names
 
 
-def test_standard_policy_advertises_file_str_replace():
-    """Standard tier with anchored_edit=True advertises file_str_replace."""
+def test_standard_policy_advertises_exact_replace():
+    """Standard tier with anchored_edit=True advertises exact_replace."""
     names = _tool_names(_STANDARD)
-    assert "file_str_replace" in names
+    assert "exact_replace" in names
 
 
 # ---------------------------------------------------------------------------
-# 3. standard + anchored_edit=False → withholds ONLY file_str_replace
+# 3. standard + anchored_edit=False → withholds exact_replace
 # ---------------------------------------------------------------------------
 
 
-def test_non_anchored_standard_withholds_file_str_replace():
-    """standard + anchored_edit=False: file_str_replace is NOT in available_tools()."""
+def test_non_anchored_standard_withholds_exact_replace():
+    """standard + anchored_edit=False: exact_replace is NOT in available_tools()."""
     names = _tool_names(_STANDARD_NO_ANCHORED)
-    assert "file_str_replace" not in names
+    assert "exact_replace" not in names
 
 
-def test_non_anchored_standard_keeps_plan_step():
-    """standard + anchored_edit=False: plan_step is withheld — it is RETIRED from the
-    advertised surface for EVERY tier (runthru-v2 #3, state-drift), independent of the
-    anchored-edit capability. This variant additionally withholds file_str_replace."""
+def test_non_anchored_standard_excludes_retired_plan_step():
+    """standard + anchored_edit=False: plan_step is absent from the agent scope."""
     names = _tool_names(_STANDARD_NO_ANCHORED)
     assert "plan_step" not in names
 
@@ -128,15 +121,12 @@ def test_non_anchored_standard_keeps_update_plan_progress():
     assert "update_plan_progress" in names
 
 
-def test_non_anchored_standard_withholds_exactly_file_str_replace():
-    """standard + anchored_edit=False withholds EXACTLY the anchored-edit tools
-    {file_str_replace, exact_replace} — no extras (CD-TOOLS-2 added exact_replace to that tier)."""
+def test_non_anchored_standard_withholds_exactly_exact_replace():
+    """standard + anchored_edit=False drops only exact_replace from the current agent surface."""
     standard_names = _tool_names(_STANDARD)
     non_anchored_names = _tool_names(_STANDARD_NO_ANCHORED)
     dropped = standard_names - non_anchored_names
-    assert dropped == {"file_str_replace", "exact_replace"}, (
-        f"non-anchored standard should drop only the anchored-edit tools, got: {dropped}"
-    )
+    assert dropped == {"exact_replace"}, f"non-anchored standard should drop exact_replace, got: {dropped}"
 
 
 # ---------------------------------------------------------------------------

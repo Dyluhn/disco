@@ -106,12 +106,14 @@ def _finish(summary: str = "done") -> ProposedToolCall:
 
 
 def _plan_step_done(idx: int) -> ProposedToolCall:
-    """Mark a plan step done — required by the plan-completeness FINISHED gate.
+    """Mark a plan step done via the current progress tool.
+
     Without this, the loop refuses to land in FINISHED (plan has incomplete steps)
     and falls back to STUCK. The scripted scenarios that should end FINISHED need
     to walk the plan to completion before declaring done."""
     return ProposedToolCall(
-        tool_name="plan_step", arguments={"index": idx, "state": "done"}
+        tool_name="update_plan_progress",
+        arguments={"steps": [{"index": idx, "state": "done"}]},
     )
 
 
@@ -342,7 +344,7 @@ async def test_reject_denies_without_executing():
     events = await store.get_events(CID)
     # The deploy action must NEVER have reached the executor: no unknown-tool
     # failure anywhere (that error is what its execution looks like — see the
-    # confirm test). The script's follow-on plan_step(1, done) may still run as
+    # confirm test). The script's follow-on progress update may still run as
     # the loop resumes; that's expected — the test guards the gate semantic.
     assert not any(
         isinstance(e, AgentErrorEvent) and "unknown or out-of-scope tool" in e.error
@@ -466,7 +468,7 @@ async def test_execution_gate_refuses_finish_without_productive_action():
         for e in events
         if isinstance(e, ActionEvent)
         and e.tool_call is not None
-        and e.tool_call.tool_name not in ("submit_plan", "plan_step")
+        and e.tool_call.tool_name not in ("submit_plan", "update_plan_progress")
     ]
     assert len(productive) >= 1  # the gate forced at least one real action
 
@@ -590,11 +592,11 @@ async def test_kill_switch_revokes_caps_tears_down_sandbox_and_records_stop():
     assert res.success is False and res.structured["kind"] == "sandbox_error"
 
 
-# ---- W4 (§10.8): capability-gated file_str_replace at the build-loop compose --
+# ---- W4 (§10.8): capability-gated exact_replace at the build-loop compose ----
 #
-# _compose_build_loop passes the BUILD LOOP's driver caps to agent_scope(model_caps),
-# so file_str_replace (the anchored-edit tool) is ADVERTISED only to a driver whose
-# ModelEntry declares ANCHORED_EDIT; weak drivers still don't see it (but it stays
+# _compose_build_loop passes the BUILD LOOP's driver caps to agent_scope(model_policy),
+# so exact_replace (the anchored-edit tool) is ADVERTISED only to a driver whose
+# ModelEntry declares ANCHORED_EDIT; non-anchored drivers still don't see it (but it stays
 # callable by qualified name). Caps are resolved from the persisted config store the
 # same way production does — routing is pinned by the injected scripted router.
 
@@ -637,19 +639,19 @@ async def _compose_and_get_executor(runtime: ConversationRuntime, store):
     return runtime._executors[CID]
 
 
-async def test_build_loop_advertises_file_str_replace_to_anchored_edit_driver(tmp_path):
-    """A driver whose ModelEntry declares ANCHORED_EDIT gets file_str_replace in the
+async def test_build_loop_advertises_exact_replace_to_anchored_edit_driver(tmp_path):
+    """A driver whose ModelEntry declares ANCHORED_EDIT gets exact_replace in the
     executor's ADVERTISED set (the capable tier)."""
     store = SqliteEventStore(":memory:")
     runtime = _caps_runtime(store, anchored=True, tmp_path=tmp_path)
     executor = await _compose_and_get_executor(runtime, store)
 
     advertised = {t.name for t in executor.available_tools()}
-    assert "file_str_replace" in advertised
+    assert "exact_replace" in advertised
 
 
-async def test_build_loop_withholds_file_str_replace_from_weak_driver(tmp_path):
-    """A driver WITHOUT ANCHORED_EDIT never sees file_str_replace advertised (weak/
+async def test_build_loop_withholds_exact_replace_from_non_anchored_driver(tmp_path):
+    """A driver WITHOUT ANCHORED_EDIT never sees exact_replace advertised (weak/
     default tier) — but it stays callable by qualified name (advertising is gated,
     allowed_tools is not)."""
     store = SqliteEventStore(":memory:")
@@ -657,5 +659,5 @@ async def test_build_loop_withholds_file_str_replace_from_weak_driver(tmp_path):
     executor = await _compose_and_get_executor(runtime, store)
 
     advertised = {t.name for t in executor.available_tools()}
-    assert "file_str_replace" not in advertised
-    assert "file_str_replace" in executor._scope.allowed_tools
+    assert "exact_replace" not in advertised
+    assert "exact_replace" in executor._scope.allowed_tools
