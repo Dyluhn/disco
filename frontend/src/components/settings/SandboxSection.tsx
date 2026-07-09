@@ -2,7 +2,8 @@
  * Settings → Sandbox. Select + configure the backend the agent runs in. Reuses the
  * settings config plumbing (useSandboxConfig / useUpdateSandboxConfig → the shared store
  * the agent-server reads). Isolation tier is legible at the point of choice; the
- * local→tighter-confirmation coupling is surfaced; Podman is an honest, labeled stub;
+ * local→tighter-confirmation coupling is surfaced; Podman is temporarily hidden from the
+ * picker (no live host in this environment — see BACKEND_META in types/sandbox.ts);
  * the keyless tailnet connections are non-secret host/socket detail (no key entry).
  */
 
@@ -221,7 +222,7 @@ export function SandboxSection() {
       <div
         role="radiogroup"
         aria-label="Sandbox backend"
-        className="grid gap-inline sm:grid-cols-3"
+        className="grid gap-inline sm:grid-cols-2"
       >
         {BACKEND_META.map((b) => (
           <BackendCard

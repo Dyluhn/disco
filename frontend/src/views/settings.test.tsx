@@ -155,14 +155,16 @@ describe("Settings — skills + MCP scaffolds", () => {
 });
 
 describe("Settings — sandbox", () => {
-  it("offers the three backends with isolation tiers legible; Podman is a stub", async () => {
+  it("offers the two live backends with isolation tiers legible; Podman is hidden for now", async () => {
     withQuery(<SettingsView />);
     expect(await screen.findByRole("heading", { name: "Sandbox" })).toBeInTheDocument();
     // radios render after the async config load
     expect(await screen.findByRole("radio", { name: /gVisor sandbox backend/i })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Local container sandbox backend/i })).toBeInTheDocument();
-    const podman = screen.getByRole("radio", { name: /Podman .* sandbox backend/i });
-    expect(within(podman).getByText(/stub here/i)).toBeInTheDocument();
+    // Podman is temporarily commented out of the picker (no live host in this environment
+    // — see BACKEND_META in types/sandbox.ts). Guard its absence so a re-add without the
+    // backing host work fails loudly here.
+    expect(screen.queryByRole("radio", { name: /Podman .* sandbox backend/i })).toBeNull();
     // isolation tiers are surfaced at the point of choice
     expect(screen.getByText(/Strong isolation/i)).toBeInTheDocument();
     expect(screen.getAllByText(/shared kernel/i).length).toBeGreaterThan(0);

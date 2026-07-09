@@ -80,8 +80,11 @@ export function fieldLabel(f: SandboxField): string {
   return FIELD_LABEL[f];
 }
 
-/** The three selectable backends (process/dev is intentionally not offered — running on
- * the host isn't an isolation choice). Ordered strong → weak, like isolation.py. */
+/** The selectable backends (process/dev is intentionally not offered — running on the
+ * host isn't an isolation choice). Ordered strong → weak, like isolation.py. Podman
+ * (remote) is temporarily commented out below — the backend code is real + verified but
+ * has no live host in this environment; restore the entry (and the grid → sm:grid-cols-3
+ * in SandboxSection.tsx) when a Podman host is provisioned. */
 export const BACKEND_META: BackendMeta[] = [
   {
     id: "gvisor",
@@ -118,6 +121,10 @@ export const BACKEND_META: BackendMeta[] = [
     provides: "You provide: nothing — it runs on this host with sensible defaults. Save and go.",
     supportsLiveView: false, // shared-kernel local backend: no live stream here
   },
+  // Podman (remote) — temporarily commented out of the UI: no live host in this
+  // environment. The backend code is real + verified; to restore, uncomment this entry
+  // AND set the backend grid back to `sm:grid-cols-3` in SandboxSection.tsx.
+  /*
   {
     id: "podman",
     name: "Podman (remote)",
@@ -133,6 +140,7 @@ export const BACKEND_META: BackendMeta[] = [
     provides: "You provide: the rootless Podman URL under Advanced. A stub here — configures but doesn't run.",
     supportsLiveView: false, // deployment stub; doesn't expose preview ports here
   },
+  */
 ];
 
 export function backendMeta(id: string): BackendMeta | undefined {

@@ -93,13 +93,15 @@ describe("SandboxSection — W-49 progressive disclosure", () => {
     expect(fieldShownUpFront("workspace_root")).toBe(false);
   });
 
-  it("podman: podman_url lives under Advanced (none up front)", async () => {
+  it("podman is temporarily NOT offered in the picker (commented out — no live host here)", async () => {
     wrap();
-    const podman = await screen.findByRole("radio", { name: /podman/i });
-    await userEvent.click(podman);
-    await waitFor(() => expect(fieldShownUpFront("podman_url")).toBe(false));
-    // podman_url IS rendered (in Advanced), just not up front.
-    expect(document.querySelector('input[data-sandbox-field="podman_url"]')).not.toBeNull();
+    // gVisor renders once the async config has loaded, so asserting podman's absence
+    // afterwards isn't racing the initial render.
+    await screen.findByRole("radio", { name: /gvisor/i });
+    expect(screen.queryByRole("radio", { name: /podman/i })).toBeNull();
+    // ...but podman_url stays in the round-tripped config shape (the "Save sends the FULL
+    // payload" test below proves the field survives), so re-enabling the card is a pure
+    // BACKEND_META un-comment with no wire change.
   });
 
   it("Save still sends the FULL payload incl. runtime/image/workspace_root defaults", async () => {
