@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, OctagonX, Play, ShieldCheck, ShieldHalf, Square } from "lucide-react";
+import { Loader2, OctagonX, Play, ShieldCheck, ShieldHalf, Square, WifiOff } from "lucide-react";
 import { cn } from "@/lib/cn";
 import type { AgentEvent, ConversationStatus, IsolationInfo } from "@/types/agent";
 import { useModels } from "@/hooks/useModels";
@@ -52,6 +52,7 @@ export function AgentStatusBar({
   status,
   isolation,
   sandboxState,
+  connectionState = "connected",
   autonomous,
   assist,
   onKill,
@@ -66,6 +67,8 @@ export function AgentStatusBar({
   isolation: IsolationInfo | null;
   /** Runtime sandbox liveness overlay ('active' | 'suspended' | undefined). */
   sandboxState?: "active" | "suspended";
+  /** Live stream health. Degraded means the socket is retrying past the normal window. */
+  connectionState?: "connected" | "degraded";
   /** Headless run: no ask_user, auto-approved plan, clean forfeit instead of halting. */
   autonomous?: boolean;
   /** Server-derived execution tier (Order D). true = weak/assist; false/absent = standard. */
@@ -185,6 +188,17 @@ export function AgentStatusBar({
             className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
           >
             suspended
+          </span>
+        )}
+        {connectionState === "degraded" && (
+          <span
+            title="Stream reconnecting — activity will replay when the connection returns"
+            data-disco-control="build.connection"
+            data-connection-state="degraded"
+            className="flex items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.7rem] text-text-muted"
+          >
+            <WifiOff className="size-3" aria-hidden />
+            reconnecting…
           </span>
         )}
         {/* RP-14: cost meter mounts only when a model is wired in — callers that

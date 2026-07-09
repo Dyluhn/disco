@@ -85,6 +85,24 @@ describe("AgentStatusBar — graceful Stop control", () => {
     expect(screen.getByRole("button", { name: /kill the agent/i })).toBeInTheDocument();
   });
 
+  it("shows a subtle reconnecting badge when the stream is degraded", () => {
+    render(
+      <AgentStatusBar
+        status="RUNNING"
+        isolation={ISO}
+        connectionState="degraded"
+        onKill={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    const badge = screen.getByText(/reconnecting…/i);
+    expect(badge).toBeInTheDocument();
+    expect(badge.closest("[data-disco-control='build.connection']")).toHaveAttribute(
+      "data-connection-state",
+      "degraded",
+    );
+  });
+
   it("Stop shows a 'Stopping…' pending state after click (cancel isn't instant)", async () => {
     const user = userEvent.setup();
     render(<AgentStatusBar status="RUNNING" isolation={ISO} onKill={() => {}} onStop={() => {}} />);

@@ -76,6 +76,7 @@ export interface StreamingFile {
 
 export interface BuildStreamState {
   status: ConversationStatus;
+  connectionState: "connected" | "degraded";
   events: AgentEvent[];
   streamingFile: StreamingFile | null;
   pendingActionId: string | null;
@@ -109,6 +110,7 @@ export interface BuildStreamState {
 
 const initial: BuildStreamState = {
   status: "IDLE",
+  connectionState: "connected",
   events: [],
   streamingFile: null,
   pendingActionId: null,
@@ -139,12 +141,15 @@ type Action =
   | { type: "local_message"; event: AgentEvent };
 
 function reducer(state: BuildStreamState, action: Action): BuildStreamState {
-  const next = reducerInner(state, action);
+  let next = reducerInner(state, action);
   // Fold the highest seen seq in ONE place rather than at every return site:
   // state frames report last_seq; events carry their own seq (absent on
   // optimistic/live-only frames). Reset passes through untouched (back to 0).
   if (action.type !== "frame") return next;
   const f = action.frame;
+  if (f.type !== "connection" && next.connectionState !== "connected") {
+    next = { ...next, connectionState: "connected" };
+  }
   const seen =
     f.type === "state" ? (f.state.last_seq ?? 0) : f.type === "event" ? (f.event.seq ?? 0) : 0;
   return seen > next.maxSeq ? { ...next, maxSeq: seen } : next;
@@ -159,6 +164,9 @@ function reducerInner(state: BuildStreamState, action: Action): BuildStreamState
     return { ...state, events: upsert(state.events, action.event) };
   }
   const f = action.frame;
+  if (f.type === "connection") {
+    return f.state === "degraded" ? { ...state, connectionState: "degraded" } : state;
+  }
   if (f.type === "state") {
     return {
       ...state,

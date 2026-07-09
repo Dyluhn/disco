@@ -40,6 +40,26 @@ function suspendedState(cid: string, lastSeq: number): ConversationState {
 }
 
 describe("useBuildStream — suspended badge vs history replay", () => {
+  it("shows degraded connection state until the next real frame arrives", () => {
+    const session = { cid: "c_connection", task: "build" };
+    const { result } = renderHook(() => useBuildStream(session));
+
+    act(() => {
+      sink!({ type: "connection", state: "degraded" });
+    });
+    expect(result.current.connectionState).toBe("degraded");
+
+    act(() => {
+      sink!({ type: "connection", state: "connected" });
+    });
+    expect(result.current.connectionState).toBe("degraded");
+
+    act(() => {
+      sink!({ type: "state", state: suspendedState("c_connection", 1) });
+    });
+    expect(result.current.connectionState).toBe("connected");
+  });
+
   it("keeps the badge through replayed RUNNING events (seq <= frameSeq)", () => {
     const session = { cid: "c_replay", task: "build" };
     const { result } = renderHook(() => useBuildStream(session));

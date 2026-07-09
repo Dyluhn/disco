@@ -358,6 +358,7 @@ export type WSServerFrame =
   | { type: "event"; event: AgentEvent }
   | { type: "file_stream"; file_stream: FileStreamFrame }
   | { type: "error"; error: { detail?: string } }
+  | { type: "connection"; state: "connected" | "degraded" }
   | { type: "pong" }
   | { type: "mcp_approval_required"; mcp_approval: McpApprovalPayload };
 
