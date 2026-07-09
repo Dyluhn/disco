@@ -69,9 +69,8 @@ _BINARY_DELIVERABLE_EXTS = frozenset(
 # Per-conversation read-before-rewrite tracker (F1).
 # Structure: {conv_id: {"read_since_write": set[str]}}
 #   read_since_write: canonical paths (workspace-prefix-stripped) for which a
-#     successful FileReadTool.run has occurred since the path's last successful
-#     mutation (file_write / file_append / file_edit / file_replace_lines /
-#     file_insert_lines / file_str_replace) in this conversation.
+#     successful FileReadTool.run or success-observation-bearing mutator has
+#     shown current content for this conversation.
 #     A write to a path that (a) EXISTS on disk AND (b) is NOT in this set is
 #     REFUSED — the model must file_read the file first.
 #     A NEW file (does not exist yet) is always allowed.
@@ -132,13 +131,15 @@ def clear_conversation_read_state(conv_id: str) -> None:
 def _conv_state(conv_id: str) -> dict[str, Any]:
     s = _read_state.get(conv_id)
     if s is None:
-        # read_since_write: the coarse F1 bit (path grounded since last write).
+        # read_since_write: the coarse F1 bit (path has current visible grounding).
         # reads: CD-TOOLS-1 sha-aware per-path read records for the fresh-edit guard —
         #   {canonical_path: {"sha": <full-file sha at read>, "ranges": [(start,end)],
         #    "full": bool}}. `ranges` are 1-based inclusive line spans the model SAW
-        #   un-elided (a real file_read page); `full` is True for a whole-file read.
+        #   un-elided (a real file_read page or mutator success view); `full` is True
+        #   when that view covers the whole file.
         # targeted_read_grounded: reads[path] came from model-visible numbered content that can
-        # ground targeted edits without granting read_since_write / blind file_write.
+        # ground targeted edits. Refusal-delivered reads set this without read_since_write;
+        # successful mutators set both.
         s = {
             "read_since_write": set(),
             "edit_grounded": set(),
@@ -174,10 +175,8 @@ def _increment_old_text_not_found_count(conv_id: str, path: str) -> int:
 
 def _clear_grounding(conv_id: str, path: str) -> None:
     """[REL-RC-D/G] Fully un-ground `path`: drop the read-since-write, edit-grounded, and
-    targeted-read bits. Called by every line-shifting/non-anchored mutation (full/blind file_write &
-    file_append & safe_write, line-shifting file_replace_lines & file_insert_lines, and external
-    run_script edits) — after those the model must get fresh content before it can edit or rewrite
-    again."""
+    targeted-read bits. Used for mutating paths that do not return a current numbered
+    observation (for example safe_write_file and external run_script edits)."""
     canon = _canonical(path)
     st = _conv_state(conv_id)
     st["read_since_write"].discard(canon)
@@ -214,7 +213,8 @@ _EDIT_ELISION_RE = re.compile(
 _GUARD_FRESH_READ_MIN_BYTES = 1_500
 _REFUSAL_READ_FULL_MAX_BYTES = 64 * 1024
 _LINE_REFUSAL_WINDOW_RADIUS = 40
-_LINE_SUCCESS_WINDOW_RADIUS = 40
+_UPDATED_REGION_WINDOW_RADIUS = 10
+_FILE_WRITE_SUCCESS_HEAD_LINES = 40
 
 
 def _has_elision_marker(*texts: str | None) -> bool:
@@ -630,22 +630,106 @@ def _best_fuzzy_old_match_lines(text: str, old: str) -> tuple[int, int] | None:
     return (best[1], best[2])
 
 
-def _line_success_content(
+def _bounded_updated_region_view(view: str) -> str:
+    raw = view.encode("utf-8")
+    if len(raw) <= _REFUSAL_READ_FULL_MAX_BYTES:
+        return view
+    notice = "\n[updated-region view truncated at 64KB]"
+    budget = max(0, _REFUSAL_READ_FULL_MAX_BYTES - len(notice.encode("utf-8")))
+    return raw[:budget].decode("utf-8", errors="ignore").rstrip() + notice
+
+
+def _post_change_line_span(before: str, after: str) -> tuple[int, int]:
+    """Best-effort 1-based span of changed lines in the post-edit file."""
+    from difflib import SequenceMatcher
+
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    spans: list[tuple[int, int]] = []
+    for tag, _i1, _i2, j1, j2 in SequenceMatcher(
+        None, before_lines, after_lines
+    ).get_opcodes():
+        if tag == "equal":
+            continue
+        spans.append((j1 + 1, max(j2, j1 + 1)))
+    if not spans:
+        return (1, max(1, len(after_lines)))
+    return (min(lo for lo, _hi in spans), max(hi for _lo, hi in spans))
+
+
+def _record_success_grounding(
+    conv_id: str,
     path: str,
-    text: str,
+    post_write_bytes: bytes,
     *,
-    changed_lines: tuple[int, int],
+    start_line: int,
+    end_line: int,
+    full: bool,
+) -> None:
+    """A successful mutator's returned view is fresh grounding for that path."""
+    import hashlib
+
+    canon = _canonical(path)
+    st = _conv_state(conv_id)
+    st["read_since_write"].add(canon)
+    st["edit_grounded"].add(canon)
+    st["targeted_read_grounded"].add(canon)
+    st["reads"][canon] = {
+        "sha": hashlib.sha256(post_write_bytes).hexdigest(),
+        "full": full,
+        "ranges": [(start_line, end_line)],
+    }
+    st["no_op_edit_counts"].pop(canon, None)
+    st["old_text_not_found_counts"].pop(canon, None)
+
+
+def _updated_region_success_content(
+    conv_id: str,
+    path: str,
+    post_write_bytes: bytes,
+    *,
     prefix: str,
+    changed_lines: tuple[int, int] | None = None,
+    file_write_head: bool = False,
 ) -> str:
+    text = post_write_bytes.decode("utf-8", errors="replace")
     total = len(text.splitlines())
-    start, end = _line_span(total, changed_lines, _LINE_SUCCESS_WINDOW_RADIUS)
-    numbered = _numbered_line_window(text, start_line=start, end_line=end, total_lines=total)
-    return (
-        f"{prefix}\n\nUpdated content for {path} "
-        f"[lines {start}-{end} of {total}; total lines: {total}]. "
-        "Line numbers may have shifted — use these for any next line edit:\n"
-        f"{numbered}"
+    if total <= 0:
+        start, end = (1, 0)
+    elif file_write_head:
+        start, end = (1, min(total, _FILE_WRITE_SUCCESS_HEAD_LINES))
+    else:
+        start, end = _line_span(
+            total, changed_lines or (1, 1), _UPDATED_REGION_WINDOW_RADIUS
+        )
+    numbered = (
+        _numbered_line_window(text, start_line=start, end_line=end, total_lines=total)
+        if total > 0 and end >= start
+        else ""
     )
+    parts = [f"applied — lines {start}-{end} now read:"]
+    if numbered:
+        parts.append(numbered)
+    if file_write_head:
+        parts.append(f"[total lines: {total}]")
+    raw_view = "\n".join(parts)
+    view = _bounded_updated_region_view(raw_view)
+    delivered_end = end
+    if view != raw_view:
+        delivered_numbers = [
+            int(m.group(1)) for m in re.finditer(r"(?m)^\s*(\d+)\t", view)
+        ]
+        delivered_end = max(delivered_numbers) if delivered_numbers else start - 1
+    full = total <= 0 or (start == 1 and delivered_end >= total)
+    _record_success_grounding(
+        conv_id,
+        path,
+        post_write_bytes,
+        start_line=start,
+        end_line=delivered_end,
+        full=full,
+    )
+    return f"{prefix}\n\n{view}"
 
 
 def guard_fresh_edit(
@@ -786,68 +870,6 @@ def guard_fresh_edit(
                 line_refusal_read=line_refusal_read,
             )
     return None
-
-
-def reground_after_anchored_edit(
-    conv_id: str, path: str, new_bytes: bytes, *, line_numbers_valid: bool = False
-) -> None:
-    """[REL-RC-D/G] After a HOST-VALIDATED ANCHORED edit (file_edit / file_str_replace /
-    exact_replace), or a line-count-preserving file_replace_lines edit, ADVANCE the file's grounding
-    to the just-written bytes instead of discarding it. Set `line_numbers_valid=True` only when the
-    edit is known not to have shifted numeric targets.
-
-    Root cause this fixes: the successful-mutation paths discarded only the coarse read_since_write
-    bit and left `reads[path].sha` at the PRE-edit value. So the model's OWN next same-file edit saw
-    rec.sha(v1) != disk_sha(v2) and was refused as STALE_FILE_CONTEXT — the guard misreporting a
-    tracked, deterministic, host-validated edit as EXTERNAL drift. Back-to-back same-file edits then
-    wedged the loop into STUCK (the REL-RC-D revise_thrice failure).
-
-    Preserves the PRIOR grounding SHAPE (Codex plan gate): keep whole-file grounding ONLY if the
-    read was already full; NEVER promote a partial read to whole-file. A partial/absent prior
-    grounding is DROPPED (not advanced) — advancing it would either lie about whole-file knowledge
-    or carry line ranges that this edit may have shifted; the next edit then honestly requires a
-    fresh read (auto-groundable) rather than inheriting a stale-but-fresh-sha partial window.
-
-    Grounding is granted on the SEPARATE `edit_grounded` signal, NOT `read_since_write`: an anchored
-    edit lets the model make its NEXT anchored edit (guard_fresh_edit honors edit_grounded), but the
-    coarse read bit stays cleared so a blind full file_write is STILL refused until a genuine read
-    (the Mode-B rewrite-from-memory protection is untouched).
-
-    Deliberately NOT called for line-shifting line edits (file_replace_lines with a different output
-    line count / file_insert_lines) or full/blind writes (file_write / file_append / safe_write_file)
-    or external mutations (run_script): a later numeric line target or a from-memory rewrite can be
-    stale even under a correct fresh sha, so those keep clearing grounding and force a fresh targeted
-    read/refusal-read."""
-    import hashlib
-
-    canon = _canonical(path)
-    st = _conv_state(conv_id)
-    prior = (st.get("reads") or {}).get(canon)
-    # The read bit is always cleared on mutation (a blind full rewrite still needs a fresh read).
-    st["read_since_write"].discard(canon)
-    st["no_op_edit_counts"].pop(canon, None)
-    st["old_text_not_found_counts"].pop(canon, None)
-    if prior is not None and prior.get("full"):
-        # Whole-file grounding stays whole-file, advanced to the post-edit bytes the engine wrote,
-        # and re-grants EDIT grounding so the model's own next anchored edit isn't false-STALE.
-        new_line_count = new_bytes.count(b"\n") + 1
-        st["reads"][canon] = {
-            "sha": hashlib.sha256(new_bytes).hexdigest(),
-            "full": True,
-            "ranges": [(1, new_line_count)],
-        }
-        st["edit_grounded"].add(canon)
-        if line_numbers_valid:
-            st["targeted_read_grounded"].add(canon)
-        else:
-            st["targeted_read_grounded"].discard(canon)
-    else:
-        # Partial/absent grounding: drop the stale sha record so it can't produce a FALSE
-        # STALE_FILE_CONTEXT, and clear edit grounding → the next edit gets an honest
-        # FRESH_READ_REQUIRED (never promote partial context to whole-file).
-        (st.get("reads") or {}).pop(canon, None)
-        st["edit_grounded"].discard(canon)
-        st["targeted_read_grounded"].discard(canon)
 
 
 def _canonical(path: str) -> str:
@@ -1011,12 +1033,10 @@ class FileReadTool:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         data = await ctx.sandbox.read_file(args.path)
         # F1 — set the read-since-write bit for this path so a subsequent
-        # file_write is allowed (the happy path: read → write). Applies to ALL
-        # tiers (not gated on ctx.assist) — the thrash root-cause hits capable
-        # models too, and the guard must be symmetric. The internal
-        # ctx.sandbox.read_file() calls inside _gated_write and each mutator's
-        # own read do NOT go through this method, so they do NOT set the bit —
-        # only an explicit model-issued file_read counts as grounding evidence.
+        # file_write is allowed (the happy path: read → write). Successful
+        # mutators also set this via their returned numbered observations.
+        # Internal ctx.sandbox.read_file() calls inside _gated_write and each
+        # mutator's own preflight read do NOT set the bit by themselves.
         import hashlib
 
         _disk_sha = hashlib.sha256(data).hexdigest()  # CD-TOOLS-1 fresh-edit grounding
@@ -1262,15 +1282,10 @@ class FileWriteTool:
             old_bytes = None
             old_text = None
         # F1 — read-before-rewrite guard (ALL tiers, no assist gate). Refuse a
-        # file_write to an EXISTING file if there has been no successful
-        # file_read of it since the path's last successful mutation in this
-        # conversation. A NEW (nonexistent) file is always allowed — there is no
-        # prior content to ground on. The old F3 "second untracked write forces
-        # replace" escape hatch is REMOVED; the only way past this refusal is an
-        # actual file_read (which sets the read-since-write bit), or using a
-        # targeted edit tool (file_replace_lines / file_insert_lines / file_edit)
-        # which does not require a full-rewrite guard because it operates on
-        # specific lines anchored to the current content.
+        # file_write to an EXISTING file if neither a successful file_read nor a
+        # success-observation-bearing mutator has grounded the current path in
+        # this conversation. A NEW (nonexistent) file is always allowed — there is no
+        # prior content to ground on.
         if old_text is not None:  # file exists (we read it above)
             # ROOT-2 — binary-deliverable clobber guard. The target is an EXISTING file
             # of a generated-binary type; a text file_write would corrupt it. Refuse
@@ -1324,12 +1339,15 @@ class FileWriteTool:
         gated = await _gated_write(ctx, args.path, raw, old_text)
         if gated is not None:
             return gated
-        # F1 — clear the read-since-write bit: the file has been mutated, so the
-        # next file_write must be preceded by another file_read.
-        _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True,
-            content=f"wrote {len(raw)} bytes to {args.path}",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                raw,
+                prefix=f"wrote {len(raw)} bytes to {args.path}",
+                file_write_head=True,
+            ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, raw),
         )
@@ -1407,11 +1425,16 @@ class FileAppendTool:
         gated = await _gated_write(ctx, args.path, combined, old_text)
         if gated is not None:
             return gated
-        # F1 — file_append is a successful mutation: clear the read-since-write bit.
-        _clear_grounding(ctx.conversation_id, args.path)
+        changed = _post_change_line_span(old_text or "", combined.decode("utf-8", errors="replace"))
         return ToolOutcome(
             success=True,
-            content=f"appended {len(append_bytes)} bytes to {args.path}",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                combined,
+                prefix=f"appended {len(append_bytes)} bytes to {args.path}",
+                changed_lines=changed,
+            ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, combined),
         )
@@ -1496,7 +1519,8 @@ class FileEditTool:
             "pasted-in line numbers). This is the SAFEST targeted edit — it anchors on "
             "the text you give, so it can't hit the wrong place. For a large file, read "
             "the relevant section first (file_read with offset/limit) and pass that exact "
-            "snippet as `old`."
+            "snippet as `old`. Your previous edit's observation shows the CURRENT "
+            "numbering for that region — use it; re-read only if you edited elsewhere since."
         ),
         args_model=FileEditArgs,
         needs=_FS,
@@ -1598,14 +1622,18 @@ class FileEditTool:
         gated = await _gated_write(ctx, args.path, updated.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # [REL-RC-D] file_edit is a HOST-VALIDATED ANCHORED mutation: advance grounding to the
-        # post-edit bytes (don't discard) so the model's own next same-file edit isn't false-STALE.
-        reground_after_anchored_edit(ctx.conversation_id, args.path, updated.encode("utf-8"))
+        updated_bytes = updated.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=f"edited {args.path} ({how})",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                updated_bytes,
+                prefix=f"edited {args.path} ({how})",
+                changed_lines=_post_change_line_span(text, updated),
+            ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, updated.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, updated_bytes),
         )
 
 
@@ -1626,8 +1654,8 @@ class FileReplaceLinesTool:
         description=(
             "Replace lines [start_line, end_line] (1-based, inclusive) of a file with "
             "`new_text`. Good for large files where reproducing exact text is hard. "
-            "IMPORTANT: re-read the file IMMEDIATELY before each call — line numbers "
-            "shift after any edit, and a stale range silently overwrites the wrong lines. "
+            "IMPORTANT: your previous edit's observation shows the CURRENT numbering "
+            "for that region — use it; re-read only if you edited elsewhere since. "
             "Use file_insert_lines to insert without replacing."
         ),
         args_model=FileReplaceLinesArgs,
@@ -1694,22 +1722,14 @@ class FileReplaceLinesTool:
         if gated is not None:
             return gated
         replaced = max(0, end - args.start_line + 1)
-        if replaced == len(new_lines):
-            # [REL-RC-G] Same line count means numeric line targets did not shift; advance the
-            # full-file grounding shape just like an anchored edit so consecutive line edits work.
-            reground_after_anchored_edit(
-                ctx.conversation_id, args.path, out.encode("utf-8"), line_numbers_valid=True
-            )
-        else:
-            # F1 — line-shifting replacement: clear grounding; the next line edit must use the
-            # fresh numbered content delivered on refusal or do an explicit file_read.
-            _clear_grounding(ctx.conversation_id, args.path)
         changed_hi = args.start_line + max(len(new_lines), 1) - 1
+        out_bytes = out.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=_line_success_content(
+            content=_updated_region_success_content(
+                ctx.conversation_id,
                 args.path,
-                out,
+                out_bytes,
                 changed_lines=(args.start_line, changed_hi),
                 prefix=(
                     f"replaced lines {args.start_line}-{end} of {args.path} "
@@ -1717,7 +1737,7 @@ class FileReplaceLinesTool:
                 ),
             ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, out.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, out_bytes),
         )
 
 
@@ -1786,20 +1806,20 @@ class FileInsertLinesTool:
         gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # F1 — file_insert_lines is a successful mutation: clear the read-since-write bit.
-        _clear_grounding(ctx.conversation_id, args.path)
         changed_start = args.after_line + 1
         changed_hi = changed_start + max(len(ins), 1) - 1
+        out_bytes = out.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=_line_success_content(
+            content=_updated_region_success_content(
+                ctx.conversation_id,
                 args.path,
-                out,
+                out_bytes,
                 changed_lines=(changed_start, changed_hi),
                 prefix=f"inserted {len(ins)} lines after line {args.after_line} of {args.path}",
             ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, out.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, out_bytes),
         )
 
 
@@ -1902,16 +1922,19 @@ class FileStrReplaceTool:
                     gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
                     if gated is not None:
                         return gated
-                    # [REL-RC-D] anchored mutation → advance grounding to the post-edit bytes.
-                    reground_after_anchored_edit(
-                        ctx.conversation_id, args.path, new_text.encode("utf-8")
-                    )
+                    new_bytes = new_text.encode("utf-8")
                     return ToolOutcome(
                         success=True,
-                        content=f"replaced in {args.path} (whitespace-stripped match)",
+                        content=_updated_region_success_content(
+                            ctx.conversation_id,
+                            args.path,
+                            new_bytes,
+                            prefix=f"replaced in {args.path} (whitespace-stripped match)",
+                            changed_lines=_post_change_line_span(text, new_text),
+                        ),
                         artifacts=[args.path],
                         structured=_write_artifact_structured(
-                            args.path, new_text.encode("utf-8")
+                            args.path, new_bytes
                         ),
                     )
             return _old_text_not_found_refusal(
@@ -1933,13 +1956,18 @@ class FileStrReplaceTool:
         gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # [REL-RC-D] anchored mutation → advance grounding to the post-edit bytes.
-        reground_after_anchored_edit(ctx.conversation_id, args.path, new_text.encode("utf-8"))
+        new_bytes = new_text.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=f"replaced in {args.path}",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                new_bytes,
+                prefix=f"replaced in {args.path}",
+                changed_lines=_post_change_line_span(text, new_text),
+            ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, new_text.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, new_bytes),
         )
 
 
@@ -2253,12 +2281,15 @@ class ExactReplaceTool:
         # (8) all checks passed → ONE atomic write (never write-then-revert). All-or-nothing.
         new_bytes = new_text.encode("utf-8")
         await _atomic_write(ctx.sandbox, args.path, new_bytes)
-        # [REL-RC-D] exact_replace is anchored (position-spliced from live-disk snippet matches) →
-        # advance grounding to the post-edit bytes so a follow-up same-file edit isn't false-STALE.
-        reground_after_anchored_edit(ctx.conversation_id, args.path, new_bytes)
         return ToolOutcome(
             success=True,
-            content=f"exact_replace applied {len(spans)} replacement(s) to {args.path}.",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                new_bytes,
+                prefix=f"exact_replace applied {len(spans)} replacement(s) to {args.path}.",
+                changed_lines=_post_change_line_span(text, new_text),
+            ),
             artifacts=[args.path],
             structured=_write_artifact_structured(
                 args.path,

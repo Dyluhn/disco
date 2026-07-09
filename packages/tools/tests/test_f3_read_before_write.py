@@ -1,15 +1,10 @@
 """F1 — read-before-rewrite guard on file_write (all tiers).
 
 FileWriteTool refuses a write to an EXISTING file if there has been no
-successful FileReadTool.run call on that path since the path's last
-successful mutation in this conversation. A NEW (nonexistent) file is
-always allowed. The only escape is a real file_read (sets the
-read-since-write bit); there is no second-attempt bypass (the old F3
-"warned" escape hatch is removed).
-
-ALL mutators (file_write, file_append, file_edit, file_replace_lines,
-file_insert_lines, file_str_replace) clear the read-since-write bit on
-success, so a write after any mutation without a new read is refused.
+successful FileReadTool.run call and no success-observation-bearing mutator
+for that path in this conversation. A NEW (nonexistent) file is always
+allowed. A successful mutation returns current numbered content and sets the
+read-since-write bit; a rejected blind write does not.
 
 The guard applies to ALL tiers (ctx.assist=True AND ctx.assist=False).
 
@@ -129,13 +124,12 @@ async def test_new_file_always_allowed_assist_on():
     assert sbx._fs["new.py"] == b"x = 1\n"
 
 
-# --- create → 2nd write without read → refused ------------------------------
+# --- successful mutations ground following writes ----------------------------
 
 
 @pytest.mark.asyncio
-async def test_second_write_without_read_refused():
-    """The thrash-repro: create a file (allowed) → file_write the SAME path
-    again WITHOUT a read → REFUSED with a read-first message."""
+async def test_successful_create_grounds_second_write():
+    """Create a file (allowed) → success observation grounds the next same-path write."""
     sbx = _FakeSandbox(existing={})
     ctx = _ctx(sbx)
     # First write: new file → allowed
@@ -143,28 +137,23 @@ async def test_second_write_without_read_refused():
         FileWriteArgs(path="main.js", content="const x = 1;\n"), ctx
     )
     assert first.success is True
-    # Second write without read → refused
     second = await FileWriteTool().run(
         FileWriteArgs(path="main.js", content="const x = 2;\n"), ctx
     )
-    assert second.success is False
-    assert second.error == "read_before_write"
-    assert "main.js" in second.content
-    assert "file_read" in second.content
-    # workspace is unchanged from first write
-    assert sbx._fs["main.js"] == b"const x = 1;\n"
+    assert second.success is True, second.content
+    assert "applied — lines 1-1 now read:" in second.content
+    assert sbx._fs["main.js"] == b"const x = 2;\n"
 
 
 @pytest.mark.asyncio
-async def test_second_write_without_read_refused_assist_off():
-    """Guard fires for assist=False (capable-model tier) — no longer exempt."""
+async def test_successful_create_grounds_second_write_assist_off():
+    """Success-observation grounding is not assist-gated."""
     sbx = _FakeSandbox(existing={})
     ctx = _ctx(sbx, assist=False)
     await FileWriteTool().run(FileWriteArgs(path="x.py", content="v1\n"), ctx)
     second = await FileWriteTool().run(FileWriteArgs(path="x.py", content="v2\n"), ctx)
-    assert second.success is False
-    assert second.error == "read_before_write"
-    assert sbx._fs["x.py"] == b"v1\n"
+    assert second.success is True, second.content
+    assert sbx._fs["x.py"] == b"v2\n"
 
 
 @pytest.mark.asyncio
@@ -203,7 +192,7 @@ async def test_preexisting_file_refused_without_read_assist_on():
 @pytest.mark.asyncio
 async def test_read_lifts_the_guard():
     """Create file → file_read → file_write SUCCEEDS (the happy grounded path).
-    After the write the bit is cleared: a 3rd write without a new read fails."""
+    After the write, its success observation grounds a 3rd write too."""
     sbx = _FakeSandbox(existing={})
     ctx = _ctx(sbx)
     # Create the file
@@ -215,11 +204,9 @@ async def test_read_lifts_the_guard():
     second = await FileWriteTool().run(FileWriteArgs(path="x.js", content="v2\n"), ctx)
     assert second.success is True
     assert sbx._fs["x.js"] == b"v2\n"
-    # 3rd write without a new read → refused again
     third = await FileWriteTool().run(FileWriteArgs(path="x.js", content="v3\n"), ctx)
-    assert third.success is False
-    assert third.error == "read_before_write"
-    assert sbx._fs["x.js"] == b"v2\n"
+    assert third.success is True, third.content
+    assert sbx._fs["x.js"] == b"v3\n"
 
 
 @pytest.mark.asyncio
@@ -236,13 +223,12 @@ async def test_read_of_preexisting_file_lifts_guard():
     assert sbx._fs["app.py"] == b"new body\n"
 
 
-# --- all mutators clear the read bit ----------------------------------------
+# --- all listed mutators ground the read bit --------------------------------
 
 
 @pytest.mark.asyncio
-async def test_file_append_clears_read_bit():
-    """file_append is a successful mutation: a write after it without a read
-    is refused (even if a read preceded the append)."""
+async def test_file_append_grounds_read_bit():
+    """file_append success observation permits a following write without a read."""
     sbx = _FakeSandbox(existing={})
     ctx = _ctx(sbx)
     # Create file, read it (bit set), then append
@@ -252,19 +238,16 @@ async def test_file_append_clears_read_bit():
         FileAppendArgs(path="log.txt", content="line2\n"), ctx
     )
     assert append_out.success is True
-    # Now file_write without a new read → refused (append cleared the bit)
     write_out = await FileWriteTool().run(
         FileWriteArgs(path="log.txt", content="overwrite\n"), ctx
     )
-    assert write_out.success is False
-    assert write_out.error == "read_before_write"
-    assert sbx._fs["log.txt"] == b"line1\nline2\n"
+    assert write_out.success is True, write_out.content
+    assert sbx._fs["log.txt"] == b"overwrite\n"
 
 
 @pytest.mark.asyncio
-async def test_file_edit_clears_read_bit():
-    """file_edit is a successful mutation: a write after it without a read
-    is refused."""
+async def test_file_edit_grounds_read_bit():
+    """file_edit success observation permits a following write without a read."""
     sbx = _FakeSandbox({"a.py": b"x = 1\n"})
     ctx = _ctx(sbx)
     # Read (bit set), then edit
@@ -273,19 +256,16 @@ async def test_file_edit_clears_read_bit():
         FileEditArgs(path="a.py", old="x = 1", new="x = 2"), ctx
     )
     assert edit_out.success is True
-    # Write without a new read → refused
     write_out = await FileWriteTool().run(
         FileWriteArgs(path="a.py", content="x = 99\n"), ctx
     )
-    assert write_out.success is False
-    assert write_out.error == "read_before_write"
-    assert b"x = 2" in sbx._fs["a.py"]
+    assert write_out.success is True, write_out.content
+    assert sbx._fs["a.py"] == b"x = 99\n"
 
 
 @pytest.mark.asyncio
-async def test_file_replace_lines_clears_read_bit():
-    """file_replace_lines is a successful mutation: a write after it without a
-    read is refused."""
+async def test_file_replace_lines_grounds_read_bit():
+    """file_replace_lines success observation permits a following write without a read."""
     sbx = _FakeSandbox({"a.py": b"x = 1\ny = 2\n"})
     ctx = _ctx(sbx)
     await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
@@ -297,14 +277,13 @@ async def test_file_replace_lines_clears_read_bit():
     write_out = await FileWriteTool().run(
         FileWriteArgs(path="a.py", content="overwrite\n"), ctx
     )
-    assert write_out.success is False
-    assert write_out.error == "read_before_write"
+    assert write_out.success is True, write_out.content
+    assert sbx._fs["a.py"] == b"overwrite\n"
 
 
 @pytest.mark.asyncio
-async def test_file_insert_lines_clears_read_bit():
-    """file_insert_lines is a successful mutation: a write after it without a
-    read is refused."""
+async def test_file_insert_lines_grounds_read_bit():
+    """file_insert_lines success observation permits a following write without a read."""
     sbx = _FakeSandbox({"a.py": b"x = 1\n"})
     ctx = _ctx(sbx)
     await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
@@ -315,14 +294,13 @@ async def test_file_insert_lines_clears_read_bit():
     write_out = await FileWriteTool().run(
         FileWriteArgs(path="a.py", content="overwrite\n"), ctx
     )
-    assert write_out.success is False
-    assert write_out.error == "read_before_write"
+    assert write_out.success is True, write_out.content
+    assert sbx._fs["a.py"] == b"overwrite\n"
 
 
 @pytest.mark.asyncio
-async def test_file_str_replace_clears_read_bit():
-    """file_str_replace is a successful mutation: a write after it without a
-    read is refused."""
+async def test_file_str_replace_grounds_read_bit():
+    """file_str_replace success observation permits a following write without a read."""
     sbx = _FakeSandbox({"a.py": b"x = 1\n"})
     ctx = _ctx(sbx)
     await FileReadTool().run(FileReadArgs(path="a.py"), ctx)
@@ -333,8 +311,8 @@ async def test_file_str_replace_clears_read_bit():
     write_out = await FileWriteTool().run(
         FileWriteArgs(path="a.py", content="overwrite\n"), ctx
     )
-    assert write_out.success is False
-    assert write_out.error == "read_before_write"
+    assert write_out.success is True, write_out.content
+    assert sbx._fs["a.py"] == b"overwrite\n"
 
 
 # --- path alias collapse -----------------------------------------------------
@@ -354,32 +332,28 @@ async def test_path_alias_collapse_workspace_prefix():
         FileWriteArgs(path="x.py", content="new\n"), ctx
     )
     assert write_out.success is True
-    # Write again (bit cleared by the write) — refused even with abs path
+    # Write again: the prior write's success observation grounds the canonical path.
     sbx._fs["x.py"] = b"new\n"  # sandbox updated
     write_out2 = await FileWriteTool().run(
         FileWriteArgs(path="/workspace/x.py", content="newer\n"), ctx
     )
-    assert write_out2.success is False
-    assert write_out2.error == "read_before_write"
+    assert write_out2.success is True, write_out2.content
+    assert sbx._fs["x.py"] == b"newer\n"
 
 
 @pytest.mark.asyncio
 async def test_path_alias_collapse_dot_slash():
-    """'./x.py' and 'x.py' collapse to the same tracker key (codex MINOR): a mutate
-    via one spelling invalidates the read bit for the other, closing the stale-read
-    hole where read('x.py') + append('./x.py') + write('x.py') could pass un-read."""
+    """'./x.py' and 'x.py' collapse to the same tracker key for success grounding."""
     sbx = _FakeSandbox({"x.py": b"original\n"})
     ctx = _ctx(sbx)
     # Read 'x.py' lifts the guard
     assert (await FileReadTool().run(FileReadArgs(path="x.py"), ctx)).success is True
-    # Append via './x.py' must INVALIDATE the read bit (same canonical key)
     app = await FileAppendTool().run(FileAppendArgs(path="./x.py", content="more\n"), ctx)
     assert app.success is True
     sbx._fs["x.py"] = b"original\nmore\n"
-    # Now a full file_write of 'x.py' WITHOUT a fresh read must be REFUSED
-    w = await FileWriteTool().run(FileWriteArgs(path="x.py", content="all new\n"), ctx)
-    assert w.success is False
-    assert w.error == "read_before_write"
+    w = await FileWriteTool().run(FileWriteArgs(path="x.py", content="z = 3\n"), ctx)
+    assert w.success is True, w.content
+    assert sbx._fs["x.py"] == b"z = 3\n"
 
 
 @pytest.mark.asyncio
@@ -403,9 +377,8 @@ async def test_path_alias_abs_prefix_read_lifts_bare_write():
 
 @pytest.mark.asyncio
 async def test_no_second_attempt_bypass():
-    """The old F3 'second write is allowed' escape hatch is GONE. Two consecutive
-    file_write calls on an existing file without an intervening file_read are
-    BOTH refused. Only a real file_read lifts the guard."""
+    """Rejected blind writes do not ground the path. Two consecutive file_write calls
+    on an existing unread file are BOTH refused."""
     sbx = _FakeSandbox({"cfg.py": b"OLD\n"})
     ctx = _ctx(sbx)
     first = await FileWriteTool().run(
