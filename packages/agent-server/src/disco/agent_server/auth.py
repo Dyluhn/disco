@@ -17,9 +17,11 @@ from disco.core.auth import (
     SessionSigner,
     allowed_frontend_origins,
     configured_admin_token,
+    localhost_auto_pair_allowed,
     origin_allowed,
     origin_permitted,
     pairing_token,
+    request_traversed_proxy,
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
@@ -239,11 +241,22 @@ def make_auth_router() -> APIRouter:
         auto_pair = _auto_pair_enabled()
         token_ok = _pairing_token_ok(body.pairing_token)
         if not token_ok:
-            # The TOKENLESS shortcut keeps the STRICT allowlist (not same-host):
-            # a DNS-rebound page's Origin would match the rebound Host, but never
-            # the localhost allowlist — so rebinding can't mint without the token.
+            # The TOKENLESS shortcuts stay strict — a DNS-rebound page's Origin
+            # matches the rebound Host but is never localhost, so rebinding can't
+            # mint without the token via either branch.
             if _is_loopback_client(request) and auto_pair and origin_allowed(origin):
-                pass  # loopback dev convenience: mint without a token
+                pass  # host-process dev convenience (unforgeable loopback TCP peer)
+            elif localhost_auto_pair_allowed(
+                origin,
+                request.headers.get("host"),
+                via_proxy=request_traversed_proxy(request.headers),
+            ):
+                # Loopback-BOUND front door (compose default): the ports are
+                # kernel-unreachable from other machines, and the page asserts a
+                # localhost origin == this app's own Host → the operator's own
+                # machine. Zero-friction first run; DISCO_BIND=0.0.0.0 (or a proxy
+                # in front, which adds a forwarding header) disables it.
+                pass
             else:
                 raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
         cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)

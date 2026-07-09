@@ -15,9 +15,11 @@ from disco.core.auth import (
     AuthSession,
     SessionSigner,
     allowed_frontend_origins,
+    localhost_auto_pair_allowed,
     origin_allowed,
     origin_permitted,
     pairing_token,
+    request_traversed_proxy,
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
@@ -259,7 +261,18 @@ def make_auth_router() -> APIRouter:
         token_ok = _pairing_token_ok(body.pairing_token)
         if not token_ok:
             if _is_loopback_client(request) and auto_pair and origin_allowed(origin):
-                pass  # loopback dev convenience: mint without a token
+                pass  # host-process dev convenience (unforgeable loopback TCP peer)
+            elif localhost_auto_pair_allowed(
+                origin,
+                request.headers.get("host"),
+                via_proxy=request_traversed_proxy(request.headers),
+            ):
+                # Loopback-BOUND front door (compose default): the ports are
+                # kernel-unreachable from other machines, and the page asserts a
+                # localhost origin == this app's own Host → the operator's own
+                # machine. Zero-friction first run; DISCO_BIND=0.0.0.0 (or a proxy
+                # in front, which adds a forwarding header) disables it.
+                pass
             else:
                 raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
         cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
