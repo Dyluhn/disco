@@ -351,9 +351,13 @@ async def test_path_alias_collapse_dot_slash():
     app = await FileAppendTool().run(FileAppendArgs(path="./x.py", content="more\n"), ctx)
     assert app.success is True
     sbx._fs["x.py"] = b"original\nmore\n"
-    w = await FileWriteTool().run(FileWriteArgs(path="x.py", content="z = 3\n"), ctx)
+    # Comparable-size content: this test is about path-alias grounding, not the
+    # >50%-shrink guard (which would rightly refuse a tiny replacement).
+    w = await FileWriteTool().run(
+        FileWriteArgs(path="x.py", content="z = 3  # kept\n"), ctx
+    )
     assert w.success is True, w.content
-    assert sbx._fs["x.py"] == b"z = 3\n"
+    assert sbx._fs["x.py"] == b"z = 3  # kept\n"
 
 
 @pytest.mark.asyncio
