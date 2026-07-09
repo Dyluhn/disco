@@ -130,56 +130,39 @@ async def test_forget_conversation_evicts_build_state() -> None:
 
 
 # ---------------------------------------------------------------------------
-# P7 truth-in-advertising (2026-07-09 coffee-shop autopsy): scaffold_starter is
-# withheld from the ADVERTISED set whenever no starter kit resolves — which,
-# with CONTRACT-ACTIVATE unwired in production, is every run today. It stays in
-# allowed_tools (typed no_starter error remains the backstop) and reappears the
-# moment a kind with a starter kit is activated.
+# P7 catalog era (2026-07-09 redesign): scaffold_starter is a CATALOG tool — the
+# model picks the kind; the active contract's kit is only the omitted-kind
+# fallback. It is advertised everywhere (no false affordance to hide), and its
+# schema catalog must stay in lockstep with the StarterKitRegistry.
 # ---------------------------------------------------------------------------
 
 
-def test_scaffold_starter_not_advertised_without_starter_kit() -> None:
+def test_scaffold_starter_catalog_matches_registry() -> None:
+    from disco.core.kits import StarterKitRegistry
+    from disco.tools.builtin.scaffold_starter import _CATALOG
+
+    assert set(_CATALOG) == set(StarterKitRegistry.default().ids()), (
+        "the tool-schema catalog and the StarterKitRegistry must list the SAME "
+        "kits — a kit registered without a catalog entry is unreachable by the "
+        "model; a catalog entry without a kit is a false affordance"
+    )
+
+
+def test_scaffold_starter_advertised_in_build_scopes() -> None:
     from disco.core.llm import ModelExecutionPolicy
     from disco.tools import agent_scope, artifact_scope
 
-    rt = _runtime()
-    # No set_build_kind (the production reality) → no starter kit resolves.
-    for base in (
-        artifact_scope(),
-        agent_scope(model_policy=ModelExecutionPolicy()),
-    ):
-        scope = rt._narrow_scope_for_starter(base, "c-nokit")
+    for scope in (artifact_scope(), agent_scope(model_policy=ModelExecutionPolicy())):
         advertised = (
             scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
         )
-        assert "scaffold_starter" not in advertised, (
-            "scaffold_starter must NOT be advertised when no starter kit resolves "
-            "(it would fail no_starter on every call — the false affordance)"
-        )
-        # …but stays CALLABLE (security allowlist unchanged) so the typed
-        # backstop error, replay, and qualified-name calls keep working.
-        assert "scaffold_starter" in scope.allowed_tools
-
-
-def test_scaffold_starter_advertised_when_kind_resolves_a_kit() -> None:
-    from disco.tools import artifact_scope
-
-    rt = _runtime()
-    rt.set_build_kind("c-site", "static.site")  # contract declares app_shell
-    scope = rt._narrow_scope_for_starter(artifact_scope(), "c-site")
-    advertised = (
-        scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
-    )
-    assert "scaffold_starter" in advertised, (
-        "an activated contract WITH a starter kit must advertise scaffold_starter"
-    )
+        assert "scaffold_starter" in advertised
 
 
 def test_set_build_kind_evicts_cached_loop_and_executor() -> None:
     """codex four-fix defect #2: the executor bakes contract-derived state at
-    build time (starter-kit ToolContext stamp + scaffold advertise split), so a
-    cached loop/executor must be evicted when the kind changes — otherwise a
-    later activation keeps serving the OLD contract. Reuses the guarded
+    build time (the starter-kit ToolContext recommendation), so a cached
+    loop/executor must be evicted when the kind changes. Reuses the guarded
     settings-eviction path (never evicts under a live run)."""
     rt = _runtime()
     rt._loops["c-act"] = MagicMock()
@@ -187,11 +170,5 @@ def test_set_build_kind_evicts_cached_loop_and_executor() -> None:
     rt.set_build_kind("c-act", "static.site")
     assert "c-act" not in rt._loops
     assert "c-act" not in rt._executors
-    # ...and the newly-resolved contract now advertises the starter tool.
-    from disco.tools import artifact_scope
-
-    scope = rt._narrow_scope_for_starter(artifact_scope(), "c-act")
-    advertised = (
-        scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
-    )
-    assert "scaffold_starter" in advertised
+    # ...and the newly-resolved contract now recommends its starter kit.
+    assert rt._starter_kit_for("c-act") == "app_shell"

@@ -222,3 +222,56 @@ def test_registered_and_in_scopes() -> None:
     agent = {t.definition.name for t in reg.in_scope(agent_scope(model_policy=ModelExecutionPolicy.standard()))}
     artifact = {t.definition.name for t in reg.in_scope(artifact_scope())}
     assert "scaffold_starter" in agent and "scaffold_starter" in artifact
+
+
+# ---------------------------------------------------------------------------
+# Catalog era (2026-07-09 redesign, per the Claude-design copy_starter_component
+# doctrine): the MODEL picks the kind; the contract's kit is only the
+# omitted-kind fallback; no contract needed at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kind_selection_works_without_any_contract() -> None:
+    """The un-lock: a build with NO active contract (production reality
+    today) scaffolds any catalog kit by kind."""
+    sbx = FakeSandboxInstance()
+    out = await ScaffoldStarterTool().run(
+        ScaffoldStarterArgs(title="Breakout", kind="game_loop_vanilla"), _ctx(sbx, None)
+    )
+    assert out.success
+    assert "game.js" in sbx._fs  # the kit actually materialized
+    assert out.structured["starter"] == "game_loop_vanilla"
+
+
+@pytest.mark.asyncio
+async def test_explicit_kind_overrides_contract_recommendation() -> None:
+    """The model's pick WINS over the contract's recommended kit — starters are
+    a catalog, not a lock."""
+    sbx = FakeSandboxInstance()
+    out = await ScaffoldStarterTool().run(
+        ScaffoldStarterArgs(title="Dash", kind="ui_kit_dense"), _ctx(sbx, "app_shell")
+    )
+    assert out.success
+    assert out.structured["starter"] == "ui_kit_dense"
+    assert "styles.css" in sbx._fs
+
+
+@pytest.mark.asyncio
+async def test_no_kind_no_contract_error_names_the_catalog() -> None:
+    """The failure mode is now ACTIONABLE: the error lists what CAN be picked."""
+    sbx = FakeSandboxInstance()
+    out = await ScaffoldStarterTool().run(ScaffoldStarterArgs(title="X"), _ctx(sbx, None))
+    assert not out.success and out.error == "no_starter"
+    for kind in ("app_shell", "game_loop_vanilla", "pwa_shell", "ui_kit_dense"):
+        assert kind in out.content
+
+
+def test_catalog_guidance_travels_in_the_tool_description() -> None:
+    """The when-to-use catalog is part of the SCHEMA the model sees (the
+    Claude-design pattern), not tribal knowledge in a prompt pack."""
+    desc = ScaffoldStarterTool.definition.description
+    for kind in ("app_shell", "lead_form", "game_loop_vanilla", "pwa_shell",
+                 "device_frames", "ui_kit_dense"):
+        assert kind in desc
+    assert "Precedence" in desc  # the funnel: design system > starter > hand-rolling
