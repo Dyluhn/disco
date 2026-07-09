@@ -19,7 +19,16 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 _LOG = logging.getLogger(__name__)
 
-PREVIEW_HOST_RE = re.compile(r"^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.localhost(?::\d+)?$")
+# Any host whose first label is {cid8}-{port} is a preview host — not just
+# .localhost. The bootstrap URLs are minted as {cid8}-{port}.<request-host>
+# (routes/preview.py), and through the single front door the request host is
+# whatever the operator browses (tailnet name, domain, LAN name); the nginx
+# front door routes those prefixed Hosts here (codex front-door defect #1,
+# 2026-07-09). Auth is unchanged — the capability cookie/intent token still
+# gates every preview request; the host match only SELECTS the proxy path.
+PREVIEW_HOST_RE = re.compile(
+    r"^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.[A-Za-z0-9.-]+?(?::\d+)?$"
+)
 
 # C2 (first-hit wake race): the preview upstream is bound lazily by the
 # sandbox; the first proxy hit after wake can land BEFORE the dev server has

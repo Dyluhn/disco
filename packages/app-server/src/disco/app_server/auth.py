@@ -16,6 +16,7 @@ from disco.core.auth import (
     SessionSigner,
     allowed_frontend_origins,
     origin_allowed,
+    origin_permitted,
     pairing_token,
 )
 from disco.core.env import disco_env
@@ -184,7 +185,8 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
         if _is_public_http(path, method):
             return await call_next(request)
         origin = request.headers.get("origin")
-        if origin and not origin_allowed(origin):
+        # allowlist OR same-host (the single-front-door deploy: Origin == Host).
+        if origin and not origin_permitted(origin, request.headers.get("host")):
             return Response("forbidden origin", status_code=403)
         session = self._authenticate_request(request)
         if session is None:
@@ -247,13 +249,16 @@ def make_auth_router() -> APIRouter:
         # gets pairing_required (prompt the user for the token) unless it's a
         # loopback dev client with auto-pair on. The token-FETCH route below stays
         # loopback-only so a remote client can never read the token off the server.
+        # Same-host origins (the front-door deploy) are permitted for the TOKEN
+        # path; the tokenless auto-pair shortcut keeps the STRICT allowlist so a
+        # DNS-rebound page (Origin == rebound Host) can never mint without the token.
         origin = request.headers.get("origin")
-        if not origin_allowed(origin):
+        if not origin_permitted(origin, request.headers.get("host")):
             raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
         auto_pair = _auto_pair_enabled()
         token_ok = _pairing_token_ok(body.pairing_token)
         if not token_ok:
-            if _is_loopback_client(request) and auto_pair:
+            if _is_loopback_client(request) and auto_pair and origin_allowed(origin):
                 pass  # loopback dev convenience: mint without a token
             else:
                 raise HTTPException(status_code=401, detail={"reason": "pairing_required"})

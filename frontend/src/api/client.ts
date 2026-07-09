@@ -49,11 +49,22 @@ export function isDemoMode(): boolean {
   return !isLive() && !agentLive();
 }
 
+/** ws(s):// base for a configured HTTP base. Handles BOTH base shapes: an
+ * absolute URL (split-origin dev: http://host:8000 → ws://host:8000) and the
+ * same-origin relative prefix (the single-front-door default: "/svc/agent" →
+ * ws://<page-host>/svc/agent — nginx upgrades and forwards to the backend). */
+function wsBase(base: string): string {
+  if (base.startsWith("http")) return base.replace(/^http/, "ws");
+  const loc = globalThis.location;
+  const proto = loc?.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${loc?.host ?? "localhost"}${base}`;
+}
+
 /** The agent-server research WebSocket URL (ws://… derived from VITE_AGENT_BASE),
  * or null when unconfigured — callers fall back to the fixture stream. */
 export function researchWsUrl(): string | null {
   if (!AGENT_BASE) return null;
-  return `${AGENT_BASE.replace(/^http/, "ws")}/ws/research`;
+  return `${wsBase(AGENT_BASE)}/ws/research`;
 }
 
 export function ensureAgentSession(): Promise<void> {
@@ -73,7 +84,7 @@ export function agentLive(): boolean {
  * when unconfigured (Build falls back to a fixture trace offline/in tests). */
 export function agentWsUrl(path: string): string | null {
   if (!AGENT_BASE) return null;
-  return `${AGENT_BASE.replace(/^http/, "ws")}${path}`;
+  return `${wsBase(AGENT_BASE)}${path}`;
 }
 
 /** Origin-true preview URL (DC-01): http://{cid8}-{port}.localhost:8000/.
@@ -83,7 +94,9 @@ export function agentWsUrl(path: string): string | null {
 export function previewHostUrl(cid: string, port: number, base: string = AGENT_BASE): string | null {
   if (!base) return null;
   const cid8 = cid.replace(/^conv_/, "").slice(0, 8);
-  const url = new URL(base);
+  // Relative (same-origin) bases resolve against the page's own origin — the
+  // front-door nginx forwards {cid8}-{port}.* Hosts to the agent-server.
+  const url = new URL(base, globalThis.location?.origin ?? "http://localhost");
   if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
     url.hostname = `${cid8}-${port}.localhost`;
   } else {
@@ -295,7 +308,14 @@ async function authFetch(base: string, pathOrUrl: string, init: RequestInit): Pr
     const csrf = csrfByBase.get(base);
     if (csrf) headers.set(CSRF_HEADER, csrf);
   }
-  const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${base}${pathOrUrl}`;
+  // Already-based inputs pass through untouched: absolute URLs (split-origin
+  // dev), and callers that build `agentHttpBase() + path` themselves (deck
+  // export, project download/import) — with a RELATIVE base those would
+  // otherwise get the prefix twice ("/svc/agent/svc/agent/…").
+  const url =
+    pathOrUrl.startsWith("http") || (base.length > 0 && pathOrUrl.startsWith(`${base}/`))
+      ? pathOrUrl
+      : `${base}${pathOrUrl}`;
   return fetch(url, { ...init, headers, credentials: "include" });
 }
 

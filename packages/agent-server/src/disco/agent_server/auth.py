@@ -18,6 +18,7 @@ from disco.core.auth import (
     allowed_frontend_origins,
     configured_admin_token,
     origin_allowed,
+    origin_permitted,
     pairing_token,
 )
 from disco.core.env import disco_env
@@ -172,7 +173,8 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         if _is_public_http(path, method):
             return await call_next(request)
         origin = request.headers.get("origin")
-        if origin and not origin_allowed(origin):
+        # allowlist OR same-host (the single-front-door deploy: Origin == Host).
+        if origin and not origin_permitted(origin, request.headers.get("host")):
             return Response("forbidden origin", status_code=403)
         session = self._authenticate_request(request)
         if session is None:
@@ -229,13 +231,18 @@ def make_auth_router() -> APIRouter:
         # a valid token pairs from ANY allowed origin (remote self-host); a
         # tokenless client gets pairing_required unless it's a loopback dev
         # client with auto-pair on. (2026-07-09 remote fresh-install fix.)
+        # Same-host origins (the front-door deploy) are permitted: minting there
+        # still requires the operator's TOKEN, so a DNS-rebound page gains nothing.
         origin = request.headers.get("origin")
-        if not origin_allowed(origin):
+        if not origin_permitted(origin, request.headers.get("host")):
             raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
         auto_pair = _auto_pair_enabled()
         token_ok = _pairing_token_ok(body.pairing_token)
         if not token_ok:
-            if _is_loopback_client(request) and auto_pair:
+            # The TOKENLESS shortcut keeps the STRICT allowlist (not same-host):
+            # a DNS-rebound page's Origin would match the rebound Host, but never
+            # the localhost allowlist — so rebinding can't mint without the token.
+            if _is_loopback_client(request) and auto_pair and origin_allowed(origin):
                 pass  # loopback dev convenience: mint without a token
             else:
                 raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
@@ -281,7 +288,9 @@ def websocket_session(websocket: WebSocket) -> AuthSession | None:
     if websocket.scope.get("server"):
         server_host = str(websocket.scope["server"][0])
     origin = websocket.headers.get("origin")
-    if origin and not origin_allowed(origin):
+    ws_host = websocket.headers.get("host")
+    # allowlist OR same-host (the single-front-door deploy: Origin == Host).
+    if origin and not origin_permitted(origin, ws_host):
         return None
     session = SessionSigner().verify(websocket.cookies.get(SESSION_COOKIE))
     if session is not None:
@@ -292,6 +301,6 @@ def websocket_session(websocket: WebSocket) -> AuthSession | None:
         os.environ.get("PYTEST_CURRENT_TEST") and server_host in {"testserver", "test", "t"}
     ):
         return AuthSession(DEFAULT_OWNER_ID, "test-csrf", "test-session", 2**31, True)
-    if not origin_allowed(origin):
+    if not origin_permitted(origin, ws_host):
         return None
     return SessionSigner().verify(websocket.cookies.get(SESSION_COOKIE))

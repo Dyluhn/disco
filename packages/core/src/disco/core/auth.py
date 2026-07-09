@@ -85,6 +85,36 @@ def origin_allowed(origin: str | None) -> bool:
     return bool(origin and origin.rstrip("/") in allowed_frontend_origins())
 
 
+def origin_matches_request_host(origin: str | None, request_host: str | None) -> bool:
+    """Same-origin check for the single-front-door deploy: nginx proxies BOTH
+    servers under the page's own origin and forwards the browser's Host header
+    untouched, so a legitimate request's Origin netloc EQUALS the request Host.
+    This is what makes any hostname (localhost, LAN IP, tailnet name, domain)
+    work with zero origin config. A cross-site page can't match: the browser
+    stamps ITS origin (attacker.example), which never equals the Host it posted
+    to. Non-browser clients can forge both headers, but they always could —
+    the session cookie remains the actual authentication; origin checks are the
+    CSRF layer. Netloc comparison is case-insensitive, scheme-agnostic."""
+    if not origin or not request_host:
+        return False
+    from urllib.parse import urlsplit
+
+    try:
+        netloc = urlsplit(origin.strip().rstrip("/")).netloc
+    except ValueError:
+        return False
+    return bool(netloc) and netloc.lower() == request_host.strip().lower()
+
+
+def origin_permitted(origin: str | None, request_host: str | None = None) -> bool:
+    """The general request-gating check: the static allowlist (split-origin dev
+    layout) OR the same-host front-door rule. NOT for the tokenless auto-pair /
+    pairing-token-fetch conveniences — those keep the STRICT allowlist so a DNS-
+    rebound page (whose Origin would match the rebound Host) can never reach the
+    credential-granting shortcuts."""
+    return origin_allowed(origin) or origin_matches_request_host(origin, request_host)
+
+
 def session_secret() -> str:
     configured = disco_env("AUTH_SECRET") or disco_env("SECRET_KEY")
     if configured:

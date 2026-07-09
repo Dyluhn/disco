@@ -159,12 +159,12 @@ services:
       dockerfile: frontend/Dockerfile
     image: disco-frontend
     environment:
-      # Blank explicit URLs → env.js falls back to the browser's own hostname +
-      # these ports, so localhost AND LAN access work with zero config.
+      # Blank explicit URLs → env.js defaults to SAME-ORIGIN relative prefixes
+      # (/svc/app, /svc/agent) that this container's nginx proxies to the
+      # backends — the single front door. Set absolute URLs only for a
+      # split-origin deployment that terminates the backends elsewhere.
       DISCO_PUBLIC_API_BASE: "${DISCO_PUBLIC_API_BASE:-${PMX_PUBLIC_API_BASE:-}}"
       DISCO_PUBLIC_AGENT_BASE: "${DISCO_PUBLIC_AGENT_BASE:-${PMX_PUBLIC_AGENT_BASE:-}}"
-      DISCO_APP_PORT: "${DISCO_APP_PORT:-${PMX_APP_PORT:-8800}}"
-      DISCO_AGENT_PORT: "${DISCO_AGENT_PORT:-${PMX_AGENT_PORT:-8000}}"
     ports:
       - "${DISCO_BIND:-${PMX_BIND:-127.0.0.1}}:${DISCO_UI_PORT:-${PMX_UI_PORT:-8088}}:80"
     healthcheck:

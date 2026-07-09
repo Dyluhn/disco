@@ -123,9 +123,15 @@ def _preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) 
     netloc = preview_host
     if url.port is not None:
         netloc = f"{preview_host}:{url.port}"
+    # Behind the front-door nginx (and any OUTER TLS terminator ahead of it) the
+    # page scheme travels in X-Forwarded-Proto; request.url.scheme is only the
+    # last plain-HTTP hop. Minting http:// on an https page would be blocked as
+    # mixed content (codex front-door defect #2, 2026-07-09).
+    fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
     query = urllib.parse.urlencode({"intent": intent})
     return urllib.parse.urlunparse(
-        (url.scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", query, "")
+        (scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", query, "")
     )
 
 
