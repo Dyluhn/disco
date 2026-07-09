@@ -87,6 +87,11 @@ services:
       DISCO_ENCODER_TIER: "${DISCO_ENCODER_TIER:-${PMX_ENCODER_TIER:-full}}"
       DISCO_ENCODERS: "${DISCO_ENCODERS:-${PMX_ENCODERS:-local}}"
       DISCO_SECRET_KEY: "${DISCO_SECRET_KEY:-${PMX_SECRET_KEY:-}}"
+      # The agent-server enforces the SAME CORS/pairing origin allowlist as the
+      # app-server, so it needs the public UI URL too — without it a LAN/tailnet
+      # browser pairs the app-server but is 403'd by the agent-server (found live
+      # 2026-07-09). Keep in lockstep with the app-server block above.
+      DISCO_PUBLIC_UI_URL: "${DISCO_PUBLIC_UI_URL:-}"
       DISCO_AUTH_DEV_AUTO_PAIR: "${AUTH_DEV_AUTO_PAIR:-${DISCO_AUTH_DEV_AUTO_PAIR:-${PMX_AUTH_DEV_AUTO_PAIR:-0}}}"
       DISCO_OPENROUTER_API_KEY: "${DISCO_OPENROUTER_API_KEY:-${PMX_OPENROUTER_API_KEY:-}}"
       DISCO_GEMMA_API_KEY: "${DISCO_GEMMA_API_KEY:-${PMX_GEMMA_API_KEY:-}}"

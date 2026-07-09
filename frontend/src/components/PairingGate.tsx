@@ -137,8 +137,8 @@ export function PairingGate({ children }: { children: React.ReactNode }) {
         </h1>
       </div>
       <p className="font-ui text-[0.86rem] leading-snug text-text-muted">
-        This is a first-run setup. Paste the one-time pairing token the server
-        printed on startup — it authorizes this browser as the admin.
+        This is a first-run setup. Paste the pairing token the server printed on
+        startup — it authorizes this browser as the admin.
       </p>
       <p className="font-ui text-[0.78rem] leading-snug text-text-faint">
         Find it in your server logs:
