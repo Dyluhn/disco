@@ -24,7 +24,7 @@ import type {
 } from "@/types/models";
 import type { SandboxConfig, SandboxHealth } from "@/types/sandbox";
 import type { ProbeResult } from "@/types/probe";
-import { agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
+import { agentGet, agentLive, agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
  * Data-access layer for the model catalogue + assignments (the absolute, manual
@@ -167,20 +167,24 @@ export async function updateSandboxConfig(cfg: SandboxConfig): Promise<SandboxCo
   return { ...fixtureSandbox };
 }
 
-/** W-48 — connectivity preflight for a sandbox backend (app-server). A real, bounded
- * probe of the configured endpoint; returns a typed host-naming verdict (never throws
- * for an expected failure). The fixture path returns a synthetic "reachable". */
+/** W-48 — connectivity preflight for a sandbox backend. Probed on the AGENT-server,
+ * which owns the sandbox environment (the app-server has no container socket in a
+ * split-container deploy, so its probe would falsely fail). Real, bounded probe →
+ * a typed host-naming verdict (never throws for an expected failure). The fixture
+ * path returns a synthetic "reachable". */
 export async function testSandbox(cfg: SandboxConfig): Promise<ProbeResult> {
-  if (isLive()) return apiSend<ProbeResult>("POST", "/api/sandbox/test", cfg);
+  if (agentLive()) return agentSend<ProbeResult>("POST", "/api/sandbox/test", cfg);
   await fixtureDelay();
   return { ok: true, status: "ok", detail: `${cfg.backend} sandbox is reachable.` };
 }
 
 /** Reachability of the ACTIVE (persisted) sandbox backend — the cheap signal the app
- * shell polls to surface an unreachable sandbox BEFORE a doomed run. Same probe the run
- * path hits. The fixture path returns a synthetic "reachable" (dev = process backend). */
+ * shell polls to surface an unreachable sandbox BEFORE a doomed run. Probed on the
+ * AGENT-server (which owns the sandbox environment), against the SAME service the run
+ * path builds, so the banner and a real run agree. The fixture path returns a synthetic
+ * "reachable" (dev = process backend). */
 export async function getSandboxHealth(): Promise<SandboxHealth> {
-  if (isLive()) return apiGet<SandboxHealth>("/api/sandbox/health");
+  if (agentLive()) return agentGet<SandboxHealth>("/api/sandbox/health");
   await fixtureDelay();
   return { reachable: true, backend: fixtureSandbox.backend, detail: "" };
 }

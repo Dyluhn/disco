@@ -488,11 +488,22 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
     that knows the backend↔config mapping (settings drive the active backend). Podman is
     real, verified backend code, but a STUB in THIS environment (VM 202 destroyed) — it
     constructs but isn't live/verifiable here; completed at the Meta deployment."""
+    # DISCO_LOCAL_RUNTIME is the deployment knob for the `local` (Docker/Podman socket)
+    # backend's OCI runtime — set it to `runsc` on a gVisor host so config-driven local
+    # sandboxes actually run under gVisor. It was previously honored ONLY on the
+    # DISCO_SANDBOX override path (__main__), so with the compose default (DISCO_SANDBOX
+    # unset → config-driven) it was SILENTLY IGNORED and local sandboxes ran under plain
+    # runc despite the operator asking for runsc (found live 2026-07-09). Apply it here so
+    # BOTH paths agree. Scoped to `local` (the runtime isn't user-selectable in Settings,
+    # so this can't clash with a UI choice); gVisor/podman carry their own runtimes.
+    runtime = settings.runtime
+    if settings.backend == "local":
+        runtime = disco_env("LOCAL_RUNTIME", settings.runtime) or settings.runtime
     cfg = SandboxConfig(
         backend=settings.backend,
         docker_socket=settings.docker_socket,
         podman_url=settings.podman_url,
-        runtime=settings.runtime,
+        runtime=runtime,
         image=settings.image,
         workspace_root=settings.workspace_root,
         # the host previews are reachable at — set PMX_PREVIEW_HOST to a LAN/tailnet IP so
@@ -1231,6 +1242,55 @@ class ConversationRuntime:
         if self._injected_sandbox is not None:
             return self._injected_sandbox
         return build_sandbox_service(self._config_store.load().sandbox)
+
+    async def probe_active_sandbox(self) -> tuple[bool, str, str]:
+        """Reachability of the ACTIVE (persisted) sandbox backend — probed HERE, on the
+        agent-server, because this is the process that actually runs sandboxes (it owns
+        the container socket; the app-server does not). Uses the SAME service the run
+        path builds (`_sandbox_service_now`), so the banner and a real run can never
+        disagree. Returns (reachable, backend, detail). Never raises."""
+        from disco.tools.sandbox import probe_sandbox_reachability, sandbox_endpoint_label
+
+        settings = self._config_store.load().sandbox
+        endpoint = sandbox_endpoint_label(
+            settings.backend, settings.docker_socket, settings.podman_url
+        )
+        try:
+            service = self._sandbox_service_now()
+        except Exception as exc:  # noqa: BLE001 — a construction failure is a RESULT
+            return False, settings.backend, f"{endpoint}: {exc}"
+        ok, _status, detail = await probe_sandbox_reachability(service, endpoint)
+        return ok, settings.backend, ("" if ok else detail)
+
+    async def probe_sandbox_config(
+        self, settings: "SandboxSettings"
+    ) -> tuple[bool, str, str]:
+        """Probe a GIVEN sandbox config (the Settings 'Test connection' preflight, before
+        it is saved) — same environment + classifier as the active-backend probe.
+        Returns (ok, status, detail). Never raises."""
+        from disco.tools.sandbox import (
+            SandboxConfig,
+            probe_sandbox_reachability,
+            sandbox_endpoint_label,
+            service_from_config,
+        )
+
+        endpoint = sandbox_endpoint_label(
+            settings.backend, settings.docker_socket, settings.podman_url
+        )
+        try:
+            cfg = SandboxConfig(
+                backend=settings.backend,
+                docker_socket=settings.docker_socket,
+                podman_url=settings.podman_url,
+                runtime=settings.runtime,
+                image=settings.image,
+                workspace_root=settings.workspace_root,
+            )
+            service = service_from_config(cfg)
+        except Exception as exc:  # noqa: BLE001 — construction failure is a RESULT
+            return False, "error", f"{endpoint}: {exc}"
+        return await probe_sandbox_reachability(service, endpoint)
 
     def _driver_context_window(self) -> int | None:
         """The context window of the model currently assigned to AGENT_DRIVER, for

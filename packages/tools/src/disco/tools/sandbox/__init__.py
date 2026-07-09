@@ -22,6 +22,11 @@ from .gvisor import GvisorSandboxInstance, GvisorSandboxService
 from .isolation import IsolationProfile, isolation_for
 from .local import LocalSandboxInstance, LocalSandboxService
 from .podman import PodmanSandboxInstance, PodmanSandboxService
+from .probe import (
+    DEFAULT_PROBE_TIMEOUT_S,
+    probe_sandbox_reachability,
+    sandbox_endpoint_label,
+)
 from .process import ProcessSandboxInstance, ProcessSandboxService
 from .session import SandboxSession
 
@@ -147,6 +152,9 @@ __all__ = [
     "PodmanSandboxService",
     "ProcessSandboxInstance",
     "ProcessSandboxService",
+    "DEFAULT_PROBE_TIMEOUT_S",
+    "probe_sandbox_reachability",
+    "sandbox_endpoint_label",
     "REGISTRY_EGRESS_ALLOW",
     "SandboxConfig",
     "SandboxError",

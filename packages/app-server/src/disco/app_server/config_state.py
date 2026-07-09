@@ -681,14 +681,18 @@ class ConfigState:
         (e.g. "gvisor sandbox host ssh://sandbox@<host> unreachable: …") instead of a
         silent failure or a generic 500 later. Bounded by _SANDBOX_PROBE_TIMEOUT_S so a
         dead host fails fast. Never raises for an expected failure — it's a RESULT."""
-        import asyncio
-
         from disco.tools.sandbox import (
             SandboxConfig,
-            SandboxUnavailableError,
+            probe_sandbox_reachability,
+            sandbox_endpoint_label,
             service_from_config,
         )
 
+        # NOTE: this co-located probe only reflects reality when the app-server SHARES the
+        # sandbox host with the run path (dev / single-process). In a split-container deploy
+        # the run path is the AGENT-server (which owns the container socket), so the live UI
+        # probes THERE (routes/sandbox.py) — this path stays for the co-located case + tests.
+        # The classifier is shared (probe_sandbox_reachability) so the two can never drift.
         cfg = SandboxConfig(
             backend=dto.backend,
             docker_socket=dto.docker_socket,
@@ -697,45 +701,17 @@ class ConfigState:
             image=dto.image,
             workspace_root=dto.workspace_root,
         )
-        if dto.backend in ("gvisor", "local"):
-            endpoint = f"{dto.backend} sandbox host {dto.docker_socket}"
-        elif dto.backend == "podman":
-            endpoint = f"podman sandbox host {dto.podman_url}"
-        else:
-            endpoint = f"{dto.backend} sandbox"
-        service = service_from_config(cfg)
+        endpoint = sandbox_endpoint_label(dto.backend, dto.docker_socket, dto.podman_url)
         try:
-            await asyncio.wait_for(service.healthcheck(), self._SANDBOX_PROBE_TIMEOUT_S)
-        except TimeoutError:
+            service = service_from_config(cfg)
+        except Exception as exc:  # noqa: BLE001 — a construction failure is a RESULT
             return ProbeResult(
-                ok=False,
-                status="unreachable",
-                detail=(
-                    f"{endpoint} unreachable: no response within "
-                    f"{self._SANDBOX_PROBE_TIMEOUT_S:.0f}s (the probe timed out)."
-                ),
-                provider=dto.backend,
+                ok=False, status="error", detail=f"{endpoint}: {exc}", provider=dto.backend
             )
-        except SandboxUnavailableError as exc:
-            return ProbeResult(
-                ok=False,
-                status="unreachable",
-                detail=f"{endpoint} unreachable: {exc}",
-                provider=dto.backend,
-            )
-        except Exception as exc:  # noqa: BLE001 — any probe failure is a RESULT, not a 500
-            return ProbeResult(
-                ok=False,
-                status="error",
-                detail=f"{endpoint}: {exc}",
-                provider=dto.backend,
-            )
-        return ProbeResult(
-            ok=True,
-            status="ok",
-            detail=f"{endpoint} is reachable.",
-            provider=dto.backend,
+        ok, status, detail = await probe_sandbox_reachability(
+            service, endpoint, timeout_s=self._SANDBOX_PROBE_TIMEOUT_S
         )
+        return ProbeResult(ok=ok, status=status, detail=detail, provider=dto.backend)
 
     # encoders: bundled-local vs remote (persisted; agent-server honors per request) -
 

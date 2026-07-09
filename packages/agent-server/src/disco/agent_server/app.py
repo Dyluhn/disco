@@ -43,6 +43,7 @@ from .routes import (
     make_probes_router,
     make_projects_router,
     make_report_router,
+    make_sandbox_router,
     make_schedules_router,
     make_sessions_router,
     make_share_router,
@@ -176,6 +177,9 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_share_router(store, runtime))
     app.include_router(make_debug_router(store, runtime))
     app.include_router(make_probes_router())
+    # Sandbox reachability (health banner + Settings "Test connection") — probed
+    # HERE because the agent-server owns the sandbox environment, not the app-server.
+    app.include_router(make_sandbox_router(runtime))
     # EPIC O — owner-only Cloudflare deploy API (real deploy is HARD-GATED +
     # dry-run by default; the mutation path sits OUTSIDE the LLM tool loop).
     app.include_router(make_cloudflare_router(store, runtime))
