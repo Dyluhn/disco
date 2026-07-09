@@ -54,7 +54,10 @@ PAYLOAD_ANCHORED = (
 )
 
 
-async def test_shell_caps_large_output_with_head_tail_and_rerun_hint():
+async def test_shell_caps_large_output_and_spills_full_evidence():
+    """Over-cap output: the observation is head+tail capped, and the FULL
+    output is saved to a workspace spill file the marker names — evidence is
+    never discarded when a sandbox can hold it."""
     sbx = BigStdoutInstance(PAYLOAD_ANCHORED)
     res = await ShellTool().run(_shell_args(), _ctx(sbx))
 
@@ -62,27 +65,46 @@ async def test_shell_caps_large_output_with_head_tail_and_rerun_hint():
     assert "HEADBLOCK-START" in res.content
     assert "TAILBLOCK-END" in res.content
     assert "omitted" in res.content
-    assert "full output not retained" in res.content
-    assert "`... > out.log 2>&1`" in res.content
-    assert "file_read it if you need it all" in res.content
-    assert len(res.content) < 4_300
-    assert not any("disco-spill" in path for path in sbx._fs)
+    assert "FULL output saved to" in res.content
+    spill_paths = [pth for pth in sbx._fs if "disco-spill" in pth]
+    assert len(spill_paths) == 1
+    assert spill_paths[0] in res.content
+    assert sbx._fs[spill_paths[0]].decode() == PAYLOAD_ANCHORED  # full evidence
+    assert len(res.content) < 4_400
 
     assert res.structured is not None
     assert res.structured["output_truncated"] is True
     assert res.structured["output_chars"] == len(PAYLOAD_ANCHORED)
     assert res.structured["dropped_chars"] == len(PAYLOAD_ANCHORED) - 4_000
+    assert res.structured["spill_path"] == spill_paths[0]
     assert "stdout" not in res.structured
     assert "stderr" not in res.structured
 
 
-async def test_shell_cap_applies_when_assist_on_without_spill_file():
+async def test_shell_cap_falls_back_to_rerun_hint_when_spill_fails():
+    """No sandbox write possible → the marker falls back to the rerun hint
+    (honest: nothing was saved)."""
+    sbx = BigStdoutInstance(PAYLOAD_ANCHORED)
+
+    async def _refuse_write(path, data):  # noqa: ANN001
+        raise OSError("read-only")
+
+    sbx.write_file = _refuse_write
+    res = await ShellTool().run(_shell_args(), _ctx(sbx))
+    assert "full output not retained" in res.content
+    assert "`... > out.log 2>&1`" in res.content
+    assert res.structured is not None and "spill_path" not in res.structured
+
+
+async def test_shell_cap_applies_when_assist_on_with_spill_file():
+    """The cap + spill behave identically for the assist tier (the old
+    assist-only gate is gone; evidence preservation is tier-independent)."""
     sbx = BigStdoutInstance(PAYLOAD_ANCHORED)
     res = await ShellTool().run(_shell_args(), _ctx(sbx, assist=True))
 
     assert res.structured is not None
     assert res.structured["output_truncated"] is True
-    assert not any("disco-spill" in path for path in sbx._fs)
+    assert any("disco-spill" in path for path in sbx._fs)
 
 
 async def test_no_cap_below_threshold_preserves_stdout_stderr_structured():

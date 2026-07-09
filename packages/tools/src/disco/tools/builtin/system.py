@@ -27,7 +27,23 @@ def _inner_timeout(ceiling_s: int) -> int:
     return max(1, ceiling_s - _GRACE_S)
 
 
-def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int) -> ToolOutcome:
+async def _spill_full_output(ctx, body: str) -> str | None:
+    """Best-effort save of over-cap shell output to a workspace file so evidence
+    survives the observation cap (a rerun is not always reproducible). Returns
+    the workspace-relative path, or None when saving isn't possible."""
+    if ctx is None or ctx.sandbox is None:
+        return None
+    import uuid
+
+    path = f".disco-spill-{uuid.uuid4().hex[:8]}.log"
+    try:
+        await ctx.sandbox.write_file(path, body.encode("utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001 — spill is best-effort; fall back to the rerun hint
+        return None
+    return path
+
+
+async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None) -> ToolOutcome:
     """Map an ExecResult to a ToolOutcome. A timeout is a DISTINCT, legible signal
     (not just a nonzero exit): the partial output is preserved and `timed_out` is
     surfaced in `structured`, so the loop can tell 'killed for running too long' from
@@ -50,7 +66,10 @@ def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int) -> ToolOutcome:
             error = f"{what} exited {res.exit_code}"
     else:
         error = None
-    content, cap_meta = cap_shell_observation(body)
+    spill_path = None
+    if len(body) > 4_000:  # matches the cap threshold in _shell_caps
+        spill_path = await _spill_full_output(ctx, body)
+    content, cap_meta = cap_shell_observation(body, spill_path=spill_path)
     structured = {
         "exit_code": res.exit_code,
         "timed_out": res.timed_out,
@@ -103,7 +122,7 @@ class ShellTool:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         inner = _inner_timeout(ctx.timeout_s)
         res = await ctx.sandbox.exec_shell(args.command, timeout_s=inner)
-        return _exec_outcome(res, what="command", timeout_s=inner)
+        return await _exec_outcome(res, what="command", timeout_s=inner, ctx=ctx)
 
 
 class CodeExecArgs(BaseModel):
@@ -148,4 +167,4 @@ class CodeExecTool:
         fname = "_codeact.js"
         await ctx.sandbox.write_file(fname, args.code.encode("utf-8"))
         res = await ctx.sandbox.exec_shell(f"node {fname}", timeout_s=inner)
-        return _exec_outcome(res, what="node", timeout_s=inner)
+        return await _exec_outcome(res, what="node", timeout_s=inner, ctx=ctx)
