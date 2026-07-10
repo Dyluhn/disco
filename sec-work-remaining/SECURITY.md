@@ -22,9 +22,11 @@ authentication layer since security wave S-W1 (commit `e028d2ac`).**
 
 - **Authenticated sessions (S-W1).** Both servers require an HttpOnly `SameSite=Strict`
   session cookie (`disco_session`); state-changing requests additionally require a CSRF
-  header (`X-Disco-CSRF`). The first session is minted by exchanging a **one-time pairing
-  token** (logged at server startup) at a loopback-only mint endpoint
-  (`POST /api/auth/mint`). CORS is pinned to an explicit frontend-origin allowlist, and
+  header (`X-Disco-CSRF`); the host-filesystem picker additionally requires it on GET.
+  A session is minted by exchanging the operator **pairing token** (derived from the
+  shared auth secret and reusable by design) at `POST /api/auth/mint`. A loopback browser
+  may retrieve it automatically; a remote self-hosted browser must receive it from the
+  operator. CORS is pinned to an explicit frontend-origin allowlist, and
   WebSocket handshakes are Origin-checked and cookie-authenticated. Routes are classed
   **admin vs authenticated**: settings, secrets, MCP, skills and other install-wide state
   are admin-only. Ownership is derived from the session — client-supplied `owner_id`
@@ -34,8 +36,8 @@ authentication layer since security wave S-W1 (commit `e028d2ac`).**
   `packages/core/src/disco/core/auth.py`.)
 - **Still bind loopback.** The defaults bind every published port to `127.0.0.1`
   (`compose.yaml:42,79,106`; `.env.example:6-8`), and there is no TLS. Auth is a real
-  gate against drive-by and cross-owner access, but the remaining parked hardening wave (see
-  "Hardening status" below) are prerequisites for any public/hardened deployment — do not
+  gate against drive-by and cross-owner access, but TLS/reverse-proxy and packaging work (see
+  "Hardening status" below) remain prerequisites for any public deployment — do not
   set `PMX_BIND=0.0.0.0` without your own TLS (a reverse proxy) in front.
 - **The operator is trusted.** v1 ships one operator, whose session is admin. Non-admin
   sessions cannot mutate install-wide state (provider config, secrets, MCP, skills), but
@@ -44,10 +46,10 @@ authentication layer since security wave S-W1 (commit `e028d2ac`).**
   shared across owners (`tool-sandbox-contract.md:79`), but v1 ships exactly one owner. Do
   not treat this as a tenant-isolation guarantee.
 
-### Hardening status (done vs parked)
+### Hardening campaign status
 
 Transcribed from `sec-work-remaining/disco-security-state.md` (the single source of truth for security
-status); wave-by-wave detail + resume playbook: `sec-work-remaining/disco-security-fix-campaign.md`.
+status); wave-by-wave detail + close-out evidence: `sec-work-remaining/disco-security-fix-campaign.md`.
 
 | Wave | Scope | Status |
 |---|---|---|
@@ -57,10 +59,10 @@ status); wave-by-wave detail + resume playbook: `sec-work-remaining/disco-securi
 | S-W3 | Host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env hygiene, session hygiene) | DONE (`1b762e3f`) |
 | S-W4 | MCP approval integrity | DONE (`212f6e89`) |
 | S-W5 | Isolation + resource caps | DONE (`10433330`) |
-| S-W6 | Output sinks + share + low-severity cluster | **PARKED** |
+| S-W6 | Output sinks + share + low-severity cluster | DONE (`17869bdb`) |
 
-The remaining S-W6 output-sink wave is a prerequisite for any public/hardened release. One further open
-item in the deploy path: the compose `agent-server` still mounts `/var/run/docker.sock`
+All six implementation waves are complete. One further open item in the deploy path:
+the compose `agent-server` still mounts `/var/run/docker.sock`
 (root-equivalent on the host) **by default** — fine for a trusted single-user box,
 unacceptable as a default others inherit. Making the isolated gVisor (`runsc`) backend
 the documented default, with the docker-socket/process path behind an explicit opt-in,
@@ -78,8 +80,8 @@ is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
 ### What it explicitly does NOT protect against
 
 - Deliberate network exposure without TLS/reverse-proxy hardening. S-W1 auth gates the
-  API, but the remaining output-sink wave (W6) is a prerequisite for a hardened public
-  deployment (§1).
+  API, but Disco does not terminate TLS or become Internet-safe merely because the six
+  implementation waves are complete (§1).
 - A compromise of the **agent-server process** itself: on the `local`/Docker backend the
   mounted container socket makes that process root-equivalent on the host (§2, §3,
   `docs/archive/self-host.md:73-78`).
@@ -162,6 +164,21 @@ are limited to 1 MiB; live durable and ephemeral queues are bounded, with replay
 for a slow durable subscriber. Preview request and injectable-HTML buffering are bounded.
 The DoD finish gate no longer auto-releases unmet or unverifiable checks, and auto-preview
 commands serialize model-derived paths as argv (`10433330`).
+
+### Share, storage, stream, and spreadsheet boundaries (S-W6)
+
+Public share tokens are immutable projections: their captured sequence bounds events,
+cassette, reconstructed state, and `last_seq`; title and surface are captured separately
+because they are conversation-table metadata. Later conversation activity cannot appear in
+an already-issued link. Conversation/research WebSocket JSON crosses one recursive redaction
+seam before send, covering persisted events and ephemeral/token streams.
+
+The Settings directory picker is an authenticated admin surface with a session-bound CSRF
+header even on GET. It lists only immediate children under `$HOME`, `/mnt`, or `/media`,
+does not advertise symlinks, and audit-logs allow/deny decisions without contents. XLSX
+headers and data use the same cell writer: only formulas rooted in an explicitly allowed
+function stay live; DDE/external references, unknown/bare formulas, and leading formula
+sigils are stored as escaped text (`17869bdb`).
 
 ---
 
@@ -250,8 +267,9 @@ residuals: `sec-work-remaining/disco-security-fix-campaign.md` (Wave 3).
 
 ## 7. Secrets at rest
 
-- **Encrypted at rest with Fernet** (AES-128-CBC + HMAC). The OpenRouter API key is the only
-  stored secret today (`secrets.py:1-12,64-97`).
+- **Encrypted at rest with Fernet** (AES-128-CBC + HMAC). Provider and deployment secrets
+  are stored by `SecretStore`; plaintext values are never returned by settings DTOs
+  (`secrets.py`).
 - **Key derivation.** The Fernet key derives from `DISCO_SECRET_KEY` (SHA-256 → urlsafe-b64).
   This is **not** a slow/salted KDF, so it is secure only with a **high-entropy** secret —
   use `openssl rand -base64 32`. A low-entropy secret is brute-forceable offline against the
@@ -291,13 +309,17 @@ residuals: `sec-work-remaining/disco-security-fix-campaign.md` (Wave 3).
   approvals are minted via the admin-only `POST /api/security/approve-origin`). These are
   reusable building blocks used by the whole platform and the intended substrate for
   generated-app outbound calls (`sec-work-remaining/disco-security-state.md` §1).
+- **Generic-provider host pin (S-W6).** Catalogue probes release a provider-specific key
+  only when the exact `(origin, provider purpose, secret ref)` tuple exists in the signed
+  approval ledger. The check precedes cache lookup, decryption, and network I/O; an offline
+  `base_url` change therefore fails closed (`17869bdb`).
 - **Never inside the sandbox.** No secret, credential, or host env is present anywhere
   agent-run code can read it (`tool-sandbox-contract.md:35`; enforced by the clean-env
   container/subprocess construction cited in §2).
 
 **Exposure corollary:** since S-W1 the API in front of these secrets is authenticated
-(secrets routes are admin-only, state changes require CSRF), but there is still no TLS and
-the remaining output-sink wave is incomplete. **Keep `DISCO_BIND=127.0.0.1`** unless you put
+(secrets routes are admin-only, state changes require CSRF), but there is still no TLS.
+**Keep `DISCO_BIND=127.0.0.1`** unless you put
 TLS (a reverse proxy) in front (`.env.example:5-8`).
 
 ---
@@ -315,11 +337,10 @@ deployment.
 
 ## 9. Known limitations & non-goals (v1)
 
-- **Auth, MCP approval integrity, and isolation/resource bounds shipped (S-W1/S-W4/S-W5),
-  but the hardening campaign is incomplete.** W6 (output sinks + share + low-severity
-  cluster) is **PARKED** — a prerequisite for any public/hardened release
-  (`sec-work-remaining/disco-security-state.md` §2). No TLS; single-operator; keep the loopback bind
-  (`.env.example:5-8`).
+- **All six implementation waves shipped.** The independent Opus half of the final
+  two-model assurance re-audit is still outstanding, but no code wave is parked
+  (`sec-work-remaining/disco-security-state.md` §2). No TLS; single-operator; keep the
+  loopback bind (`.env.example:5-8`).
 - **The `local`/Docker socket mount is root-equivalent** on the host; a full agent-server
   compromise can own the machine — and it is still the compose **default**. Mitigate with
   a rootless Podman socket (`docs/archive/self-host.md:73-95`); making the isolated gVisor

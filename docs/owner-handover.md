@@ -1,6 +1,6 @@
 # Disco — Owner's Handover (Dylan)
 
-**Branch `disclaude/mega-campaign` @ `5f390ca7` · 2026-07-06.** This is your
+**Branch `disclaude/mega-campaign` · security code snapshot `17869bdb` · 2026-07-10.** This is your
 cockpit view: where Disco stands, the decisions that are yours to make, the full
 board of what's left (features *and* your security track), the known problems, and
 how to pick it back up if you lose the session. Unlike the Fable handover
@@ -17,8 +17,8 @@ one-call "add X to my app" system — landed and was **live-proven** with a real
 plus the first three catalog primitives. The framework is the keystone and it's done;
 more primitives are now cheap. What's left is a bounded, known list: one high-value
 engine bug, a batch of fan-out-safe feature primitives, a deferred deeper catalog that
-waits on a runtime decision, packaging for self-host, a broad soak — and your parked
-security waves.
+waits on a runtime decision, packaging for self-host, and a broad soak. The six-wave
+security implementation campaign is complete.
 
 | Track | State |
 |-------|-------|
@@ -29,7 +29,7 @@ security waves.
 | Deeper catalog (Postgres track) | **DEFERRED** — waits on the runtime fork |
 | Packaging (Epic P) | **NEXT** — recon done, not started |
 | Mega-soak (Epic Z) | **QUEUED** — the integration gate |
-| Security waves | **W1/W2/W3 DONE, W-Pi removed; W4/W5/W6 PARKED** |
+| Security waves | **W1–W6 DONE; W-Pi removed** (independent Opus assurance pass outstanding) |
 
 ---
 
@@ -48,10 +48,7 @@ These are the forks only you can call. Everything downstream depends on them.
    Postgres track is coming?
 4. **Packaging target.** Who is the first self-host user, and what's the minimum bar
    for "clone → `docker compose up` → working UI" to count as shippable?
-5. **Security resume timing.** When do you un-park **W4/W5/W6**? They're a prerequisite
-   for any public/hardened release. Needs a fresh Opus/Codex/Sonnet session (never
-   Fable).
-6. **Arch debt.** Decompose the ~19 pre-existing god-objects (the red `check_arch_budget`
+5. **Arch debt.** Decompose the ~19 pre-existing god-objects (the red `check_arch_budget`
    gate) as part of closing out, or accept it as v0.1 debt?
 
 ---
@@ -107,18 +104,19 @@ broad soak proves the epics compose. This is the "is it actually done" gate.
 
 ---
 
-## Remaining — security (your track)
+## Security — implementation campaign complete
 
 Segregated into **`sec-work-remaining/`** so the plans read clean and it stays off Fable.
-Detail, the 38-finding fix campaign, and the resume playbook live there.
+Detail, the 38-finding fix campaign, exploit proofs, and close-out evidence live there.
 
 - **DONE:** W1 (auth + CORS + owner-scoping), W2 (secret-resolution + egress chokepoint),
-  W3 (host-execution cluster); W-Pi (attack-surface reduction — Pi removed).
-- **PARKED (your call):** W4 (MCP approval integrity), W5 (isolation + resource caps),
-  W6 (output sinks + share/storage). Prerequisite for a public/hardened release; not in
-  flight.
-- **Resume:** a fresh **Opus / Codex / Sonnet** session (never Fable — it degrades on
-  security, which is the whole `🚫` apparatus in the plans) + `sec-work-remaining/`.
+  W3 (host-execution cluster), W4 (MCP approval integrity), W5 (isolation + resource
+  caps), and W6 (output sinks + share/storage); W-Pi removed the Pi attack surface.
+- **ASSURANCE ONLY:** Codex completed the final adversarial re-read. The independent Opus
+  half was unavailable; run that review if the model becomes available, without restarting
+  the implementation waves.
+- **SEPARATE DEFERRED WORK:** host-service credential/quota enforcement, payment/webhook
+  primitive fills, and replacing the default root-equivalent container socket posture.
 
 > 🚫 **Fable 5 (Anthropic) models are off-limits to view the security track per the project owner** — viewing it will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
@@ -150,7 +148,8 @@ Detail, the 38-finding fix campaign, and the resume playbook live there.
 - **Fable** → all feature/engine/packaging work. Hand a fresh Fable session
   `docs/fable-handover.md`; it reviews the codebase, then brings *you* the closing-out
   questions (it's instructed to ask, not just build). Fable never touches the security track.
-- **Opus / Codex / Sonnet** → the security track only. Fresh session + `sec-work-remaining/`.
+- **Opus / Codex / Sonnet** → new security work or the outstanding independent assurance
+  pass. Start with `sec-work-remaining/`; do not restart completed waves.
 
 **The discipline (hold the line):** live-proof over green test counts (only a real model /
 real runtime proves a feature *works*); Firefox visual evidence for any UI change; the five
@@ -181,7 +180,8 @@ fitness gates before "done" (`basedpyright`, `lint-imports`, arch-diagram `--che
 
 ## When you're back — immediate next actions
 
-1. Call the six decisions above (or hand them to a fresh me).
+1. Call the five decisions above (or hand them to a fresh me).
 2. Point a fresh **Fable** session at `docs/fable-handover.md` → it reviews, returns questions.
 3. If you want the single highest-leverage fix first: the **finish-deadlock engine bug** (Risk #1).
-4. When ready for security: a fresh **Opus/Codex/Sonnet** session + `sec-work-remaining/`.
+4. If Opus becomes available, use it for the assurance-only pass described in
+   `sec-work-remaining/HANDOVER-PROMPT.md`.

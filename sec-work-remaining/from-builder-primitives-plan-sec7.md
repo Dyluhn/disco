@@ -29,5 +29,5 @@ harness above are **security-classed work** — done in Opus/codex sessions, nev
 - **WO-A2.2 auth slice** — the bus per-app bearer (conversation-bound v0); adversarial review (codex xhigh).
 - **WO-A4 security half** — token format/minting/rotation/scope model for per-app credentials + threat model + codex adversarial pass. (The *feature* half — usage accounting, quota, 429/retry-after, per-service rate limits — is Fable-safe.)
 - **Every template_only adversarial harness** in the §7 table above.
-- **S-W4 done; parked S-W5/W6** at Epic Z (see `disco-security-fix-campaign.md`).
+- **S-W4/S-W5/S-W6 done** (see `disco-security-fix-campaign.md`).
 - **Epic P3/P4 `docker.sock` flip** (host-root-equivalent default → scoped).

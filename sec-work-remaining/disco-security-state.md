@@ -1,11 +1,11 @@
 # Disco — security state (single source of truth, 2026-07-10)
 
-Code snapshot at `disclaude/mega-campaign` @ `10433330`. This file records everything
-security-related: what is DONE (committed), what is PARKED, what was DEFERRED
-during the primitive sprint, and the gate that currently protects the tree.
+Code snapshot at `disclaude/mega-campaign` @ `17869bdb`. This file records everything
+security-related: what is DONE (committed), what remains separately DEFERRED,
+and the gate that currently protects the tree.
 
 Companion detail: `sec-work-remaining/disco-security-fix-campaign.md` (the wave-by-wave campaign
-log + resume playbook).
+log + close-out evidence).
 
 ---
 
@@ -19,9 +19,12 @@ log + resume playbook).
 | S-W3 | Host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env hygiene, session hygiene) + 2 adversarial review rounds | `1b762e3f` |
 | S-W4 | MCP pre-connect config approval, first-use/schema-drift approval, honest host scope, configured risk-tier gating | `212f6e89` |
 | S-W5 | Per-surface isolated egress, real workspace/resource caps, bounded output/event/WS boundaries, fail-closed DoD, argv-safe preview | `10433330` |
+| S-W6 | Immutable share projections, audited storage-root picker, live WS redaction, XLSX injection escaping, env hygiene, generic-provider origin pinning | `17869bdb` |
 | — | Origin-approval ledger: surface silently-dropped entries + fail-closed/warn-once regression | `8157745b`, `d6651e7e` |
 
-These are live on the branch and covered by tests + the four fitness gates.
+These are live on the branch and covered by full package/frontend suites, the
+contract/fuzz/fault gates, and clean lint on every changed file. Repository-wide
+Ruff still has 1,100 inherited findings; no rule or assertion was weakened.
 
 The reusable building blocks S-W2 left behind (used by the whole platform, and
 the intended substrate for generated-app outbound calls):
@@ -32,14 +35,18 @@ the intended substrate for generated-app outbound calls):
 
 ---
 
-## 2. Remaining parked wave
+## 2. Campaign implementation complete
 
-| Wave | Scope |
-|------|-------|
-| S-W6 | Output sinks + share + low-severity cluster |
+There are no parked implementation waves in S-W1 through S-W6. The campaign
+close-out re-read found no surviving path in the changed surfaces: public share
+tokens remain bounded after later events/title changes; storage browsing is
+admin+CSRF gated and confined to `$HOME`, `/mnt`, and `/media`; live WS frames
+use the redaction seam; spreadsheet injection strings are inert; and a poisoned
+generic-provider URL cannot receive the stored key.
 
-Resume playbook lives in `sec-work-remaining/disco-security-fix-campaign.md` (rebase notes +
-the pi-kernel leftover). These are a prerequisite for any public/hardened release.
+The Codex half of the requested post-campaign round-pair is complete. An independent
+Opus pass was not available in this execution environment, so that extra assurance
+pass remains explicitly outstanding; it is not an unimplemented code wave.
 
 ---
 
@@ -143,8 +150,8 @@ harnesses are built yet; the framework hook (§4) is what they plug into.
 ## 7. One-line summary
 
 Auth, secret custody, egress chokepoint, the host-execution floor, MCP approval
-integrity, and isolation/resource bounds are DONE and gated. The output-sink wave
-(W6) is PARKED. The credential/quota plane and the two payment/webhook scaffolds'
+integrity, isolation/resource bounds, and the output-sink/share wave are DONE and
+gated. The credential/quota plane and the two payment/webhook scaffolds'
 security fills are DEFERRED with specs written. The framework's fail-closed gate keeps anything
 security-critical from shipping unverified. Packaging's one blocker is flipping the
 sandbox default off the root-equivalent socket.

@@ -6,14 +6,14 @@ work — done, parked, and deferred**. Nothing here is on the active feature pat
 picked up as a deliberate, separate effort.
 
 **State of record → [`disco-security-state.md`](./disco-security-state.md)** (what is
-DONE / PARKED / DEFERRED + the fail-closed `template_only` finish gate). Start there.
+DONE / DEFERRED + the fail-closed `template_only` finish gate). Start there.
 
 ## Contents
 
 | File | What it is |
 |------|-----------|
-| [`disco-security-state.md`](./disco-security-state.md) | **Authoritative** security status: waves done/parked/deferred, the fail-closed gate. |
-| [`disco-security-fix-campaign.md`](./disco-security-fix-campaign.md) | The implementation-ready fix campaign — 38 findings (8C/17H/10M/3L), per-wave tasks + acceptance tests + resume recon. |
+| [`disco-security-state.md`](./disco-security-state.md) | **Authoritative** security status: waves done, separate deferred work, and the fail-closed gate. |
+| [`disco-security-fix-campaign.md`](./disco-security-fix-campaign.md) | Completed 38-finding campaign (8C/17H/10M/3L): per-wave implementation, acceptance tests, exploit proof, and adversarial close-out. |
 | [`SECURITY.md`](./SECURITY.md) | The repo's public security policy / disclosure doc (was at repo root). |
 | [`wo-a2-host-bus-design-notes.md`](./wo-a2-host-bus-design-notes.md) | Host-service bus auth design notes — the per-app bearer deferred from WO-A2.1. |
 | [`from-mega-campaign-epic-s.md`](./from-mega-campaign-epic-s.md) | EPIC-S wave breakdown (S-W1..S-W6 + S-post), lifted from `docs/disco-mega-campaign.md`. |
@@ -21,10 +21,10 @@ DONE / PARKED / DEFERRED + the fail-closed `template_only` finish gate). Start t
 
 ## Current security state (one-liner)
 
-**S-W1 / S-W2 / S-W-Pi / S-W3 / S-W4 (MCP approval) DONE; S-W5 (isolation+caps) /
-S-W6 (output sinks+share) PARKED** — the remaining waves are a prerequisite for any public /
-hardened release, not in flight. Plus two fail-closed builder seams whose security fills
-are documented **on their own unmerged branches** (not in this folder):
+**S-W1 / S-W2 / S-W-Pi / S-W3 / S-W4 / S-W5 / S-W6 DONE.** The independent
+Opus half of the final two-model assurance pass remains outstanding, but no campaign
+implementation wave is parked. Two fail-closed builder seams still have separate deferred
+security fills documented **on their own unmerged branches** (not in this folder):
 `disclaude/f41-stripe-seam` (`60436fa8`) and `disclaude/f33-webhook-seam` (`ec622888`).
 
 ## What deliberately did NOT move (and why)

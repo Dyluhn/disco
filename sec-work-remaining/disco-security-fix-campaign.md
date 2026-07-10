@@ -1,15 +1,15 @@
-# Disco Security Fix Campaign — wave-by-wave log + resume playbook
+# Disco Security Fix Campaign — wave-by-wave log + close-out evidence
 
-**Status (2026-07-10): W1–W4 EXECUTED — W5/W6 PARKED.** Wave 1 (`e028d2ac`), Wave 2
+**Status (2026-07-10): W1–W6 EXECUTED.** Wave 1 (`e028d2ac`), Wave 2
 (`17c47761`, tree-identical to archived `2408e40f`), Wave-Pi (`76b4e397` — removed the
 Pi integration, attack-surface reduction), Wave 3 (`1b762e3f`), and Wave 4
-(`212f6e89`) are **DONE + committed** on `disclaude/mega-campaign`; a follow-up surfaced
+(`212f6e89`), Wave 5 (`10433330`), and Wave 6 (`17869bdb`) are **DONE + committed** on
+`disclaude/mega-campaign`; a follow-up surfaced
 the silently-dropped origin-approval ledger entries (`8157745b`) and a regression proof
-now pins its fail-closed/warn-once behavior (`d6651e7e`). Waves 5–6 remain **PARKED** —
-prerequisites for any public/hardened release.
-The single source of truth for current security state (done/parked/deferred) is
-`sec-work-remaining/disco-security-state.md`; this file is the wave-by-wave campaign log + resume
-playbook it points to.
+now pins its fail-closed/warn-once behavior (`d6651e7e`). The Codex close-out re-audit is
+complete; only the unavailable independent Opus assurance pass remains outstanding.
+The single source of truth for current security state is
+`sec-work-remaining/disco-security-state.md`; this file is its detailed campaign log.
 
 **Plan history:** Dylan signed off "use best practices, go with your recommendations" + "continuously give it to codex until it is not blocked" (2026-06-20). Iterative codex gpt-5.5 plan-review loop **CONVERGED** (2 consecutive not-BLOCK): **r1 BLOCK (9) → r2 SHIP-WITH-FIXES (10) → r3 BLOCK (7) → r4 SHIP-WITH-FIXES (8) → r5 SHIP-WITH-FIXES (2 + impl note)** — ALL folded in (see §Plan-review changelog blocks). codex r5: "coverage complete; round-4 edits landed."
 
@@ -112,7 +112,7 @@ Per-wave discipline (the HARD GATES, every wave):
 - **Short-lived signed URLs** for preview-proxy + artifact/file downloads that can't carry the cookie cleanly (or scope the cookie to cover them).
 
 **FIRST sub-task — bootstrap design + auth-transport matrix (write before coding).**
-- **Bootstrap/session minting** (codex r2-A1): the cookie is set by the SERVER via `Set-Cookie` (frontend JS cannot set HttpOnly), so define how the first session is minted WITHOUT exposing the per-install secret to a hostile page or local process. Concrete approach: a **localhost-only pairing/mint endpoint** the real frontend hits on first load to exchange a startup-printed one-time pairing token for a `Set-Cookie` session; reject the mint from non-loopback / wrong-Origin.
+- **Bootstrap/session minting** (codex r2-A1, historical design proposal): the cookie is set by the SERVER via `Set-Cookie` (frontend JS cannot set HttpOnly). The proposal used a startup-printed one-time loopback token; the shipped design instead exchanges a reusable secret-derived operator pairing token, permits loopback auto-retrieval, and requires operator transfer for remote self-hosted browsers. Both paths retain Origin checks.
 - **Cookie host strategy (codex r4-A1'' — cookies are HOST-scoped, not port-scoped):** a host-only `localhost` cookie covers BOTH `localhost:8800` and `localhost:8000` (so the two API servers CAN share it) but NOT `127.0.0.1` and NOT `*.localhost`. So: pick a **canonical host** (use `localhost` consistently, or unify behind ONE reverse-proxy origin — cleanest) and **NEVER set `Domain=.localhost`** (that would hand the API cookie to model-authored preview JS). The API cookie stays host-only to the real app/API host; preview is a SEPARATE capability (A6).
 - **Auth-transport matrix:** enumerate every surface + its carrier — fetch APIs, WS handshake, Host-header preview proxy, noVNC WS, artifact/inline-file downloads, share viewer (intentionally public-by-token — exempt), file uploads, the `/env.js`/bootstrap (must NOT carry the secret). Each row: carrier (cookie / signed URL / public), CSRF needed?, Origin-checked?.
 
@@ -306,7 +306,7 @@ security assertion was weakened.
 
 ---
 
-## Wave 6 — output sinks + share/storage + lows + ops hardening — **PARKED (not started)**
+## Wave 6 — output sinks + share/storage + lows + ops hardening — **DONE (`17869bdb`)**
 
 **Closes:** M4, M2, M6, L1, L2, L3 (if not already in B3), + Fernet KDF.
 
@@ -320,11 +320,91 @@ security assertion was weakened.
 
 **Acceptance:** an xlsx cell `=cmd|'/c calc'!A1` is written as an escaped literal, not a live formula; `.env` no longer tracked.
 
+**STATUS: DONE + adversarially re-read (2026-07-10, commit `17869bdb`).**
+
+**Implementation.** Public share tokens now pass their captured sequence boundary into
+`share_export`; events, cassette, reconstructed state, and both `last_seq` fields derive
+only from that bounded event set. Token rows also capture title and surface because those
+fields live outside the event log; an idempotent SQLite migration freezes current metadata
+for legacy links. Direct owner exports remain intentionally live.
+
+`/api/storage/browse` is an admin-only, session-CSRF-bound read even though it is a GET.
+It authorizes the resolved target before existence/type checks, permits only `$HOME`,
+`/mnt`, and `/media`, stops parent navigation at those roots, never advertises symlinks as
+browsable, and emits structured allow/deny audit records without file contents. The shared
+frontend client adds the CSRF header to this protected read. `/`, `/etc`, `/root`, `/usr`,
+and an under-home symlink to `/etc` deny.
+
+Every outbound JSON frame on the conversation and research WebSockets now crosses one
+`redact_frame` helper, including persisted events, ephemeral file deltas, state, errors, and
+research tokens/finals. XLSX headers and data cells share one writer: only an exact
+`=ALLOWED_FUNCTION(...)` rooted in the allowlist is live; bare arithmetic/references,
+unknown/nested unsafe functions, DDE/external-reference characters (`|`, `!`, `[`), leading
+non-alpha after `=`, leading whitespace, and `+`/`-`/`@`/other formula sigils are explicit
+string cells.
+
+Generic provider catalogue probes are now bound to a signed tuple of exact origin,
+provider purpose, and provider-specific secret ref. The gate runs before cache lookup,
+secret decryption, or wire I/O; cosmetic edits cannot bless a poisoned URL, and base URLs
+must be absolute HTTP(S). `.env` and `frontend/.env.development.local` are ignored and both
+are absent from the index.
+
+The optional Fernet KDF change was considered and deliberately not mixed into this wave.
+Fresh installs already generate a high-entropy 32-byte master key, weak keys warn, and a
+safe KDF migration must version ciphertext *and* the HMAC-signed approval ledger to avoid
+locking existing secrets or turning the ledger into a cheap password verifier. Argon2id
+therefore remains an explicit operator-hardening follow-up, not a surviving campaign
+finding.
+
+**Exploit proof.** The regression suite appends search/cassette/status events and changes
+the title after token issue; the public bundle retains only the pre-share query, RUNNING
+state, captured seq/title/surface, and contains none of the post-share IDs/text. Real XLSX
+files reopen with every malicious header/data payload as `data_type="s"` and a leading
+literal escape. Real WebSocket clients receive redaction markers instead of canaries on
+persisted, ephemeral, and research streams.
+
+The restarted live agent stack produced: unauthenticated storage browse `401`, authenticated
+without CSRF `403`, `$HOME` browse `200` (126 immediate entries), and `/etc` `403`; the live
+service log recorded the CSRF denial, allowed listing, and outside-root denial. The approved
+browser-control surface was unavailable, so no screenshot artifact could be captured; the
+actual frontend request path is instead pinned by its live-mode CSRF test and the complete
+frontend suite.
+
+For the required real exfil proof, isolated `systemd --user` app/sink units exercised the
+real HTTP server and TCP sinks. The approved provider origin received exactly one
+authenticated `/v1/models` request. After stopping the server, poisoning only the persisted
+base URL, and restarting with the original signed ledger/key, the catalogue endpoint returned
+`403`; the attacker sink stayed at `0` requests. All temporary units/files were removed.
+
+**Adversarial notes.** The unreviewed archive draft was not merged. Re-reading it found four
+material gaps and the implementation was strengthened before commit: its formula predicate
+admitted bare `=A1+B1`; it bounded event-derived share fields but left live title/surface;
+the frontend did not send CSRF on GET; and the generic provider catalogue path bypassed the
+S-W2 origin ledger. A second pass removed the configured-project-root trust exception from
+storage, bound provider cache hits as well as network misses, made legacy share migration
+rollback-compatible, and checked every outbound send site. Missing approval, malformed URL,
+missing CSRF, forbidden/missing root, broken/symlink child, old token metadata, and unknown
+formula all fail closed. No client chooses the comparison value that authorizes a provider
+origin; only the separately HMAC-signed ledger does.
+
+**Verification:** the complete core, agent-server, tools, and app-server suites are green;
+frontend is `968/968`; contract `3/3`, fuzz `5/5`, fault `9/9`; production TypeScript
+typecheck, Vite production bundle, changed-file ESLint, and Ruff on every changed Python file
+are green. Repository-wide Ruff reports 1,100 inherited findings. The combined
+`npm run build` still includes pre-existing test-only TypeScript errors in unrelated files;
+none names a changed file, while the production typecheck and bundle are clean.
+
 ---
 
 ## Post-campaign re-audit
 
 After all waves land, run ONE more Opus+codex round-pair against the patched tree to confirm the tail collapsed (especially that ROOT-A's reachability removal + ROOT-B's chokepoint actually closed the sinks, and no fix introduced a regression). This is the "verify the dead end" close-out.
+
+**Status (2026-07-10):** the Codex half is complete. It re-inventoried the public share,
+storage, WS, spreadsheet, and generic-provider sinks; the review found and fixed the four
+gaps listed above, then reran full suites and real sinks. An independent Opus reviewer was
+not available in this execution environment, so that second-model assurance half remains
+outstanding and is recorded in `HANDOVER-PROMPT.md`; no implementation wave remains parked.
 
 ## Resolved decisions (Dylan: "use best practices, go with your recommendations", 2026-06-20; revised per codex plan-review)
 1. **Wave 1 auth = HttpOnly SameSite cookie + CSRF + strict WS `Origin` checks + short-lived signed preview/artifact URLs** (NOT a JS-readable bearer — codex blocker #1). A cookie is sent automatically by browser navigation surfaces (WS, iframes, downloads) that can't add an `Authorization` header, is not readable by a hostile page's JS, and SameSite + CSRF closes the drive-by. CORS is tightened too but is NOT relied on for WS (Origin-checked instead).

@@ -7,10 +7,10 @@
 > Since the original A/B/C/S/Z plan, three epics were added — **F-A (primitive
 > framework)**, **F catalog (builder primitives — first 3 shipped)**, and
 > **P (OSS packaging — next up, not started)**; see the sections and ledger rows
-> below. The "security is the closing epic" sequencing is **superseded by the
-> PARK decision**: S-W1 / S-W2 / S-W-Pi / S-W3 are DONE + committed, and
-> S-W4/W5/W6 are **PARKED** at Dylan's request (state in
-> `sec-work-remaining/disco-security-state.md`; resume playbook in
+> below. **Security update (2026-07-10):** S-W1 through S-W6 are DONE + committed
+> (`e028d2ac`…`17869bdb`), and W-Pi removed the Pi surface. The Codex close-out
+> re-audit is complete; the unavailable independent Opus assurance half remains
+> outstanding (state in `sec-work-remaining/disco-security-state.md`; proof in
 > `sec-work-remaining/disco-security-fix-campaign.md`).
 > 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
@@ -115,8 +115,8 @@ Small harvest leftovers on the design-loop branch (guidance-weight, low risk). F
 > **Moved out of the project folder.** The full EPIC-S wave breakdown (S-W1..S-W6 +
 > S-post, their findings-closure map and HARD GATES) now lives in
 > `sec-work-remaining/from-mega-campaign-epic-s.md`. State of record:
-> `sec-work-remaining/disco-security-state.md`. The ledger below still tracks per-wave
-> DONE/PARKED status. **S-W1 / S-W2 / S-W-Pi / S-W3 DONE; S-W4 / S-W5 / S-W6 PARKED.**
+> `sec-work-remaining/disco-security-state.md`. The ledger below tracks the completed
+> waves. **S-W1 / S-W2 / S-W-Pi / S-W3 / S-W4 / S-W5 / S-W6 DONE.**
 > 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
 ---
@@ -171,7 +171,9 @@ Everything that happens this run is appended to **`docs/mega-campaign-run-log.md
 | S-W-Pi | Security | **DONE** | `76b4e397` | attack-surface reduction — Pi kernel/inference fully removed (76 files, −19.9k LOC); DiscoKernel intact; config-wipe hazard handled (legacy coercion + regression test); unit 5372/0, basedpyright 0, no new arch violation |
 | S-W3 | Security | **DONE** | `1b762e3f` | host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env + session hygiene); 2 gpt-5.5 adversarial rounds |
 | — | Security (aux) | **DONE** | `8157745b` | origin-approval ledger: silently-dropped entries surfaced |
-| S-W4/W5/W6 | Security | **PARKED** (Dylan's call, NOT in flight; prerequisite for any public/hardened release) | — | resume playbook in `sec-work-remaining/disco-security-fix-campaign.md`; state in `sec-work-remaining/disco-security-state.md` — 🚫 Fable 5 (Anthropic) off-limits per owner: viewing = silent fallback to a weaker model; do not proceed unless Opus/Codex/Sonnet |
+| S-W4 | Security | **DONE** | `212f6e89` | MCP config is approved before connect; first-use/schema drift and honest host risk are gated; detailed exploit proof in the security campaign log |
+| S-W5 | Security | **DONE** | `10433330` | per-surface host-enforced egress, real workspace/resource caps, bounded transfers/queues, fail-closed DoD, argv-safe preview; full and fault-gate proof in the security campaign log |
+| S-W6 | Security | **DONE** | `17869bdb` | immutable shares, admin+CSRF storage jail, WS redaction, inert spreadsheet payloads, and exact generic-provider origin pin; live storage + real TCP sink proof |
 | WALK batch | Walkthrough fixes | **DONE** | `90828654` `bbf4be46` `ba9f5c4b` `3b5e5417` `93442553` `34fa9041` `fed4703f` `ac5b4b21` | the live-bug batch Dylan surfaced (OpenRouter/image-gen approval-ref, research surface, export/preview honesty, exported-site MIME+zip, real visuals, honest deck fallback, instant pause, slides timeout); session-start verify: the 3 original requests render in the running app |
 | WO-A0 | F-A framework | **DONE** | `68088170` | PrimitiveDefinition extension (tier/host_contract/spec_schema/verify) + `hello` proof primitive |
 | WO-A1 | F-A framework | **DONE** | `f6a56ec3` | `app_add_primitive` (validate spec → fold → regenerate → provenance); scope bug fixed in `4cbaa218`; live-proven — deepseek-v4-pro chose + executed it end-to-end (see project-state) |
