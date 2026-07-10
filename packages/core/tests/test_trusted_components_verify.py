@@ -244,7 +244,7 @@ def test_parse_probe_stdout_last_line_wins_and_garbage_raises() -> None:
     assert v.passed and v.summary == "ok"
     with pytest.raises(ValueError):
         parse_probe_stdout("")
-    with pytest.raises(Exception):
+    with pytest.raises((ValueError, json.JSONDecodeError)):
         parse_probe_stdout("not json at all")
 
 
