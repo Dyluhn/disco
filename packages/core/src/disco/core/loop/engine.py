@@ -1510,6 +1510,19 @@ class AgentLoop:
 
     async def _gate_risk_confirm(self, action: ActionEvent) -> tuple[Disp, ActionEvent]:
         # (i) RISK GATE — assess, then maybe require confirmation (§5).
+        # GATE ORDER (appkit-lane live catch 2026-07-10): an action whose tool is
+        # NOT in the executor's callable set can never execute, so it must never
+        # park on a human confirmation — in an autonomous run nobody can answer
+        # and the run dies at the inactivity cap (a barred `file_edit` in strict
+        # AppKit hit BlastRadiusConfirm instead of the executor's unknown_tool
+        # refusal). Fall through so execute() emits the ONE canonical refusal.
+        _callable = getattr(self.executor, "callable_tool_names", None)
+        if callable(_callable):
+            try:
+                if action.tool_call.tool_name not in set(_callable()):
+                    return Disp.FALLTHROUGH, action
+            except Exception:  # noqa: BLE001 — introspection failure → normal gating
+                pass
         # Audit (security §7): when the analyzer exposes the detailed
         # assessment, stamp it into the action's meta so the security
         # posture (final risk, rationale, contributing analyzers, the
