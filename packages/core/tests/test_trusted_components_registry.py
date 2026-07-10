@@ -267,7 +267,10 @@ def test_registry_data_has_no_invisible_components() -> None:
             assert entry.name == "README.md", f"stray file in registry_data: {entry.name}"
             continue
         versions = reg.versions(entry.name)
-        assert versions, f"registry_data/{entry.name} has NO loadable version (typo'd dir or missing manifest.json?)"
+        assert versions, (
+            f"registry_data/{entry.name} has NO loadable version "
+            "(typo'd dir or missing manifest.json?)"
+        )
         version_dirs = {p.name for p in entry.iterdir() if p.is_dir()}
         assert version_dirs == set(versions), (
             f"registry_data/{entry.name}: dirs {sorted(version_dirs)} != loadable {list(versions)}"

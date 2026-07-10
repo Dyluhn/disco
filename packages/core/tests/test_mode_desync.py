@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from _buildsoak_fakes import PROD_PLANNING_TOOLS, BuildExecutor, build_plan_loop
 from disco.core import ConversationStatus, PlanEvent, PlanStep, StatusEvent
 from disco.core.llm import (
     DefaultLLMRouter,
@@ -13,9 +14,6 @@ from disco.core.llm import (
 from disco.core.loop import BuildAgent
 from llm_fakes import simple_config
 from loop_fakes import SequenceProvider
-
-from _buildsoak_fakes import BuildExecutor, PROD_PLANNING_TOOLS, build_plan_loop
-
 
 CID = "conv-mode-desync"
 

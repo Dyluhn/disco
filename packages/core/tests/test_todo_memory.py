@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import pytest
-
+from _buildsoak_fakes import build_plan_loop
 from disco.core.context import ArtifactMemoryStore
 from disco.core.events import PlanEvent, PlanStep
 from disco.core.loop.context_builder import render_plan_as_todo_markdown
-
-from _buildsoak_fakes import build_plan_loop
 from loop_fakes import ScriptedAgent, action_step, finish_step
 
 

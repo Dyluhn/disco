@@ -4,8 +4,6 @@ validation, and the minimal() factory."""
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ValidationError
-
 from disco.core.contract import (
     ArtifactContract,
     BuildContract,
@@ -16,6 +14,7 @@ from disco.core.contract import (
     VerificationContract,
     VerificationLevel,
 )
+from pydantic import BaseModel, ValidationError
 
 
 def _roundtrip(m: BaseModel) -> None:

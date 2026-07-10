@@ -756,7 +756,6 @@ async def test_bookkeeping_halt_caps_genuine_spam_on_tiny_plan():
     shuffles the plan tracker forever; it must still fire on this case."""
     from disco.core import ConversationStatus
     from disco.core import SqliteEventStore as Store
-    from disco.core.events import StatusEvent as CoreStatusEvent
     from disco.core.llm import OperatingMode
 
     store = Store(":memory:")
@@ -1291,8 +1290,8 @@ async def test_t2_circuit_breaker_recovery_message_carries_search_and_environmen
     environment-vs-your-code distinction. Drives the real breaker (non-autonomous
     build_loop) with distinct failing actions and inspects the emitted recovery
     reminder in the log; detection/halt behavior is unchanged."""
-    from loop_fakes import FakeExecutor
     from disco.core import ToolResult
+    from loop_fakes import FakeExecutor
 
     failing = ToolResult(
         call_id="c", tool_name="shell", success=False, content="", error="boom"

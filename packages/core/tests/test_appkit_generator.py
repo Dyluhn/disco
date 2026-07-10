@@ -19,15 +19,13 @@ import json
 import sqlite3
 
 import pytest
-from disco.core.appkit.spec import AppSpec
-from disco.core.appkit.semantic_metadata import METADATA_VERSION
 from disco.core.appkit import (
+    RECORDS_PRIMITIVE_ID,
     Action,
     DesignSpec,
     Entity,
     EntityField,
     Page,
-    RECORDS_PRIMITIVE_ID,
     Section,
     SectionContent,
     check_drizzle_schema,
@@ -38,6 +36,8 @@ from disco.core.appkit import (
     resolve_lead_entity,
     synthesized_lead_entity,
 )
+from disco.core.appkit.semantic_metadata import METADATA_VERSION
+from disco.core.appkit.spec import AppSpec
 
 _LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST = (
     "cfe5bfd3497d8e566d2e804286143694307a184ed68d230d4e01e83c3b165d13"

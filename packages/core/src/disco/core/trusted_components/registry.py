@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import REQUIREMENT_RE, _VERSION_SHAPE, TrustedComponentManifest, _safe_relpath
+from . import _VERSION_SHAPE, REQUIREMENT_RE, TrustedComponentManifest, _safe_relpath
 
 # Directories copied into a workspace on install. probe/ is deliberately NOT
 # here (D3 — host-run only), and manifest.json is host-side truth (D1).

@@ -269,9 +269,10 @@ async def test_infra_release_emits_unverified_advisory(tmp_path):
     """v2.1 + honest-incomplete: when the gate RELEASES on an infra-only failure (a denied
     command), it allows finish BUT records a visible ADVISORY note naming what could not be
     verified — not a silent clean pass."""
+    import sys
+
     from disco.core.dod import CommandExitPredicate, DoDSpec
     from disco.core.dod_evaluator import DoDEvaluator
-    import sys
     sys.path.insert(0, "packages/core/tests")
     from test_dod_evaluator import _denied_command_runner, _passing_http_probe
 

@@ -245,7 +245,7 @@ class EjectTrustedComponentTool:
                 f"\n\n---\n\n> ⚠ **Ejected {now}** — this copy diverged from the "
                 f"registry and is now custom code you own. Upgrades and the verified "
                 f"badge no longer apply. Reason: {args.reason}\n"
-            ).encode("utf-8")
+            ).encode()
             await ctx.sandbox.write_file(guide_path, guide + banner)
         return ToolOutcome(
             success=True,

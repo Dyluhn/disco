@@ -34,9 +34,9 @@ from disco.core.llm import (
     OperatingMode,
 )
 from disco.core.llm.prompts import (
-    _MENTIONED_ELEMENT_GUIDANCE,
     _EXECUTION_DRIVER_PROMPT,
     _EXECUTION_DRIVER_PROMPT_SMALL,
+    _MENTIONED_ELEMENT_GUIDANCE,
 )
 from llm_fakes import FakeModelProvider, simple_config
 

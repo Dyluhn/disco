@@ -400,7 +400,6 @@ def test_replan_framing_threads_current_plan_and_forbids_prose():
     call submit_plan' rule, so the model revises the actual plan via the tool instead of
     narrating it. Full plan shown (no aggressive truncation)."""
     from disco.core.loop.messages import (
-        _REPLAN_FRAMING,
         _render_replan_plan_digest,
     )
 

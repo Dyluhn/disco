@@ -10,6 +10,8 @@ releases with a loud UNVERIFIED warning rather than trapping the run.
 from __future__ import annotations
 
 import pytest
+from disco.core.context import ArtifactMemoryStore
+from disco.core.context.ledger import ArtifactRecord
 from disco.core.contract.export_render import (
     EXPORT_GATE_TOKEN as _EXPORT_GATE_TOKEN,
 )
@@ -17,8 +19,6 @@ from disco.core.contract.export_render import (
     EXPORT_RENDER_KEY,
     check_export_render,
 )
-from disco.core.context import ArtifactMemoryStore
-from disco.core.context.ledger import ArtifactRecord
 from disco.core.events import (
     DeliverableEvent,
     EventSource,

@@ -4,8 +4,6 @@ and SourcePriority/CompactionPolicy semantics."""
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ValidationError
-
 from disco.core.context import (
     ArtifactMemoryKind,
     ArtifactMemoryRef,
@@ -21,6 +19,7 @@ from disco.core.context import (
     SourcePriority,
     VerifierFailureRef,
 )
+from pydantic import BaseModel, ValidationError
 
 
 def _roundtrip(m: BaseModel) -> None:

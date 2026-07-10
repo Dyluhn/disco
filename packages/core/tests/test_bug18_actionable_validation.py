@@ -27,7 +27,6 @@ from disco.core import (
     NoOpCondenser,
     ObservationEvent,
     SqliteEventStore,
-    StatusEvent,
     ToolCall,
 )
 from disco.core.llm import ModelExecutionPolicy, OperatingMode

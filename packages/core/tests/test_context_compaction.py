@@ -20,7 +20,6 @@ from disco.core.events import (
     LLMConvertible,
 )
 from disco.core.view import View
-
 from event_fakes import user_msg, with_seqs
 
 

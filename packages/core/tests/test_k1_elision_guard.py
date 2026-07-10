@@ -45,9 +45,8 @@ from __future__ import annotations
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
-    EventSource,
     Event,
-    LLMMessage,
+    EventSource,
     MessageEvent,
     ObservationEvent,
     SqliteEventStore,

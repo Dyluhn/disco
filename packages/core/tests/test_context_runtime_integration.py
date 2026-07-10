@@ -8,7 +8,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
-
+from _buildsoak_fakes import build_plan_loop
 from disco.core.context import (
     ArtifactMemoryKind,
     ArtifactMemoryStore,
@@ -27,8 +27,6 @@ from disco.core.loop.context_builder import build_context_pack
 from disco.core.loop.finish import FinishGate
 from disco.core.observations import scan_for_destructive_elision
 from disco.core.view import View
-
-from _buildsoak_fakes import build_plan_loop
 from event_fakes import user_msg, with_seqs
 from loop_fakes import ScriptedAgent, action_step
 

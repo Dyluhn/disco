@@ -14,12 +14,10 @@ Proves:
 
 from __future__ import annotations
 
-import pytest
-
 import hashlib
 import json
 
-from disco.core.appkit.spec import AppSpec
+import pytest
 from disco.core.appkit import (
     DIRECTORY_PRIMITIVE_ID,
     LEAD_GEN_PRIMITIVE_ID,
@@ -35,6 +33,7 @@ from disco.core.appkit import (
     primitive_ids,
     resolve_primitive,
 )
+from disco.core.appkit.spec import AppSpec
 
 
 def _design():

@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
 from disco.core.llm.prompts import (
-    _MENTIONED_ELEMENT_GUIDANCE,
     _AGENT_PLANNING_CAPABILITY_BLOCK,
     _EXECUTION_DRIVER_PROMPT,
+    _MENTIONED_ELEMENT_GUIDANCE,
     _PLANNING_DRIVER_PROMPT,
 )
 from disco.tools.registry import AGENT_TOOLS

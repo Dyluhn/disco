@@ -18,7 +18,6 @@ from disco.tools.builtin.trusted_components import (
     EjectTrustedComponentTool,
 )
 from disco.tools.secrets import CapabilityBroker
-
 from tool_fakes import FakeSandboxInstance
 
 

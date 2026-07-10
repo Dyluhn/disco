@@ -7,9 +7,9 @@ import re
 import pytest
 from disco.core.workflow import (
     BUILTIN_WORKFLOW_TOOLS,
+    WORKFLOW_CONTROL_TOOLS,
     McpMount,
     ScheduleSpec,
-    WORKFLOW_CONTROL_TOOLS,
     WorkflowApproval,
     WorkflowDefinition,
     WorkflowInstance,
