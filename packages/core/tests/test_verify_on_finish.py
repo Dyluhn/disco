@@ -8,6 +8,7 @@ action.
 from __future__ import annotations
 
 import pytest
+
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,

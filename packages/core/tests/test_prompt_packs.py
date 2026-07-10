@@ -4,6 +4,7 @@ invariant (every contract's prompt_pack id resolves to a complete pack)."""
 from __future__ import annotations
 
 import pytest
+
 from disco.core.contract import BuildContractRegistry, ContractKind
 from disco.core.workflows import (
     REQUIRED_SECTIONS,

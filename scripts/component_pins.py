@@ -54,7 +54,8 @@ def repin(component_dir: Path, *, allow_removals: bool = False) -> None:
     # Validate BEFORE writing so a broken manifest never lands on disk.
     TrustedComponentManifest.model_validate(raw)
     manifest_path.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"pinned {len(files)} file(s) in {manifest_path}" + (f" (removed: {removed})" if removed else ""))
+    suffix = f" (removed: {removed})" if removed else ""
+    print(f"pinned {len(files)} file(s) in {manifest_path}{suffix}")
 
 
 if __name__ == "__main__":

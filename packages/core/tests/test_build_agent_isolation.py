@@ -25,9 +25,9 @@ from __future__ import annotations
 
 from disco.core.llm import DriverPrompts, ModelRole, OperatingMode
 from disco.core.llm.prompts import (
+    _MENTIONED_ELEMENT_GUIDANCE,
     _AGENT_PLANNING_CAPABILITY_BLOCK,
     _EXECUTION_DRIVER_PROMPT,
-    _MENTIONED_ELEMENT_GUIDANCE,
     _PLANNING_DRIVER_PROMPT,
 )
 from disco.tools.registry import AGENT_TOOLS
@@ -197,8 +197,6 @@ def test_constructing_agent_flavor_does_not_mutate_module_constants():
 # That is the point: any scope change must touch this file, making it a
 # deliberate, code-reviewed decision rather than silent drift.
 _EXPECTED_AGENT_TOOLS = [
-    # WO-TC2: trusted components — verified vendored security cores (free-form only)
-    "add_trusted_component",
     # Legacy AppKit wrappers still used by governed persisted-AppSpec paths
     "app_set_tweak",
     "app_snapshot_version",
@@ -211,7 +209,6 @@ _EXPECTED_AGENT_TOOLS = [
     "design_lint",  # B3 appkit port — read-only design-slop probe (nightly EPIC D3 parity)
     "doc_export",  # §E doc-assembly — host assembles the document at the P10 choke
     "doc_set_section",  # §E doc-assembly — pydantic-validated document part writes
-    "eject_trusted_component",  # WO-TC2 — honest take-ownership relabel
     "exact_replace",  # CD-TOOLS-2 — atomic exact-match batch replace (anchored-edit tier)
     "extract",
     "file_append",

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from disco.core.appkit import AppSection, AppSpec, render_html
 from pydantic import ValidationError
+
+from disco.core.appkit import AppSection, AppSpec, render_html
 
 
 def _spec() -> AppSpec:

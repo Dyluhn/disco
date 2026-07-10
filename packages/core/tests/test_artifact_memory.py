@@ -4,6 +4,7 @@ recovery, and faithful ledger reconstruction."""
 from __future__ import annotations
 
 import pytest
+
 from disco.core.context import (
     ArtifactMemoryKind,
     ContextRecoveryError,

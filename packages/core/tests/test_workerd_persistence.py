@@ -5,8 +5,9 @@ import socket
 import uuid
 
 import pytest
-from _workerd_harness import WorkerdApp, wrangler_available
 from disco.core.appkit import default_lead_gen_app_spec, generate, get_recipe
+
+from _workerd_harness import WorkerdApp, wrangler_available
 
 pytestmark = pytest.mark.integration
 

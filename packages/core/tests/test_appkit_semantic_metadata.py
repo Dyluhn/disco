@@ -4,6 +4,7 @@ the anchor validators (duplicate / invented) + stable screen labels."""
 from __future__ import annotations
 
 import pytest
+
 from disco.core.appkit import AppSection, AppSpec, render_html
 from disco.core.appkit.semantic_metadata import (
     METADATA_VERSION,

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from disco.core.contract import (
-    PHASE_NEUTRAL_TOOLS,
     ArtifactContract,
     BuildContract,
     BuildContractRegistry,
     ContractKind,
     ContractToolScopes,
     EditContract,
+    PHASE_NEUTRAL_TOOLS,
     Phase,
     ToolPack,
     VerificationContract,

@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import cast
 
 import pytest
+
 from disco.core import (
     ActionEvent,
     AgentErrorEvent,
@@ -33,11 +34,12 @@ from disco.core.context import (
     context_mark_resolved,
     context_write_summary,
 )
+from disco.core.llm import OperatingMode
 from disco.core.inspect import install as install_inspect
 from disco.core.inspect import registry as inspect_registry
-from disco.core.llm import OperatingMode
 from disco.core.loop.engine import AgentLoop
 from disco.core.loop.view_render import ViewBuilder
+
 from event_fakes import action, observation, user_msg, with_seqs
 from loop_fakes import FakeAnalyzer, FakeExecutor, FakeSummarizer, NeverConfirm, ScriptedAgent
 
@@ -60,7 +62,7 @@ class _MemFS:
 def _make_loop(*, sandbox: _MemFS | None = None, cadence: int = 1) -> AgentLoop:
     executor = FakeExecutor()
     if sandbox is not None:
-        executor.sandbox = sandbox
+        setattr(executor, "sandbox", sandbox)
     return AgentLoop(
         CID,
         SqliteEventStore(":memory:"),

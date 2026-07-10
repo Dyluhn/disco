@@ -4,13 +4,14 @@ justification rules, exact numeric bounds, canonical hex, and validate_value coe
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
+
 from disco.core.tweaks import (
     TweakEditor,
     TweakField,
     TweakSpec,
     canonical_hex,
 )
-from pydantic import ValidationError
 
 
 def _f(**kw) -> TweakField:

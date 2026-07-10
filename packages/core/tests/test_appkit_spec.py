@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from disco.core.appkit.spec import AppSpec
 from disco.core.appkit import (
     Action,
     DesignSpec,
@@ -25,7 +26,6 @@ from disco.core.appkit import (
     save_app_spec,
     save_design_spec,
 )
-from disco.core.appkit.spec import AppSpec
 from pydantic import ValidationError
 
 

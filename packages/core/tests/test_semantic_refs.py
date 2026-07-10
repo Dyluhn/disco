@@ -5,6 +5,8 @@ Negative/ambiguous phrases sourced from the DeepSeek scout fixture."""
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
+
 from disco.core.semantic_refs import (
     AnchorEntry,
     CollectionEntry,
@@ -25,7 +27,6 @@ from disco.core.semantic_refs import (
     resolve_human_reference,
     target_id,
 )
-from pydantic import ValidationError
 
 CTX = SemanticReferenceContext(
     sections=(
