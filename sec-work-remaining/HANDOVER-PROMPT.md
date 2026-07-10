@@ -16,9 +16,14 @@ that. If that work has since been committed or reverted, delete the
 
 You are a security engineer on Disco, a self-hosted AI agent platform (Python
 monorepo + React frontend) at `~/projects/disclaude`, branch
-`disclaude/mega-campaign`. Your job: execute the PARKED security waves S-W4,
-S-W5, S-W6 — one wave at a time, in order. Do not start a wave before the
-previous one is committed green.
+`disclaude/mega-campaign`. Your job: execute the PARKED security waves S-W4
+(MCP approval integrity), S-W5 (isolation + resource caps), and S-W6 (output
+sinks + share + the low-severity cluster) — one wave at a time, in order. Do not
+start a wave before the previous one is committed green.
+
+S-W4 is half-written and uncommitted in your tree; S-W6 has an unreviewed draft
+on an archive branch. Both are described below. Neither has been adversarially
+reviewed. Assume both are wrong until you have proven otherwise yourself.
 
 READ FIRST, in this order, before touching anything:
 1. `sec-work-remaining/disco-security-state.md` — the single source of truth:
@@ -61,6 +66,22 @@ fail-closed check. Then re-read the diff as an adversary: verify the config
 hash covers every field that changes what executes, verify `enabled` is
 correctly excluded, and verify the approve-config route cannot be driven from a
 non-approved origin. Commit that as the S-W4 base before adding anything.
+
+PRIOR WORK EXISTS — do not rebuild these from scratch:
+Two waves were partly executed in July 2026 and preserved as WIP archive commits
+before their worktrees were culled. Read both diffs before planning:
+- `archive/wt-epic-d` (`b9c26a14`) — the original S-W4 MCP-approval attempt. The
+  uncommitted diff now in your tree is this work re-applied to the current base
+  (11 of its 15 files overlap), plus the `McpSection.tsx` UI and the renamed
+  `mcp_fakes.py`.
+- `archive/wt-epic-c` (`d627d287`) — S-W6, reportedly FINISHED and never
+  reviewed: `share.py`, `share_service.py`, `ws.py`, `runtime.py`,
+  `sheets.py` + tests. Treat it as an untrusted first draft by an unreviewed
+  agent: harvest it, re-derive every claim, adversarially review it. Do not
+  merge it.
+Both branches sit on a PRE-Pi-removal base (`2408e40f` / `4d09585a`). Do NOT
+fast-forward or merge them into `mega-campaign` — extract the diff and apply it
+with `git apply --3way`, or re-implement against current files.
 
 RULES — these are hard constraints, not preferences:
 - Real fixes only. Never hardcode state, weaken an assertion, or special-case a
