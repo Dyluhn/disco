@@ -48,7 +48,33 @@ def approve_model_origin(
         if stored is not None:
             entry = stored
     if entry.base_url:
-        approve_origin(store, secrets, entry.base_url, f"model:{entry.provider}", entry.api_key_env or "")
+        approve_origin(
+            store, secrets, entry.base_url, f"model:{entry.provider}", entry.api_key_env or ""
+        )
+
+
+def approve_provider_origin(store: ConfigStore, secrets: SecretStore, provider: Any) -> None:
+    """Bind a generic provider's stored key to its exact configured origin."""
+    approve_origin(
+        store,
+        secrets,
+        provider.base_url,
+        f"provider:{provider.id}",
+        provider.secret_name,
+    )
+
+
+def provider_origin_approved(store: ConfigStore, secrets: SecretStore, provider: Any) -> bool:
+    if not store.origin_approved(
+        provider.base_url,
+        f"provider:{provider.id}",
+        provider.secret_name,
+        secret_store=secrets,
+    ):
+        return False
+    from disco.core.llm.secret_refs import secret_ref_allowed_for_origin
+
+    return secret_ref_allowed_for_origin(provider.secret_name, provider.base_url)
 
 
 def approve_encoder_origins(

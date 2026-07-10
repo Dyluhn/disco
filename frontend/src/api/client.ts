@@ -304,7 +304,17 @@ async function authFetch(base: string, pathOrUrl: string, init: RequestInit): Pr
   await ensureSessionFor(base);
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  if (base && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+  let csrfProtectedRead = false;
+  if (method === "GET") {
+    try {
+      csrfProtectedRead = new URL(pathOrUrl, "http://disco.invalid").pathname.endsWith(
+        "/api/storage/browse",
+      );
+    } catch {
+      csrfProtectedRead = false;
+    }
+  }
+  if (base && (["POST", "PUT", "PATCH", "DELETE"].includes(method) || csrfProtectedRead)) {
     const csrf = csrfByBase.get(base);
     if (csrf) headers.set(CSRF_HEADER, csrf);
   }

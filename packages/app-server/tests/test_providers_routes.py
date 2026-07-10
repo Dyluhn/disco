@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx
@@ -14,10 +16,42 @@ from disco.app_server.config_state import ConfigState
 from disco.app_server.routes import providers as providers_mod
 from disco.core import SkillStore, SqliteEventStore
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.core.llm.config import ProviderSettings
 from fastapi.testclient import TestClient
 
-
 FIXTURES = Path(__file__).parent / "fixtures" / "provider_catalogues"
+
+
+class _CatalogueSink:
+    """A real loopback HTTP sink that records bearer credentials."""
+
+    def __init__(self) -> None:
+        self.authorization: list[str] = []
+        sink = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
+                sink.authorization.append(self.headers.get("Authorization", ""))
+                body = b'{"data": []}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format: str, *_args) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        host, port = self.server.server_address[:2]
+        self.url = f"http://{host}:{port}/v1"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def close(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
 
 
 @pytest.fixture
@@ -111,6 +145,75 @@ def test_probe_failure_still_saves_provider_and_key(client, state, monkeypatch):
     assert client.get("/api/providers").json()[0]["id"] == "relay"
     assert state._secrets.get_secret("provider_relay") == "sk-relay-secret"
     assert "sk-relay-secret" not in str(body)
+
+
+def test_tampered_provider_origin_cannot_receive_stored_key(client, state, monkeypatch):
+    calls: list[tuple[str, str]] = []
+
+    async def capture_fetch(provider, api_key):
+        calls.append((provider.base_url, api_key))
+        return []
+
+    monkeypatch.setattr(providers_mod, "_fetch_provider_catalogue", capture_fetch)
+    created = client.post(
+        "/api/providers",
+        json={
+            "label": "OpenAI",
+            "base_url": "https://api.openai.com/v1",
+            "kind": "openai-compat",
+            "api_key": "sk-host-pinned",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert calls == [("https://api.openai.com/v1", "sk-host-pinned")]
+    calls.clear()
+
+    # Simulate offline config poisoning: retain the same provider/key identity
+    # but redirect its URL without the signed operator-save path.
+    cfg = state._store.load()
+    original = cfg.providers["openai"]
+    poisoned = ProviderSettings(
+        id=original.id,
+        label=original.label,
+        base_url="https://collector.invalid/v1",
+        kind=original.kind,
+        secret_name=original.secret_name,
+    )
+    state._store.save(cfg.model_copy(update={"providers": {"openai": poisoned}}))
+
+    denied = client.get("/api/providers/openai/models")
+    assert denied.status_code == 403
+    assert "not approved" in denied.text
+    assert calls == []
+
+
+def test_tampered_provider_origin_is_refused_before_real_exfil_sink(client, state):
+    approved_sink = _CatalogueSink()
+    attacker_sink = _CatalogueSink()
+    try:
+        state.create_provider(
+            ProviderCreate(
+                label="Sink",
+                base_url=approved_sink.url,
+                kind="openai-compat",
+                api_key="sk-real-host-pin-canary",
+            )
+        )
+        live = client.get("/api/providers/sink/models")
+        assert live.status_code == 200, live.text
+        assert approved_sink.authorization == ["Bearer sk-real-host-pin-canary"]
+
+        cfg = state._store.load()
+        original = cfg.providers["sink"]
+        poisoned = original.model_copy(update={"base_url": attacker_sink.url})
+        state._store.save(cfg.model_copy(update={"providers": {"sink": poisoned}}))
+
+        denied = client.get("/api/providers/sink/models")
+        assert denied.status_code == 403
+        assert attacker_sink.authorization == []
+    finally:
+        approved_sink.close()
+        attacker_sink.close()
 
 
 def test_delete_refuses_while_catalogue_models_reference_provider(client, monkeypatch):

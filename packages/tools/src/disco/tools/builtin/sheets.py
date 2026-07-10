@@ -3,8 +3,8 @@
 (rows, columns, formulas) and this tool writes it via openpyxl.
 
 Formula whitelist: only pure functions (SUM/AVERAGE/IF/VLOOKUP/INDEX/MATCH/DATE
-and similar) are allowed. External-fetch / indirection functions like IMPORTXML,
-INDIRECT, WEBSERVICE, HYPERLINK are REJECTED with a clear error.
+and similar) are written as live formulas. External-fetch / indirection formulas
+and formula-injection trigger strings are written as inert text literals.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import re
 from typing import cast
 
 import openpyxl
-from openpyxl.cell.cell import MergedCell
+from openpyxl.cell.cell import Cell, MergedCell
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 from pydantic import BaseModel, Field
@@ -135,7 +135,7 @@ _ALLOWED_FUNCTIONS: frozenset[str] = frozenset(
     }
 )
 
-# Functions that are EXPLICITLY REJECTED with a clear error.
+# Functions that are never allowed as live formulas.
 _REJECTED_FUNCTIONS: frozenset[str] = frozenset(
     {
         "IMPORTXML",
@@ -158,6 +158,9 @@ _REJECTED_FUNCTIONS: frozenset[str] = frozenset(
 # nested parens or string literals; a string literal containing "IMPORTXML("
 # would false-positive, but that's the safe direction for a deny-list (fail-safe).
 _FORMULA_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.IGNORECASE)
+_FIRST_FORMULA_FUNCTION_RE = re.compile(r"^=([A-Za-z][A-Za-z0-9_]*)\s*\(", re.IGNORECASE)
+_FORMULA_TRIGGER_CHARS = frozenset("=+-@|![")
+_BLOCKED_FORMULA_CHARS = frozenset("|![")
 
 
 def _validate_formula(formula: str, *, cell_ref: str) -> None:
@@ -180,9 +183,43 @@ def _validate_formula(formula: str, *, cell_ref: str) -> None:
             )
 
 
-# ---- args model --------------------------------------------------------------
-
 SheetCell = str | float | int | bool | None
+
+
+def _is_allowed_formula(formula: str, *, cell_ref: str) -> bool:
+    """Return true only for a formula rooted in an explicitly allowed function.
+
+    Requiring an anchored first function closes bare-reference/arithmetic, DDE,
+    external workbook, and unary-prefix forms that a loose "contains an allowed
+    function" check would accidentally admit.
+    """
+    if any(char in formula[1:] for char in _BLOCKED_FORMULA_CHARS):
+        return False
+    first = _FIRST_FORMULA_FUNCTION_RE.match(formula)
+    if first is None or first.group(1).upper() not in _ALLOWED_FUNCTIONS:
+        return False
+    try:
+        _validate_formula(formula, cell_ref=cell_ref)
+    except ValueError:
+        return False
+    return True
+
+
+def _write_untrusted_cell(cell: Cell, value: SheetCell, *, cell_ref: str) -> None:
+    if isinstance(value, str):
+        candidate = value.lstrip(" \t\r\n")
+        if candidate[:1] in _FORMULA_TRIGGER_CHARS:
+            # Only an exact, non-whitespace-prefixed `=ALLOWED_FN(...)` becomes
+            # live. Everything else receives an explicit text prefix.
+            if candidate == value and _is_allowed_formula(value, cell_ref=cell_ref):
+                cell.value = value
+            else:
+                cell.value = "'" + value
+            return
+    cell.value = value
+
+
+# ---- args model --------------------------------------------------------------
 
 
 class SheetSpec(BaseModel):
@@ -196,7 +233,8 @@ class SheetSpec(BaseModel):
         description=(
             "Row data. Each row is a list of cell values. Values can be strings, "
             "numbers, booleans, nulls, or Excel formulas (strings starting with '='). Example: "
-            "[['Widget', 10, 5, '=B2*C2'], ['Gadget', 15, 3, '=B3*C3']]"
+            "[['Widget', 10, 5, '=PRODUCT(B2,C2)'], "
+            "['Gadget', 15, 3, '=PRODUCT(B3,C3)']]"
         )
     )
 
@@ -222,9 +260,9 @@ class SheetsTool:
             "Write a real .xlsx workbook with LIVE formulas (not pre-computed values) "
             "to the workspace. Provide one or more sheets with column headers and row "
             "data. Cells starting with '=' are written as Excel formulas (e.g. "
-            "'=SUM(A2:A10)', '=VLOOKUP(D2, A:B, 2, FALSE)'). Formulas are validated "
-            "against a whitelist — external-fetch functions like IMPORTXML/INDIRECT "
-            "are rejected."
+            "'=SUM(A2:A10)', '=VLOOKUP(D2, A:B, 2, FALSE)'). A live formula must "
+            "start with a whitelisted function; external-fetch, external-reference, "
+            "DDE, and other formula-like values are escaped as inert text."
         ),
         args_model=SheetGenerateArgs,
         needs=frozenset({Capability.FILESYSTEM}),
@@ -242,27 +280,7 @@ class SheetsTool:
         # outside the workspace where the DeliverableEvent can't resolve it.
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
 
-        # 1. Validate all formulas before writing anything.
-        errors: list[str] = []
-        for _si, sheet_spec in enumerate(args.sheets):
-            for ri, row in enumerate(sheet_spec.rows):
-                for ci, cell_val in enumerate(row):
-                    if isinstance(cell_val, str) and cell_val.startswith("="):
-                        col_letter = get_column_letter(ci + 1)
-                        cell_ref = f"'{sheet_spec.name}'!{col_letter}{ri + 2}"
-                        try:
-                            _validate_formula(cell_val, cell_ref=cell_ref)
-                        except ValueError as e:
-                            errors.append(str(e))
-
-        if errors:
-            return ToolOutcome(
-                success=False,
-                content="\n".join(errors),
-                error="Formula validation failed. " + errors[0],
-            )
-
-        # 2. Build the workbook.
+        # 1. Build the workbook.
         wb = openpyxl.Workbook()
         # Remove the default sheet; we add our own.
         default_ws = wb.active
@@ -274,7 +292,10 @@ class SheetsTool:
 
             # Write column headers (row 1).
             for ci, col_name in enumerate(sheet_spec.columns):
-                ws.cell(row=1, column=ci + 1, value=col_name)
+                cell = ws.cell(row=1, column=ci + 1)
+                assert not isinstance(cell, MergedCell)
+                cell_ref = f"'{sheet_spec.name}'!{get_column_letter(ci + 1)}1"
+                _write_untrusted_cell(cell, col_name, cell_ref=cell_ref)
 
             # Style the header row.
             from openpyxl.styles import Font
@@ -290,12 +311,9 @@ class SheetsTool:
                     # ws.cell() returns Cell | MergedCell; we never merge cells
                     # in this tool, so a real Cell is provable here.
                     assert not isinstance(cell, MergedCell)
-                    if isinstance(cell_val, str) and cell_val.startswith("="):
-                        # Write as a formula — openpyxl stores it as the formula
-                        # STRING, NOT the evaluated value.
-                        cell.value = cell_val
-                    else:
-                        cell.value = cell_val
+                    col_letter = get_column_letter(ci + 1)
+                    cell_ref = f"'{sheet_spec.name}'!{col_letter}{ri + 2}"
+                    _write_untrusted_cell(cell, cell_val, cell_ref=cell_ref)
 
             # Auto-fit column widths (approximate).
             for ci in range(len(sheet_spec.columns)):
@@ -305,7 +323,7 @@ class SheetsTool:
                     max_width = max(max_width, len(str(val)))
                 ws.column_dimensions[get_column_letter(ci + 1)].width = min(max_width + 2, 40)
 
-        # 3. Render to an in-memory buffer, then write THROUGH the sandbox so the
+        # 2. Render to an in-memory buffer, then write THROUGH the sandbox so the
         #    path is jailed and the artifact lands in the conversation workspace.
         buf = io.BytesIO()
         wb.save(buf)
@@ -318,7 +336,8 @@ class SheetsTool:
             content=(
                 f"Workbook '{args.title}' written to {args.filename}\n"
                 f"Sheets: {', '.join(sheet_names)}\n"
-                f"NOTE: formulas are NOT evaluated — open in a spreadsheet app to compute."
+                "NOTE: allowed formulas are NOT evaluated — open in a spreadsheet "
+                "app to compute. Unsafe formula-like values are escaped as text."
             ),
             artifacts=[args.filename],
             structured={

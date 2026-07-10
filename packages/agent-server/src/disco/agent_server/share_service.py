@@ -21,7 +21,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from disco.core import DEFAULT_OWNER_ID, Event
+from disco.core import DEFAULT_OWNER_ID, ConversationState, Event, EventFilter
 
 
 class ShareService:
@@ -42,9 +42,11 @@ class ShareService:
         conversation_id: str,
         *,
         owner_id: str = DEFAULT_OWNER_ID,
+        before_seq: int | None = None,
     ) -> dict[str, Any]:
-        """Produce a scrubbed, versioned JSON bundle from a conversation's full
-        event log. The bundle is the canonical static-replay format (RP-00's
+        """Produce a scrubbed, versioned JSON bundle from a conversation snapshot.
+
+        The bundle is the canonical static-replay format (RP-00's
         cassette format, RP-06's static viewer) — the static viewer reads it
         directly with no WebSocket dependency, the harness re-runs against
         it as a deterministic event source. Both consumers get one projection
@@ -61,9 +63,15 @@ class ShareService:
             can refuse to render unknown versions cleanly).
           - `conversation_id`, `owner_id`, `exported_at`: provenance.
           - `surface`: the conversation's surface at export time.
-          - `events`: list[dict] — the full scrubbed event log, ascending seq.
+          - `events`: list[dict] — the scrubbed event log, ascending seq.
           - `state`: dict — the reconstructed final state (drives the
             viewer's "finished at …" header and the "any gates open" badge).
+
+        ``before_seq`` is an inclusive point-in-time boundary captured when a
+        public share token is issued. When present, every event-derived projection
+        in the bundle — events, state, last_seq, and cassette — is rebuilt from
+        events at or below that boundary. Later appends therefore cannot leak
+        through a field that happens not to be the raw event list.
 
         The order of operations matters: events are serialized via
         `event.model_dump(mode="json")` (ISO datetimes, enums by value) and
@@ -84,8 +92,9 @@ class ShareService:
                 "ok": False,
                 "reason": "conversation_not_found",
             }
-        events = await self._store.get_events(conversation_id)
-        state = await self._store.get_state(conversation_id)
+        event_filter = EventFilter(before_seq=before_seq + 1) if before_seq is not None else None
+        events = await self._store.get_events(conversation_id, event_filter)
+        state = ConversationState.reconstruct(conversation_id, events)
 
         # Scrub the events. The redactor walks every text field of every
         # event payload; non-text fields (seq, id, timestamps, booleans)
@@ -246,6 +255,8 @@ class ShareService:
             conversation_id,
             owner_id,
             bundle_seq=bundle_seq,
+            bundle_title=row.title,
+            bundle_surface=row.surface or self._surface_of(conversation_id),
         )
         return {
             "ok": True,

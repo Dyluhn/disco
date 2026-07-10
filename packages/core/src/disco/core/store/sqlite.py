@@ -112,6 +112,8 @@ CREATE TABLE IF NOT EXISTS share_tokens (
     created_at     TEXT    NOT NULL,
     revoked_at     TEXT,                  -- NULL = active; ISO-8601 if revoked
     bundle_seq     INTEGER NOT NULL,      -- the last_seq captured at export time
+    bundle_title   TEXT,                  -- title captured at token issue time
+    bundle_surface TEXT NOT NULL DEFAULT 'research', -- surface captured at issue
     -- The bundle is rebuilt on demand (events are append-only; the share
     -- selector walks the live log) — this column is the seq boundary the
     -- future re-export uses to detect "the conversation moved since the link
@@ -247,6 +249,14 @@ class SqliteEventStore:
         except sqlite3.OperationalError:
             pass  # column already exists
         try:
+            self._conn.execute("ALTER TABLE share_tokens ADD COLUMN bundle_title TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            self._conn.execute("ALTER TABLE share_tokens ADD COLUMN bundle_surface TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN surface TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
@@ -261,6 +271,21 @@ class SqliteEventStore:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN origin TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        # Legacy share rows could not preserve their original metadata. Freeze
+        # the current values once at upgrade so they at least stop tracking
+        # future title/surface changes after this security migration. The NULL
+        # surface is the migration marker; newly issued rows always set it even
+        # when their captured title is legitimately NULL.
+        self._conn.execute(
+            "UPDATE share_tokens SET bundle_title = "
+            "(SELECT title FROM conversations WHERE conversations.conversation_id = "
+            "share_tokens.conversation_id) WHERE bundle_surface IS NULL"
+        )
+        self._conn.execute(
+            "UPDATE share_tokens SET bundle_surface = COALESCE("
+            "(SELECT surface FROM conversations WHERE conversations.conversation_id = "
+            "share_tokens.conversation_id), 'research') WHERE bundle_surface IS NULL"
+        )
         self._conn.commit()
         self._write_lock = asyncio.Lock()
         # conversation_id -> set of live subscriber queues.
@@ -834,6 +859,8 @@ class SqliteEventStore:
         owner_id: str,
         *,
         bundle_seq: int,
+        bundle_title: str | None,
+        bundle_surface: str,
     ) -> None:
         """Persist a new share token pointing at a conversation. The row
         records the conversation + the bundle's last_seq at export time. A
@@ -843,14 +870,16 @@ class SqliteEventStore:
         button issuing a write twice."""
         self._conn.execute(
             "INSERT OR IGNORE INTO share_tokens "
-            "(token, conversation_id, owner_id, created_at, bundle_seq) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(token, conversation_id, owner_id, created_at, bundle_seq, "
+            "bundle_title, bundle_surface) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 token,
                 conversation_id,
                 owner_id,
                 datetime.now().isoformat(),
                 int(bundle_seq),
+                bundle_title,
+                bundle_surface,
             ),
         )
         self._conn.commit()
@@ -862,7 +891,8 @@ class SqliteEventStore:
         viewer (404, not 410), so revocation cannot be probed to confirm a
         conversation exists."""
         row = self._conn.execute(
-            "SELECT token, conversation_id, owner_id, created_at, bundle_seq "
+            "SELECT token, conversation_id, owner_id, created_at, bundle_seq, "
+            "bundle_title, bundle_surface "
             "FROM share_tokens WHERE token = ? AND revoked_at IS NULL",
             (token,),
         ).fetchone()
@@ -874,6 +904,8 @@ class SqliteEventStore:
             "owner_id": row["owner_id"],
             "created_at": row["created_at"],
             "bundle_seq": int(row["bundle_seq"]),
+            "bundle_title": row["bundle_title"],
+            "bundle_surface": row["bundle_surface"] or "research",
         }
 
     def list_share_tokens(self, *, owner_id: str) -> list[dict]:
@@ -881,7 +913,8 @@ class SqliteEventStore:
         "shared links" affordance). Revoked links are NOT returned by
         default; pass `include_revoked=True` for an audit view."""
         rows = self._conn.execute(
-            "SELECT token, conversation_id, owner_id, created_at, bundle_seq "
+            "SELECT token, conversation_id, owner_id, created_at, bundle_seq, "
+            "bundle_title, bundle_surface "
             "FROM share_tokens WHERE owner_id = ? AND revoked_at IS NULL "
             "ORDER BY created_at DESC",
             (owner_id,),
@@ -893,6 +926,8 @@ class SqliteEventStore:
                 "owner_id": r["owner_id"],
                 "created_at": r["created_at"],
                 "bundle_seq": int(r["bundle_seq"]),
+                "bundle_title": r["bundle_title"],
+                "bundle_surface": r["bundle_surface"] or "research",
             }
             for r in rows
         ]

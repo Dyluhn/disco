@@ -4040,8 +4040,13 @@ class ConversationRuntime:
         conversation_id: str,
         *,
         owner_id: str = DEFAULT_OWNER_ID,
+        before_seq: int | None = None,
     ) -> dict[str, Any]:
-        return await self._share.share_export(conversation_id, owner_id=owner_id)
+        return await self._share.share_export(
+            conversation_id,
+            owner_id=owner_id,
+            before_seq=before_seq,
+        )
 
     _IMPORT_MAX_EVENTS = 20_000
 

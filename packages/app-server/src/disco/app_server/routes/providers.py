@@ -284,6 +284,8 @@ def make_providers_router(state: ConfigState) -> APIRouter:
     locks: dict[str, asyncio.Lock] = {}
 
     async def _probe(provider: ProviderDTO, api_key: str) -> tuple[bool, str | None]:
+        if not state.provider_origin_approved(provider):
+            return False, "provider key is not approved for this origin"
         try:
             await _fetch_provider_catalogue(provider, api_key)
             return True, None
@@ -291,6 +293,14 @@ def make_providers_router(state: ConfigState) -> APIRouter:
             return False, _error_text(exc)
 
     async def _cached_models(provider: ProviderDTO) -> list[ProviderCatalogueModelDTO]:
+        # Gate before consulting the cache or decrypting the key. A tampered
+        # persisted base_url must neither receive a credential nor inherit a
+        # catalogue cached under the previously approved host.
+        if not state.provider_origin_approved(provider):
+            raise HTTPException(
+                status_code=403,
+                detail="Provider key is not approved for this origin. Re-save the provider.",
+            )
         hit = cache.get(provider.id)
         if hit and time.monotonic() - hit[0] < _CATALOGUE_TTL_S:
             return hit[1]
@@ -319,7 +329,9 @@ def make_providers_router(state: ConfigState) -> APIRouter:
         try:
             return state._provider_dto(state.provider_settings(provider_id))
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"unknown provider {provider_id!r}") from exc
+            raise HTTPException(
+                status_code=404, detail=f"unknown provider {provider_id!r}"
+            ) from exc
 
     @router.get("/api/providers/presets")
     async def get_provider_presets() -> list[ProviderPresetDTO]:
@@ -344,10 +356,16 @@ def make_providers_router(state: ConfigState) -> APIRouter:
         try:
             provider = state.update_provider(provider_id, body)
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"unknown provider {provider_id!r}") from exc
+            raise HTTPException(
+                status_code=404, detail=f"unknown provider {provider_id!r}"
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        key = body.api_key.strip() if body.api_key else state._resolve_secret_value(provider.secret_name)
+        key = (
+            body.api_key.strip()
+            if body.api_key
+            else state._resolve_secret_value(provider.secret_name)
+        )
         if key:
             ok, error = await _probe(provider, key)
         else:
@@ -360,7 +378,9 @@ def make_providers_router(state: ConfigState) -> APIRouter:
         try:
             state.delete_provider(provider_id)
         except KeyError as exc:
-            raise HTTPException(status_code=404, detail=f"unknown provider {provider_id!r}") from exc
+            raise HTTPException(
+                status_code=404, detail=f"unknown provider {provider_id!r}"
+            ) from exc
         except ProviderInUseError as exc:
             raise HTTPException(
                 status_code=409,

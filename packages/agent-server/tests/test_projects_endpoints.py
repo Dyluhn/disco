@@ -33,9 +33,7 @@ def _runtime(store: SqliteEventStore, *, root: str | None) -> ConversationRuntim
     )
     cfg_store = ConfigStore(path=Path("/dev/null"))
     if root is not None:
-        cfg = cfg.model_copy(
-            update={"projects": ProjectStorageSettings(projects_root=root)}
-        )
+        cfg = cfg.model_copy(update={"projects": ProjectStorageSettings(projects_root=root)})
     # Save the config so _project_store_now reads it back from the in-memory copy.
     # We don't actually write to disk; the cfg_store is overridden below.
     cfg_store.load = lambda: cfg  # type: ignore[method-assign]
@@ -105,8 +103,12 @@ def test_list_projects_carries_surface_for_resume_routing(store, tmp_path):
         ws.mkdir(parents=True)
         (ws / "f.txt").write_bytes(b"x")
         ps.write_manifest(
-            cid, title=None, owner_id="local",
-            created_at="2026-06-06T00:00:00Z", file_count=1, total_bytes=1,
+            cid,
+            title=None,
+            owner_id="local",
+            created_at="2026-06-06T00:00:00Z",
+            file_count=1,
+            total_bytes=1,
         )
         store.create_conversation(cid, owner_id="local", surface=surface)
 
@@ -124,11 +126,16 @@ def test_files_missing_flag_surfaces_when_workspace_deleted(store, tmp_path):
     workspace.mkdir(parents=True)
     (workspace / "a.txt").write_bytes(b"x")
     ps.write_manifest(
-        cid, title="o", owner_id="local",
-        created_at="2026-06-06T00:00:00Z", file_count=1, total_bytes=1,
+        cid,
+        title="o",
+        owner_id="local",
+        created_at="2026-06-06T00:00:00Z",
+        file_count=1,
+        total_bytes=1,
     )
     # nuke the workspace, leave the manifest
     import shutil
+
     shutil.rmtree(workspace)
     store.create_conversation(cid, owner_id="local", title="Orphan")
 
@@ -148,8 +155,12 @@ def test_download_returns_zip_with_real_files(store, tmp_path):
     (workspace / "sub").mkdir()
     (workspace / "sub" / "b.txt").write_bytes(b"beta")
     ps.write_manifest(
-        cid, title="z", owner_id="local",
-        created_at="2026-06-06T00:00:00Z", file_count=2, total_bytes=9,
+        cid,
+        title="z",
+        owner_id="local",
+        created_at="2026-06-06T00:00:00Z",
+        file_count=2,
+        total_bytes=9,
     )
 
     client = TestClient(create_app(store, runtime=runtime))
@@ -169,8 +180,12 @@ def test_download_files_missing_returns_404_with_reason(store, tmp_path):
     # manifest only — no workspace dir
     (tmp_path / cid).mkdir()
     ps.write_manifest(
-        cid, title="g", owner_id="local",
-        created_at="2026-06-06T00:00:00Z", file_count=0, total_bytes=0,
+        cid,
+        title="g",
+        owner_id="local",
+        created_at="2026-06-06T00:00:00Z",
+        file_count=0,
+        total_bytes=0,
     )
 
     client = TestClient(create_app(store, runtime=runtime))
@@ -325,8 +340,12 @@ def test_delete_removes_project_from_disk(store, tmp_path):
     workspace.mkdir(parents=True)
     (workspace / "x").write_bytes(b"x")
     ps.write_manifest(
-        cid, title="k", owner_id="local",
-        created_at="2026-06-06T00:00:00Z", file_count=1, total_bytes=1,
+        cid,
+        title="k",
+        owner_id="local",
+        created_at="2026-06-06T00:00:00Z",
+        file_count=1,
+        total_bytes=1,
     )
 
     client = TestClient(create_app(store, runtime=runtime))
@@ -336,7 +355,8 @@ def test_delete_removes_project_from_disk(store, tmp_path):
     assert not (tmp_path / cid).exists()
 
 
-def test_browse_storage_lists_directories(store, tmp_path):
+def test_browse_storage_lists_directories(store, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
     runtime = _runtime(store, root=str(tmp_path))
     (tmp_path / "sub_a").mkdir()
     (tmp_path / "sub_b").mkdir()
@@ -358,9 +378,50 @@ def test_browse_storage_lists_directories(store, tmp_path):
 def test_browse_storage_not_found_returns_404(store):
     runtime = _runtime(store, root=None)
     client = TestClient(create_app(store, runtime=runtime))
-    res = client.get("/api/storage/browse?path=/definitely/not/a/real/path")
+    missing = Path.home() / "definitely-not-a-real-disco-browse-path"
+    assert not missing.exists()
+    res = client.get("/api/storage/browse", params={"path": str(missing)})
     assert res.status_code == 404
     assert res.json()["detail"]["reason"] == "not_found"
+
+
+def test_browse_storage_hides_and_refuses_escaping_symlink(store, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runtime = _runtime(store, root=str(tmp_path))
+    escape = tmp_path / "etc-link"
+    escape.symlink_to("/etc", target_is_directory=True)
+
+    client = TestClient(create_app(store, runtime=runtime))
+    listing = client.get("/api/storage/browse", params={"path": str(tmp_path)})
+    assert listing.status_code == 200, listing.text
+    assert "etc-link" not in {entry["name"] for entry in listing.json()["entries"]}
+
+    escaped = client.get("/api/storage/browse", params={"path": str(escape)})
+    assert escaped.status_code == 403
+    assert escaped.json()["detail"]["reason"] == "outside_allowed_roots"
+
+
+def test_browse_storage_emits_allow_and_deny_audit_records(
+    store, tmp_path, caplog, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    runtime = _runtime(store, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    caplog.set_level("INFO", logger="disco.agent_server.routes.storage")
+
+    assert client.get("/api/storage/browse", params={"path": str(tmp_path)}).status_code == 200
+    assert client.get("/api/storage/browse", params={"path": "/etc"}).status_code == 403
+
+    records = [
+        record
+        for record in caplog.records
+        if getattr(record, "audit_event", None) == "storage_browse"
+    ]
+    assert [record.audit_decision for record in records[-2:]] == ["allowed", "denied"]
+    assert [record.audit_reason for record in records[-2:]] == [
+        "listed",
+        "outside_allowed_roots",
+    ]
 
 
 def test_surface_recovery_treats_project_with_manifest_as_build(store, tmp_path):
@@ -376,8 +437,12 @@ def test_surface_recovery_treats_project_with_manifest_as_build(store, tmp_path)
     workspace.mkdir(parents=True)
     (workspace / "a.txt").write_bytes(b"x")
     ps.write_manifest(
-        cid, title="r", owner_id="local",
-        created_at="2026-06-06T00:00:00Z", file_count=1, total_bytes=1,
+        cid,
+        title="r",
+        owner_id="local",
+        created_at="2026-06-06T00:00:00Z",
+        file_count=1,
+        total_bytes=1,
     )
     # set_surface was NEVER called on this runtime — exactly the post-restart shape.
     assert cid not in runtime._surface
@@ -394,9 +459,7 @@ def test_surface_recovery_defaults_to_research_when_no_manifest(store, tmp_path)
     assert "conv_unknown" not in runtime._surface
 
 
-def test_surface_persists_across_restart_without_project_manifest(
-    store, tmp_path, monkeypatch
-):
+def test_surface_persists_across_restart_without_project_manifest(store, tmp_path, monkeypatch):
     """DC-05 re-run #7 (2026-06-11): with NO projects_root configured, the
     manifest-based recovery ladder can never derive "build" — so a server
     restart silently demoted a Build conversation to the research surface,

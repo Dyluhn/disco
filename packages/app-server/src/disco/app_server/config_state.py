@@ -220,6 +220,9 @@ class ConfigState:
             raise KeyError(provider_id)
         return provider
 
+    def provider_origin_approved(self, provider: ProviderDTO) -> bool:
+        return _origin_wiring.provider_origin_approved(self._store, self._secrets, provider)
+
     def _unique_provider_id(self, label: str) -> str:
         import re
 
@@ -240,6 +243,14 @@ class ConfigState:
             raise ValueError("label is empty")
         if not base_url:
             raise ValueError("base_url is empty")
+        from disco.core.host_egress import origin_for_url
+
+        try:
+            valid_origin = origin_for_url(base_url)
+        except ValueError as exc:
+            raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
+        if valid_origin is None:
+            raise ValueError("base_url must be an absolute HTTP(S) URL")
         if not api_key:
             raise ValueError("api_key is empty")
         provider_id = self._unique_provider_id(label)
@@ -259,6 +270,7 @@ class ConfigState:
         self._store.save(
             cfg.model_copy(update={"providers": {**cfg.providers, provider_id: provider}})
         )
+        _origin_wiring.approve_provider_origin(self._store, self._secrets, provider)
         return self._provider_dto(provider)
 
     def update_provider(self, provider_id: str, patch: ProviderPatch) -> ProviderDTO:
@@ -276,6 +288,14 @@ class ConfigState:
             base_url = patch.base_url.strip().rstrip("/")
             if not base_url:
                 raise ValueError("base_url is empty")
+            from disco.core.host_egress import origin_for_url
+
+            try:
+                valid_origin = origin_for_url(base_url)
+            except ValueError as exc:
+                raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
+            if valid_origin is None:
+                raise ValueError("base_url must be an absolute HTTP(S) URL")
             updates["base_url"] = base_url
         if patch.kind is not None:
             updates["kind"] = patch.kind
@@ -291,6 +311,10 @@ class ConfigState:
         self._store.save(
             cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
         )
+        # A base-URL save or explicit key rotation is the operator approval
+        # gesture. Cosmetic edits never bless a previously unapproved origin.
+        if patch.base_url is not None or patch.api_key is not None:
+            _origin_wiring.approve_provider_origin(self._store, self._secrets, updated)
         return self._provider_dto(updated)
 
     def delete_provider(self, provider_id: str) -> None:

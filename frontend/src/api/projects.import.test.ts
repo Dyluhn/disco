@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { importProject as importProjectFn } from "@/api/projects";
+import type {
+  browseStorage as browseStorageFn,
+  importProject as importProjectFn,
+} from "@/api/projects";
 
 type ImportProject = typeof importProjectFn;
+type BrowseStorage = typeof browseStorageFn;
 
 function jsonResponse(body: object, status = 200): Response {
   return {
@@ -22,7 +26,10 @@ function makeFetchStub(body: object, status = 200) {
   });
 }
 
-async function importLiveProjects(): Promise<{ importProject: ImportProject }> {
+async function importLiveProjects(): Promise<{
+  importProject: ImportProject;
+  browseStorage: BrowseStorage;
+}> {
   vi.resetModules();
   vi.stubGlobal("__DISCO_ENV", { AGENT_BASE: "http://agent" });
   return import("@/api/projects");
@@ -73,7 +80,7 @@ describe("importProject", () => {
 
     await importProject({ kind: "path", path: "/tmp/existing" });
 
-    const [_url, init] = importCall(stub);
+    const [, init] = importCall(stub);
     expect(new Headers(init.headers).get("content-type")).toBe("application/json");
     expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
     expect(init.body).toBe(JSON.stringify({ path: "/tmp/existing" }));
@@ -87,8 +94,28 @@ describe("importProject", () => {
 
     await importProject({ kind: "git", gitUrl: "https://example.com/repo.git" });
 
-    const [_url, init] = importCall(stub);
+    const [, init] = importCall(stub);
     expect(init.body).toBe(JSON.stringify({ git_url: "https://example.com/repo.git" }));
+  });
+
+  it("sends the session-bound CSRF header on the protected storage browse GET", async () => {
+    const { browseStorage } = await importLiveProjects();
+    const stub = makeFetchStub({
+      path: "/home/dylan",
+      parent: null,
+      selectable: "ok",
+      entries: [],
+    });
+    vi.stubGlobal("fetch", stub);
+
+    await browseStorage("/home/dylan");
+
+    const call = stub.mock.calls.find(([url]) => String(url).includes("/api/storage/browse?"));
+    expect(call).toBeDefined();
+    const [url, init] = call as unknown as [string, RequestInit];
+    expect(url).toContain("path=%2Fhome%2Fdylan");
+    expect((init.method ?? "GET").toUpperCase()).toBe("GET");
+    expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
   });
 
   it("surfaces the backend import error reason and message", async () => {

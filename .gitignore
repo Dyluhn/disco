@@ -84,6 +84,7 @@ disco-config.json*
 disco-approved-origins.json
 tmux-client-*.log
 .env
+frontend/.env.development.local
 .bashrc
 .bash_profile
 .zshrc

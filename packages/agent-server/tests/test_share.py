@@ -29,8 +29,10 @@ from disco.core import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     SqliteEventStore,
     StatusEvent,
+    ToolResult,
 )
 from disco.core.events import ActionEvent, ToolCall
 from fastapi.testclient import TestClient
@@ -87,12 +89,7 @@ def test_post_share_token_is_url_safe_base62ish(client_with_runtime: TestClient)
     cid = _create(client_with_runtime)
     r = client_with_runtime.post(f"/api/conversations/{cid}/share").json()
     token = r["token"]
-    allowed = set(
-        "abcdefghijklmnopqrstuvwxyz"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "0123456789"
-        "-_"
-    )
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
     assert set(token) <= allowed, f"unexpected chars in token: {token!r}"
 
 
@@ -136,6 +133,87 @@ def test_get_bundle_for_valid_token(client_with_runtime: TestClient) -> None:
     # The share envelope is included.
     assert bundle["share"]["token"] == token
     assert bundle["share"]["bundle_seq_at_issue"] == r["bundle_seq"]
+
+
+def test_share_token_bundle_is_a_full_point_in_time_projection() -> None:
+    """Events are not the only public projection: state, last_seq, and cassette
+    must all remain frozen at the token's issue boundary too."""
+    import asyncio
+
+    store = SqliteEventStore(":memory:")
+    runtime = ConversationRuntime(store)
+    client = TestClient(create_app(store, runtime=runtime))
+    cid = "conv_share_snapshot"
+    store.create_conversation(
+        cid,
+        owner_id="local",
+        surface="deep_research",
+        title="Initial shared title",
+    )
+
+    async def append_search_pair(query: str) -> list[str]:
+        action = await store.append(
+            cid,
+            ActionEvent(
+                thought=f"search {query}",
+                tool_call=ToolCall(
+                    tool_name="ddgs.search",
+                    arguments={"query": query, "limit": 1, "deny": []},
+                ),
+            ),
+        )
+        observation = await store.append(
+            cid,
+            ObservationEvent(
+                action_id=action.id,
+                tool_result=ToolResult(
+                    call_id=f"call-{query}",
+                    tool_name="ddgs.search",
+                    success=True,
+                    content=f"{query} hit",
+                    structured={"results": [{"url": f"https://{query}.example"}]},
+                ),
+            ),
+        )
+        return [action.id, observation.id]
+
+    async def seed_before_share() -> None:
+        await store.append(
+            cid,
+            MessageEvent(
+                source=EventSource.USER,
+                message=LLMMessage(role="user", content="before share"),
+            ),
+        )
+        await store.append(cid, StatusEvent(status=ConversationStatus.RUNNING))
+        await append_search_pair("pre-share")
+
+    async def append_after_share() -> list[str]:
+        ids = await append_search_pair("post-share")
+        status = await store.append(cid, StatusEvent(status=ConversationStatus.FINISHED))
+        return [*ids, status.id]
+
+    asyncio.run(seed_before_share())
+    issued = client.post(f"/api/conversations/{cid}/share")
+    assert issued.status_code == 200, issued.text
+    share = issued.json()
+
+    post_share_ids = asyncio.run(append_after_share())
+    asyncio.run(store.update_title(cid, "POST-SHARE PRIVATE TITLE"))
+    response = client.get(f"/api/share/{share['token']}/bundle")
+    assert response.status_code == 200, response.text
+    bundle = response.json()
+
+    assert bundle["last_seq"] == share["bundle_seq"]
+    assert bundle["state"]["last_seq"] == share["bundle_seq"]
+    assert bundle["state"]["execution_status"] == ConversationStatus.RUNNING.value
+    assert max(event["seq"] for event in bundle["events"]) == share["bundle_seq"]
+    assert {event["id"] for event in bundle["events"]}.isdisjoint(post_share_ids)
+    assert {row["input"]["query"] for row in bundle["cassette"]} == {"pre-share"}
+    assert bundle["title"] == "Initial shared title"
+    assert "POST-SHARE PRIVATE TITLE" not in json.dumps(bundle)
+    assert bundle["surface"] == "deep_research"
+    assert bundle["share"]["bundle_seq_at_issue"] == share["bundle_seq"]
 
 
 def test_get_bundle_404_for_unknown_token(client_with_runtime: TestClient) -> None:
@@ -336,9 +414,7 @@ def test_share_export_unknown_conversation_returns_not_found() -> None:
 
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(
-            rt.share_export("conv_does_not_exist", owner_id="local")
-        )
+        result = loop.run_until_complete(rt.share_export("conv_does_not_exist", owner_id="local"))
     finally:
         loop.close()
     assert result["ok"] is False
@@ -400,6 +476,60 @@ def test_share_tokens_table_persists_tokens_across_runtimes(tmp_path) -> None:
     assert row is not None
     assert row["conversation_id"] == cid
     assert row["owner_id"] == "local"
+
+
+def test_legacy_share_token_migration_freezes_current_metadata(tmp_path) -> None:
+    """Old token rows had no title/surface snapshot. Upgrade captures them once;
+    subsequent conversation metadata changes must not alter that legacy link."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy-share.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE conversations (
+            conversation_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            space_id TEXT,
+            title TEXT,
+            created_at TEXT NOT NULL,
+            status TEXT,
+            surface TEXT,
+            origin TEXT
+        );
+        CREATE TABLE share_tokens (
+            token TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            revoked_at TEXT,
+            bundle_seq INTEGER NOT NULL
+        );
+        INSERT INTO conversations VALUES (
+            'conv_legacy_share', 'local', NULL, 'Legacy title',
+            '2026-07-01T00:00:00', NULL, 'build', NULL
+        );
+        INSERT INTO share_tokens VALUES (
+            'legacytoken1234567890', 'conv_legacy_share', 'local',
+            '2026-07-01T00:00:00', NULL, 0
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    store = SqliteEventStore(str(db_path))
+    migrated = store.lookup_share_token("legacytoken1234567890")
+    assert migrated is not None
+    assert migrated["bundle_title"] == "Legacy title"
+    assert migrated["bundle_surface"] == "build"
+
+    import asyncio
+
+    asyncio.run(store.update_title("conv_legacy_share", "Changed after upgrade"))
+    still_frozen = store.lookup_share_token("legacytoken1234567890")
+    assert still_frozen is not None
+    assert still_frozen["bundle_title"] == "Legacy title"
 
 
 def test_share_tokens_revoke_owner_scoped(tmp_path) -> None:

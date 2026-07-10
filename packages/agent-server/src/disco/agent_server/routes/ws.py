@@ -24,6 +24,7 @@ from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconn
 from pydantic import ValidationError
 
 from ..auth import websocket_session
+from ..redaction import redact_frame
 from ..runtime import ConversationRuntime
 from ..space_access import owned_space_ids_or_403
 from ._common import (
@@ -53,6 +54,11 @@ def _file_stream_payload(frame: dict[str, Any]) -> FileStreamFrame:
     )
 
 
+async def _send_json_redacted(websocket: WebSocket, frame: dict[str, Any]) -> None:
+    """The sole outbound JSON seam for both live WebSocket surfaces."""
+    await websocket.send_json(redact_frame(frame))
+
+
 async def _handle_frame(
     store: SqliteEventStore,
     websocket: WebSocket,
@@ -64,7 +70,7 @@ async def _handle_frame(
     every subscriber (incl. this socket) as `event` frames — the log is truth.
     A message KICKS the loop (Stage 2) so a real answer streams back."""
     if frame.type == "ping":
-        await websocket.send_json(WSServerFrame(type="pong").model_dump(mode="json"))
+        await _send_json_redacted(websocket, WSServerFrame(type="pong").model_dump(mode="json"))
     elif frame.type in (
         "send_message",
         "steer",
@@ -78,10 +84,11 @@ async def _handle_frame(
         # `WSServerFrame.error` is typed `dict[str, Any] | None` but the wire
         # contract here is a free-form reason string — cast to keep the
         # runtime value byte-identical while satisfying the type checker.
-        await websocket.send_json(
+        await _send_json_redacted(
+            websocket,
             WSServerFrame(
                 type="error", error=cast("dict[str, Any]", "imported_read_only")
-            ).model_dump(mode="json")
+            ).model_dump(mode="json"),
         )
     elif frame.type == "send_message" and frame.content is not None:
         brief = classify_build_brief(frame.content) if frame.build_brief is not None else None
@@ -220,12 +227,14 @@ async def _reject_forbidden_research_conversation(
         try:
             validate_canonical_conversation_id(conversation_id)
         except HTTPException:
-            await websocket.send_json({"type": "error", "message": "conversation forbidden"})
+            await _send_json_redacted(
+                websocket, {"type": "error", "message": "conversation forbidden"}
+            )
             await websocket.close()
             return True
     if conversation_id is None or await store.conversation_owned_by(conversation_id, owner_id):
         return False
-    await websocket.send_json({"type": "error", "message": "conversation forbidden"})
+    await _send_json_redacted(websocket, {"type": "error", "message": "conversation forbidden"})
     await websocket.close()
     return True
 
@@ -260,14 +269,14 @@ async def _send_conversation_state_frame(
         sbackend = runtime.sandbox_backend_name()
         if sbackend is not None:
             state_dict["sandbox_backend"] = sbackend
-    await websocket.send_json({"type": "state", "state": state_dict})
+    await _send_json_redacted(websocket, {"type": "state", "state": state_dict})
 
 
 async def _pump_conversation_events(websocket: WebSocket, stream: Any) -> None:
     try:
         async for event in stream:
-            await websocket.send_json(
-                WSServerFrame(type="event", event=event).model_dump(mode="json")
+            await _send_json_redacted(
+                websocket, WSServerFrame(type="event", event=event).model_dump(mode="json")
             )
     except SubscriberOverflow:
         # Durable history is replayable by sequence. A slow client reconnects
@@ -283,17 +292,19 @@ async def _pump_ephemeral_frames(websocket: WebSocket, eph_stream: Any) -> None:
     async for frame in eph_stream:
         # D3: route mcp_approval_required frames via the typed WS event
         if isinstance(frame, dict) and frame.get("type") == "mcp_approval_required":
-            await websocket.send_json(
+            await _send_json_redacted(
+                websocket,
                 WSServerFrame(
                     type="mcp_approval_required",
                     mcp_approval=frame,
-                ).model_dump(mode="json")
+                ).model_dump(mode="json"),
             )
         else:
-            await websocket.send_json(
+            await _send_json_redacted(
+                websocket,
                 WSServerFrame(
                     type="file_stream", file_stream=_file_stream_payload(frame)
-                ).model_dump(mode="json")
+                ).model_dump(mode="json"),
             )
 
 
@@ -325,19 +336,21 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
                 except WebSocketDisconnect:
                     break
                 except Exception:  # noqa: BLE001 — non-JSON text frame
-                    await websocket.send_json(
+                    await _send_json_redacted(
+                        websocket,
                         WSServerFrame(
                             type="error", error={"detail": "malformed frame (not JSON)"}
-                        ).model_dump(mode="json")
+                        ).model_dump(mode="json"),
                     )
                     continue
                 try:
                     frame = WSClientFrame.model_validate(raw)
                 except ValidationError:
-                    await websocket.send_json(
+                    await _send_json_redacted(
+                        websocket,
                         WSServerFrame(
                             type="error", error={"detail": "invalid client frame"}
-                        ).model_dump(mode="json")
+                        ).model_dump(mode="json"),
                     )
                     continue
                 await _handle_frame(store, websocket, conversation_id, frame, runtime)
@@ -364,8 +377,9 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             return
         await websocket.accept()
         if runtime is None:
-            await websocket.send_json(
-                {"type": "error", "message": "research is not available (no runtime configured)"}
+            await _send_json_redacted(
+                websocket,
+                {"type": "error", "message": "research is not available (no runtime configured)"},
             )
             await websocket.close()
             return
@@ -378,7 +392,7 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
         body = raw or {}
         query = str(body.get("query", "")).strip()
         if not query:
-            await websocket.send_json({"type": "error", "message": "empty query"})
+            await _send_json_redacted(websocket, {"type": "error", "message": "empty query"})
             await websocket.close()
             return
         # Re-scope controls from the UI: the model pill picks the answerer, plus
@@ -403,7 +417,9 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             return
         raw_space_ids = body.get("space_ids") or []
         if not isinstance(raw_space_ids, list):
-            await websocket.send_json({"type": "error", "message": "space_ids must be a list"})
+            await _send_json_redacted(
+                websocket, {"type": "error", "message": "space_ids must be a list"}
+            )
             await websocket.close()
             return
         try:
@@ -414,8 +430,8 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
                 include_unclaimed_legacy=session.is_admin,
             )
         except HTTPException as exc:
-            await websocket.send_json(
-                {"type": "error", "message": "space_forbidden", "detail": exc.detail}
+            await _send_json_redacted(
+                websocket, {"type": "error", "message": "space_forbidden", "detail": exc.detail}
             )
             await websocket.close()
             return
@@ -436,7 +452,7 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
                 include_unclaimed_legacy=session.is_admin,
                 sources=sources,
             ):
-                await websocket.send_json(frame)
+                await _send_json_redacted(websocket, frame)
         except WebSocketDisconnect:
             return  # client cancelled mid-stream
         except EncoderUnavailable as exc:
@@ -444,11 +460,11 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
             # Emit an honest, actionable error frame instead of closing the socket
             # silently (which is what an OOM kill / exit 137 would do).
             with contextlib.suppress(Exception):
-                await websocket.send_json({"type": "error", "message": str(exc)})
+                await _send_json_redacted(websocket, {"type": "error", "message": str(exc)})
         except Exception as exc:  # noqa: BLE001 — surface the real reason, then close
             with contextlib.suppress(Exception):
-                await websocket.send_json(
-                    {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
+                await _send_json_redacted(
+                    websocket, {"type": "error", "message": f"{type(exc).__name__}: {exc}"}
                 )
         finally:
             with contextlib.suppress(Exception):
