@@ -63,7 +63,9 @@ Ordered work (detail in plan §6):
 Dylan's verified vendored-component design (2026-07-10) — immutable hash-pinned
 security cores (auth/RBAC/payments) + free periphery; verify = integrity hash +
 requires-graph + per-component seam probe; eject = honest relabel. Full design +
-market evidence: `docs/trusted-components-design.md`. Fail-closed seam pinned in
+market evidence: `docs/trusted-components-design.md`; **implementation-ready spec
+(data contracts, tools, verify semantics, WO-TC1..6): `docs/trusted-components-spec.md`**.
+Fail-closed seam pinned in
 `packages/core/src/disco/core/trusted_components/` (manifest contract, tested,
 NOTHING advertised — same parking discipline as the f41/f33 seams). Deliberately
 NOT v0.1: no current surface claims auth/RBAC, so deferral breaks no promise.

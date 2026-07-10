@@ -1,6 +1,8 @@
 # Trusted Components — the verified vendored-component tier
 
-**Status:** DESIGN ONLY (nothing implemented). Origin: Dylan's proposal, 2026-07-10
+**Status:** DESIGN (the WHY). The implementation-ready spec — data contracts,
+tool behavior, verify semantics, pilot WOs — is `docs/trusted-components-spec.md`,
+which supersedes this doc on mechanics. Origin: Dylan's proposal, 2026-07-10
 session — "make the important pieces (auth, RBAC, Stripe) immutable and verified
 in depth; let everything cosmetic stay customizable; verification just checks the
 important piece still matches source, plus that dependent pieces exist together."
