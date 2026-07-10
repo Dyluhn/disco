@@ -219,7 +219,7 @@ this repo-wide gate debt is explicit rather than misreported as green.
 
 ---
 
-## Wave 5 — ROOT-C: availability / isolation hardening — **PARKED (not started)**
+## Wave 5 — ROOT-C: availability / isolation hardening — **DONE (`10433330`)**
 
 **Closes:** H15, H16, H17, M8, M9, M10.
 
@@ -238,6 +238,71 @@ Tasks:
 - **D5 — preview command uses argv, not shell-composition:** never interpolate a model-authored `serve_dir` into a shell string; sanitize it / force a fixed root in artifact mode. (`preview_service.py:198`.) (M10.)
 
 **Acceptance:** two sandboxes can't reach each other on the bridge; `curl 169.254.169.254` from the agent sandbox is blocked; `fallocate -l 500G` is quota-denied; `file_read` of a 500 MB file / `/dev/zero` symlink is capped (no host OOM); a `x; touch /tmp/pwned #/index.html` artifact does NOT execute on preview restart; a build with an unmet DoD does not auto-finish.
+
+**STATUS: DONE + adversarially re-read (2026-07-10, commit `10433330`).**
+
+**Implementation.** Build and artifact sandboxes default to the finite registry allowlist;
+agent/browser sandboxes get arbitrary public HTTP(S), but no model-shaped setting reaches a
+raw bridge. Both public and filtered modes place the sandbox on its own internal no-NAT
+network and expose the outside world only through a dual-homed, host-managed policy sidecar.
+The sidecar resolves once, rejects the whole answer set if any address is non-global or
+host-owned, pins the validated IP for connect, restricts public mode to ports 80/443, drops
+all capabilities, disables forwarding, and must pass readiness before the sandbox starts.
+Local and remote host interface inventories are authoritative and fail closed; remote
+published ports are reached through local SSH loopback tunnels. Every host mapping is bound
+to daemon loopback, including the internal kernel mapping, and only `USER_PORTS` can become
+a user URL.
+
+Every container create now has CPU, memory, PID, and `nofile` ceilings. `disk_mb` materializes
+as a size-capped tmpfs workspace volume on gVisor, local, and native Podman; creation fails
+instead of falling back to an uncapped volume, and destroy/orphan reconciliation removes the
+volume, sidecar, network, and tunnel. Shell output crosses the runtime API only as bounded
+head/tail plus a capped in-workspace prefix spill. File reads use no-follow descriptor walks,
+regular-file checks, a 32 MiB ceiling, and a read timeout. Kernel streams/images, durable
+event payloads, durable/ephemeral subscriber queues, preview request/HTML buffering, and WS
+recovery are bounded. Slow durable subscribers close with 1013 and can replay by sequence.
+
+The external DoD gate treats missing/unverifiable evidence as unmet and pauses after its
+bounded retry budget; it never converts refusal into `FINISHED`. Container evidence is read
+through the sandbox namespace. Static-preview commands are argv-serialized with
+`shlex.join`, and Chromium is explicitly attached to the policy proxy.
+
+**Exploit proof, both directions.** The pre-fix live network probe showed that two ordinary
+separate rootless-Podman NAT networks could route to one another, disproving the assumption
+that distinct bridge names alone isolated siblings; the old DoD regression suite also
+encoded the unsafe cap-release as its expected result. With `10433330`, the exact native
+`PodmanSandboxService` path produced: public `example.com` → 200; metadata
+`169.254.169.254` and LAN `192.168.1.1` → 403; direct sibling connect → refused; proxied
+sibling connect → 403; filtered Build `example.com` → 403 while npm registry → 200. All
+published bindings reported `HostIp=127.0.0.1`. `df` reported a 16 MiB `/workspace`,
+`fallocate -l 500G` failed `ENOSPC`, `pids.max=32`, and `ulimit -n=256`. A separate 128 MiB
+box killed a 512 MiB allocation at exit 137 and changed `memory.events oom_kill` from 0 to
+1. Each proof ended with zero labeled containers, networks, and volumes. The first native
+attempts also caught two SDK-only serialization errors (random loopback port and
+no-new-privileges shapes); both failed cleanly with zero residue and were fixed before the
+successful proof.
+
+Regression coverage is concentrated in
+`packages/tools/tests/test_sw5_isolation_bounds.py` and
+`packages/core/tests/test_sw5_event_bounds.py`, with focused additions for DNS rebinding,
+mixed-address poisoning, browser proxying, preview argv injection, DoD refusal, backend
+resource wiring, bounded shell/kernel/file output, request buffering, and WS overflow.
+
+**Adversarial notes.** Checks run before network/container side effects wherever possible;
+partial sidecar/main-container failures remove every resource. Empty or unreadable host
+inventory, invalid policy config, missing quota support, proxy readiness failure, unknown
+egress mode, non-loopback daemon bindings, unverifiable DoD evidence, and oversized payloads
+all deny. DNS answers are backend-resolved and pinned rather than client-chosen; one private
+answer poisons a mixed set. Re-reading the diff found and fixed three additional holes before
+commit: sealed workflows could inherit agent `public_web`, local inventory omitted secondary
+interfaces, and the container DoD size check used a `test --` form rejected by the real
+image. The `process` backend still cannot provide network isolation and remains dev-only,
+fail-closed for production.
+
+**Verification:** complete tools, core, and agent-server suites are green; contract, fuzz,
+and fault gates are green; every changed Python file passes Ruff. Repository-wide
+`make lint` still reports 1,111 inherited findings outside this wave. No lint rule or
+security assertion was weakened.
 
 ---
 

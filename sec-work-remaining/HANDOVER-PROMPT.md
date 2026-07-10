@@ -1,34 +1,32 @@
 # Security-wave handover prompt
 
 Paste the block below to a fresh agent (no prior context) to execute the remaining
-parked security waves. Keep this file updated as waves complete.
+parked security wave. Keep this file updated as waves complete.
 
 **Give this to a NON-Fable model.** Standing rule: Fable degrades on security
 work. Codex or a non-Fable Claude is the right worker here.
 
-**Tree state as of 2026-07-10 09:05 CDT:** S-W4 is complete at `212f6e89`; the
-signed-origin regression audit is `d6651e7e`. The remaining sequence is S-W5 then
-S-W6. The checkout was clean immediately after the S-W4 code commit; ledger edits
-may be the only newer changes if this handover itself has not yet been committed.
+**Tree state as of 2026-07-10:** S-W5 is complete at `10433330`; S-W4 is
+`212f6e89`, and the signed-origin regression audit is `d6651e7e`. The only
+remaining campaign wave is S-W6. S-W5's proof and adversarial notes are recorded
+in the campaign log.
 
 ---
 
 You are a security engineer on Disco, a self-hosted AI agent platform (Python
 monorepo + React frontend) at `~/projects/disclaude`, branch
-`disclaude/mega-campaign`. Your job: execute the PARKED security waves S-W5
-(isolation + resource caps) and S-W6 (output sinks + share + the low-severity
-cluster) — one wave at a time, in order. Do not start a wave before the previous
-one is committed and verified.
+`disclaude/mega-campaign`. Your job: execute the PARKED security wave S-W6
+(output sinks + share + the low-severity cluster). S-W5 is committed and verified;
+do not rebuild or regress it.
 
-S-W4 is completed and adversarially reviewed in the campaign log. S-W6 has an
-unreviewed draft on an archive branch. Assume that draft is wrong until you have
-proven otherwise yourself.
+S-W4 and S-W5 are completed and adversarially reviewed in the campaign log.
+S-W6 has an unreviewed draft on an archive branch. Assume that draft is wrong
+until you have proven otherwise yourself.
 
 READ FIRST, in this order, before touching anything:
 1. `sec-work-remaining/disco-security-state.md` — the single source of truth:
-   what is DONE (S-W1/W2/W3/W4 + Pi removal, with commits), what each parked wave
-   covers (S-W5 isolation + resource caps; S-W6 output sinks + share +
-   low-severity cluster), and the fitness gates that
+   what is DONE (S-W1/W2/W3/W4/W5 + Pi removal, with commits), what S-W6 covers
+   (output sinks + share + low-severity cluster), and the fitness gates that
    protect the tree.
 2. `sec-work-remaining/disco-security-fix-campaign.md` — the wave-by-wave
    campaign log, finding details, and the RESUME PLAYBOOK. Follow it.
@@ -46,6 +44,17 @@ wiring. Its exploit harness is
 records both-direction live proof. Preserve the invariant that no subprocess or
 HTTP connection occurs before config approval and no discovered tool registers
 before its exact live schema hash is approved.
+
+COMPLETED S-W5 BASE — do not regress it:
+`10433330` gives Build/artifact finite filtered egress and Agent/browser public-web
+through a private/host-denying policy sidecar on an internal per-instance network.
+It binds published ports to loopback, inventories all local/remote host addresses,
+pins validated DNS answers, applies real tmpfs workspace quotas plus CPU/memory/PID/
+FD caps, bounds shell/file/kernel/event/WS/preview transfers, keeps unmet DoD
+fail-closed, and argv-quotes preview paths. Its concentrated exploit harnesses are
+`packages/tools/tests/test_sw5_isolation_bounds.py` and
+`packages/core/tests/test_sw5_event_bounds.py`. Preserve the invariant that no
+model-shaped sandbox spec reaches a raw bridge.
 
 PRIOR WORK EXISTS — do not rebuild these from scratch:
 Two waves were partly executed in July 2026 and preserved as WIP archive commits
@@ -78,9 +87,8 @@ RULES — these are hard constraints, not preferences:
 PROOF — a wave is not done when the tests pass:
 - Unit + regression tests are the floor, not the proof. Fixtures prove
   regressions; only a live end-to-end exercise proves a feature.
-- For each wave, run the real path once against the running stack and paste the
-  evidence into the campaign log: for S-W5, a real container hitting the cap and
-  being killed; for S-W6, a real exfil attempt against a real sink, refused.
+- Run the real S-W6 path once against the running stack and paste the evidence into
+  the campaign log: a real exfil attempt against a real sink, refused.
 - Dev stack: `systemd --user` units `disco-app.service` and
   `disco-agent.service`. Restart them to pick up package edits.
 
@@ -106,7 +114,7 @@ adversarial notes is not finished.
 
 REPORTING — when a wave is done:
 1. Commit with a message naming the wave and what it closes, e.g.
-   `sec(S-W5): isolate sandbox egress and bound resources`.
+   `sec(S-W6): snapshot shares and close output sinks`.
 2. Update the DONE table in `sec-work-remaining/disco-security-state.md` with the
    wave, scope, and commit SHA; remove it from the parked table.
 3. Append the findings, the live proof, and the adversarial notes to
@@ -115,4 +123,5 @@ REPORTING — when a wave is done:
    found but did not fix.
 
 Start by reading the three documents, then `git diff` the working tree, then
-begin S-W5 from the current implementation and acceptance tests.
+begin S-W6 by reviewing (not merging) archive commit `d627d287` against the
+current implementation and acceptance tests.

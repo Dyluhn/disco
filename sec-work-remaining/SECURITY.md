@@ -34,7 +34,7 @@ authentication layer since security wave S-W1 (commit `e028d2ac`).**
   `packages/core/src/disco/core/auth.py`.)
 - **Still bind loopback.** The defaults bind every published port to `127.0.0.1`
   (`compose.yaml:42,79,106`; `.env.example:6-8`), and there is no TLS. Auth is a real
-  gate against drive-by and cross-owner access, but the parked hardening waves (see
+  gate against drive-by and cross-owner access, but the remaining parked hardening wave (see
   "Hardening status" below) are prerequisites for any public/hardened deployment — do not
   set `PMX_BIND=0.0.0.0` without your own TLS (a reverse proxy) in front.
 - **The operator is trusted.** v1 ships one operator, whose session is admin. Non-admin
@@ -56,10 +56,10 @@ status); wave-by-wave detail + resume playbook: `sec-work-remaining/disco-securi
 | S-W-Pi | Removed the Pi integration (attack-surface reduction) | DONE (`76b4e397`) |
 | S-W3 | Host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env hygiene, session hygiene) | DONE (`1b762e3f`) |
 | S-W4 | MCP approval integrity | DONE (`212f6e89`) |
-| S-W5 | Isolation + resource caps | **PARKED** |
+| S-W5 | Isolation + resource caps | DONE (`10433330`) |
 | S-W6 | Output sinks + share + low-severity cluster | **PARKED** |
 
-The parked waves are a prerequisite for any public/hardened release. One further open
+The remaining S-W6 output-sink wave is a prerequisite for any public/hardened release. One further open
 item in the deploy path: the compose `agent-server` still mounts `/var/run/docker.sock`
 (root-equivalent on the host) **by default** — fine for a trusted single-user box,
 unacceptable as a default others inherit. Making the isolated gVisor (`runsc`) backend
@@ -78,7 +78,7 @@ is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
 ### What it explicitly does NOT protect against
 
 - Deliberate network exposure without TLS/reverse-proxy hardening. S-W1 auth gates the
-  API, but the parked hardening waves (W5/W6) are prerequisites for a hardened public
+  API, but the remaining output-sink wave (W6) is a prerequisite for a hardened public
   deployment (§1).
 - A compromise of the **agent-server process** itself: on the `local`/Docker backend the
   mounted container socket makes that process root-equivalent on the host (§2, §3,
@@ -93,7 +93,7 @@ is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
 |---|---|---|---|
 | **operator ↔ server** | authenticated session | any other caller | S-W1 auth: HttpOnly session cookie + CSRF header on state-changing requests, pinned CORS, Origin-checked WS, admin-only route class for install-wide state, owner-scoped conversation routes (§1). Defaults still bind loopback (`compose.yaml:42,79,106`); no TLS. |
 | **server ↔ sandbox** | agent-server (holds the socket) | code running in the sandbox | The agent-server spawns sibling sandbox containers through the host socket. The **sandbox containers do not get the socket** — the run mount is the workspace only (`gvisor.py:307`, `local.py:84`). No host env crosses in (`environment={}` — `gvisor.py:310`, `local.py:85`; `process.py:55-61`). |
-| **sandbox ↔ internet** | the egress proxy / network policy | the sandbox guest | Three postures: sealed / filtered / open (§4). Enforced *outside* the guest, not by trusting in-guest config (`tool-sandbox-contract.md:36`, `egress_proxy.py:1-12`). |
+| **sandbox ↔ internet** | the egress proxy / network policy | the sandbox guest | Three postures: sealed / filtered / public (§4). Container backends enforce policy outside the guest on per-instance internal networks; the process backend remains dev-only and cannot enforce a network boundary. |
 | **agent-output ↔ browser** | your own live runs | shared/imported runs | Rendered in a sandboxed `<iframe>`; untrusted runs drop `allow-scripts` (§5, `ExecutionCanvas.tsx:401-403`). |
 
 ---
@@ -111,8 +111,8 @@ leaves `PMX_SANDBOX` unset so the persisted setting wins, `compose.yaml:68-69`).
 |---|---|---|---|
 | `process` | **NONE.** Tools run as subprocesses in the agent-server's own container — no kernel/VM boundary. It *does* uphold two things: a clean minimal env (no host secret leaks in) and a workspace path-jail for file ops (`process.py:1-16,48-61`). Network egress is **not** actually blocked (`process.py:11-16`). Labeled "no isolation, dev only" in the UI (`docs/archive/self-host.md:99-101`). Since S-W3 the backend selector is a fail-closed allowlist and `process` is dev-only + fail-closed in production (`preflight_build_sandbox_backend`). | No | weakest (fallback gates at LOW / on UNKNOWN, `isolation.py:83-90`) |
 | `local` (Docker/OCI, `runc`) | Container-grade only — **shared host kernel** (`local.py:1-18,35-38`). Plus the **socket tradeoff**: the agent-server mounts the host container socket, making that process **root-equivalent on the host** (`docs/archive/self-host.md:73-78`, `compose.yaml:72-75`). The agent's own code never touches the socket; this is a blast-radius concern for an *agent-server RCE*. | **No** | tighter — gate at MEDIUM, gate UNKNOWN (`isolation.py:68-78`) |
-| `gvisor` (`runsc`, separate VM) | Strong: a user-space kernel intercepting syscalls, on a separate Docker host reached over (keyless Tailscale) SSH (`gvisor.py:1-12,46-53`). The only tier that enforces a **selective** egress allowlist (§4). | Yes | most permissive earned default — gate HIGH only, trust UNKNOWN (`isolation.py:49-56`) |
-| `podman` (rootless, remote) | Container-grade (shared kernel) behind a host boundary; **real backend code but a stub in this environment** (the test VM was destroyed) — constructs but is not live-verified here (`runtime.py:256-260`). | No | gate HIGH, gate UNKNOWN (`isolation.py:57-67`) |
+| `gvisor` (`runsc`, separate VM) | Strong: a user-space kernel intercepting syscalls, on a separate Docker host reached over (keyless Tailscale) SSH (`gvisor.py`). It uses the same per-instance policy sidecar as the other container tiers (§4). | Yes | most permissive earned default — gate HIGH only, trust UNKNOWN (`isolation.py:49-56`) |
+| `podman` (rootless, remote) | Container-grade (shared kernel) behind a host boundary. The native backend and its isolation/quota/egress path are live-verified locally; the former remote test VM is gone, so that specific SSH transport is not currently exercised. | No | gate HIGH, gate UNKNOWN (`isolation.py:57-67`) |
 
 **Mitigations for the socket tradeoff** (from `docs/archive/self-host.md:80-95`, not duplicated here):
 prefer a **rootless Podman socket** (an escape lands as your unprivileged user, not root);
@@ -129,35 +129,39 @@ docs say so and so does this file.
 
 ## 4. Network egress
 
-Egress is resolved per-sandbox into one of three modes (`_container.py:38-67`):
+Egress is resolved per-sandbox into one of three modes (`sandbox/_container.py`):
 
 | Mode | Meaning | Enforcement |
 |---|---|---|
-| `sealed` | No allowlist and no NETWORK capability → **no network at all** | `network_mode=none` (`gvisor.py:297`, `local.py:79`). The `SandboxSpec` default is sealed (`_container.py:38-41`). |
-| `filtered` | Non-empty `egress_allow` → a per-connection **allowlisting proxy** | gVisor only: an internal no-NAT network whose only route out is a proxy sidecar that 403s any host the allowlist doesn't name (`gvisor.py:186-258`, `egress_proxy.py:1-24,39-56`). |
-| `open` | NETWORK capability, no allowlist → deliberate raw egress (the whole internet) | `network_mode=bridge` (`gvisor.py:295`, `local.py:79`). |
+| `sealed` | No allowlist/public grant → **no network at all** | `network_mode=none`. The bare `SandboxSpec` default is sealed. |
+| `filtered` | Non-empty `egress_allow` → only the finite named hosts | The sandbox has one internal no-NAT interface; a dual-homed policy sidecar resolves, validates, and pins the upstream IP, and 403s unlisted or non-global/host-owned targets. |
+| `public` | Agent/browser may use arbitrary public HTTP(S) | The same policy sidecar permits public ports 80/443 but rejects metadata, private/non-global, host-owned, sibling, and DNS-rebind targets. Legacy `open`/`raw` configuration aliases this posture; neither grants a raw bridge. |
 
-**Honest caveats — the guarantee is tier-dependent (`tool-sandbox-contract.md:85-93`):**
+Every container-backed instance gets its own internal network. Published preview/kernel
+ports bind only to daemon loopback; a remote daemon is reached through a local SSH loopback
+tunnel. The sidecar drops all capabilities, disables IP forwarding, has its own CPU/memory/
+PID/FD limits, and must pass readiness before sandbox start. Local interface inventory and
+remote `ip -j address` inventory add every host-owned address to the deny set; inventory
+failure denies creation. DNS is resolved once, every answer is checked, and the connection
+uses the validated IP, so private redirects/rebinding and mixed public/private answers fail.
 
-- The **selective allowlist is a gVisor-only guarantee.** On `local`/`podman`, a `filtered`
-  request **cannot** be enforced per-host, so it **fails safe to `sealed` (deny-all)** rather
-  than silently opening the full bridge (`local.py:64-68`, `podman.py:254-256`). It is
-  all-or-nothing on these tiers, not a curated allowlist.
-- On `process`, egress policy is **modeled only** — the host network is reachable; this is
-  not an isolation boundary (`process.py:11-16`, `tool-sandbox-contract.md:91`).
+**Per-surface defaults:** Build and artifact use `REGISTRY_EGRESS_ALLOW` (finite-filtered),
+while Agent/browser uses public-web-but-private-denied. A sealed workflow explicitly clears
+the public grant. Unknown `*_EGRESS` values fail closed. The `process` backend remains the
+honest exception: its policy is modeled only because it shares the host network; production
+selection refuses that backend.
 
-**The Build/Agent surface defaults to `open`, NOT sealed.** Although a bare `SandboxSpec` is
-sealed, the Build loop builds its spec from `PMX_BUILD_EGRESS`, which **defaults to `open`**
-(full NETWORK) — `runtime.py:808,828` (`os.environ.get("PMX_BUILD_EGRESS", "open")`). The
-deny-by-default allowlist is **opt-in**: set `PMX_BUILD_EGRESS=filtered` (commented out in
-`.env.example:63`) to switch a Build sandbox to the registry-only allowlist (and, on gVisor,
-get the proxy). The same posture governs the orchestrator-side MCP HTTP client
-(`runtime.py:797-814`).
+### Resource and output boundaries (S-W5)
 
-> This means: on the **default deployment** (`local` backend, `PMX_BUILD_EGRESS` unset), a
-> Build/Agent sandbox has **full outbound internet**. `docs/archive/self-host.md` states this same
-> default in its "Network egress" section; the bare `SandboxSpec` is sealed, but the Build
-> surface grants NETWORK unless you opt into `filtered`.
+Container creates apply CPU, memory, PID, and `nofile` ceilings. `disk_mb` is a real,
+size-capped tmpfs workspace volume on gVisor/local/Podman, never an uncapped fallback;
+destroy and orphan reconciliation remove the volume and network auxiliaries. Shell capture
+returns bounded head/tail with a capped workspace spill, file reads use no-follow descriptor
+walks plus regular-file/size/time limits, and kernel text/images are capped. Durable events
+are limited to 1 MiB; live durable and ephemeral queues are bounded, with replay-on-reconnect
+for a slow durable subscriber. Preview request and injectable-HTML buffering are bounded.
+The DoD finish gate no longer auto-releases unmet or unverifiable checks, and auto-preview
+commands serialize model-derived paths as argv (`10433330`).
 
 ---
 
@@ -293,7 +297,7 @@ residuals: `sec-work-remaining/disco-security-fix-campaign.md` (Wave 3).
 
 **Exposure corollary:** since S-W1 the API in front of these secrets is authenticated
 (secrets routes are admin-only, state changes require CSRF), but there is still no TLS and
-the parked hardening waves are incomplete. **Keep `DISCO_BIND=127.0.0.1`** unless you put
+the remaining output-sink wave is incomplete. **Keep `DISCO_BIND=127.0.0.1`** unless you put
 TLS (a reverse proxy) in front (`.env.example:5-8`).
 
 ---
@@ -311,22 +315,21 @@ deployment.
 
 ## 9. Known limitations & non-goals (v1)
 
-- **Auth and MCP approval integrity shipped (S-W1/S-W4), but the hardening campaign is
-  incomplete.** W5 (isolation + resource caps) and W6 (output sinks + share +
-  low-severity cluster) are **PARKED** — prerequisites for any public/hardened release
+- **Auth, MCP approval integrity, and isolation/resource bounds shipped (S-W1/S-W4/S-W5),
+  but the hardening campaign is incomplete.** W6 (output sinks + share + low-severity
+  cluster) is **PARKED** — a prerequisite for any public/hardened release
   (`sec-work-remaining/disco-security-state.md` §2). No TLS; single-operator; keep the loopback bind
   (`.env.example:5-8`).
 - **The `local`/Docker socket mount is root-equivalent** on the host; a full agent-server
   compromise can own the machine — and it is still the compose **default**. Mitigate with
   a rootless Podman socket (`docs/archive/self-host.md:73-95`); making the isolated gVisor
   backend the documented default is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
-- **`process` backend = no isolation** and no real egress block — dev/try-out only
-  (`process.py:1-16`).
-- **Egress is `open` by default on the Build surface** (`PMX_BUILD_EGRESS` defaults to
-  `open`, `runtime.py:808,828`). Selective allowlisting is gVisor-only and opt-in.
+- **`process` backend = no isolation and no enforceable egress boundary** — dev/try-out
+  only (`process.py:1-16`). Container-backed Build/artifact defaults are finite-filtered,
+  and Agent/browser is public-but-private-denied.
 - **Single-owner; not tenant-isolated.** Every conversation is owner `"local"`.
-- **`podman` remote backend is a stub in this environment** — not live-verified here
-  (`runtime.py:256-260`).
+- **The former remote Podman VM is gone.** The native backend is live-verified locally, but
+  that particular remote SSH endpoint is not currently available for transport testing.
 - **Your own live previews run scripts** (`allow-scripts`); only shared/imported runs are
   script-hardened (`ExecutionCanvas.tsx:401-403`).
 - **The risk gate auto-approves in-sandbox actions** on the Build surface; it is not

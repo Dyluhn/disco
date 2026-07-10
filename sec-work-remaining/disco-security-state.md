@@ -1,6 +1,6 @@
 # Disco — security state (single source of truth, 2026-07-10)
 
-Code snapshot at `disclaude/mega-campaign` @ `212f6e89`. This file records everything
+Code snapshot at `disclaude/mega-campaign` @ `10433330`. This file records everything
 security-related: what is DONE (committed), what is PARKED, what was DEFERRED
 during the primitive sprint, and the gate that currently protects the tree.
 
@@ -18,6 +18,7 @@ log + resume playbook).
 | S-W-Pi | Removed the Pi integration (attack-surface reduction) | `76b4e397` |
 | S-W3 | Host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env hygiene, session hygiene) + 2 adversarial review rounds | `1b762e3f` |
 | S-W4 | MCP pre-connect config approval, first-use/schema-drift approval, honest host scope, configured risk-tier gating | `212f6e89` |
+| S-W5 | Per-surface isolated egress, real workspace/resource caps, bounded output/event/WS boundaries, fail-closed DoD, argv-safe preview | `10433330` |
 | — | Origin-approval ledger: surface silently-dropped entries + fail-closed/warn-once regression | `8157745b`, `d6651e7e` |
 
 These are live on the branch and covered by tests + the four fitness gates.
@@ -31,11 +32,10 @@ the intended substrate for generated-app outbound calls):
 
 ---
 
-## 2. Parked waves (not started — the campaign's remaining hardening)
+## 2. Remaining parked wave
 
 | Wave | Scope |
 |------|-------|
-| S-W5 | Isolation + resource caps |
 | S-W6 | Output sinks + share + low-severity cluster |
 
 Resume playbook lives in `sec-work-remaining/disco-security-fix-campaign.md` (rebase notes +
@@ -132,7 +132,7 @@ harnesses are built yet; the framework hook (§4) is what they plug into.
   host). Fine for a trusted single-user box; **unacceptable as the default others
   inherit.** P3/P4 must make the isolated `runsc`/gVisor backend the documented
   default and gate the docker.sock/process path behind an explicit opt-in. This
-  couples packaging to the parked isolation work (S-W3/S-W4 done / S-W5 parked).
+  couples packaging to the isolation work (S-W3/S-W4/S-W5 done).
 - The `process` sandbox backend is dev-only and already fail-closed in prod
   (`preflight_build_sandbox_backend`, S-W3).
 - Host-specific defaults to scrub before publishing (P3): `workspace_root`,
@@ -142,9 +142,9 @@ harnesses are built yet; the framework hook (§4) is what they plug into.
 
 ## 7. One-line summary
 
-Auth, secret custody, egress chokepoint, the host-execution floor, and MCP approval
-integrity are DONE and gated. The isolation/output-sink waves (W5/W6) are PARKED. The
-credential/quota plane and the two payment/webhook scaffolds' security fills are
-DEFERRED with specs written. The framework's fail-closed gate keeps anything
+Auth, secret custody, egress chokepoint, the host-execution floor, MCP approval
+integrity, and isolation/resource bounds are DONE and gated. The output-sink wave
+(W6) is PARKED. The credential/quota plane and the two payment/webhook scaffolds'
+security fills are DEFERRED with specs written. The framework's fail-closed gate keeps anything
 security-critical from shipping unverified. Packaging's one blocker is flipping the
 sandbox default off the root-equivalent socket.
