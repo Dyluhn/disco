@@ -353,7 +353,9 @@ class VerifyWebAppTool:
         )
 
         if result.newly_ejected and result.lock is not None:
-            await sandbox.write_file(LOCKFILE_RELPATH, dump_lock(result.lock))
+            from .files import _atomic_write
+
+            await _atomic_write(sandbox, LOCKFILE_RELPATH, dump_lock(result.lock))
             for name in result.newly_ejected:
                 await self._append_eject_banner(ctx, result.lock, name)
 
