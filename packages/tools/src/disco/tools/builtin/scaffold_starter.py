@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Literal
 
 from disco.core import SecurityRisk
+from disco.core.flags import appkit_enabled
 from disco.core.kits import StarterKitRegistry
 from pydantic import BaseModel, Field
 
@@ -121,6 +122,18 @@ class ScaffoldStarterTool:
                     "pass `kind` to pick a starter component — available: "
                     + ", ".join(_CATALOG)
                     + ". (No build contract recommends one for this run.)"
+                ),
+            )
+        # KILL SWITCH: lead_form seeds an AppKit app (.disco/appspec.json) — with
+        # AppKit disabled that seed is a dead end, so refuse with the free-form path.
+        if starter_id == "lead_form" and not appkit_enabled():
+            return ToolOutcome(
+                success=False,
+                error="appkit_disabled",
+                content=(
+                    "the 'lead_form' starter seeds an AppKit app, and AppKit is "
+                    "disabled on this deployment (DISCO_APPKIT_ENABLED=0). Use "
+                    "'app_shell' and add a plain HTML form to it instead."
                 ),
             )
         kit = StarterKitRegistry.default().get(starter_id)

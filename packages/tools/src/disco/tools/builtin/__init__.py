@@ -9,6 +9,8 @@ placeholder — the model declares intent, the platform owns the port/serving/he
 
 from __future__ import annotations
 
+from disco.core.flags import appkit_enabled
+
 from ..registry import ToolRegistry
 from ._deck_patch import DeckPatchTool
 from .app_kit import APPKIT_V2_TOOLS
@@ -160,9 +162,12 @@ def build_default_registry() -> ToolRegistry:
         # LEGACY app_snapshot_version stays the registered owner of its name
         # (governed persisted-v1 paths depend on it) — skip the v2 duplicate here;
         # the AppKit executor registers the full v2 set for strict-mode builds.
+        # KILL SWITCH: DISCO_APPKIT_ENABLED=0 drops the whole v2 set — app_*
+        # becomes unknown_tool everywhere (the legacy pair above is a different,
+        # governed surface and stays).
         *(
             cls()
-            for cls in APPKIT_V2_TOOLS
+            for cls in (APPKIT_V2_TOOLS if appkit_enabled() else ())
             if cls().definition.name != "app_snapshot_version"
         ),
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame

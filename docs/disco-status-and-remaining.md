@@ -72,6 +72,22 @@ NOT v0.1: no current surface claims auth/RBAC, so deferral breaks no promise.
 v0.1 borrow only: the hand-rolled-auth honesty label (flag model-generated
 auth/payment code as unverified in the deliverable).
 
+## AppKit kill switch (2026-07-10)
+
+`DISCO_APPKIT_ENABLED=0` on the agent-server fully separates the AppKit track
+if it proves unreliable — one config change, restart, gone. Off means: the
+`app_*` v2 mutators leave the default registry (unknown_tool everywhere), the
+create route refuses `appkit_mode` with an honest 409 (never a silent
+downgrade), the runtime never composes the strict `AppKitToolExecutor`
+(existing appkit conversations degrade to normal free-form builds; their files
+are ordinary Vite apps), and the `lead_form` starter refuses with the
+free-form alternative. Re-enable + restart restores everything — no stored
+state is touched (the gate is on the READ, `_effective_appkit_mode`, not the
+setter). Flag helper: `disco.core.flags.appkit_enabled()`. Known caveat: the
+`disco verify` AppKit acceptance scenario fails with the 409 detail while
+disabled — expected and self-explaining. Live-proven 2026-07-10 (409 with flag
+off, 200 both ways with flag on, on a throwaway :8010 instance).
+
 ## HANDOVER — immediate queue (2026-07-10, post appkit-lane session)
 
 1. **Fix `verify_appkit_app` `schema_sql_valid`** (packages/tools/src/disco/tools/

@@ -17,6 +17,7 @@ from disco.core import (
     MessageEvent,
 )
 from disco.core.appkit import classify_build_brief
+from disco.core.flags import appkit_enabled
 from disco.core.store.base import ConversationSummary
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
@@ -115,6 +116,19 @@ async def _create_conversation_response(
     body: CreateConversationBody,
     request: Request | None,
 ) -> dict:
+    # KILL SWITCH: an explicit appkit_mode request against a deployment that
+    # disabled AppKit is refused loudly BEFORE any event is persisted — a silent
+    # downgrade to free-form would be a false affordance (the caller asked for
+    # the strict allowlist and validated mutators and would not get them).
+    if body.appkit_mode and not appkit_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "AppKit is disabled on this deployment (DISCO_APPKIT_ENABLED=0). "
+                "Create the conversation without appkit_mode to build free-form, "
+                "or re-enable the flag and restart disco-agent."
+            ),
+        )
     conversation_id = f"conv_{uuid.uuid4().hex}"
     session = current_session(request) if request is not None else None
     owner_id = await _owner_for_create_request(request)

@@ -564,8 +564,15 @@ class RuntimeSettings:
         self._rt._appkit_mode[conversation_id] = bool(on)
 
     def _effective_appkit_mode(self, conversation_id: str) -> bool:
-        """True when the conversation was created with appkit_mode=True."""
-        return self._rt._appkit_mode.get(conversation_id, False)
+        """True when the conversation was created with appkit_mode=True AND the
+        deployment has AppKit enabled. This read is the single choke point every
+        executor-composition decision flows through, so the DISCO_APPKIT_ENABLED=0
+        kill switch gates HERE (not the setter): existing appkit conversations
+        degrade to normal free-form builds on their next loop composition, and
+        re-enabling the flag restores them — no stored state is touched."""
+        from disco.core.flags import appkit_enabled
+
+        return appkit_enabled() and self._rt._appkit_mode.get(conversation_id, False)
 
     # ---- per-query research sources ---------------------------------------
 
