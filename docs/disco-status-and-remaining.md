@@ -88,6 +88,12 @@ setter). Flag helper: `disco.core.flags.appkit_enabled()`. Known caveat: the
 disabled — expected and self-explaining. Live-proven 2026-07-10 (409 with flag
 off, 200 both ways with flag on, on a throwaway :8010 instance).
 
+> **2026-07-10 supersede:** the "verifier re-aim" queue item below is now
+> **Wave 1 of `docs/appkit-campaign.md`** at a corrected, larger scope — the
+> repro proved **5 of 6** fallback checks false-FAIL for records apps (not just
+> `schema_sql_valid`), so the fix is a full `records_verify` bundle, not a
+> representative-row tweak. Read the campaign doc first.
+
 ## HANDOVER — immediate queue (2026-07-10, post appkit-lane session)
 
 1. **Fix `verify_appkit_app` `schema_sql_valid`** (packages/tools/src/disco/tools/
