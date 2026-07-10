@@ -32,20 +32,25 @@ from .models import (
 # medium (there is no semantic-tool layer to protect, unlike AppKit), so the packs
 # carry the full evidenced working set; the contract's enforcement value here is
 # the read-only VERIFY phase + cross-kind hygiene (deck/doc/app_* tools stay out).
+# codex follow-ups: file_edit in BOOTSTRAP (an artifact-mode "targeted change to
+# an uploaded file" edits before any authoring — CUSTOM always allowed this);
+# scaffold_starter in EDIT + REPAIR (any bootstrap-pack success — even a
+# context_memory list — advances the phase, and the starter must not be
+# stranded behind that flip; the tool is no-clobber, so late calls are safe).
 _SITE_BOOTSTRAP_TOOLS = (
-    "scaffold_starter", "file_write", "preview_start", "shell", "context_memory",
-    "image_generate",
+    "scaffold_starter", "file_write", "file_edit", "preview_start", "shell",
+    "context_memory", "image_generate",
 )
 _SITE_EDIT_TOOLS = (
     "file_edit", "file_replace_lines", "file_insert_lines", "file_append",
     "file_write", "shell", "shell_exec", "shell_kill_process", "browser",
     "code_exec", "run_project_script", "context_memory", "image_generate",
-    "delegate_explore",
+    "delegate_explore", "scaffold_starter",
 )
 _SITE_REPAIR_TOOLS = (
     "file_write", "file_edit", "file_replace_lines", "file_insert_lines",
     "file_append", "shell", "shell_exec", "shell_kill_process", "browser",
-    "context_memory",
+    "context_memory", "scaffold_starter",
 )
 
 
@@ -198,14 +203,19 @@ _BUILTINS = (
 # contracts genuinely fit. api/cli/data_tool/mobile_app and "unknown" stay
 # UNMAPPED → the CUSTOM escape hatch, exactly as before activation — a wrong
 # contract (its required_files + finalizer) is worse than no contract.
+# NARROWED further after codex review (2026-07-10): app_kind is MEDIUM-BLIND —
+# "text-based terminal game in Python" classifies `game`, "PowerPoint deck about
+# ecommerce trends" classifies `ecommerce` — and a wrongly-mapped browser
+# contract's required_files can mis-gate finish (index.html becomes a
+# dictated-content candidate). Only kinds whose CLASSIFIER KEYWORDS are
+# intrinsically web-medium stay mapped: landing_page/blog ("landing page",
+# "portfolio", "blog", "content site") and web_app ("web app", "website",
+# "saas", "page"). game/dashboard/chat_app/ecommerce → CUSTOM: they lose the
+# starter RECOMMENDATION but keep full catalog access via explicit `kind`.
 APP_KIND_TO_CONTRACT: dict[str, ContractKind] = {
     "landing_page": ContractKind.STATIC_SITE,
     "blog": ContractKind.STATIC_SITE,
-    "game": ContractKind.INTERACTIVE_PROTOTYPE,
     "web_app": ContractKind.INTERACTIVE_PROTOTYPE,
-    "dashboard": ContractKind.INTERACTIVE_PROTOTYPE,
-    "chat_app": ContractKind.INTERACTIVE_PROTOTYPE,
-    "ecommerce": ContractKind.INTERACTIVE_PROTOTYPE,
 }
 
 

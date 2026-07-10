@@ -377,8 +377,12 @@ export interface FileStreamFrame {
 // that the model receives as an ENVIRONMENT message but the user doesn't see;
 // the visible `content` stays a short one-liner.
 // D3: inject_source adds plaintext to an active Deep Research run's corpus.
+// CONTRACT-ACTIVATE (2026-07-10): `build_brief` is an advisory PRESENCE flag —
+// the server never trusts client fields; it re-classifies from `content` and
+// uses the result to declare the build contract (starter recommendation,
+// finalizer alias). Omitting it leaves the run undeclared (CUSTOM).
 export type WSClientFrame =
-  | { type: "send_message"; content: string; context?: string }
+  | { type: "send_message"; content: string; context?: string; build_brief?: Record<string, never> }
   | { type: "steer"; steer_text: string } // redirect a running agent / DR mid-run steer (routes by context)
   | { type: "confirm"; action_id?: string }
   | { type: "reject"; action_id?: string }

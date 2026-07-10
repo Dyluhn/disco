@@ -348,6 +348,10 @@ export function useBuildStream(
       h.send({
         type: "send_message",
         content: session.task,
+        // CONTRACT-ACTIVATE: presence of build_brief asks the server to classify
+        // the request and declare the build contract for this run (codex found
+        // the shipped UI never sent it, so activation only fired for API callers).
+        build_brief: {},
         ...(session.context ? { context: session.context } : {}),
       });
     return () => h.cancel();

@@ -184,7 +184,7 @@ def test_brief_activation_maps_and_declares() -> None:
     from disco.core.appkit import BuildBrief
 
     rt = _runtime()
-    rt.activate_contract_for_brief("c-map", BuildBrief(app_kind="game"))
+    rt.activate_contract_for_brief("c-map", BuildBrief(app_kind="web_app"))
     assert rt._build_kind.get("c-map") == "interactive.prototype"
     # and the contract's affordances resolve for THIS run:
     assert rt._starter_kit_for("c-map") == "app_shell"
@@ -199,20 +199,37 @@ def test_brief_activation_first_declaration_wins() -> None:
     rt.activate_contract_for_brief("c-first", BuildBrief(app_kind="landing_page"))
     assert rt._build_kind.get("c-first") == "static.site"
     tracker_before = rt._build_trackers.get("c-first")
-    rt.activate_contract_for_brief("c-first", BuildBrief(app_kind="game"))
+    rt.activate_contract_for_brief("c-first", BuildBrief(app_kind="web_app"))
     assert rt._build_kind.get("c-first") == "static.site"  # unchanged
     assert rt._build_trackers.get("c-first") is tracker_before  # no reset
 
 
-def test_brief_activation_unmapped_kinds_stay_custom() -> None:
+def test_brief_activation_custom_sentinel_also_wins_first() -> None:
+    """codex defect #2: an UNMAPPED first brief records the CUSTOM sentinel, so a
+    LATER mapped brief cannot re-declare (which would reset trackers under a
+    live pinned run)."""
+    from disco.core.appkit import BuildBrief
+
+    rt = _runtime()
+    rt.activate_contract_for_brief("c-cust", BuildBrief(app_kind="api"))
+    assert rt._build_kind.get("c-cust") == "custom"
+    rt.activate_contract_for_brief("c-cust", BuildBrief(app_kind="landing_page"))
+    assert rt._build_kind.get("c-cust") == "custom"  # first (unmapped) won
+
+
+def test_brief_activation_unmapped_kinds_resolve_custom() -> None:
     from disco.core.appkit import BuildBrief
     from disco.core.contract import ContractKind
 
     rt = _runtime()
-    for kind in ("api", "cli", "data_tool", "mobile_app", "unknown", ""):
+    # Medium-blind kinds are deliberately unmapped (codex defect #5: a
+    # "text-based terminal game" classifies `game`; a browser contract's
+    # required_files would mis-gate finish) — they record the CUSTOM sentinel.
+    for kind in ("api", "cli", "data_tool", "mobile_app", "game", "dashboard",
+                 "ecommerce", "chat_app", "unknown", ""):
         cid = f"c-{kind or 'blank'}"
         rt.activate_contract_for_brief(cid, BuildBrief(app_kind=kind))
-        assert cid not in rt._build_kind, kind
+        assert rt._build_kind.get(cid) == "custom", kind
         guard, _ = rt._build_scope_guard(cid)
         assert rt._build_trackers[cid][0].kind is ContractKind.CUSTOM
 

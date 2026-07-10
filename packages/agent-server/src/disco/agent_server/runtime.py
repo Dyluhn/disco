@@ -1531,11 +1531,16 @@ class ConversationRuntime:
         artifact-mode-only wiring (see the executor guard selection)."""
         if build_brief is None or conversation_id in self._build_kind:
             return
-        from disco.core.contract import contract_kind_for_app_kind
+        from disco.core.contract import ContractKind, contract_kind_for_app_kind
 
         kind = contract_kind_for_app_kind(getattr(build_brief, "app_kind", None))
-        if kind is not None:
-            self.set_build_kind(conversation_id, kind.value)
+        # An UNMAPPED brief records the CUSTOM sentinel (codex defect #2): without
+        # it, "first declaration wins" was false for unmapped kinds — a LATER
+        # mapped brief could re-declare mid-conversation and reset the trackers
+        # under a live pinned run. CUSTOM resolves to the same contract the
+        # no-declaration path always used, so behavior is otherwise unchanged;
+        # only the first-wins guarantee becomes real.
+        self.set_build_kind(conversation_id, (kind or ContractKind.CUSTOM).value)
 
     def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
         """Declare the build contract kind for a conversation (e.g. 'appkit.leadgen').
@@ -4146,7 +4151,11 @@ class ConversationRuntime:
         # CONTRACT-ACTIVATE: declare the contract kind from the brief BEFORE the
         # kernel composes the loop, so the starter recommendation / finalizer
         # alias / delivery mode resolve for this very run. First-wins + guarded
-        # eviction inside — safe on steers and re-sends.
+        # eviction inside — safe on steers and re-sends. Mirrors the kernel-pin
+        # rollback: a declaration made by THIS call is undone if the send never
+        # lands (codex defect #3 — a failed send must not permanently win the
+        # contract for a turn that never entered history).
+        newly_declared = build_brief is not None and conversation_id not in self._build_kind
         self.activate_contract_for_brief(conversation_id, build_brief)
         newly_pinned = conversation_id not in self._pinned_kernels
         kernel = self._ensure_kernel_pinned(conversation_id)
@@ -4161,6 +4170,8 @@ class ConversationRuntime:
         except BaseException:
             if newly_pinned:
                 self._clear_pinned_kernel(conversation_id)
+            if newly_declared:
+                self.set_build_kind(conversation_id, None)
             raise
 
     async def _run_continuing_control(
