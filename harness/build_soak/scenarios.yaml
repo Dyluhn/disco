@@ -378,3 +378,25 @@ scenarios:
           - path: "index.html"
             must_contain: ["Acme Cloud", "Pro", "Enterprise", "Get Started", "Copyright Acme Cloud 2026"]
       terminal_status_in: ["FINISHED", "VERIFIED"]
+
+  # ---- AppKit finish lane (deadlock regression cbfec1fd, live proof) --------
+  # Autonomous strict-AppKit build: the exact configuration the finish deadlock
+  # killed (dictated-content false positives + refused shell probe + nudge
+  # re-entry meant NO autonomous appkit build ever terminated cleanly). The
+  # oracle adjudicates the fix from the outcome alone: a deadlocked run never
+  # reaches FINISHED/VERIFIED, and a zero-work finish leaves no appspec.
+  - id: appkit_finish_autonomous
+    mode: api
+    appkit: true
+    autonomous: true
+    prompt: "Build a small notes web app: an input to add a note, a list of saved notes, and a way to delete one. Keep it simple and finish when it works."
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      workspace:
+        files:
+          - path: ".disco/appspec.json"
+          - path: ".disco/designspec.json"
+      terminal_status_in: ["FINISHED", "VERIFIED"]

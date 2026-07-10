@@ -411,11 +411,21 @@ class DiscoApiClient:
     # -- create + drive -------------------------------------------------------
 
     async def create_build_conversation(
-        self, prompt: str, *, model: str | None = None, autonomous: bool = False
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        autonomous: bool = False,
+        appkit: bool = False,
     ) -> str:
         """POST /conversations (surface=build) then POST the user message (which the
         route appends AND kicks). Returns the conversation_id."""
         body: dict[str, Any] = {"surface": "build", "autonomous": autonomous}
+        if appkit:
+            # EPIC F strict AppKit mode — the phase-based allowlist build. The
+            # appkit soak lane (deadlock regression cbfec1fd) sets this per
+            # scenario; the route flips runtime.set_appkit_mode at create time.
+            body["appkit_mode"] = True
         if model:
             body["model_override"] = model
         status, data = await self._t.post_json("/conversations", body)
@@ -426,10 +436,14 @@ class DiscoApiClient:
         # down even if the subsequent message POST / drive raises — a created-but-abandoned
         # conversation must never leak as a RUNNING build on the shared server.
         self.last_conversation_id = cid
-        # POST the user task — appends the USER message AND kicks the loop.
-        mstatus, _ = await self._t.post_json(
-            f"/conversations/{cid}/messages", {"content": prompt}
-        )
+        # POST the user task — appends the USER message AND kicks the loop. AppKit
+        # lanes mirror the production UI's initial frame: `build_brief` present makes
+        # the route classify a Build Brief from the prompt (codex finding #11 — without
+        # it the contract-activation path never fires for the soak).
+        mbody: dict[str, Any] = {"content": prompt}
+        if appkit:
+            mbody["build_brief"] = {}
+        mstatus, _ = await self._t.post_json(f"/conversations/{cid}/messages", mbody)
         if mstatus >= 400:
             raise RuntimeError(f"post_message failed: HTTP {mstatus}")
         return cid
