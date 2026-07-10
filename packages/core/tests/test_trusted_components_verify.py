@@ -239,6 +239,58 @@ async def test_fingerprint_material_is_deterministic(tmp_path: Path) -> None:
     assert a.fingerprint_material() == b.fingerprint_material()
 
 
+@pytest.mark.asyncio
+async def test_rbac_two_edge_requires_graph_blocks_then_passes() -> None:
+    """WO-TC5: rbac-kit's 2-edge requires graph, proven on the REAL registry.
+    Missing EITHER auth-kit or database-kit FAILS (blocks finish); both present
+    passes. This is the broken-deps-then-fixed demonstration the spec calls for."""
+    reg = TrustedComponentRegistry.default()
+    if reg.get("rbac-kit") is None:
+        pytest.skip("rbac-kit not shipped in the registry")
+
+    def files_for(*names: str) -> dict[str, bytes]:
+        out: dict[str, bytes] = {}
+        for n in names:
+            comp = reg.get(n)
+            assert comp is not None
+            for rel, data in comp.install_tree().items():
+                out[install_path(n, rel)] = data
+        return out
+
+    def rbac_deps(res):
+        return next(c for c in res.checks if c.name == "component_deps:rbac-kit")
+
+    # rbac alone — BOTH edges missing → deps FAIL and block.
+    res = await verify_trusted_components(
+        _lock_for(("rbac-kit", "1.0.0")), reg, files_for("rbac-kit"), run_probe=None, now_iso=NOW
+    )
+    deps = rbac_deps(res)
+    assert deps.status == "fail"
+    assert "auth-kit>=1.0" in deps.evidence and "database-kit>=1.0" in deps.evidence
+    assert res.failing
+
+    # one edge satisfied (auth), the other (database) still missing → FAIL.
+    res2 = await verify_trusted_components(
+        _lock_for(("rbac-kit", "1.0.0"), ("auth-kit", "1.0.0")),
+        reg,
+        files_for("rbac-kit", "auth-kit"),
+        run_probe=None,
+        now_iso=NOW,
+    )
+    assert rbac_deps(res2).status == "fail"
+    assert "database-kit>=1.0" in rbac_deps(res2).evidence
+
+    # both edges installed → rbac's deps PASS (installing the dep fixed it).
+    res3 = await verify_trusted_components(
+        _lock_for(("rbac-kit", "1.0.0"), ("auth-kit", "1.0.0"), ("database-kit", "1.0.0")),
+        reg,
+        files_for("rbac-kit", "auth-kit", "database-kit"),
+        run_probe=None,
+        now_iso=NOW,
+    )
+    assert rbac_deps(res3).status == "pass"
+
+
 def test_parse_probe_stdout_last_line_wins_and_garbage_raises() -> None:
     v = parse_probe_stdout('debug noise\nmore noise\n{"passed": true, "summary": "ok"}\n')
     assert v.passed and v.summary == "ok"
