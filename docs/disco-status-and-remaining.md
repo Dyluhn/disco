@@ -57,3 +57,15 @@ Ordered work (detail in plan §6):
 - **P3** — promote `deploy/sandbox/` to a first-class deliverable; scrub host-specific defaults in `core/llm/config.py` (workspace_root, podman_url) to neutral container-local values; rewrite the stale sandbox README (`pmx-sandbox:base` → `disco-sandbox:base`).
 - **P4** — trim `.env.example` to required-vs-optional; add a first-run "configure your model" step (the seed defaults to an Ollama endpoint that's empty on most boxes — the #1 out-of-box failure).
 - **P5** — release hygiene: SBOM of bundled weights/deps, image-size trim + recorded targets, README quickstart matching P1's real commands.
+
+## Parked for v0.2: Trusted Components tier
+
+Dylan's verified vendored-component design (2026-07-10) — immutable hash-pinned
+security cores (auth/RBAC/payments) + free periphery; verify = integrity hash +
+requires-graph + per-component seam probe; eject = honest relabel. Full design +
+market evidence: `docs/trusted-components-design.md`. Fail-closed seam pinned in
+`packages/core/src/disco/core/trusted_components/` (manifest contract, tested,
+NOTHING advertised — same parking discipline as the f41/f33 seams). Deliberately
+NOT v0.1: no current surface claims auth/RBAC, so deferral breaks no promise.
+v0.1 borrow only: the hand-rolled-auth honesty label (flag model-generated
+auth/payment code as unverified in the deliverable).
