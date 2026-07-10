@@ -6,11 +6,14 @@ re-approval required path.
 
 from __future__ import annotations
 
+from disco.core import SecurityRisk
 from disco.tools.mcp.approval import (
     ApprovalRecord,
     ApprovalRequired,
+    compute_config_hash,
     compute_description_hash,
 )
+from disco.tools.mcp.config import McpServerConfig
 
 
 class TestComputeDescriptionHash:
@@ -28,22 +31,30 @@ class TestComputeDescriptionHash:
 
     def test_different_tools_produce_different_hash(self):
         """Different tool sets → different hash."""
-        h1 = compute_description_hash([
-            {"name": "echo", "description": "Echo back a message"},
-        ])
-        h2 = compute_description_hash([
-            {"name": "add", "description": "Add two numbers"},
-        ])
+        h1 = compute_description_hash(
+            [
+                {"name": "echo", "description": "Echo back a message"},
+            ]
+        )
+        h2 = compute_description_hash(
+            [
+                {"name": "add", "description": "Add two numbers"},
+            ]
+        )
         assert h1 != h2
 
     def test_same_name_different_description_produces_different_hash(self):
         """A changed description → different hash."""
-        h1 = compute_description_hash([
-            {"name": "echo", "description": "Echo back a message"},
-        ])
-        h2 = compute_description_hash([
-            {"name": "echo", "description": "Echo with formatting"},
-        ])
+        h1 = compute_description_hash(
+            [
+                {"name": "echo", "description": "Echo back a message"},
+            ]
+        )
+        h2 = compute_description_hash(
+            [
+                {"name": "echo", "description": "Echo with formatting"},
+            ]
+        )
         assert h1 != h2
 
     def test_empty_tool_list_produces_valid_hash(self):
@@ -54,11 +65,91 @@ class TestComputeDescriptionHash:
 
     def test_hash_is_hex_string(self):
         """Hash is a 64-char hex string."""
-        h = compute_description_hash([
-            {"name": "t", "description": "d"},
-        ])
+        h = compute_description_hash(
+            [
+                {"name": "t", "description": "d"},
+            ]
+        )
         assert isinstance(h, str)
         assert len(h) == 64
+
+    def test_input_schema_change_changes_hash(self):
+        base = [{"name": "t", "description": "d", "inputSchema": {"type": "object"}}]
+        changed = [{"name": "t", "description": "d", "inputSchema": {"type": "string"}}]
+        assert compute_description_hash(base) != compute_description_hash(changed)
+
+    def test_config_hash_covers_launch_and_policy_fields(self):
+        base = {"name": "s", "transport": "stdio", "command": ["safe"], "risk_tier": "low"}
+        changed = {**base, "command": ["unsafe"]}
+        assert compute_config_hash(base) != compute_config_hash(changed)
+
+    def test_config_hash_matches_loose_and_typed_representations(self):
+        loose = {
+            "name": "srv",
+            "transport": "stdio",
+            "command": ["python", "server.py"],
+            "args": ["--safe"],
+            "url": "stdio://python",
+            "env": {"TOKEN": "mcp_token"},
+            "allowed_tools": ["read", "write"],
+            "risk_tier": "high",
+            "enabled": True,
+        }
+        typed = McpServerConfig.model_validate({**loose, "risk_tier": SecurityRisk.HIGH})
+        assert compute_config_hash(loose) == compute_config_hash(typed)
+
+    def test_config_hash_pins_every_execution_or_policy_field(self):
+        base = {
+            "name": "srv",
+            "transport": "streamable_http",
+            "command": [],
+            "args": [],
+            "url": "https://mcp.example/one",
+            "env": {"TOKEN": "ref_a"},
+            "headers": {"Authorization": "ref_b"},
+            "allowed_hosts": ["mcp.example"],
+            "allowed_tools": ["read"],
+            "risk_tier": "medium",
+            "enabled": True,
+        }
+        changes = (
+            {"name": "other"},
+            {"transport": "stdio"},
+            {"command": ["evil"]},
+            {"args": ["--evil"]},
+            {"url": "https://evil.example/mcp"},
+            {"env": {"TOKEN": "other_ref"}},
+            {"headers": {"Authorization": "other_ref"}},
+            {"allowed_hosts": ["evil.example"]},
+            {"allowed_tools": ["delete"]},
+            {"risk_tier": "low"},
+        )
+        baseline = compute_config_hash(base)
+        for change in changes:
+            assert compute_config_hash({**base, **change}) != baseline
+
+        # Lifecycle state and the separate discovered-schema fingerprint do
+        # not change what will execute once enabled.
+        assert compute_config_hash({**base, "enabled": False}) == baseline
+        assert compute_config_hash({**base, "description_hash": "x" * 64}) == baseline
+
+    def test_config_hash_field_inventory_tracks_typed_model(self):
+        hashed = {
+            "name",
+            "transport",
+            "command",
+            "args",
+            "url",
+            "env",
+            "headers",
+            "allowed_hosts",
+            "allowed_tools",
+            "risk_tier",
+        }
+        assert hashed == set(McpServerConfig.model_fields) - {
+            "enabled",
+            "description_hash",
+        }
 
 
 class TestApprovalRequired:

@@ -64,11 +64,17 @@ class McpServerConfig(BaseModel):
     def _reject_sse(cls, v: str) -> str:
         if v not in _VALID_TRANSPORTS:
             if v == "sse":
-                raise ValueError(
-                    "SSE transport is not supported in MCP v1; use streamable_http"
-                )
+                raise ValueError("SSE transport is not supported in MCP v1; use streamable_http")
             raise ValueError(f"Unknown transport {v!r}; must be stdio or streamable_http")
         return v
+
+    @field_validator("risk_tier", mode="before")
+    @classmethod
+    def _normalize_risk_tier(cls, v: object) -> object:
+        # The Settings DTO persists lower-case wire values while SecurityRisk's
+        # enum values are upper-case. Accept both representations so the exact
+        # config the operator approved can be loaded by the agent server.
+        return v.upper() if isinstance(v, str) else v
 
 
 class McpSettings(BaseModel):

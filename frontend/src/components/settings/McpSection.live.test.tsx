@@ -281,13 +281,13 @@ describe("McpSection — live CRUD over the real fetch path", () => {
     expect(screen.getByText("GitHub")).toBeInTheDocument();
   });
 
-  it("shows the Re-approve control and SHA-256 fingerprint for hashed connections", async () => {
+  it("shows the Review control and SHA-256 fingerprint for pending approvals", async () => {
     renderMcp();
     await waitFor(() => {
       expect(screen.getByText("Filesystem")).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText("Re-approve").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Review").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/abc123def456…/)).toBeInTheDocument();
     expect(screen.getByText(/\(SHA-256\)/)).toBeInTheDocument();
   });

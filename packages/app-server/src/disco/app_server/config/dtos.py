@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ModelDTO(BaseModel):
@@ -410,20 +410,33 @@ class SkillCreate(BaseModel):
 
 
 class McpServerConfigDTO(BaseModel):
-    """POST/PATCH body for creating or updating an MCP server."""
+    """POST body for creating an MCP server."""
 
-    name: str
+    name: str = Field(pattern=r"^[a-z0-9_]+$")
     url: str
-    transport: str = "stdio"  # "stdio" | "streamable_http"
+    transport: Literal["stdio", "streamable_http"] = "stdio"
     enabled: bool = True
     allowed_tools: list[str] | None = None
-    risk_tier: str = "medium"
+    risk_tier: Literal["unknown", "low", "medium", "high"] = "medium"
+
+
+class McpServerPatchDTO(BaseModel):
+    """PATCH body; omitted fields must never reset security-sensitive config."""
+
+    name: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$")
+    url: str | None = None
+    transport: Literal["stdio", "streamable_http"] | None = None
+    enabled: bool | None = None
+    allowed_tools: list[str] | None = None
+    risk_tier: Literal["unknown", "low", "medium", "high"] | None = None
 
 
 class McpServerApproveDTO(BaseModel):
-    """POST body for approve/re-approve — carries the new description hash."""
+    """Approve either pre-connect config or discovered tool schemas."""
 
-    description_hash: str
+    approval_kind: Literal["config", "tools"] = "tools"
+    config_hash: str | None = None
+    description_hash: str | None = None
 
 
 class McpConnectionDTO(BaseModel):
@@ -440,6 +453,8 @@ class McpConnectionDTO(BaseModel):
     # the changed tool set — not a stub of the stored hash. None when the
     # server is in sync (no drift) or has never been approved (first connect).
     new_description_hash: str | None = None
+    config_hash: str | None = None
+    new_config_hash: str | None = None
     approved_at: str | None = None  # ISO-8601
     enabled: bool | None = None
 

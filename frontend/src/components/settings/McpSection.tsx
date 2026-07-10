@@ -23,6 +23,7 @@ const STATUS_META: Record<McpStatus, { label: string; dot: string }> = {
   connected: { label: "Connected", dot: "bg-supported" },
   disconnected: { label: "Disconnected", dot: "bg-text-faint" },
   error: { label: "Error", dot: "bg-unsupported" },
+  approval_required: { label: "Approval required", dot: "bg-unsupported" },
 };
 
 function Switch({
@@ -158,13 +159,15 @@ function ApprovalDiff({
   busy,
   onConfirm,
   onCancel,
+  kind = "tools",
 }: {
   name: string;
-  oldHash: string;
+  oldHash?: string;
   newHash: string;
   busy: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  kind?: "config" | "tools";
 }) {
   return (
     <div
@@ -172,16 +175,19 @@ function ApprovalDiff({
       className="rounded-card border border-unsupported/40 bg-unsupported/5 p-body"
     >
       <p className="font-ui text-[0.82rem] font-medium text-unsupported">
-        Tool descriptions changed — re-approval required
+        {kind === "config"
+          ? "Server configuration approval required"
+          : "Tool schemas changed — approval required"}
       </p>
       <p className="mt-px font-ui text-[0.76rem] text-text-muted">
-        The tool set for <strong>{name}</strong> has changed since the last
-        approval. Review the diff and confirm to accept the new tools.
+        Review the {kind === "config" ? "server configuration" : "tool schemas"} for{" "}
+        <strong>{name}</strong> and confirm its fingerprint{" "}
+        {kind === "config" ? "before Disco connects" : "before its tools are registered"}.
       </p>
       <div className="mt-inline flex flex-col gap-hair font-mono text-[0.7rem]">
         <div className="rounded-control border border-hairline bg-surface-2 px-inline py-hair">
           <span className="text-text-faint">Old hash: </span>
-          <span className="break-all text-text">{oldHash}</span>
+          <span className="break-all text-text">{oldHash || "Not previously approved"}</span>
         </div>
         <div className="rounded-control border border-hairline bg-surface-2 px-inline py-hair">
           <span className="text-text-faint">New hash: </span>
@@ -203,7 +209,7 @@ function ApprovalDiff({
           onClick={onConfirm}
           className="rounded-control bg-accent px-body py-hair font-ui text-[0.78rem] font-medium text-bg transition-opacity disabled:opacity-40"
         >
-          {busy ? "Approving…" : "Re-approve"}
+          {busy ? "Approving…" : "Approve"}
         </button>
       </div>
     </div>
@@ -234,9 +240,19 @@ export function McpSection() {
     create.mutate(config, { onSuccess: closeForm });
   };
 
-  const handleApprove = (serverName: string, hash: string) => {
+  const handleApprove = (
+    serverName: string,
+    kind: "config" | "tools",
+    hash: string,
+  ) => {
     approve.mutate(
-      { name: serverName, body: { description_hash: hash } },
+      {
+        name: serverName,
+        body:
+          kind === "config"
+            ? { approval_kind: "config", config_hash: hash }
+            : { approval_kind: "tools", description_hash: hash },
+      },
       { onSuccess: closeApproval },
     );
   };
@@ -342,16 +358,16 @@ export function McpSection() {
                     />
                     {meta.label}
                   </span>
-                  {c.description_hash && c.new_description_hash && (
+                  {(c.new_config_hash || c.new_description_hash) && (
                     <button
                       type="button"
                       data-disco-control="settings.mcp-reapprove"
                       onClick={() => setApprovingServer(c.id)}
                       aria-label={`Re-approve ${c.name}`}
-                      title="Re-approve changed tool descriptions"
+                      title="Review required MCP approval"
                       className="text-text-faint transition-colors hover:text-accent font-ui text-[0.72rem]"
                     >
-                      Re-approve
+                      Review
                     </button>
                   )}
                   <Switch
@@ -387,15 +403,20 @@ export function McpSection() {
                   disabledHint="connect the agent server to test"
                 />
               </div>
-              {hashMismatch && c.description_hash && c.new_description_hash && (
+              {hashMismatch && (c.new_config_hash || c.new_description_hash) && (
                 <div className="px-body pb-inline">
                   <ApprovalDiff
                     name={c.name}
-                    oldHash={c.description_hash}
-                    newHash={c.new_description_hash}
+                    oldHash={c.new_config_hash ? c.config_hash : c.description_hash}
+                    newHash={c.new_config_hash ?? c.new_description_hash!}
+                    kind={c.new_config_hash ? "config" : "tools"}
                     busy={approve.isPending}
                     onConfirm={() =>
-                      handleApprove(c.id, c.new_description_hash!)
+                      handleApprove(
+                        c.id,
+                        c.new_config_hash ? "config" : "tools",
+                        c.new_config_hash ?? c.new_description_hash!,
+                      )
                     }
                     onCancel={closeApproval}
                   />

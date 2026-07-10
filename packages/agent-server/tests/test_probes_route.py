@@ -104,10 +104,33 @@ def test_mcp_failed_handshake_is_not_a_500(client, cfg_path):
     connection refusal (the HTTP path can't be driven under the sync TestClient
     portal because the MCP SDK's anyio task group tears down in a foreign task —
     a harness artifact; the agent-server runs single-loop in production)."""
-    r = client.post(
-        "/api/mcp/test",
-        json={"transport": "stdio", "url": "/nonexistent/disco-probe-binary-xyz"},
+    event_store = SqliteEventStore(":memory:")
+    approved_client = TestClient(create_app(event_store))
+    cfg_store = ConfigStore(cfg_path)
+    cfg = cfg_store.load()
+    server = {
+        "transport": "stdio",
+        "command": ["/nonexistent/disco-probe-binary-xyz"],
+        "url": "stdio://missing",
+        "risk_tier": "medium",
+        "enabled": True,
+    }
+    cfg_store.save(
+        cfg.model_copy(
+            update={
+                "mcp": cfg.mcp.model_copy(update={"enabled": True, "servers": {"missing": server}})
+            }
+        )
     )
+    from disco.tools.mcp.approval import compute_config_hash
+    from disco.tools.mcp.migrations import create_mcp_config_approval
+
+    create_mcp_config_approval(
+        event_store._conn,
+        "missing",
+        compute_config_hash({"name": "missing", **server}),
+    )
+    r = approved_client.post("/api/mcp/test", json={"name": "missing"})
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] is False and body["status"] in ("unreachable", "error")

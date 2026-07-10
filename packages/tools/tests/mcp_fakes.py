@@ -14,6 +14,50 @@ import os
 import sys
 import tempfile
 
+FAKE_TOOL_DESCRIPTORS = [
+    {
+        "name": "echo",
+        "description": "Echo back the message",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+        },
+    },
+    {
+        "name": "add",
+        "description": "Add two numbers together",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+            "required": ["a", "b"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Read a file from the server temp dir",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "list_files",
+        "description": "List files in the temp dir",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_env",
+        "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    },
+]
+
 
 class FakeStdioServer:
     """A minimal MCP JSON-RPC server speaking over stdin/stdout streams.

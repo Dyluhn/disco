@@ -58,6 +58,22 @@ _MCP_APPROVAL_PENDING_SQL = """CREATE TABLE IF NOT EXISTS mcp_approval_pending (
 );
 """
 
+_MCP_CONFIG_APPROVALS_SQL = """CREATE TABLE IF NOT EXISTS mcp_config_approvals (
+    server          TEXT PRIMARY KEY,
+    config_hash     TEXT NOT NULL,
+    approved_at     TEXT NOT NULL,
+    approved_by     TEXT NOT NULL
+);
+"""
+
+
+def ensure_mcp_approval_tables(conn: _ApprovalConn) -> None:
+    """Create both approval ledgers for old databases and lightweight tests."""
+    conn.execute(_MCP_APPROVALS_SQL)
+    conn.execute(_MCP_APPROVAL_PENDING_SQL)
+    conn.execute(_MCP_CONFIG_APPROVALS_SQL)
+    conn.commit()
+
 
 def create_mcp_approval(
     conn: _ApprovalConn,
@@ -66,6 +82,7 @@ def create_mcp_approval(
     *,
     approved_by: str = "operator",
 ) -> None:
+    ensure_mcp_approval_tables(conn)
     now = datetime.now(UTC).isoformat()
     conn.execute(
         "INSERT OR REPLACE INTO mcp_approvals "
@@ -73,10 +90,12 @@ def create_mcp_approval(
         "VALUES (?, ?, ?, ?)",
         (server, description_hash, now, approved_by),
     )
+    delete_mcp_approval_pending(conn, server)
     conn.commit()
 
 
 def delete_mcp_approval(conn: _ApprovalConn, server: str) -> None:
+    ensure_mcp_approval_tables(conn)
     conn.execute("DELETE FROM mcp_approvals WHERE server = ?", (server,))
     # E6: any drift row for the server is stale the moment the approval row
     # is gone — the next startup will recompute the new_hash from scratch.
@@ -85,6 +104,7 @@ def delete_mcp_approval(conn: _ApprovalConn, server: str) -> None:
 
 
 def get_mcp_approval(conn: _ApprovalConn, server: str) -> dict | None:
+    ensure_mcp_approval_tables(conn)
     row = conn.execute(
         "SELECT server, description_hash, approved_at, approved_by "
         "FROM mcp_approvals WHERE server = ?",
@@ -101,6 +121,7 @@ def get_mcp_approval(conn: _ApprovalConn, server: str) -> dict | None:
 
 
 def list_mcp_approvals(conn: _ApprovalConn) -> list[dict]:
+    ensure_mcp_approval_tables(conn)
     rows = conn.execute(
         "SELECT server, description_hash, approved_at, approved_by "
         "FROM mcp_approvals ORDER BY server"
@@ -128,6 +149,7 @@ def set_mcp_approval_pending(
     """Record a drift: the live pool saw `new_hash` for `server` but the
     stored approval is `old_hash`. Idempotent — overwrites on repeat writes
     (e.g. agent-server restart re-detects the same drift)."""
+    ensure_mcp_approval_tables(conn)
     now = datetime.now(UTC).isoformat()
     conn.execute(
         "INSERT OR REPLACE INTO mcp_approval_pending "
@@ -142,15 +164,13 @@ def delete_mcp_approval_pending(conn: _ApprovalConn, server: str) -> None:
     """Clear a drift row — called by the app-server on POST /approve (the
     operator has just accepted the new descriptions) and by
     delete_mcp_approval (the server was removed entirely)."""
-    conn.execute(
-        "DELETE FROM mcp_approval_pending WHERE server = ?", (server,)
-    )
+    conn.execute("DELETE FROM mcp_approval_pending WHERE server = ?", (server,))
 
 
 def get_mcp_approval_pending(conn: _ApprovalConn, server: str) -> dict | None:
+    ensure_mcp_approval_tables(conn)
     row = conn.execute(
-        "SELECT server, old_hash, new_hash, detected_at "
-        "FROM mcp_approval_pending WHERE server = ?",
+        "SELECT server, old_hash, new_hash, detected_at FROM mcp_approval_pending WHERE server = ?",
         (server,),
     ).fetchone()
     if row is None:
@@ -164,9 +184,9 @@ def get_mcp_approval_pending(conn: _ApprovalConn, server: str) -> dict | None:
 
 
 def list_mcp_approval_pending(conn: _ApprovalConn) -> list[dict]:
+    ensure_mcp_approval_tables(conn)
     rows = conn.execute(
-        "SELECT server, old_hash, new_hash, detected_at "
-        "FROM mcp_approval_pending ORDER BY server"
+        "SELECT server, old_hash, new_hash, detected_at FROM mcp_approval_pending ORDER BY server"
     ).fetchall()
     return [
         {
@@ -174,6 +194,63 @@ def list_mcp_approval_pending(conn: _ApprovalConn) -> list[dict]:
             "old_hash": row[1],
             "new_hash": row[2],
             "detected_at": row[3],
+        }
+        for row in rows
+    ]
+
+
+def create_mcp_config_approval(
+    conn: _ApprovalConn,
+    server: str,
+    config_hash: str,
+    *,
+    approved_by: str = "operator",
+) -> None:
+    ensure_mcp_approval_tables(conn)
+    now = datetime.now(UTC).isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO mcp_config_approvals "
+        "(server, config_hash, approved_at, approved_by) VALUES (?, ?, ?, ?)",
+        (server, config_hash, now, approved_by),
+    )
+    conn.commit()
+
+
+def delete_mcp_config_approval(conn: _ApprovalConn, server: str) -> None:
+    ensure_mcp_approval_tables(conn)
+    conn.execute("DELETE FROM mcp_config_approvals WHERE server = ?", (server,))
+    conn.commit()
+
+
+def get_mcp_config_approval(conn: _ApprovalConn, server: str) -> dict | None:
+    ensure_mcp_approval_tables(conn)
+    row = conn.execute(
+        "SELECT server, config_hash, approved_at, approved_by "
+        "FROM mcp_config_approvals WHERE server = ?",
+        (server,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "server": row[0],
+        "config_hash": row[1],
+        "approved_at": row[2],
+        "approved_by": row[3],
+    }
+
+
+def list_mcp_config_approvals(conn: _ApprovalConn) -> list[dict]:
+    ensure_mcp_approval_tables(conn)
+    rows = conn.execute(
+        "SELECT server, config_hash, approved_at, approved_by "
+        "FROM mcp_config_approvals ORDER BY server"
+    ).fetchall()
+    return [
+        {
+            "server": row[0],
+            "config_hash": row[1],
+            "approved_at": row[2],
+            "approved_by": row[3],
         }
         for row in rows
     ]

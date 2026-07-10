@@ -9,7 +9,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
@@ -68,9 +68,14 @@ afterEach(() => {
 });
 
 function renderPane(status: ConversationStatus, events: AgentEvent[]) {
-  return render(
+  const rendered = render(
     withClient(<PreviewPane status={status} cid="conv_reload1" events={events} />),
   );
+  // The product now defaults to the deterministic rendered/srcdoc view. W-42
+  // specifically governs the live-server iframe, so switch to that view before
+  // asserting its cache-busting URL.
+  fireEvent.click(screen.getByRole("button", { name: /live server/i }));
+  return rendered;
 }
 
 describe("PreviewPane — W-42 auto-refresh", () => {

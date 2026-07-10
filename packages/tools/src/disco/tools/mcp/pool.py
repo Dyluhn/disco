@@ -20,7 +20,12 @@ from mcp.types import Tool as MCPTool
 from pydantic import BaseModel
 
 from ..anatomy import ToolDef
-from .approval import ApprovalRequired, compute_description_hash
+from .approval import (
+    ApprovalRequired,
+    ConfigApprovalRequired,
+    compute_config_hash,
+    compute_description_hash,
+)
 from .config import McpServerConfig, McpSettings
 from .naming import qualified_name
 from .stdio import McpStdioClient
@@ -45,10 +50,12 @@ class McpPool:
         *,
         secrets: Any | None = None,  # SecretsStore
         approvals: dict[str, str] | None = None,  # server -> stored description_hash
+        config_approvals: dict[str, str] | None = None,
     ) -> None:
         self._settings = settings
         self._secrets = secrets
         self._approvals = dict(approvals or {})
+        self._config_approvals = dict(config_approvals or {})
         self._exit_stack = AsyncExitStack()
         self._clients: dict[str, McpStdioClient] = {}
         self._tools: dict[str, ToolDef] = {}  # qualified_name -> ToolDef
@@ -89,17 +96,34 @@ class McpPool:
                 continue
 
             try:
+                current_config_hash = compute_config_hash(srv)
+                stored_config_hash = self._config_approvals.get(name)
+                if stored_config_hash != current_config_hash:
+                    raise ConfigApprovalRequired(
+                        name, stored_config_hash or "", current_config_hash
+                    )
                 await self._connect_stdio(name, srv)
+            except ConfigApprovalRequired as exc:
+                self._server_status[name] = "approval_required"
+                self._approval_pending[name] = {
+                    "kind": "config",
+                    "old_hash": exc.old_hash,
+                    "new_hash": exc.new_hash,
+                }
+                continue
             except ApprovalRequired as exc:
                 # D1: per-server refusal — mark the server, don't propagate.
                 # Other servers still start, and their tools are available.
                 _LOG.warning(
                     "McpPool: server %r refused — description_hash changed "
                     "(%s → %s) — re-approval required",
-                    name, exc.old_hash[:12], exc.new_hash[:12],
+                    name,
+                    exc.old_hash[:12],
+                    exc.new_hash[:12],
                 )
                 self._server_status[name] = "approval_required"
                 self._approval_pending[name] = {
+                    "kind": "tools",
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
                 }
@@ -110,6 +134,7 @@ class McpPool:
                 client = self._clients.pop(name, None)
                 if client is not None:
                     import contextlib
+
                     with contextlib.suppress(Exception):
                         await client.close()
                 continue
@@ -143,9 +168,7 @@ class McpPool:
             env=resolved_env or None,
         )
 
-        await self._exit_stack.enter_async_context(
-            _ClientContext(name, client, self)
-        )
+        await self._exit_stack.enter_async_context(_ClientContext(name, client, self))
 
         await client.connect()
         self._clients[name] = client
@@ -155,14 +178,18 @@ class McpPool:
 
         # Compute the description hash and check approval
         tool_descs = [
-            {"name": t.name, "description": t.description or ""}
+            {
+                "name": t.name,
+                "description": t.description or "",
+                "inputSchema": t.inputSchema or {},
+            }
             for t in raw_tools
         ]
         new_hash = compute_description_hash(tool_descs)
 
         stored = self._approvals.get(name)
-        if stored is not None and stored != new_hash:
-            raise ApprovalRequired(name, stored, new_hash)
+        if stored != new_hash:
+            raise ApprovalRequired(name, stored or "", new_hash)
 
         # Build ToolDefs — only tools in allowed_tools (if set)
         allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None
@@ -189,7 +216,7 @@ class McpPool:
                 args_model=_schema_to_args_model(tool),
                 needs=frozenset(),
                 base_risk=srv.risk_tier,  # REQUIRED — not inferred
-                runs_in="sandbox",  # stdio always runs in sandbox (gVisor)
+                runs_in="in_process",  # stdio subprocess executes on the host
                 read_only=False,  # MCP tools are not assumed read-only
                 uses_capabilities=frozenset(),
             )
@@ -301,5 +328,6 @@ def _json_type_to_python(prop: dict) -> type:
     }
     # For Any-typed fields, use Any
     from typing import Any
+
     py_type = mapping.get(typ, Any)
     return py_type

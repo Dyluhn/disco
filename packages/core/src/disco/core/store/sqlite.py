@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING
 
 from ..events import Event, EventAdapter, event_to_json_dict
 from ..migration import migrate_event
-from ..owners import DEFAULT_OWNER_ID, install_owner_id
+from ..owners import DEFAULT_OWNER_ID, install_owner_id  # noqa: F401 - public re-export
 from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
 
@@ -137,6 +137,15 @@ CREATE TABLE IF NOT EXISTS mcp_approval_pending (
     old_hash        TEXT NOT NULL,  -- the LAST APPROVED hash (mcp_approvals.description_hash)
     new_hash        TEXT NOT NULL,  -- the AUTHORITATIVE live pool's hash
     detected_at     TEXT NOT NULL   -- ISO-8601
+);
+CREATE TABLE IF NOT EXISTS mcp_config_approvals (
+    -- S-W4: approval of the server configuration happens before connect.
+    -- This ledger is separate from discovered tool-schema approvals because
+    -- discovery itself may spawn host code or perform network side effects.
+    server          TEXT PRIMARY KEY,
+    config_hash     TEXT NOT NULL,
+    approved_at     TEXT NOT NULL,
+    approved_by     TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS dod_specs (
     -- C1a: external Definition-of-Done spec, one row per conversation.
@@ -308,12 +317,11 @@ class SqliteEventStore:
         `DoDSpec` via the Pydantic model); we don't re-validate on write
         beyond the JSON round-trip, because the spec is frozen upstream."""
         from ..dod import DoDSpec, DoDSpecAlreadySet  # local import: dod.py is a leaf
+
         if not isinstance(spec, DoDSpec):
             # Don't accept free-form dicts here — the storage shape is the
             # Pydantic model. Callers go through DoDSpec(predicates=...).
-            raise TypeError(
-                f"set_dod_spec expects a DoDSpec, got {type(spec).__name__}"
-            )
+            raise TypeError(f"set_dod_spec expects a DoDSpec, got {type(spec).__name__}")
         payload = spec.to_json_dict()
         now = datetime.now(UTC).isoformat()
         async with self._write_lock:
@@ -363,6 +371,7 @@ class SqliteEventStore:
         The returned spec is the live Pydantic model — frozen, so even an
         in-process attempt to mutate the result is a `ValidationError`."""
         from ..dod import DoDSpec
+
         row = self._conn.execute(
             "SELECT spec FROM dod_specs WHERE conversation_id = ?",
             (conversation_id,),
@@ -391,10 +400,9 @@ class SqliteEventStore:
         NOT buy a weakening: even a human operator cannot drop a committed bar
         via this method (the user-facing relax path is a new conversation)."""
         from ..dod import DoDSpec, DoDSpecAlreadySet, is_monotonic_extension
+
         if not isinstance(spec, DoDSpec):
-            raise TypeError(
-                f"replace_dod_spec expects a DoDSpec, got {type(spec).__name__}"
-            )
+            raise TypeError(f"replace_dod_spec expects a DoDSpec, got {type(spec).__name__}")
         payload = spec.to_json_dict()
         now = datetime.now(UTC).isoformat()
         async with self._write_lock:
@@ -602,7 +610,8 @@ class SqliteEventStore:
 
     def conversation_owner_id_sync(self, conversation_id: str) -> str | None:
         row = self._conn.execute(
-            "SELECT owner_id FROM conversations WHERE conversation_id = ? LIMIT 1", (conversation_id,)
+            "SELECT owner_id FROM conversations WHERE conversation_id = ? LIMIT 1",
+            (conversation_id,),
         ).fetchone()
         return row["owner_id"] if row is not None else None
 
@@ -656,7 +665,8 @@ class SqliteEventStore:
         where_clause = " AND ".join(clauses)
         params.extend([limit, offset])
         rows = self._conn.execute(
-            "SELECT conversation_id, owner_id, space_id, title, created_at, status, surface, origin "
+            "SELECT conversation_id, owner_id, space_id, title, created_at, status, "
+            "surface, origin "
             "FROM conversations c "
             f"WHERE {where_clause} "
             "ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
@@ -695,9 +705,7 @@ class SqliteEventStore:
 
         return summaries
 
-    async def set_conversation_space(
-        self, conversation_id: str, space_id: str | None
-    ) -> None:
+    async def set_conversation_space(self, conversation_id: str, space_id: str | None) -> None:
         """Move a conversation into a Space folder, or clear it to Unfiled."""
         clean_space_id = space_id.strip() if isinstance(space_id, str) else None
         async with self._write_lock:
@@ -737,9 +745,7 @@ class SqliteEventStore:
             )
             if cur.rowcount == 0:
                 return False  # not found OR not owned — no cross-owner deletes
-            self._conn.execute(
-                "DELETE FROM events WHERE conversation_id = ?", (conversation_id,)
-            )
+            self._conn.execute("DELETE FROM events WHERE conversation_id = ?", (conversation_id,))
             self._conn.commit()
         return True
 
@@ -882,9 +888,7 @@ class SqliteEventStore:
 
     def list_enabled_schedules(self) -> list[dict]:
         """All enabled schedules across all owners — used by the background loop."""
-        rows = self._conn.execute(
-            "SELECT * FROM schedules WHERE enabled = 1"
-        ).fetchall()
+        rows = self._conn.execute("SELECT * FROM schedules WHERE enabled = 1").fetchall()
         return [dict(r) for r in rows]
 
     def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
