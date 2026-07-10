@@ -76,4 +76,46 @@ def _build_brief_message(brief: BuildBrief) -> MessageEvent:
     return MessageEvent(
         source=EventSource.ENVIRONMENT,
         message=LLMMessage(role="user", content=f"<build_brief>{safe}</build_brief>"),
+        # Provenance marker for the contract fold: only THIS constructor writes it,
+        # so a user-supplied WS `context` block that happens to contain the same
+        # wrapper text cannot be mistaken for a declaration (codex finding #5).
+        meta={"build_brief": True},
     )
+
+
+_BRIEF_OPEN = "<build_brief>"
+_BRIEF_CLOSE = "</build_brief>"
+
+
+_BRIEF_KEYS = frozenset(
+    {"app_kind", "primary_goal", "audience", "key_entities", "must_have_sections"}
+)
+
+
+def parse_build_brief_content(
+    content: object, *, meta: dict[str, object] | None = None
+) -> dict[str, object] | None:
+    """Inverse of :func:`_build_brief_message`: the bounded payload dict from a
+    persisted ``<build_brief>…</build_brief>`` ENVIRONMENT message content, or
+    None when the content is not a brief message / fails to parse. Used by the
+    runtime's contract fold-on-load (restart durability) — the persisted brief
+    is the durable record of the declaration `activate_contract_for_brief` made.
+
+    Provenance (codex finding #5): events written by `_build_brief_message` carry
+    the ``build_brief`` meta marker and are trusted outright. LEGACY events
+    (pre-marker) are accepted only when the payload is the exact bounded shape —
+    all five keys, nothing else — so a free-form context block that merely
+    contains the wrapper text cannot masquerade as a declaration."""
+    if not isinstance(content, str):
+        return None
+    if not (content.startswith(_BRIEF_OPEN) and content.endswith(_BRIEF_CLOSE)):
+        return None
+    try:
+        payload = json.loads(content[len(_BRIEF_OPEN) : -len(_BRIEF_CLOSE)])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if not (meta or {}).get("build_brief") and set(payload.keys()) != _BRIEF_KEYS:
+        return None
+    return payload

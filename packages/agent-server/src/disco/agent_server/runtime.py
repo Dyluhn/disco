@@ -829,6 +829,10 @@ class ConversationRuntime:
         self._build_contract_registry = BuildContractRegistry.default()
         self._build_kind: dict[str, str] = {}
         self._build_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
+        # CONTRACT-DURABILITY: conversations whose contract fold-on-load already ran
+        # this process (positive OR negative outcome). Prevents re-reading the event
+        # log on every turn of long chat conversations that never declared a brief.
+        self._contract_fold_attempted: set[str] = set()
         # REL-3 audit mode keeps its observe-only tracker separate from the
         # authoritative build tracker so turning the flag on cannot change delivery
         # mode/finalizer/starter-kit behavior in the default build path.
@@ -1541,6 +1545,129 @@ class ConversationRuntime:
         # no-declaration path always used, so behavior is otherwise unchanged;
         # only the first-wins guarantee becomes real.
         self.set_build_kind(conversation_id, (kind or ContractKind.CUSTOM).value)
+
+    async def _fold_contract_from_history(self, conversation_id: str) -> None:
+        """CONTRACT-DURABILITY (2026-07-10): restore a restarted process's contract
+        identity + phase from the persisted event log.
+
+        `_build_kind` / `_build_trackers` are process-local, so an agent-server
+        restart mid-build silently dropped the declared contract (codex four-fix
+        review, residual #4) — the resumed run continued contract-less until the
+        next brief-bearing turn. The durable record already exists: every brief-
+        bearing turn persists the ENVIRONMENT `<build_brief>` MessageEvent, tool
+        outcomes persist as Action/Observation pairs, and host verify outcomes
+        persist as `VerifierVerdictEvent`s. This fold replays them:
+
+        * kind — the FIRST persisted brief's `app_kind`, through the SAME
+          `contract_kind_for_app_kind` → CUSTOM-sentinel mapping activation uses,
+          so a fold can never disagree with what activation would have declared
+          (first-wins holds across restarts).
+        * phase — successful tool calls through `BuildPhaseTracker.note_tool_success`
+          and pass/fail verdicts through `note_verifier_result`, in event order —
+          the exact transition inputs the live run feeds.
+
+        Runs at most once per process per conversation (`_contract_fold_attempted`);
+        no-ops for conversations that never declared a brief, and for build-like
+        surfaces only. Never raises: a fold failure degrades to today's behavior
+        (contract-less until the next brief), logged for the audit trail."""
+        if (
+            conversation_id in self._build_kind
+            or conversation_id in self._contract_fold_attempted
+        ):
+            return
+        if self._surface_of(conversation_id) not in self._BUILD_LIKE_SURFACES:
+            return
+        # Mark BEFORE the await so a concurrent second turn doesn't double-fold;
+        # a failure below unmarks so a later turn may retry.
+        self._contract_fold_attempted.add(conversation_id)
+        try:
+            events = await self._store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — degrade to contract-less, never block the turn
+            self._contract_fold_attempted.discard(conversation_id)
+            _LOG.warning(
+                "contract fold: event read failed for %s; continuing contract-less",
+                conversation_id,
+                exc_info=True,
+            )
+            return
+
+        from .build_messages import parse_build_brief_content
+
+        app_kind: str | None = None
+        brief_seq = -1
+        for i, ev in enumerate(events):
+            if isinstance(ev, MessageEvent) and ev.source == EventSource.ENVIRONMENT:
+                payload = parse_build_brief_content(ev.message.content, meta=ev.meta)
+                if payload is not None:
+                    raw = payload.get("app_kind")
+                    app_kind = raw if isinstance(raw, str) else None
+                    brief_seq = i
+                    break  # FIRST brief wins, matching activate_contract_for_brief
+        if app_kind is None:
+            return  # never declared — identical to today's no-brief behavior
+
+        from disco.core.contract import ContractKind, contract_kind_for_app_kind
+
+        # NOTE (codex review, accepted residuals): (a) only app_kind is durable, so a
+        # mapping change across a DEPLOY re-resolves it under the new version's opinion
+        # (finding #6 — deliberate: the mapping is code, not conversation state);
+        # (b) the attempted-marker is not a lock — with today's synchronous SQLite
+        # get_events the fold cannot interleave with a concurrent sender (finding #9,
+        # latent for alternate stores only); (c) this is one O(N) full-log scan, once
+        # per process per conversation, the same cost class as the resume seam's own
+        # get_state/get_events materializations (finding #10).
+        kind = contract_kind_for_app_kind(app_kind) or ContractKind.CUSTOM
+        # A restarted process has no cached loop for this conversation, so the
+        # eviction inside set_build_kind is a no-op there; if a loop WAS lazily
+        # built contract-less before this fold ran, the same guarded eviction
+        # rebakes it exactly as a live activation would.
+        self.set_build_kind(conversation_id, kind.value)
+        # Phase replay ONLY where live wiring records phase: the artifact-mode
+        # executor is the one path that wires on_tool_success to the AUTHORITATIVE
+        # tracker (codex finding #2) — a normal build's tracker never advances live,
+        # so folding one would restore a phase the process never had.
+        if not self._effective_artifact_mode(conversation_id):
+            _LOG.info(
+                "contract fold: %s restored kind=%s (kind-only: not an artifact run)",
+                conversation_id,
+                kind.value,
+            )
+            return
+        self._build_scope_guard(conversation_id)
+        entry = self._build_trackers.get(conversation_id)
+        if entry is None:  # non-artifact surface guard declined — kind alone stands
+            return
+        tracker = entry[1]
+        actions: dict[str, str] = {}
+        # Replay starts AFTER the declaration (codex finding #1): live activation
+        # creates a fresh BOOTSTRAP tracker at declaration time, so pre-brief tool
+        # successes / verdicts never advanced it.
+        for ev in events[brief_seq + 1 :]:
+            if isinstance(ev, ActionEvent):
+                actions[ev.id] = ev.tool_call.tool_name
+            elif isinstance(ev, ObservationEvent):
+                if ev.tool_result.success:
+                    tool = actions.get(ev.action_id)
+                    if tool:
+                        tracker.note_tool_success(tool)
+            elif isinstance(ev, VerifierStartedEvent):
+                # The finalizer alias is canonicalized to `finish` before the event
+                # log (codex finding #4) — the durable VERIFY marker is the verifier
+                # START event, same edge note_finalizer_called drives live.
+                tracker.note_finalizer_called()
+            elif isinstance(ev, VerifierVerdictEvent):
+                verdict = str(ev.verdict) if ev.verdict is not None else None
+                if verdict is not None:
+                    # Live parity (codex finding #3): the verify hook treats EVERY
+                    # non-pass verdict (incl. unavailable/unverifiable) as not-passed.
+                    tracker.note_verifier_result(passed=verdict == "pass")
+        _LOG.info(
+            "contract fold: %s restored kind=%s phase=%s from %d events",
+            conversation_id,
+            kind.value,
+            tracker.current().value,
+            len(events),
+        )
 
     def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
         """Declare the build contract kind for a conversation (e.g. 'appkit.leadgen').
@@ -4155,6 +4282,11 @@ class ConversationRuntime:
         # rollback: a declaration made by THIS call is undone if the send never
         # lands (codex defect #3 — a failed send must not permanently win the
         # contract for a turn that never entered history).
+        # CONTRACT-DURABILITY: fold any PERSISTED declaration first, so after an
+        # agent-server restart the historical contract wins over this turn's brief
+        # (first-wins holds across restarts) and the phase tracker resumes where
+        # the run left off instead of restarting at BOOTSTRAP.
+        await self._fold_contract_from_history(conversation_id)
         newly_declared = build_brief is not None and conversation_id not in self._build_kind
         self.activate_contract_for_brief(conversation_id, build_brief)
         newly_pinned = conversation_id not in self._pinned_kernels
@@ -4172,6 +4304,10 @@ class ConversationRuntime:
                 self._clear_pinned_kernel(conversation_id)
             if newly_declared:
                 self.set_build_kind(conversation_id, None)
+                # Finding #8: the kernel may have PERSISTED this turn's brief before
+                # raising — release the fold marker so a later fold can rediscover
+                # it instead of a later declaration silently winning.
+                self._contract_fold_attempted.discard(conversation_id)
             raise
 
     async def _run_continuing_control(
@@ -4192,6 +4328,10 @@ class ConversationRuntime:
         kernel call raises (so a failed op leaves no stuck pin), while a pre-existing pin
         from the live run is preserved. Byte-identical for the default `disco` kernel —
         the op still lands on `_control`/`_loop_for` exactly as before, just pinned."""
+        # CONTRACT-DURABILITY (codex finding #7): a confirm/approve-plan can be the
+        # FIRST touch after a restart — fold before the kernel composes a loop, or a
+        # gated conversation continues contract-less.
+        await self._fold_contract_from_history(conversation_id)
         newly_pinned = conversation_id not in self._pinned_kernels
         kernel = self._ensure_kernel_pinned(conversation_id)
         try:
@@ -4307,6 +4447,10 @@ class ConversationRuntime:
         return await self._resume._reconstruct_resume_context(conversation_id, events)
 
     async def resume_conversation(self, conversation_id: str) -> dict:
+        # CONTRACT-DURABILITY: a resume after an agent-server restart is exactly
+        # the path that used to lose the contract — fold BEFORE the resume seam
+        # composes a loop so the executor bakes contract-derived state.
+        await self._fold_contract_from_history(conversation_id)
         return await self._resume.resume_conversation(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
@@ -4379,6 +4523,8 @@ class ConversationRuntime:
             self._shadow_folded_finished_seq,
         ):
             cache.pop(conversation_id, None)
+        # CONTRACT-DURABILITY: sets, not dicts — same per-cid leak rule applies.
+        self._contract_fold_attempted.discard(conversation_id)
 
     async def aclose(self) -> None:
         for task in self._tasks.values():

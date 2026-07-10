@@ -49,6 +49,7 @@ def _fake_runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> ty
     fake = types.SimpleNamespace()
     fake._store = store
     fake.kick = MagicMock()
+    fake._fold_contract_from_history = AsyncMock()
     fake._pinned_kernels = {}
     fake._run_generation = {}
 
