@@ -69,3 +69,31 @@ NOTHING advertised — same parking discipline as the f41/f33 seams). Deliberate
 NOT v0.1: no current surface claims auth/RBAC, so deferral breaks no promise.
 v0.1 borrow only: the hand-rolled-auth honesty label (flag model-generated
 auth/payment code as unverified in the deliverable).
+
+## HANDOVER — immediate queue (2026-07-10, post appkit-lane session)
+
+1. **Fix `verify_appkit_app` `schema_sql_valid`** (packages/tools/src/disco/tools/
+   builtin/verify_appkit_app.py): the check inserts "a representative lead row"
+   (assumes a `name` column) into the app's ACTUAL entity table — a records app
+   with entity `shift` false-FAILs ("table shift has no column named name") and
+   the model repair-spirals (observed: app_create ×11). Fix: derive the
+   representative row from the entity's real fields (or scope the check to
+   lead_gen kinds). Do NOT weaken the check — re-aim it.
+2. **One sequential lane proof run** (NOT parallel — concurrent npm installs
+   contend and the 300s _VITE_BUILD_TIMEOUT_S is tight cold):
+   `systemctl --user restart disco-app.service disco-agent.service` (picks up
+   package edits), then
+   `DISCO_RELAY_LOG=/tmp/disco-provider-ledger.jsonl .venv/bin/python -m
+   harness.build_soak.run --scenario appkit_finish_autonomous --autonomous
+   --hard-cap 3600 --out test-record/appkit-lane`.
+   PASS = FINISHED/VERIFIED + .disco specs. Gotcha: killing the runner does NOT
+   kill the build — kill the conversation via
+   POST :8000/conversations/{cid}/kill (X-Disco-CSRF from /api/auth/mint).
+3. **Funnel backlog** (evidence-ranked, apply AFTER a green run, measure with the
+   lane): plan-time appkit sequence recipe > next-step guidance in app_create
+   SUCCESS message > advertise ONLY verify_appkit_app in appkit scope (models
+   picked verify_web_app) > variant_id catalog in app_add_section schema
+   ('form.standard' was refused) > server_status poll damping (46 polls seen).
+4. Context commits: 36bab3d1 (durability), 09a1f127 (gate order), 12abd8df
+   (appkit vocab), e2b9f021 (lane), 70e5ad7a (gvisor PASS), e949dc83 (UI soak),
+   617e07bb (trusted-components v0.2 parking). Evidence: test-record/appkit-lane/.
