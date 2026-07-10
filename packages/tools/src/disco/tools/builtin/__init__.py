@@ -109,6 +109,12 @@ __all__ = [
     "build_default_registry",
 ]
 
+def _trusted_registry_nonempty() -> bool:
+    from disco.core.trusted_components.registry import TrustedComponentRegistry
+
+    return bool(TrustedComponentRegistry.default().names())
+
+
 def build_default_registry() -> ToolRegistry:
     """Register the core toolset. The EPIC F preview surface (preview_start/status/
     logs/stop) is registered below and supersedes the old `deploy_preview` placeholder;
@@ -174,9 +180,13 @@ def build_default_registry() -> ToolRegistry:
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
         # WO-TC2: the trusted-components tier — verified vendored security cores.
         # Free-form Build scope only (AGENT_TOOLS); strict AppKit/artifact/research
-        # scopes never include the names.
-        AddTrustedComponentTool(),
-        EjectTrustedComponentTool(),
+        # scopes never include the names. Registered ONLY when the registry ships
+        # components — an installable-nothing tool is a false affordance (review #7).
+        *(
+            (AddTrustedComponentTool(), EjectTrustedComponentTool())
+            if _trusted_registry_nonempty()
+            else ()
+        ),
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned
         # here — the tool re-reads the saved provider per call (config honored live).

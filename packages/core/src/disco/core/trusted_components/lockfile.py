@@ -22,7 +22,7 @@ class LockfileCorrupt(ValueError):
 
 
 class InstalledComponent(BaseModel):
-    version: str
+    version: str = Field(pattern=r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
     installed_at: str
     installed_by: str = "add_trusted_component"
     ejected: bool = False
@@ -41,7 +41,7 @@ class EjectRecord(BaseModel):
 class ComponentsLock(BaseModel):
     model_config = ConfigDict(validate_assignment=True)
 
-    lockfile_version: int = 1
+    lockfile_version: int = Field(default=1, ge=1, le=1)
     components: dict[str, InstalledComponent] = Field(default_factory=dict)
     ejects: list[EjectRecord] = Field(default_factory=list)
 

@@ -41,11 +41,18 @@ def test_tools_advertised_only_in_freeform_scope() -> None:
     import inspect
 
     import disco.tools.appkit_scope as appkit_scope_mod
+    from disco.core.trusted_components.registry import TrustedComponentRegistry
     from disco.tools import build_default_registry
     from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, RESEARCH_TOOLS
 
     tc_names = {"add_trusted_component", "eject_trusted_component"}
-    assert tc_names <= set(build_default_registry().names())
+    # Registration is gated on the registry actually shipping components — an
+    # installable-nothing tool is a false affordance. Present IFF non-empty.
+    ships_components = bool(TrustedComponentRegistry.default().names())
+    registered = tc_names <= set(build_default_registry().names())
+    assert registered == ships_components, (
+        f"tools registered={registered} but registry ships={ships_components}"
+    )
     assert tc_names <= AGENT_TOOLS
     assert tc_names.isdisjoint(RESEARCH_TOOLS)
     assert tc_names.isdisjoint(ARTIFACT_TOOLS)

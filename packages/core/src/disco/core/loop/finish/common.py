@@ -331,6 +331,21 @@ def _last_productive_seq(events: list[Event]) -> int:
     return 0
 
 
+def _tc_components_installed(events: list[Event]) -> bool:
+    """True when a trusted component was SUCCESSFULLY installed in this
+    conversation (WO-TC3): such a build must pass through the verify_web_app
+    gate even when nothing else marks it as a web deliverable — the component
+    checks (integrity / requires-graph / probe) ride that verdict, and a
+    finish that skipped them would silently drop every verified-component
+    claim. Events-only, pure."""
+    for ev in events:
+        if isinstance(ev, ObservationEvent):
+            tr = ev.tool_result
+            if tr.success and tr.tool_name == "add_trusted_component":
+                return True
+    return False
+
+
 def _is_web_deliverable(events: list[Event]) -> bool:
     """Web deliverable if index.html was written/edited OR port 8000 owned by non-preview.
     Derived from events to keep the check pure (event-list in, verdict out)."""

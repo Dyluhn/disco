@@ -42,6 +42,7 @@ from .common import (
     _real_web_failure_evidence,
     _safe_deliverable_file_path,
     _screenshot_from_verdict,
+    _tc_components_installed,
     _vision_mode,
 )
 
@@ -1521,7 +1522,10 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         if (
             self._loop._planning_tools
             and self._loop.mode != OperatingMode.PLANNING
-            and (is_appkit or _is_web_deliverable(events))
+            # WO-TC3: a build that installed trusted components must pass through
+            # this gate even without a web-deliverable marker — the component
+            # integrity/deps/probe checks ride the verify_web_app verdict.
+            and (is_appkit or _is_web_deliverable(events) or _tc_components_installed(events))
         ):
             # W-45: when the structured `verify_web_app` tool is in the execution
             # set (the build surface), consume its VERDICT as the primary check —

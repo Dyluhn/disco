@@ -33,7 +33,12 @@ from disco.core.trusted_components.registry import (
 from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from .files import _atomic_write
 
+# Single source of truth for the install layout lives in core's verify module
+# (verify and install can never disagree). Concurrency note: tool calls are
+# serialized per conversation (one action per AgentStep — boundaries.py), so
+# the exists→read→write sequences here have no concurrent writer.
 INSTALL_PREFIX = "src/trusted"
 
 
@@ -99,6 +104,16 @@ class AddTrustedComponentTool:
     )
 
     async def run(self, args: AddTrustedComponentArgs, ctx: ToolContext) -> ToolOutcome:
+        try:
+            return await self._run(args, ctx)
+        except Exception as exc:  # noqa: BLE001 — a raw stack trace is not a refusal (review #6)
+            return ToolOutcome(
+                success=False,
+                error="component_error",
+                content=f"add_trusted_component could not proceed: {exc}",
+            )
+
+    async def _run(self, args: AddTrustedComponentArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
         registry = TrustedComponentRegistry.default()
         comp = registry.get(args.name, args.version)
@@ -137,6 +152,28 @@ class AddTrustedComponentTool:
                         f"Install it first: add_trusted_component(name='{req.name}')."
                     ),
                 )
+            # A lock entry whose files were DELETED is not a present dependency
+            # (review finding: eject + rm left the edge "satisfied" while zero
+            # bytes existed). Structural presence = at least one pinned file of
+            # the locked version still on disk.
+            dep_comp = registry.get(req.name, installed.version)
+            dep_present = dep_comp is None  # unknown version → verify handles it
+            if dep_comp is not None:
+                for dep_rel in dep_comp.manifest.files:
+                    if await ctx.sandbox.file_exists(_install_path(req.name, dep_rel)):
+                        dep_present = True
+                        break
+            if not dep_present:
+                return ToolOutcome(
+                    success=False,
+                    error="missing_dependency",
+                    content=(
+                        f"{comp.manifest.name} requires {entry}, and {req.name} is in "
+                        f"the lockfile but its files are GONE from "
+                        f"{INSTALL_PREFIX}/{req.name}/ — reinstall it first: "
+                        f"add_trusted_component(name='{req.name}')."
+                    ),
+                )
 
         # Collision check (never clobber): byte-identical files are fine
         # (idempotent re-install), anything else refuses with the list.
@@ -163,11 +200,11 @@ class AddTrustedComponentTool:
             )
 
         for target, data in to_write.items():
-            await ctx.sandbox.write_file(target, data)
+            await _atomic_write(ctx.sandbox, target, data)
         record_install(
             lock, comp.manifest.name, comp.manifest.version, datetime.now(UTC).isoformat()
         )
-        await ctx.sandbox.write_file(LOCKFILE_RELPATH, dump_lock(lock))
+        await _atomic_write(ctx.sandbox, LOCKFILE_RELPATH, dump_lock(lock))
 
         m = comp.manifest
         mounts_bits = []
@@ -217,6 +254,16 @@ class EjectTrustedComponentTool:
     )
 
     async def run(self, args: EjectTrustedComponentArgs, ctx: ToolContext) -> ToolOutcome:
+        try:
+            return await self._run(args, ctx)
+        except Exception as exc:  # noqa: BLE001 — a raw stack trace is not a refusal (review #6)
+            return ToolOutcome(
+                success=False,
+                error="component_error",
+                content=f"eject_trusted_component could not proceed: {exc}",
+            )
+
+    async def _run(self, args: EjectTrustedComponentArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None
         try:
             lock = await _load_lock(ctx)
@@ -232,21 +279,20 @@ class EjectTrustedComponentTool:
         now = datetime.now(UTC).isoformat()
         changed = record_eject(lock, args.name, "explicit", now, note=args.reason)
         if not changed:
+            # Interrupted-eject repair (review HIGH): the lockfile may say
+            # ejected while the banner write never happened — converge here.
+            await self._ensure_banner(ctx, args.name, now, args.reason)
             return ToolOutcome(
                 success=True,
                 content=f"'{args.name}' was already ejected — it is already yours.",
                 structured={"name": args.name, "already_ejected": True},
             )
-        await ctx.sandbox.write_file(LOCKFILE_RELPATH, dump_lock(lock))
-        guide_path = _install_path(args.name, "GUIDE.md")
-        if await ctx.sandbox.file_exists(guide_path):
-            guide = await ctx.sandbox.read_file(guide_path)
-            banner = (
-                f"\n\n---\n\n> ⚠ **Ejected {now}** — this copy diverged from the "
-                f"registry and is now custom code you own. Upgrades and the verified "
-                f"badge no longer apply. Reason: {args.reason}\n"
-            ).encode()
-            await ctx.sandbox.write_file(guide_path, guide + banner)
+        # Banner BEFORE the lockfile flag: an interruption between the two then
+        # leaves banner-without-flag (harmless; the retry appends nothing new via
+        # _ensure_banner's marker check) instead of flag-without-banner (a
+        # silent honesty gap the retry path used to never repair).
+        await self._ensure_banner(ctx, args.name, now, args.reason)
+        await _atomic_write(ctx.sandbox, LOCKFILE_RELPATH, dump_lock(lock))
         return ToolOutcome(
             success=True,
             content=(
@@ -255,3 +301,21 @@ class EjectTrustedComponentTool:
             ),
             structured={"name": args.name, "already_ejected": False},
         )
+
+    @staticmethod
+    async def _ensure_banner(ctx: ToolContext, name: str, now: str, reason: str) -> None:
+        """Append the eject banner to the workspace GUIDE copy exactly once —
+        idempotent so interrupted ejects converge on retry."""
+        assert ctx.sandbox is not None
+        guide_path = _install_path(name, "GUIDE.md")
+        if not await ctx.sandbox.file_exists(guide_path):
+            return
+        guide = await ctx.sandbox.read_file(guide_path)
+        if b"**Ejected" in guide:
+            return
+        banner = (
+            f"\n\n---\n\n> ⚠ **Ejected {now}** — this copy diverged from the "
+            f"registry and is now custom code you own. Upgrades and the verified "
+            f"badge no longer apply. Reason: {reason}\n"
+        ).encode()
+        await _atomic_write(ctx.sandbox, guide_path, guide + banner)
