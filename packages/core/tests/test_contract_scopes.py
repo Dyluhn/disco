@@ -106,13 +106,18 @@ def test_document_contract_scopes_parts_and_export_tool() -> None:
     assert s.allowed(Phase.VERIFY, "doc_export") is False
 
 
-def test_custom_contract_permits_broad_repair_only_as_declared() -> None:
+def test_custom_contract_is_the_broad_escape_hatch() -> None:
+    # CUSTOM is what every UNMAPPED build runs through (CONTRACT-ACTIVATE,
+    # 2026-07-10): the first live audited wave showed its old 2-tool edit pack
+    # would-denying 24 shell calls in one ordinary run. It now carries the full
+    # evidenced working set in edit AND repair; VERIFY discipline still holds.
     c = BuildContractRegistry.default().get(ContractKind.CUSTOM)
     assert c is not None and c.edit.rewrite_allowed is True
     s = compile_tool_scopes(c)
-    # custom DECLARED file_write as a repair tool → allowed in repair, still not in edit
-    assert s.allowed(Phase.REPAIR, "file_write") is True
-    assert s.allowed(Phase.EDIT, "file_write") is False
+    for tool in ("file_write", "shell", "browser", "file_edit"):
+        assert s.allowed(Phase.EDIT, tool) is True, tool
+        assert s.allowed(Phase.REPAIR, tool) is True, tool
+        assert s.allowed(Phase.VERIFY, tool) is False, tool
 
 
 def test_shell_hard_excluded_from_bootstrap_unless_declared() -> None:

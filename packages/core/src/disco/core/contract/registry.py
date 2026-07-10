@@ -166,12 +166,17 @@ def _workflow_output() -> BuildContract:
 
 
 def _custom() -> BuildContract:
-    # the escape hatch: broad tools + rewrite allowed; the generic artifact finalizer.
+    # The escape hatch: broad tools + rewrite allowed; the generic artifact
+    # finalizer. CUSTOM is what every UNMAPPED build runs through, so its packs
+    # must be the BROADEST — the first live audited wave (2026-07-10) showed its
+    # old 2-tool edit pack would-denying 24 shell calls in one ordinary run.
     return BuildContract(
         kind=ContractKind.CUSTOM,
         artifact=ArtifactContract(kind=ContractKind.CUSTOM),
-        bootstrap=ToolPack(name="custom.bootstrap", tools=("file_write", "file_edit", "shell")),
-        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",), rewrite_allowed=True),
+        bootstrap=ToolPack(name="custom.bootstrap", tools=_SITE_BOOTSTRAP_TOOLS),
+        edit=EditContract(
+            edit_tools=_SITE_EDIT_TOOLS, repair_tools=_SITE_REPAIR_TOOLS, rewrite_allowed=True
+        ),
         verify=VerificationContract(finalizer="ready_for_artifact_verification"),
         ui_card="ArtifactCard",
     )
