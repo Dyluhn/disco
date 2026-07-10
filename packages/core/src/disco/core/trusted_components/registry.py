@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import REQUIREMENT_RE, TrustedComponentManifest, _safe_relpath
+from . import REQUIREMENT_RE, _VERSION_SHAPE, TrustedComponentManifest, _safe_relpath
 
 # Directories copied into a workspace on install. probe/ is deliberately NOT
 # here (D3 — host-run only), and manifest.json is host-side truth (D1).
@@ -20,12 +20,13 @@ _INSTALL_DIRS = ("core", "config")
 
 
 def parse_version(version: str) -> tuple[int, int, int]:
-    """Strict X.Y.Z → int tuple. Registry authoring errors raise here (the
+    """Strict X.Y.Z → int tuple, leading zeros rejected ("01.2.3" would be a
+    second identity for "1.2.3"). Registry authoring errors raise here (the
     tripwire runs this over every shipped manifest)."""
-    parts = version.split(".")
-    if len(parts) != 3 or not all(p.isdigit() for p in parts):
-        raise ValueError(f"not a X.Y.Z version: {version!r}")
-    return (int(parts[0]), int(parts[1]), int(parts[2]))
+    m = _VERSION_SHAPE.match(version)
+    if m is None:
+        raise ValueError(f"not a X.Y.Z version (leading zeros rejected): {version!r}")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
 @dataclass(frozen=True)
@@ -47,16 +48,17 @@ class Requirement:
 
 
 def parse_requirement(entry: str) -> Requirement:
+    """Parse a requires edge. SAME regex as the manifest validator (single
+    source of truth): `>=` takes exactly X.Y, `==` exactly X.Y.Z — a drifted
+    parser once accepted `>=X.Y.Z` and silently dropped the patch digit."""
     m = REQUIREMENT_RE.match(entry)
     if m is None:
         raise ValueError(f"invalid requires entry (D10 grammar): {entry!r}")
-    ver = tuple(int(p) for p in m.group("version").split("."))
-    op = m.group("op")
-    if op == "==" and len(ver) != 3:
-        raise ValueError(f"== requires an exact X.Y.Z version: {entry!r}")
-    if op == ">=" and len(ver) < 2:
-        raise ValueError(f">= requires at least X.Y: {entry!r}")
-    return Requirement(name=m.group("name"), op=op, version=ver)
+    if m.group("eq") is not None:
+        ver = tuple(int(p) for p in m.group("eq").split("."))
+        return Requirement(name=m.group("name"), op="==", version=ver)
+    ver = tuple(int(p) for p in m.group("ge").split("."))
+    return Requirement(name=m.group("name"), op=">=", version=ver)
 
 
 @dataclass(frozen=True)
@@ -69,27 +71,44 @@ class LoadedComponent:
     def read_file(self, relpath: str) -> bytes:
         """Read a registry file, confined to the component dir. Rejects any
         '..'/absolute path outright (even ones that would round-trip back
-        inside) AND re-checks the resolved target — belt and braces."""
+        inside), rejects SYMLINKS anywhere on the relative chain (a symlink in
+        OUR registry is an authoring error, and following one would copy
+        out-of-tree bytes into workspaces under a benign name), and re-checks
+        the resolved target — belt and braces."""
         _safe_relpath(relpath)
-        target = (self.root / relpath).resolve()
+        probe = self.root
+        for segment in relpath.split("/"):
+            probe = probe / segment
+            if probe.is_symlink():
+                raise ValueError(f"registry path is a symlink (authoring error): {relpath!r}")
+        target = probe.resolve()
         if not target.is_relative_to(self.root.resolve()):
             raise ValueError(f"manifest path must be normalized and traversal-free: {relpath!r}")
         return target.read_bytes()
 
     def install_tree(self) -> dict[str, bytes]:
         """Everything a workspace install copies: core/, config/, GUIDE.md.
-        Excludes probe/ (D3) and manifest.json (D1)."""
+        Excludes probe/ (D3) and manifest.json (D1). EVERY read goes through
+        read_file's confinement + symlink rejection — the adversarial review
+        proved a symlink under core/ used to smuggle out-of-tree bytes into
+        the returned tree under a benign key."""
         tree: dict[str, bytes] = {}
         for dirname in _INSTALL_DIRS:
             base = self.root / dirname
+            if base.is_symlink():
+                raise ValueError(f"registry dir is a symlink (authoring error): {dirname!r}")
             if not base.is_dir():
                 continue
             for path in sorted(base.rglob("*")):
+                if path.is_symlink():
+                    rel = path.relative_to(self.root).as_posix()
+                    raise ValueError(f"registry path is a symlink (authoring error): {rel!r}")
                 if path.is_file():
-                    tree[path.relative_to(self.root).as_posix()] = path.read_bytes()
+                    rel = path.relative_to(self.root).as_posix()
+                    tree[rel] = self.read_file(rel)
         guide = self.root / self.manifest.guide
-        if guide.is_file():
-            tree[self.manifest.guide] = guide.read_bytes()
+        if guide.is_file() or guide.is_symlink():
+            tree[self.manifest.guide] = self.read_file(self.manifest.guide)
         return tree
 
     def probe_source(self) -> bytes | None:

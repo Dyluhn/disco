@@ -211,3 +211,76 @@ def test_manifest_requires_full_validation() -> None:
                 "guide": "GUIDE.md",
             }
         )
+
+
+def test_symlink_under_core_is_rejected_everywhere(tmp_path: Path) -> None:
+    """Adversarial-review CRITICAL: a symlink under core/ used to flow through
+    install_tree() unguarded, smuggling out-of-tree bytes into workspaces."""
+    _write_component(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"HOST SECRET")
+    comp_dir = tmp_path / "demo-kit" / "1.0.0"
+    (comp_dir / "core" / "evil.js").symlink_to(secret)
+    comp = TrustedComponentRegistry(tmp_path).get("demo-kit")
+    assert comp is not None
+    with pytest.raises(ValueError, match="symlink"):
+        comp.install_tree()
+    with pytest.raises(ValueError, match="symlink"):
+        comp.read_file("core/evil.js")
+
+
+def test_symlinked_guide_is_rejected(tmp_path: Path) -> None:
+    _write_component(tmp_path)
+    secret = tmp_path / "secret.txt"
+    secret.write_bytes(b"HOST SECRET")
+    comp_dir = tmp_path / "demo-kit" / "1.0.0"
+    (comp_dir / "GUIDE.md").unlink()
+    (comp_dir / "GUIDE.md").symlink_to(secret)
+    comp = TrustedComponentRegistry(tmp_path).get("demo-kit")
+    assert comp is not None
+    with pytest.raises(ValueError, match="symlink"):
+        comp.install_tree()
+
+
+def test_parse_version_rejects_leading_zeros() -> None:
+    with pytest.raises(ValueError):
+        parse_version("01.2.3")
+
+
+def test_parse_requirement_rejects_three_segment_ge() -> None:
+    """The drifted-grammar finding: >=X.Y.Z must be rejected, not truncated."""
+    with pytest.raises(ValueError):
+        parse_requirement("auth-kit>=1.0.5")
+
+
+def test_registry_data_has_no_invisible_components() -> None:
+    """Vacuous-tripwire guard (review finding 4): every directory under the
+    REAL registry_data must be a loadable component with >=1 valid version —
+    a typo'd version dir or missing manifest.json must fail HERE, not silently
+    vanish from names() and every downstream tripwire."""
+    reg = TrustedComponentRegistry.default()
+    root = reg._root
+    if not root.is_dir():
+        return
+    for entry in sorted(root.iterdir()):
+        if entry.is_file():
+            assert entry.name == "README.md", f"stray file in registry_data: {entry.name}"
+            continue
+        versions = reg.versions(entry.name)
+        assert versions, f"registry_data/{entry.name} has NO loadable version (typo'd dir or missing manifest.json?)"
+        version_dirs = {p.name for p in entry.iterdir() if p.is_dir()}
+        assert version_dirs == set(versions), (
+            f"registry_data/{entry.name}: dirs {sorted(version_dirs)} != loadable {list(versions)}"
+        )
+        for q in entry.rglob("*"):
+            assert not q.is_symlink(), f"symlink in shipped registry: {q}"
+
+
+def test_shipped_config_surface_files_exist() -> None:
+    """Review finding 5: a declared config_surface path that does not ship is a
+    dangling affordance — the GUIDE will tell the model to edit a file that
+    does not exist."""
+    for comp in _shipped_components():
+        tree = comp.install_tree()
+        for rel in comp.manifest.config_surface:
+            assert rel in tree, f"{comp.manifest.name}: config_surface {rel} not shipped"

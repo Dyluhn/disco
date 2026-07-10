@@ -57,6 +57,7 @@ from .slides import SlidesTool
 from .subagent import DelegateExploreTool
 from .system import CodeExecTool, ShellTool
 from .think import ThinkTool
+from .trusted_components import AddTrustedComponentTool, EjectTrustedComponentTool
 from .verify_app import VerifyWebAppTool
 from .workflow_controls import WorkflowNeedsInputTool, WorkflowSkipTool
 
@@ -171,6 +172,11 @@ def build_default_registry() -> ToolRegistry:
             if cls().definition.name != "app_snapshot_version"
         ),
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
+        # WO-TC2: the trusted-components tier — verified vendored security cores.
+        # Free-form Build scope only (AGENT_TOOLS); strict AppKit/artifact/research
+        # scopes never include the names.
+        AddTrustedComponentTool(),
+        EjectTrustedComponentTool(),
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned
         # here — the tool re-reads the saved provider per call (config honored live).

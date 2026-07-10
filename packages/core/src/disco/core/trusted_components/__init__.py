@@ -18,23 +18,34 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# D10 (spec §0): exactly two operators. The grammar is validated on the model so
-# a bad manifest fails at LOAD, not at verify time.
-REQUIREMENT_RE = re.compile(r"^(?P<name>[a-z0-9-]+)(?P<op>>=|==)(?P<version>\d+\.\d+(\.\d+)?)$")
-_REQUIREMENT_SHAPE = re.compile(r"^[a-z0-9-]+(>=\d+\.\d+|==\d+\.\d+\.\d+)$")
+# D10 (spec §0): exactly two operators, ONE grammar — this single pattern is the
+# source of truth for both the manifest validator and parse_requirement(), so
+# the two can never drift (adversarial-review finding: a drifted parse regex
+# accepted `>=X.Y.Z` and silently discarded the patch digit).
+REQUIREMENT_RE = re.compile(
+    r"^(?P<name>[a-z0-9-]+)(?:>=(?P<ge>\d+\.\d+)|==(?P<eq>\d+\.\d+\.\d+))$"
+)
 _PIN_SHAPE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _NAME_SHAPE = re.compile(r"^[a-z0-9-]+$")
-_VERSION_SHAPE = re.compile(r"^\d+\.\d+\.\d+$")
+# No leading zeros: "01.2.3" and "1.2.3" would otherwise be two distinct,
+# semantically identical registry entries.
+_VERSION_SHAPE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+_SEGMENT_SHAPE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _safe_relpath(path: str) -> str:
-    """Reject absolute paths and traversal — manifest paths are workspace-relative
-    under the component's install dir, nothing else."""
-    if path.startswith("/") or path.startswith("\\"):
+    """Reject absolute paths (POSIX and Windows drive-letter forms), traversal,
+    and exotic characters — manifest paths are workspace-relative under the
+    component's install dir, plain ASCII-safe segments only (control or
+    direction-override characters could spoof filenames in logs/UI)."""
+    if path.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", path):
         raise ValueError(f"manifest path must be relative: {path!r}")
     parts = path.replace("\\", "/").split("/")
     if any(p in ("", ".", "..") for p in parts):
         raise ValueError(f"manifest path must be normalized and traversal-free: {path!r}")
+    for p in parts:
+        if not _SEGMENT_SHAPE.match(p):
+            raise ValueError(f"manifest path segment has unsafe characters: {p!r}")
     return path
 
 
@@ -128,7 +139,7 @@ class TrustedComponentManifest(BaseModel):
     @classmethod
     def _requires_grammar(cls, v: list[str]) -> list[str]:
         for entry in v:
-            if not _REQUIREMENT_SHAPE.match(entry):
+            if not REQUIREMENT_RE.match(entry):
                 raise ValueError(
                     f"requires entry {entry!r} must match <name>>=X.Y or <name>==X.Y.Z (D10)"
                 )

@@ -20,25 +20,45 @@ from disco.core.trusted_components import TrustedComponentManifest
 from disco.core.trusted_components.verify import pin
 
 
-def repin(component_dir: Path) -> None:
+def repin(component_dir: Path, *, allow_removals: bool = False) -> None:
+    component_dir = component_dir.resolve()
     manifest_path = component_dir / "manifest.json"
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    # Layout guard (review finding): the manifest must belong to THIS dir, or
+    # the registry will refuse it at load ("layout mismatch") after we exit 0.
+    if raw.get("name") != component_dir.parent.name or raw.get("version") != component_dir.name:
+        raise SystemExit(
+            f"manifest says {raw.get('name')}/{raw.get('version')} but the directory is "
+            f"{component_dir.parent.name}/{component_dir.name} — fix the manifest first"
+        )
     core = component_dir / "core"
     if not core.is_dir():
         raise SystemExit(f"{component_dir} has no core/ directory — nothing to pin")
+    symlinks = [q for q in core.rglob("*") if q.is_symlink()]
+    if symlinks:
+        raise SystemExit(f"symlinks under core/ are forbidden: {symlinks}")
     files = {
-        p.relative_to(component_dir).as_posix(): pin(p.read_bytes())
-        for p in sorted(core.rglob("*"))
-        if p.is_file()
+        q.relative_to(component_dir).as_posix(): pin(q.read_bytes())
+        for q in sorted(core.rglob("*"))
+        if q.is_file()
     }
+    # Removal guard (review finding): a deleted/renamed core file must never be
+    # silently unpinned — that is exactly how an integrity hole ships.
+    removed = sorted(set(raw.get("files", {})) - set(files))
+    if removed and not allow_removals:
+        raise SystemExit(
+            f"these previously-pinned files are GONE from core/: {removed} — if the "
+            "removal is intentional, rerun with --allow-removals"
+        )
     raw["files"] = files
     # Validate BEFORE writing so a broken manifest never lands on disk.
     TrustedComponentManifest.model_validate(raw)
     manifest_path.write_text(json.dumps(raw, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"pinned {len(files)} file(s) in {manifest_path}")
+    print(f"pinned {len(files)} file(s) in {manifest_path}" + (f" (removed: {removed})" if removed else ""))
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    args = [a for a in sys.argv[1:] if a != "--allow-removals"]
+    if len(args) != 1:
         raise SystemExit(__doc__)
-    repin(Path(sys.argv[1]))
+    repin(Path(args[0]), allow_removals="--allow-removals" in sys.argv)

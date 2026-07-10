@@ -33,12 +33,23 @@ def test_manifest_contract_parses_the_design_doc_example() -> None:
     assert m.name == "auth-kit" and m.requires == ["database-kit>=1.0"]
 
 
-def test_seam_is_fail_closed_nothing_advertises_it() -> None:
-    """No tool named anything trusted-component-ish exists in the default
-    registry — the tier CANNOT be reached by a model until v0.2 wires it
-    deliberately. If this fails, someone registered a tool without the
-    design doc's §4 verification checks: stop and read the doc."""
-    from disco.tools import build_default_registry
+def test_tools_advertised_only_in_freeform_scope() -> None:
+    """WO-TC2 INVERTED the original fail-closed tripwire: the tools are now
+    deliberately registered — but ONLY the free-form Build scope (AGENT_TOOLS)
+    may carry them (D8). Strict AppKit, artifact, and research scopes must
+    never see the names."""
+    import inspect
 
-    names = set(build_default_registry().names())
-    assert not any("trusted" in n or "component" in n for n in names), names
+    import disco.tools.appkit_scope as appkit_scope_mod
+    from disco.tools import build_default_registry
+    from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, RESEARCH_TOOLS
+
+    tc_names = {"add_trusted_component", "eject_trusted_component"}
+    assert tc_names <= set(build_default_registry().names())
+    assert tc_names <= AGENT_TOOLS
+    assert tc_names.isdisjoint(RESEARCH_TOOLS)
+    assert tc_names.isdisjoint(ARTIFACT_TOOLS)
+    # The strict AppKit allowlists are explicit name sets — source-level guard
+    # that nobody quietly adds the names to a strict-mode phase set.
+    src = inspect.getsource(appkit_scope_mod)
+    assert "add_trusted_component" not in src and "eject_trusted_component" not in src
