@@ -1,0 +1,8 @@
+{
+  "publicAllowlist": ["/", "/index.html"],
+  "sessionTtlHours": 24,
+  "devSeedUser": {
+    "email": "dev@example.com",
+    "password": "dev-password-123"
+  }
+}
