@@ -8,7 +8,10 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 import websockets
-from disco.agent_server.preview_inject import inject_element_mention_picker
+from disco.agent_server.preview_inject import (
+    MAX_ELEMENT_MENTION_HTML_BYTES,
+    inject_element_mention_picker,
+)
 from disco.core.auth import (
     PREVIEW_BOOTSTRAP_PATH,
     PREVIEW_COOKIE,
@@ -26,9 +29,7 @@ _LOG = logging.getLogger(__name__)
 # front door routes those prefixed Hosts here (codex front-door defect #1,
 # 2026-07-09). Auth is unchanged — the capability cookie/intent token still
 # gates every preview request; the host match only SELECTS the proxy path.
-PREVIEW_HOST_RE = re.compile(
-    r"^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.[A-Za-z0-9.-]+?(?::\d+)?$"
-)
+PREVIEW_HOST_RE = re.compile(r"^(?P<cid8>[0-9a-f]{8})-(?P<port>\d{2,5})\.[A-Za-z0-9.-]+?(?::\d+)?$")
 
 # C2 (first-hit wake race): the preview upstream is bound lazily by the
 # sandbox; the first proxy hit after wake can land BEFORE the dev server has
@@ -43,9 +44,11 @@ _CONNECT_RETRY_ATTEMPTS = 5  # 1 initial + 4 retries
 _CONNECT_BACKOFF_BASE = 0.05  # 50ms
 _CONNECT_BACKOFF_FACTOR = 2.0
 _CONNECT_BACKOFF_CAP = 0.4  # 400ms
+MAX_PREVIEW_REQUEST_BODY_BYTES = 1024 * 1024
 # Total backoff across all failed attempts: 50+100+200+400 = 750ms (well under 2s).
 
 _client: httpx.AsyncClient | None = None
+
 
 def _get_client() -> httpx.AsyncClient:
     global _client
@@ -66,7 +69,7 @@ def _cookie_value(scope: Scope, name: str) -> str | None:
         for part in value.decode("latin1").split(";"):
             item = part.strip()
             if item.startswith(needle):
-                return item[len(needle):]
+                return item[len(needle) :]
     return None
 
 
@@ -80,6 +83,7 @@ def _preview_ws_origin_allowed(scope: Scope, host: str) -> bool:
         return False
     parsed = urllib.parse.urlparse(origin)
     return parsed.scheme in {"http", "https"} and parsed.netloc == host
+
 
 class HostPreviewProxyMiddleware:
     def __init__(
@@ -112,7 +116,7 @@ class HostPreviewProxyMiddleware:
             if name.lower() == b"host":
                 host = value.decode("latin1")
                 break
-        
+
         match = PREVIEW_HOST_RE.match(host)
         if not match:
             await self.app(scope, receive, send)
@@ -125,13 +129,16 @@ class HostPreviewProxyMiddleware:
             port = 0
 
         from disco.tools.sandbox._container import USER_PORTS
+
         if port not in USER_PORTS:
             if scope["type"] == "http":
-                await send({
-                    "type": "http.response.start",
-                    "status": 404,
-                    "headers": [(b"content-type", b"text/plain")],
-                })
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 404,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
                 await send({"type": "http.response.body", "body": b"unknown port"})
             else:
                 await send({"type": "websocket.close", "code": 1008, "reason": "unknown port"})
@@ -154,9 +161,11 @@ class HostPreviewProxyMiddleware:
 
         cap_owner_id = None
         if self.require_capability:
-            method = "WEBSOCKET" if scope["type"] == "websocket" else str(
-                scope.get("method") or "GET"
-            ).upper()
+            method = (
+                "WEBSOCKET"
+                if scope["type"] == "websocket"
+                else str(scope.get("method") or "GET").upper()
+            )
             cap = self.capability_signer.verify(
                 _cookie_value(scope, PREVIEW_COOKIE),
                 cid8=cid8,
@@ -166,21 +175,27 @@ class HostPreviewProxyMiddleware:
             )
             if cap is None:
                 if scope["type"] == "http":
-                    await send({
-                        "type": "http.response.start",
-                        "status": 403,
-                        "headers": [(b"content-type", b"text/plain")],
-                    })
-                    await send({
-                        "type": "http.response.body",
-                        "body": b"preview capability required",
-                    })
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": 403,
+                            "headers": [(b"content-type", b"text/plain")],
+                        }
+                    )
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": b"preview capability required",
+                        }
+                    )
                 else:
-                    await send({
-                        "type": "websocket.close",
-                        "code": 1008,
-                        "reason": "preview capability required",
-                    })
+                    await send(
+                        {
+                            "type": "websocket.close",
+                            "code": 1008,
+                            "reason": "preview capability required",
+                        }
+                    )
                 return
             cap_owner_id = cap.owner_id
 
@@ -204,18 +219,20 @@ class HostPreviewProxyMiddleware:
             ):
                 return
             if scope["type"] == "http":
-                await send({
-                    "type": "http.response.start",
-                    "status": 503,
-                    "headers": [(b"content-type", b"text/plain")],
-                })
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 503,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
                 await send({"type": "http.response.body", "body": b"preview not available"})
             else:
                 await send(
                     {"type": "websocket.close", "code": 1008, "reason": "preview not available"}
                 )
             return
-            
+
         if scope["type"] == "http":
             await self._proxy_http(scope, receive, send, upstream)
         elif scope["type"] == "websocket":
@@ -228,38 +245,47 @@ class HostPreviewProxyMiddleware:
         intent = (query.get("intent") or [""])[0]
         minted = self.capability_signer.mint_cookie_from_intent(intent)
         if minted is None:
-            await send({
-                "type": "http.response.start",
-                "status": 403,
-                "headers": [(b"content-type", b"text/plain")],
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 403,
+                    "headers": [(b"content-type", b"text/plain")],
+                }
+            )
             await send({"type": "http.response.body", "body": b"invalid preview intent"})
             return
         token, target = minted
-        if self.capability_signer.verify(
-            token, cid8=cid8, port=port, method="GET", path=target.split("?", 1)[0] or "/"
-        ) is None:
-            await send({
-                "type": "http.response.start",
-                "status": 403,
-                "headers": [(b"content-type", b"text/plain")],
-            })
+        if (
+            self.capability_signer.verify(
+                token, cid8=cid8, port=port, method="GET", path=target.split("?", 1)[0] or "/"
+            )
+            is None
+        ):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 403,
+                    "headers": [(b"content-type", b"text/plain")],
+                }
+            )
             await send({"type": "http.response.body", "body": b"preview intent scope mismatch"})
             return
         cookie = (
             f"{PREVIEW_COOKIE}={token}; Path=/; Max-Age={preview_ttl_s()}; "
             "HttpOnly; SameSite=Strict"
         ).encode("latin1")
-        await send({
-            "type": "http.response.start",
-            "status": 303,
-            "headers": [
-                (b"location", target.encode("latin1")),
-                (b"set-cookie", cookie),
-                (b"referrer-policy", b"no-referrer"),
-                (b"cache-control", b"no-store"),
-            ],
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 303,
+                "headers": [
+                    (b"location", target.encode("latin1")),
+                    (b"set-cookie", cookie),
+                    (b"referrer-policy", b"no-referrer"),
+                    (b"cache-control", b"no-store"),
+                ],
+            }
+        )
         await send({"type": "http.response.body", "body": b""})
 
     async def _send_with_connect_retry(
@@ -287,7 +313,7 @@ class HostPreviewProxyMiddleware:
                 last_err = e
                 if attempt < _CONNECT_RETRY_ATTEMPTS - 1:
                     wait = min(
-                        _CONNECT_BACKOFF_BASE * (_CONNECT_BACKOFF_FACTOR ** attempt),
+                        _CONNECT_BACKOFF_BASE * (_CONNECT_BACKOFF_FACTOR**attempt),
                         _CONNECT_BACKOFF_CAP,
                     )
                     await asyncio.sleep(wait)
@@ -296,11 +322,13 @@ class HostPreviewProxyMiddleware:
             _CONNECT_RETRY_ATTEMPTS,
             last_err,
         )
-        await send({
-            "type": "http.response.start",
-            "status": 502,
-            "headers": [(b"content-type", b"text/plain")],
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 502,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
         await send({"type": "http.response.body", "body": b"preview upstream unreachable"})
         return None
 
@@ -323,6 +351,7 @@ class HostPreviewProxyMiddleware:
         # disabled live-browser surface, bypassing the gate. The noVNC surface is
         # served EXCLUSIVELY via the gated published-port proxy — never fetch_inside.
         from disco.tools.sandbox._container import NOVNC_PORT
+
         if port == NOVNC_PORT:
             return False
         resolver = self.session_resolver
@@ -348,20 +377,24 @@ class HostPreviewProxyMiddleware:
             return False
         status, body, ctype = got
         media_type = ctype or "application/octet-stream"
-        await send({
-            "type": "http.response.start",
-            "status": status,
-            "headers": [(b"content-type", media_type.encode("latin1"))],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": inject_element_mention_picker(body, media_type),
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", media_type.encode("latin1"))],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": inject_element_mention_picker(body, media_type),
+            }
+        )
         return True
 
     async def _proxy_http(self, scope: Scope, receive: Receive, send: Send, upstream: str) -> None:
         client = _get_client()
-        
+
         path = scope.get("path", "")
         query_string = scope.get("query_string", b"").decode("latin1")
         url = f"{upstream}{path}"
@@ -369,17 +402,40 @@ class HostPreviewProxyMiddleware:
             url = f"{url}?{query_string}"
 
         method = scope.get("method", "GET")
-        
+
         headers = []
+        declared_length: int | None = None
         hop_by_hop = {
-            "connection", "keep-alive", "transfer-encoding", "upgrade",
-            "proxy-authenticate", "proxy-authorization", "te", "trailers",
+            "connection",
+            "keep-alive",
+            "transfer-encoding",
+            "upgrade",
+            "proxy-authenticate",
+            "proxy-authorization",
+            "te",
+            "trailers",
         }
         for name, value in scope.get("headers", []):
             name_str = name.decode("latin1").lower()
             if name_str not in hop_by_hop and not name_str.startswith("proxy-"):
                 if name_str != "host":
                     headers.append((name.decode("latin1"), value.decode("latin1")))
+            if name_str == "content-length":
+                try:
+                    declared_length = int(value.decode("latin1"))
+                except ValueError:
+                    declared_length = None
+
+        if declared_length is not None and declared_length > MAX_PREVIEW_REQUEST_BODY_BYTES:
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 413,
+                    "headers": [(b"content-type", b"text/plain")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b"preview request body too large"})
+            return
 
         upstream_parsed = urllib.parse.urlparse(upstream)
         headers.append(("host", upstream_parsed.netloc))
@@ -400,7 +456,24 @@ class HostPreviewProxyMiddleware:
         # cannot replay it. Buffering is bounded by request size; preview
         # upstreams see small bodies (form posts, hmr pings, asset fetches).
         body_chunks: list[bytes] = []
+        body_size = 0
         async for chunk in body_iterator():
+            body_size += len(chunk)
+            if body_size > MAX_PREVIEW_REQUEST_BODY_BYTES:
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 413,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"preview request body too large",
+                    }
+                )
+                return
             body_chunks.append(chunk)
         body = b"".join(body_chunks)
 
@@ -411,12 +484,51 @@ class HostPreviewProxyMiddleware:
             return
 
         content_type = res.headers.get("content-type")
+        content_encoding = (res.headers.get("content-encoding") or "").strip().lower()
         buffer_html = (
             content_type is not None
             and content_type.split(";", 1)[0].strip().lower() == "text/html"
+            # Do not decompress an attacker-controlled encoded response into
+            # memory for injection; encoded HTML stays on the raw streaming path.
+            and content_encoding in {"", "identity"}
         )
         if buffer_html:
-            body = await res.aread()
+            # HTML injection needs a complete document, but the upstream is an
+            # untrusted sandbox. Buffer at most the injection ceiling; larger or
+            # lengthless streams fall back to bounded-memory pass-through.
+            html_chunks: list[bytes] = []
+            html_size = 0
+            html_overflow = False
+            html_stream = res.aiter_bytes()
+            async for chunk in html_stream:
+                html_chunks.append(chunk)
+                html_size += len(chunk)
+                if html_size > MAX_ELEMENT_MENTION_HTML_BYTES:
+                    html_overflow = True
+                    break
+            if html_overflow:
+                res_headers = []
+                for k, v in res.headers.multi_items():
+                    k_lower = k.lower()
+                    if k_lower not in hop_by_hop and not k_lower.startswith("proxy-"):
+                        res_headers.append((k.encode("latin1"), v.encode("latin1")))
+                try:
+                    await send(
+                        {
+                            "type": "http.response.start",
+                            "status": res.status_code,
+                            "headers": res_headers,
+                        }
+                    )
+                    for chunk in html_chunks:
+                        await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                    async for chunk in html_stream:
+                        await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                    await send({"type": "http.response.body", "body": b"", "more_body": False})
+                finally:
+                    await res.aclose()
+                return
+            body = b"".join(html_chunks)
             injected = inject_element_mention_picker(body, content_type)
             changed = injected != body
             res_headers = []
@@ -434,16 +546,20 @@ class HostPreviewProxyMiddleware:
                 res_headers.append((k.encode("latin1"), v.encode("latin1")))
             res_headers.append((b"content-length", str(len(injected)).encode("latin1")))
             try:
-                await send({
-                    "type": "http.response.start",
-                    "status": res.status_code,
-                    "headers": res_headers,
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": injected,
-                    "more_body": False,
-                })
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": res.status_code,
+                        "headers": res_headers,
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": injected,
+                        "more_body": False,
+                    }
+                )
             finally:
                 await res.aclose()
             return
@@ -457,22 +573,28 @@ class HostPreviewProxyMiddleware:
         # aclose in finally: a client disconnect mid-stream raises out of send()
         # and must not leak the upstream connection (orchestrator hardening).
         try:
-            await send({
-                "type": "http.response.start",
-                "status": res.status_code,
-                "headers": res_headers,
-            })
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": res.status_code,
+                    "headers": res_headers,
+                }
+            )
             async for chunk in res.aiter_raw():
-                await send({
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": chunk,
+                        "more_body": True,
+                    }
+                )
+            await send(
+                {
                     "type": "http.response.body",
-                    "body": chunk,
-                    "more_body": True,
-                })
-            await send({
-                "type": "http.response.body",
-                "body": b"",
-                "more_body": False,
-            })
+                    "body": b"",
+                    "more_body": False,
+                }
+            )
         finally:
             await res.aclose()
 
@@ -482,7 +604,7 @@ class HostPreviewProxyMiddleware:
         message = await receive()
         if message["type"] != "websocket.connect":
             return
-            
+
         path = scope.get("path", "")
         query_string = scope.get("query_string", b"").decode("latin1")
         upstream_parsed = urllib.parse.urlparse(upstream)
@@ -540,7 +662,7 @@ class HostPreviewProxyMiddleware:
 
         t1 = asyncio.create_task(client_to_upstream())
         t2 = asyncio.create_task(upstream_to_client())
-        
+
         done, pending = await asyncio.wait([t1, t2], return_when=asyncio.FIRST_COMPLETED)
         for task in pending:
             task.cancel()

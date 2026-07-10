@@ -3,12 +3,12 @@
 UNIT part only (live VM 201 host-reach is deferred). The Build sandbox spec
 now defaults to egress="filtered" by default, so build boxes get the
 allowlisting proxy (E8 wired the proxy on every backend — gVisor, podman,
-local — so flipping the default is safe everywhere). Open remains an
-explicit escape hatch (PMX_BUILD_EGRESS=open) for debug/dev use.
+local — so flipping the default is safe everywhere). The legacy ``open``
+setting widens to arbitrary public web through the same private-denying proxy.
 
 Acceptance:
   • _build_sandbox_spec() with no env var set  →  egress_allow = REGISTRY_EGRESS_ALLOW
-  • _build_sandbox_spec() with PMX_BUILD_EGRESS=open  →  NETWORK capability granted
+  • _build_sandbox_spec() with PMX_BUILD_EGRESS=open  →  public-web proxy posture
   • _mcp_proxy_env()  defaults to a NON-None proxy env (was None)
   • gVisor filtered wiring is UNCHANGED (the E8 regression guard still holds)
   • The npm/pip/git registry hosts are covered by the default allowlist
@@ -88,15 +88,13 @@ def test_default_build_spec_egress_mode_resolves_to_filtered():
     assert egress_mode(spec) == "filtered"
 
 
-def test_explicit_open_escape_hatch_still_works():
-    """The escape hatch: PMX_BUILD_EGRESS=open explicitly grants NETWORK (no
-    allowlist, full egress). This is the path debug/dev use when a real
-    network is genuinely required; it is NO LONGER the default, but it must
-    still be reachable for opt-in."""
+def test_explicit_open_alias_widens_only_to_public_web():
+    """The compatibility alias never grants a model-controlled raw bridge."""
     rt = _runtime()
     with mock.patch.dict(os.environ, {"PMX_BUILD_EGRESS": "open"}):
         spec = rt._build_sandbox_spec()
-    assert Capability.NETWORK in spec.permitted
+    assert Capability.NETWORK not in spec.permitted
+    assert spec.public_web is True
     assert not spec.egress_allow
 
 
@@ -235,10 +233,7 @@ async def test_gvisor_filtered_path_unchanged_no_regression(tmp_path):
     assert inst._egress_sidecar is sidecar
 
 
-async def test_gvisor_sealed_and_open_paths_unchanged(tmp_path):
-    """E8 + BP-G10 together must keep the non-filtered paths stable. Default
-    spec → sealed (network_mode="none"); explicit NETWORK capability → open
-    (network_mode="bridge"). Neither path may have been touched."""
+async def test_gvisor_sealed_and_open_paths_remain_sibling_isolated(tmp_path):
     svc, client = _gvisor_svc(tmp_path)
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     assert client.last.run_kwargs["network_mode"] == "none"
@@ -247,7 +242,8 @@ async def test_gvisor_sealed_and_open_paths_unchanged(tmp_path):
         owner_id="o",
         conversation_id="c",
     )
-    assert client.last.run_kwargs["network_mode"] == "bridge"
+    assert client.last.run_kwargs["network"].startswith("disco-egr-")
+    assert client.networks.created[-1].attrs.get("internal") is True
 
 
 # ---------------------------------------------------------------------------

@@ -47,7 +47,7 @@ def strip_redundant_workspace_prefix(path: str) -> str:
     """
     for prefix in ("/workspace/", "workspace/"):
         if path.startswith(prefix):
-            return path[len(prefix):]
+            return path[len(prefix) :]
     if path in ("/workspace", "workspace"):
         return ""  # the workspace root itself
     return path
@@ -171,6 +171,11 @@ class SandboxSpec(BaseModel):
     timeout_s: int = 300  # default per-call ceiling
     # egress allowlist (§7); empty => deny ALL network (deny-by-default).
     egress_allow: frozenset[str] = frozenset()
+    # S-W5 D1: browser/agent surfaces may reach arbitrary PUBLIC web origins,
+    # but still traverse the isolated proxy boundary which rejects non-global,
+    # host-owned, metadata, sibling, and private addresses. Legacy NETWORK
+    # grants resolve to this same boundary; no model-shaped spec gets a raw bridge.
+    public_web: bool = False
 
     def egress_allowed(self, host: str) -> bool:
         """[CONTRACT §7] Deny-by-default: a host is reachable only if explicitly
@@ -192,22 +197,24 @@ class SandboxSpec(BaseModel):
         return False
 
 
-REGISTRY_EGRESS_ALLOW: frozenset[str] = frozenset({
-    "registry.npmjs.org",
-    ".npmjs.org",
-    "pypi.org",
-    "files.pythonhosted.org",
-    "github.com",
-    "codeload.github.com",
-    ".githubusercontent.com",
-    "deb.debian.org",
-    "security.debian.org",
-    "cdn.jsdelivr.net",
-    "unpkg.com",
-    "esm.sh",
-    "fonts.googleapis.com",
-    "fonts.gstatic.com",
-})
+REGISTRY_EGRESS_ALLOW: frozenset[str] = frozenset(
+    {
+        "registry.npmjs.org",
+        ".npmjs.org",
+        "pypi.org",
+        "files.pythonhosted.org",
+        "github.com",
+        "codeload.github.com",
+        ".githubusercontent.com",
+        "deb.debian.org",
+        "security.debian.org",
+        "cdn.jsdelivr.net",
+        "unpkg.com",
+        "esm.sh",
+        "fonts.googleapis.com",
+        "fonts.gstatic.com",
+    }
+)
 
 
 @runtime_checkable

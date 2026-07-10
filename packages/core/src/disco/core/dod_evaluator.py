@@ -425,6 +425,7 @@ async def _default_http_probe(
 # fakes to keep the unit test hermetic (no real subprocess, no real network).
 CommandRunner = Callable[[str], Awaitable[CommandResult]]
 HttpProbe = Callable[[str, int], Awaitable[HttpProbeResult]]
+FileChecker = Callable[[FileExistsPredicate], Awaitable[DoDPredicateResult]]
 
 
 class DoDEvaluator:
@@ -456,6 +457,7 @@ class DoDEvaluator:
         *,
         command_runner: CommandRunner | None = None,
         http_probe: HttpProbe | None = None,
+        file_checker: FileChecker | None = None,
         subjective_judge: SubjectiveJudge | None = None,
         command_timeout_seconds: float = _DEFAULT_COMMAND_TIMEOUT_SECONDS,
         http_timeout_seconds: float = _DEFAULT_HTTP_TIMEOUT_SECONDS,
@@ -472,6 +474,7 @@ class DoDEvaluator:
             pass
         # Set scalar config FIRST so the builder closures can read them.
         self._subjective_judge = subjective_judge
+        self._file_checker = file_checker
         self._command_timeout_seconds = float(command_timeout_seconds)
         self._http_timeout_seconds = float(http_timeout_seconds)
         self._http_allow_hosts = frozenset(http_allow_hosts)
@@ -489,9 +492,7 @@ class DoDEvaluator:
         timeout = self._command_timeout_seconds
 
         async def runner(command: str) -> CommandResult:
-            return await _default_command_runner(
-                command, cwd=cwd, timeout_seconds=timeout
-            )
+            return await _default_command_runner(command, cwd=cwd, timeout_seconds=timeout)
 
         return runner
 
@@ -556,14 +557,12 @@ class DoDEvaluator:
 
     # ---- per-predicate dispatch --------------------------------------------
 
-    async def _evaluate_one(
-        self, predicate: DoDPredicate, spec: DoDSpec
-    ) -> DoDPredicateResult:
+    async def _evaluate_one(self, predicate: DoDPredicate, spec: DoDSpec) -> DoDPredicateResult:
         # Discriminate by concrete type — the Pydantic `kind` discriminator
         # is the canonical field, but `isinstance` is the cheapest dispatch
         # and the union is closed (only three kinds as of C1a).
         if isinstance(predicate, FileExistsPredicate):
-            return self._check_file_exists(predicate)
+            return await self._check_file_exists(predicate)
         if isinstance(predicate, CommandExitPredicate):
             return await self._check_command_exit(predicate)
         if isinstance(predicate, HTTPOkPredicate):
@@ -574,7 +573,7 @@ class DoDEvaluator:
 
     # ---- deterministic checks ---------------------------------------------
 
-    def _check_file_exists(self, predicate: FileExistsPredicate) -> DoDPredicateResult:
+    async def _check_file_exists(self, predicate: FileExistsPredicate) -> DoDPredicateResult:
         """Resolve the predicate's path against the workspace root and check
         existence. A path-escape (resolved path outside `workspace_root`) is
         a hard fail — same discipline the sandbox uses for the agent's file
@@ -583,10 +582,10 @@ class DoDEvaluator:
         to see) an arbitrary file's existence. The evaluator refuses to
         grade it; the verdict names the predicate unmet with the escape
         reason."""
+        if self._file_checker is not None:
+            return await self._file_checker(predicate)
         try:
-            resolved = resolve_under_workspace(
-                self._workspace_root, predicate.path
-            )
+            resolved = resolve_under_workspace(self._workspace_root, predicate.path)
         except PathEscapeError as exc:
             return DoDPredicateResult(
                 predicate=predicate,
@@ -606,9 +605,8 @@ class DoDEvaluator:
             # file. Path.exists() alone is satisfied by a directory named like the file, or
             # by an empty `touch`ed placeholder — both let a model pass a file_exists gate
             # without producing real content (the exact form-without-substance reward-hack
-            # the gate exists to stop). A genuinely-empty marker (e.g. __init__.py) that
-            # trips this refuses at most _DOD_REFUSAL_CAP times then releases, so the
-            # check never traps a build — it only forces content where content was promised.
+            # the gate exists to stop). A genuinely-empty marker (e.g. __init__.py) remains
+            # unmet and eventually pauses for user review; it is never silently released.
             is_file = resolved.is_file()
             if is_file and stat.st_size > 0:
                 return DoDPredicateResult(
@@ -651,9 +649,7 @@ class DoDEvaluator:
             },
         )
 
-    async def _check_command_exit(
-        self, predicate: CommandExitPredicate
-    ) -> DoDPredicateResult:
+    async def _check_command_exit(self, predicate: CommandExitPredicate) -> DoDPredicateResult:
         """Re-run the predicate's own command in a fresh subprocess. The
         verdict turns the `CommandResult` into a `DoDPredicateResult` based
         on the predicate's `expect_exit` (default 0). A hard-denied command
@@ -687,17 +683,13 @@ class DoDEvaluator:
         elif result.error_message:
             reason = f"command not run: {result.error_message}"
         else:
-            reason = (
-                f"command exited {result.exit_code}, expected {predicate.expect_exit}"
-            )
+            reason = f"command exited {result.exit_code}, expected {predicate.expect_exit}"
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
             # INFRA if the command could not RUN (denied / executor error / no exit code);
             # a TASK failure only when it ran and exited with the wrong code.
-            unverifiable=bool(
-                result.denied or result.error_message or result.exit_code is None
-            ),
+            unverifiable=bool(result.denied or result.error_message or result.exit_code is None),
             reason=reason,
             details={
                 "kind": "command",
@@ -713,9 +705,7 @@ class DoDEvaluator:
             },
         )
 
-    async def _check_http_ok(
-        self, predicate: HTTPOkPredicate
-    ) -> DoDPredicateResult:
+    async def _check_http_ok(self, predicate: HTTPOkPredicate) -> DoDPredicateResult:
         """Probe the URL and compare to `expect_status` (default 200). An
         egress-denied URL is "not probed", not "probed and got a bad
         status" — distinct in the audit trail."""
@@ -743,9 +733,7 @@ class DoDEvaluator:
         elif result.error_message:
             reason = f"probe not run: {result.error_message}"
         else:
-            reason = (
-                f"HTTP {result.status_code}, expected {predicate.expect_status}"
-            )
+            reason = f"HTTP {result.status_code}, expected {predicate.expect_status}"
         return DoDPredicateResult(
             predicate=predicate,
             passed=False,
@@ -753,9 +741,7 @@ class DoDEvaluator:
             # e.g. the server isn't up at finish); a TASK failure only when it served the
             # wrong status.
             unverifiable=bool(
-                result.egress_denied
-                or result.error_message
-                or result.status_code is None
+                result.egress_denied or result.error_message or result.status_code is None
             ),
             reason=reason,
             details={
@@ -772,9 +758,7 @@ class DoDEvaluator:
 
     # ---- subjective-judge seam (future) -----------------------------------
 
-    async def _check_subjective(
-        self, predicate: DoDPredicate, spec: DoDSpec
-    ) -> DoDPredicateResult:
+    async def _check_subjective(self, predicate: DoDPredicate, spec: DoDSpec) -> DoDPredicateResult:
         """A predicate kind the evaluator does not handle directly. If a
         `subjective_judge` is wired, delegate to it (fresh context: the
         judge gets the spec + the workspace path, NOT the agent's

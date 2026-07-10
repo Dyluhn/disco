@@ -139,6 +139,87 @@ async def test_empty_allowlist_denies_everything():
         await proxy.aclose()
 
 
+@pytest.mark.parametrize(
+    "answers",
+    [
+        [(2, "127.0.0.1")],
+        [(2, "169.254.169.254")],
+        [(2, "192.168.1.20")],
+        [(10, "fd00::1")],
+        [(10, "::ffff:127.0.0.1")],
+        [(2, "93.184.216.34"), (2, "10.0.0.8")],  # mixed-answer DNS rebinding
+    ],
+)
+async def test_public_proxy_rejects_every_non_global_or_mixed_resolution_before_dial(
+    answers, monkeypatch
+):
+    dialed = []
+
+    async def _dial(*args, **kwargs):
+        dialed.append((args, kwargs))
+        raise AssertionError("a denied resolution reached the network dial")
+
+    monkeypatch.setattr(asyncio, "open_connection", _dial)
+    proxy = AllowlistProxy(
+        lambda _host: True,
+        require_global=True,
+        web_ports_only=True,
+        resolver=lambda _host, _port: answers,
+    )
+    with pytest.raises(PermissionError):
+        await proxy._open_upstream("rebind.example", 443)
+    assert dialed == []
+
+
+async def test_public_proxy_rejects_host_owned_global_ip_before_dial(monkeypatch):
+    async def _dial(*args, **kwargs):
+        raise AssertionError("a host-owned address reached the network dial")
+
+    monkeypatch.setattr(asyncio, "open_connection", _dial)
+    proxy = AllowlistProxy(
+        lambda _host: True,
+        require_global=True,
+        denied_ips=["93.184.216.34"],
+        resolver=lambda _host, _port: [(10, "::ffff:93.184.216.34")],
+    )
+    with pytest.raises(PermissionError):
+        await proxy._open_upstream("daemon-public.example", 443)
+
+
+async def test_proxy_dials_validated_ip_not_hostname_and_port_class_is_surface_specific(
+    monkeypatch,
+):
+    calls = []
+    sentinel = (object(), object())
+
+    async def _dial(*args, **kwargs):
+        calls.append((args, kwargs))
+        return sentinel
+
+    monkeypatch.setattr(asyncio, "open_connection", _dial)
+
+    def resolver(_host, _port):
+        return [(2, "93.184.216.34")]
+
+    filtered = AllowlistProxy(
+        lambda _host: True,
+        require_global=True,
+        web_ports_only=False,
+        resolver=resolver,
+    )
+    assert await filtered._open_upstream("approved-mcp.example", 8443) == sentinel
+    assert calls[0][0][:2] == ("93.184.216.34", 8443)
+
+    public = AllowlistProxy(
+        lambda _host: True,
+        require_global=True,
+        web_ports_only=True,
+        resolver=resolver,
+    )
+    with pytest.raises(PermissionError, match="non-web port"):
+        await public._open_upstream("public.example", 8443)
+
+
 @pytest.mark.parametrize("bad", [b"garbage\r\n\r\n", b"\r\n"])
 async def test_malformed_request_is_handled_not_crashed(bad):
     proxy = await _proxy(["x.com"])

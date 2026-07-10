@@ -8,8 +8,8 @@ import contextlib
 from typing import Any, cast
 
 from disco.core import (
-    WSClientFrame,
     FileStreamFrame,
+    WSClientFrame,
     WSServerFrame,
 )
 from disco.core.appkit import classify_build_brief
@@ -18,7 +18,7 @@ from disco.core.selection_edit import (
     parse_selection_ref,
     selection_edit_frame_valid,
 )
-from disco.core.store.sqlite import SqliteEventStore
+from disco.core.store.sqlite import SqliteEventStore, SubscriberOverflow
 from disco.retrieval.local_encoders import EncoderUnavailable
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
@@ -66,10 +66,13 @@ async def _handle_frame(
     if frame.type == "ping":
         await websocket.send_json(WSServerFrame(type="pong").model_dump(mode="json"))
     elif frame.type in (
-        "send_message", "steer", "inject_source", "confirm", "reject", "selection_edit"
-    ) and (
-        store.conversation_origin(conversation_id) == "imported"
-    ):
+        "send_message",
+        "steer",
+        "inject_source",
+        "confirm",
+        "reject",
+        "selection_edit",
+    ) and (store.conversation_origin(conversation_id) == "imported"):
         # Imported (untrusted, read-only) conversations refuse every revive path —
         # the WS is one of them (the easy-to-miss kick site). Refuse, don't kick.
         # `WSServerFrame.error` is typed `dict[str, Any] | None` but the wire
@@ -261,10 +264,16 @@ async def _send_conversation_state_frame(
 
 
 async def _pump_conversation_events(websocket: WebSocket, stream: Any) -> None:
-    async for event in stream:
-        await websocket.send_json(
-            WSServerFrame(type="event", event=event).model_dump(mode="json")
-        )
+    try:
+        async for event in stream:
+            await websocket.send_json(
+                WSServerFrame(type="event", event=event).model_dump(mode="json")
+            )
+    except SubscriberOverflow:
+        # Durable history is replayable by sequence. A slow client reconnects
+        # instead of retaining an unbounded in-memory queue on the server.
+        with contextlib.suppress(Exception):
+            await websocket.close(code=1013, reason="event stream fell behind; reconnect")
 
 
 async def _pump_ephemeral_frames(websocket: WebSocket, eph_stream: Any) -> None:
@@ -288,9 +297,7 @@ async def _pump_ephemeral_frames(websocket: WebSocket, eph_stream: Any) -> None:
             )
 
 
-def make_ws_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.websocket("/ws/conversations/{conversation_id}")
@@ -396,9 +403,7 @@ def make_ws_router(
             return
         raw_space_ids = body.get("space_ids") or []
         if not isinstance(raw_space_ids, list):
-            await websocket.send_json(
-                {"type": "error", "message": "space_ids must be a list"}
-            )
+            await websocket.send_json({"type": "error", "message": "space_ids must be a list"})
             await websocket.close()
             return
         try:

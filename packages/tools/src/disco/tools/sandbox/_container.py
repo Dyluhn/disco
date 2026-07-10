@@ -11,15 +11,24 @@ work over any transport (local socket or Docker/Podman-over-SSH).
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import errno
 import io
-import secrets
+import ipaddress
+import json
 import logging
 import math
 import posixpath
+import secrets
+import socket
+import subprocess
 import tarfile
 import threading
 import time
+import urllib.parse
 from typing import TYPE_CHECKING, Any
+
+import psutil
 
 from ..anatomy import Capability
 from .base import (
@@ -80,9 +89,7 @@ def _bounded(name: str, value: float, maximum: float) -> float:
     # A non-finite spec value (NaN/inf) can never be a valid request — reject before clamp
     # (min(NaN, max) is order-dependent and could smuggle NaN through to the runtime).
     if not math.isfinite(value):
-        raise SandboxError(
-            f"sandbox spec {name}={value!r} is invalid (must be a finite number)"
-        )
+        raise SandboxError(f"sandbox spec {name}={value!r} is invalid (must be a finite number)")
     if value < 0:
         raise SandboxError(
             f"sandbox spec {name}={value!r} is invalid (must be >= 0); "
@@ -93,8 +100,8 @@ def _bounded(name: str, value: float, maximum: float) -> float:
     return min(value, maximum)  # clamp above-max DOWN; a spec can only tighten
 
 
-def resolve_bounds(spec: SandboxSpec, cfg: SandboxConfig) -> tuple[float, int, int]:
-    """Resolve the effective `(cpu, memory_mb, pids)` for a container create from the
+def resolve_bounds(spec: SandboxSpec, cfg: SandboxConfig) -> tuple[float, int, int, int]:
+    """Resolve effective `(cpu, memory_mb, pids, disk_mb)` for a container create from the
     SPEC and the deployment CONFIG, treating the config as the hard MAXIMUM (EPIC H P1).
 
     Closes the spec-overridable-limits hole: `pids=0` resolves to the configured default
@@ -104,7 +111,8 @@ def resolve_bounds(spec: SandboxSpec, cfg: SandboxConfig) -> tuple[float, int, i
     cpu = _bounded("cpu", spec.cpu, cfg.default_cpu)
     mem = int(_bounded("memory_mb", spec.memory_mb, cfg.default_memory_mb))
     pids = int(_bounded("pids", spec.pids, cfg.default_pids_limit))
-    return cpu, mem, pids
+    disk = int(_bounded("disk_mb", spec.disk_mb, cfg.default_disk_mb))
+    return cpu, mem, pids, disk
 
 
 def bounded_sidecar_cap(name: str, value: float) -> float:
@@ -128,8 +136,269 @@ def bounded_sidecar_cap(name: str, value: float) -> float:
         )
     return value
 
+
+def nofile_ulimits(cfg: SandboxConfig) -> list[Any]:
+    """Runtime-last-gate for the container file-descriptor ceiling."""
+    soft = int(cfg.default_nofile_soft)
+    hard = int(cfg.default_nofile_hard)
+    if soft <= 0 or hard <= 0 or soft > hard:
+        raise SandboxError(
+            f"invalid nofile limits soft={soft} hard={hard}; limits must be positive "
+            "and soft must not exceed hard"
+        )
+    # docker-py recognizes its Ulimit type directly; podman-py treats it as the
+    # uppercase-key dict its payload renderer expects. A lowercase plain dict
+    # works in Docker but crashes podman-py before the API call.
+    from docker.types import Ulimit
+
+    return [Ulimit(name="nofile", soft=soft, hard=hard)]
+
+
 # Exit codes the `timeout` coreutil reports when it fires (SIGTERM / then SIGKILL).
 TIMEOUT_EXIT_CODES = frozenset({124, 137})
+
+# S-W5 D3: the sandbox-to-host boundary is bounded before docker-py/podman-py
+# materializes a response. The in-guest helper streams arbitrary command output
+# into fixed-size head/tail buffers and a bounded workspace spill; only that
+# bounded projection crosses the container API.
+EXEC_CAPTURE_HEAD_BYTES = 64 * 1024
+EXEC_CAPTURE_TAIL_BYTES = 64 * 1024
+EXEC_CAPTURE_RETURN_BYTES = EXEC_CAPTURE_HEAD_BYTES + EXEC_CAPTURE_TAIL_BYTES
+EXEC_CAPTURE_SPILL_BYTES = 1024 * 1024
+MAX_SANDBOX_READ_BYTES = 32 * 1024 * 1024
+SANDBOX_READ_TIMEOUT_S = 20
+
+_BOUNDED_EXEC_HELPER = r"""
+import os
+import signal
+import subprocess
+import sys
+import threading
+
+timeout_s = float(sys.argv[1])
+command = sys.argv[2]
+token = sys.argv[3]
+head_cap = int(sys.argv[4])
+tail_cap = int(sys.argv[5])
+return_cap = int(sys.argv[6])
+spill_cap = int(sys.argv[7])
+spill_dir = os.path.join(os.getcwd(), ".disco", "spills")
+os.makedirs(spill_dir, mode=0o700, exist_ok=True)
+
+
+class Capture:
+    def __init__(self, kind):
+        self.kind = kind
+        self.total = 0
+        self.small = bytearray()
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.relpath = os.path.join(".disco", "spills", token + "." + kind + ".log")
+        self.path = os.path.join(os.getcwd(), self.relpath)
+        self.spilled = 0
+        self.file = open(self.path, "wb")
+
+    def feed(self, chunk):
+        self.total += len(chunk)
+        if len(self.small) <= return_cap:
+            room = return_cap + 1 - len(self.small)
+            self.small.extend(chunk[:room])
+        if len(self.head) < head_cap:
+            self.head.extend(chunk[: head_cap - len(self.head)])
+        self.tail.extend(chunk)
+        if len(self.tail) > tail_cap:
+            del self.tail[:-tail_cap]
+        if self.spilled < spill_cap:
+            part = chunk[: spill_cap - self.spilled]
+            self.file.write(part)
+            self.spilled += len(part)
+
+    def finish(self):
+        self.file.close()
+        if self.total <= return_cap:
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+            return bytes(self.small[:self.total])
+        dropped = max(0, self.total - len(self.head) - len(self.tail))
+        marker = (
+            "\n[disco: output truncated at sandbox boundary; "
+            + str(self.total)
+            + " bytes total, "
+            + str(dropped)
+            + " omitted; bounded prefix saved at "
+            + self.relpath
+            + " (max "
+            + str(spill_cap)
+            + " bytes)]\n"
+        ).encode()
+        return bytes(self.head) + marker + bytes(self.tail)
+
+
+def drain(stream, capture):
+    while True:
+        chunk = stream.read(65536)
+        if not chunk:
+            return
+        capture.feed(chunk)
+
+
+out = Capture("stdout")
+err = Capture("stderr")
+proc = subprocess.Popen(
+    command,
+    shell=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    start_new_session=True,
+)
+t_out = threading.Thread(target=drain, args=(proc.stdout, out), daemon=True)
+t_err = threading.Thread(target=drain, args=(proc.stderr, err), daemon=True)
+t_out.start()
+t_err.start()
+timed_out = False
+try:
+    rc = proc.wait(timeout=timeout_s)
+except subprocess.TimeoutExpired:
+    timed_out = True
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        rc = proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.wait()
+        rc = 137
+t_out.join(timeout=5)
+t_err.join(timeout=5)
+out_bytes = out.finish()
+err_bytes = err.finish()
+try:
+    os.rmdir(spill_dir)
+    os.rmdir(os.path.dirname(spill_dir))
+except OSError:
+    pass
+sys.stdout.buffer.write(out_bytes)
+sys.stderr.buffer.write(err_bytes)
+raise SystemExit(124 if timed_out else rc)
+"""
+
+
+def bounded_exec_argv(command: str, timeout_s: int, *, python: str = "python3") -> list[str]:
+    """Return an argv whose stdout/stderr crossing the runtime API is bounded."""
+    return [
+        python,
+        "-c",
+        _BOUNDED_EXEC_HELPER,
+        str(timeout_s),
+        command,
+        secrets.token_hex(8),
+        str(EXEC_CAPTURE_HEAD_BYTES),
+        str(EXEC_CAPTURE_TAIL_BYTES),
+        str(EXEC_CAPTURE_RETURN_BYTES),
+        str(EXEC_CAPTURE_SPILL_BYTES),
+    ]
+
+
+_BOUNDED_READ_HELPER = r"""
+import errno
+import os
+import stat
+import sys
+
+root, relpath, cap_raw = sys.argv[1:4]
+cap = int(cap_raw)
+parts = [part for part in relpath.split("/") if part not in ("", ".")]
+
+
+def fail(kind, detail, code):
+    sys.stderr.write("DISCO_READ_" + kind + ":" + detail[:512])
+    raise SystemExit(code)
+
+
+if not parts:
+    fail("DENIED", "invalid relative path", 45)
+
+dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+opened = []
+try:
+    current = os.open(root, dir_flags)
+    opened.append(current)
+    for part in parts[:-1]:
+        if part == "..":
+            if len(opened) == 1:
+                fail("DENIED", "path escapes workspace", 45)
+            os.close(opened.pop())
+            current = opened[-1]
+            continue
+        current = os.open(part, dir_flags, dir_fd=current)
+        opened.append(current)
+    if parts[-1] == "..":
+        fail("DENIED", "directory paths are not readable files", 45)
+    fd = os.open(parts[-1], file_flags, dir_fd=current)
+    opened.append(fd)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode):
+        fail("DENIED", "only regular, non-symlink files may be read", 45)
+    if info.st_size > cap:
+        fail("TOO_LARGE", str(info.st_size), 46)
+    remaining = cap + 1
+    chunks = []
+    while remaining:
+        chunk = os.read(fd, min(1024 * 1024, remaining))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    data = b"".join(chunks)
+    if len(data) > cap:
+        fail("TOO_LARGE", "file grew while being read", 46)
+    sys.stdout.buffer.write(data)
+except FileNotFoundError as exc:
+    fail("MISSING", str(exc), 44)
+except OSError as exc:
+    if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
+        fail("DENIED", str(exc), 45)
+    fail("ERROR", str(exc), 47)
+finally:
+    for descriptor in reversed(opened):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+"""
+
+
+def bounded_read_argv(workspace: str, relpath: str, *, python: str = "python3") -> list[str]:
+    """Open and read a workspace file through no-follow directory descriptors."""
+    return [python, "-c", _BOUNDED_READ_HELPER, workspace, relpath, str(MAX_SANDBOX_READ_BYTES)]
+
+
+def bounded_read_result(path: str, rc: int, out: bytes, err: bytes) -> bytes:
+    """Map the guest helper's bounded result to the sandbox read contract."""
+    detail = err.decode("utf-8", "replace")
+    if rc == 0:
+        return out
+    if detail.startswith("DISCO_READ_MISSING:"):
+        raise FileNotFoundError(path)
+    if detail.startswith("DISCO_READ_DENIED:"):
+        raise SandboxPermissionError(
+            f"read_file {path!r}: only regular, non-symlink workspace files may be read"
+        )
+    if detail.startswith("DISCO_READ_TOO_LARGE:"):
+        raise OSError(
+            errno.EFBIG,
+            f"read_file {path!r} exceeds the {MAX_SANDBOX_READ_BYTES}-byte transfer cap",
+        )
+    raise OSError(f"read_file {path!r} failed safely: {detail or f'exit {rc}'}")
+
 
 # Default upper bound on a docker-py / podman-py `reload()` call (Dispo #25 wedge-guard).
 # A healthy reload is sub-ms; this is ~500x that — large enough to absorb a brief
@@ -155,6 +424,20 @@ USER_PORTS: frozenset[int] = frozenset({8000, 3000, 5173, 8080, 5000, 4321, NOVN
 INTERNAL_PORTS: frozenset[int] = frozenset({8899})
 PUBLISHED_PORTS: frozenset[int] = USER_PORTS | INTERNAL_PORTS
 
+
+def loopback_port_bindings(*, podman: bool = False) -> dict[str, tuple[str, None] | dict[str, str]]:
+    """Publish curated ports on daemon loopback only, with random host ports.
+
+    This closes sibling/tailnet/public-IP hairpins. INTERNAL_PORTS remain mapped
+    solely for the host-side kernel client, but never on a non-loopback address.
+    """
+    if podman:
+        # podman-py rejects Docker's (host_ip, None) random-port tuple. Its
+        # native payload shape omits host_port while retaining host_ip.
+        return {f"{port}/tcp": {"ip": "127.0.0.1"} for port in sorted(PUBLISHED_PORTS)}
+    return {f"{port}/tcp": ("127.0.0.1", None) for port in sorted(PUBLISHED_PORTS)}
+
+
 # The SINGLE source of truth for which sandbox backends can actually run the noVNC
 # live-view stack (Xvfb + x11vnc + websockify). Those binaries ship ONLY in the
 # container image (deploy/sandbox/Dockerfile) AND the live-jail security model (P5:
@@ -172,7 +455,9 @@ LIVE_VIEW_BACKENDS: frozenset[str] = frozenset({"gvisor"})
 def sealed(spec: SandboxSpec) -> bool:
     """Network is SEALED unless the capability set grants it (§7 deny-by-default):
     a non-empty egress allowlist, or NETWORK in `permitted`. Default => sealed."""
-    return not spec.egress_allow and Capability.NETWORK not in spec.permitted
+    return (
+        not spec.egress_allow and not spec.public_web and Capability.NETWORK not in spec.permitted
+    )
 
 
 # The single egress proxy port a filtered box reaches its allowlisting sidecar on.
@@ -180,7 +465,7 @@ EGRESS_PROXY_PORT = 8888
 
 
 def egress_mode(spec: SandboxSpec) -> str:
-    """Resolve a spec's egress posture to one of THREE modes — the fix for the old
+    """Resolve a spec's egress posture — the fix for the old
     binary (none|bridge) that silently gave an allowlisted box full network:
 
       • "sealed"   — no allowlist, no NETWORK cap → no network at all.
@@ -188,16 +473,17 @@ def egress_mode(spec: SandboxSpec) -> str:
                      enforces the list per-connection; the box's only route out is
                      the proxy (internal, no-NAT network). THIS is what makes the
                      allowlist real instead of a false guarantee.
-      • "open"     — NETWORK capability granted with NO allowlist → deliberate raw
-                     egress (e.g. the browser tool needs the whole web). An explicit
-                     capability grant, not an unenforced allowlist.
+      • "public"   — arbitrary public HTTP(S), but non-global/host/sibling IPs
+                     are denied by the isolated proxy sidecar.
+        Legacy NETWORK grants resolve to the same public-only boundary; there is
+        no model-shaped route to the daemon's raw bridge.
 
     `filtered` takes precedence: an allowlist always means "only these", even if the
     NETWORK capability is also present."""
     if spec.egress_allow:
         return "filtered"
-    if Capability.NETWORK in spec.permitted:
-        return "open"
+    if spec.public_web or Capability.NETWORK in spec.permitted:
+        return "public"
     return "sealed"
 
 
@@ -225,11 +511,256 @@ def proxy_env(proxy_host: str, port: int = EGRESS_PROXY_PORT) -> dict[str, str]:
     }
 
 
-def proxy_run_argv(allow: str, port: int = EGRESS_PROXY_PORT) -> list[str]:
+def proxy_run_argv(
+    allow: str,
+    port: int = EGRESS_PROXY_PORT,
+    *,
+    public_only: bool = False,
+    deny_ips: frozenset[str] = frozenset(),
+) -> list[str]:
     """The command that runs the allowlisting proxy inside the sidecar. The proxy
     script is `put_archive`'d to /egress_proxy.py first (it's stdlib-only, so the
     base image's python3 runs it with no install)."""
-    return ["python3", "/egress_proxy.py", "--port", str(port), "--allow", allow]
+    argv = ["python3", "/egress_proxy.py", "--port", str(port), "--allow", allow]
+    if public_only:
+        argv.append("--public-only")
+    if deny_ips:
+        argv.extend(["--deny-ip", ",".join(sorted(deny_ips))])
+    return argv
+
+
+def collect_host_deny_ips(
+    configured: list[str],
+    endpoint_host: str,
+    *,
+    include_local_interfaces: bool,
+    additional_host_ips: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """Resolve host-owned addresses before a sandbox network is created.
+
+    The daemon endpoint is always load-bearing: failure to identify it aborts
+    setup. For a local daemon, hostname and outbound-interface discovery add the
+    host's other visible addresses. Explicit entries cover additional interfaces
+    on remote multi-homed hosts.
+    """
+
+    result: set[str] = set()
+    for raw in [*configured, *additional_host_ips]:
+        try:
+            result.add(str(ipaddress.ip_address(raw.strip())))
+        except ValueError as exc:
+            raise SandboxError(f"invalid host_ip_blocklist address {raw!r}") from exc
+
+    def _resolve(host: str, *, required: bool) -> None:
+        clean = host.strip().strip("[]")
+        if not clean:
+            if required:
+                raise SandboxError("sandbox daemon host address is empty")
+            return
+        try:
+            result.add(str(ipaddress.ip_address(clean)))
+            return
+        except ValueError:
+            pass
+        try:
+            infos = socket.getaddrinfo(clean, 0, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            if required:
+                raise SandboxError(
+                    f"cannot resolve sandbox daemon host {clean!r} for egress denial"
+                ) from exc
+            return
+        for _family, _kind, _proto, _canon, sockaddr in infos:
+            result.add(str(ipaddress.ip_address(sockaddr[0])))
+
+    _resolve(endpoint_host, required=True)
+    if include_local_interfaces:
+        result.update(discover_local_host_ips())
+    return frozenset(result)
+
+
+def discover_local_host_ips() -> frozenset[str]:
+    """Inventory every address on the local sandbox-daemon host.
+
+    Resolving the hostname and probing the default route each reveal only a
+    subset on a multi-homed machine. The deny policy must also include secondary
+    public, VPN, and tailnet interfaces, so an unavailable/empty inventory fails
+    closed instead of silently omitting a host-owned global address.
+    """
+    try:
+        interfaces = psutil.net_if_addrs()
+    except Exception as exc:  # noqa: BLE001 — policy construction must fail closed
+        raise SandboxError("could not inventory local sandbox host interfaces") from exc
+    addresses: set[str] = set()
+    for entries in interfaces.values():
+        for entry in entries:
+            if entry.family not in {socket.AF_INET, socket.AF_INET6}:
+                continue
+            raw = str(entry.address).split("%", 1)[0]
+            try:
+                addresses.add(str(ipaddress.ip_address(raw)))
+            except ValueError as exc:
+                raise SandboxError(
+                    f"local sandbox host returned invalid interface address {entry.address!r}"
+                ) from exc
+    if not addresses:
+        raise SandboxError("local sandbox host interface inventory was empty")
+    return frozenset(addresses)
+
+
+def _ssh_endpoint_argv(endpoint: str, *, connect_timeout: int = 8) -> list[str]:
+    parsed = urllib.parse.urlsplit(endpoint)
+    if parsed.scheme != "ssh" or not parsed.hostname:
+        raise SandboxError(f"not an SSH sandbox endpoint: {endpoint!r}")
+    argv = [
+        "ssh",
+        "-o",
+        f"ConnectTimeout={connect_timeout}",
+        "-o",
+        "BatchMode=yes",
+    ]
+    if parsed.username:
+        argv.extend(["-l", urllib.parse.unquote(parsed.username)])
+    if parsed.port:
+        argv.extend(["-p", str(parsed.port)])
+    argv.extend(["--", parsed.hostname])
+    return argv
+
+
+def discover_remote_host_ips(endpoint: str) -> frozenset[str]:
+    """Inventory every interface address on a trusted remote daemon host.
+
+    The policy cannot claim to deny host-owned public addresses based only on
+    the SSH endpoint (often a tailnet address). Inventory is refreshed for every
+    sandbox so a newly-added public interface cannot hide behind a stale cache.
+    If inventory cannot be obtained, sandbox creation fails closed instead of
+    starting a public-egress surface.
+    """
+    argv = [*_ssh_endpoint_argv(endpoint), "ip", "-j", "address", "show"]
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed argv, trusted configured host
+            argv,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=12,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SandboxError(
+            f"could not inventory remote sandbox host interfaces at {endpoint!r}"
+        ) from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+        raise SandboxError(
+            "remote sandbox host interface inventory failed: "
+            + (detail[-1] if detail else f"ssh exited {proc.returncode}")
+        )
+    try:
+        payload = json.loads(proc.stdout)
+        addresses = {
+            str(ipaddress.ip_address(info["local"]))
+            for interface in payload
+            for info in interface.get("addr_info", [])
+            if info.get("local")
+        }
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise SandboxError("remote sandbox host returned invalid interface inventory") from exc
+    if not addresses:
+        raise SandboxError("remote sandbox host interface inventory was empty")
+    return frozenset(addresses)
+
+
+class SshLoopbackTunnelManager:
+    """Expose remote daemon-loopback mappings only on local loopback."""
+
+    def __init__(self, endpoint: str) -> None:
+        self._endpoint = endpoint
+        self._lock = threading.Lock()
+        self._forwards: dict[int, tuple[int, subprocess.Popen[bytes]]] = {}
+
+    @staticmethod
+    def _available_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            return int(sock.getsockname()[1])
+
+    def forward(self, remote_port: int) -> tuple[str, int]:
+        with self._lock:
+            existing = self._forwards.get(remote_port)
+            if existing is not None and existing[1].poll() is None:
+                return "127.0.0.1", existing[0]
+            for _attempt in range(3):
+                local_port = self._available_port()
+                # SSH options must precede the destination. `_ssh_endpoint_argv`
+                # ends in `-- host`, so move the forwarding options before it.
+                base = _ssh_endpoint_argv(self._endpoint)
+                destination = base[-2:]
+                argv = [
+                    *base[:-2],
+                    "-N",
+                    "-T",
+                    "-o",
+                    "ExitOnForwardFailure=yes",
+                    "-o",
+                    "ServerAliveInterval=15",
+                    "-o",
+                    "ServerAliveCountMax=2",
+                    "-L",
+                    f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
+                    *destination,
+                ]
+                proc = subprocess.Popen(  # noqa: S603 — fixed argv, configured SSH endpoint
+                    argv,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    if proc.poll() is not None:
+                        break
+                    try:
+                        with socket.create_connection(("127.0.0.1", local_port), timeout=0.1):
+                            self._forwards[remote_port] = (local_port, proc)
+                            return "127.0.0.1", local_port
+                    except OSError:
+                        time.sleep(0.05)
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+                    proc.wait(timeout=1)
+            raise SandboxError(
+                f"could not establish local SSH forwarding for remote sandbox port {remote_port}"
+            )
+
+    def close(self) -> None:
+        with self._lock:
+            forwards = list(self._forwards.values())
+            self._forwards.clear()
+        for _port, proc in forwards:
+            if proc.poll() is not None:
+                continue
+            with contextlib.suppress(Exception):
+                proc.terminate()
+                proc.wait(timeout=2)
+            if proc.poll() is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                    proc.wait(timeout=1)
+
+
+def proxy_readiness_argv(port: int = EGRESS_PROXY_PORT) -> list[str]:
+    """Bounded sidecar probe; setup fails if the policy process did not bind."""
+    script = (
+        "import socket,sys,time; p=int(sys.argv[1]); "
+        "ok=False; "
+        "\nfor _ in range(50):\n"
+        " s=socket.socket(); s.settimeout(.1)\n"
+        " try:\n  ok=s.connect_ex(('127.0.0.1',p))==0\n"
+        " finally:\n  s.close()\n"
+        " if ok: break\n time.sleep(.1)\n"
+        "raise SystemExit(0 if ok else 1)"
+    )
+    return ["python3", "-c", script, str(port)]
 
 
 class ContainerInstance:
@@ -263,6 +794,7 @@ class ContainerInstance:
         preview_host: str = "localhost",
         reload_timeout_s: float = _DEFAULT_RELOAD_TIMEOUT_S,
         workspace_volume: Any | None = None,
+        loopback_tunnel: SshLoopbackTunnelManager | None = None,
     ) -> None:
         self.id = id
         self.owner_id = owner_id
@@ -282,6 +814,7 @@ class ContainerInstance:
         # instance teardown can remove it even when the runtime only removes
         # anonymous attached volumes from container.remove(v=True).
         self._workspace_volume = workspace_volume
+        self._loopback_tunnel = loopback_tunnel
         # Wedge-guard bound for `_safe_reload()` (Dispo #25). A hung or failing
         # docker/podman client must never block the event loop. The service sources
         # this from `SandboxConfig.reload_timeout_s` at create time (hot-apply).
@@ -356,9 +889,7 @@ class ContainerInstance:
                 f"the container state is unverifiable"
             )
         if result["exc"] is not None:
-            raise SandboxUnavailableError(
-                f"sandbox client failed on reload(): {result['exc']}"
-            )
+            raise SandboxUnavailableError(f"sandbox client failed on reload(): {result['exc']}")
         return result["status"] == "running"
 
     def _classify_failure_sync(self, exc: Exception) -> SandboxError:
@@ -411,18 +942,15 @@ class ContainerInstance:
         if await self._confidently_alive():
             _LOG.info(
                 "sandbox container %s: transient API error, container running on re-verify: %s",
-                self.id, exc,
+                self.id,
+                exc,
             )
             return SandboxError(f"transient sandbox API error in {self.id}: {exc}")
         # Death CONFIRMED across the re-verify window — attribute it (OOMKilled/exit) in BOTH
         # the WARNING log and the returned error so a recreate is no longer opaque.
         reason = self._death_reason_from_attrs()
-        _LOG.warning(
-            "sandbox container %s died mid-session (%s): %s", self.id, reason, exc
-        )
-        return SandboxUnavailableError(
-            f"sandbox container died mid-session ({reason}): {exc}"
-        )
+        _LOG.warning("sandbox container %s died mid-session (%s): %s", self.id, reason, exc)
+        return SandboxUnavailableError(f"sandbox container died mid-session ({reason}): {exc}")
 
     def _death_reason_from_attrs(self) -> str:
         """Best-effort read of the container's State (refreshed by _safe_reload) for
@@ -533,8 +1061,9 @@ class ContainerInstance:
             self._resolve_guest_path(path)  # enforce the jail (raises on escape / unverifiable)
             # Replace the RESOLVED real target (follow a final symlink), matching ProcessSandbox's
             # _resolve().resolve() + os.replace and the backend's own write_file — so atomic_write
-            # and write_file have identical symlink semantics (codex round-5 parity). _guest_realpath
-            # is jail-checked by _resolve_guest_path above; for a new file it is the lexical path.
+            # and write_file have identical symlink semantics (codex round-5 parity).
+            # _guest_realpath is jail-checked by _resolve_guest_path above; for a new
+            # file it is the lexical path.
             real_target = self._guest_realpath(self._container_path(path))
             if real_target is None:
                 raise SandboxError(f"atomic_write {path!r}: cannot resolve real target")
@@ -575,7 +1104,9 @@ class ContainerInstance:
             real = self._guest_realpath(self._container_path(path))
             ws_real = self._guest_ws_real()
             if real is None or ws_real is None:
-                raise SandboxPermissionError(f"cannot verify real path stays in workspace: {path!r}")
+                raise SandboxPermissionError(
+                    f"cannot verify real path stays in workspace: {path!r}"
+                )
             rel = posixpath.relpath(real, ws_real)
             return "." if rel == "." else rel
 
@@ -587,7 +1118,7 @@ class ContainerInstance:
         outer backstop in case the exec call hangs. A killed command is reported with
         `timed_out=True`, not raised — partial output is preserved."""
         self._alive()
-        wrapped = ["timeout", "-k", "5", str(timeout_s), "sh", "-c", cmd]
+        wrapped = bounded_exec_argv(cmd, timeout_s)
 
         def _run() -> Any:
             return self._container.exec_run(wrapped, demux=True, workdir=self._ws)
@@ -614,18 +1145,25 @@ class ContainerInstance:
         )
 
     async def read_file(self, path: str) -> bytes:
-        """Read a workspace file via `exec cat` — binary-safe, transport-agnostic."""
+        """Read one bounded, regular, non-symlink workspace file."""
         self._alive()
 
         def _read() -> bytes:
             target = self._resolve_guest_path(path)  # lexical + symlink jail (P2)
-            res = self._container.exec_run(["cat", "--", target], demux=True)
-            if res[0] != 0:
-                err = (res[1][1] if res[1] else b"") or b""
-                raise_read_error(path, err)  # W1: missing file → typed FileNotFoundError
-            return (res[1][0] if res[1] else b"") or b""
+            relpath = posixpath.relpath(target, self._ws)
+            res = self._container.exec_run(
+                bounded_read_argv(self._ws, relpath), demux=True, workdir=self._ws
+            )
+            out, err = res[1] if res[1] is not None else (None, None)
+            return bounded_read_result(path, int(res[0] or 0), out or b"", err or b"")
 
-        return await self._guarded(_read)
+        try:
+            return await asyncio.wait_for(self._guarded(_read), timeout=SANDBOX_READ_TIMEOUT_S)
+        except TimeoutError as exc:
+            raise OSError(
+                errno.ETIMEDOUT,
+                f"read_file {path!r}: exceeded the {SANDBOX_READ_TIMEOUT_S}s read timeout",
+            ) from exc
 
     async def file_exists(self, path: str) -> bool:
         """[B4] Existence check INSIDE the container — `test -f` in the box, never
@@ -641,7 +1179,9 @@ class ContainerInstance:
                 target = self._resolve_guest_path(path)  # lexical + symlink jail (P2)
             except SandboxError:
                 return False
-            res = self._container.exec_run(["test", "-f", target])
+            res = self._container.exec_run(
+                ["sh", "-c", 'test -f "$1" && test ! -L "$1"', "disco", target]
+            )
             return res[0] == 0
 
         return await self._guarded(_test)
@@ -695,7 +1235,7 @@ class ContainerInstance:
         """Return a browser-reachable URL for a published USER port (containment:
         only the curated USER_PORTS set is ever exposed; INTERNAL_PORTS are the
         agent-server's own plumbing and never become user URLs)."""
-        if port not in USER_PORTS:
+        if sealed(self.spec) or port not in USER_PORTS:
             return None
         mapping = self._resolve_mapping(port)
         if not mapping:
@@ -706,7 +1246,7 @@ class ContainerInstance:
         """Resolve the published host mapping for an INTERNAL port only (BP-08).
         SECURITY: it must REFUSE USER_PORTS (the inverse gate) so it can never
         become a backdoor preview path."""
-        if port not in INTERNAL_PORTS:
+        if sealed(self.spec) or port not in INTERNAL_PORTS:
             return None
         return self._resolve_mapping(port)
 
@@ -729,7 +1269,13 @@ class ContainerInstance:
             binding = ports.get(f"{port}/tcp")
             if not binding:
                 return None
-            return self._preview_host, int(binding[0]["HostPort"])
+            host_ip = str(binding[0].get("HostIp") or "")
+            if host_ip not in {"127.0.0.1", "::1"}:
+                # Fail closed if the daemon did not honor the loopback bind.
+                return None
+            if self._loopback_tunnel is not None:
+                return self._loopback_tunnel.forward(int(binding[0]["HostPort"]))
+            return host_ip, int(binding[0]["HostPort"])
         except Exception:  # noqa: BLE001 — no mapping yet / box gone / wedged client
             return None
 
@@ -760,9 +1306,9 @@ class ContainerInstance:
                 pass
 
     async def destroy(self) -> None:
-        """Stop + remove the container, then tear down the filtered-egress aux (if
-        any). The workspace bind dir persists for gVisor; named workspace volumes
-        for Podman / local are ephemeral and removed with the container. The aux
+        """Stop + remove the container, then tear down the policy-egress aux (if
+        any). Every container backend uses an ephemeral, quota-capped workspace
+        volume which is explicitly removed during teardown. The aux
         teardown is shared across every backend that supports the allowlisting
         proxy (E8) — see `_teardown_egress_aux`."""
         if self._destroyed:
@@ -782,6 +1328,8 @@ class ContainerInstance:
                 _remove_volume(self._workspace_volume)
             except Exception:  # noqa: BLE001 — already gone is fine
                 pass
+            if self._loopback_tunnel is not None:
+                self._loopback_tunnel.close()
 
         await asyncio.to_thread(_teardown)
         # Aux AFTER the sandbox: the sandbox is on the internal net; removing the
@@ -823,9 +1371,35 @@ def _remove_volume(volume: Any, *, force: bool = True) -> None:
     volume.remove()
 
 
-def _create_named_volume(volumes: Any, *, name: str, labels: dict[str, str]) -> Any:
-    """Create a named workspace volume, labeling it when the client supports labels."""
+def _create_named_volume(
+    volumes: Any,
+    *,
+    name: str,
+    labels: dict[str, str],
+    disk_mb: int,
+    workspace_uid: int,
+) -> Any:
+    """Create a real size-capped tmpfs workspace volume.
+
+    A plain named volume or overlay ``storage_opt`` does not cap the mounted
+    workspace. The local-volume tmpfs driver makes ``df /workspace`` and writes
+    observe the declared cap on Docker and Podman, and volume removal destroys
+    the ephemeral workspace.
+    """
+    opts = {
+        "driver": "local",
+        "driver_opts": {
+            "type": "tmpfs",
+            "device": "tmpfs",
+            "o": (
+                f"size={disk_mb}m,uid={workspace_uid},gid={workspace_uid},mode=0750,nosuid,nodev"
+            ),
+        },
+    }
     try:
-        return volumes.create(name=name, labels=labels)
+        return volumes.create(name=name, labels=labels, **opts)
     except TypeError:
-        return volumes.create(name=name)
+        # Compatibility fakes/older clients may not accept labels, but a real
+        # backend must still accept the quota options; never fall back to an
+        # uncapped volume.
+        return volumes.create(name=name, **opts)

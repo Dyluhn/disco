@@ -2229,9 +2229,9 @@ class ConversationRuntime:
     ) -> SandboxSpec:
         """The egress-posture spec for a Build sandbox. FILTERED by default
         (BP-G10: build boxes get the allowlisting proxy now that E8 wired the
-        proxy on every backend — gVisor, podman, local). Open only when
-        PMX_BUILD_EGRESS=open is set explicitly (an escape hatch for debug
-        / dev when a real network is genuinely required). Used both by
+        proxy on every backend — gVisor, podman, local). The legacy
+        PMX_BUILD_EGRESS=open value widens to arbitrary public web through the
+        same private-denying boundary; it never selects a raw bridge. Used both by
         _compose_build_loop and upload_session so pending sessions and build
         sessions share the same spec.
 
@@ -2239,18 +2239,52 @@ class ConversationRuntime:
         (SUPERSET, not replacement) — the pre-existing registry hosts AND the MCP
         hosts both survive (rung B egress-proxy routing)."""
         if surface == "agent":
-            egress = disco_env("AGENT_EGRESS", "open").lower().strip()
+            # S-W5: the browser gets the public web, not a raw bridge. The
+            # public posture is carried separately so backends must place it
+            # behind the private/non-global-denying sidecar.
+            egress = disco_env("AGENT_EGRESS", "public").lower().strip()
         else:
             egress = disco_env("BUILD_EGRESS", "filtered").lower().strip()
         if egress == "filtered":
             base_allow = REGISTRY_EGRESS_ALLOW
             if mcp_egress_hosts:
                 base_allow = frozenset(base_allow | mcp_egress_hosts)
-            return self._sandbox_spec.model_copy(update={"egress_allow": base_allow})
-        # Open mode grants full NETWORK — there is no allowlist to union MCP hosts
-        # into; they are already reachable. mcp_egress_hosts only matters under
-        # filtered posture (above).
-        spec_update = {"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
+            return self._sandbox_spec.model_copy(
+                update={
+                    "egress_allow": base_allow,
+                    "public_web": False,
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+                }
+            )
+        if egress == "public":
+            return self._sandbox_spec.model_copy(
+                update={
+                    "egress_allow": frozenset(),
+                    "public_web": True,
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+                }
+            )
+        if egress in {"sealed", "none"}:
+            return self._sandbox_spec.model_copy(
+                update={
+                    "egress_allow": frozenset(),
+                    "public_web": False,
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+                }
+            )
+        if egress not in {"open", "raw"}:
+            raise ValueError(
+                f"invalid {surface.upper()}_EGRESS={egress!r}; expected one of "
+                "filtered, public, sealed, open, or raw"
+            )
+        # Legacy open/raw configuration is retained as a compatibility alias for
+        # public-web-only. No runtime setting grants a model-controlled sandbox
+        # the daemon's raw bridge.
+        spec_update = {
+            "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+            "public_web": True,
+            "egress_allow": frozenset(),
+        }
         return self._sandbox_spec.model_copy(update=spec_update)
 
     def upload_session(self, conversation_id: str) -> SandboxSession:
@@ -2314,8 +2348,14 @@ class ConversationRuntime:
         # re-read of the directory. Create a fresh session only when there is none.
         session = self._pending_sessions.pop(conversation_id, None)
         if session is None:
+            egress_surface = self._surface_of(conversation_id)
+            if self._effective_artifact_mode(conversation_id):
+                # Artifact builds do not need the agent browser's arbitrary
+                # public web. Keep them on the finite registry allowlist even
+                # when entered from the general-agent surface.
+                egress_surface = "build"
             sandbox_spec = self._build_sandbox_spec(
-                surface=self._surface_of(conversation_id),
+                surface=egress_surface,
                 mcp_egress_hosts=self._mcp_egress_hosts(),
             )
             if sealed_workflow_run is not None:
@@ -2325,6 +2365,7 @@ class ConversationRuntime:
                         "egress_allow": frozenset(
                             sealed_workflow_run.definition.policies.egress_allow
                         ),
+                        "public_web": False,
                     }
                 )
             session = SandboxSession(

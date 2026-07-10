@@ -50,7 +50,13 @@ class FakeContainer:
         if detach:
             return _Exec(0, (b"", b"") if demux else b"")
         # file ops the backend issues: cat / ls / mkdir against the tiny FS
-        if cmd[0] == "cat":
+        if cmd[0] == "python3" and "DISCO_READ_" in cmd[2]:
+            path = cmd[3].rstrip("/") + "/" + cmd[4]
+            if path in self.fs:
+                code, out, err = 0, self.fs[path], b""
+            else:
+                code, out, err = 44, b"", b"DISCO_READ_MISSING:no file"
+        elif cmd[0] == "cat":
             path = cmd[-1]
             if path in self.fs:
                 code, out, err = 0, self.fs[path], b""
@@ -58,10 +64,19 @@ class FakeContainer:
                 code, out, err = 1, b"", b"cat: No such file"
         elif cmd[0] == "ls":
             prefix = cmd[-1].rstrip("/") + "/"
-            names = sorted({p[len(prefix):].split("/")[0] for p in self.fs if p.startswith(prefix)})
+            names = sorted(
+                {p[len(prefix) :].split("/")[0] for p in self.fs if p.startswith(prefix)}
+            )
             code, out, err = 0, ("\n".join(names) + "\n").encode() if names else b"", b""
         elif cmd[0] == "mkdir":
             code, out, err = 0, b"", b""
+        elif cmd[0] == "stat":
+            path = cmd[-1]
+            code, out, err = (
+                (0, f"{len(self.fs[path])}\n".encode(), b"")
+                if path in self.fs
+                else (1, b"", b"stat: No such file")
+            )
         elif self.exec_results:
             code, out, err = self.exec_results.pop(0)
         else:
@@ -96,6 +111,36 @@ class _FakeImages:
         if not self._has:
             raise ImageNotFound(f"no such image: {tag}")
         return object()  # an opaque image handle is enough
+
+
+class FakeVolume:
+    def __init__(self, name: str, labels: dict[str, str], options: dict[str, Any]) -> None:
+        self.name = name
+        self.labels = labels
+        self.options = options
+        self.removed = False
+
+    def remove(self, force=False):
+        self.removed = True
+
+
+class _FakeVolumes:
+    def __init__(self) -> None:
+        self.created: list[str] = []
+        self.objects: dict[str, FakeVolume] = {}
+
+    def create(self, name, labels=None, **options):
+        self.created.append(name)
+        volume = FakeVolume(name, labels or {}, options)
+        self.objects[name] = volume
+        return volume
+
+    def list(self, filters=None):
+        label = (filters or {}).get("label")
+        if not label:
+            return list(self.objects.values())
+        key, _, value = label.partition("=")
+        return [volume for volume in self.objects.values() if volume.labels.get(key) == value]
 
 
 class FakeNetwork:
@@ -136,6 +181,7 @@ class FakeDockerClient:
         self._run_error = run_error
         self.containers = self
         self.images = _FakeImages(has_image)
+        self.volumes = _FakeVolumes()
         self.networks = _FakeNetworks()
         self.runs: list[FakeContainer] = []  # every container started (sidecar + sandbox)
         self.last: FakeContainer | None = None
@@ -186,8 +232,8 @@ async def test_create_exec_close_session_model(tmp_path):
     await inst.exec_shell("echo bye", timeout_s=10)
     assert r1.exit_code == 0 and r1.stdout == "ok\n" and r1.timed_out is False
     assert len(client.last.exec_calls) == 2  # same container, two execs
-    # the command is wrapped in the container-side timeout
-    assert client.last.exec_calls[0][:1] == ["timeout"]
+    # A guest-side streaming helper bounds output before it crosses the daemon API.
+    assert client.last.exec_calls[0][:3] == ["python3", "-c", client.last.exec_calls[0][2]]
     assert "echo hi" in client.last.exec_calls[0]
     # close stops + removes the container
     await inst.destroy()
@@ -213,11 +259,18 @@ async def test_sealed_by_default_filtered_on_allowlist_open_on_capability(tmp_pa
     assert "network_mode" not in sandbox_kw  # NOT full bridge!
     assert sandbox_kw["network"].startswith("disco-egr-")  # the internal no-NAT net
     assert sandbox_kw["environment"]["HTTPS_PROXY"].startswith("http://disco-egr-")
-    # 3) raw NETWORK capability, no allowlist → OPEN (deliberate raw egress).
+    # 3) legacy NETWORK capability → public-only proxy, never a raw bridge.
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
     )
-    assert client.last.run_kwargs["network_mode"] == "bridge"
+    assert client.last.run_kwargs["network"].startswith("disco-egr-")
+    assert client.networks.created[-1].attrs.get("internal") is True
+    launch = next(
+        call
+        for call in client.runs[-2].exec_calls
+        if any("egress_proxy.py" in str(arg) for arg in call)
+    )
+    assert "--public-only" in " ".join(launch)
 
 
 async def test_filtered_egress_stands_up_and_tears_down_proxy_sidecar(tmp_path):
@@ -271,9 +324,12 @@ async def test_resource_limits_and_workspace_mount_applied(tmp_path):
     # EPIC H host-protection: the create call carries a pids cap (cgroup pids.max). The
     # spec left `pids` unset → the backend's config default (512) is applied.
     assert kw["pids_limit"] == 512
-    # workspace bind-mounted rw to the container's /workspace
-    (host_bind,) = kw["volumes"].keys()
-    assert kw["volumes"][host_bind] == {"bind": "/workspace", "mode": "rw"}
+    # workspace is an ephemeral, size-capped tmpfs volume mounted at /workspace.
+    (volume_name,) = kw["volumes"].keys()
+    assert kw["volumes"][volume_name] == {"bind": "/workspace", "mode": "rw"}
+    volume = client.volumes.objects[volume_name]
+    assert volume.options["driver"] == "local"
+    assert "size=4096m" in volume.options["driver_opts"]["o"]
 
 
 async def test_pids_limit_spec_override_and_config_default(tmp_path):

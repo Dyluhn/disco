@@ -32,6 +32,49 @@ from .base import ConversationSummary, EventFilter, Page
 if TYPE_CHECKING:  # annotations only; runtime uses a local import (dod.py is a leaf)
     from ..dod import DoDSpec
 
+MAX_EVENT_PAYLOAD_BYTES = 1024 * 1024
+EVENT_SUBSCRIBER_QUEUE_MAX = 256
+EPHEMERAL_SUBSCRIBER_QUEUE_MAX = 128
+
+
+class EventPayloadTooLarge(ValueError):
+    """An event exceeded the durable payload ceiling and was not persisted."""
+
+
+class SubscriberOverflow(RuntimeError):
+    """A durable subscriber fell behind and must reconnect for replay."""
+
+
+class _SubscriberOverflowMarker:
+    pass
+
+
+_SUBSCRIBER_OVERFLOW = _SubscriberOverflowMarker()
+
+
+def _estimated_json_upper_bound(value: object, *, stop_after: int) -> int:
+    """Conservative, allocation-light JSON size estimate with early exit."""
+    total = 0
+    stack = [value]
+    while stack and total <= stop_after:
+        item = stack.pop()
+        if item is None or isinstance(item, (bool, int, float)):
+            total += 24
+        elif isinstance(item, str):
+            total += (len(item) if item.isascii() else len(item) * 6) + 2
+        elif isinstance(item, dict):
+            total += 2 + len(item) * 2
+            for key, child in item.items():
+                stack.append(str(key))
+                stack.append(child)
+        elif isinstance(item, (list, tuple)):
+            total += 2 + len(item)
+            stack.extend(item)
+        else:
+            total += len(str(item)) * 6 + 2
+    return total
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
     conversation_id TEXT    NOT NULL,
@@ -221,7 +264,9 @@ class SqliteEventStore:
         self._conn.commit()
         self._write_lock = asyncio.Lock()
         # conversation_id -> set of live subscriber queues.
-        self._subscribers: dict[str, set[asyncio.Queue[Event]]] = defaultdict(set)
+        self._subscribers: dict[str, set[asyncio.Queue[Event | _SubscriberOverflowMarker]]] = (
+            defaultdict(set)
+        )
         # conversation_id -> set of EPHEMERAL subscriber queues. These carry
         # transient frames (watch-it-write file-stream deltas) that are broadcast
         # to live listeners but NEVER persisted — they're display-only and would
@@ -467,6 +512,16 @@ class SqliteEventStore:
 
         stored = event.model_copy(update={"seq": next_seq})
         payload = event_to_json_dict(stored)
+        estimate = _estimated_json_upper_bound(payload, stop_after=MAX_EVENT_PAYLOAD_BYTES)
+        if estimate > MAX_EVENT_PAYLOAD_BYTES:
+            raise EventPayloadTooLarge(
+                f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
+            )
+        payload_json = json.dumps(payload, separators=(",", ":"))
+        if len(payload_json.encode("utf-8")) > MAX_EVENT_PAYLOAD_BYTES:
+            raise EventPayloadTooLarge(
+                f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
+            )
         self._conn.execute(
             "INSERT INTO events (conversation_id, seq, id, kind, source, created_at, payload) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -477,7 +532,7 @@ class SqliteEventStore:
                 payload["kind"],
                 payload["source"],
                 payload["timestamp"],
-                json.dumps(payload),
+                payload_json,
             ),
         )
 
@@ -491,7 +546,14 @@ class SqliteEventStore:
         return stored, True
 
     def _publish(self, conversation_id: str, event: Event) -> None:
-        for q in self._subscribers.get(conversation_id, set()):
+        subscribers = self._subscribers.get(conversation_id, set())
+        for q in list(subscribers):
+            if q.full():
+                subscribers.discard(q)
+                while not q.empty():
+                    q.get_nowait()
+                q.put_nowait(_SUBSCRIBER_OVERFLOW)
+                continue
             q.put_nowait(event)
 
     def publish_ephemeral(self, conversation_id: str, frame: dict) -> None:
@@ -500,6 +562,8 @@ class SqliteEventStore:
         listener the frame is simply dropped (the final ActionEvent is the durable
         record). Sync + non-blocking so the agent loop can call it inline."""
         for q in self._eph_subscribers.get(conversation_id, set()):
+            if q.full():
+                q.get_nowait()
             q.put_nowait(frame)
 
     async def subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]:
@@ -507,7 +571,7 @@ class SqliteEventStore:
         return self._subscribe_ephemeral(conversation_id)
 
     async def _subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]:
-        queue: asyncio.Queue[dict] = asyncio.Queue()
+        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=EPHEMERAL_SUBSCRIBER_QUEUE_MAX)
         self._eph_subscribers[conversation_id].add(queue)
         try:
             while True:
@@ -954,7 +1018,9 @@ class SqliteEventStore:
     async def _subscribe(self, conversation_id: str, after_seq: int | None) -> AsyncIterator[Event]:
         # Register the live queue FIRST so no append is missed between the
         # history snapshot and going live; the overlap is deduped by seq.
-        queue: asyncio.Queue[Event] = asyncio.Queue()
+        queue: asyncio.Queue[Event | _SubscriberOverflowMarker] = asyncio.Queue(
+            maxsize=EVENT_SUBSCRIBER_QUEUE_MAX
+        )
         self._subscribers[conversation_id].add(queue)
         try:
             history = self._query(
@@ -966,7 +1032,12 @@ class SqliteEventStore:
                     last_seq = max(last_seq, ev.seq)
                 yield ev
             while True:
-                ev = await queue.get()
+                item = await queue.get()
+                if isinstance(item, _SubscriberOverflowMarker):
+                    raise SubscriberOverflow(
+                        "durable event subscriber exceeded its bounded queue; reconnect for replay"
+                    )
+                ev = item
                 if ev.seq is not None and ev.seq <= last_seq:
                     continue  # already delivered from history (overlap dedup)
                 if ev.seq is not None:

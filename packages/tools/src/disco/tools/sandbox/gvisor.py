@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import logging
 import pathlib
 import posixpath
+import shlex
 import uuid
 from typing import Any
 
@@ -27,15 +29,22 @@ from ._container import (
     EGRESS_PROXY_PORT,
     PUBLISHED_PORTS,
     ContainerInstance,
+    SshLoopbackTunnelManager,
+    _create_named_volume,
+    _remove_container,
+    _remove_volume,
     bounded_sidecar_cap,
+    collect_host_deny_ips,
+    discover_remote_host_ips,
     egress_mode,
     format_allow,
+    loopback_port_bindings,
+    nofile_ulimits,
     proxy_env,
+    proxy_readiness_argv,
     proxy_run_argv,
     resolve_bounds,
     sealed,
-    _remove_container,
-    _remove_volume,
 )
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
 from .config import SandboxConfig, default_sandbox_config
@@ -103,9 +112,7 @@ def _ssh_probe_command(
     return args
 
 
-def _probe_ssh_reachable(
-    docker_socket: str, connect_timeout: int = _SSH_CONNECT_TIMEOUT_S
-) -> None:
+def _probe_ssh_reachable(docker_socket: str, connect_timeout: int = _SSH_CONNECT_TIMEOUT_S) -> None:
     """Run the bounded SSH probe BEFORE handing the endpoint to docker-py, so a dead
     host raises a typed error in ~`connect_timeout`s and the leaky `use_ssh_client`
     path is never reached for it. `subprocess.run(timeout=…)` is a hard backstop: even
@@ -133,9 +140,7 @@ def _probe_ssh_reachable(
     if proc.returncode != 0:
         tail = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
         msg = tail[-1] if tail else f"ssh exited {proc.returncode}"
-        raise SandboxUnavailableError(
-            f"Docker host unreachable over SSH at {docker_socket}: {msg}"
-        )
+        raise SandboxUnavailableError(f"Docker host unreachable over SSH at {docker_socket}: {msg}")
 
 
 def _put_file(container: Any, dir_path: str, name: str, data: bytes) -> None:
@@ -157,9 +162,9 @@ def _put_file(container: Any, dir_path: str, name: str, data: bytes) -> None:
 
 
 class GvisorSandboxInstance(ContainerInstance):
-    """A running gVisor container — shared ContainerInstance behavior. The host
-    bind-mount persists the workspace on the daemon host; the backend never touches
-    that path directly (file ops go through the container).
+    """A running gVisor container — shared ContainerInstance behavior. Its
+    workspace is an ephemeral, quota-capped daemon volume; file ops reach it only
+    through the container and teardown removes it.
 
     Filtered-egress boxes also own an allowlisting proxy SIDECAR and an internal
     no-NAT network; both are torn down alongside the container so a run leaves no
@@ -307,6 +312,16 @@ class GvisorSandboxService:
         sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
         sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
         sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
+        deny_ips = collect_host_deny_ips(
+            self._cfg.host_ip_blocklist,
+            self._cfg.preview_host or _preview_host(self._cfg.docker_socket),
+            include_local_interfaces=not self._cfg.docker_socket.startswith("ssh://"),
+            additional_host_ips=(
+                discover_remote_host_ips(self._cfg.docker_socket)
+                if self._cfg.docker_socket.startswith("ssh://") and self._injected_client is None
+                else frozenset()
+            ),
+        )
         # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
         # so if it creates the network/sidecar then fails partway (connect/start/proxy
         # inject), nothing downstream tears them down. Own the cleanup HERE: any exception
@@ -332,12 +347,19 @@ class GvisorSandboxService:
                 command=["sh", "-c", "exec sleep infinity"],
                 runtime=self._cfg.runtime,
                 network="bridge",  # the route to the internet (the proxy's upstream)
-                ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
+                ports=loopback_port_bindings(),
                 # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
                 # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
                 mem_limit=f"{sidecar_memory_mb}m",
                 nano_cpus=int(sidecar_cpu * 1_000_000_000),
                 pids_limit=sidecar_pids_limit,
+                ulimits=nofile_ulimits(self._cfg),
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges:true"],
+                sysctls={
+                    "net.ipv4.ip_forward": "0",
+                    "net.ipv6.conf.all.forwarding": "0",
+                },
                 detach=True,
                 name=net_name,
                 labels=labels,
@@ -356,10 +378,20 @@ class GvisorSandboxService:
             script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
             _put_file(sidecar, "/", "egress_proxy.py", script)
             allow = format_allow(spec.egress_allow)
-            argv = proxy_run_argv(allow, EGRESS_PROXY_PORT)
-            sidecar.exec_run(
-                ["sh", "-c", f"{' '.join(argv)} >/var/log/egress.log 2>&1 &"], detach=True
+            argv = proxy_run_argv(
+                allow,
+                EGRESS_PROXY_PORT,
+                public_only=egress_mode(spec) == "public",
+                deny_ips=deny_ips,
             )
+            sidecar.exec_run(
+                ["sh", "-c", f"{shlex.join(argv)} >/var/log/egress.log 2>&1 &"], detach=True
+            )
+            ready = sidecar.exec_run(proxy_readiness_argv(EGRESS_PROXY_PORT), demux=True)
+            if ready[0] != 0:
+                raise SandboxUnavailableError(
+                    "egress policy proxy failed its readiness check; refusing sandbox start"
+                )
             # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
             sidecar.reload()
             proxy_ip = (
@@ -453,12 +485,12 @@ class GvisorSandboxService:
         # model-influenced spec may TIGHTEN cpu/mem/pids but can never loosen them above
         # the configured max nor disable the pids cap (pids=0 → default, never Docker's
         # "unlimited"); above-max is clamped down, negatives rejected. See resolve_bounds.
-        cpu, mem_mb, pids = resolve_bounds(spec, self._cfg)
+        cpu, mem_mb, pids, disk_mb = resolve_bounds(spec, self._cfg)
         mode = egress_mode(spec)
         # Publish the curated port set (Docker can't add mappings to a running
         # container, so the set is declared here), and only when network is
         # granted — a sealed box has no port to reach.
-        ports = None if sealed(spec) else {f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)}
+        ports = None if sealed(spec) else loopback_port_bindings()
         command = _keepalive_command()
 
         # Per-mode network config (the three-way egress posture; egress_mode docstring).
@@ -467,7 +499,7 @@ class GvisorSandboxService:
         egress_network = egress_sidecar = None
         egress_net_name = ""
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        if mode == "filtered":
+        if mode in {"filtered", "public"}:
             egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
                 client, spec, instance_id, conversation_id
             )
@@ -477,12 +509,21 @@ class GvisorSandboxService:
             # runsc can't hot-plug a NIC). [FIX6] the preview is reached via the egress
             # SIDECAR's published ports + an inbound forwarder, launched below.
             ports = None
-        elif mode == "open":
-            net_kwargs = {"network_mode": "bridge"}  # explicit raw egress (NETWORK capability)
         else:  # sealed
             net_kwargs = {"network_mode": "none"}
 
+        volume = None
+        container = None
+        container_name = f"{SBX_NAME_PREFIX}{instance_id}"
+        vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         try:
+            volume = _create_named_volume(
+                client.volumes,
+                name=vol_name,
+                labels=labels,
+                disk_mb=disk_mb,
+                workspace_uid=self._cfg.workspace_uid,
+            )
             container = client.containers.run(
                 image=self._cfg.image,
                 command=command,  # keepalive
@@ -491,28 +532,36 @@ class GvisorSandboxService:
                 mem_limit=f"{mem_mb}m",
                 nano_cpus=int(cpu * 1_000_000_000),
                 pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
-                volumes={host_workspace: {"bind": self._cfg.container_workspace, "mode": "rw"}},
+                ulimits=nofile_ulimits(self._cfg),
+                volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env beyond capability-granted values. For a filtered box that's
                 # the proxy routing vars (defense in depth atop the no-route network).
                 environment=environment,
                 working_dir=self._cfg.container_workspace,
                 detach=True,
-                name=f"{SBX_NAME_PREFIX}{instance_id}",
+                name=container_name,
                 labels=labels,
                 **net_kwargs,
             )
-        except SandboxUnavailableError:
-            raise
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
+            if container is None:
+                with contextlib.suppress(Exception):
+                    container = client.containers.get(container_name)
+            with contextlib.suppress(Exception):
+                _remove_container(container)
             # Don't leak the egress aux if the sandbox itself failed to start.
             self._best_effort_cleanup(egress_network, egress_sidecar)
+            with contextlib.suppress(Exception):
+                _remove_volume(volume)
+            if isinstance(exc, SandboxUnavailableError):
+                raise
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
         # [FIX6] sandbox is up and on the internal net — launch the inbound preview
         # forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT). Best-effort: never
         # raises, so it can't leak the just-started box.
-        if mode == "filtered" and egress_sidecar is not None:
+        if mode in {"filtered", "public"} and egress_sidecar is not None:
             self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
-        return container, egress_network, egress_sidecar
+        return container, egress_network, egress_sidecar, volume
 
     @staticmethod
     def _best_effort_cleanup(network: Any, sidecar: Any) -> None:
@@ -557,6 +606,11 @@ class GvisorSandboxService:
             # = new_value` directly.
             reload_timeout_s=self._cfg.reload_timeout_s,
             workspace_volume=workspace_volume,
+            loopback_tunnel=(
+                SshLoopbackTunnelManager(self._cfg.docker_socket)
+                if self._cfg.docker_socket.startswith("ssh://") and self._injected_client is None
+                else None
+            ),
         )
         # Attach the filtered-egress aux so destroy() tears down the proxy + network.
         instance._egress_network = egress_network
@@ -577,6 +631,7 @@ class GvisorSandboxService:
         "the '<runtime>' runtime is not configured on the Docker host"); returns None
         on success. The blocking docker-py calls run in a thread and are bounded by
         `client_timeout_s`, so an unreachable host fails fast instead of hanging."""
+
         def _probe() -> None:
             client = self._client()  # typed: "Docker unreachable at <endpoint>: …"
             self._require_runtime(client)  # typed: "<runtime> not configured …"
@@ -593,6 +648,7 @@ class GvisorSandboxService:
         fresh instance). These legacy orphans are reaped on sight — they are
         exactly the population that OOM-wedged VM-201 (34 unlabeled containers,
         2026-06-10); a label-only sweep would skip every one of them."""
+
         def _list() -> list[str]:
             try:
                 client = self._client()
@@ -623,10 +679,12 @@ class GvisorSandboxService:
                 return result
             except Exception:  # noqa: BLE001 — docker unreachable at startup is non-fatal
                 return []
+
         return await asyncio.to_thread(_list)
 
     async def destroy_by_conversation(self, conversation_id: str) -> None:
         """Destroy all pmx-sbx-* and pmx-egr-* containers labelled with this conversation_id."""
+
         def _destroy() -> None:
             try:
                 client = self._client()
@@ -648,7 +706,7 @@ class GvisorSandboxService:
                         for prefix in SBX_NAME_PREFIXES:
                             if name.startswith(prefix):
                                 workspace_volume_names.add(
-                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix):]}"
+                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix) :]}"
                                 )
                                 break
                         try:
@@ -666,9 +724,7 @@ class GvisorSandboxService:
                 # containers were removed above, so the network is detachable.
                 seen_nets: set[str] = set()
                 for key in LABEL_CONV_KEYS:
-                    for net in client.networks.list(
-                        filters={"label": f"{key}={conversation_id}"}
-                    ):
+                    for net in client.networks.list(filters={"label": f"{key}={conversation_id}"}):
                         if net.id in seen_nets:
                             continue
                         seen_nets.add(net.id)
@@ -684,9 +740,7 @@ class GvisorSandboxService:
                     seen_vols: set[str] = set()
                     for key in LABEL_CONV_KEYS:
                         try:
-                            candidates = volumes.list(
-                                filters={"label": f"{key}={conversation_id}"}
-                            )
+                            candidates = volumes.list(filters={"label": f"{key}={conversation_id}"})
                         except Exception:  # noqa: BLE001 — client lacks volume listing
                             continue
                         for vol in candidates:
@@ -712,4 +766,5 @@ class GvisorSandboxService:
                             pass
             except Exception:  # noqa: BLE001 — docker unreachable: best-effort
                 pass
+
         await asyncio.to_thread(_destroy)

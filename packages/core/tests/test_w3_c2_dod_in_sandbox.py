@@ -13,7 +13,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from disco.core import DoDSpec
-from disco.core.dod import CommandExitPredicate
+from disco.core.dod import CommandExitPredicate, FileExistsPredicate
 from disco.core.loop.finish import FinishGate
 from loop_fakes import ScriptedAgent, build_loop
 
@@ -96,6 +96,37 @@ async def test_dod_command_hard_deny_still_applies_in_sandbox_runner(tmp_path):
     assert verdict.results[0].details.get("denied") is True
 
 
+async def test_container_dod_file_evidence_is_checked_inside_sandbox_without_host_path():
+    class _ContainerSandbox:
+        workspace_path = None
+
+        def __init__(self) -> None:
+            self.file_calls = []
+            self.shell_calls = []
+
+        async def file_exists(self, path: str) -> bool:
+            self.file_calls.append(path)
+            return path == "artifact.txt"
+
+        async def resolve_relpath(self, path: str) -> str:
+            return path
+
+        async def exec_shell(self, command: str, timeout_s: int = 5):
+            self.shell_calls.append(command)
+            return SimpleNamespace(exit_code=0, stdout="", stderr="", timed_out=False)
+
+    sandbox = _ContainerSandbox()
+    loop, _ = build_loop(ScriptedAgent([]), executor=_Executor(sandbox), conversation_id=CID)
+    evaluator = await FinishGate(loop).build_dod_evaluator()
+    verdict = await evaluator.evaluate(
+        DoDSpec(predicates=[FileExistsPredicate(path="artifact.txt")])
+    )
+
+    assert verdict.passed is True
+    assert sandbox.file_calls == ["artifact.txt"]
+    assert sandbox.shell_calls == ["sh -c 'test -s \"$1\"' disco artifact.txt"]
+
+
 async def test_plan_step_command_predicate_applies_hard_deny_floor(tmp_path):
     # W3 C-2/C-3 (codex #7): the plan-step `command` predicate path (advisory C18)
     # must apply the destructive floor BEFORE it reaches exec_shell / host
@@ -111,9 +142,7 @@ async def test_plan_step_command_predicate_applies_hard_deny_floor(tmp_path):
         async def exec_shell(self, command: str, timeout_s: int = 5):  # noqa: ANN201
             raise AssertionError("hard-denied command reached the sandbox")
 
-    loop, _ = build_loop(
-        ScriptedAgent([]), executor=_Executor(_TripSandbox()), conversation_id=CID
-    )
+    loop, _ = build_loop(ScriptedAgent([]), executor=_Executor(_TripSandbox()), conversation_id=CID)
     psc = PlanStepConditions(loop)
     ok, note = await psc.check_command_for_plan_step(
         CommandExitPredicate(cmd="rm -rf --no-preserve-root /", expect_exit=0)

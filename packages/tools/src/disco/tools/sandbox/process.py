@@ -18,15 +18,23 @@ than production.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 import re
 import shlex
 import shutil
+import stat
+import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
 
+from ._container import (
+    MAX_SANDBOX_READ_BYTES,
+    SANDBOX_READ_TIMEOUT_S,
+    bounded_exec_argv,
+)
 from .base import (
     ExecResult,
     SandboxError,
@@ -73,11 +81,11 @@ _WORKSPACE_TOKEN_RE = re.compile(
 # boundary; `-k` is a flag) never matches.
 _CMD_HEAD = r"(?:^|[;&|`(\n]|\|\||&&)\s*"
 _HOST_SIGNAL_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(_CMD_HEAD + r"kill\b"),           # kill <pid> / kill -9 / kill -TERM / kill -s TERM
-    re.compile(_CMD_HEAD + r"pkill\b"),          # pkill / pkill -f uvicorn
-    re.compile(_CMD_HEAD + r"killall\b"),        # killall python
-    re.compile(r"\bfuser\b[^\n]*\s-k\b"),        # fuser -k 8000/tcp (free a port by killing owner)
-    re.compile(r"\bxargs\b[^\n|]*\bkill\b"),     # lsof -ti:PORT | xargs kill / xargs -r kill
+    re.compile(_CMD_HEAD + r"kill\b"),  # kill <pid> / kill -9 / kill -TERM / kill -s TERM
+    re.compile(_CMD_HEAD + r"pkill\b"),  # pkill / pkill -f uvicorn
+    re.compile(_CMD_HEAD + r"killall\b"),  # killall python
+    re.compile(r"\bfuser\b[^\n]*\s-k\b"),  # fuser -k 8000/tcp (free a port by killing owner)
+    re.compile(r"\bxargs\b[^\n|]*\bkill\b"),  # lsof -ti:PORT | xargs kill / xargs -r kill
 )
 
 # Actionable refusal — MUST start with "refused:" so system.py (_exec_outcome, Bug 16)
@@ -180,6 +188,7 @@ class ProcessSandboxInstance:
         ``SandboxPermissionError`` and the whole command is rejected (fail closed) —
         the rewrite must never itself manufacture an out-of-jail absolute path.
         """
+
         def _sub(m: re.Match[str]) -> str:
             # _resolve strips the redundant /workspace prefix, joins onto the real
             # workspace root, resolves, and raises SandboxPermissionError on escape.
@@ -231,15 +240,15 @@ class ProcessSandboxInstance:
         if signal_why is not None:
             return ExecResult(exit_code=126, stdout="", stderr=signal_why)
         cmd = self._rewrite_workspace_paths(cmd)
-        proc = await asyncio.create_subprocess_shell(
-            cmd,
+        proc = await asyncio.create_subprocess_exec(
+            *bounded_exec_argv(cmd, timeout_s, python=sys.executable),
             cwd=str(self._workspace),
             env=self._clean_env(),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s + 15)
         except TimeoutError:
             proc.kill()
             await proc.wait()
@@ -259,7 +268,84 @@ class ProcessSandboxInstance:
 
     async def read_file(self, path: str) -> bytes:
         self._alive()
-        return self._resolve(path).read_bytes()
+        clean = strip_redundant_workspace_prefix(path)
+        self._resolve(path)  # lexical jail before the descriptor walk
+
+        def _read_securely() -> bytes:
+            parts = [part for part in Path(clean).parts if part not in ("", ".")]
+            if not parts:
+                raise SandboxPermissionError(f"read_file {path!r}: invalid workspace path")
+            dir_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+            file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            opened: list[int] = []
+            try:
+                current = os.open(self._workspace, dir_flags)
+                opened.append(current)
+                for part in parts[:-1]:
+                    if part == "..":
+                        if len(opened) == 1:
+                            raise SandboxPermissionError(
+                                f"read_file {path!r}: path escapes workspace"
+                            )
+                        os.close(opened.pop())
+                        current = opened[-1]
+                        continue
+                    current = os.open(part, dir_flags, dir_fd=current)
+                    opened.append(current)
+                if parts[-1] == "..":
+                    raise SandboxPermissionError(
+                        f"read_file {path!r}: directory paths are not readable files"
+                    )
+                descriptor = os.open(parts[-1], file_flags, dir_fd=current)
+                opened.append(descriptor)
+                info = os.fstat(descriptor)
+                if not stat.S_ISREG(info.st_mode):
+                    raise SandboxPermissionError(
+                        f"read_file {path!r}: only regular, non-symlink files may be read"
+                    )
+                if info.st_size > MAX_SANDBOX_READ_BYTES:
+                    raise OSError(
+                        errno.EFBIG,
+                        f"read_file {path!r} exceeds the "
+                        f"{MAX_SANDBOX_READ_BYTES}-byte transfer cap",
+                    )
+                chunks: list[bytes] = []
+                remaining = MAX_SANDBOX_READ_BYTES + 1
+                while remaining:
+                    chunk = os.read(descriptor, min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    remaining -= len(chunk)
+                data = b"".join(chunks)
+                if len(data) > MAX_SANDBOX_READ_BYTES:
+                    raise OSError(
+                        errno.EFBIG,
+                        f"read_file {path!r} grew beyond the transfer cap while reading",
+                    )
+                return data
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR, errno.EACCES, errno.EPERM}:
+                    raise SandboxPermissionError(
+                        f"read_file {path!r}: symlink and non-regular paths are denied"
+                    ) from exc
+                raise
+            finally:
+                for descriptor in reversed(opened):
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_read_securely), timeout=SANDBOX_READ_TIMEOUT_S
+            )
+        except TimeoutError as exc:
+            raise OSError(
+                errno.ETIMEDOUT,
+                f"read_file {path!r}: exceeded the {SANDBOX_READ_TIMEOUT_S}s read timeout",
+            ) from exc
 
     async def write_file(self, path: str, data: bytes) -> None:
         self._alive()
@@ -274,8 +360,9 @@ class ProcessSandboxInstance:
 
         Security (codex round-1): the tmp is created with tempfile.mkstemp — a RANDOM name +
         O_CREAT|O_EXCL|O_NOFOLLOW semantics — so a model CANNOT pre-create a predictable
-        ``<target>.disco-tmp`` symlink that the write would follow into a governed path. os.replace
-        targets the link itself (never follows a symlinked target), so the final swap is safe too."""
+        ``<target>.disco-tmp`` symlink that the write would follow into a governed
+        path. os.replace targets the link itself (never follows a symlinked target),
+        so the final swap is safe too."""
         self._alive()
         target = self._resolve(path)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -293,7 +380,8 @@ class ProcessSandboxInstance:
         root, as a forward-slash string. Lets the governed-artifact guard see through a symlink
         (link.json -> .disco/appspec.json) — `_resolve` already follows symlinks + rejects jail
         escapes. async to match the container backend's exec-based resolve; the body is a cheap
-        in-process path op. Raises (SandboxPermissionError) on an escaping path, like the file ops."""
+        in-process path op. Raises (SandboxPermissionError) on an escaping path,
+        like the file ops."""
         target = self._resolve(path)
         if target == self._workspace:
             return "."
@@ -311,10 +399,16 @@ class ProcessSandboxInstance:
         workspace); a plain absence is False."""
         self._alive()
         try:
+            clean = strip_redundant_workspace_prefix(path)
+            current = self._workspace
+            for part in Path(clean).parts:
+                current /= part
+                if current.is_symlink():
+                    return False
             target = self._resolve(path)
         except SandboxError:
             return False
-        return target.exists()
+        return target.is_file()
 
     @property
     def workspace_path(self) -> str | None:
@@ -352,9 +446,9 @@ class ProcessSandboxInstance:
 
     async def destroy(self) -> None:
         self._destroyed = True
-        
+
         # Cleanup tmux sessions on destroy (BP-01).
-        # Container backends need nothing (container death kills the tmux server), 
+        # Container backends need nothing (container death kills the tmux server),
         # but the process backend shares the host tmux server, so we must clean up explicitly.
         ns = f"{self.conversation_id[:8]}-"
         # Dual-read: kill sessions under the current `disco-{ns}` AND legacy
@@ -373,7 +467,7 @@ class ProcessSandboxInstance:
                     await asyncio.create_subprocess_shell(
                         f"tmux kill-session -t {shlex.quote(line)}"
                     )
-        
+
         shutil.rmtree(self._workspace, ignore_errors=True)
 
 
@@ -411,6 +505,7 @@ class ProcessSandboxService:
         confirms the workspace ROOT is present + writable (the one local resource it
         needs). Raises ``SandboxUnavailableError`` naming the root on failure; returns
         None on success."""
+
         def _probe() -> None:
             try:
                 self._root.mkdir(parents=True, exist_ok=True)

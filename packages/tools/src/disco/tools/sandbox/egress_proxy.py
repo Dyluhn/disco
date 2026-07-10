@@ -27,8 +27,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import os
+import socket
+import urllib.parse
 from collections.abc import Callable, Iterable
+from typing import Any
 
 __all__ = ["host_allowed", "make_predicate", "AllowlistProxy", "main"]
 
@@ -76,19 +80,93 @@ _BAD_REQUEST = b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"
 _ESTABLISHED = b"HTTP/1.1 200 Connection Established\r\n\r\n"
 
 
+def _canonical_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    parsed = ipaddress.ip_address(value)
+    if isinstance(parsed, ipaddress.IPv6Address) and parsed.ipv4_mapped is not None:
+        return parsed.ipv4_mapped
+    return parsed
+
+
 class AllowlistProxy:
     """An asyncio forward proxy that allows a connection only if `allow(host)`.
 
     `denied` counts refused connections and `allowed` counts permitted ones — the
     live-verify + unit tests assert on these to prove enforcement actually fired."""
 
-    def __init__(self, allow: Callable[[str], bool], *, host: str = "0.0.0.0", port: int = 8888):
+    def __init__(
+        self,
+        allow: Callable[[str], bool],
+        *,
+        host: str = "0.0.0.0",
+        port: int = 8888,
+        require_global: bool = False,
+        web_ports_only: bool = False,
+        denied_ips: Iterable[str] = (),
+        resolver: Callable[[str, int], Any] | None = None,
+    ):
         self._allow = allow
         self._host = host
         self._port = port
+        self._require_global = require_global
+        self._web_ports_only = web_ports_only
+        self._denied_ips = frozenset(_canonical_ip(value) for value in denied_ips if value)
+        self._resolver = resolver
         self._server: asyncio.Server | None = None
         self.allowed = 0
         self.denied = 0
+
+    async def _resolved_targets(self, host: str, port: int) -> list[tuple[int, str]]:
+        """Resolve once, validate every answer, and return pinned IP targets.
+
+        Connecting to the validated address (not the hostname again) closes the
+        DNS-rebinding gap. Any non-global/host-owned answer poisons the whole
+        resolution set; an attacker cannot hide a private answer behind a public one.
+        """
+        clean_host = host.strip().strip("[]")
+        if self._resolver is not None:
+            resolved = self._resolver(clean_host, port)
+            if asyncio.iscoroutine(resolved):
+                resolved = await resolved
+            targets = list(resolved)
+        else:
+            loop = asyncio.get_running_loop()
+            infos = await loop.getaddrinfo(
+                clean_host,
+                port,
+                type=socket.SOCK_STREAM,
+                proto=socket.IPPROTO_TCP,
+            )
+            targets = [(family, sockaddr[0]) for family, _, _, _, sockaddr in infos]
+
+        unique: list[tuple[int, str]] = []
+        seen: set[str] = set()
+        for family, value in targets:
+            ip = _canonical_ip(value)
+            if isinstance(ip, ipaddress.IPv4Address):
+                family = socket.AF_INET
+            if str(ip) in seen:
+                continue
+            seen.add(str(ip))
+            if self._require_global and (not ip.is_global or ip in self._denied_ips):
+                raise PermissionError(f"destination address {ip} is not permitted")
+            unique.append((family, str(ip)))
+        if not unique:
+            raise OSError("hostname resolved to no usable addresses")
+        return unique
+
+    async def _open_upstream(
+        self, host: str, port: int
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter]:
+        if self._web_ports_only and port not in {80, 443}:
+            raise PermissionError(f"public-web proxy refuses non-web port {port}")
+        targets = await self._resolved_targets(host, port)
+        last_error: Exception | None = None
+        for family, ip in targets:
+            try:
+                return await asyncio.open_connection(ip, port, family=family)
+            except OSError as exc:
+                last_error = exc
+        raise OSError(f"all resolved addresses failed: {last_error}")
 
     @property
     def port(self) -> int:
@@ -147,7 +225,11 @@ class AllowlistProxy:
             await self._reply(writer, _FORBIDDEN)
             return
         try:
-            up_r, up_w = await asyncio.open_connection(host, port)
+            up_r, up_w = await self._open_upstream(host, port)
+        except PermissionError:
+            self.denied += 1
+            await self._reply(writer, _FORBIDDEN)
+            return
         except Exception:  # noqa: BLE001 — upstream unreachable
             await self._reply(writer, _BAD_REQUEST)
             return
@@ -174,7 +256,11 @@ class AllowlistProxy:
             await self._reply(writer, _FORBIDDEN)
             return
         try:
-            up_r, up_w = await asyncio.open_connection(host, port)
+            up_r, up_w = await self._open_upstream(host, port)
+        except PermissionError:
+            self.denied += 1
+            await self._reply(writer, _FORBIDDEN)
+            return
         except Exception:  # noqa: BLE001
             await self._reply(writer, _BAD_REQUEST)
             return
@@ -220,13 +306,20 @@ async def _read_headers(reader: asyncio.StreamReader) -> bytes:
 
 
 def _split_absolute_uri(uri: str) -> tuple[str | None, int, str]:
-    if "://" not in uri:
+    try:
+        parsed = urllib.parse.urlsplit(uri)
+    except ValueError:
         return None, 0, ""
-    _, _, rest = uri.partition("://")
-    authority, slash, path = rest.partition("/")
-    host, _, port_s = authority.partition(":")
-    port = int(port_s) if port_s.isdigit() else 80
-    return (host or None), port, ("/" + path if slash else "/")
+    if parsed.scheme.lower() != "http" or parsed.hostname is None:
+        return None, 0, ""
+    try:
+        port = parsed.port or 80
+    except ValueError:
+        return None, 0, ""
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
+    return parsed.hostname, port, path
 
 
 async def _pipe(
@@ -255,8 +348,21 @@ async def _pipe(
 # ---- sidecar entrypoint -----------------------------------------------------
 
 
-async def _run(port: int, entries: list[str]) -> None:
-    proxy = AllowlistProxy(make_predicate(entries), port=port)
+async def _run(
+    port: int,
+    entries: list[str],
+    *,
+    public_only: bool,
+    denied_ips: list[str],
+) -> None:
+    predicate = (lambda _host: True) if public_only else make_predicate(entries)
+    proxy = AllowlistProxy(
+        predicate,
+        port=port,
+        require_global=True,
+        web_ports_only=public_only,
+        denied_ips=denied_ips,
+    )
     await proxy.serve_forever()
 
 
@@ -268,9 +374,27 @@ def main(argv: list[str] | None = None) -> None:
         default=os.environ.get("EGRESS_ALLOW", ""),
         help="Comma-separated allowlist (exact host or .suffix). Empty = deny all.",
     )
+    parser.add_argument(
+        "--public-only",
+        action="store_true",
+        help="Allow arbitrary public HTTP(S), while denying every non-global address.",
+    )
+    parser.add_argument(
+        "--deny-ip",
+        default=os.environ.get("EGRESS_DENY_IPS", ""),
+        help="Comma-separated host-owned global IPs to deny in addition to non-global ranges.",
+    )
     args = parser.parse_args(argv)
     entries = [e for e in (x.strip() for x in args.allow.split(",")) if e]
-    asyncio.run(_run(args.port, entries))
+    denied_ips = [e for e in (x.strip() for x in args.deny_ip.split(",")) if e]
+    asyncio.run(
+        _run(
+            args.port,
+            entries,
+            public_only=bool(args.public_only),
+            denied_ips=denied_ips,
+        )
+    )
 
 
 if __name__ == "__main__":

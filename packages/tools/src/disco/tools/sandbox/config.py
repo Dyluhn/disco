@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 class SandboxConfig(BaseModel):
@@ -45,6 +45,10 @@ class SandboxConfig(BaseModel):
     # local socket; the remote host's IP for Docker-over-SSH). Set a LAN/tailnet IP to make
     # previews reachable from other devices, not just the agent-server's own host.
     preview_host: str = ""
+    # Optional explicit global addresses owned by the sandbox daemon host.
+    # Non-global ranges are always denied; this closes the remaining public-IP
+    # hairpin when a host owns a globally-routable interface.
+    host_ip_blocklist: list[str] = Field(default_factory=list)
     # The image's run-user uid (contract: `agent` = 1000). Files written via the
     # interface are owned by it so the sandbox user can edit them, not just read them.
     workspace_uid: int = 1000
@@ -68,12 +72,18 @@ class SandboxConfig(BaseModel):
     # negatives, while the per-field 0 "unset" sentinel resolves to the default below.
     default_cpu: float = 1.0
     default_memory_mb: int = 2048
+    # REAL workspace quota. Backends materialize this as a size-capped tmpfs
+    # volume; it is not an overlay ``storage_opt`` hint and therefore applies to
+    # the actual /workspace mount seen by the sandbox.
+    default_disk_mb: int = 4096
     # EPIC H host-protection: default cgroup pids.max for a created sandbox container,
     # so a runaway build (fork bomb, parallel-install storm) can't exhaust host PIDs and
     # freeze the box. Used when a SandboxSpec leaves `pids` unset (0); also the hard
     # MAXIMUM a spec can request (above-max is clamped). Overridable per deployment via
     # the Settings layer (same hot-apply path as the other bounds).
     default_pids_limit: int = 512
+    default_nofile_soft: int = 1024
+    default_nofile_hard: int = 2048
 
     # EPIC H (P1) — resource caps for the filtered-egress PROXY SIDECAR. A "filtered" box
     # stands up a SECOND container (the allowlisting proxy). Before this it was capped on
@@ -99,7 +109,10 @@ class SandboxConfig(BaseModel):
     @field_validator(
         "default_cpu",
         "default_memory_mb",
+        "default_disk_mb",
         "default_pids_limit",
+        "default_nofile_soft",
+        "default_nofile_hard",
         "sidecar_cpu",
         "sidecar_memory_mb",
         "sidecar_pids_limit",

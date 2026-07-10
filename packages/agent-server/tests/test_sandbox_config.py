@@ -143,7 +143,8 @@ async def test_preview_is_backend_aware_and_honest():
     async def mock_port_owners(inst, ports):
         return {
             p: PortOwner(port=p, pid=1234, cmdline="test", session="pmx-preview")
-            if p == 8000 else None
+            if p == 8000
+            else None
             for p in ports
         }
 
@@ -320,12 +321,13 @@ async def test_compose_build_loop_egress_modes():
             assert Capability.NETWORK not in spec.permitted
             assert spec.egress_allow == REGISTRY_EGRESS_ALLOW
 
-    # 2. Explicit open (escape hatch via PMX_BUILD_EGRESS=open)
+    # 2. Explicit open compatibility alias (public-only, private denied)
     with mock.patch.dict(os.environ, {"PMX_BUILD_EGRESS": "open"}):
         with mock.patch.object(rt, "_sandbox_service_now"):
             loop = rt._compose_build_loop("c2", router, agent)
             spec = loop.executor._sandbox.spec
-            assert Capability.NETWORK in spec.permitted
+            assert Capability.NETWORK not in spec.permitted
+            assert spec.public_web is True
             assert not spec.egress_allow
 
     # 3. Filtered is unchanged when set explicitly (regression guard for BP-09).
@@ -335,6 +337,25 @@ async def test_compose_build_loop_egress_modes():
             spec = loop.executor._sandbox.spec
             assert Capability.NETWORK not in spec.permitted
             assert spec.egress_allow == REGISTRY_EGRESS_ALLOW
+
+
+@pytest.mark.asyncio
+async def test_agent_artifact_mode_keeps_finite_build_egress():
+    from unittest import mock
+
+    from disco.tools import REGISTRY_EGRESS_ALLOW
+
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    rt.set_surface("artifact-agent", "agent")
+    rt.set_artifact_mode("artifact-agent", True)
+    router = mock.MagicMock(spec=DefaultLLMRouter)
+    agent = mock.MagicMock(spec=RouterAgent)
+
+    with mock.patch.object(rt, "_sandbox_service_now"):
+        loop = rt._compose_build_loop("artifact-agent", router, agent)
+    spec = loop.executor._sandbox.spec
+    assert spec.public_web is False
+    assert spec.egress_allow == REGISTRY_EGRESS_ALLOW
 
 
 def test_registry_egress_allow_semantics():
@@ -347,3 +368,45 @@ def test_registry_egress_allow_semantics():
     assert spec.egress_allowed("anything.npmjs.org") is True
     assert spec.egress_allowed("example.com") is False
     assert spec.egress_allowed("raw.githubusercontent.com") is True
+
+
+def test_surface_egress_defaults_and_unknown_values_fail_closed(monkeypatch):
+    from disco.tools import REGISTRY_EGRESS_ALLOW, Capability, SandboxSpec
+
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    rt._sandbox_spec = SandboxSpec(
+        permitted=frozenset({Capability.NETWORK}),
+        egress_allow=frozenset({"stale.example"}),
+    )
+    for name in ("PMX_AGENT_EGRESS", "DISCO_AGENT_EGRESS"):
+        monkeypatch.delenv(name, raising=False)
+    agent = rt._build_sandbox_spec(surface="agent")
+    assert agent.public_web is True
+    assert Capability.NETWORK not in agent.permitted
+    assert not agent.egress_allow
+
+    for name in ("PMX_BUILD_EGRESS", "DISCO_BUILD_EGRESS"):
+        monkeypatch.delenv(name, raising=False)
+    build = rt._build_sandbox_spec(surface="build")
+    assert build.public_web is False
+    assert Capability.NETWORK not in build.permitted
+    assert build.egress_allow == REGISTRY_EGRESS_ALLOW
+
+    monkeypatch.setenv("PMX_AGENT_EGRESS", "typo-means-open-before-sw5")
+    with pytest.raises(ValueError, match="invalid AGENT_EGRESS"):
+        rt._build_sandbox_spec(surface="agent")
+
+
+def test_surface_egress_sealed_and_explicit_raw(monkeypatch):
+    from disco.tools import Capability
+
+    rt = ConversationRuntime(SqliteEventStore(":memory:"))
+    monkeypatch.setenv("PMX_AGENT_EGRESS", "sealed")
+    sealed = rt._build_sandbox_spec(surface="agent")
+    assert not sealed.public_web and not sealed.egress_allow
+    assert Capability.NETWORK not in sealed.permitted
+
+    monkeypatch.setenv("PMX_AGENT_EGRESS", "raw")
+    raw = rt._build_sandbox_spec(surface="agent")
+    assert Capability.NETWORK not in raw.permitted
+    assert raw.public_web and not raw.egress_allow

@@ -9,9 +9,9 @@ from collections.abc import Awaitable, Callable
 from typing import cast
 from urllib.parse import urlsplit
 
+import disco.agent_server.runtime as runtime_mod
 import httpx
 import pytest
-import disco.agent_server.runtime as runtime_mod
 from disco.agent_server import ConversationRuntime
 from disco.agent_server.routes.schedules import make_schedules_router
 from disco.agent_server.workflow_schedule import WorkflowScheduleManager
@@ -48,8 +48,10 @@ from disco.tools import (
     SandboxError,
     SandboxInstance,
     SandboxService,
-    SandboxSession as RealSandboxSession,
     SandboxSpec,
+)
+from disco.tools import (
+    SandboxSession as RealSandboxSession,
 )
 from fastapi import FastAPI
 
@@ -175,7 +177,7 @@ class _MemorySandboxInstance:
         value = path.strip()
         for prefix in ("/workspace/", "workspace/"):
             if value.startswith(prefix):
-                value = value[len(prefix):]
+                value = value[len(prefix) :]
         if value in {"", ".", "/workspace", "workspace"}:
             return ""
         return value.strip("/")
@@ -205,7 +207,7 @@ class _MemorySandboxInstance:
         for file_path in self.files:
             if prefix and not file_path.startswith(prefix):
                 continue
-            rest = file_path[len(prefix):] if prefix else file_path
+            rest = file_path[len(prefix) :] if prefix else file_path
             name = rest.split("/", 1)[0]
             if name:
                 children.add(name)
@@ -214,6 +216,10 @@ class _MemorySandboxInstance:
     async def file_exists(self, path: str) -> bool:
         self._check_live()
         return self._clean(path) in self.files
+
+    async def resolve_relpath(self, path: str) -> str:
+        self._check_live()
+        return self._clean(path)
 
     def display_url(self) -> str | None:
         return None
@@ -261,7 +267,9 @@ class _MemorySandboxService:
                 await instance.destroy()
 
 
-def _runtime(steps: list[tuple[str, list[ProposedToolCall]]]) -> tuple[ConversationRuntime, SqliteEventStore]:
+def _runtime(
+    steps: list[tuple[str, list[ProposedToolCall]]],
+) -> tuple[ConversationRuntime, SqliteEventStore]:
     store = SqliteEventStore(":memory:")
     cfg = RouterConfig(
         models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
@@ -454,6 +462,7 @@ async def test_sealed_workflow_schedule_uses_declared_egress_allow() -> None:
         assert record is not None
         spec = _sandbox_spec_for_run(runtime, record.run_cid)
         assert spec.egress_allow == frozenset({"example.com"})
+        assert spec.public_web is False
         assert Capability.NETWORK not in spec.permitted
     finally:
         await runtime.aclose()
@@ -477,6 +486,7 @@ async def test_sealed_workflow_schedule_empty_egress_stays_fully_denied() -> Non
         assert record is not None
         spec = _sandbox_spec_for_run(runtime, record.run_cid)
         assert spec.egress_allow == frozenset()
+        assert spec.public_web is False
         assert Capability.NETWORK not in spec.permitted
     finally:
         await runtime.aclose()
@@ -530,7 +540,7 @@ async def test_sealed_workflow_schedule_fire_keeps_session_open_until_loop_retur
     release_write = asyncio.Event()
 
     class RecordingSandboxSession(RealSandboxSession):
-        instances: list["RecordingSandboxSession"] = []
+        instances: list[RecordingSandboxSession] = []
 
         def __init__(
             self,
@@ -628,8 +638,7 @@ async def test_sealed_workflow_schedule_autonomous_plan_auto_approves() -> None:
         statuses = [event for event in events if isinstance(event, StatusEvent)]
         assert any(status.detail == "plan_approved" for status in statuses)
         assert all(
-            status.status != ConversationStatus.AWAITING_PLAN_APPROVAL
-            for status in statuses
+            status.status != ConversationStatus.AWAITING_PLAN_APPROVAL for status in statuses
         )
     finally:
         await runtime.aclose()
@@ -654,8 +663,7 @@ async def test_sealed_workflow_schedule_needs_input_lands_terminal_explanation()
         assert statuses[-1].status == ConversationStatus.PAUSED
         assert statuses[-1].detail == "workflow_needs_input"
         assert all(
-            status.status != ConversationStatus.AWAITING_USER_QUESTION
-            for status in statuses
+            status.status != ConversationStatus.AWAITING_USER_QUESTION for status in statuses
         )
         agent_messages = [
             event.message.content

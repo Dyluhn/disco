@@ -62,6 +62,7 @@ _STEALTH_INIT_SCRIPT = """
     Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
 """
 
+
 class BrowserState:
     def __init__(self):
         self.playwright = None
@@ -79,13 +80,28 @@ class BrowserState:
         # W-46: --disable-blink-features=AutomationControlled removes the Blink flag
         # that otherwise sets navigator.webdriver=true and trips WAF bot heuristics.
         launch_args = ["--no-sandbox", "--disable-blink-features=AutomationControlled"]
+        # S-W5: agent/browser sandboxes reach the public web through the
+        # private/non-global-denying sidecar, not a raw bridge. Playwright does
+        # not reliably inherit HTTP_PROXY into Chromium, so wire it explicitly.
+        proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+        launch_kwargs = {}
+        if proxy_url:
+            launch_kwargs["proxy"] = {
+                "server": proxy_url,
+                "bypass": "localhost,127.0.0.1,[::1]",
+            }
         if display:
             import os as _os
+
             _os.environ["DISPLAY"] = display
             launch_args.append(f"--display={display}")
-            self.browser = self.playwright.chromium.launch(headless=False, args=launch_args)
+            self.browser = self.playwright.chromium.launch(
+                headless=False, args=launch_args, **launch_kwargs
+            )
         else:
-            self.browser = self.playwright.chromium.launch(headless=True, args=launch_args)
+            self.browser = self.playwright.chromium.launch(
+                headless=True, args=launch_args, **launch_kwargs
+            )
         # W-46: a realistic desktop-Chrome context — UA without "HeadlessChrome", a
         # locale/timezone, and an Accept-Language header — so a server fingerprinting
         # the request sees a normal browser. Same sandbox egress; only the fingerprint
@@ -133,21 +149,25 @@ class BrowserState:
         # B7: a request that never got a response (DNS, refused, aborted, timeout).
         # request.failure is the error text (or None on some engines).
         failure = getattr(request, "failure", None)
-        self._record_network({
-            "method": request.method,
-            "url": request.url,
-            "failure": failure or "failed",
-        })
+        self._record_network(
+            {
+                "method": request.method,
+                "url": request.url,
+                "failure": failure or "failed",
+            }
+        )
 
     def _add_response(self, response):
         # B7: a response that *did* arrive but with an error status (4xx/5xx).
         status = response.status
         if status >= 400:
-            self._record_network({
-                "method": response.request.method,
-                "url": response.url,
-                "status": status,
-            })
+            self._record_network(
+                {
+                    "method": response.request.method,
+                    "url": response.url,
+                    "status": status,
+                }
+            )
 
     def _record_network(self, entry):
         self.network_fails.append(entry)
@@ -159,7 +179,9 @@ class BrowserState:
         # B7: a fresh navigation starts a fresh network-failure ledger.
         self.network_fails = []
 
+
 state = BrowserState()
+
 
 class BrowserHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -177,7 +199,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        content_length = int(self.headers.get('Content-Length', 0))
+        content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
         try:
             params = json.loads(body)
@@ -194,9 +216,9 @@ class BrowserHandler(BaseHTTPRequestHandler):
 
     def _send_json(self, data, status=200):
         self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
+        self.wfile.write(json.dumps(data).encode("utf-8"))
 
     def _handle_action(self, action, params):
         page = state.page
@@ -216,9 +238,9 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 return {"ok": False, "error": "URL required for navigate"}
             state.clear_console()
             page.goto(url, wait_until="load")
-            page.wait_for_timeout(500) # Settle time
+            page.wait_for_timeout(500)  # Settle time
         elif action == "screenshot":
-            pass # Just take a screenshot at the end
+            pass  # Just take a screenshot at the end
         elif action == "click":
             # W6: click supports index (data-pmx-index attr), CSS selector, or
             # visible text — whichever the agent provides. Timeout cut to a few
@@ -278,7 +300,7 @@ class BrowserHandler(BaseHTTPRequestHandler):
                 "network": state.network_fails,
                 "elements": [],
                 "text": "",
-                "screenshot_path": None
+                "screenshot_path": None,
             }
         elif action == "live_start":
             global _live_headed
@@ -438,11 +460,13 @@ class BrowserHandler(BaseHTTPRequestHandler):
             }}
         """)
 
+
 def run():
     state.start()
-    server = HTTPServer(('127.0.0.1', PORT), BrowserHandler)
+    server = HTTPServer(("127.0.0.1", PORT), BrowserHandler)
     print(f"Browser daemon listening on 127.0.0.1:{PORT}")
     server.serve_forever()
+
 
 if __name__ == "__main__":
     run()

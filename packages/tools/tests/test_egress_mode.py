@@ -19,15 +19,14 @@ from disco.tools.sandbox.base import SandboxSpec
 def test_egress_mode_three_way():
     assert egress_mode(SandboxSpec()) == "sealed"
     assert egress_mode(SandboxSpec(egress_allow=frozenset({"x.com"}))) == "filtered"
-    assert egress_mode(SandboxSpec(permitted=frozenset({Capability.NETWORK}))) == "open"
+    assert egress_mode(SandboxSpec(public_web=True)) == "public"
+    assert egress_mode(SandboxSpec(permitted=frozenset({Capability.NETWORK}))) == "public"
 
 
 def test_allowlist_takes_precedence_over_network_capability():
-    # An allowlist means "only these" even when the raw NETWORK cap is also present
+    # An allowlist means "only these" even when the legacy NETWORK cap is also present
     # — the safer interpretation wins, so a stray capability can't widen egress.
-    spec = SandboxSpec(
-        egress_allow=frozenset({"x.com"}), permitted=frozenset({Capability.NETWORK})
-    )
+    spec = SandboxSpec(egress_allow=frozenset({"x.com"}), permitted=frozenset({Capability.NETWORK}))
     assert egress_mode(spec) == "filtered"
 
 

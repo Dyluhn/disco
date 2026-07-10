@@ -1,15 +1,15 @@
-"""C1c — the external Definition-of-Done finish gate, with the BOUNDED refusal
-cap (the fix for the uncapped first cut that OOM'd: an unmet DoD looped
-refuse-and-continue forever, accumulating events without end).
+"""C1c — the external Definition-of-Done finish gate, with a bounded refusal
+budget followed by a fail-closed pause.
 
 These tests exercise `AgentLoop._finish_dod_gate_passed` DIRECTLY (no full loop
 run) so the cap is proven without any risk of the very unbounded loop it guards
-against. The cap mirrors `_FINISH_VERIFY_CAP`: refuse while under the cap, then
-RELEASE the gate (finish lands) with a loud log + the prior refusal events as the
-visible audit trail.
+against. An unmet acceptance bar is never converted into success: the loop gets a
+bounded opportunity to repair it, then pauses for explicit review.
 """
 
 from __future__ import annotations
+
+from types import SimpleNamespace
 
 import pytest
 from disco.core import MessageEvent
@@ -36,8 +36,9 @@ def _agent():
 class _FixedEvaluator:
     """A fake DoD evaluator returning a fixed verdict — the C1c factory seam."""
 
-    def __init__(self, passed: bool):
+    def __init__(self, passed: bool, *, unverifiable: bool = False):
         self._passed = passed
+        self._unverifiable = unverifiable
         self.calls = 0
 
     async def evaluate(self, spec, *, conversation_id):  # noqa: ARG002
@@ -46,6 +47,7 @@ class _FixedEvaluator:
             predicate=_PRED,
             passed=self._passed,
             reason="ok" if self._passed else "out.txt is missing",
+            unverifiable=self._unverifiable,
         )
         return DoDVerdict(
             passed=self._passed,
@@ -67,16 +69,19 @@ async def _loop_with_dod(evaluator):
 # ---- the cap (the OOM fix) --------------------------------------------------
 
 
-async def test_unmet_dod_refuses_then_RELEASES_at_the_cap():
-    """The load-bearing regression: an always-failing DoD must NOT refuse
-    forever. Refuse while under the cap, then release — bounded, no infinite
-    refuse-and-continue loop (the OOM the uncapped first cut caused)."""
-    loop, _ = await _loop_with_dod(_FixedEvaluator(passed=False))
+async def test_unmet_dod_refuses_then_pauses_fail_closed_at_the_cap():
+    """An always-failing DoD neither loops forever nor becomes a false pass."""
+    loop, store = await _loop_with_dod(_FixedEvaluator(passed=False))
     verdicts = [await loop._finish_dod_gate_passed() for _ in range(_DOD_REFUSAL_CAP + 1)]
-    # First _DOD_REFUSAL_CAP calls refuse (False); the next RELEASES (True).
-    assert verdicts == [False] * _DOD_REFUSAL_CAP + [True]
-    # And it STAYS released on every subsequent call — never loops back to refuse.
-    assert await loop._finish_dod_gate_passed() is True
+    assert verdicts == [False] * (_DOD_REFUSAL_CAP + 1)
+    assert loop._pause_requested.is_set()
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(event, MessageEvent)
+        and event.meta.get("blocking") == "dod_unmet"
+        and "NOT complete" in event.message.content
+        for event in events
+    )
 
 
 async def test_met_dod_passes_and_resets_the_refusal_streak():
@@ -91,6 +96,28 @@ async def test_met_dod_passes_and_resets_the_refusal_streak():
     # Fresh failure → refuses again from zero (not already at the cap).
     loop._dod_evaluator_factory = lambda: fail
     assert await loop._finish_dod_gate_passed() is False
+
+
+async def test_unverifiable_dod_is_not_silently_released():
+    loop, _ = await _loop_with_dod(_FixedEvaluator(passed=False, unverifiable=True))
+    assert await loop._finish_dod_gate_passed() is False
+    assert loop._dod_refusals == 1
+
+
+async def test_missing_sandbox_evidence_surface_pauses_fail_closed():
+    loop, store = build_loop(_agent())
+    await store.set_dod_spec(CID, DoDSpec(predicates=[_PRED]))
+    loop._dod_evaluator_factory = None
+    loop.executor = SimpleNamespace(sandbox=object())
+
+    assert await loop._finish_dod_gate_passed() is False
+    assert loop._pause_requested.is_set()
+    events = await store.get_events(CID)
+    assert any(
+        isinstance(event, MessageEvent)
+        and "evidence surface is unavailable" in event.message.content
+        for event in events
+    )
 
 
 async def test_unmet_dod_emits_a_visible_event_naming_the_predicate():
