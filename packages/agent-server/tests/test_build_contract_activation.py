@@ -172,3 +172,52 @@ def test_set_build_kind_evicts_cached_loop_and_executor() -> None:
     assert "c-act" not in rt._executors
     # ...and the newly-resolved contract now recommends its starter kit.
     assert rt._starter_kit_for("c-act") == "app_shell"
+
+
+# ---------------------------------------------------------------------------
+# CONTRACT-ACTIVATE wiring (2026-07-10): the brief's app_kind now DECLARES the
+# contract at run start — the production caller set_build_kind never had.
+# ---------------------------------------------------------------------------
+
+
+def test_brief_activation_maps_and_declares() -> None:
+    from disco.core.appkit import BuildBrief
+
+    rt = _runtime()
+    rt.activate_contract_for_brief("c-map", BuildBrief(app_kind="game"))
+    assert rt._build_kind.get("c-map") == "interactive.prototype"
+    # and the contract's affordances resolve for THIS run:
+    assert rt._starter_kit_for("c-map") == "app_shell"
+
+
+def test_brief_activation_first_declaration_wins() -> None:
+    """A steer message mid-run also carries a brief — it must never re-declare
+    (which would reset the phase tracker / evict a live loop)."""
+    from disco.core.appkit import BuildBrief
+
+    rt = _runtime()
+    rt.activate_contract_for_brief("c-first", BuildBrief(app_kind="landing_page"))
+    assert rt._build_kind.get("c-first") == "static.site"
+    tracker_before = rt._build_trackers.get("c-first")
+    rt.activate_contract_for_brief("c-first", BuildBrief(app_kind="game"))
+    assert rt._build_kind.get("c-first") == "static.site"  # unchanged
+    assert rt._build_trackers.get("c-first") is tracker_before  # no reset
+
+
+def test_brief_activation_unmapped_kinds_stay_custom() -> None:
+    from disco.core.appkit import BuildBrief
+    from disco.core.contract import ContractKind
+
+    rt = _runtime()
+    for kind in ("api", "cli", "data_tool", "mobile_app", "unknown", ""):
+        cid = f"c-{kind or 'blank'}"
+        rt.activate_contract_for_brief(cid, BuildBrief(app_kind=kind))
+        assert cid not in rt._build_kind, kind
+        guard, _ = rt._build_scope_guard(cid)
+        assert rt._build_trackers[cid][0].kind is ContractKind.CUSTOM
+
+
+def test_brief_activation_none_brief_is_noop() -> None:
+    rt = _runtime()
+    rt.activate_contract_for_brief("c-none", None)
+    assert "c-none" not in rt._build_kind

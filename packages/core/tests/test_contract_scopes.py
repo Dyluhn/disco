@@ -73,14 +73,25 @@ def test_verify_scope_is_neutral_finalizer_without_mutators() -> None:
     assert s.allowed(Phase.VERIFY, "file_write") is False
 
 
-def test_static_site_contract_cannot_rewrite_during_edit() -> None:
-    # a real built-in: editing must use file_edit/file_replace_lines, NOT file_write
+def test_static_site_edit_pack_carries_the_evidenced_working_set() -> None:
+    # CONTRACT-ACTIVATE harvest (2026-07-10): the old pin ("no file_write during
+    # EDIT") encoded an aspiration the 35-dossier replay disproved — real site
+    # builds legitimately file_write NEW files (pages/scripts/styles) mid-edit
+    # (42 calls across 18 runs) and lean on shell/browser throughout. For
+    # raw-file kinds the file tools ARE the medium; the contract's enforcement
+    # value is the read-only VERIFY phase + cross-kind hygiene.
     c = BuildContractRegistry.default().get(ContractKind.STATIC_SITE)
     assert c is not None
     s = compile_tool_scopes(c)
-    assert s.allowed(Phase.BOOTSTRAP, "file_write") is True  # bootstrap may create files
-    assert s.allowed(Phase.EDIT, "file_edit") is True
-    assert s.allowed(Phase.EDIT, "file_write") is False  # cannot clobber-rewrite during edit
+    assert s.allowed(Phase.BOOTSTRAP, "file_write") is True
+    for tool in ("file_edit", "file_write", "shell", "browser", "file_insert_lines"):
+        assert s.allowed(Phase.EDIT, tool) is True, tool
+    # VERIFY stays read-only: no mutation tools while the verifier adjudicates.
+    for tool in ("file_write", "file_edit", "shell"):
+        assert s.allowed(Phase.VERIFY, tool) is False, tool
+    # Cross-kind hygiene: other kinds' semantic tools stay out of a site build.
+    for tool in ("deck_patch", "doc_set_section", "app_create"):
+        assert s.allowed(Phase.EDIT, tool) is False, tool
 
 
 def test_document_contract_scopes_parts_and_export_tool() -> None:

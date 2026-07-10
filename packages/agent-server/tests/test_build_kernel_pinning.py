@@ -35,6 +35,9 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
     fake._run_generation = {}
     fake._emit_toolscope_audit_summary = MagicMock()
     fake.kick = MagicMock()
+    # CONTRACT-ACTIVATE: send_user_turn declares the contract from the brief
+    # before kernel dispatch — a no-op collaborator here (pinning seam only).
+    fake.activate_contract_for_brief = MagicMock()
 
     control = MagicMock()
     control.confirm = AsyncMock()

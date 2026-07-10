@@ -1514,6 +1514,29 @@ class ConversationRuntime:
 
     # ---- CONTRACT-ACTIVATE: build contract + live phase ---------------------
 
+    def activate_contract_for_brief(
+        self, conversation_id: str, build_brief: "BuildBrief | None"
+    ) -> None:
+        """CONTRACT-ACTIVATE (2026-07-10): declare the build contract from the
+        classified BuildBrief — the production caller set_build_kind never had.
+
+        FIRST DECLARATION WINS: once a kind is set for a conversation it is never
+        re-declared here, so a mid-run steer message (which also carries a brief)
+        cannot reset the phase tracker or evict a live loop. Unmapped/unknown
+        app_kinds leave the conversation on the CUSTOM contract exactly as before
+        activation existed. What this turns on for a mapped build: the contract's
+        starter-kit RECOMMENDATION (scaffold_starter's omitted-kind fallback), the
+        verification finalizer alias, the delivery-mode label, and honest
+        kind-resolved audit — NOT hard tool enforcement, which remains an
+        artifact-mode-only wiring (see the executor guard selection)."""
+        if build_brief is None or conversation_id in self._build_kind:
+            return
+        from disco.core.contract import contract_kind_for_app_kind
+
+        kind = contract_kind_for_app_kind(getattr(build_brief, "app_kind", None))
+        if kind is not None:
+            self.set_build_kind(conversation_id, kind.value)
+
     def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
         """Declare the build contract kind for a conversation (e.g. 'appkit.leadgen').
         Unset/None ⇒ the CUSTOM contract. Resets any existing tracker for the run."""
@@ -4120,6 +4143,11 @@ class ConversationRuntime:
         once the kernel call succeeds,
         so a failed send leaves NO pin and the next attempt re-resolves. A pre-existing
         pin (a steer of a live run) is NOT rolled back — that run stays on its kernel."""
+        # CONTRACT-ACTIVATE: declare the contract kind from the brief BEFORE the
+        # kernel composes the loop, so the starter recommendation / finalizer
+        # alias / delivery mode resolve for this very run. First-wins + guarded
+        # eviction inside — safe on steers and re-sends.
+        self.activate_contract_for_brief(conversation_id, build_brief)
         newly_pinned = conversation_id not in self._pinned_kernels
         kernel = self._ensure_kernel_pinned(conversation_id)
         try:
