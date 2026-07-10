@@ -63,6 +63,7 @@ from disco.core.appkit import (
     tree_digest,
     tree_file_hashes,
 )
+from disco.core.appkit.recipes import RECIPES
 from disco.core.appkit.spec import AppSpec, DesignSpec, Section, SectionContent
 from pydantic import (
     BaseModel,
@@ -242,7 +243,13 @@ def _safe_load_app_kind(spec_bytes: bytes) -> str | None:
 
 class AppCreateArgs(BaseModel):
     recipe_id: str = Field(
-        description="The SiteRecipe id to derive the DesignSpec from (e.g. 'editorial-ledger')."
+        # Catalog-in-schema (same doctrine as scaffold_starter, proven live 2026-07-10):
+        # the model must see the FULL valid vocabulary before its first call — the
+        # appkit-lane trace showed a hallucinated id costing a whole round-trip.
+        description=(
+            "The SiteRecipe id to derive the DesignSpec from. Valid ids (complete "
+            "catalog): " + ", ".join(f"'{r.id}'" for r in RECIPES) + "."
+        )
     )
     primitive_id: str = Field(
         default=LEAD_GEN_PRIMITIVE_ID,
@@ -260,8 +267,18 @@ class AppCreateArgs(BaseModel):
     )
     app_spec: SkipValidation[AppSpec] | None = Field(
         default=None,
-        description="Optional explicit AppSpec (JSON). When omitted, a sensible default "
-        "AppSpec for the chosen primitive is derived from the brief + recipe.",
+        description="Optional explicit AppSpec (JSON). PREFER OMITTING THIS: the "
+        "derived default spec is valid BY CONSTRUCTION — scaffold with just "
+        "recipe_id + primitive_id + brief, then shape it with app_add_section / "
+        "app_update_content / app_add_primitive (each validates one small change "
+        "with an actionable error). A hand-written full spec must satisfy ~40 "
+        "validation rules and is the slow path. If you DO pass one — RULES "
+        "(violations are refused): app_kind must be one of 'lead_gen' | "
+        "'directory' | 'records' (there is no other kind — model your app onto the "
+        "closest one); entity field names must be snake_case identifiers and must "
+        "NOT use reserved names like 'id' or 'created_at' (implicit columns); pages "
+        "carry sections (each with id/kind/content) — a page has NO direct 'content' "
+        "key of its own; a 'records' spec needs at least one NON-form entity.",
     )
     overwrite: bool = Field(
         default=False,
@@ -573,7 +590,9 @@ class AppUpdateContentTool:
                     f"values — nothing changed. Current content: "
                     f"{_json.dumps(existing, ensure_ascii=False)[:600]}. Send a "
                     "DIFFERENT value for a slot (heading/subheading/body/cta_label/"
-                    "items/success_message) or target another section."
+                    "items/success_message) or target another section — or, if this is "
+                    "already the state you wanted, the content is COMPLETE: move on to "
+                    "the next step (verify/finish) instead of retrying this edit."
                 )
             try:
                 # Validate the bounded content in isolation for a precise error.
@@ -689,7 +708,9 @@ class AppSetDesignTool:
                 # to an unchanged app regenerates an identical tree — refuse loudly
                 # instead of reporting a hollow success the model will retry.
                 raise _AppKitError(
-                    "no-op: this design produced an identical generated tree — the "
+                    "no-op: this design produced an identical generated tree — the app "
+                    "ALREADY uses this design; if that is what you wanted, it is "
+                    "COMPLETE (move on to verify/finish). Otherwise the "
                     "app already uses it. Pick a different recipe_id/design_spec or "
                     "change sections first."
                 )
