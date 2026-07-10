@@ -33,12 +33,26 @@ http.createServer(app).listen(port);
 
 Add every one of YOUR public pages/assets to `publicAllowlist` (exact path,
 or a `prefix*` wildcard). Everything not listed requires a valid
-`tc_session` cookie.
+`tc_session` cookie. The shipped default already includes `"/__health/*"` so
+database-kit's `/__health/db` seam stays reachable when both kits are mounted.
+
+The guard canonicalizes the request path itself (collapsing `//`, `\`, and
+`/../`) and rewrites the URL to that form before your handler sees it, so a
+crafted target like `//admin` can't read as public here and resolve to a
+protected route in your router. A malformed login body (wrong types, oversized)
+is answered `401`/`413`, never allowed to throw the process down.
 
 ## What you may edit
 
-Only `config/auth.config.json`: `publicAllowlist`, `sessionTtlHours`,
-`devSeedUser`. This is the sanctioned customization surface.
+Only `config/auth.config.json`. The sanctioned customization surface:
+
+- `publicAllowlist` — routes reachable without a session (opt-out protection).
+- `sessionTtlHours` — session lifetime.
+- `devSeedUser` — a local-dev/test account, or `null` (the default: no account).
+- `maxBodyBytes` — request-body cap on `/auth/login` (default 65536).
+- `loginRateLimit` — `{ windowMs, max }` per-IP login throttle (default 10/60s).
+- `cookieSecure` — omit for auto (Secure only over HTTPS/`x-forwarded-proto`),
+  or set `true`/`false` to force. Leave it omitted unless you have a reason.
 
 ## What you must not edit
 
@@ -49,6 +63,12 @@ but it's one-way (reinstall requires reverting the edit).
 
 ## Security note
 
-`devSeedUser` creates a known-password account (`dev@example.com` /
-`dev-password-123`) for local development and the probe. **Set it to `null`
-in `config/auth.config.json` before shipping anything real.**
+`devSeedUser` ships **`null`** — no account exists by default. Set it to
+`{ "email": ..., "password": ... }` to seed a local dev/test account, then
+remove it before shipping. The seam probe **fails closed** if you leave the
+well-known example credential (`dev@example.com` / `dev-password-123`) live,
+so you cannot reach the verified badge carrying that backdoor.
+
+Session tokens are stored **hashed** (sha256) in the `sessions` table — a read
+of that table yields hashes, not usable bearer tokens. The raw token lives only
+in the client's `tc_session` cookie.

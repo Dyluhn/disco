@@ -60,3 +60,21 @@ def test_tools_advertised_only_in_freeform_scope() -> None:
     # that nobody quietly adds the names to a strict-mode phase set.
     src = inspect.getsource(appkit_scope_mod)
     assert "add_trusted_component" not in src and "eject_trusted_component" not in src
+
+
+def test_tc_tools_confined_to_the_plan_gated_build_scope() -> None:
+    """TC3-review MEDIUM (belt): the finish gate now forces verification the
+    instant trusted components are installed, independent of `_planning_tools`.
+    That structural fix removes the reliance on this invariant — but we STILL
+    pin it so the install tool cannot leak into a non-build scope (workflow,
+    artifact, research) where a finish would run with no plan-gate at all."""
+    from disco.tools import WORKFLOW_ROUTER_ALLOWED_TOOLS
+    from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, RESEARCH_TOOLS
+
+    tc_names = {"add_trusted_component", "eject_trusted_component"}
+    # Present ONLY in the plan-gated build scope (AGENT_TOOLS), which the runtime
+    # always pairs with a non-empty planning_tools set.
+    assert tc_names <= AGENT_TOOLS
+    assert tc_names.isdisjoint(WORKFLOW_ROUTER_ALLOWED_TOOLS)
+    assert tc_names.isdisjoint(ARTIFACT_TOOLS)
+    assert tc_names.isdisjoint(RESEARCH_TOOLS)

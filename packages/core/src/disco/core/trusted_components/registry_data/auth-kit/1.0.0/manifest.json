@@ -5,8 +5,8 @@
   "summary": "Session auth: login/logout routes, middleware, session store.",
   "when_to_use": "ANY app with accounts, logins, or per-user data.",
   "files": {
-    "core/auth.js": "sha256:ce8ed6c2d14206eb509f292ea0142c0397e4b16f91578f1695bc1d9c5730201c",
-    "core/middleware.js": "sha256:e8a5cf68ae5f037578e0f2e6da9a3ba767b06b9e42b855c5d9eb8d2d599bbb5f",
+    "core/auth.js": "sha256:617536a8f0ce1828c0ee06abddada2d1c333767141303638542fe7a7edfa5035",
+    "core/middleware.js": "sha256:2a462d037b0876fc348a3d429607258663227b97a67c75bc1913c4462b76ab72",
     "core/schema.js": "sha256:6534dfb615d35bf7799033a02d6b67283b4c44fba8c5419c315512fc7c3d7d1a"
   },
   "config_surface": [

@@ -29,6 +29,12 @@ from typing import Any
 TIMEOUT_S = 10
 CONFIG_RELPATH = "src/trusted/auth-kit/config/auth.config.json"
 
+# The credential auth-kit ships in its example config. If a build leaves this
+# well-known pair live, the seam has a public backdoor — the probe FAILS closed
+# on it (spec: a component cannot reach `verified` carrying a known credential).
+SHIPPED_DEFAULT_EMAIL = "dev@example.com"
+SHIPPED_DEFAULT_PASSWORD = "dev-password-123"
+
 
 def _random_probe_path() -> str:
     suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
@@ -126,6 +132,56 @@ def main() -> int:
                 "name": "allowlisted_open",
                 "passed": False,
                 "detail": "no exact (non-wildcard) publicAllowlist entry configured to probe",
+            }
+        )
+
+    # (c) login_rejects_bogus — the login endpoint exists and fails closed on a
+    # credential that cannot exist. Runs regardless of dev-seed config, so the
+    # login seam is never wholly unprobed.
+    bogus_email = _random_probe_path().strip("/") + "@probe.invalid"
+    bogus_pw = "".join(random.choices(string.ascii_letters + string.digits, k=24))
+    status, _hb, _rb = _request(
+        base_url, "/auth/login", method="POST", body={"email": bogus_email, "password": bogus_pw}
+    )
+    checks.append(
+        {
+            "name": "login_rejects_bogus",
+            "passed": status == 401,
+            "detail": f"POST /auth/login (nonexistent user) -> {status} (want 401)",
+        }
+    )
+
+    # (d) no_default_backdoor — the shipped example credential must NOT be a live
+    # login. FAILS closed if a build left config.devSeedUser at the shipped
+    # default and it authenticates.
+    is_shipped_default = (
+        isinstance(dev_seed, dict)
+        and dev_seed.get("email") == SHIPPED_DEFAULT_EMAIL
+        and dev_seed.get("password") == SHIPPED_DEFAULT_PASSWORD
+    )
+    if is_shipped_default:
+        status, _hd, _rd = _request(
+            base_url,
+            "/auth/login",
+            method="POST",
+            body={"email": SHIPPED_DEFAULT_EMAIL, "password": SHIPPED_DEFAULT_PASSWORD},
+        )
+        checks.append(
+            {
+                "name": "no_default_backdoor",
+                "passed": status != 200,
+                "detail": (
+                    f"shipped-default dev credential login -> {status} "
+                    "(want != 200; remove/replace config.devSeedUser before shipping)"
+                ),
+            }
+        )
+    else:
+        checks.append(
+            {
+                "name": "no_default_backdoor",
+                "passed": True,
+                "detail": "config.devSeedUser is not the shipped default credential",
             }
         )
 

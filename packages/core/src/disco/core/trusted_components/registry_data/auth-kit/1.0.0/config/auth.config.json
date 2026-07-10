@@ -1,8 +1,10 @@
 {
-  "publicAllowlist": ["/", "/index.html"],
+  "publicAllowlist": ["/", "/index.html", "/__health/*"],
   "sessionTtlHours": 24,
-  "devSeedUser": {
-    "email": "dev@example.com",
-    "password": "dev-password-123"
-  }
+  "maxBodyBytes": 65536,
+  "loginRateLimit": {
+    "windowMs": 60000,
+    "max": 10
+  },
+  "devSeedUser": null
 }

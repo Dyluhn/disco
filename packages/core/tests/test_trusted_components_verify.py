@@ -270,3 +270,30 @@ def test_forged_lockfile_cannot_carry_pins() -> None:
     dumped = json.loads(lock.model_dump_json())
     assert "pins" not in dumped
     assert "files" not in dumped["components"]["auth-kit"]
+
+
+def test_lockfile_rejects_malformed_component_name() -> None:
+    """TC3-review LOW: the dict KEY (component name) validates `version` but had
+    no shape guard — a forged name must fail closed as LockfileCorrupt at parse."""
+    from disco.core.trusted_components.lockfile import LockfileCorrupt
+
+    for bad_name in ("Auth-Kit", "auth_kit", "auth kit", "../etc", "auth.kit", ""):
+        forged = json.dumps(
+            {
+                "lockfile_version": 1,
+                "components": {bad_name: {"version": "1.0.0", "installed_at": NOW}},
+            }
+        ).encode()
+        with pytest.raises(LockfileCorrupt):
+            parse_lock(forged)
+
+    # A malformed name hiding in eject history is rejected too.
+    forged_eject = json.dumps(
+        {
+            "lockfile_version": 1,
+            "components": {},
+            "ejects": [{"name": "BAD NAME", "at": NOW, "reason": "explicit"}],
+        }
+    ).encode()
+    with pytest.raises(LockfileCorrupt):
+        parse_lock(forged_eject)

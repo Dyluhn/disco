@@ -25,6 +25,7 @@ TrustedComponentRegistry.default()).
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import select
@@ -153,10 +154,21 @@ def _loaded(name: str):
     return comp
 
 
-def _write_workspace(tmp_path: Path, server_js: str) -> Path:
+# auth-kit ships devSeedUser=null (no backdoor by default), so the happy-path
+# probe's login/session/logout checks only run when a build configures a dev
+# user. This is a NON-default credential — proving both the full login flow AND
+# that no_default_backdoor passes for a real (non-shipped) credential.
+_TEST_DEV_USER = {"email": "tester@example.com", "password": "s3cret-not-default"}
+
+
+def _write_workspace(
+    tmp_path: Path, server_js: str, *, config_override: dict | None = None
+) -> Path:
     """Materialize a minimal app workspace: BOTH kits' shipped install_tree()
     under src/trusted/<name>/, a {"type":"module"} package.json, and the
-    fixture server.js at the workspace root."""
+    fixture server.js at the workspace root. `config_override`, when given, is
+    merged onto the installed auth-kit config (the free config surface a build
+    edits) so a test can enable a dev user without shipping one by default."""
     workspace = tmp_path / "workspace"
     for name in ("database-kit", "auth-kit"):
         comp = _loaded(name)
@@ -164,6 +176,11 @@ def _write_workspace(tmp_path: Path, server_js: str) -> Path:
             target = workspace / "src" / "trusted" / name / relpath
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
+    if config_override:
+        cfg_path = workspace / "src" / "trusted" / "auth-kit" / "config" / "auth.config.json"
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        cfg.update(config_override)
+        cfg_path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     (workspace / "package.json").write_text(
         json.dumps({"type": "module"}) + "\n", encoding="utf-8"
     )
@@ -272,7 +289,9 @@ def _run_probe(workspace: Path, base_url: str, tmp_path: Path) -> ProbeVerdict:
 
 
 def test_auth_kit_probe_passes_when_the_seam_is_wired(tmp_path: Path) -> None:
-    workspace = _write_workspace(tmp_path, _SERVER_JS_WRAPPED)
+    workspace = _write_workspace(
+        tmp_path, _SERVER_JS_WRAPPED, config_override={"devSeedUser": _TEST_DEV_USER}
+    )
     proc, port = _boot_node_server(workspace)
     try:
         verdict = _run_probe(workspace, f"http://127.0.0.1:{port}", tmp_path)
@@ -309,3 +328,76 @@ def test_auth_kit_probe_fails_when_the_seam_is_unguarded(tmp_path: Path) -> None
     assert verdict.passed is False, verdict.model_dump()
     failing = {c.name for c in verdict.checks if not c.passed}
     assert "unauth_401" in failing, verdict.model_dump()
+
+
+def _raw_request(
+    port: int, method: str, path: str, *, body: bytes | None = None
+) -> tuple[int, bytes]:
+    """Send `method path` with the path LITERAL — http.client does not
+    canonicalize the request target, so a "//notes" reaches the server as-is
+    (urllib would rewrite it). Returns (status, body)."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+    try:
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        conn.request(method, path, body=body, headers=headers)
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def test_auth_kit_blocks_path_confusion_and_survives_malformed_input(tmp_path: Path) -> None:
+    """S4 CRITICAL regressions, proven live against the real seam:
+
+    #1 auth bypass — a protocol-relative "//notes" must NOT read as the public
+       "/" and reach the guarded handler; it is 401, and the process stays up.
+    #2 unauthenticated crash — a JSON object/array where a string is expected
+       (email or password) must be a clean 401, never a thrown, unhandled
+       rejection that kills the whole node process. Proven by continuing to
+       serve "/" (200) after each hostile request.
+    """
+    workspace = _write_workspace(
+        tmp_path, _SERVER_JS_WRAPPED, config_override={"devSeedUser": _TEST_DEV_USER}
+    )
+    proc, port = _boot_node_server(workspace)
+    try:
+        # baseline: the guarded route really is guarded on the normal path.
+        assert _raw_request(port, "GET", "/notes")[0] == 401
+
+        # #1 — protocol-relative path confusion must not bypass the guard.
+        status, _ = _raw_request(port, "GET", "//notes")
+        assert status == 401, f"//notes bypassed the guard -> {status}"
+        # backslash and dot-segment variants resolve to the same guarded route.
+        assert _raw_request(port, "GET", "/../notes")[0] == 401
+        assert _raw_request(port, "GET", "/./notes")[0] == 401
+        assert _raw_request(port, "GET", "/")[0] == 200  # process alive
+
+        # #2 — malformed credential TYPES must not crash the process.
+        for hostile in (
+            b'{"email":{"$ne":1},"password":"x"}',
+            b'{"email":["a"],"password":"x"}',
+            b'{"email":"real@user.test","password":{"x":1}}',
+            b'{"email":"real@user.test","password":["x"]}',
+        ):
+            status, _ = _raw_request(port, "POST", "/auth/login", body=hostile)
+            assert status == 401, f"malformed login {hostile!r} -> {status} (want 401)"
+            assert _raw_request(port, "GET", "/")[0] == 200, (
+                f"process died after malformed login {hostile!r}"
+            )
+
+        # #8 — an oversized body is refused (413), process still alive.
+        big = b'{"email":"' + b"a" * 200_000 + b'","password":"x"}'
+        status, _ = _raw_request(port, "POST", "/auth/login", body=big)
+        assert status == 413, f"oversized body -> {status} (want 413)"
+        assert _raw_request(port, "GET", "/")[0] == 200
+
+        # sanity: a genuine login still works after all the hostile traffic.
+        status, _ = _raw_request(
+            port,
+            "POST",
+            "/auth/login",
+            body=json.dumps(_TEST_DEV_USER).encode("utf-8"),
+        )
+        assert status == 200, f"legit login broke after hostile traffic -> {status}"
+    finally:
+        _kill(proc)

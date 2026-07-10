@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from . import _NAME_SHAPE  # canonical kebab-case component-name shape (single source)
 
 LOCKFILE_RELPATH = ".disco/components.lock"
 
@@ -44,6 +46,20 @@ class ComponentsLock(BaseModel):
     lockfile_version: int = Field(default=1, ge=1, le=1)
     components: dict[str, InstalledComponent] = Field(default_factory=dict)
     ejects: list[EjectRecord] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_component_names(self) -> ComponentsLock:
+        """The dict KEY (component name) carries no type-level shape, so a forged
+        lockfile could smuggle an arbitrary name past `version` validation. Reject
+        any non-kebab-case name (in `components` OR `ejects`) so parse_lock maps it
+        to LockfileCorrupt — fail-closed at parse, not a live bad-name claim."""
+        for name in self.components:
+            if not _NAME_SHAPE.match(name):
+                raise ValueError(f"component name must be kebab-case [a-z0-9-]: {name!r}")
+        for rec in self.ejects:
+            if not _NAME_SHAPE.match(rec.name):
+                raise ValueError(f"eject record name must be kebab-case [a-z0-9-]: {rec.name!r}")
+        return self
 
 
 def parse_lock(data: bytes | None) -> ComponentsLock:

@@ -4,9 +4,22 @@
 // contract). Every function here is pure db-in/db-out — the HTTP seam lives
 // in middleware.js, which is the ONLY file that owns routing decisions.
 
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 const SCRYPT_KEYLEN = 64;
+
+// A well-formed but never-matching hash. Login runs a real scrypt against this
+// when the email is unknown, so "no such user" costs the same wall-clock as a
+// wrong password — no user-enumeration timing oracle. Its expected length is
+// SCRYPT_KEYLEN, so the decoy scrypt does the SAME work as a real verify.
+const DECOY_HASH = `scrypt:${"0".repeat(32)}:${"0".repeat(SCRYPT_KEYLEN * 2)}`;
+
+// Session tokens are stored HASHED (sha256) at rest: a read of the sessions
+// table (SQLi elsewhere, a leaked backup) yields hashes, not live bearer
+// tokens. The raw token lives only in the client cookie.
+function hashToken(token) {
+  return createHash("sha256").update(String(token)).digest("hex");
+}
 
 // "scrypt:<salt-hex>:<hash-hex>" — a per-user random 16-byte salt, so two
 // users with the same password never share a hash.
@@ -18,9 +31,10 @@ export function hashPassword(password) {
 
 // Constant-time compare against a "scrypt:<salt>:<hash>" record. Any
 // malformed `stored` value (wrong format, bad hex) is a clean `false`, never
-// a thrown error — a corrupt row must never crash the auth seam.
+// a thrown error — a corrupt row must never crash the auth seam. A non-string
+// `password` is also a clean `false` (never a scryptSync ERR_INVALID_ARG_TYPE).
 export function verifyPassword(password, stored) {
-  if (typeof stored !== "string") return false;
+  if (typeof stored !== "string" || typeof password !== "string") return false;
   const parts = stored.split(":");
   if (parts.length !== 3 || parts[0] !== "scrypt") return false;
   const [, saltHex, hashHex] = parts;
@@ -38,6 +52,23 @@ export function verifyPassword(password, stored) {
   return timingSafeEqual(actual, expected);
 }
 
+// The one credential-check entry point the seam uses. Type-guards BOTH inputs
+// so a JSON object/array can never reach node:sqlite's bind (which treats an
+// object as NAMED params and throws) or scryptSync (ERR_INVALID_ARG_TYPE).
+// Always performs exactly one scrypt (real hash when the user exists, decoy
+// when it does not) so presence/absence of a user is not timing-observable.
+// Returns {id, email} on success, or null.
+export function authenticateUser(db, email, password) {
+  if (typeof email !== "string" || typeof password !== "string") {
+    verifyPassword("decoy", DECOY_HASH); // flatten timing even for malformed input
+    return null;
+  }
+  const row = db.prepare("SELECT id, email, password_hash FROM users WHERE email = ?").get(email);
+  const stored = row ? row.password_hash : DECOY_HASH;
+  const ok = verifyPassword(password, stored);
+  return ok && row ? { id: row.id, email: row.email } : null;
+}
+
 export function createUser(db, email, password) {
   const passwordHash = hashPassword(password);
   const createdAt = new Date().toISOString();
@@ -51,7 +82,7 @@ export function createSession(db, userId, ttlHours) {
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000).toISOString();
   db.prepare("INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)").run(
-    token,
+    hashToken(token),
     userId,
     expiresAt,
   );
@@ -61,7 +92,8 @@ export function createSession(db, userId, ttlHours) {
 // {userId, email} for a live session, or null. Expired sessions are BOTH
 // reported as null AND deleted here (lazy sweep — no separate cron needed).
 export function getSession(db, token) {
-  if (!token) return null;
+  if (!token || typeof token !== "string") return null;
+  const tokenHash = hashToken(token);
   const row = db
     .prepare(
       `SELECT sessions.user_id AS userId, sessions.expires_at AS expiresAt, users.email AS email
@@ -69,17 +101,18 @@ export function getSession(db, token) {
          JOIN users ON users.id = sessions.user_id
         WHERE sessions.token = ?`,
     )
-    .get(token);
+    .get(tokenHash);
   if (!row) return null;
   if (new Date(row.expiresAt).getTime() <= Date.now()) {
-    destroySession(db, token);
+    db.prepare("DELETE FROM sessions WHERE token = ?").run(tokenHash);
     return null;
   }
   return { userId: row.userId, email: row.email };
 }
 
 export function destroySession(db, token) {
-  db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  if (!token || typeof token !== "string") return;
+  db.prepare("DELETE FROM sessions WHERE token = ?").run(hashToken(token));
 }
 
 // Idempotent: only runs when config.devSeedUser is non-null, and only when
