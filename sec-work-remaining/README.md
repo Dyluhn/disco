@@ -21,8 +21,8 @@ DONE / PARKED / DEFERRED + the fail-closed `template_only` finish gate). Start t
 
 ## Current security state (one-liner)
 
-**S-W1 / S-W2 / S-W-Pi / S-W3 DONE; S-W4 (MCP approval) / S-W5 (isolation+caps) /
-S-W6 (output sinks+share) PARKED** at Dylan's call — a prerequisite for any public /
+**S-W1 / S-W2 / S-W-Pi / S-W3 / S-W4 (MCP approval) DONE; S-W5 (isolation+caps) /
+S-W6 (output sinks+share) PARKED** — the remaining waves are a prerequisite for any public /
 hardened release, not in flight. Plus two fail-closed builder seams whose security fills
 are documented **on their own unmerged branches** (not in this folder):
 `disclaude/f41-stripe-seam` (`60436fa8`) and `disclaude/f33-webhook-seam` (`ec622888`).

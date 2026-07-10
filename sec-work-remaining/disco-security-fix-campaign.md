@@ -1,10 +1,12 @@
 # Disco Security Fix Campaign — wave-by-wave log + resume playbook
 
-**Status (2026-07-06): W1–W3 EXECUTED — W4/W5/W6 PARKED.** Wave 1 (`e028d2ac`), Wave 2
-(`2408e40f`), Wave-Pi (`76b4e397` — removed the Pi integration, attack-surface
-reduction), and Wave 3 (`1b762e3f`) are **DONE + committed** on `disclaude/mega-campaign`;
-a follow-up surfaced the silently-dropped origin-approval ledger entries (`8157745b`).
-Waves 4–6 are **PARKED** (not started) — prerequisites for any public/hardened release.
+**Status (2026-07-10): W1–W4 EXECUTED — W5/W6 PARKED.** Wave 1 (`e028d2ac`), Wave 2
+(`17c47761`, tree-identical to archived `2408e40f`), Wave-Pi (`76b4e397` — removed the
+Pi integration, attack-surface reduction), Wave 3 (`1b762e3f`), and Wave 4
+(`212f6e89`) are **DONE + committed** on `disclaude/mega-campaign`; a follow-up surfaced
+the silently-dropped origin-approval ledger entries (`8157745b`) and a regression proof
+now pins its fail-closed/warn-once behavior (`d6651e7e`). Waves 5–6 remain **PARKED** —
+prerequisites for any public/hardened release.
 The single source of truth for current security state (done/parked/deferred) is
 `sec-work-remaining/disco-security-state.md`; this file is the wave-by-wave campaign log + resume
 playbook it points to.
@@ -128,7 +130,7 @@ Tasks:
 
 ---
 
-## Wave 2 — ROOT-B: secret-resolution + egress chokepoint (host-side) — **DONE (`2408e40f`; follow-up `8157745b` surfaced the silently-dropped origin-approval ledger entries)**
+## Wave 2 — ROOT-B: secret-resolution + egress chokepoint (host-side) — **DONE (`17c47761`, tree-identical to archived `2408e40f`; follow-up `8157745b` surfaced the silently-dropped origin-approval ledger entries)**
 
 **Closes:** C4, C8, H1, H11, H12, M3, M5, M7(host side), C7(fetch side); subsumes L3. (H11/H12 fully via B2 egress + B6 runs_in.)
 
@@ -169,7 +171,7 @@ Tasks:
 
 ---
 
-## Wave 4 — STANDALONE MCP approval integrity — **PARKED (not started)**
+## Wave 4 — STANDALONE MCP approval integrity — **DONE (`212f6e89`)**
 
 **Closes:** H3, H4, H5, H7.
 
@@ -180,6 +182,40 @@ Tasks:
 - **H7** Fold the canonical `inputSchema` into `compute_description_hash` so a re-approved server can't silently rewrite param schemas / inject text into property descriptions. (`approval.py:50-63`.)
 
 **Acceptance:** registering a new MCP server prompts approval; a stdio MCP tool triggers the host-scope confirm; flipping a tool's `inputSchema` re-triggers approval.
+
+**STATUS: DONE + adversarially re-read (2026-07-10, commit `212f6e89`).** The app-server
+now stores configuration approvals separately from live tool-schema approvals. The
+canonical config fingerprint covers transport, ordered command/args, URL, secret-reference
+maps (never resolved values), allowed hosts/tools, and risk tier; `enabled` is deliberately
+excluded because it does not change what executes. Both stdio and HTTP paths compare that
+backend-computed fingerprint before spawn/connect, and the test/probe route refuses ad-hoc
+or request-overridden targets. Discovery then requires a second, authoritative hash over
+tool name, description, and canonical `inputSchema`; first sight and later drift both deny
+registration and tear down the live client. Stale/client-chosen approval hashes receive
+409, and partial PATCH requests no longer reset omitted transport/risk fields.
+
+Execution scope and policy are honest: stdio and HTTP MCP tools are `in_process`, each
+configured `risk_tier` is projected into the live `RuleBasedAnalyzer`, and high-risk MCP
+actions reach `BlastRadiusConfirm` even in artifact/sealed workflow modes.
+
+**Exploit proof, both directions:** against parent `d6651e7e`, the real stdio fake executed
+before any approval and printed `spawned=True status=connected tools=5 scope=sandbox`.
+Against `212f6e89`, marker-command tests prove unapproved/changed config cannot spawn or
+connect, and a real JSON-RPC stdio server with schema drift printed
+`status=approval_required old=51cb297f1bd2 new=c27f35170659 tools=0`.
+
+**Adversarial notes:** the check runs before every transport side effect; a missing or
+unreadable approval store produces empty approval maps and therefore denial; clients cannot
+choose the config hash (it is recomputed from saved config) or the tool hash (the approve
+route accepts only the live pool's pending hash); config drift, first-use schema, and schema
+drift all fail closed. Probe URL/transport overrides were removed so an approved config
+cannot authorize a different target.
+
+**Verification:** complete agent-server, core, tools, app-server, and frontend suites were
+green; frontend typecheck and the contract/fuzz/fault fitness gates were green; all changed
+Python files pass Ruff. The repository-wide `make lint` gate still reports 1,187 inherited,
+unrelated lint findings. No rule was weakened and no unrelated mass-format was performed;
+this repo-wide gate debt is explicit rather than misreported as green.
 
 ---
 

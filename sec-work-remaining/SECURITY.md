@@ -52,10 +52,10 @@ status); wave-by-wave detail + resume playbook: `sec-work-remaining/disco-securi
 | Wave | Scope | Status |
 |---|---|---|
 | S-W1 | Authentication + CORS + owner-scoping (the keystone) | DONE (`e028d2ac`) |
-| S-W2 | Secret-ref resolution + egress origin-approval chokepoint | DONE (`2408e40f`) |
+| S-W2 | Secret-ref resolution + egress origin-approval chokepoint | DONE (`17c47761`; tree-identical to archived `2408e40f`) |
 | S-W-Pi | Removed the Pi integration (attack-surface reduction) | DONE (`76b4e397`) |
 | S-W3 | Host-execution cluster / gVisor-bypass floor (rm-root floor, in-sandbox DoD, backend allowlist, env hygiene, session hygiene) | DONE (`1b762e3f`) |
-| S-W4 | MCP approval integrity | **PARKED** |
+| S-W4 | MCP approval integrity | DONE (`212f6e89`) |
 | S-W5 | Isolation + resource caps | **PARKED** |
 | S-W6 | Output sinks + share + low-severity cluster | **PARKED** |
 
@@ -78,7 +78,7 @@ is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
 ### What it explicitly does NOT protect against
 
 - Deliberate network exposure without TLS/reverse-proxy hardening. S-W1 auth gates the
-  API, but the parked hardening waves (W4/W5/W6) are prerequisites for a hardened public
+  API, but the parked hardening waves (W5/W6) are prerequisites for a hardened public
   deployment (§1).
 - A compromise of the **agent-server process** itself: on the `local`/Docker backend the
   mounted container socket makes that process root-equivalent on the host (§2, §3,
@@ -276,7 +276,7 @@ residuals: `sec-work-remaining/disco-security-fix-campaign.md` (Wave 3).
 - **Pin your key.** If `PMX_SECRET_KEY` is blank it is auto-generated into the data volume;
   pin it in `.env` so your encrypted keys survive a volume rebuild
   (`.env.example:20-24`, `docs/archive/self-host.md:134-135`).
-- **Secret-refs, not env names (S-W2, commit `2408e40f`).** Provider secrets resolve by
+- **Secret-refs, not env names (S-W2, commit `17c47761`; tree-identical to archived `2408e40f`).** Provider secrets resolve by
   secret-ref through `disco.core.llm.secret_refs` (`resolve_provider_secret`,
   `secret_ref_allowed_for_origin`) rather than by reading arbitrary host env-var names,
   and a secret-ref is only released to an origin it is approved for.
@@ -311,8 +311,8 @@ deployment.
 
 ## 9. Known limitations & non-goals (v1)
 
-- **Auth shipped (S-W1), but the hardening campaign is incomplete.** Waves W4 (MCP
-  approval integrity), W5 (isolation + resource caps), and W6 (output sinks + share +
+- **Auth and MCP approval integrity shipped (S-W1/S-W4), but the hardening campaign is
+  incomplete.** W5 (isolation + resource caps) and W6 (output sinks + share +
   low-severity cluster) are **PARKED** — prerequisites for any public/hardened release
   (`sec-work-remaining/disco-security-state.md` §2). No TLS; single-operator; keep the loopback bind
   (`.env.example:5-8`).

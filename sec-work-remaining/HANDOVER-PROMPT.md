@@ -1,35 +1,34 @@
 # Security-wave handover prompt
 
-Paste the block below to a fresh agent (no prior context) to execute the parked
-security waves. Keep this file updated as waves complete.
+Paste the block below to a fresh agent (no prior context) to execute the remaining
+parked security waves. Keep this file updated as waves complete.
 
 **Give this to a NON-Fable model.** Standing rule: Fable degrades on security
 work. Codex or a non-Fable Claude is the right worker here.
 
-**Tree state as of 2026-07-10 08:20 CDT:** an agent already began S-W4 in the
-main checkout and left it UNCOMMITTED and RED (11 failures in
-`packages/agent-server/tests/test_mcp_pool.py`). The prompt below accounts for
-that. If that work has since been committed or reverted, delete the
-"CURRENT TREE STATE" section before pasting.
+**Tree state as of 2026-07-10 09:05 CDT:** S-W4 is complete at `212f6e89`; the
+signed-origin regression audit is `d6651e7e`. The remaining sequence is S-W5 then
+S-W6. The checkout was clean immediately after the S-W4 code commit; ledger edits
+may be the only newer changes if this handover itself has not yet been committed.
 
 ---
 
 You are a security engineer on Disco, a self-hosted AI agent platform (Python
 monorepo + React frontend) at `~/projects/disclaude`, branch
-`disclaude/mega-campaign`. Your job: execute the PARKED security waves S-W4
-(MCP approval integrity), S-W5 (isolation + resource caps), and S-W6 (output
-sinks + share + the low-severity cluster) — one wave at a time, in order. Do not
-start a wave before the previous one is committed green.
+`disclaude/mega-campaign`. Your job: execute the PARKED security waves S-W5
+(isolation + resource caps) and S-W6 (output sinks + share + the low-severity
+cluster) — one wave at a time, in order. Do not start a wave before the previous
+one is committed and verified.
 
-S-W4 is half-written and uncommitted in your tree; S-W6 has an unreviewed draft
-on an archive branch. Both are described below. Neither has been adversarially
-reviewed. Assume both are wrong until you have proven otherwise yourself.
+S-W4 is completed and adversarially reviewed in the campaign log. S-W6 has an
+unreviewed draft on an archive branch. Assume that draft is wrong until you have
+proven otherwise yourself.
 
 READ FIRST, in this order, before touching anything:
 1. `sec-work-remaining/disco-security-state.md` — the single source of truth:
-   what is DONE (S-W1/W2/W3 + Pi removal, with commits), what each parked wave
-   covers (S-W4 MCP approval integrity; S-W5 isolation + resource caps; S-W6
-   output sinks + share + low-severity cluster), and the fitness gates that
+   what is DONE (S-W1/W2/W3/W4 + Pi removal, with commits), what each parked wave
+   covers (S-W5 isolation + resource caps; S-W6 output sinks + share +
+   low-severity cluster), and the fitness gates that
    protect the tree.
 2. `sec-work-remaining/disco-security-fix-campaign.md` — the wave-by-wave
    campaign log, finding details, and the RESUME PLAYBOOK. Follow it.
@@ -39,41 +38,20 @@ READ FIRST, in this order, before touching anything:
    `disco.core.llm.secret_refs` (`resolve_provider_secret`,
    `secret_ref_allowed_for_origin`). Extend these; do not reinvent them.
 
-CURRENT TREE STATE — read before you write a line of code:
-`git status` is dirty. A previous agent started S-W4 and stopped mid-task. The
-uncommitted diff (15 files) is *directionally correct* — do not blow it away.
-It contains four real changes:
-- `mcp/approval.py`: new `compute_config_hash()` + `ConfigApprovalRequired`,
-  fingerprinting transport/command/args/url/env/headers/allowed_hosts/
-  allowed_tools/risk_tier before a server is ever connected.
-- `mcp/approval.py`: `compute_description_hash()` now folds `inputSchema` in,
-  not just name+description — closes schema-poisoning drift.
-- `mcp/pool.py`: first-connect is now FAIL-CLOSED (`stored != new_hash`, was
-  `stored is not None and stored != new_hash` — an unapproved server used to be
-  trusted silently on first sight).
-- `mcp/pool.py`: MCP stdio tools re-labelled `runs_in="in_process"` (was
-  `"sandbox"`). The stdio subprocess executes on the HOST, not inside gVisor;
-  the old label made the whole risk model wrong for MCP.
-Plus a new `mcp_config_approvals` table (`mcp/migrations.py`), an approve-config
-route, and `McpSection.tsx` UI.
-
-The tests were never updated to match. `packages/agent-server/tests/test_mcp_pool.py`
-has 11 failures whose root cause is a single thing: no test seeds
-`config_approvals`, so every server now correctly refuses to connect and
-`pool.snapshot()` is empty. Your first task is to make that suite green BY
-SEEDING APPROVALS IN THE TESTS AND ADDING REFUSAL TESTS — not by relaxing the
-fail-closed check. Then re-read the diff as an adversary: verify the config
-hash covers every field that changes what executes, verify `enabled` is
-correctly excluded, and verify the approve-config route cannot be driven from a
-non-approved origin. Commit that as the S-W4 base before adding anything.
+COMPLETED S-W4 BASE — do not regress it:
+`212f6e89` adds a separate pre-connect config approval, authoritative first-use
+and drifted tool-schema approval, host-honest MCP tool scope, and configured risk
+wiring. Its exploit harness is
+`packages/agent-server/tests/test_sw4_mcp_approval_integrity.py`. The campaign log
+records both-direction live proof. Preserve the invariant that no subprocess or
+HTTP connection occurs before config approval and no discovered tool registers
+before its exact live schema hash is approved.
 
 PRIOR WORK EXISTS — do not rebuild these from scratch:
 Two waves were partly executed in July 2026 and preserved as WIP archive commits
 before their worktrees were culled. Read both diffs before planning:
-- `archive/wt-epic-d` (`b9c26a14`) — the original S-W4 MCP-approval attempt. The
-  uncommitted diff now in your tree is this work re-applied to the current base
-  (11 of its 15 files overlap), plus the `McpSection.tsx` UI and the renamed
-  `mcp_fakes.py`.
+- `archive/wt-epic-d` (`b9c26a14`) — the original S-W4 MCP-approval attempt,
+  superseded by reviewed commit `212f6e89`. Keep it only as provenance.
 - `archive/wt-epic-c` (`d627d287`) — S-W6, reportedly FINISHED and never
   reviewed: `share.py`, `share_service.py`, `ws.py`, `runtime.py`,
   `sheets.py` + tests. Treat it as an untrusted first draft by an unreviewed
@@ -101,8 +79,7 @@ PROOF — a wave is not done when the tests pass:
 - Unit + regression tests are the floor, not the proof. Fixtures prove
   regressions; only a live end-to-end exercise proves a feature.
 - For each wave, run the real path once against the running stack and paste the
-  evidence into the campaign log: for S-W4, an actual MCP server that drifts its
-  tool schema and is refused; for S-W5, a real container hitting the cap and
+  evidence into the campaign log: for S-W5, a real container hitting the cap and
   being killed; for S-W6, a real exfil attempt against a real sink, refused.
 - Dev stack: `systemd --user` units `disco-app.service` and
   `disco-agent.service`. Restart them to pick up package edits.
@@ -129,7 +106,7 @@ adversarial notes is not finished.
 
 REPORTING — when a wave is done:
 1. Commit with a message naming the wave and what it closes, e.g.
-   `sec(S-W4): fail-closed MCP config + schema approval`.
+   `sec(S-W5): isolate sandbox egress and bound resources`.
 2. Update the DONE table in `sec-work-remaining/disco-security-state.md` with the
    wave, scope, and commit SHA; remove it from the parked table.
 3. Append the findings, the live proof, and the adversarial notes to
@@ -138,4 +115,4 @@ REPORTING — when a wave is done:
    found but did not fix.
 
 Start by reading the three documents, then `git diff` the working tree, then
-tell me your plan for S-W4 before you write code.
+begin S-W5 from the current implementation and acceptance tests.
