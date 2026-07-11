@@ -1,9 +1,9 @@
 # Disco — security state (single source of truth, 2026-07-11)
 
-Code snapshot at `disclaude/mega-campaign` @ `83c593a6`. This file records everything
+Code snapshot at `disclaude/mega-campaign` @ `7614dc22`. This file records everything
 security-related: what is DONE (committed), what remains separately DEFERRED, and the
 gate that currently protects the tree. The W1–W6 close-out was recorded at `17869bdb`;
-the later A2.2/A2.3 and F4.1 Stripe work are included below.
+the later A2.2/A2.3, F4.1, F3.3, packaging, and A4 work are included below.
 
 Companion detail: `sec-work-remaining/disco-security-fix-campaign.md` (the wave-by-wave campaign
 log + close-out evidence).
@@ -25,10 +25,14 @@ log + close-out evidence).
 | A2.2 | Authenticated per-app host-service bus + narrow sandbox capability relay | `cd57f830`, `205d8c6b` |
 | A2.3 | Hardened generated-Worker host-service client shim | `ef19bac6` |
 | F4.1 | Stripe key custody, verified Worker webhooks, entitlement transaction, deploy lifecycle, mandatory live exploit proof | `8f356c1e` |
+| F3.3 | Generic inbound/outbound webhook security fill, readiness lifecycle, mandatory live exploit proof | `ce349096` |
+| Epic P | Local rootless-Podman default, explicit Docker/process opt-in, portable OSS defaults | `f01a0635` |
+| A4 | Versioned per-app credentials, monotonic rotation, exact scopes, request/token quotas, 429/Retry-After, metered `ai.chat` | `a0d5eabd` |
 
-These are live on the branch and covered by full package/frontend suites, the
-contract/fuzz/fault gates, and clean lint on every changed file. Repository-wide
-Ruff still has 1,100 inherited findings; no rule or assertion was weakened.
+These are live on the branch and covered by full package/frontend suites and the
+contract/fuzz/fault gates. Focused Ruff over the new and security-critical close-out
+modules is clean. Repository-wide Ruff still has roughly 1,100 inherited findings;
+no rule or assertion was weakened.
 
 The reusable building blocks S-W2 left behind (used by the whole platform, and
 the intended substrate for generated-app outbound calls):
@@ -69,24 +73,23 @@ rebuild.
   Worker client shim. The original design notes remain useful context, but this is no
   longer a deferred implementation wave.
 
-### 3b. Scoped-credential / quota plane (was WO-A4)
-- **Deferred entirely.** Per-app token minting/rotation/scope + per-app usage
-  accounting, quota, and rate-limiting at the bus. Prerequisite input is 3a's v0
-  bearer. No code written.
+### 3b. Scoped-credential / quota plane (WO-A4)
+- **Complete.** New credentials use the versioned `a4v1` selector/verifier format;
+  persisted A2 credentials migrate without prefix confusion. Rotation allocates
+  monotonically and can revoke only strictly older generations in the exact
+  owner/conversation/app tuple. The bus accounts requests plus estimated/exact
+  input/output tokens against app aggregate and exact-service fixed windows,
+  returns `429` with `Retry-After`, retains conservative spend on cancellation,
+  timeout, unknown provider usage, or post-dispatch crash, and prunes settled
+  rows after the maximum accounting window. `ai.chat` is the first bounded,
+  tool-free, model-selection-free metered service.
 
-### 3c. Remaining fail-closed scaffold
+### 3c. Security scaffolds graduated
 
-F4.1 graduated from its original fail-closed scaffold into the real Stripe primitive at
-`8f356c1e`. The generic F3.3 webhook scaffold remains intentionally unmerged and
-unregistered with `verify=None`.
-
-| Scaffold | Branch (commit) | Security-fill spec |
-|----------|-----------------|--------------------|
-| Webhook endpoint seam | `disclaude/f33-webhook-seam` (`ec622888`) | `docs/wo-f33-webhook-security-spec.md` (on that branch) |
-
-The F3.3 spec enumerates the host-side secret custody, signature verification,
-idempotency, SSRF/rebind rejection, and real adversarial harness required to graduate
-it. Do not merge it as a false affordance or weaken the fail-closed gate to make it ship.
+F4.1 graduated at `8f356c1e`; F3.3 graduated at `ce349096`. Both retain the
+`template_only` ownership boundary and now have deterministic verification plus
+mandatory live exploit runners. Neither gate was weakened and neither shipped as
+a false affordance.
 
 ---
 
@@ -97,10 +100,10 @@ applied to an app that is registered `tier="template_only"` with `verify=None`
 FAILS verification — "cannot ship unverified." Provenance records in
 `.disco/primitives/*.json` tell the gate which primitives an app uses.
 
-Consequence: even if the two §3c scaffolds were merged today, an app that added
-them could not pass the finish gate until their verify harness is written. This is
-the mechanism that lets security-critical scaffolds exist in the catalog without
-becoming a false affordance — they are enforced-incomplete, not silently broken.
+Consequence: a future security-critical scaffold still cannot pass the finish
+gate until its verify harness is written. Stripe and generic webhooks pass because
+their real deterministic and live exploit checks are now present; the rule itself
+is unchanged.
 
 The shipped primitives (`form`, `seo`, `collection`) are `tier="fillable"` — their
 security-critical surface is a thin hardening layer, not the core value, so they
@@ -113,8 +116,9 @@ NOT built and are a separate security-classed item.
 ## 5. Per-primitive adversarial harnesses (the template_only set)
 
 Every future `template_only` primitive ships a real exploit-style harness as its
-build gate (from `docs/disco-builder-primitives-plan.md` §7). None of these
-harnesses are built yet; the framework hook (§4) is what they plug into.
+build gate (from `docs/disco-builder-primitives-plan.md` §7). Stripe payment
+webhooks and generic outbound/inbound webhooks now supply the first two live
+harnesses; the remaining roadmap stays separately deferred.
 
 | Primitive | Failure = | Build-gate harness |
 |-----------|-----------|--------------------|
@@ -154,7 +158,7 @@ harnesses are built yet; the framework hook (§4) is what they plug into.
 
 Auth, secret custody, egress chokepoint, the host-execution floor, MCP approval
 integrity, isolation/resource bounds, output-sink/share hardening, the authenticated
-host-service bus, and the Stripe security fill are DONE and gated. The credential/quota
-plane and generic F3.3 webhook fill remain deferred. The framework's fail-closed gate
-keeps anything security-critical from shipping unverified. Packaging now defaults to
-local rootless Podman, with gVisor available as an opt-in stronger tier.
+host-service bus, Stripe and generic webhook fills, the scoped credential/quota plane,
+and secure packaging defaults are DONE and gated. The framework's fail-closed gate
+keeps the separately deferred primitive roadmap from shipping unverified. Packaging
+defaults to local rootless Podman, with gVisor available as an opt-in stronger tier.

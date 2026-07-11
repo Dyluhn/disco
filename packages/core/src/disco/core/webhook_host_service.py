@@ -97,12 +97,8 @@ def configure_webhook_inbound_secret(
     )
 
 
-def resolve_webhook_inbound_secret(
-    store: SecretStore, owner_id: str, audience: str
-) -> str | None:
-    value = store.get_secret(
-        webhook_inbound_secret_ref(owner_id, audience), strong_required=True
-    )
+def resolve_webhook_inbound_secret(store: SecretStore, owner_id: str, audience: str) -> str | None:
+    value = store.get_secret(webhook_inbound_secret_ref(owner_id, audience), strong_required=True)
     try:
         return _validate_signing_secret(value) if value is not None else None
     except WebhookConfigurationError:
@@ -199,10 +195,15 @@ class WebhookAppConfigStore:
 
     def get(self, owner_id: str, audience: str, endpoint_id: str) -> WebhookTargetConfig | None:
         with self._lock:
-            row = self._check_open().execute(
-                "SELECT * FROM webhook_app_configs WHERE owner_id=? AND audience=? AND endpoint_id=?",
-                (owner_id, audience, endpoint_id),
-            ).fetchone()
+            row = (
+                self._check_open()
+                .execute(
+                    "SELECT * FROM webhook_app_configs "
+                    "WHERE owner_id=? AND audience=? AND endpoint_id=?",
+                    (owner_id, audience, endpoint_id),
+                )
+                .fetchone()
+            )
         if row is None:
             return None
         raw_event_types = json.loads(str(row["event_types"]))
@@ -211,9 +212,13 @@ class WebhookAppConfigStore:
         ):
             raise RuntimeError("stored webhook event types are invalid")
         return WebhookTargetConfig(
-            str(row["owner_id"]), str(row["audience"]), str(row["endpoint_id"]),
-            str(row["target_url"]), str(row["secret_ref"]),
-            frozenset(raw_event_types), bool(row["enabled"]),
+            str(row["owner_id"]),
+            str(row["audience"]),
+            str(row["endpoint_id"]),
+            str(row["target_url"]),
+            str(row["secret_ref"]),
+            frozenset(raw_event_types),
+            bool(row["enabled"]),
         )
 
     def _check_open(self) -> sqlite3.Connection:
@@ -262,9 +267,7 @@ def _failure(reason: str) -> dict[str, Any]:
     return {"ok": False, "error": reason}
 
 
-async def _webhook_emit_handler(
-    payload: dict[str, Any], ctx: HostServiceContext
-) -> dict[str, Any]:
+async def _webhook_emit_handler(payload: dict[str, Any], ctx: HostServiceContext) -> dict[str, Any]:
     if payload["app_binding"] != ctx.app_id:
         return _failure("app_binding_refused")
     configs = ctx.webhook_config_store

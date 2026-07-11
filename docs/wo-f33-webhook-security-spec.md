@@ -1,11 +1,11 @@
 # WO-F3.3 — webhook security fill (spec for the security-classed session)
 
-Status: **SEAM ONLY shipped** (`packages/core/src/disco/core/appkit/webhook_primitive.py`,
-branch `disclaude/f33-webhook-seam`). The primitive is registered
-`tier="template_only"` with `verify=None` — FAIL-CLOSED at the WO-A3 finish gate
-on purpose. This document is the fill-in-the-blanks for the later security
-session (per §10.5 this labor is security-classed: Opus/codex, NOT Fable).
-Nothing below exists yet; do not treat any of it as shipped.
+Status: **SECURITY FILL COMPLETE** on `disclaude/mega-campaign` (merge
+`ce349096`). The primitive remains Disco-owned `tier="template_only"`, now with
+deterministic trusted-tree verification plus the mandatory
+`webhook.security.v1` live exploit runner. Inbound signature/idempotency,
+outbound approved egress/signing, secret custody, Cloudflare readiness, and
+failure rollback below are implemented and gated.
 
 ## What the seam already gives you
 

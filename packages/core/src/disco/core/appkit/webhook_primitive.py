@@ -172,7 +172,9 @@ def _endpoint_section_data(spec: WebhookSpec, *, secured: bool) -> dict[str, obj
     body_parts.append(f"Event types: {', '.join(spec.event_types)}.")
     body_parts.append(direction_note)
     if secured:
-        body_parts.append("The route fails closed until its host-managed runtime configuration exists.")
+        body_parts.append(
+            "The route fails closed until its host-managed runtime configuration exists."
+        )
     else:
         body_parts.append("Declared contract only — no live handler exists.")
     return {
@@ -338,7 +340,8 @@ def _verify_result(checks: list[VerifyCheck]) -> PrimitiveVerifyResult:
 def _metadata_check(app: AppSpec | None) -> VerifyCheck:
     if app is None or app.webhooks is None:
         return VerifyCheck(
-            "webhook_metadata_binding", False,
+            "webhook_metadata_binding",
+            False,
             "Webhook provenance requires strict AppSpec.webhooks metadata (fail-closed).",
         )
     meta = app.webhooks
@@ -360,7 +363,8 @@ def _metadata_check(app: AppSpec | None) -> VerifyCheck:
         "webhook_metadata_binding",
         not reasons,
         "Webhook metadata is bound to the records app and exact endpoint sections."
-        if not reasons else "; ".join(reasons),
+        if not reasons
+        else "; ".join(reasons),
     )
 
 
@@ -368,34 +372,51 @@ def _provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyChe
     raw = tree.get(_WEBHOOK_PROVENANCE_RELPATH)
     if raw is None:
         return VerifyCheck(
-            "webhook_provenance_binding", False,
-            f"missing {_WEBHOOK_PROVENANCE_RELPATH}; webhook metadata cannot ship without provenance.",
+            "webhook_provenance_binding",
+            False,
+            f"missing {_WEBHOOK_PROVENANCE_RELPATH}; webhook metadata cannot ship "
+            "without provenance.",
         )
     try:
         record = json.loads(raw)
     except json.JSONDecodeError as exc:
-        return VerifyCheck("webhook_provenance_binding", False, f"invalid webhook provenance: {exc}")
+        return VerifyCheck(
+            "webhook_provenance_binding", False, f"invalid webhook provenance: {exc}"
+        )
     if not isinstance(record, dict) or set(record) != {
-        "primitive_id", "tier", "applied_at", "specs"
+        "primitive_id",
+        "tier",
+        "applied_at",
+        "specs",
     }:
         return VerifyCheck(
-            "webhook_provenance_binding", False,
+            "webhook_provenance_binding",
+            False,
             "Webhook provenance must contain exactly primitive_id, tier, applied_at, and specs.",
         )
     if record.get("primitive_id") != WEBHOOK_PRIMITIVE_ID or record.get("tier") != "template_only":
-        return VerifyCheck("webhook_provenance_binding", False, "Webhook provenance identity is invalid.")
+        return VerifyCheck(
+            "webhook_provenance_binding", False, "Webhook provenance identity is invalid."
+        )
     if not isinstance(record.get("applied_at"), str) or not record["applied_at"].strip():
-        return VerifyCheck("webhook_provenance_binding", False, "Webhook provenance timestamp is empty.")
+        return VerifyCheck(
+            "webhook_provenance_binding", False, "Webhook provenance timestamp is empty."
+        )
     raw_specs = record.get("specs")
     if not isinstance(raw_specs, list) or not raw_specs:
-        return VerifyCheck("webhook_provenance_binding", False, "Webhook provenance specs are empty.")
+        return VerifyCheck(
+            "webhook_provenance_binding", False, "Webhook provenance specs are empty."
+        )
     try:
         specs = tuple(WebhookSpec.model_validate(value) for value in raw_specs)
     except Exception as exc:  # noqa: BLE001 - bounded declarative validation detail
-        return VerifyCheck("webhook_provenance_binding", False, f"invalid webhook provenance spec: {exc}")
+        return VerifyCheck(
+            "webhook_provenance_binding", False, f"invalid webhook provenance spec: {exc}"
+        )
     if app is None or app.webhooks is None:
         return VerifyCheck(
-            "webhook_provenance_binding", False,
+            "webhook_provenance_binding",
+            False,
             "Webhook provenance exists without AppSpec.webhooks metadata (fail-closed).",
         )
     by_id = {endpoint.endpoint_id: endpoint for endpoint in app.webhooks.endpoints}
@@ -411,7 +432,9 @@ def _provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyChe
             reasons.append(f"metadata differs for endpoint {spec.endpoint_id}")
         section = next(
             (
-                section for page in app.pages for section in page.sections
+                section
+                for page in app.pages
+                for section in page.sections
                 if section.id == f"{_SECTION_ID_PREFIX}{spec.endpoint_id}"
             ),
             None,
@@ -420,9 +443,11 @@ def _provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyChe
         if section is None or section.model_dump(mode="json") != expected.model_dump(mode="json"):
             reasons.append(f"section differs for endpoint {spec.endpoint_id}")
     return VerifyCheck(
-        "webhook_provenance_binding", not reasons,
+        "webhook_provenance_binding",
+        not reasons,
         "Validated webhook provenance exactly matches all metadata and docs sections."
-        if not reasons else "; ".join(reasons),
+        if not reasons
+        else "; ".join(reasons),
     )
 
 
@@ -431,7 +456,8 @@ def _trusted_tree_check(
 ) -> VerifyCheck:
     if app is None or app.webhooks is None or design is None:
         return VerifyCheck(
-            "webhook_trusted_tree", False,
+            "webhook_trusted_tree",
+            False,
             "cannot reconstruct trusted webhook output without AppSpec.webhooks and DesignSpec.",
         )
     from .generator import generate
@@ -439,13 +465,14 @@ def _trusted_tree_check(
     try:
         expected = generate(app, design)
     except Exception as exc:  # noqa: BLE001 - projection errors close the gate
-        return VerifyCheck("webhook_trusted_tree", False, f"trusted webhook projection failed: {exc}")
+        return VerifyCheck(
+            "webhook_trusted_tree", False, f"trusted webhook projection failed: {exc}"
+        )
     webhook_components = tuple(
         sorted(
             path
             for path, contents in expected.items()
-            if path.startswith("src/components/")
-            and 'data-appkit-section="webhook_' in contents
+            if path.startswith("src/components/") and 'data-appkit-section="webhook_' in contents
         )
     )
     if len(webhook_components) != len(app.webhooks.endpoints):
@@ -455,38 +482,50 @@ def _trusted_tree_check(
             "trusted projection did not emit exactly one docs component per webhook endpoint.",
         )
     sensitive_paths = (
-        "worker/index.ts", "worker/disco-client.ts", "wrangler.toml", "package.json",
-        "package-lock.json", "schema.sql", "migrations/0001_init.sql", "src/db/schema.ts",
+        "worker/index.ts",
+        "worker/disco-client.ts",
+        "wrangler.toml",
+        "package.json",
+        "package-lock.json",
+        "schema.sql",
+        "migrations/0001_init.sql",
+        "src/db/schema.ts",
         *webhook_components,
     )
     mismatched = [path for path in sensitive_paths if tree.get(path) != expected.get(path)]
     if tree.get(".disco/appspec.json") != serialize_app_spec(app):
         mismatched.append(".disco/appspec.json")
     return VerifyCheck(
-        "webhook_trusted_tree", not mismatched,
+        "webhook_trusted_tree",
+        not mismatched,
         "Webhook Worker, host client, lockfile, schemas, and AppSpec match the trusted projection."
-        if not mismatched else "security-sensitive webhook file mismatch: " + ", ".join(mismatched),
+        if not mismatched
+        else "security-sensitive webhook file mismatch: " + ", ".join(mismatched),
     )
 
 
 def _secret_absence_check(tree: Mapping[str, str]) -> VerifyCheck:
     hits = sorted(path for path, contents in tree.items() if _SECRET_VALUE_RE.search(contents))
     return VerifyCheck(
-        "webhook_static_secret_absence", not hits,
+        "webhook_static_secret_absence",
+        not hits,
         "No webhook secret-value patterns occur in the emitted tree."
-        if not hits else "Webhook secret-value pattern found in: " + ", ".join(hits),
+        if not hits
+        else "Webhook secret-value pattern found in: " + ", ".join(hits),
     )
 
 
 def webhook_verify(
     app: AppSpec | None, design: DesignSpec | None, tree: Mapping[str, str]
 ) -> PrimitiveVerifyResult:
-    return _verify_result([
-        _metadata_check(app),
-        _provenance_check(app, tree),
-        _trusted_tree_check(app, design, tree),
-        _secret_absence_check(tree),
-    ])
+    return _verify_result(
+        [
+            _metadata_check(app),
+            _provenance_check(app, tree),
+            _trusted_tree_check(app, design, tree),
+            _secret_absence_check(tree),
+        ]
+    )
 
 
 register_primitive(
