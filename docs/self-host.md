@@ -1,28 +1,30 @@
 # Self-hosting Disco
 
-This is the supported one-command path for a local Linux or WSL2 host with
-Docker Compose. Podman works too, but Docker remains the user-facing command.
+This is the supported one-command path for a local Linux or WSL2 host. Sandboxes
+use the current user's rootless Podman service by default: no root-owned container
+socket is inherited by a fresh install.
 
 ## Quickstart
 
 ```bash
 git clone <repo-url>
 cd disclaude
-docker compose up -d --build
-docker compose logs app-server
+systemctl --user enable --now podman.socket
+podman compose up -d --build
+podman compose logs app-server
 open http://localhost:8088
 ```
 
 The app-server logs print the working UI URL and a one-time first-run pairing
 token. On localhost the browser normally pairs automatically; if it asks for a
-token, paste the token from `docker compose logs app-server`.
+token, paste the token from `podman compose logs app-server`.
 
 No driver model is bundled and no dead local endpoint is seeded. After the UI
 loads, open **Settings -> Models & Providers**, add an OpenAI-compatible local,
 LAN, or paid endpoint, set it as **Default primary**, then prove it:
 
 ```bash
-docker compose exec agent-server disco-verify --quick
+podman compose exec agent-server disco-verify --quick
 ```
 
 ## Services
@@ -45,15 +47,35 @@ out of the box. For a lean stack without build capability, comment out the
 `sandbox-image` service and the agent-server `depends_on` entry in
 `compose.yaml`.
 
-TODO(security-track): the agent-server still mounts the host container socket by
-default for the local sandbox backend. That is root-equivalent on a Docker host.
-For Podman, prefer a rootless socket:
+The agent-server mounts the current user's rootless Podman socket by default. On
+Linux and WSL2 with systemd, enable it once before bringing up the stack:
 
 ```bash
 systemctl --user enable --now podman.socket
-DISCO_SANDBOX_SOCKET=/run/user/$(id -u)/podman/podman.sock \
-  docker compose up -d --build
+podman compose up -d --build
 ```
+
+The compose default resolves the host socket from `$XDG_RUNTIME_DIR`, falling
+back to `/run/user/1000/podman/podman.sock`. Set `DISCO_SANDBOX_SOCKET` when your
+UID or socket location differs.
+
+Docker's root-owned socket grants root-equivalent control of the host. It is not
+selected automatically. A trusted single-user operator can explicitly accept
+that weaker host boundary (and ensure the sandbox image is built in that daemon):
+
+```bash
+DISCO_SANDBOX_SOCKET=/var/run/docker.sock docker compose up -d --build
+```
+
+gVisor remains an optional stronger tier for hosts where `runsc` is installed and
+registered. Select it without changing the backend persistence model:
+
+```bash
+DISCO_LOCAL_RUNTIME=runsc podman compose up -d --build
+```
+
+The unisolated `process` backend is development-only and fails closed unless both
+`DISCO_SANDBOX=process` and `DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1` are explicit.
 
 ## Models
 

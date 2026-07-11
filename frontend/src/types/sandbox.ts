@@ -70,7 +70,7 @@ export interface BackendMeta {
 
 const FIELD_LABEL: Record<SandboxField, string> = {
   docker_socket: "Docker endpoint (local socket or ssh://user@host)",
-  podman_url: "Podman remote URL (rootless socket over Tailscale SSH)",
+  podman_url: "Podman API URL (local rootless socket or explicit remote)",
   runtime: "OCI runtime",
   image: "Sandbox image",
   workspace_root: "Workspace root (host path)",

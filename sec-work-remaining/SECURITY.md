@@ -61,12 +61,11 @@ status); wave-by-wave detail + close-out evidence: `sec-work-remaining/disco-sec
 | S-W5 | Isolation + resource caps | DONE (`10433330`) |
 | S-W6 | Output sinks + share + low-severity cluster | DONE (`17869bdb`) |
 
-All six implementation waves are complete. One further open item in the deploy path:
-the compose `agent-server` still mounts `/var/run/docker.sock`
-(root-equivalent on the host) **by default** — fine for a trusted single-user box,
-unacceptable as a default others inherit. Making the isolated gVisor (`runsc`) backend
-the documented default, with the docker-socket/process path behind an explicit opt-in,
-is open packaging work (`sec-work-remaining/disco-security-state.md` §6).
+All six implementation waves are complete. Packaging now defaults to the current
+user's rootless Podman socket, with no implicit `/var/run/docker.sock` mount. gVisor
+(`runsc`) remains an optional stronger tier because it is not a clean WSL2 default;
+the root Docker socket and the unisolated process backend require explicit operator
+opt-ins (`sec-work-remaining/disco-security-state.md` §6).
 
 ### What this DOES try to protect against
 

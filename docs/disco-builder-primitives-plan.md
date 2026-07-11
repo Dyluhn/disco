@@ -210,10 +210,9 @@ specific gaps*, not greenfield. Ground truth first, then WOs that target the gap
 | Encoders | in-process ONNX via `fastembed` (`DISCO_ENCODERS=local` default); weights **lazy-download** to `/data/cache/fastembed` | `fastembed` is a **mandatory core dep** (`retrieval/pyproject.toml:12`) → `lite` must make it optional; weights not pre-baked → `full` isn't truly offline yet |
 | OSS files | LICENSE Apache-2.0, README, CONTRIBUTING, SECURITY, thorough `.dockerignore` | compose cites `docs/self-html.md`; real file is `docs/archive/self-host.md` (**broken link**); `.env.example` still names CC-BY-NC jina reranker + wrong encoder-tier default |
 
-**⚠ Security ground-truth:** agent-server mounts `/var/run/docker.sock` (host-root-equivalent). Fine on a trusted
-single-user box; **unacceptable as the default others inherit.** P3/P4 must make the isolated runsc/gVisor backend
-the documented default and gate the docker.sock path behind an explicit opt-in — this ties directly to the parked
-S-W3 (host-exec) / S-W5 (isolation) waves, so Epic P cannot fully ship until those resume in Epic Z.
+**Security ground-truth (corrected 2026-07-11):** packaging defaults to the current user's rootless Podman socket,
+which is suitable for Linux and WSL2 without granting host-root-equivalent daemon access. gVisor/runsc is an
+optional stronger tier, not the default; `/var/run/docker.sock` and the process backend are explicit opt-ins.
 
 - **P1 — one-command full stack + `profiles:`.** Add `profiles:` to `compose.yaml` (`core`, `encoders`, `sandbox`)
   so bare `docker compose up` = app+agent+frontend+data with sane defaults; `--profile sandbox` adds the isolated
@@ -229,13 +228,11 @@ S-W3 (host-exec) / S-W5 (isolation) waves, so Epic P cannot fully ship until tho
   `local_encoders.py`. Also fix the code-vs-`.env.example` encoder-tier default mismatch (code `full`, example
   `lite`) and the stale jina name in `.env.example` (real default reranker is MIT `bge-reranker-base`). Acceptance:
   `full` answers a first RAG query with **no network**; `lite` starts small + documents the encoder-endpoint env.
-- **P3 — gVisor sandbox in-repo, as the documented default.** Promote `deploy/sandbox/` to a first-class
-  deliverable: a runsc install/setup script, a **new CONTRACT.md** (the README references one that doesn't exist),
-  a compose `sandbox` profile wiring the runsc backend, and a scrub of the VM-201 leakage in defaults
-  (`workspace_root=/opt/sandbox/workspaces`, `podman_url=…@100.73.110.47` in `core/llm/config.py`) → neutral
-  container-local defaults. Rewrite the stale README (`pmx-sandbox:base` → `disco-sandbox:base`). Document the
-  docker.sock/process fallback as an **explicit opt-in**, not the default. Acceptance: documented `docker build` +
-  runsc bring-up reproduces the sandbox contract on a clean host; docker.sock is opt-in only.
+- **P3 — sandbox packaging default (corrected).** Ship local rootless Podman as the portable default, including
+  WSL2; keep gVisor/runsc separately deployable as an opt-in stronger tier. Scrub host-specific Podman/workspace
+  values from OSS defaults and document the root Docker socket/process backend as explicit opt-ins. Acceptance:
+  default compose resolves to the user's Podman socket; an operator can opt into runsc without changing the
+  Settings-driven backend model.
 - **P4 — config / secrets / first-admin / first-model bootstrap.** `.env.example` trimmed to required-vs-optional
   DISCO_* (document `AUTH_DEV_AUTO_PAIR`, `DISCO_ENCODERS`, encoder tier, sandbox backend). Keep the entrypoint's
   `/data/.secret_key` generation. Add a **first-run "configure your model" step** — the seed defaults to Ollama
@@ -403,4 +400,3 @@ Two halves, different labor classes:
 - **Big rocks needing their own campaigns:** F-F persistent runtime (7.1, XL — gates 2.3/6.4 and the
   Postgres track per 10.1); 2.1 RLS (XL, crown jewel, template_only + harness); 6.6 MCP connectors (XL).
 - **Do-last (unchanged):** Epic Z mega-soak (resumes parked security waves) → Epic P packaging.
-

@@ -325,7 +325,7 @@ def test_config_is_podman_and_crun_and_cli_url():
     cfg = default_podman_config()
     assert cfg.backend == "podman" and cfg.runtime == "crun"
     svc = PodmanSandboxService(cfg)
-    assert svc._cli_url.startswith("ssh://") and not svc._cli_url.startswith("http+")
+    assert svc._cli_url == "unix:///run/user/1000/podman/podman.sock"
 
 
 def test_inspect_state_retries_transient_inspect_failure(monkeypatch):
@@ -548,8 +548,8 @@ async def test_sealed_sandbox_has_no_sidecar_or_exposed_mapping():
 def test_preview_host_derived_from_cli_url():
     from disco.tools.sandbox.podman import _preview_host
 
-    assert _preview_host("ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock") == (
-        "100.73.110.47"
+    assert _preview_host("ssh://sandbox@203.0.113.47/run/user/1000/podman/podman.sock") == (
+        "203.0.113.47"
     )
     assert _preview_host("ssh://user@host.example:22/run/podman.sock") == "host.example"
     assert _preview_host("unix:///run/user/1000/podman/podman.sock") == "localhost"
@@ -558,4 +558,4 @@ def test_preview_host_derived_from_cli_url():
 async def test_instance_preview_host_set_from_cli_url():
     svc, _client, _cli = _svc()
     inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    assert inst._preview_host == "100.73.110.47"  # default podman_url tailnet host
+    assert inst._preview_host == "localhost"  # default podman_url is the local rootless socket

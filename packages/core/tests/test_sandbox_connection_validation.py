@@ -10,7 +10,12 @@ rejected. Valid host[:port][/path] endpoints must still pass.
 from __future__ import annotations
 
 import pytest
-from disco.core.llm import SandboxConnection, default_connection_for, sandbox_connection_error
+from disco.core.llm import (
+    SandboxConnection,
+    SandboxSettings,
+    default_connection_for,
+    sandbox_connection_error,
+)
 
 
 def _err(backend: str, socket: str) -> str | None:
@@ -70,7 +75,8 @@ def test_process_needs_nothing():
 
 def test_default_connection_for_is_backend_appropriate_and_never_cross_bleeds():
     """Each backend's clean default is shaped for THAT backend — local/process get the
-    local docker socket (never an ssh:// host), gvisor gets the ssh prefill, podman crun."""
+    local Docker-compatible socket, gvisor gets the ssh prefill, podman gets the local
+    rootless socket."""
     gvisor = default_connection_for("gvisor")
     assert gvisor.docker_socket == "ssh://sandbox@" and gvisor.runtime == "runsc"
     local = default_connection_for("local")
@@ -79,4 +85,16 @@ def test_default_connection_for_is_backend_appropriate_and_never_cross_bleeds():
     process = default_connection_for("process")
     assert "ssh://" not in process.docker_socket
     podman = default_connection_for("podman")
-    assert podman.runtime == "crun" and podman.podman_url  # keeps the rootless remote url
+    assert podman.runtime == "crun"
+    assert podman.podman_url == "unix:///run/user/1000/podman/podman.sock"
+    assert podman.workspace_root == "/var/lib/disco/workspaces"
+
+
+def test_sandbox_defaults_are_portable_and_do_not_name_a_private_host():
+    connection = SandboxConnection()
+    settings = SandboxSettings()
+
+    for value in (connection, settings):
+        assert value.podman_url == "unix:///run/user/1000/podman/podman.sock"
+        assert value.workspace_root == "/var/lib/disco/workspaces"
+        assert "@" not in value.podman_url  # no operator-specific SSH host in OSS defaults
