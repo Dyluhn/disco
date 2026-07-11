@@ -4,6 +4,12 @@ The generated app supplies only a stable plan selector and relative return
 paths.  Stripe price ids, credentials, approved origins, and idempotency keys
 remain in the trusted host plane.  This module deliberately exposes no API for
 reading a Stripe credential back out of ``SecretStore``.
+
+Operators configure the slice through the app-server's admin+CSRF-protected
+``PUT /api/stripe/config/{audience}`` route.  That route writes the restricted
+key to ``SecretStore`` and the non-secret mapping to this store in the shared
+event database.  The agent-server opens a distinct connection to the same DB;
+the plaintext key is write-only and never appears in the route response.
 """
 
 from __future__ import annotations
@@ -24,7 +30,6 @@ from urllib.parse import urlencode, urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .env import disco_env
 from .host_egress import EgressDenied, GuardedResponse, guarded_request, origin_for_url
 from .host_services import (
     HostServiceContext,
@@ -50,16 +55,6 @@ _MAX_STRIPE_RESPONSE_BYTES = 256 * 1024
 
 class StripeConfigurationError(ValueError):
     """Operator-owned Stripe configuration is absent or unsafe."""
-
-
-def default_stripe_config_path() -> Path:
-    """Shared host-owned config DB path used by both app- and agent-server."""
-    explicit = (disco_env("STRIPE_CONFIG") or "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
-    data_dir = (disco_env("DATA_DIR") or "").strip()
-    root = Path(data_dir).expanduser() if data_dir else Path.home() / ".local" / "share" / "disco"
-    return root / "stripe-apps.db"
 
 
 def validate_stripe_restricted_key(api_key: str) -> None:
@@ -133,8 +128,8 @@ class StripeAppConfig:
 class StripeAppConfigStore:
     """Durable, host-only Stripe app configuration keyed by owner + audience."""
 
-    def __init__(self, path: str | Path | None = None) -> None:
-        resolved = default_stripe_config_path() if path is None else Path(path)
+    def __init__(self, path: str | Path = ":memory:") -> None:
+        resolved = Path(path)
         self.db_path = str(resolved)
         if self.db_path != ":memory:":
             resolved.parent.mkdir(parents=True, exist_ok=True)
