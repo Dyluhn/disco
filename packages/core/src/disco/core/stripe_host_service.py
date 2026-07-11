@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
+import hmac
 import ipaddress
 import json
 import re
@@ -43,6 +45,7 @@ if TYPE_CHECKING:
     from .llm.secrets import SecretStore
 
 PAYMENTS_CHECKOUT_SERVICE_NAME = "payments.checkout"
+PAYMENTS_READY_SERVICE_NAME = "payments.ready"
 STRIPE_SECRET_REF = "stripe"
 STRIPE_API_URL = "https://api.stripe.com/v1/checkout/sessions"
 STRIPE_API_HOSTS = frozenset({"api.stripe.com"})
@@ -50,6 +53,7 @@ STRIPE_API_HOSTS = frozenset({"api.stripe.com"})
 _IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _PRICE_ID_RE = re.compile(r"^price_[A-Za-z0-9]{6,200}$")
 _RETURN_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9._~-]+/?)*$")
+_BINDING_SECRET_RE = re.compile(r"^stb_[A-Za-z0-9_-]{43}$")
 _MAX_STRIPE_RESPONSE_BYTES = 256 * 1024
 
 
@@ -75,6 +79,56 @@ def configure_stripe_restricted_key(secret_store: SecretStore, api_key: str) -> 
     """Validate, then persist the credential encrypted under the fixed ``stripe`` ref."""
     validate_stripe_restricted_key(api_key)
     secret_store.set_secret(STRIPE_SECRET_REF, api_key, strong_required=True)
+
+
+def stripe_binding_secret_ref(owner_id: str, audience: str) -> str:
+    """Opaque per-owner/app ref; raw tenant identifiers never become secret names."""
+    owner = _validate_identity("owner", owner_id)
+    app = _validate_identity("audience", audience)
+    digest = hashlib.sha256(f"{owner}\0{app}".encode()).hexdigest()
+    return f"stripe.binding.{digest}"
+
+
+def ensure_stripe_binding_secret(
+    secret_store: SecretStore,
+    owner_id: str,
+    audience: str,
+) -> str:
+    """Return the per-app correlation key, creating it encrypted when absent."""
+    ref = stripe_binding_secret_ref(owner_id, audience)
+    existing = secret_store.get_secret(ref, strong_required=True)
+    if existing is not None:
+        if _BINDING_SECRET_RE.fullmatch(existing) is None:
+            raise StripeConfigurationError("Stripe app binding secret is invalid")
+        return existing
+    value = "stb_" + secrets.token_urlsafe(32)
+    secret_store.set_secret(ref, value, strong_required=True)
+    return value
+
+
+def resolve_stripe_binding_secret(
+    secret_store: SecretStore,
+    owner_id: str,
+    audience: str,
+) -> str | None:
+    value = secret_store.get_secret(
+        stripe_binding_secret_ref(owner_id, audience),
+        strong_required=True,
+    )
+    return value if value is not None and _BINDING_SECRET_RE.fullmatch(value) else None
+
+
+def stripe_correlation_tag(
+    binding_secret: str,
+    app_id: str,
+    plan_selector: str,
+    user_id: int,
+) -> str:
+    """Authenticate host-created Session metadata without sending the key to Stripe."""
+    if _BINDING_SECRET_RE.fullmatch(binding_secret) is None:
+        raise StripeConfigurationError("Stripe app binding secret is invalid")
+    message = f"{app_id}\0{plan_selector}\0{user_id}".encode()
+    return hmac.new(binding_secret.encode(), message, hashlib.sha256).hexdigest()
 
 
 def _validate_identity(label: str, value: str) -> str:
@@ -366,6 +420,21 @@ class StripeCheckoutPayload(BaseModel):
         return value
 
 
+class StripeReadyPayload(BaseModel):
+    """Selector-only readiness probe; it performs no Stripe egress."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    plan_selector: str
+
+    @field_validator("plan_selector")
+    @classmethod
+    def _valid_selector(cls, value: str) -> str:
+        if _IDENTIFIER_RE.fullmatch(value) is None:
+            raise ValueError("invalid plan selector")
+        return value
+
+
 def _safe_failure(reason: str) -> dict[str, Any]:
     return {"ok": False, "error": reason}
 
@@ -381,6 +450,59 @@ def _return_origin(ctx: HostServiceContext, config: StripeAppConfig) -> str | No
 def _new_stripe_request_key() -> str:
     """Per-call Stripe request key; webhook replay idempotency is handled separately."""
     return "disco-checkout-" + secrets.token_urlsafe(24)
+
+
+@dataclass(frozen=True)
+class _StripeRuntimeInputs:
+    config: StripeAppConfig
+    restricted_key: str
+    return_origin: str
+    binding_secret: str
+
+
+def _runtime_inputs(
+    ctx: HostServiceContext,
+    plan_selector: str,
+) -> tuple[_StripeRuntimeInputs | None, str]:
+    config_store = ctx.stripe_config_store
+    if config_store is None or ctx.secret_store is None or ctx.approvals is None:
+        return None, "stripe_not_configured"
+    config = config_store.get(ctx.owner_id, ctx.app_id)
+    if config is None or not config.enabled:
+        return None, "stripe_not_configured"
+    if plan_selector != config.plan_selector:
+        return None, "unknown_plan"
+    origin = _return_origin(ctx, config)
+    if origin is None:
+        return None, "return_origin_not_allowed"
+    try:
+        secret = resolve_provider_secret(
+            STRIPE_SECRET_REF,
+            ctx.secret_store,
+            strong_required=True,
+        )
+        binding_secret = resolve_stripe_binding_secret(
+            ctx.secret_store,
+            ctx.owner_id,
+            ctx.app_id,
+        )
+    except RuntimeError:
+        return None, "stripe_credential_refused"
+    if secret is None or binding_secret is None:
+        return None, "stripe_not_configured"
+    try:
+        validate_stripe_restricted_key(secret)
+    except StripeConfigurationError:
+        return None, "stripe_credential_refused"
+    if not secret_ref_allowed_for_origin(STRIPE_SECRET_REF, STRIPE_API_URL):
+        return None, "stripe_origin_refused"
+    if not ctx.approvals.is_approved(
+        STRIPE_API_URL,
+        PAYMENTS_CHECKOUT_SERVICE_NAME,
+        STRIPE_SECRET_REF,
+    ):
+        return None, "stripe_origin_not_approved"
+    return _StripeRuntimeInputs(config, secret, origin, binding_secret), ""
 
 
 def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
@@ -434,52 +556,30 @@ def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
 async def _payments_checkout_handler(
     payload: dict[str, Any], ctx: HostServiceContext
 ) -> dict[str, Any]:
-    config_store = ctx.stripe_config_store
-    if config_store is None or ctx.secret_store is None or ctx.approvals is None:
-        return _safe_failure("stripe_not_configured")
-    config = config_store.get(ctx.owner_id, ctx.app_id)
-    if config is None or not config.enabled:
-        return _safe_failure("stripe_not_configured")
-    if payload["plan_selector"] != config.plan_selector:
-        return _safe_failure("unknown_plan")
-
-    origin = _return_origin(ctx, config)
-    if origin is None:
-        return _safe_failure("return_origin_not_allowed")
-    success_url = origin + payload["success_path"]
-    cancel_url = origin + payload["cancel_path"]
+    runtime, error = _runtime_inputs(ctx, payload["plan_selector"])
+    if runtime is None:
+        return _safe_failure(error)
+    success_url = runtime.return_origin + payload["success_path"]
+    cancel_url = runtime.return_origin + payload["cancel_path"]
     if not return_url_allowed(ctx, success_url) or not return_url_allowed(ctx, cancel_url):
         return _safe_failure("return_url_not_allowed")
-
-    try:
-        secret = resolve_provider_secret(
-            STRIPE_SECRET_REF,
-            ctx.secret_store,
-            strong_required=True,
-        )
-    except RuntimeError:
-        return _safe_failure("stripe_credential_refused")
-    if secret is None:
-        return _safe_failure("stripe_not_configured")
-    try:
-        validate_stripe_restricted_key(secret)
-    except StripeConfigurationError:
-        return _safe_failure("stripe_credential_refused")
-    if not secret_ref_allowed_for_origin(STRIPE_SECRET_REF, STRIPE_API_URL):
-        return _safe_failure("stripe_origin_refused")
-    if not ctx.approvals.is_approved(
-        STRIPE_API_URL,
-        PAYMENTS_CHECKOUT_SERVICE_NAME,
-        STRIPE_SECRET_REF,
-    ):
-        return _safe_failure("stripe_origin_not_approved")
+    user_id = int(payload["user_id"])
+    correlation = stripe_correlation_tag(
+        runtime.binding_secret,
+        ctx.app_id,
+        runtime.config.plan_selector,
+        user_id,
+    )
 
     form = urlencode(
         {
             "mode": "payment",
-            "line_items[0][price]": config.stripe_price_id,
+            "line_items[0][price]": runtime.config.stripe_price_id,
             "line_items[0][quantity]": "1",
-            "client_reference_id": str(payload["user_id"]),
+            "client_reference_id": str(user_id),
+            "metadata[disco_app_binding]": ctx.app_id,
+            "metadata[disco_plan_selector]": runtime.config.plan_selector,
+            "metadata[disco_correlation]": correlation,
             "success_url": success_url,
             "cancel_url": cancel_url,
         }
@@ -490,7 +590,7 @@ async def _payments_checkout_handler(
             "POST",
             STRIPE_API_URL,
             headers={
-                "Authorization": f"Bearer {secret}",
+                "Authorization": f"Bearer {runtime.restricted_key}",
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Idempotency-Key": _new_stripe_request_key(),
             },
@@ -508,6 +608,22 @@ async def _payments_checkout_handler(
     return {"url": checkout_url}
 
 
+async def _payments_ready_handler(
+    payload: dict[str, Any], ctx: HostServiceContext
+) -> dict[str, Any]:
+    runtime, _error = _runtime_inputs(ctx, payload["plan_selector"])
+    return {"ready": runtime is not None}
+
+
+PAYMENTS_READY_SERVICE = HostServiceDefinition(
+    name=PAYMENTS_READY_SERVICE_NAME,
+    handler=_payments_ready_handler,
+    description="Check host-owned Stripe configuration without creating a Session.",
+    payload_schema=StripeReadyPayload,
+)
+register_host_service(PAYMENTS_READY_SERVICE)
+
+
 PAYMENTS_CHECKOUT_SERVICE = HostServiceDefinition(
     name=PAYMENTS_CHECKOUT_SERVICE_NAME,
     handler=_payments_checkout_handler,
@@ -520,6 +636,8 @@ register_host_service(PAYMENTS_CHECKOUT_SERVICE)
 __all__ = [
     "PAYMENTS_CHECKOUT_SERVICE",
     "PAYMENTS_CHECKOUT_SERVICE_NAME",
+    "PAYMENTS_READY_SERVICE",
+    "PAYMENTS_READY_SERVICE_NAME",
     "STRIPE_API_HOSTS",
     "STRIPE_API_URL",
     "STRIPE_SECRET_REF",
@@ -527,6 +645,11 @@ __all__ = [
     "StripeAppConfigStore",
     "StripeCheckoutPayload",
     "StripeConfigurationError",
+    "StripeReadyPayload",
     "configure_stripe_restricted_key",
+    "ensure_stripe_binding_secret",
+    "resolve_stripe_binding_secret",
+    "stripe_binding_secret_ref",
+    "stripe_correlation_tag",
     "validate_stripe_restricted_key",
 ]

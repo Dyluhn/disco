@@ -17,6 +17,7 @@ from disco.core.host_services import (
 )
 from disco.core.stripe_host_service import (
     PAYMENTS_CHECKOUT_SERVICE_NAME,
+    PAYMENTS_READY_SERVICE_NAME,
     STRIPE_API_HOSTS,
     StripeAppConfigStore,
 )
@@ -41,6 +42,7 @@ _DOWNSTREAM_TIMEOUT_S = 5.0
 _SERVICE_ALLOW_HOSTS: Mapping[str, frozenset[str]] = {
     "svc.ping": frozenset(),
     PAYMENTS_CHECKOUT_SERVICE_NAME: STRIPE_API_HOSTS,
+    PAYMENTS_READY_SERVICE_NAME: frozenset(),
 }
 
 

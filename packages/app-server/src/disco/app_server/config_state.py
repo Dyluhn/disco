@@ -24,6 +24,7 @@ from disco.core.stripe_host_service import (
     StripeAppConfig,
     StripeAppConfigStore,
     configure_stripe_restricted_key,
+    ensure_stripe_binding_secret,
 )
 
 if TYPE_CHECKING:
@@ -334,6 +335,7 @@ class ConfigState:
             enabled=enabled,
         )
         configure_stripe_restricted_key(self._secrets, restricted_key)
+        ensure_stripe_binding_secret(self._secrets, owner_id, audience)
         config = self._stripe_configs.configure(
             owner_id=owner_id,
             audience=audience,

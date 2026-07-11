@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
@@ -18,11 +19,14 @@ from disco.core.llm.secrets import SecretBox, SecretStore
 from disco.core.origin_approvals import OriginApprovalStore
 from disco.core.stripe_host_service import (
     PAYMENTS_CHECKOUT_SERVICE_NAME,
+    PAYMENTS_READY_SERVICE_NAME,
     STRIPE_API_URL,
     STRIPE_SECRET_REF,
     StripeAppConfigStore,
     StripeConfigurationError,
     configure_stripe_restricted_key,
+    ensure_stripe_binding_secret,
+    stripe_correlation_tag,
 )
 
 _MASTER_KEY = "strong-test-master-key-0123456789-ABCDE"
@@ -43,6 +47,7 @@ def _configured(
 ) -> tuple[StripeAppConfigStore, SecretStore, OriginApprovalStore]:
     secrets = _secret_store(tmp_path)
     configure_stripe_restricted_key(secrets, _RESTRICTED_KEY)
+    ensure_stripe_binding_secret(secrets, "owner-1", "app-1")
     configs = StripeAppConfigStore(tmp_path / "state.db")
     configs.configure(
         owner_id="owner-1",
@@ -251,15 +256,39 @@ async def test_success_uses_trusted_price_origin_timeout_and_per_call_stripe_key
         assert headers["Idempotency-Key"].startswith("disco-checkout-")
         keys.append(headers["Idempotency-Key"])
         form = parse_qs(kwargs["body"].decode("ascii"), strict_parsing=True)
+        binding = ensure_stripe_binding_secret(secrets, "owner-1", "app-1")
         assert form == {
             "mode": ["payment"],
             "line_items[0][price]": [_PRICE_ID],
             "line_items[0][quantity]": ["1"],
             "client_reference_id": ["42"],
+            "metadata[disco_app_binding]": ["app-1"],
+            "metadata[disco_plan_selector]": ["pro"],
+            "metadata[disco_correlation]": [stripe_correlation_tag(binding, "app-1", "pro", 42)],
             "success_url": [f"{_ORIGIN}/billing/success"],
             "cancel_url": [f"{_ORIGIN}/billing/cancel"],
         }
     assert keys[0] != keys[1]
+
+
+@pytest.mark.asyncio
+async def test_readiness_is_dynamic_and_performs_no_egress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configs, secrets, approvals = _configured(tmp_path)
+    monkeypatch.setattr(
+        "disco.core.stripe_host_service.guarded_request",
+        lambda *_args, **_kwargs: pytest.fail("readiness must not reach Stripe"),
+    )
+    ctx = _ctx(configs, secrets, approvals)
+    ctx = replace(ctx, allowed_services=frozenset({PAYMENTS_READY_SERVICE_NAME}))
+    assert await call_host_service(PAYMENTS_READY_SERVICE_NAME, {"plan_selector": "pro"}, ctx) == {
+        "ready": True
+    }
+    configs.disable("owner-1", "app-1")
+    assert await call_host_service(PAYMENTS_READY_SERVICE_NAME, {"plan_selector": "pro"}, ctx) == {
+        "ready": False
+    }
 
 
 @pytest.mark.asyncio
