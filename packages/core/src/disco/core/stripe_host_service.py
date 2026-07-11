@@ -54,6 +54,7 @@ _IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _PRICE_ID_RE = re.compile(r"^price_[A-Za-z0-9]{6,200}$")
 _RETURN_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9._~-]+/?)*$")
 _BINDING_SECRET_RE = re.compile(r"^stb_[A-Za-z0-9_-]{43}$")
+_WEBHOOK_SECRET_RE = re.compile(r"^whsec_[A-Za-z0-9_-]{6,250}$")
 _MAX_STRIPE_RESPONSE_BYTES = 256 * 1024
 
 
@@ -81,12 +82,47 @@ def configure_stripe_restricted_key(secret_store: SecretStore, api_key: str) -> 
     secret_store.set_secret(STRIPE_SECRET_REF, api_key, strong_required=True)
 
 
-def stripe_binding_secret_ref(owner_id: str, audience: str) -> str:
+def _stripe_scoped_secret_ref(kind: str, owner_id: str, audience: str) -> str:
     """Opaque per-owner/app ref; raw tenant identifiers never become secret names."""
     owner = _validate_identity("owner", owner_id)
     app = _validate_identity("audience", audience)
     digest = hashlib.sha256(f"{owner}\0{app}".encode()).hexdigest()
-    return f"stripe.binding.{digest}"
+    return f"stripe.{kind}.{digest}"
+
+
+def stripe_binding_secret_ref(owner_id: str, audience: str) -> str:
+    return _stripe_scoped_secret_ref("binding", owner_id, audience)
+
+
+def stripe_webhook_secret_ref(owner_id: str, audience: str) -> str:
+    return _stripe_scoped_secret_ref("webhook", owner_id, audience)
+
+
+def configure_stripe_webhook_secret(
+    secret_store: SecretStore,
+    owner_id: str,
+    audience: str,
+    webhook_secret: str,
+) -> None:
+    if _WEBHOOK_SECRET_RE.fullmatch(webhook_secret) is None:
+        raise StripeConfigurationError("Stripe requires a whsec_ webhook signing secret")
+    secret_store.set_secret(
+        stripe_webhook_secret_ref(owner_id, audience),
+        webhook_secret,
+        strong_required=True,
+    )
+
+
+def resolve_stripe_webhook_secret(
+    secret_store: SecretStore,
+    owner_id: str,
+    audience: str,
+) -> str | None:
+    value = secret_store.get_secret(
+        stripe_webhook_secret_ref(owner_id, audience),
+        strong_required=True,
+    )
+    return value if value is not None and _WEBHOOK_SECRET_RE.fullmatch(value) else None
 
 
 def ensure_stripe_binding_secret(
@@ -486,9 +522,14 @@ def _runtime_inputs(
             ctx.owner_id,
             ctx.app_id,
         )
+        webhook_secret = resolve_stripe_webhook_secret(
+            ctx.secret_store,
+            ctx.owner_id,
+            ctx.app_id,
+        )
     except RuntimeError:
         return None, "stripe_credential_refused"
-    if secret is None or binding_secret is None:
+    if secret is None or binding_secret is None or webhook_secret is None:
         return None, "stripe_not_configured"
     try:
         validate_stripe_restricted_key(secret)
@@ -646,10 +687,13 @@ __all__ = [
     "StripeCheckoutPayload",
     "StripeConfigurationError",
     "StripeReadyPayload",
+    "configure_stripe_webhook_secret",
     "configure_stripe_restricted_key",
     "ensure_stripe_binding_secret",
     "resolve_stripe_binding_secret",
+    "resolve_stripe_webhook_secret",
     "stripe_binding_secret_ref",
     "stripe_correlation_tag",
+    "stripe_webhook_secret_ref",
     "validate_stripe_restricted_key",
 ]

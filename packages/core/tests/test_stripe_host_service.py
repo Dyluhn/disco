@@ -25,6 +25,7 @@ from disco.core.stripe_host_service import (
     StripeAppConfigStore,
     StripeConfigurationError,
     configure_stripe_restricted_key,
+    configure_stripe_webhook_secret,
     ensure_stripe_binding_secret,
     stripe_correlation_tag,
 )
@@ -47,6 +48,7 @@ def _configured(
 ) -> tuple[StripeAppConfigStore, SecretStore, OriginApprovalStore]:
     secrets = _secret_store(tmp_path)
     configure_stripe_restricted_key(secrets, _RESTRICTED_KEY)
+    configure_stripe_webhook_secret(secrets, "owner-1", "app-1", "whsec_test_signing_secret")
     ensure_stripe_binding_secret(secrets, "owner-1", "app-1")
     configs = StripeAppConfigStore(tmp_path / "state.db")
     configs.configure(

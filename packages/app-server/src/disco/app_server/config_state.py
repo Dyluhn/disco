@@ -24,6 +24,7 @@ from disco.core.stripe_host_service import (
     StripeAppConfig,
     StripeAppConfigStore,
     configure_stripe_restricted_key,
+    configure_stripe_webhook_secret,
     ensure_stripe_binding_secret,
 )
 
@@ -262,12 +263,18 @@ class ConfigState:
 
     _RESERVED_SECRETS = frozenset({"openrouter", STRIPE_SECRET_REF})
 
+    @classmethod
+    def _reserved_secret(cls, name: str) -> bool:
+        return name in cls._RESERVED_SECRETS or name.startswith(
+            ("stripe.binding.", "stripe.webhook.")
+        )
+
     def list_secrets(self) -> SecretsListDTO:
-        names = [n for n in self._secrets.secret_names() if n not in self._RESERVED_SECRETS]
+        names = [n for n in self._secrets.secret_names() if not self._reserved_secret(n)]
         # The SPECIFIC stored keys that can't be decrypted (named, so the UI can
         # say which to fix) — generic, not the OpenRouter-only `locked` property.
         locked_names = [
-            n for n in self._secrets.undecryptable_names() if n not in self._RESERVED_SECRETS
+            n for n in self._secrets.undecryptable_names() if not self._reserved_secret(n)
         ]
         return SecretsListDTO(
             names=sorted(names),
@@ -291,7 +298,7 @@ class ConfigState:
         name = name.strip()
         from disco.core.llm.secret_refs import is_control_secret_ref
 
-        if name in self._RESERVED_SECRETS:
+        if self._reserved_secret(name):
             route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
             raise ValueError(f"use the dedicated {route} route for the {name} credential")
         if is_control_secret_ref(name):
@@ -306,9 +313,13 @@ class ConfigState:
 
     def clear_secret(self, name: str) -> SecretStatus:
         name = name.strip()
-        if name in self._RESERVED_SECRETS:
+        from disco.core.llm.secret_refs import is_control_secret_ref
+
+        if self._reserved_secret(name):
             route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
             raise ValueError(f"use the dedicated {route} route for the {name} credential")
+        if is_control_secret_ref(name):
+            raise ValueError(f"{name} is an internal control secret and cannot be cleared")
         self._secrets.clear_secret(name)
         return self.secret_status(name)
 
@@ -318,6 +329,7 @@ class ConfigState:
         owner_id: str,
         audience: str,
         restricted_key: str,
+        webhook_secret: str,
         plan_selector: str,
         stripe_price_id: str,
         allowed_return_origins: frozenset[str],
@@ -335,6 +347,12 @@ class ConfigState:
             enabled=enabled,
         )
         configure_stripe_restricted_key(self._secrets, restricted_key)
+        configure_stripe_webhook_secret(
+            self._secrets,
+            owner_id,
+            audience,
+            webhook_secret,
+        )
         ensure_stripe_binding_secret(self._secrets, owner_id, audience)
         config = self._stripe_configs.configure(
             owner_id=owner_id,

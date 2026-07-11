@@ -23,6 +23,7 @@ def make_stripe_router(state: ConfigState) -> APIRouter:
                 owner_id=current_owner_id(request),
                 audience=audience,
                 restricted_key=body.restricted_key.get_secret_value(),
+                webhook_secret=body.webhook_secret.get_secret_value(),
                 plan_selector=body.plan_selector,
                 stripe_price_id=body.stripe_price_id,
                 allowed_return_origins=frozenset(body.allowed_return_origins),
@@ -39,6 +40,7 @@ def make_stripe_router(state: ConfigState) -> APIRouter:
             allowed_return_origins=sorted(config.allowed_return_origins),
             enabled=config.enabled,
             credential_configured=True,
+            webhook_configured=True,
         )
 
     return router

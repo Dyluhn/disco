@@ -16,6 +16,8 @@ from disco.core.stripe_host_service import (
     STRIPE_API_URL,
     STRIPE_SECRET_REF,
     StripeAppConfigStore,
+    stripe_binding_secret_ref,
+    stripe_webhook_secret_ref,
 )
 from fastapi.testclient import TestClient
 
@@ -44,6 +46,7 @@ def configured_client(tmp_path):
 def _body(**overrides):
     body = {
         "restricted_key": _RESTRICTED_KEY,
+        "webhook_secret": "whsec_route_test_signing_secret",
         "plan_selector": "pro",
         "stripe_price_id": "price_ABCdef123456",
         "allowed_return_origins": ["https://app.example.com"],
@@ -63,6 +66,7 @@ def test_owner_can_configure_app_without_secret_ever_returning(configured_client
         "allowed_return_origins": ["https://app.example.com"],
         "enabled": True,
         "credential_configured": True,
+        "webhook_configured": True,
     }
     assert _RESTRICTED_KEY not in response.text
     assert "price_ABCdef123456" not in response.text
@@ -77,6 +81,14 @@ def test_owner_can_configure_app_without_secret_ever_returning(configured_client
         PAYMENTS_CHECKOUT_SERVICE_NAME,
         STRIPE_SECRET_REF,
     )
+    binding_ref = stripe_binding_secret_ref("owner-a", "app-1")
+    webhook_ref = stripe_webhook_secret_ref("owner-a", "app-1")
+    assert secrets.has_secret(binding_ref)
+    assert secrets.has_secret(webhook_ref)
+    listed = client.get("/api/secrets?owner_id=owner-a")
+    assert listed.status_code == 200
+    assert binding_ref not in listed.text
+    assert webhook_ref not in listed.text
 
 
 def test_full_access_key_and_extra_fields_are_refused_without_persistence(

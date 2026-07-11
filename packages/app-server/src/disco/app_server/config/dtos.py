@@ -185,6 +185,7 @@ class StripeConfigBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     restricted_key: SecretStr = Field(min_length=1, max_length=256)
+    webhook_secret: SecretStr = Field(min_length=1, max_length=256)
     plan_selector: str = Field(min_length=1, max_length=64)
     stripe_price_id: str = Field(min_length=1, max_length=206)
     allowed_return_origins: list[str] = Field(min_length=1, max_length=16)
@@ -199,6 +200,7 @@ class StripeConfigStatus(BaseModel):
     allowed_return_origins: list[str]
     enabled: bool
     credential_configured: bool
+    webhook_configured: bool
 
 
 class ProbeResult(BaseModel):
