@@ -392,6 +392,165 @@ class HostPreviewProxyMiddleware:
         )
         return True
 
+    async def _read_bounded_request_body(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+        *,
+        max_bytes: int,
+    ) -> bytes | None:
+        """Read the ASGI request body, returning it if within ``max_bytes``.
+
+        Sends a 413 response and returns ``None`` if the body exceeds the bound.
+        The iterator is a one-shot async generator over the ASGI receive channel,
+        so the body must be buffered in memory to support connect retries.
+        """
+        async def body_iterator():
+            more_body = True
+            while more_body:
+                message = await receive()
+                if message["type"] == "http.request":
+                    yield message.get("body", b"")
+                    more_body = message.get("more_body", False)
+                elif message["type"] == "http.disconnect":
+                    break
+
+        body_chunks: list[bytes] = []
+        body_size = 0
+        async for chunk in body_iterator():
+            body_size += len(chunk)
+            if body_size > max_bytes:
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 413,
+                        "headers": [(b"content-type", b"text/plain")],
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"preview request body too large",
+                    }
+                )
+                return None
+            body_chunks.append(chunk)
+        return b"".join(body_chunks)
+
+    async def _forward_http_response(
+        self,
+        send: Send,
+        res: httpx.Response,
+        *,
+        hop_by_hop: set[str],
+        content_type: str | None,
+    ) -> None:
+        """Forward an upstream HTTP response to the ASGI client.
+
+        Buffers ``text/html`` responses (when not content-encoded) so the
+        element-mention picker can inject UI chrome; streams everything else.
+        The caller is responsible for ``res.aclose()`` in a ``finally`` block.
+        """
+        content_encoding = (res.headers.get("content-encoding") or "").strip().lower()
+        buffer_html = (
+            content_type is not None
+            and content_type.split(";", 1)[0].strip().lower() == "text/html"
+            # Do not decompress an attacker-controlled encoded response into
+            # memory for injection; encoded HTML stays on the raw streaming path.
+            and content_encoding in {"", "identity"}
+        )
+        if buffer_html:
+            html_chunks: list[bytes] = []
+            html_size = 0
+            html_overflow = False
+            html_stream = res.aiter_bytes()
+            async for chunk in html_stream:
+                html_chunks.append(chunk)
+                html_size += len(chunk)
+                if html_size > MAX_ELEMENT_MENTION_HTML_BYTES:
+                    html_overflow = True
+                    break
+            if html_overflow:
+                res_headers = [
+                    (k.encode("latin1"), v.encode("latin1"))
+                    for k, v in res.headers.multi_items()
+                    if k.lower() not in hop_by_hop and not k.lower().startswith("proxy-")
+                ]
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": res.status_code,
+                        "headers": res_headers,
+                    }
+                )
+                for chunk in html_chunks:
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                async for chunk in html_stream:
+                    await send({"type": "http.response.body", "body": chunk, "more_body": True})
+                await send({"type": "http.response.body", "body": b"", "more_body": False})
+                return
+            body = b"".join(html_chunks)
+            injected = inject_element_mention_picker(body, content_type)
+            changed = injected != body
+            res_headers = []
+            for k, v in res.headers.multi_items():
+                k_lower = k.lower()
+                if k_lower in hop_by_hop or k_lower.startswith("proxy-"):
+                    continue
+                if k_lower in {"content-length", "content-encoding", "etag"}:
+                    continue
+                if changed and k_lower in {
+                    "content-security-policy",
+                    "content-security-policy-report-only",
+                }:
+                    continue
+                res_headers.append((k.encode("latin1"), v.encode("latin1")))
+            res_headers.append((b"content-length", str(len(injected)).encode("latin1")))
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": res.status_code,
+                    "headers": res_headers,
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": injected,
+                    "more_body": False,
+                }
+            )
+            return
+
+        res_headers = [
+            (k.encode("latin1"), v.encode("latin1"))
+            for k, v in res.headers.multi_items()
+            if k.lower() not in hop_by_hop and not k.lower().startswith("proxy-")
+        ]
+        await send(
+            {
+                "type": "http.response.start",
+                "status": res.status_code,
+                "headers": res_headers,
+            }
+        )
+        async for chunk in res.aiter_raw():
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": chunk,
+                    "more_body": True,
+                }
+            )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"",
+                "more_body": False,
+            }
+        )
+
     async def _proxy_http(self, scope: Scope, receive: Receive, send: Send, upstream: str) -> None:
         client = _get_client()
 
@@ -403,8 +562,6 @@ class HostPreviewProxyMiddleware:
 
         method = scope.get("method", "GET")
 
-        headers = []
-        declared_length: int | None = None
         hop_by_hop = {
             "connection",
             "keep-alive",
@@ -415,6 +572,8 @@ class HostPreviewProxyMiddleware:
             "te",
             "trailers",
         }
+        headers = []
+        declared_length: int | None = None
         for name, value in scope.get("headers", []):
             name_str = name.decode("latin1").lower()
             if name_str not in hop_by_hop and not name_str.startswith("proxy-"):
@@ -440,42 +599,11 @@ class HostPreviewProxyMiddleware:
         upstream_parsed = urllib.parse.urlparse(upstream)
         headers.append(("host", upstream_parsed.netloc))
 
-        async def body_iterator():
-            more_body = True
-            while more_body:
-                message = await receive()
-                if message["type"] == "http.request":
-                    yield message.get("body", b"")
-                    more_body = message.get("more_body", False)
-                elif message["type"] == "http.disconnect":
-                    break
-
-        # Buffer the request body in memory so we can rebuild the request on
-        # each retry attempt. The body iterator is a one-shot async generator
-        # over the ASGI receive channel; if the first connect attempt fails we
-        # cannot replay it. Buffering is bounded by request size; preview
-        # upstreams see small bodies (form posts, hmr pings, asset fetches).
-        body_chunks: list[bytes] = []
-        body_size = 0
-        async for chunk in body_iterator():
-            body_size += len(chunk)
-            if body_size > MAX_PREVIEW_REQUEST_BODY_BYTES:
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 413,
-                        "headers": [(b"content-type", b"text/plain")],
-                    }
-                )
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": b"preview request body too large",
-                    }
-                )
-                return
-            body_chunks.append(chunk)
-        body = b"".join(body_chunks)
+        body = await self._read_bounded_request_body(
+            scope, receive, send, max_bytes=MAX_PREVIEW_REQUEST_BODY_BYTES
+        )
+        if body is None:
+            return
 
         req = client.build_request(method, url, headers=headers, content=body)
         res = await self._send_with_connect_retry(client, req, send)
@@ -483,117 +611,14 @@ class HostPreviewProxyMiddleware:
             # All connect attempts failed; 502 already sent.
             return
 
-        content_type = res.headers.get("content-type")
-        content_encoding = (res.headers.get("content-encoding") or "").strip().lower()
-        buffer_html = (
-            content_type is not None
-            and content_type.split(";", 1)[0].strip().lower() == "text/html"
-            # Do not decompress an attacker-controlled encoded response into
-            # memory for injection; encoded HTML stays on the raw streaming path.
-            and content_encoding in {"", "identity"}
-        )
-        if buffer_html:
-            # HTML injection needs a complete document, but the upstream is an
-            # untrusted sandbox. Buffer at most the injection ceiling; larger or
-            # lengthless streams fall back to bounded-memory pass-through.
-            html_chunks: list[bytes] = []
-            html_size = 0
-            html_overflow = False
-            html_stream = res.aiter_bytes()
-            async for chunk in html_stream:
-                html_chunks.append(chunk)
-                html_size += len(chunk)
-                if html_size > MAX_ELEMENT_MENTION_HTML_BYTES:
-                    html_overflow = True
-                    break
-            if html_overflow:
-                res_headers = []
-                for k, v in res.headers.multi_items():
-                    k_lower = k.lower()
-                    if k_lower not in hop_by_hop and not k_lower.startswith("proxy-"):
-                        res_headers.append((k.encode("latin1"), v.encode("latin1")))
-                try:
-                    await send(
-                        {
-                            "type": "http.response.start",
-                            "status": res.status_code,
-                            "headers": res_headers,
-                        }
-                    )
-                    for chunk in html_chunks:
-                        await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                    async for chunk in html_stream:
-                        await send({"type": "http.response.body", "body": chunk, "more_body": True})
-                    await send({"type": "http.response.body", "body": b"", "more_body": False})
-                finally:
-                    await res.aclose()
-                return
-            body = b"".join(html_chunks)
-            injected = inject_element_mention_picker(body, content_type)
-            changed = injected != body
-            res_headers = []
-            for k, v in res.headers.multi_items():
-                k_lower = k.lower()
-                if k_lower in hop_by_hop or k_lower.startswith("proxy-"):
-                    continue
-                if k_lower in {"content-length", "content-encoding", "etag"}:
-                    continue
-                if changed and k_lower in {
-                    "content-security-policy",
-                    "content-security-policy-report-only",
-                }:
-                    continue
-                res_headers.append((k.encode("latin1"), v.encode("latin1")))
-            res_headers.append((b"content-length", str(len(injected)).encode("latin1")))
-            try:
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": res.status_code,
-                        "headers": res_headers,
-                    }
-                )
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": injected,
-                        "more_body": False,
-                    }
-                )
-            finally:
-                await res.aclose()
-            return
-
-        res_headers = []
-        for k, v in res.headers.multi_items():
-            k_lower = k.lower()
-            if k_lower not in hop_by_hop and not k_lower.startswith("proxy-"):
-                res_headers.append((k.encode("latin1"), v.encode("latin1")))
-
         # aclose in finally: a client disconnect mid-stream raises out of send()
         # and must not leak the upstream connection (orchestrator hardening).
         try:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": res.status_code,
-                    "headers": res_headers,
-                }
-            )
-            async for chunk in res.aiter_raw():
-                await send(
-                    {
-                        "type": "http.response.body",
-                        "body": chunk,
-                        "more_body": True,
-                    }
-                )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"",
-                    "more_body": False,
-                }
+            await self._forward_http_response(
+                send,
+                res,
+                hop_by_hop=hop_by_hop,
+                content_type=res.headers.get("content-type"),
             )
         finally:
             await res.aclose()

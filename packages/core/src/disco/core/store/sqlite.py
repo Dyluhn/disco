@@ -28,6 +28,7 @@ from ..migration import migrate_event
 from ..owners import DEFAULT_OWNER_ID, install_owner_id  # noqa: F401 - public re-export
 from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
+from .sqlite_schedules import ScheduleStore
 
 if TYPE_CHECKING:  # annotations only; runtime uses a local import (dod.py is a leaf)
     from ..dod import DoDSpec
@@ -287,6 +288,7 @@ class SqliteEventStore:
             "share_tokens.conversation_id), 'research') WHERE bundle_surface IS NULL"
         )
         self._conn.commit()
+        self._schedules = ScheduleStore(self._conn)
         self._write_lock = asyncio.Lock()
         # conversation_id -> set of live subscriber queues.
         self._subscribers: dict[str, set[asyncio.Queue[Event | _SubscriberOverflowMarker]]] = (
@@ -946,109 +948,31 @@ class SqliteEventStore:
         return cur.rowcount > 0
 
     # ---- schedules (RP-08) --------------------------------------------------
+    # Delegated to ScheduleStore to keep SqliteEventStore within its size budget.
 
     def create_schedule(self, row: dict) -> None:
-        """Persist a new schedule row. `row` must contain all required fields.
-        Uses INSERT OR IGNORE so a double-create is a no-op."""
-        self._conn.execute(
-            "INSERT OR IGNORE INTO schedules "
-            "(schedule_id, conversation_id, owner_id, rrule, description, "
-            "depth, model_override, created_at, enabled, next_run) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                row["schedule_id"],
-                row["conversation_id"],
-                row["owner_id"],
-                row["rrule"],
-                row["description"],
-                row.get("depth"),
-                row.get("model_override"),
-                row["created_at"],
-                1 if row.get("enabled", True) else 0,
-                row.get("next_run"),
-            ),
-        )
-        self._conn.commit()
+        self._schedules.create_schedule(row)
 
     def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
-        """List schedules for an owner, optionally filtered by conversation."""
-        if conversation_id is not None:
-            rows = self._conn.execute(
-                "SELECT * FROM schedules WHERE owner_id = ? AND conversation_id = ? "
-                "ORDER BY created_at DESC",
-                (owner_id, conversation_id),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                "SELECT * FROM schedules WHERE owner_id = ? ORDER BY created_at DESC",
-                (owner_id,),
-            ).fetchall()
-        return [dict(r) for r in rows]
+        return self._schedules.list_schedules(owner_id=owner_id, conversation_id=conversation_id)
 
     def list_enabled_schedules(self) -> list[dict]:
-        """All enabled schedules across all owners — used by the background loop."""
-        rows = self._conn.execute("SELECT * FROM schedules WHERE enabled = 1").fetchall()
-        return [dict(r) for r in rows]
+        return self._schedules.list_enabled_schedules()
 
     def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
-        """Delete a schedule. OWNER-SCOPED. Returns True if a row was removed."""
-        cur = self._conn.execute(
-            "DELETE FROM schedules WHERE schedule_id = ? AND owner_id = ?",
-            (schedule_id, owner_id),
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
+        return self._schedules.delete_schedule(schedule_id, owner_id=owner_id)
 
     def update_schedule_next_run(self, schedule_id: str, next_run: str | None) -> None:
-        """Update the next_run timestamp after a schedule fires."""
-        self._conn.execute(
-            "UPDATE schedules SET next_run = ? WHERE schedule_id = ?",
-            (next_run, schedule_id),
-        )
-        self._conn.commit()
+        self._schedules.update_schedule_next_run(schedule_id, next_run)
 
     def create_schedule_run(self, row: dict) -> None:
-        """Record a completed schedule run in the audit log."""
-        self._conn.execute(
-            "INSERT OR IGNORE INTO schedule_runs "
-            "(run_id, schedule_id, conversation_id, fired_at, coalesced) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (
-                row["run_id"],
-                row["schedule_id"],
-                row["conversation_id"],
-                row["fired_at"],
-                1 if row.get("coalesced", False) else 0,
-            ),
-        )
-        self._conn.commit()
+        self._schedules.create_schedule_run(row)
 
     def list_schedule_runs(self, schedule_id: str) -> list[dict]:
-        """List run history for a schedule."""
-        rows = self._conn.execute(
-            "SELECT * FROM schedule_runs WHERE schedule_id = ? ORDER BY fired_at DESC",
-            (schedule_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self._schedules.list_schedule_runs(schedule_id)
 
     def list_recent_schedule_runs(self, owner_id: str, limit: int = 50) -> list[dict]:
-        """Owner-scoped recent scheduled-run history for the activity dashboard, newest
-        first, joined with the schedule description + conversation title for display.
-        Scoped by JOINing schedule_runs → schedules (which carries owner_id); a run
-        whose schedule was deleted drops out (its history is gone with it, by design).
-        Returns rows: run_id, schedule_id, conversation_id, fired_at, coalesced,
-        description, title."""
-        rows = self._conn.execute(
-            "SELECT sr.run_id, sr.schedule_id, sr.conversation_id, sr.fired_at, "
-            "       sr.coalesced, s.description, c.title "
-            "FROM schedule_runs sr "
-            "JOIN schedules s ON s.schedule_id = sr.schedule_id "
-            "LEFT JOIN conversations c ON c.conversation_id = sr.conversation_id "
-            "WHERE s.owner_id = ? "
-            "ORDER BY sr.fired_at DESC LIMIT ?",
-            (owner_id, limit),
-        ).fetchall()
-        return [dict(r) for r in rows]
+        return self._schedules.list_recent_schedule_runs(owner_id, limit)
 
     async def _subscribe(self, conversation_id: str, after_seq: int | None) -> AsyncIterator[Event]:
         # Register the live queue FIRST so no append is missed between the

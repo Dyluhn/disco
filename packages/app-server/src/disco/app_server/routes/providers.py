@@ -127,7 +127,7 @@ def _token_price_per_m(value: object) -> float | None:
 
 def _context(value: object) -> int | None:
     try:
-        parsed = int(value) if value is not None else 0
+        parsed = int(value) if isinstance(value, (int, float, str)) else 0
     except (TypeError, ValueError):
         return None
     return parsed or None
@@ -165,8 +165,10 @@ def _normalize_openai_compat(payload: dict) -> list[ProviderCatalogueModelDTO]:
     for raw in data:
         if not isinstance(raw, dict) or raw.get("id") is None:
             continue
-        pricing = raw.get("pricing") if isinstance(raw.get("pricing"), dict) else {}
-        arch = raw.get("architecture") if isinstance(raw.get("architecture"), dict) else {}
+        raw_pricing = raw.get("pricing")
+        raw_arch = raw.get("architecture")
+        pricing = raw_pricing if isinstance(raw_pricing, dict) else {}
+        arch = raw_arch if isinstance(raw_arch, dict) else {}
         context_window = _context(
             raw.get("context_length")
             or raw.get("context_window")

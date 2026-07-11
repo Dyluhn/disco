@@ -568,16 +568,15 @@ class Driver:
                 _hint = f"{_hint} did you mean '{_suggestion}'?"
         return _hint
 
-    async def drive_step(self, view: View, events: list[Event]) -> tuple[AgentStep | None, Disp]:
-        # (e) ask the agent for ONE action (principle 1). The visible tool
-        # set is mode-scoped: while PLANNING the agent sees ONLY the plan
-        # tool (so it can't act before approval); while executing it sees
-        # everything except the plan tool.
-        # Escape temperature: jitter HARD to break a self-imitation chain —
-        # the single step right after a stuck reframe (StuckDetector's escape).
-        # escape_seq/acted_since_escape are pure functions of `events`
-        # (the stuck gate recomputes its own copy); recompute here for the
-        # temperature decision (folds into `_drive_step` on extraction).
+    def _prepare_drive_context(
+        self, view: View, events: list[Event]
+    ) -> tuple[OperatingMode, float | None, bool, bool, frozenset[str] | None]:
+        """Compute the request-context invariants for a single drive step.
+
+        Returns ``(mode, escape_temp, fresh_session, force_submit_only,
+        force_read_tools)``. Kept inline with drive_step's original logic so
+        retry counters, event ordering, and model requests are unchanged.
+        """
         escape_seq = signals.stuck_escape_seq(events)
         acted_since_escape = escape_seq is not None and any(
             isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
@@ -585,8 +584,7 @@ class Driver:
         )
         in_escape = escape_seq is not None and not acted_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
-        # Withhold the meta/handoff virtuals until this session's first
-        # real action (see _tools_for_step docstring — Phase-B re-run #4).
+
         cached_mode = self._loop.mode
         mode = self._loop._reconcile_mode_from_events(events)
         if (
@@ -600,13 +598,12 @@ class Driver:
                 cached_mode.value,
                 mode.value,
             )
+
         fresh_session = (
             mode != OperatingMode.PLANNING
             and signals.actions_since_last_resume(events) == 0
         )
-        # Forced-submit recovery narrows the offered tools to submit_plan plus a bounded
-        # read set. Prose-plan loops key off a replayed event marker; repeated planning
-        # refusals key off the tail refusal streak in the same event log.
+
         planning_refusal_force = (
             mode == OperatingMode.PLANNING
             and planning_tool_refusal_streak(events) >= _PLANNING_TOOL_REFUSAL_NARROW_AT
@@ -616,6 +613,66 @@ class Driver:
         )
         force_read_tools = (
             _PLANNING_TOOL_REFUSAL_READ_TOOLS if planning_refusal_force else None
+        )
+        return mode, escape_temp, fresh_session, force_submit_only, force_read_tools
+
+    async def _repair_degenerate_step(
+        self,
+        step: AgentStep,
+        *,
+        mode: OperatingMode,
+        events: list[Event],
+        transient_messages: list[LLMMessage],
+        empty_reasoning_repair_count: int,
+        prose_noop_repair_count: int,
+    ) -> tuple[bool, list[LLMMessage], int, int]:
+        """Handle empty-reasoning and prose-noop degenerate steps.
+
+        Emits diagnostics and appends transient user reminders exactly as the
+        inline code did, preserving counter limits and event order. Returns
+        ``(should_continue, transient_messages, empty_reasoning_repair_count,
+        prose_noop_repair_count)``.
+        """
+        if step.empty_reasoning_diagnostic is not None:
+            await self._persist_empty_reasoning_diagnostic(
+                step.empty_reasoning_diagnostic
+            )
+            if empty_reasoning_repair_count < 1:
+                return (
+                    True,
+                    transient_messages
+                    + [LLMMessage(role="user", content=_EMPTY_REASONING_REPAIR_REMINDER)],
+                    empty_reasoning_repair_count + 1,
+                    prose_noop_repair_count,
+                )
+
+        if (
+            mode != OperatingMode.PLANNING
+            and step.tool_call is None
+            and not step.finished
+            and not step.truncated
+            and step.thought.strip()
+            and prose_noop_repair_count < 1
+            and not signals.prose_noop_repair_seen_current_execution_segment(events)
+        ):
+            await self._persist_prose_noop_diagnostic(step)
+            return (
+                True,
+                transient_messages
+                + [LLMMessage(role="user", content=_PROSE_NOOP_REPAIR_REMINDER)],
+                empty_reasoning_repair_count,
+                prose_noop_repair_count + 1,
+            )
+
+        return False, transient_messages, empty_reasoning_repair_count, prose_noop_repair_count
+
+    async def drive_step(self, view: View, events: list[Event]) -> tuple[AgentStep | None, Disp]:
+        # (e) ask the agent for ONE action (principle 1). The visible tool
+        # set is mode-scoped: while PLANNING the agent sees ONLY the plan
+        # tool (so it can't act before approval); while executing it sees
+        # everything except the plan tool.
+        mode, escape_temp, fresh_session, force_submit_only, force_read_tools = (
+            self._prepare_drive_context(view, events)
         )
         try:
             attempts = 0
@@ -669,39 +726,15 @@ class Driver:
                         ),
                     )
 
-                    if step.empty_reasoning_diagnostic is not None:
-                        await self._persist_empty_reasoning_diagnostic(
-                            step.empty_reasoning_diagnostic
-                        )
-                        if empty_reasoning_repair_count < 1:
-                            empty_reasoning_repair_count += 1
-                            transient_messages.append(
-                                LLMMessage(
-                                    role="user",
-                                    content=_EMPTY_REASONING_REPAIR_REMINDER,
-                                )
-                            )
-                            continue
-
-                    if (
-                        mode != OperatingMode.PLANNING
-                        and step.tool_call is None
-                        and not step.finished
-                        and not step.truncated
-                        and step.thought.strip()
-                        and prose_noop_repair_count < 1
-                        and not signals.prose_noop_repair_seen_current_execution_segment(
-                            events
-                        )
-                    ):
-                        prose_noop_repair_count += 1
-                        await self._persist_prose_noop_diagnostic(step)
-                        transient_messages.append(
-                            LLMMessage(
-                                role="user",
-                                content=_PROSE_NOOP_REPAIR_REMINDER,
-                            )
-                        )
+                    should_continue, transient_messages, empty_reasoning_repair_count, prose_noop_repair_count = await self._repair_degenerate_step(
+                        step,
+                        mode=mode,
+                        events=events,
+                        transient_messages=transient_messages,
+                        empty_reasoning_repair_count=empty_reasoning_repair_count,
+                        prose_noop_repair_count=prose_noop_repair_count,
+                    )
+                    if should_continue:
                         continue
 
                     # Rung 7: Invalid-tool reroute (weak-model FC kit).

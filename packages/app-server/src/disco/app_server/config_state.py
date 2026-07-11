@@ -410,12 +410,12 @@ class ConfigState:
             capabilities=capabilities,
             price_in_per_m=(
                 catalogue_model.price_in_per_m
-                if prices_known and catalogue_model.price_in_per_m is not None
+                if catalogue_model is not None and catalogue_model.price_in_per_m is not None
                 else 0.0
             ),
             price_out_per_m=(
                 catalogue_model.price_out_per_m
-                if prices_known and catalogue_model.price_out_per_m is not None
+                if catalogue_model is not None and catalogue_model.price_out_per_m is not None
                 else 0.0
             ),
             pricing_mode="metered" if prices_known else "unknown",
