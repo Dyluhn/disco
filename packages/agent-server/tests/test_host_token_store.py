@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,7 @@ def _parts(token: str) -> tuple[str, str, str]:
 def test_mint_returns_opaque_split_token(store):
     token = store.mint("conv_1", "owner_a", "app:demo")
     prefix, selector, verifier = _parts(token)
-    assert prefix == "a2v0"
+    assert prefix == "a4v1"
     assert selector
     assert verifier
     # Verifier is 32 random bytes encoded urlsafe-base64 (43 chars).
@@ -47,6 +48,7 @@ def test_verify_valid_token(store):
     assert record.conversation_id == "conv_1"
     assert record.owner_id == "owner_a"
     assert record.audience == "app:demo"
+    assert record.version == 1
     assert record.is_active is True
 
 
@@ -113,6 +115,7 @@ def test_rotation_keeps_old_until_candidate_is_confirmed(store):
     assert new != old
     assert store.verify(old) is not None
     assert store.verify(new) is not None
+    assert store.verify(new).generation == 1
     new_selector = store.verify(new).selector
     assert store.finish_rotation("conv_1", "app:demo", keep_selector=new_selector) == 1
     assert store.verify(old) is None
@@ -130,6 +133,53 @@ def test_restart_durability(tmp_path):
     assert record is not None
     assert record.conversation_id == "conv_1"
     store2.close()
+
+
+def test_schema_migration_accepts_persisted_active_a2v0_token(tmp_path):
+    path = tmp_path / "legacy.db"
+    selector = "A" * 22
+    verifier = "B" * 43
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE host_service_tokens (
+            selector TEXT PRIMARY KEY, verifier_digest BLOB NOT NULL,
+            conversation_id TEXT NOT NULL, owner_id TEXT NOT NULL, audience TEXT NOT NULL,
+            allowed_services TEXT NOT NULL, allowed_origins TEXT NOT NULL, kind TEXT NOT NULL,
+            generation INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT, revoked_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO host_service_tokens VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+        (
+            selector,
+            HostTokenStore._digest(verifier),
+            "conv_1",
+            "owner_a",
+            "app:demo",
+            '["svc.ping"]',
+            "[]",
+            "deployed",
+            7,
+            "2026-07-11T00:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    with HostTokenStore(path) as migrated:
+        record = migrated.verify(f"a2v0.{selector}.{verifier}")
+        assert record is not None
+        assert record.version == 0
+        assert record.generation == 7
+        assert migrated.mint("conv_1", "owner_a", "app:new").startswith("a4v1.")
+
+
+def test_wire_version_must_match_persisted_version(store):
+    token = store.mint("conv_1", "owner_a", "app:demo")
+    _prefix, selector, verifier = _parts(token)
+    assert store.verify(f"a2v0.{selector}.{verifier}") is None
 
 
 def test_no_plaintext_verifier_in_database(store):
@@ -193,6 +243,62 @@ def test_mint_rejects_invalid_service_scope(store):
             "app:demo",
             allowed_services=frozenset({"Svc-Ping"}),
         )
+
+
+def test_rotation_generation_is_automatic_monotonic_and_owner_scoped(store):
+    initial = store.mint("conv_1", "owner_a", "app:demo", generation=40)
+    rotated = store.rotate("conv_1", "owner_a", "app:demo")
+    assert store.verify(initial).generation == 40
+    assert store.verify(rotated).generation == 41
+    next_rotated = store.rotate("conv_1", "owner_a", "app:demo")
+    assert store.verify(next_rotated).generation == 42
+    other_owner = store.rotate("conv_1", "owner_b", "app:demo")
+    assert store.verify(other_owner).generation == 0
+
+
+def test_finish_rotation_does_not_revoke_other_owner(store):
+    owner_a_old = store.mint("conv_1", "owner_a", "app:demo")
+    owner_b = store.mint("conv_1", "owner_b", "app:demo")
+    owner_a_new = store.rotate("conv_1", "owner_a", "app:demo")
+    selector = store.verify(owner_a_new).selector
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=selector) == 1
+    assert store.verify(owner_a_old) is None
+    assert store.verify(owner_b) is not None
+
+
+def test_unknown_selector_uses_digest_comparison(store, monkeypatch):
+    calls = 0
+    real_compare = secrets.compare_digest
+
+    def observed_compare(left, right):
+        nonlocal calls
+        calls += 1
+        return real_compare(left, right)
+
+    monkeypatch.setattr("secrets.compare_digest", observed_compare)
+    unknown = "a4v1.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    assert store.verify(unknown) is None
+    assert calls == 1
+
+
+def test_concurrent_rotations_allocate_distinct_increasing_generations(tmp_path):
+    path = tmp_path / "generation.db"
+    first = HostTokenStore(path)
+    second = HostTokenStore(path)
+    first.mint("conv_1", "owner_a", "app:demo")
+    barrier = threading.Barrier(2)
+
+    def rotate(store):
+        barrier.wait()
+        token = store.rotate("conv_1", "owner_a", "app:demo")
+        return store.verify(token).generation
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(rotate, first), pool.submit(rotate, second)]
+        generations = sorted(future.result() for future in futures)
+    assert generations == [1, 2]
+    first.close()
+    second.close()
 
 
 def test_concurrent_rotation_cannot_revoke_both_candidates(tmp_path):
