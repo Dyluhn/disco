@@ -309,6 +309,74 @@ async def test_filtered_egress_stands_up_and_tears_down_proxy_sidecar(tmp_path):
     assert sidecar.removed and net.removed
 
 
+async def test_sealed_host_service_box_gets_only_internal_relay_network(tmp_path):
+    client = FakeDockerClient()
+    cfg = SandboxConfig(
+        workspace_root=str(tmp_path),
+        host_service_upstream="https://agent.internal:8443",
+    )
+    svc = GvisorSandboxService(cfg, client=client)
+    inst = await svc.create(
+        SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
+    )
+    sidecar, sandbox = client.runs
+    net = client.networks.created[0]
+    assert net.attrs["internal"] is True
+    assert sandbox.run_kwargs["network"] == net.name
+    assert "network_mode" not in sandbox.run_kwargs
+    # Sealed means the sidecar publishes no preview ports and the generic proxy's
+    # allowlist is empty; the relay is the one narrow route off the internal net.
+    assert sidecar.run_kwargs["ports"] is None
+    proxy_launch = next(c for c in sidecar.exec_calls if "egress_proxy.py" in " ".join(c))
+    assert "--allow ''" in " ".join(proxy_launch)
+    assert "/capability_relay.py" in sidecar.fs
+    assert inst.host_service_relay_url == f"http://{net.name}:3211"
+    await inst.destroy()
+    assert sidecar.removed and net.removed
+
+
+async def test_required_host_service_relay_readiness_failure_aborts_and_cleans(tmp_path):
+    class BrokenRelayContainer(FakeContainer):
+        def exec_run(self, cmd, demux=False, workdir=None, detach=False):
+            if cmd[:2] == ["python3", "-c"] and cmd[-1] == "3211":
+                return _Exec(1, (b"", b"") if demux else b"")
+            return super().exec_run(cmd, demux=demux, workdir=workdir, detach=detach)
+
+    class BrokenRelayClient(FakeDockerClient):
+        def create(self, **kwargs):
+            container = BrokenRelayContainer(kwargs)
+            self.runs.append(container)
+            return container
+
+    client = BrokenRelayClient()
+    cfg = SandboxConfig(
+        workspace_root=str(tmp_path),
+        host_service_upstream="https://agent.internal:8443",
+    )
+    svc = GvisorSandboxService(cfg, client=client)
+    with pytest.raises(SandboxUnavailableError, match="relay failed readiness"):
+        await svc.create(
+            SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
+        )
+    assert client.runs[0].removed
+    assert client.networks.created[0].removed
+    assert client.last is None  # sandbox never started
+
+
+async def test_container_relay_rejects_sidecar_loopback_http_before_resources(tmp_path):
+    client = FakeDockerClient()
+    cfg = SandboxConfig(
+        workspace_root=str(tmp_path),
+        host_service_upstream="http://127.0.0.1:8000",
+    )
+    svc = GvisorSandboxService(cfg, client=client)
+    with pytest.raises(SandboxUnavailableError, match="sidecar loopback"):
+        await svc.create(
+            SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
+        )
+    assert client.runs == [] and client.networks.created == []
+
+
 async def test_resource_limits_and_workspace_mount_applied(tmp_path):
     client = FakeDockerClient()
     # EPIC H (P1): the deployment config is the MAXIMUM. cpu=2.0 / memory_mb=512 are WITHIN

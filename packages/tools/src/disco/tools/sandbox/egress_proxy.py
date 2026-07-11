@@ -102,6 +102,7 @@ class AllowlistProxy:
         require_global: bool = False,
         web_ports_only: bool = False,
         denied_ips: Iterable[str] = (),
+        denied_hosts: Iterable[str] = (),
         resolver: Callable[[str, int], Any] | None = None,
     ):
         self._allow = allow
@@ -110,6 +111,9 @@ class AllowlistProxy:
         self._require_global = require_global
         self._web_ports_only = web_ports_only
         self._denied_ips = frozenset(_canonical_ip(value) for value in denied_ips if value)
+        self._denied_hosts = frozenset(
+            value.lower().strip().strip("[]") for value in denied_hosts if value.strip()
+        )
         self._resolver = resolver
         self._server: asyncio.Server | None = None
         self.allowed = 0
@@ -141,7 +145,7 @@ class AllowlistProxy:
         unique: list[tuple[int, str]] = []
         seen: set[str] = set()
         for family, value in targets:
-            ip = _canonical_ip(cast(str, value))
+            ip = _canonical_ip(cast("str", value))
             if isinstance(ip, ipaddress.IPv4Address):
                 family = socket.AF_INET
             if str(ip) in seen:
@@ -220,7 +224,7 @@ class AllowlistProxy:
         port = int(port_s) if port_s.isdigit() else 443
         # drain the rest of the CONNECT headers (up to the blank line)
         await _drain_headers(reader)
-        if not self._allow(host):
+        if host.lower().strip().strip("[]") in self._denied_hosts or not self._allow(host):
             self.denied += 1
             await self._reply(writer, _FORBIDDEN)
             return
@@ -251,7 +255,7 @@ class AllowlistProxy:
             await self._reply(writer, _BAD_REQUEST)
             return
         headers = await _read_headers(reader)
-        if not self._allow(host):
+        if host.lower().strip().strip("[]") in self._denied_hosts or not self._allow(host):
             self.denied += 1
             await self._reply(writer, _FORBIDDEN)
             return
@@ -354,6 +358,7 @@ async def _run(
     *,
     public_only: bool,
     denied_ips: list[str],
+    denied_hosts: list[str],
 ) -> None:
     predicate = (lambda _host: True) if public_only else make_predicate(entries)
     proxy = AllowlistProxy(
@@ -362,6 +367,7 @@ async def _run(
         require_global=True,
         web_ports_only=public_only,
         denied_ips=denied_ips,
+        denied_hosts=denied_hosts,
     )
     await proxy.serve_forever()
 
@@ -384,15 +390,22 @@ def main(argv: list[str] | None = None) -> None:
         default=os.environ.get("EGRESS_DENY_IPS", ""),
         help="Comma-separated host-owned global IPs to deny in addition to non-global ranges.",
     )
+    parser.add_argument(
+        "--deny-host",
+        default=os.environ.get("EGRESS_DENY_HOSTS", ""),
+        help="Comma-separated exact hostnames denied even in public-web mode.",
+    )
     args = parser.parse_args(argv)
     entries = [e for e in (x.strip() for x in args.allow.split(",")) if e]
     denied_ips = [e for e in (x.strip() for x in args.deny_ip.split(",")) if e]
+    denied_hosts = [e for e in (x.strip() for x in args.deny_host.split(",")) if e]
     asyncio.run(
         _run(
             args.port,
             entries,
             public_only=bool(args.public_only),
             denied_ips=denied_ips,
+            denied_hosts=denied_hosts,
         )
     )
 

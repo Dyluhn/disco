@@ -517,6 +517,7 @@ def proxy_run_argv(
     *,
     public_only: bool = False,
     deny_ips: frozenset[str] = frozenset(),
+    deny_hosts: frozenset[str] = frozenset(),
 ) -> list[str]:
     """The command that runs the allowlisting proxy inside the sidecar. The proxy
     script is `put_archive`'d to /egress_proxy.py first (it's stdlib-only, so the
@@ -526,6 +527,8 @@ def proxy_run_argv(
         argv.append("--public-only")
     if deny_ips:
         argv.extend(["--deny-ip", ",".join(sorted(deny_ips))])
+    if deny_hosts:
+        argv.extend(["--deny-host", ",".join(sorted(deny_hosts))])
     return argv
 
 
@@ -779,6 +782,7 @@ class ContainerInstance:
     # attr in create() — that shadows the class attr with a real object.
     _egress_sidecar: Any | None = None
     _egress_network: Any | None = None
+    _host_service_relay_url: str | None = None
 
     def __init__(
         self,
@@ -827,6 +831,11 @@ class ContainerInstance:
     def _alive(self) -> None:
         if self._destroyed:
             raise SandboxError(f"sandbox instance {self.id} has been destroyed")
+
+    @property
+    def host_service_relay_url(self) -> str | None:
+        """Capability-only internal URL; never includes the bearer credential."""
+        return self._host_service_relay_url
 
     def _safe_reload(self, obj: Any = None) -> bool:
         """Bounded wrapper around `reload()` (docker-py / podman-py) on `obj`, which

@@ -424,6 +424,56 @@ async def test_filtered_sidecar_published_with_preview_ports_sandbox_not():
     assert "ports" not in client.last.create_kwargs
 
 
+async def test_podman_sealed_host_service_box_has_capability_only_relay():
+    fs: dict[str, bytes] = {}
+    client = FakePodmanClient(fs=fs)
+    cli = FakeCli(fs)
+    cfg = SandboxConfig(
+        backend="podman",
+        runtime="crun",
+        host_service_upstream="https://agent.internal:8443",
+    )
+    svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
+    inst = await svc.create(
+        SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
+    )
+    sidecar, sandbox = client.created
+    net = client.networks.created[0]
+    assert net.attrs["internal"] is True
+    assert sidecar.create_kwargs["ports"] is None
+    assert sandbox.create_kwargs["networks"] == {net.name: {}}
+    assert "/capability_relay.py" in fs
+    assert inst.host_service_relay_url == f"http://{net.name}:3211"
+    await inst.destroy()
+    assert sidecar.removed and net.removed
+
+
+async def test_podman_relay_failure_fails_creation_and_cleans_sidecar():
+    class BrokenRelayCli(FakeCli):
+        def __call__(self, argv, timeout):
+            if argv[5:7] == ["python3", "-c"] and argv[-1] == "3211":
+                self.calls.append(argv)
+                return (1, b"", b"")
+            return super().__call__(argv, timeout)
+
+    fs: dict[str, bytes] = {}
+    client = FakePodmanClient(fs=fs)
+    cli = BrokenRelayCli(fs)
+    cfg = SandboxConfig(
+        backend="podman",
+        runtime="crun",
+        host_service_upstream="https://agent.internal:8443",
+    )
+    svc = PodmanSandboxService(cfg, client=client, cli_runner=cli)
+    with pytest.raises(SandboxUnavailableError, match="relay failed readiness"):
+        await svc.create(
+            SandboxSpec(host_services=True), owner_id="o", conversation_id="c"
+        )
+    assert client.created[0].removed
+    assert client.networks.created[0].removed
+    assert len(client.created) == 1
+
+
 async def test_inbound_forwarder_launched_on_sidecar_via_cli_one_shell():
     from disco.tools.sandbox._container import PUBLISHED_PORTS
 

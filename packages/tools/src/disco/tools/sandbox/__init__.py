@@ -12,6 +12,9 @@ from .base import (
     SandboxSpec,
     SandboxUnavailableError,
 )
+from .base import (
+    HostServiceRelayInstance as HostServiceRelayInstance,
+)
 from .config import (
     SandboxConfig,
     default_local_config,
@@ -62,7 +65,7 @@ def service_from_config(cfg: SandboxConfig) -> SandboxService:
         # The unisolated dev backend (shares the host PID + net namespace).
         # Reaching it requires an EXPLICIT backend=="process"; the Build/soak path
         # additionally gates it behind the dev opt-out (preflight_build_sandbox_backend).
-        return ProcessSandboxService()
+        return ProcessSandboxService(config=cfg)
     # W3 C-1: FAIL CLOSED. An unknown / garbage backend must NEVER silently fall
     # through to host execution — that turned a typo or a poisoned config write into
     # an un-sandboxed run. Refuse it here; the caller surfaces the error rather than

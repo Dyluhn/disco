@@ -45,6 +45,11 @@ class SandboxConfig(BaseModel):
     # local socket; the remote host's IP for Docker-over-SSH). Set a LAN/tailnet IP to make
     # previews reachable from other devices, not just the agent-server's own host.
     preview_host: str = ""
+    # Sole operator-pinned agent-server origin used by the sandbox capability
+    # relay. Empty is valid until a SandboxSpec requests host_services, at which
+    # point provisioning fails closed. HTTP is accepted only for loopback (the
+    # process dev backend); container/remote deployments must configure HTTPS.
+    host_service_upstream: str = ""
     # Optional explicit global addresses owned by the sandbox daemon host.
     # Non-global ranges are always denied; this closes the remaining public-IP
     # hairpin when a host owns a globally-routable interface.
