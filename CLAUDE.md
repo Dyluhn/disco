@@ -1,3 +1,25 @@
+# ⚠️ FABLE DEMO LANE — read this first
+
+This worktree (`fable/demo-lane`) has ONE job: run the Disco app and drive it with
+Playwright/Firefox to capture screens for the **v4 release/demo video**. The shot-list
++ narration is in **`V4-VIDEO-BRIEF.md`** at the repo root. This lane is deliberately
+isolated from the security workstream (owned by a separate session).
+
+**DO NOT in this lane:**
+- Read, grep, open, or run anything about SECURITY internals — the risk analyzers
+  (`core/security/**`), egress guard (`host_egress.py`), secret resolution
+  (`secret_refs.py`), origin approvals, or exploit tests. They're either removed from
+  this branch or blocked by `.claude/settings.json`. You don't need them to run the app.
+- Enumerate processes, ports, or other sessions (`ps`/`ss`/`lsof`/`netstat`/`nmap`) —
+  never needed to make a video, and it trips safeguards.
+
+**DO in this lane:**
+- `uv sync --all-packages` (NEVER `--frozen`), build the frontend, boot the servers,
+  drive the app with **Playwright/Firefox** (this host rasterizes text/oklch in Firefox,
+  not Chromium — Playwright is Firefox-only here), and shoot the `V4-VIDEO-BRIEF.md` chapters.
+
+---
+
 # CLAUDE.md — operating manual for AI agents working in this repo
 
 This file is for an LLM coding agent (Claude Code et al.). It captures the

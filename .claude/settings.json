@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(ps:*)",
+      "Bash(ss:*)",
+      "Bash(lsof:*)",
+      "Bash(netstat:*)",
+      "Bash(nmap:*)",
+      "Bash(top:*)",
+      "Bash(htop:*)",
+      "Read(./packages/core/src/disco/core/security/**)",
+      "Read(./packages/core/src/disco/core/host_egress.py)",
+      "Read(./packages/core/src/disco/core/llm/secret_refs.py)",
+      "Read(./packages/core/src/disco/core/origin_approvals.py)",
+      "Read(./packages/app-server/src/disco/app_server/origin_approval_wiring.py)",
+      "Read(./packages/app-server/src/disco/app_server/routes/security.py)",
+      "Grep(./packages/core/src/disco/core/security/**)"
+    ]
+  }
+}
