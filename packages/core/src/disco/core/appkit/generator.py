@@ -1856,7 +1856,7 @@ def _emit_disco_client_ts() -> str:
         '        "Content-Type": "application/json",\n'
         '        "Authorization": `Bearer ${token}`,\n'
         "      },\n"
-        '      redirect: "error",\n'
+        '      redirect: "manual",\n'
         "      signal: controller.signal,\n"
         '      cache: "no-store",\n'
         "      body: bodyBytes,\n"

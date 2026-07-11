@@ -27,6 +27,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .appkit_cloudflare import CloudflareDeployCorsMiddleware, make_cloudflare_router
+from .appkit_cloudflare.stripe_deploy import StripeDeployDependencies
 from .auth import AgentAuthMiddleware, make_auth_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
 from .host_service_bus import make_host_service_bus_router
@@ -218,6 +219,12 @@ def create_app(
     app.include_router(make_sandbox_router(runtime))
     # EPIC O — owner-only Cloudflare deploy API (real deploy is HARD-GATED +
     # dry-run by default; the mutation path sits OUTSIDE the LLM tool loop).
-    app.include_router(make_cloudflare_router(store, runtime))
+    app.include_router(
+        make_cloudflare_router(
+            store,
+            runtime,
+            stripe_dependencies=StripeDeployDependencies(token_store, stripe_configs),
+        )
+    )
 
     return app

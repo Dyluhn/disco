@@ -1151,8 +1151,8 @@ def test_disco_client_shim_content_invariants(monkeypatch: pytest.MonkeyPatch):
     assert '"Authorization"' in shim
     assert "Bearer" in shim
 
-    # ---- redirect: "error" ----
-    assert 'redirect: "error"' in shim
+    # ---- workerd-supported manual redirects, rejected by the non-2xx gate ----
+    assert 'redirect: "manual"' in shim
 
     # ---- AbortController timeout ----
     assert "AbortController" in shim
@@ -1318,9 +1318,16 @@ assert.deepEqual(await svc(env, "svc.ping", { value: 1 }), { ok: true });
 assert.equal(timeoutSeen, 10000);
 assert.equal(request.url, "https://bus.example/_disco/svc/svc.ping");
 assert.equal(request.init.method, "POST");
-assert.equal(request.init.redirect, "error");
+assert.equal(request.init.redirect, "manual");
 assert.equal(request.init.cache, "no-store");
 assert.equal(new TextDecoder().decode(request.init.body), '{"value":1}');
+globalThis.fetch = async () => new Response(null, {
+  status: 302, headers: { Location: "https://redirect-secret.example" },
+});
+assertSanitized(await errorOf(() => svc(env, "svc.ping", {})));
+globalThis.fetch = async () => new Response('{"ok":true}', {
+  headers: { "Content-Type": "application/json" },
+});
 
 const badBuses = ["http://example.com", "ftp://localhost",
   "https://user:pass@bus.example", "https://bus.example/path"];
