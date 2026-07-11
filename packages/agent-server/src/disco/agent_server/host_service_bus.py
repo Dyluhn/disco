@@ -15,6 +15,11 @@ from disco.core.host_services import (
     call_host_service,
     valid_host_service_name,
 )
+from disco.core.stripe_host_service import (
+    PAYMENTS_CHECKOUT_SERVICE_NAME,
+    STRIPE_API_HOSTS,
+    StripeAppConfigStore,
+)
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -35,7 +40,7 @@ _HANDLER_TIMEOUT_S = 6.0
 _DOWNSTREAM_TIMEOUT_S = 5.0
 _SERVICE_ALLOW_HOSTS: Mapping[str, frozenset[str]] = {
     "svc.ping": frozenset(),
-    "payments.checkout": frozenset({"api.stripe.com"}),
+    PAYMENTS_CHECKOUT_SERVICE_NAME: STRIPE_API_HOSTS,
 }
 
 
@@ -178,6 +183,7 @@ def _audit(record: HostTokenRecord, service: str, outcome: str) -> None:
 
 def make_host_service_context_factory(
     runtime: ConversationRuntime | None,
+    stripe_config_store: StripeAppConfigStore | None = None,
 ) -> HostServiceContextFactory:
     """Construct handler context only from authenticated server-side state."""
 
@@ -193,6 +199,7 @@ def make_host_service_context_factory(
                 credential_kind=record.kind,
                 credential_generation=record.generation,
                 request_timeout_s=_DOWNSTREAM_TIMEOUT_S,
+                stripe_config_store=stripe_config_store,
             )
         secret_store = runtime._secret_store
         approvals = runtime._config_store.approval_store(secret_store=secret_store)
@@ -208,6 +215,7 @@ def make_host_service_context_factory(
             credential_kind=record.kind,
             credential_generation=record.generation,
             request_timeout_s=_DOWNSTREAM_TIMEOUT_S,
+            stripe_config_store=stripe_config_store,
         )
 
     return factory
@@ -217,8 +225,9 @@ def make_host_service_bus_router(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
     token_store: HostTokenStore,
+    stripe_config_store: StripeAppConfigStore | None = None,
 ) -> APIRouter:
-    context_factory = make_host_service_context_factory(runtime)
+    context_factory = make_host_service_context_factory(runtime, stripe_config_store)
     router = APIRouter()
 
     @router.post(_BUS_PATH_PREFIX + "{service:path}")

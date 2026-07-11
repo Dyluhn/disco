@@ -89,6 +89,7 @@ if TYPE_CHECKING:
 
     from .llm.secrets import SecretStore
     from .origin_approvals import OriginApprovalStore
+    from .stripe_host_service import StripeAppConfigStore
 
 
 class HostServiceError(Exception):
@@ -137,6 +138,7 @@ class HostServiceContext:
     credential_kind: str = ""
     credential_generation: int = 0
     request_timeout_s: float = 5.0
+    stripe_config_store: StripeAppConfigStore | None = None
 
 
 def return_url_allowed(ctx: HostServiceContext, url: str) -> bool:

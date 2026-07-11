@@ -54,6 +54,7 @@ _LEGACY_IMPORTS: dict[str, tuple[str, ...]] = {
 }
 _PINNED_REF_ORIGINS: dict[str, frozenset[str]] = {
     OPENROUTER_REF: frozenset({"https://openrouter.ai"}),
+    "stripe": frozenset({"https://api.stripe.com"}),
 }
 
 
@@ -65,7 +66,12 @@ def is_legacy_env_name(ref: str | None) -> bool:
     return bool(ref and _ENV_NAME_RE.fullmatch(ref.strip()))
 
 
-def resolve_provider_secret(ref: str | None, store: SecretStore | None = None) -> str | None:
+def resolve_provider_secret(
+    ref: str | None,
+    store: SecretStore | None = None,
+    *,
+    strong_required: bool = False,
+) -> str | None:
     """Resolve a provider secret by secret-ref id from SecretStore only."""
     if not ref:
         return None
@@ -74,8 +80,10 @@ def resolve_provider_secret(ref: str | None, store: SecretStore | None = None) -
         return None
     secret_store = store or SecretStore()
     if name in {OPENROUTER_REF, OPENROUTER_API_KEY_ENV, OPENROUTER_API_KEY_ENV_LEGACY}:
+        if strong_required:
+            return secret_store.get_secret(OPENROUTER_REF, strong_required=True)
         return secret_store.get_openrouter_key()
-    return secret_store.get_secret(name)
+    return secret_store.get_secret(name, strong_required=strong_required)
 
 
 def secret_ref_allowed_for_origin(ref: str | None, url: str | None) -> bool:
@@ -187,9 +195,7 @@ def _import_env_secret(
     if not value:
         return
     if not store.can_store or store.locked:
-        diagnostics.append(
-            f"cannot migrate {target_ref!r}: SecretStore is unavailable or locked"
-        )
+        diagnostics.append(f"cannot migrate {target_ref!r}: SecretStore is unavailable or locked")
         return
     if target_ref == OPENROUTER_REF:
         store.set_openrouter_key(value)
