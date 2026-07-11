@@ -22,7 +22,8 @@ generated app in the workspace, each returning a PASS/FAIL with concrete evidenc
 * ``worker_contract``     — STRUCTURALLY inspect `worker/index.ts` (presence +
                             ordering + parameterization + guard-first; NOT live
                             execution — the local runtime proof is
-                            packages/core/tests/test_workerd_persistence.py): the public POST /api/leads
+                            packages/core/tests/test_workerd_persistence.py): the
+                            public POST /api/leads
                             region CONTAINS a Drizzle insert in a
                             non-dead position; GET /api/leads AND /admin each
                             early-return 401 via the auth guard as the FIRST statement
@@ -105,7 +106,11 @@ from disco.core.appkit import (
     resolve_primitive,
 )
 from disco.core.appkit.primitive_verify import lead_gen_verify
-from disco.core.appkit.primitives import PrimitiveVerifyResult
+from disco.core.appkit.primitives import (
+    PrimitiveDefinition,
+    PrimitiveVerifyResult,
+    required_security_primitives,
+)
 from disco.core.appkit.spec import AppSpec, DesignSpec
 
 # Compatibility re-exports (WO-A3): the pure static inspectors moved VERBATIM to
@@ -137,9 +142,7 @@ _VITE_CONFIG_RELPATH = "vite.config.ts"
 _VITE_PACKAGE_SHA_RELPATH = ".disco/appkit-vite-package.sha256"
 _VITE_BUILD_TIMEOUT_S = 300
 _BUILT_PREVIEW_NAME = "appkit-built-vite"
-_VITE_PREVIEW_COMMAND = (
-    "npx vite preview --host 0.0.0.0 --port {port} --strictPort"
-)
+_VITE_PREVIEW_COMMAND = "npx vite preview --host 0.0.0.0 --port {port} --strictPort"
 # Where app_add_primitive persists applied-primitive provenance records (keep in
 # sync with app_kit._PRIMITIVES_RELDIR) — the A3.2 enforcement input.
 _PRIMITIVES_RELDIR = ".disco/primitives"
@@ -244,8 +247,10 @@ def _tail(text: str, *, limit: int = 2000) -> str:
 
 
 def _exec_failure_evidence(step: str, res: Any) -> str:
-    reason = "timed out" if bool(getattr(res, "timed_out", False)) else (
-        f"exit {getattr(res, 'exit_code', 'unknown')}"
+    reason = (
+        "timed out"
+        if bool(getattr(res, "timed_out", False))
+        else (f"exit {getattr(res, 'exit_code', 'unknown')}")
     )
     stderr = _tail(str(getattr(res, "stderr", "") or ""))
     stdout = _tail(str(getattr(res, "stdout", "") or ""))
@@ -264,9 +269,7 @@ def _composite_fingerprint(checks: list[dict[str, Any]], embedded_fp: str) -> st
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def build_verdict(
-    checks: list[dict[str, Any]], embedded: dict[str, Any] | None
-) -> dict[str, Any]:
+def build_verdict(checks: list[dict[str, Any]], embedded: dict[str, Any] | None) -> dict[str, Any]:
     """Assemble the W-45-compatible verdict from the per-check results + the
     embedded `verify_web_app` (structural) verdict."""
     emb = embedded or {}
@@ -283,9 +286,7 @@ def build_verdict(
         )
         next_action = ""
     else:
-        summary = (
-            f"verify_appkit_app: {first_fail['name']} FAILED — {first_fail['evidence']}"
-        )
+        summary = f"verify_appkit_app: {first_fail['name']} FAILED — {first_fail['evidence']}"
         next_action = str(first_fail["evidence"])
     fp = _composite_fingerprint(checks, str(emb.get("failure_fingerprint") or ""))
     return {
@@ -395,19 +396,34 @@ class VerifyAppKitAppTool:
             # coverage stay COMMON to every primitive.
             prim = resolve_primitive(app.app_kind) if app is not None else None
             verify_fn = (
-                prim.verify
-                if (prim is not None and prim.verify is not None)
-                else lead_gen_verify
+                prim.verify if (prim is not None and prim.verify is not None) else lead_gen_verify
             )
             result = verify_fn(app, design, tree)
             checks.extend(self._primitive_result_checks(result, prim))
+
+            # Security-classed add-ons are derived from strict AppSpec metadata,
+            # never solely from deletable workspace provenance.  Each must pass
+            # both its pure source/tree verifier and its host-owned live runner.
+            security_primitives = required_security_primitives(app)
+            for security_prim in security_primitives:
+                checks.extend(
+                    await self._security_primitive_checks(ctx, security_prim, app, design, tree)
+                )
 
             # A3.2 — applied-primitive enforcement (fail-closed): every
             # `.disco/primitives/*.json` provenance record lands a
             # `primitive_verify:<id>` check in this SAME list, so the W-45 verdict
             # (and the existing finish gate consuming it) enforces template_only
             # primitives without any loop changes.
-            checks.extend(await self._applied_primitive_checks(ctx, app, design, tree))
+            checks.extend(
+                await self._applied_primitive_checks(
+                    ctx,
+                    app,
+                    design,
+                    tree,
+                    required_ids=frozenset(item.id for item in security_primitives),
+                )
+            )
 
             # last. route + section coverage + the embedded verify_web_app verdict — COMMON.
             # Vite SPAs need a platform-owned compiled preview: the model has no shell in
@@ -424,12 +440,8 @@ class VerifyAppKitAppTool:
                             prepared.failure_evidence.encode("utf-8")
                         ).hexdigest()[:16],
                     }
-                    route_check = _check(
-                        "route_coverage", False, prepared.failure_evidence
-                    )
-                    section_check = _check(
-                        "section_coverage", False, prepared.failure_evidence
-                    )
+                    route_check = _check("route_coverage", False, prepared.failure_evidence)
+                    section_check = _check("section_coverage", False, prepared.failure_evidence)
                 else:
                     embedded, route_check, section_check = await self._browser_checks(
                         ctx, app, prepared.url
@@ -468,6 +480,8 @@ class VerifyAppKitAppTool:
         app: AppSpec | None,
         design: DesignSpec | None,
         tree: dict[str, str],
+        *,
+        required_ids: frozenset[str] = frozenset(),
     ) -> list[dict[str, Any]]:
         """A3.2 — applied-primitive enforcement (fail-closed). Every
         `.disco/primitives/*.json` provenance record (written by app_add_primitive)
@@ -512,6 +526,10 @@ class VerifyAppKitAppTool:
                     )
                 )
                 continue
+            if prim.id in required_ids:
+                # The mandatory AppSpec-derived security path already checked
+                # this exact record and dispatched the live exploit harness.
+                continue
             if prim.verify is None:
                 if prim.tier == "template_only":
                     checks.append(
@@ -524,16 +542,141 @@ class VerifyAppKitAppTool:
                     )
                 # fillable + no verify: nothing to enforce — the model owns the output.
                 continue
-            result = prim.verify(app, design, tree)
+            record_tree = dict(tree)
+            if raw is not None:
+                record_tree[relpath] = raw
+            result = prim.verify(app, design, record_tree)
             evidence = result.detail
             first_fail = next((c for c in result.checks if not c.passed), None)
             if first_fail is not None:
                 evidence = (
-                    f"{result.detail}; first failure: "
-                    f"{first_fail.name} — {first_fail.evidence}"
+                    f"{result.detail}; first failure: {first_fail.name} — {first_fail.evidence}"
                 )
             checks.append(_check(check_name, bool(result.ok), evidence))
         return checks
+
+    async def _security_primitive_checks(
+        self,
+        ctx: ToolContext,
+        prim: PrimitiveDefinition,
+        app: AppSpec | None,
+        design: DesignSpec | None,
+        tree: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        """Run the pure and live halves of a mandatory security primitive.
+
+        The live callback is an injected host capability, not a registry global.
+        Missing wiring, exceptions, wrong/empty results, duplicate checks, and an
+        ``ok`` bit inconsistent with the check breakdown all fail closed.
+        """
+        static_name = f"security_primitive:{prim.id}"
+        live_id = prim.live_verify_id
+        live_name = f"primitive_live:{live_id or prim.id}"
+        if prim.verify is None or live_id is None:
+            return [
+                _check(
+                    static_name,
+                    False,
+                    f"security primitive {prim.id!r} is missing static/live verification wiring.",
+                ),
+                _check(live_name, False, "live verification was not dispatched."),
+            ]
+        static_result = prim.verify(app, design, tree)
+        static_consistency = self._verify_result_problem(static_result)
+        if static_consistency is not None:
+            return [
+                _check(static_name, False, static_consistency),
+                _check(
+                    live_name,
+                    False,
+                    "live verification withheld because static verification is invalid.",
+                ),
+            ]
+        static_failure = next((item for item in static_result.checks if not item.passed), None)
+        static_evidence = static_result.detail
+        if static_failure is not None:
+            static_evidence = (
+                f"{static_result.detail}; first failure: {static_failure.name} — "
+                f"{static_failure.evidence}"
+            )
+        static_check = _check(static_name, static_result.ok, static_evidence)
+        if not static_result.ok:
+            return [
+                static_check,
+                _check(
+                    live_name,
+                    False,
+                    "live verification withheld until trusted static checks pass.",
+                ),
+            ]
+        if app is None or design is None:
+            return [
+                static_check,
+                _check(
+                    live_name,
+                    False,
+                    "valid AppSpec and DesignSpec are required for live verification.",
+                ),
+            ]
+        callback = ctx.primitive_live_verifier
+        if callback is None:
+            return [
+                static_check,
+                _check(live_name, False, "host live verifier is not wired (fail-closed)."),
+            ]
+        try:
+            live_result = await callback(live_id, app, design, tree)
+        except Exception as exc:  # noqa: BLE001 - host failures become a closed gate
+            return [
+                static_check,
+                _check(
+                    live_name,
+                    False,
+                    f"host live verifier raised {type(exc).__name__} (fail-closed).",
+                ),
+            ]
+        if not isinstance(live_result, PrimitiveVerifyResult):
+            return [
+                static_check,
+                _check(live_name, False, "host live verifier returned an unknown result shape."),
+            ]
+        live_problem = self._verify_result_problem(live_result)
+        if live_problem is not None:
+            return [static_check, _check(live_name, False, live_problem)]
+        actual_live_checks = frozenset(item.name for item in live_result.checks)
+        if actual_live_checks != frozenset(prim.live_verify_checks):
+            return [
+                static_check,
+                _check(
+                    live_name,
+                    False,
+                    "host live verifier returned unknown/missing exploit checks (fail-closed).",
+                ),
+            ]
+        live_failure = next((item for item in live_result.checks if not item.passed), None)
+        live_evidence = live_result.detail
+        if live_failure is not None:
+            live_evidence = (
+                f"{live_result.detail}; first failure: {live_failure.name} — "
+                f"{live_failure.evidence}"
+            )
+        return [static_check, _check(live_name, live_result.ok, live_evidence)]
+
+    @staticmethod
+    def _verify_result_problem(result: PrimitiveVerifyResult) -> str | None:
+        if not result.detail.strip() or not result.checks:
+            return "primitive verifier returned an empty result (fail-closed)."
+        names = [item.name for item in result.checks]
+        if any(not item.name.strip() or not item.evidence.strip() for item in result.checks):
+            return "primitive verifier returned an empty check name/evidence (fail-closed)."
+        if len(set(names)) != len(names):
+            return "primitive verifier returned duplicate check names (fail-closed)."
+        checks_ok = all(item.passed for item in result.checks)
+        if result.ok != checks_ok:
+            return (
+                "primitive verifier result is inconsistent with its check breakdown (fail-closed)."
+            )
+        return None
 
     # ---- helpers -------------------------------------------------------------
 
@@ -569,18 +712,19 @@ class VerifyAppKitAppTool:
         model-edited beyond the projection)."""
         assert ctx.sandbox is not None
         paths: set[str] = set(_LEGACY_TREE_PATHS)
+        paths.add(APPSPEC_RELPATH)
         if app is not None and design is not None:
             try:
                 paths.update(generate(app, design))
             except Exception:  # noqa: BLE001 — a projection failure must not kill verify
                 pass  # the legacy path set below still drives the ported checks
+        for security_prim in required_security_primitives(app):
+            paths.add(f"{_PRIMITIVES_RELDIR}/{security_prim.id}.json")
         try:
             names = await ctx.sandbox.list_dir(_COMPONENTS_DIR)
         except Exception:  # noqa: BLE001 — no components dir
             names = []
-        paths.update(
-            f"{_COMPONENTS_DIR}/{name}" for name in names if name.endswith(".tsx")
-        )
+        paths.update(f"{_COMPONENTS_DIR}/{name}" for name in names if name.endswith(".tsx"))
         tree: dict[str, str] = {}
         for path in sorted(paths):
             text = await self._read_text(ctx, path)
@@ -627,9 +771,7 @@ class VerifyAppKitAppTool:
         """
         assert ctx.sandbox is not None
         package_json = await self._read_text(ctx, _PACKAGE_RELPATH)
-        if not _is_vite_app_tree(
-            package_json, await ctx.sandbox.file_exists(_VITE_CONFIG_RELPATH)
-        ):
+        if not _is_vite_app_tree(package_json, await ctx.sandbox.file_exists(_VITE_CONFIG_RELPATH)):
             return _PreparedPreview(url=(requested_url or "").strip())
 
         vtool = VerifyWebAppTool()
@@ -654,9 +796,7 @@ class VerifyAppKitAppTool:
             return _PreparedPreview(url=base, failure_evidence=build.evidence)
         return await self._start_built_vite_preview(ctx)
 
-    async def _fetch_preview_index(
-        self, ctx: ToolContext, base_url: str
-    ) -> _PreviewProbe | None:
+    async def _fetch_preview_index(self, ctx: ToolContext, base_url: str) -> _PreviewProbe | None:
         """Fetch the current preview's root from inside the sandbox.
 
         Returns ``None`` only when the sandbox fake/output is not the JSON frame this
@@ -677,9 +817,7 @@ class VerifyAppKitAppTool:
             "'error': str(e)}))\n"
         )
         try:
-            res = await ctx.sandbox.exec_shell(
-                f"python3 -c {shlex.quote(script)}", timeout_s=15
-            )
+            res = await ctx.sandbox.exec_shell(f"python3 -c {shlex.quote(script)}", timeout_s=15)
         except Exception:  # noqa: BLE001 — let browser checks handle opaque fakes
             return None
         try:
@@ -717,22 +855,16 @@ class VerifyAppKitAppTool:
             # registry snapshot). Live-caught 2026-07-03: ci without a lock is EUSAGE.
             has_lock = await self._sandbox_file_exists(ctx, "package-lock.json")
             install_cmd = (
-                "npm ci --no-audit --no-fund"
-                if has_lock
-                else "npm install --no-audit --no-fund"
+                "npm ci --no-audit --no-fund" if has_lock else "npm install --no-audit --no-fund"
             )
             try:
-                ci = await ctx.sandbox.exec_shell(
-                    install_cmd, timeout_s=_VITE_BUILD_TIMEOUT_S
-                )
+                ci = await ctx.sandbox.exec_shell(install_cmd, timeout_s=_VITE_BUILD_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001 — loud verdict evidence
                 return _BuildResult(
                     False, f"platform Vite build could not run `{install_cmd}`: {exc}"
                 )
             if getattr(ci, "exit_code", 1) != 0 or bool(getattr(ci, "timed_out", False)):
-                return _BuildResult(
-                    False, _exec_failure_evidence(install_cmd, ci)
-                )
+                return _BuildResult(False, _exec_failure_evidence(install_cmd, ci))
             try:
                 await ctx.sandbox.write_file(
                     _VITE_PACKAGE_SHA_RELPATH, (package_sha + "\n").encode("utf-8")
@@ -771,7 +903,8 @@ class VerifyAppKitAppTool:
                 ),
             )
 
-        status = getattr(getattr(session, "status", ""), "value", str(getattr(session, "status", "")))
+        raw_status = getattr(session, "status", "")
+        status = getattr(raw_status, "value", str(raw_status))
         port = getattr(session, "port", None)
         if status not in {"running", "unavailable"} or not isinstance(port, int):
             detail = str(getattr(session, "detail", "") or "preview did not become healthy")
@@ -868,9 +1001,7 @@ class VerifyAppKitAppTool:
         found: set[str] = set()
         for route in routes:
             route_url = base if route == "/" else base + "/" + route.lstrip("/")
-            out = await BrowserTool().run(
-                BrowserArgs(action="navigate", url=route_url), ctx
-            )
+            out = await BrowserTool().run(BrowserArgs(action="navigate", url=route_url), ctx)
             if out.success and out.structured:
                 for marker in out.structured.get("appkit_sections", []) or []:
                     if marker:

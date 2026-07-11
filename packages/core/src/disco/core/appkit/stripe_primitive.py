@@ -20,20 +20,15 @@ these models.
   only supported live composition is an auth-capable records app; every other
   composition fails closed in the top-level generator.
 
-The host-side ``payments.checkout`` handler, secret custody, and the live
-adversarial verifier are separate WO-F4.1 slices.  Until that verifier lands,
-``tier="template_only"`` + ``verify=None`` intentionally keeps the finish gate
-closed even though the generated data plane exists.
+The host-side ``payments.checkout`` handler and secret custody remain separate
+WO-F4.1 slices.  Verification is deliberately two-stage: ``stripe_verify`` is a
+pure, secret-free provenance/trusted-output check, while ``live_verify_id``
+requires a host-injected adversarial runner (forged signature, replay, secret
+absence, restricted key, and price injection).  Neither stage can ship alone.
 
-THE FAIL-CLOSED GATE IS INTENTIONAL. This primitive registers with
-``tier="template_only"`` and ``verify=None``. Under WO-A3's rule
-(template_only + verify=None ⇒ cannot ship unverified), any app that adds
-``stripe`` FAILS the finish gate until the deferred security session lands
-the REAL adversarial ``verify`` harness (forged-sig rejected, replay deduped,
-leaked-key blast radius bounded). Do NOT "fix" a blocked build by setting
-``verify`` to a passing stub, flipping the tier, or otherwise working around
-the gate — that would ship unverified payments code. ``verify`` flips from
-None only WITH the real harness from the security spec doc.
+THE FAIL-CLOSED GATE IS INTENTIONAL. Do not replace the host live callback with
+a passing stub, flip the tier, or derive membership only from the deletable
+provenance file. AppSpec.stripe itself makes both verification stages mandatory.
 """
 
 from __future__ import annotations
@@ -41,13 +36,21 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import re
+from collections.abc import Mapping
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from .primitives import HostService, PrimitiveDefinition, register_primitive
+from .primitives import (
+    HostService,
+    PrimitiveDefinition,
+    PrimitiveVerifyResult,
+    VerifyCheck,
+    register_primitive,
+)
 from .recipes import SiteRecipe
-from .spec import AppSpec, DesignSpec, Page, Section, SectionContent
+from .spec import AppSpec, DesignSpec, Page, Section, SectionContent, serialize_app_spec
 
 STRIPE_PRIMITIVE_ID = "stripe"
 
@@ -71,6 +74,10 @@ _FLAG_PATTERN = r"^[a-z][a-z0-9_]*$"
 
 _MAX_FEATURES = 8
 _MAX_FEATURE_LEN = 120
+
+_STRIPE_PROVENANCE_RELPATH = ".disco/primitives/stripe.json"
+_STRIPE_LIVE_VERIFY_ID = "stripe.security.v1"
+_SECRET_VALUE_RE = re.compile(r"(?i)(?:sk_(?:live|test)|rk_(?:live|test)|whsec_)[A-Za-z0-9_-]{4,}")
 
 _FlagStr = Annotated[str, StringConstraints(min_length=1, max_length=64, pattern=_FLAG_PATTERN)]
 
@@ -356,6 +363,235 @@ def generate_stripe(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     }
 
 
+def _stripe_result(checks: list[VerifyCheck]) -> PrimitiveVerifyResult:
+    failed = sum(not check.passed for check in checks)
+    return PrimitiveVerifyResult(
+        ok=failed == 0,
+        detail=f"{len(checks) - failed} passed / {failed} failed",
+        checks=tuple(checks),
+    )
+
+
+def _stripe_metadata_check(app: AppSpec | None) -> VerifyCheck:
+    if app is None or app.stripe is None:
+        return VerifyCheck(
+            "stripe_metadata_binding",
+            False,
+            "Stripe provenance requires strict AppSpec.stripe metadata (fail-closed).",
+        )
+    meta = app.stripe
+    stripe_sections = [
+        section
+        for page in app.pages
+        for section in page.sections
+        if section.id == STRIPE_PRICING_SECTION_ID
+    ]
+    reasons: list[str] = []
+    if app.app_kind != "records":
+        reasons.append("app_kind is not records")
+    if meta.app_binding != _stripe_app_binding(app):
+        reasons.append("app_binding does not match the canonical app identity")
+    if meta.plan_selector != meta.entitlement_flag:
+        reasons.append("plan_selector does not match entitlement_flag")
+    if app.roles.count(meta.entitlement_flag) != 1:
+        reasons.append("entitlement_flag is not declared exactly once in AppSpec.roles")
+    if not any(role != meta.entitlement_flag for role in app.roles):
+        reasons.append("records app has no non-payment base role")
+    if len(stripe_sections) != 1:
+        reasons.append("AppSpec does not contain exactly one stripe_pricing section")
+    return VerifyCheck(
+        "stripe_metadata_binding",
+        not reasons,
+        (
+            "StripeMeta is bound to the records app, canonical app identity, plan selector, "
+            "entitlement role, and unique pricing section."
+            if not reasons
+            else "; ".join(reasons)
+        ),
+    )
+
+
+def _stripe_provenance_check(app: AppSpec | None, tree: Mapping[str, str]) -> VerifyCheck:
+    raw = tree.get(_STRIPE_PROVENANCE_RELPATH)
+    if raw is None:
+        return VerifyCheck(
+            "stripe_provenance_binding",
+            False,
+            f"missing {_STRIPE_PROVENANCE_RELPATH}; AppSpec.stripe cannot ship "
+            "without exact provenance.",
+        )
+    try:
+        record = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return VerifyCheck(
+            "stripe_provenance_binding", False, f"invalid Stripe provenance JSON: {exc}"
+        )
+    if not isinstance(record, dict) or set(record) != {
+        "primitive_id",
+        "tier",
+        "applied_at",
+        "spec",
+    }:
+        return VerifyCheck(
+            "stripe_provenance_binding",
+            False,
+            "Stripe provenance must contain exactly primitive_id, tier, applied_at, and spec.",
+        )
+    if record.get("primitive_id") != STRIPE_PRIMITIVE_ID or record.get("tier") != "template_only":
+        return VerifyCheck(
+            "stripe_provenance_binding",
+            False,
+            "Stripe provenance primitive_id/tier does not match the registered security primitive.",
+        )
+    if not isinstance(record.get("applied_at"), str) or not record["applied_at"].strip():
+        return VerifyCheck(
+            "stripe_provenance_binding", False, "Stripe provenance applied_at is empty."
+        )
+    try:
+        spec = StripeSpec.model_validate(record.get("spec"))
+    except Exception as exc:  # noqa: BLE001 - validation detail is safe declarative metadata
+        return VerifyCheck(
+            "stripe_provenance_binding", False, f"invalid Stripe provenance spec: {exc}"
+        )
+    if app is None or app.stripe is None:
+        return VerifyCheck(
+            "stripe_provenance_binding",
+            False,
+            "Stripe provenance exists without AppSpec.stripe metadata (fail-closed).",
+        )
+    meta = app.stripe
+    section = next(
+        (
+            section
+            for page in app.pages
+            for section in page.sections
+            if section.id == STRIPE_PRICING_SECTION_ID
+        ),
+        None,
+    )
+    expected_content = {
+        "heading": spec.plan_name,
+        "subheading": spec.price_display,
+        "body": _pending_body(spec),
+        "cta_label": None,
+        "items": tuple(spec.features),
+    }
+    reasons: list[str] = []
+    if meta.plan_selector != spec.entitlement_flag:
+        reasons.append("plan_selector differs from provenance entitlement_flag")
+    if meta.entitlement_flag != spec.entitlement_flag:
+        reasons.append("StripeMeta entitlement_flag differs from provenance")
+    if meta.success_message != spec.success_message:
+        reasons.append("StripeMeta success_message differs from provenance")
+    if section is None:
+        reasons.append("stripe_pricing section is missing")
+    else:
+        if section.kind != "pricing" or section.variant_id != STRIPE_PRICING_VARIANT_ID:
+            reasons.append("stripe_pricing kind/variant differs from the trusted primitive")
+        actual_content = (
+            section.content.model_dump(mode="python") if section.content is not None else None
+        )
+        if actual_content != expected_content:
+            reasons.append("stripe_pricing content differs from the validated provenance spec")
+    return VerifyCheck(
+        "stripe_provenance_binding",
+        not reasons,
+        (
+            "Validated StripeSpec provenance exactly matches StripeMeta, entitlement "
+            "role, and pricing section."
+            if not reasons
+            else "; ".join(reasons)
+        ),
+    )
+
+
+def _stripe_trusted_tree_check(
+    app: AppSpec | None,
+    design: DesignSpec | None,
+    tree: Mapping[str, str],
+) -> VerifyCheck:
+    if app is None or app.stripe is None or design is None:
+        return VerifyCheck(
+            "stripe_trusted_tree",
+            False,
+            "cannot reconstruct trusted Stripe output without valid AppSpec.stripe and DesignSpec.",
+        )
+    # Lazy import avoids the generator -> stripe_primitive registration cycle.
+    from .generator import generate
+
+    try:
+        expected = generate(app, design)
+    except Exception as exc:  # noqa: BLE001 - projection errors become a closed gate
+        return VerifyCheck("stripe_trusted_tree", False, f"trusted Stripe projection failed: {exc}")
+    stripe_components = [
+        path
+        for path, contents in expected.items()
+        if path.startswith("src/components/") and 'data-appkit-section="stripe_pricing"' in contents
+    ]
+    if len(stripe_components) != 1:
+        return VerifyCheck(
+            "stripe_trusted_tree",
+            False,
+            "trusted projection did not emit exactly one Stripe pricing component.",
+        )
+    sensitive_paths = (
+        "worker/index.ts",
+        "worker/disco-client.ts",
+        "wrangler.toml",
+        "schema.sql",
+        "migrations/0001_init.sql",
+        "src/db/schema.ts",
+        stripe_components[0],
+    )
+    mismatched = [path for path in sensitive_paths if tree.get(path) != expected.get(path)]
+    if tree.get(".disco/appspec.json") != serialize_app_spec(app):
+        mismatched.append(".disco/appspec.json")
+    return VerifyCheck(
+        "stripe_trusted_tree",
+        not mismatched,
+        (
+            "Stripe Worker, host client, Wrangler entrypoint, SQL schemas, pricing component, "
+            "and canonical AppSpec are byte-identical to Disco's trusted projection."
+            if not mismatched
+            else "security-sensitive Stripe file mismatch: " + ", ".join(mismatched)
+        ),
+    )
+
+
+def _stripe_secret_absence_check(tree: Mapping[str, str]) -> VerifyCheck:
+    hits = sorted(path for path, contents in tree.items() if _SECRET_VALUE_RE.search(contents))
+    return VerifyCheck(
+        "stripe_static_secret_absence",
+        not hits,
+        (
+            "No Stripe secret-value patterns occur in the trusted emitted tree."
+            if not hits
+            else "Stripe secret-value pattern found in: " + ", ".join(hits)
+        ),
+    )
+
+
+def stripe_verify(
+    app: AppSpec | None,
+    design: DesignSpec | None,
+    tree: Mapping[str, str],
+) -> PrimitiveVerifyResult:
+    """Secret-free half of the mandatory Stripe security gate.
+
+    The tools layer separately dispatches ``_STRIPE_LIVE_VERIFY_ID`` through a
+    host-owned ToolContext callback.  Passing this deterministic half alone is
+    intentionally insufficient to ship.
+    """
+    return _stripe_result(
+        [
+            _stripe_metadata_check(app),
+            _stripe_provenance_check(app, tree),
+            _stripe_trusted_tree_check(app, design, tree),
+            _stripe_secret_absence_check(tree),
+        ]
+    )
+
+
 register_primitive(
     PrimitiveDefinition(
         id=STRIPE_PRIMITIVE_ID,
@@ -371,13 +607,17 @@ register_primitive(
             HostService("payments.ready"),
         ),
         spec_schema=StripeSpec,
-        # verify=None ON PURPOSE — the fail-closed gate. WO-A3's rule makes a
-        # template_only primitive with verify=None UNSHIPPABLE, which is exactly
-        # right until the real adversarial harness (forged-sig rejected, replay
-        # deduped, leaked-key blast radius bounded) exists. NEVER set a passing
-        # stub here; see the module docstring + docs/wo-f41-stripe-security-spec.md.
-        verify=None,
+        verify=stripe_verify,
         apply_spec=apply_stripe_spec,
+        live_verify_id=_STRIPE_LIVE_VERIFY_ID,
+        live_verify_checks=(
+            "forged_signature_rejected",
+            "replay_deduped",
+            "secret_absence",
+            "restricted_key_only",
+            "price_injection_refused",
+        ),
+        security_metadata_field="stripe",
     )
 )
 
@@ -393,4 +633,5 @@ __all__ = [
     "default_stripe_app_spec",
     "generate_stripe",
     "prepare_stripe_app_spec",
+    "stripe_verify",
 ]

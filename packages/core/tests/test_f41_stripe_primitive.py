@@ -121,14 +121,21 @@ def test_registered_through_generator_force_import() -> None:
 
 
 def test_fail_closed_registration_invariants() -> None:
-    """WO-A3's rule keys on tier=='template_only' AND verify is None ⇒ a
-    stripe-bearing app CANNOT pass the finish gate. These two facts are the
-    seam's whole safety story — if either assertion ever fails, someone tried
-    to work around the gate (see the module docstring: forbidden)."""
+    """Stripe stays template-only and requires both its pure checker and a
+    host-owned live verifier id; neither is optional."""
     prim = get_primitive(STRIPE_PRIMITIVE_ID)
     assert prim is not None
     assert prim.tier == "template_only"
-    assert prim.verify is None  # ON PURPOSE — never a passing stub
+    assert prim.verify is not None
+    assert prim.live_verify_id == "stripe.security.v1"
+    assert prim.security_metadata_field == "stripe"
+    assert prim.live_verify_checks == (
+        "forged_signature_rejected",
+        "replay_deduped",
+        "secret_absence",
+        "restricted_key_only",
+        "price_injection_refused",
+    )
     # Webhooks are inbound Worker routes, never a host-service capability.
     assert prim.host_contract == (
         HostService("payments.checkout"),
@@ -524,6 +531,45 @@ def test_anonymous_pricing_card_is_a_disabled_sign_in_state() -> None:
     worker = tree["worker/index.ts"]
     anonymous = worker[worker.index("async function stripeStatus") :]
     assert "ready: false, authenticated: false" in anonymous
+
+
+def test_runtime_readiness_is_bound_to_current_host_secrets() -> None:
+    _, tree = _filled_tree()
+    worker = tree["worker/index.ts"]
+    proof = worker[worker.index("async function stripeRuntimeProof") :]
+    assert "stripe-runtime\\0${STRIPE_APP_BINDING}\\0${STRIPE_PLAN_SELECTOR}" in proof
+    assert '{ name: "HMAC", hash: "SHA-256" }' in proof
+    assert "binding_proof: await stripeRuntimeProof(binding)" in proof
+    assert "webhook_proof: await stripeRuntimeProof(webhook)" in proof
+    ready = worker[worker.index("async function stripeHostReady") :]
+    assert 'svc(env, "payments.ready"' in ready
+    assert "...proofs" in ready
+    checkout = worker[worker.index("async function stripeCheckout") :]
+    assert "if (!stripeRuntimeReady(env))" in checkout
+    assert 'svc(env, "payments.checkout"' in checkout
+    assert "...proofs" in checkout
+
+
+def test_runtime_probe_is_admin_only_and_webhooks_pause_during_rotation() -> None:
+    _, tree = _filled_tree()
+    worker = tree["worker/index.ts"]
+    probe = worker[
+        worker.index("async function stripeRuntimeProbe") : worker.index(
+            "interface RouteHandlers"
+        )
+    ]
+    assert "await isAdminAuthorized(request, env)" in probe
+    assert "ready: await stripeHostReady(env)" in probe
+    route = worker.index('rawPath === "/api/stripe/runtime-probe"')
+    csrf_gate = worker.index('return json({ error: "bad origin" }, 403)')
+    assert csrf_gate < route
+    webhook = worker[
+        worker.index("async function stripeWebhook") : worker.index(
+            "async function stripeHostReady"
+        )
+    ]
+    assert 'env.STRIPE_RUNTIME_READY !== "1"' in webhook
+    assert 'return stripeJson({ error: "payments unavailable" }, 503)' in webhook
 
 
 @pytest.mark.parametrize(

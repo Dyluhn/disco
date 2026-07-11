@@ -55,6 +55,7 @@ _PRICE_ID_RE = re.compile(r"^price_[A-Za-z0-9]{6,200}$")
 _RETURN_PATH_RE = re.compile(r"^/(?:[A-Za-z0-9._~-]+/?)*$")
 _BINDING_SECRET_RE = re.compile(r"^stb_[A-Za-z0-9_-]{43}$")
 _WEBHOOK_SECRET_RE = re.compile(r"^whsec_[A-Za-z0-9_-]{6,250}$")
+_PROOF_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_STRIPE_RESPONSE_BYTES = 256 * 1024
 
 
@@ -165,6 +166,12 @@ def stripe_correlation_tag(
         raise StripeConfigurationError("Stripe app binding secret is invalid")
     message = f"{app_id}\0{plan_selector}\0{user_id}".encode()
     return hmac.new(binding_secret.encode(), message, hashlib.sha256).hexdigest()
+
+
+def stripe_runtime_proof(secret: str, app_id: str, plan_selector: str) -> str:
+    """Prove the Worker's injected secret matches current host configuration."""
+    message = f"stripe-runtime\0{app_id}\0{plan_selector}".encode()
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
 
 def _validate_identity(label: str, value: str) -> str:
@@ -437,6 +444,8 @@ class StripeCheckoutPayload(BaseModel):
     user_id: int = Field(gt=0)
     success_path: str
     cancel_path: str
+    binding_proof: str = Field(pattern=_PROOF_RE.pattern)
+    webhook_proof: str = Field(pattern=_PROOF_RE.pattern)
 
     @field_validator("plan_selector")
     @classmethod
@@ -462,6 +471,8 @@ class StripeReadyPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     plan_selector: str
+    binding_proof: str = Field(pattern=_PROOF_RE.pattern)
+    webhook_proof: str = Field(pattern=_PROOF_RE.pattern)
 
     @field_validator("plan_selector")
     @classmethod
@@ -499,6 +510,8 @@ class _StripeRuntimeInputs:
 def _runtime_inputs(
     ctx: HostServiceContext,
     plan_selector: str,
+    binding_proof: str,
+    webhook_proof: str,
 ) -> tuple[_StripeRuntimeInputs | None, str]:
     config_store = ctx.stripe_config_store
     if config_store is None or ctx.secret_store is None or ctx.approvals is None:
@@ -531,6 +544,12 @@ def _runtime_inputs(
         return None, "stripe_credential_refused"
     if secret is None or binding_secret is None or webhook_secret is None:
         return None, "stripe_not_configured"
+    expected_binding = stripe_runtime_proof(binding_secret, ctx.app_id, plan_selector)
+    expected_webhook = stripe_runtime_proof(webhook_secret, ctx.app_id, plan_selector)
+    if not hmac.compare_digest(binding_proof, expected_binding) or not hmac.compare_digest(
+        webhook_proof, expected_webhook
+    ):
+        return None, "stripe_runtime_stale"
     try:
         validate_stripe_restricted_key(secret)
     except StripeConfigurationError:
@@ -597,7 +616,12 @@ def _parse_stripe_checkout_url(response: GuardedResponse) -> str | None:
 async def _payments_checkout_handler(
     payload: dict[str, Any], ctx: HostServiceContext
 ) -> dict[str, Any]:
-    runtime, error = _runtime_inputs(ctx, payload["plan_selector"])
+    runtime, error = _runtime_inputs(
+        ctx,
+        payload["plan_selector"],
+        payload["binding_proof"],
+        payload["webhook_proof"],
+    )
     if runtime is None:
         return _safe_failure(error)
     success_url = runtime.return_origin + payload["success_path"]
@@ -652,7 +676,12 @@ async def _payments_checkout_handler(
 async def _payments_ready_handler(
     payload: dict[str, Any], ctx: HostServiceContext
 ) -> dict[str, Any]:
-    runtime, _error = _runtime_inputs(ctx, payload["plan_selector"])
+    runtime, _error = _runtime_inputs(
+        ctx,
+        payload["plan_selector"],
+        payload["binding_proof"],
+        payload["webhook_proof"],
+    )
     return {"ready": runtime is not None}
 
 
@@ -694,6 +723,7 @@ __all__ = [
     "resolve_stripe_webhook_secret",
     "stripe_binding_secret_ref",
     "stripe_correlation_tag",
+    "stripe_runtime_proof",
     "stripe_webhook_secret_ref",
     "validate_stripe_restricted_key",
 ]

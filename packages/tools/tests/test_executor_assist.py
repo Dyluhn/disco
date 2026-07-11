@@ -9,7 +9,11 @@ because they build the context by hand."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pytest
+from disco.core.appkit.primitives import PrimitiveVerifyResult
+from disco.core.appkit.spec import AppSpec, DesignSpec
 from disco.core.llm import ModelExecutionPolicy
 from disco.tools.anatomy import ToolDef
 from disco.tools.executor import DefaultToolExecutor
@@ -55,3 +59,23 @@ async def test_build_context_assist_defaults_off():
     ex = DefaultToolExecutor(reg, ToolScope(allowed_tools=frozenset({"probe"})))
     ctx = await ex._build_context(_TOOL_DEF)
     assert ctx.assist is False
+
+
+async def test_build_context_stamps_host_live_primitive_verifier():
+    async def live_verify(
+        live_id: str,
+        app: AppSpec,
+        design: DesignSpec,
+        tree: Mapping[str, str],
+    ) -> PrimitiveVerifyResult:
+        del live_id, app, design, tree
+        return PrimitiveVerifyResult(ok=False, detail="not invoked")
+
+    reg = ToolRegistry()
+    ex = DefaultToolExecutor(
+        reg,
+        ToolScope(allowed_tools=frozenset({"probe"})),
+        primitive_live_verifier=live_verify,
+    )
+    ctx = await ex._build_context(_TOOL_DEF)
+    assert ctx.primitive_live_verifier is live_verify
