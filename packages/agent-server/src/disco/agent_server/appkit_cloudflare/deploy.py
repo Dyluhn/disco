@@ -59,6 +59,7 @@ from disco.core.appkit.spec import (
     load_design_spec_from_bytes,
 )
 from disco.core.appkit.stripe_primitive import stripe_verify
+from disco.core.appkit.webhook_primitive import webhook_verify
 from disco.core.llm.secrets import SecretStore, WeakSecretError
 
 from ..redaction import redact_text
@@ -75,6 +76,12 @@ from .stripe_deploy import (
     StripeDeployError,
     StripeDeploymentLifecycle,
     stripe_lifecycle_for,
+)
+from .webhook_deploy import (
+    WebhookDeployContext,
+    WebhookDeployError,
+    WebhookDeploymentLifecycle,
+    webhook_lifecycle_for,
 )
 from .wrangler import BuildBackend, BuildResult, CommandResult, CommandRunner
 
@@ -873,13 +880,18 @@ def _stage_deploy_tree(workspace: Path) -> Path:
                 dest.write_bytes(data if data is not None else b"")
         # Trusted reconstruction inputs live under the otherwise-pruned `.disco`
         # tree. Freeze them explicitly alongside the deploy bytes so pre/post-build
-        # verification cannot race a live AppSpec, DesignSpec, or Stripe provenance
+        # verification cannot race a live AppSpec, DesignSpec, or primitive provenance
         # rewrite. Missing inputs remain absent and the trusted verifier fails closed.
-        trusted_inputs = (
+        trusted_inputs = [
             _APPSPEC_RELPATH,
             ".disco/designspec.json",
             ".disco/primitives/stripe.json",
-        )
+        ]
+        raw_app = read_workspace_file(workspace / _APPSPEC_RELPATH, workspace_root)
+        if raw_app:
+            with contextlib.suppress(Exception):
+                if load_app_spec_from_bytes(raw_app).webhooks is not None:
+                    trusted_inputs.append(".disco/primitives/webhook.json")
         for relpath in trusted_inputs:
             src = workspace / relpath
             if not src.exists():
@@ -1633,11 +1645,9 @@ def _assert_worker_auth_verified(workspace: Path) -> None:
             "No worker/index.ts in the staged deploy tree — cannot verify the admin-token "
             "auth gate. Refusing to deploy an unverified Worker (fail closed).",
         )
-    # Stripe is records-only; invoke its authoritative trusted-tree verifier
-    # rather than the legacy lead-specific inspector. This exact check is
-    # repeated post-build to close the build TOCTOU.
-    if _guarded_app_is_stripe(workspace):
-        _assert_stripe_trusted_tree(workspace)
+    # Security primitives use their authoritative trusted-tree verifiers rather
+    # than the legacy lead-specific inspector. The checks repeat post-build.
+    if _assert_security_primitive_trusted_trees(workspace):
         return
     try:
         from disco.core.appkit.spec import Entity
@@ -1732,6 +1742,31 @@ def _guarded_app_is_stripe(staged: Path) -> bool:
         return False
 
 
+def _guarded_app_spec_hint(staged: Path) -> AppSpec | None:
+    """Best-effort dispatch only; each selected verifier reloads fail-closed."""
+    spec_text = read_workspace_file(staged / _APPSPEC_RELPATH, staged.resolve())
+    if not (spec_text and spec_text.strip()):
+        return None
+    try:
+        return load_app_spec_from_bytes(spec_text)
+    except Exception:
+        return None
+
+
+def _assert_security_primitive_trusted_trees(staged: Path) -> bool:
+    app = _guarded_app_spec_hint(staged)
+    if app is None:
+        return False
+    selected = False
+    if app.stripe is not None:
+        _assert_stripe_trusted_tree(staged)
+        selected = True
+    if app.webhooks is not None:
+        _assert_webhook_trusted_tree(staged)
+        selected = True
+    return selected
+
+
 def _load_guarded_design_spec(staged: Path) -> DesignSpec:
     raw = read_workspace_file(staged / ".disco/designspec.json", staged.resolve())
     if not (raw and raw.strip()):
@@ -1776,6 +1811,43 @@ def _assert_stripe_trusted_tree(staged: Path) -> None:
     raise DeployRefused(
         RefusalReason.STRIPE_TRUSTED_TREE,
         "Stripe trusted-tree verification failed: " + "; ".join(failures),
+    )
+
+
+def _assert_webhook_trusted_tree(staged: Path) -> None:
+    """Run the core webhook verifier over its exact on-disk trusted projection."""
+    app = _load_guarded_app_spec(staged)
+    if app.webhooks is None:
+        return
+    raw_design = read_workspace_file(staged / ".disco/designspec.json", staged.resolve())
+    if not (raw_design and raw_design.strip()):
+        raise DeployRefused(
+            RefusalReason.WEBHOOK_TRUSTED_TREE,
+            "Webhook deployment requires .disco/designspec.json for trusted reconstruction.",
+        )
+    try:
+        design = load_design_spec_from_bytes(raw_design)
+        from disco.core.appkit.generator import generate
+
+        paths = set(generate(app, design))
+    except Exception as exc:
+        raise DeployRefused(
+            RefusalReason.WEBHOOK_TRUSTED_TREE,
+            f"Could not reconstruct the trusted webhook deploy tree ({exc}).",
+        ) from exc
+    paths.update({".disco/appspec.json", ".disco/primitives/webhook.json"})
+    tree: dict[str, str] = {}
+    for relpath in sorted(paths):
+        text = read_workspace_file(staged / relpath, staged.resolve())
+        if text is not None:
+            tree[relpath] = text
+    result = webhook_verify(app, design, tree)
+    if result.ok:
+        return
+    failures = [f"{check.name}: {check.evidence}" for check in result.checks if not check.passed]
+    raise DeployRefused(
+        RefusalReason.WEBHOOK_TRUSTED_TREE,
+        "Webhook trusted-tree verification failed: " + "; ".join(failures),
     )
 
 
@@ -2074,6 +2146,39 @@ def _stripe_lifecycle_for_deploy(
         raise DeployRefused(RefusalReason.STRIPE_RUNTIME_CONFIG, exc.detail) from exc
 
 
+def _webhook_lifecycle_for_deploy(
+    staged: Path,
+    store: SecretStore,
+    context: WebhookDeployContext | None,
+) -> WebhookDeploymentLifecycle | None:
+    try:
+        return webhook_lifecycle_for(
+            _load_guarded_app_spec(staged),
+            owner_id=context.owner_id if context is not None else None,
+            conversation_id=context.conversation_id if context is not None else None,
+            secret_store=store,
+            dependencies=context.dependencies if context is not None else None,
+        )
+    except WebhookDeployError as exc:
+        raise DeployRefused(RefusalReason.WEBHOOK_RUNTIME_CONFIG, exc.detail) from exc
+
+
+def _security_lifecycles_for_deploy(
+    staged: Path,
+    store: SecretStore,
+    stripe_context: StripeDeployContext | None,
+    webhook_context: WebhookDeployContext | None,
+) -> tuple[StripeDeploymentLifecycle | None, WebhookDeploymentLifecycle | None]:
+    stripe = _stripe_lifecycle_for_deploy(staged, store, stripe_context)
+    webhook = _webhook_lifecycle_for_deploy(staged, store, webhook_context)
+    if stripe is not None and webhook is not None and stripe.audience != webhook.audience:
+        raise DeployRefused(
+            RefusalReason.WEBHOOK_RUNTIME_CONFIG,
+            "Stripe and webhook metadata do not identify the same generated app",
+        )
+    return stripe, webhook
+
+
 async def execute_deploy(
     workspace: Path,
     store: SecretStore,
@@ -2085,6 +2190,7 @@ async def execute_deploy(
     build_backend: BuildBackend | None = None,
     admin_token: str | None = None,
     stripe_context: StripeDeployContext | None = None,
+    webhook_context: WebhookDeployContext | None = None,
 ) -> DeployExecutionResult:
     """The single entry point for a (possibly real) deploy. Enforces the four
     hard gates IN ORDER, then either returns the dry-run plan (default, no side
@@ -2093,9 +2199,8 @@ async def execute_deploy(
 
     Raises :class:`DeployRefused` (mapped to a 4xx at the route) on any gate.
     """
-    # GATE 4 (checked first — cheapest, and the most important): autonomous runs
-    # never get a real OR dry-run deploy decision that could be mistaken for
-    # approval. Like request_custom_build, a real deploy needs a human.
+    # GATE 4: autonomous deploy decisions can never be mistaken for owner approval.
+    # Like request_custom_build, a real deploy needs a human.
     if autonomous:
         raise DeployRefused(
             RefusalReason.AUTONOMOUS,
@@ -2109,8 +2214,7 @@ async def execute_deploy(
             f"Workspace {workspace} does not exist or is not a directory.",
         )
 
-    # Build the plan FRESH (re-reads the workspace, recomputes digests, re-runs
-    # cloudflare_export_ready) so every gate below judges the CURRENT tree.
+    # Build the plan fresh so every gate judges the current tree.
     plan = build_plan(workspace, store)
 
     # GATE 1: Epic I export-readiness must PASS.
@@ -2255,7 +2359,9 @@ async def execute_deploy(
                 # config-redirect var is forwarded — see _WRANGLER_ENV_ALLOWLIST), so the only
                 # remaining redirect vector is this on-disk ancestor walk.
                 _assert_no_ancestor_wrangler_config(staged)
-                stripe_lifecycle = _stripe_lifecycle_for_deploy(staged, store, stripe_context)
+                stripe_lifecycle, webhook_lifecycle = _security_lifecycles_for_deploy(
+                    staged, store, stripe_context, webhook_context
+                )
                 return await _run_real_deploy(
                     workspace,
                     staged,
@@ -2268,6 +2374,7 @@ async def execute_deploy(
                     snap_account=snap_account,
                     deploy_home=str(deploy_home),
                     stripe_lifecycle=stripe_lifecycle,
+                    webhook_lifecycle=webhook_lifecycle,
                 )
             finally:
                 shutil.rmtree(staged, ignore_errors=True)
@@ -2539,14 +2646,24 @@ class _DeploySecretWriter:
         self._record_named_mutation(name)
 
 
-def _recheck_stripe_after_build(lifecycle: StripeDeploymentLifecycle | None, staged: Path) -> None:
-    if lifecycle is None:
-        return
-    _assert_stripe_trusted_tree(staged)
-    try:
-        lifecycle.recheck_after_build(_load_guarded_app_spec(staged))
-    except StripeDeployError as exc:
-        raise DeployRefused(RefusalReason.STRIPE_RUNTIME_CONFIG, exc.detail) from exc
+def _recheck_security_bindings_after_build(
+    stripe_lifecycle: StripeDeploymentLifecycle | None,
+    webhook_lifecycle: WebhookDeploymentLifecycle | None,
+    staged: Path,
+) -> None:
+    app_spec = _load_guarded_app_spec(staged)
+    if stripe_lifecycle is not None:
+        _assert_stripe_trusted_tree(staged)
+        try:
+            stripe_lifecycle.recheck_after_build(app_spec)
+        except StripeDeployError as exc:
+            raise DeployRefused(RefusalReason.STRIPE_RUNTIME_CONFIG, exc.detail) from exc
+    if webhook_lifecycle is not None:
+        _assert_webhook_trusted_tree(staged)
+        try:
+            webhook_lifecycle.recheck_after_build(app_spec)
+        except WebhookDeployError as exc:
+            raise DeployRefused(RefusalReason.WEBHOOK_RUNTIME_CONFIG, exc.detail) from exc
 
 
 async def _activate_stripe_worker(
@@ -2556,6 +2673,7 @@ async def _activate_stripe_worker(
     admin_token: str,
     fresh_worker: bool,
     writer: _DeploySecretWriter,
+    additional_services: frozenset[str] = frozenset(),
 ) -> StripeDeployError | None:
     try:
         await lifecycle.activate(
@@ -2564,6 +2682,7 @@ async def _activate_stripe_worker(
             fresh_worker=fresh_worker,
             put_secret=writer,
             record_mutation=writer.record_host_token_mutation,
+            additional_services=additional_services,
         )
     except StripeDeployError as exc:
         if await lifecycle.fail_closed(writer):
@@ -2586,27 +2705,124 @@ async def _activate_stripe_worker(
 
 
 async def _install_worker_bindings(
-    lifecycle: StripeDeploymentLifecycle | None,
-    *,
+    stripe_lifecycle: StripeDeploymentLifecycle | None,
+    webhook_lifecycle: WebhookDeploymentLifecycle | None,
     deployed_url: str | None,
     admin_token: str | None,
     fresh_worker: bool,
     writer: _DeploySecretWriter,
-) -> StripeDeployError | None:
-    if lifecycle is not None and admin_token is not None:
-        return await _activate_stripe_worker(
-            lifecycle,
+) -> StripeDeployError | WebhookDeployError | None:
+    if webhook_lifecycle is not None and fresh_worker:
+        try:
+            await webhook_lifecycle.establish_disabled(writer)
+        except WebhookDeployError as exc:
+            if await webhook_lifecycle.fail_closed(writer):
+                return exc
+            return WebhookDeployError(
+                "webhook_runtime_state_uncertain",
+                "Webhook activation state is uncertain; manual intervention is required.",
+            )
+    if stripe_lifecycle is not None and admin_token is not None:
+        if webhook_lifecycle is not None:
+            try:
+                # Stripe owns the shared bus binding and the one candidate token;
+                # webhook contributes only its inbound key and service scope.
+                await webhook_lifecycle.install_fixed_bindings(writer, include_bus=False)
+            except WebhookDeployError as exc:
+                stripe_safe = await stripe_lifecycle.fail_closed(writer)
+                webhook_safe = await webhook_lifecycle.fail_closed(writer)
+                if stripe_safe and webhook_safe:
+                    return exc
+                return WebhookDeployError(
+                    "webhook_runtime_state_uncertain",
+                    "Webhook/Stripe activation state is uncertain; manual intervention "
+                    "is required.",
+                )
+            except Exception:
+                stripe_safe = await stripe_lifecycle.fail_closed(writer)
+                webhook_safe = await webhook_lifecycle.fail_closed(writer)
+                if stripe_safe and webhook_safe:
+                    return WebhookDeployError(
+                        "webhook_runtime_activation",
+                        "Webhook activation failed unexpectedly and Stripe remained disabled",
+                    )
+                return WebhookDeployError(
+                    "webhook_runtime_state_uncertain",
+                    "Webhook/Stripe activation state is uncertain; manual intervention "
+                    "is required.",
+                )
+        stripe_error = await _activate_stripe_worker(
+            stripe_lifecycle,
             deployed_url=deployed_url,
             admin_token=admin_token,
             fresh_worker=fresh_worker,
             writer=writer,
+            additional_services=(
+                webhook_lifecycle.required_services
+                if webhook_lifecycle is not None
+                else frozenset()
+            ),
         )
+        if stripe_error is not None:
+            if webhook_lifecycle is not None and not await webhook_lifecycle.fail_closed(writer):
+                return WebhookDeployError(
+                    "webhook_runtime_state_uncertain",
+                    "Webhook activation state is uncertain; manual intervention is required.",
+                )
+            return stripe_error
+        if webhook_lifecycle is not None:
+            try:
+                await webhook_lifecycle.enable(writer)
+            except Exception:
+                stripe_safe = await stripe_lifecycle.fail_closed(writer)
+                webhook_safe = await webhook_lifecycle.fail_closed(writer)
+                if stripe_safe and webhook_safe:
+                    return WebhookDeployError(
+                        "wrangler secret put WEBHOOK_RUNTIME_READY",
+                        "the verified combined Worker could not enable webhook delivery",
+                    )
+                return WebhookDeployError(
+                    "webhook_runtime_state_uncertain",
+                    "Webhook/Stripe activation state is uncertain; manual intervention "
+                    "is required.",
+                )
+        return None
     if admin_token is not None:
         result = await writer.put_legacy_admin(admin_token)
         if not result.ok:
+            if webhook_lifecycle is not None and not await webhook_lifecycle.fail_closed(writer):
+                return WebhookDeployError(
+                    "webhook_runtime_state_uncertain",
+                    "Webhook activation state is uncertain; manual intervention is required.",
+                )
             return StripeDeployError(
                 "wrangler secret put ADMIN_TOKEN",
                 f"secret put failed (exit {result.returncode})",
+            )
+    if webhook_lifecycle is not None:
+        try:
+            await webhook_lifecycle.install_fixed_bindings(writer)
+            await webhook_lifecycle.rotate_outbound_token(
+                deployed_url=deployed_url,
+                put_secret=writer,
+                record_mutation=writer.record_host_token_mutation,
+            )
+            await webhook_lifecycle.enable(writer)
+        except WebhookDeployError as exc:
+            if await webhook_lifecycle.fail_closed(writer):
+                return exc
+            return WebhookDeployError(
+                "webhook_runtime_state_uncertain",
+                "Webhook activation state is uncertain; manual intervention is required.",
+            )
+        except Exception:
+            if await webhook_lifecycle.fail_closed(writer):
+                return WebhookDeployError(
+                    "webhook_runtime_activation", "Webhook activation failed unexpectedly"
+                )
+            return WebhookDeployError(
+                "webhook_runtime_state_uncertain",
+                "Webhook activation state is uncertain; manual intervention is required.",
             )
     return None
 
@@ -2639,6 +2855,38 @@ async def _quiesce_stripe_worker(
     return None
 
 
+async def _quiesce_security_workers(
+    stripe_lifecycle: StripeDeploymentLifecycle | None,
+    webhook_lifecycle: WebhookDeploymentLifecycle | None,
+    worker_exists: bool,
+    writer: _DeploySecretWriter,
+) -> StripeDeployError | WebhookDeployError | None:
+    stripe_error = await _quiesce_stripe_worker(stripe_lifecycle, worker_exists, writer)
+    if stripe_error is not None:
+        return stripe_error
+    if webhook_lifecycle is None or not worker_exists:
+        return None
+    try:
+        await webhook_lifecycle.establish_disabled(writer)
+    except WebhookDeployError as exc:
+        if await webhook_lifecycle.fail_closed(writer):
+            return exc
+        return WebhookDeployError(
+            "webhook_runtime_state_uncertain",
+            "Webhook activation state is uncertain; manual intervention is required.",
+        )
+    except Exception:
+        if await webhook_lifecycle.fail_closed(writer):
+            return WebhookDeployError(
+                "webhook_runtime_quiesce", "Webhook could not be disabled before deployment"
+            )
+        return WebhookDeployError(
+            "webhook_runtime_state_uncertain",
+            "Webhook activation state is uncertain; manual intervention is required.",
+        )
+    return None
+
+
 async def _run_real_deploy(
     live_workspace: Path,
     staged: Path,
@@ -2652,6 +2900,7 @@ async def _run_real_deploy(
     snap_account: str | None,
     deploy_home: str,
     stripe_lifecycle: StripeDeploymentLifecycle | None = None,
+    webhook_lifecycle: WebhookDeploymentLifecycle | None = None,
 ) -> DeployExecutionResult:
     """Drive the deploy sequence (idempotent) against the IMMUTABLE *staged* copy —
     NEVER the live mutable workspace (SEC-6/SEC-7/CORR-2). The UNTRUSTED build runs in
@@ -2672,8 +2921,7 @@ async def _run_real_deploy(
     def _wr(*args: str) -> list[str]:
         return [wrangler_bin, *args]
 
-    # The trusted wrangler steps run with the token overlaid ONLY in their env —
-    # never argv, never logged — and a MINIMISED, sanitised env (SEC-32). The CF token
+    # Trusted wrangler receives the token only in its minimized, sanitized environment.
     # NEVER reaches the build: the build runs in the sandbox (below), which has no
     # host env / host FS at all.
     deploy_env = _deploy_env(
@@ -2682,8 +2930,7 @@ async def _run_real_deploy(
 
     transcript: list[str] = []
 
-    # Scrub literal values before pattern redaction; the helper also avoids
-    # recording secret-put output.
+    # Scrub literals before pattern redaction and never record secret-put output.
     secret_literals = tuple(s for s in (token, admin_token) if s and s.strip())
 
     def record(
@@ -2697,8 +2944,7 @@ async def _run_real_deploy(
             capture_output=capture_output,
         )
 
-    # CORR-1/SEC-1: validate the [assets].directory EARLY (absolute/`..` refused) so we
-    # fail closed BEFORE any Cloudflare mutation, not just before the upload.
+    # Validate [assets].directory early, before any Cloudflare mutation.
     asset_dir_rel = _deploy_asset_dir_rel(staged)
 
     # 1. Build the UNTRUSTED, workspace-controlled app INSIDE an isolating sandbox
@@ -2759,7 +3005,7 @@ async def _run_real_deploy(
     # against). Re-scan the staged tree HERE — AFTER sync-back, BEFORE the first Cloudflare
     # mutation — and refuse (ALT_WRANGLER_CONFIG) so a build-emitted alt config never deploys.
     _assert_sole_wrangler_config(staged)
-    _recheck_stripe_after_build(stripe_lifecycle, staged)
+    _recheck_security_bindings_after_build(stripe_lifecycle, webhook_lifecycle, staged)
 
     # 2. Decide D1 provisioning from the EXACT-parsed `d1 list` (SEC-15/CORR-8): match
     #    the database by EXACT name (no substring, no first-UUID fallback). The `d1 list`
@@ -2904,7 +3150,9 @@ async def _run_real_deploy(
         mutations,
         store,
     )
-    quiesce_error = await _quiesce_stripe_worker(stripe_lifecycle, worker_exists, secret_writer)
+    quiesce_error = await _quiesce_security_workers(
+        stripe_lifecycle, webhook_lifecycle, worker_exists, secret_writer
+    )
     if quiesce_error is not None:
         return _fail(quiesce_error.step, quiesce_error.detail)
 
@@ -3007,10 +3255,11 @@ async def _run_real_deploy(
     deployed_url = _extract_url(deployed.stdout)
     binding_error = await _install_worker_bindings(
         stripe_lifecycle,
-        deployed_url=deployed_url,
-        admin_token=admin_token,
-        fresh_worker=not worker_exists,
-        writer=secret_writer,
+        webhook_lifecycle,
+        deployed_url,
+        admin_token,
+        not worker_exists,
+        secret_writer,
     )
     if binding_error is not None:
         return _fail(binding_error.step, binding_error.detail)

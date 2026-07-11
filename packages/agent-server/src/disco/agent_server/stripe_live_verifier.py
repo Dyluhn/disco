@@ -2140,4 +2140,21 @@ def make_stripe_live_verifier() -> Any:
     return verifier
 
 
-__all__ = ["make_stripe_live_verifier"]
+# Reusable, host-owned exploit-harness pieces. They remain implementation
+# details of the agent-server (never part of core or generated apps), but F3.3
+# shares the exact materialize/build/workerd and secret-scan machinery so the
+# two security primitives cannot drift onto subtly different proof paths.
+LiveWorkerdApp = _WorkerdApp
+find_wrangler = _find_wrangler
+free_loopback_port = _free_port
+make_loopback_tls_pair = _make_loopback_tls_pair
+scan_live_paths_for_secrets = _scan_for_secrets
+
+__all__ = [
+    "LiveWorkerdApp",
+    "find_wrangler",
+    "free_loopback_port",
+    "make_loopback_tls_pair",
+    "make_stripe_live_verifier",
+    "scan_live_paths_for_secrets",
+]

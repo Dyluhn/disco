@@ -1,44 +1,33 @@
-"""Epic F3.3 SEAM — the `webhook` primitive (declaration + spec only, fail-closed).
-
-Covers:
-  * WebhookSpec validation — direction literal, slug/bounds on endpoint_id and
-    event_types, unknown-key refusal (extra=forbid), description cap;
-  * the fold (`apply_webhook_spec`) — endpoints recorded as documentation
-    sections on the `webhooks` docs page (existing AppSpec shapes only),
-    duplicate endpoint_id refused, docs-route collision refused, wrong spec
-    type refused;
-  * the emitted surface is PENDING-STATE ONLY — the "Handler pending secure
-    setup" marker is present and the whole tree contains NO worker route, NO
-    wrangler config, NO signature-verification / HMAC / dedup code (absence
-    asserted by grep over every emitted path + byte);
-  * the registration invariants the WO-A3 finish gate keys on —
-    tier == "template_only", verify is None (fail-closed ON PURPOSE),
-    host_contract declares webhook.emit, spec_schema/apply_spec make it addable,
-    and generator.py's force-import registers it.
-"""
+"""Core security contract for the completed WO-F3.3 webhook primitive."""
 
 from __future__ import annotations
+
+import json
+import sqlite3
 
 import pytest
 from disco.core.appkit import get_recipe
 from disco.core.appkit.generator import generate
-from disco.core.appkit.primitives import get_primitive, primitive_ids
-from disco.core.appkit.recipes import SiteRecipe
-from disco.core.appkit.spec import AppSpec, DesignSpec, Page
+from disco.core.appkit.primitives import HostService, get_primitive, primitive_ids
+from disco.core.appkit.records_primitive import default_records_auth_app_spec
+from disco.core.appkit.spec import AppSpec, DesignSpec, Page, serialize_app_spec
 from disco.core.appkit.webhook_primitive import (
     WEBHOOK_DOCS_PAGE_ID,
     WEBHOOK_EMIT_SERVICE_NAME,
     WEBHOOK_PENDING_MARKER,
     WEBHOOK_PRIMITIVE_ID,
+    WEBHOOK_SECURED_MARKER,
     WebhookSpec,
     apply_webhook_spec,
     default_webhook_app_spec,
     generate_webhook,
+    webhook_verify,
 )
+from disco.core.host_services import get_host_service
 from pydantic import ValidationError
 
 
-def _recipe() -> SiteRecipe:
+def _recipe():
     recipe = get_recipe("editorial-ledger")
     assert recipe is not None
     return recipe
@@ -49,225 +38,257 @@ def _design() -> DesignSpec:
 
 
 def _spec(**overrides: object) -> WebhookSpec:
-    base: dict[str, object] = {
+    raw: dict[str, object] = {
         "endpoint_id": "order_events",
         "direction": "inbound",
         "event_types": ["order.created", "order.cancelled"],
+        "description": "Order lifecycle receiver.",
     }
-    base.update(overrides)
-    return WebhookSpec.model_validate(base)
+    raw.update(overrides)
+    return WebhookSpec.model_validate(raw)
 
 
-# Tokens whose presence in the emitted tree would mean security code / a live
-# receiver leaked into the SEAM. Checked case-insensitively over every path and
-# every emitted byte.
-_FORBIDDEN_TREE_TOKENS = (
-    "hmac",
-    "createhmac",
-    "timingsafeequal",
-    "crypto.subtle",
-    "x-webhook-signature",
-    "idempotency",
-    "addeventlistener",
-    "export default",  # a Worker module handler
-    "wrangler",
-    "fetch(",
-)
+def _records_app() -> AppSpec:
+    app = default_records_auth_app_spec("Acme Operations", _recipe())
+    assert app.roles, "the webhook fill requires the records auth surface"
+    return app
 
 
-def _assert_tree_is_inert(tree: dict[str, str]) -> None:
-    """The SEAM guarantee: no worker route, no script, no security code."""
-    assert set(tree) == {"index.html"}, f"unexpected files emitted: {sorted(tree)}"
-    for path, contents in tree.items():
-        haystack = (path + "\n" + contents).lower()
-        for token in _FORBIDDEN_TREE_TOKENS:
-            assert token not in haystack, f"forbidden token {token!r} in {path}"
-        assert "<script" not in haystack, f"script tag emitted in {path}"
-        assert "<form" not in haystack, f"form emitted in {path} (false affordance)"
+def _filled_app() -> tuple[AppSpec, tuple[WebhookSpec, WebhookSpec]]:
+    inbound = _spec()
+    outbound = _spec(
+        endpoint_id="fulfillment_events",
+        direction="outbound",
+        event_types=["order.shipped", "order.delayed"],
+        description="Signed fulfillment deliveries.",
+    )
+    app = apply_webhook_spec(_records_app(), inbound)
+    app = apply_webhook_spec(app, outbound)
+    return app, (inbound, outbound)
 
 
-# ---- 1. WebhookSpec validation ---------------------------------------------------
+def _verified_tree() -> tuple[AppSpec, dict[str, str]]:
+    app, specs = _filled_app()
+    tree = generate(app, _design())
+    # app_add_primitive owns these two persisted inputs.  The primitive verifier
+    # deliberately requires them in addition to the generated projection.
+    tree[".disco/appspec.json"] = serialize_app_spec(app)
+    tree[".disco/primitives/webhook.json"] = json.dumps(
+        {
+            "primitive_id": WEBHOOK_PRIMITIVE_ID,
+            "tier": "template_only",
+            "applied_at": "2026-07-11T00:00:00+00:00",
+            "specs": [spec.model_dump(mode="json") for spec in specs],
+        }
+    )
+    return app, tree
 
 
-def test_valid_spec_accepts_and_defaults() -> None:
+def _assert_standalone_is_inert(tree: dict[str, str]) -> None:
+    assert set(tree) == {"index.html"}
+    page = tree["index.html"]
+    assert WEBHOOK_PENDING_MARKER in page
+    lowered = page.lower()
+    for marker in (
+        "crypto.subtle",
+        "hmac",
+        "fetch(",
+        "wrangler",
+        "addeventlistener",
+        "<script",
+        "<form",
+    ):
+        assert marker not in lowered
+
+
+# ---- bounded declarative input -------------------------------------------------
+
+
+def test_spec_accepts_bounded_non_secret_contract() -> None:
     spec = _spec()
-    assert spec.endpoint_id == "order_events"
     assert spec.direction == "inbound"
-    assert spec.description is None
-    outbound = _spec(direction="outbound", description="Emits order lifecycle events.")
-    assert outbound.direction == "outbound"
-
-
-def test_direction_is_a_closed_literal() -> None:
-    with pytest.raises(ValidationError):
-        _spec(direction="sideways")
+    assert spec.event_types == ["order.created", "order.cancelled"]
+    dumped = spec.model_dump(mode="json")
+    assert set(dumped) == {"endpoint_id", "direction", "event_types", "description"}
 
 
 @pytest.mark.parametrize(
-    "bad_id", ["", "Order-Events", "9lives", "has space", "x" * 49]
-)
-def test_endpoint_id_slug_bounds(bad_id: str) -> None:
-    with pytest.raises(ValidationError):
-        _spec(endpoint_id=bad_id)
-
-
-@pytest.mark.parametrize(
-    "bad_events",
+    ("field", "value"),
     [
-        [],  # min 1
-        [f"ev_{i}" for i in range(13)],  # max 12
-        ["Order.Created"],  # not a slug
-        ["order..created"],  # malformed dotted slug
-        ["x" * 65],  # per-item length cap
-        ["order.created", "order.created"],  # duplicate
+        ("direction", "sideways"),
+        ("endpoint_id", "Order-Events"),
+        ("endpoint_id", "9events"),
+        ("event_types", []),
+        ("event_types", ["Order.Created"]),
+        ("event_types", ["order.created", "order.created"]),
+        ("description", "x" * 501),
     ],
 )
-def test_event_types_bounds(bad_events: list[str]) -> None:
+def test_spec_refuses_invalid_contract(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
-        _spec(event_types=bad_events)
+        _spec(**{field: value})
 
 
-def test_unknown_key_refused() -> None:
-    # extra=forbid — and specifically, a smuggled secret is a refusal.
-    with pytest.raises(ValidationError):
-        WebhookSpec.model_validate(
-            {
-                "endpoint_id": "e",
-                "direction": "inbound",
-                "event_types": ["a.b"],
-                "signing_secret": "shh",
-            }
-        )
+def test_spec_refuses_smuggled_target_or_secret() -> None:
+    for field in ("target_url", "signing_secret", "secret_ref"):
+        with pytest.raises(ValidationError):
+            _spec(**{field: "attacker-controlled"})
 
 
-def test_description_bounded() -> None:
-    with pytest.raises(ValidationError):
-        _spec(description="x" * 501)
+# ---- honest standalone and supported fold -------------------------------------
 
 
-# ---- 2. the fold ------------------------------------------------------------------
+def test_standalone_remains_inert_and_visibly_pending() -> None:
+    app = default_webhook_app_spec("Acme", _recipe())
+    tree = generate_webhook(app, _design())
+    _assert_standalone_is_inert(tree)
+    assert "No webhook endpoints declared yet." in tree["index.html"]
+
+    declared = apply_webhook_spec(app, _spec())
+    assert declared.webhooks is None
+    declared_tree = generate_webhook(declared, _design())
+    _assert_standalone_is_inert(declared_tree)
+    assert "order_events" in declared_tree["index.html"]
+    assert "Declared contract only" in declared_tree["index.html"]
+    assert "no live handler exists" in declared_tree["index.html"]
 
 
-def test_fold_records_endpoint_on_docs_page() -> None:
-    app = default_webhook_app_spec("Acme Studio", _recipe())
-    folded = apply_webhook_spec(app, _spec())
-    page = next(p for p in folded.pages if p.id == WEBHOOK_DOCS_PAGE_ID)
-    section = next(s for s in page.sections if s.id == "webhook_order_events")
-    assert section.kind == "custom"
-    assert section.content is not None
-    assert "order_events" in (section.content.heading or "")
-    assert "inbound" in (section.content.heading or "")
-    assert WEBHOOK_PENDING_MARKER in (section.content.subheading or "")
-    assert tuple(section.content.items) == ("order.created", "order.cancelled")
-
-
-def test_fold_creates_docs_page_on_foreign_base_app() -> None:
-    app = AppSpec(
+def test_unsupported_or_unauthenticated_base_app_is_refused() -> None:
+    hello = AppSpec(
         schema_version=1,
         app_kind="hello",
-        name="Acme",
+        name="Unsupported",
         pages=(Page(id="home", route="/", title="Home"),),
     )
-    folded = apply_webhook_spec(app, _spec(direction="outbound"))
-    page = next(p for p in folded.pages if p.id == WEBHOOK_DOCS_PAGE_ID)
-    assert page.route == "/webhooks"
-    assert [s.id for s in page.sections] == ["webhook_order_events"]
-    # a second, different endpoint appends to the SAME docs page
-    folded2 = apply_webhook_spec(
-        folded, _spec(endpoint_id="billing", event_types=["invoice.paid"])
-    )
-    page2 = next(p for p in folded2.pages if p.id == WEBHOOK_DOCS_PAGE_ID)
-    assert [s.id for s in page2.sections] == [
-        "webhook_order_events",
-        "webhook_billing",
+    with pytest.raises(ValueError, match="D1-backed records"):
+        apply_webhook_spec(hello, _spec())
+
+    records_without_roles = _records_app().model_copy(update={"roles": ()})
+    with pytest.raises(ValueError, match="session-authenticated"):
+        apply_webhook_spec(records_without_roles, _spec())
+
+
+def test_records_fold_persists_non_secret_metadata_and_secured_docs() -> None:
+    app, _specs = _filled_app()
+    assert app.webhooks is not None
+    assert app.webhooks.app_binding.startswith("app_")
+    assert len(app.webhooks.app_binding) == 36
+    assert [endpoint.endpoint_id for endpoint in app.webhooks.endpoints] == [
+        "order_events",
+        "fulfillment_events",
     ]
+    assert [endpoint.direction for endpoint in app.webhooks.endpoints] == [
+        "inbound",
+        "outbound",
+    ]
+    dumped = app.model_dump(mode="json")["webhooks"]
+    assert set(dumped) == {"app_binding", "endpoints"}
+    assert "secret" not in json.dumps(dumped).lower()
+    assert "target" not in json.dumps(dumped).lower()
 
-
-def test_duplicate_endpoint_id_refused() -> None:
-    app = apply_webhook_spec(default_webhook_app_spec("Acme", _recipe()), _spec())
-    with pytest.raises(ValueError, match="duplicate webhook endpoint_id"):
-        apply_webhook_spec(app, _spec(direction="outbound"))
-
-
-def test_docs_route_collision_refused() -> None:
-    app = AppSpec(
-        schema_version=1,
-        app_kind="hello",
-        name="Acme",
-        pages=(Page(id="other", route="/webhooks", title="Not the docs page"),),
+    docs = next(page for page in app.pages if page.id == WEBHOOK_DOCS_PAGE_ID)
+    assert [section.id for section in docs.sections] == [
+        "webhook_order_events",
+        "webhook_fulfillment_events",
+    ]
+    assert all(
+        section.content is not None
+        and section.content.subheading == WEBHOOK_SECURED_MARKER
+        for section in docs.sections
     )
-    with pytest.raises(ValueError, match="already taken"):
-        apply_webhook_spec(app, _spec())
 
 
-def test_wrong_spec_type_refused() -> None:
-    from disco.core.appkit.hello_primitive import HelloSpec
-
-    app = default_webhook_app_spec("Acme", _recipe())
-    with pytest.raises(TypeError):
-        apply_webhook_spec(app, HelloSpec(headline="nope"))
-
-
-# ---- 3. the emitted surface is pending-state, with NO security code ---------------
-
-
-def test_empty_standalone_surface_is_inert_and_marked() -> None:
-    app = default_webhook_app_spec("Acme Studio", _recipe())
-    tree = generate_webhook(app, _design())
-    _assert_tree_is_inert(tree)
-    page = tree["index.html"]
-    assert WEBHOOK_PENDING_MARKER in page
-    assert "No webhook endpoints declared yet." in page
-
-
-def test_declared_endpoint_renders_pending_not_active() -> None:
-    app = apply_webhook_spec(
-        default_webhook_app_spec("Acme Studio", _recipe()),
-        _spec(description="Order lifecycle receiver."),
-    )
-    tree = generate_webhook(app, _design())
-    _assert_tree_is_inert(tree)
-    page = tree["index.html"]
-    # the declared contract is visible…
-    assert "order_events" in page
-    assert "inbound" in page
-    assert "order.created" in page
-    assert "order.cancelled" in page
-    assert "Order lifecycle receiver." in page
-    # …and unmistakably NOT active
-    assert WEBHOOK_PENDING_MARKER in page
-    assert "declared, not active" in page
-    assert "no live handler exists" in page.lower()
-
-
-def test_registry_generate_dispatches_to_webhook() -> None:
-    # through the public generate() (app_kind dispatch), not just the module fn
-    app = apply_webhook_spec(default_webhook_app_spec("Acme", _recipe()), _spec())
+def test_records_generation_emits_trusted_inbound_outbound_schema_and_bus_shim() -> None:
+    app, _specs = _filled_app()
     tree = generate(app, _design())
-    _assert_tree_is_inert(tree)
-    assert WEBHOOK_PENDING_MARKER in tree["index.html"]
+    worker = tree["worker/index.ts"]
+    assert 'rawPath === "/api/webhooks/order_events"' in worker
+    assert 'rawPath === "/api/webhooks/fulfillment_events/emit"' in worker
+    assert 'request.headers.get("Disco-Webhook-Signature")' in worker
+    assert 'crypto.subtle.verify("HMAC"' in worker
+    assert "JSON.parse" in worker
+    assert worker.index('crypto.subtle.verify("HMAC"') < worker.index(
+        "parseWebhookEnvelope(body)"
+    )
+    assert 'env.DB.withSession("first-primary")' in worker
+    assert "await db.batch([" in worker
+    assert worker.index("INSERT INTO webhook_events") < worker.index(
+        "INSERT INTO webhook_effects"
+    )
+    assert 'svc(env, "webhook.emit"' in worker
+    assert 'import { svc } from "./disco-client"' in worker
+    assert "WEBHOOK_SIGNING_SECRET?: string" in worker
+    assert "WEBHOOK_RUNTIME_READY?: string" in worker
+    assert worker.count('env.WEBHOOK_RUNTIME_READY !== "1"') == 2
+    assert "export async function svc" in tree["worker/disco-client.ts"]
+
+    schema = tree["schema.sql"]
+    assert "webhook_events" in schema and "webhook_effects" in schema
+    db = sqlite3.connect(":memory:")
+    db.executescript(schema)
+    assert {"webhook_events", "webhook_effects"} <= {
+        str(row[0]) for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    emitted = "\n".join(tree.values()).lower()
+    assert "webhook_secret_" not in emitted
+    assert "whsec_" not in emitted
 
 
-# ---- 4. registration invariants (what the WO-A3 gate keys on) ---------------------
+# ---- fail-closed registration and static verifier -----------------------------
 
 
-def test_registered_via_generator_force_import() -> None:
+def test_registration_requires_real_static_and_live_verification() -> None:
     assert WEBHOOK_PRIMITIVE_ID in primitive_ids()
+    primitive = get_primitive(WEBHOOK_PRIMITIVE_ID)
+    assert primitive is not None
+    assert primitive.tier == "template_only"
+    assert primitive.verify is webhook_verify
+    assert primitive.host_contract == (HostService(WEBHOOK_EMIT_SERVICE_NAME),)
+    assert primitive.spec_schema is WebhookSpec
+    assert primitive.apply_spec is apply_webhook_spec
+    assert primitive.live_verify_id == "webhook.security.v1"
+    assert primitive.live_verify_checks == (
+        "forged_signature_rejected",
+        "replay_deduped",
+        "egress_blocked",
+        "secret_absence",
+    )
+    assert primitive.security_metadata_field == "webhooks"
+    assert get_host_service(WEBHOOK_EMIT_SERVICE_NAME) is not None
 
 
-def test_registration_is_fail_closed_template_only() -> None:
-    prim = get_primitive(WEBHOOK_PRIMITIVE_ID)
-    assert prim is not None
-    assert prim.tier == "template_only"
-    assert prim.verify is None  # fail-closed ON PURPOSE — the security fill flips it
-    assert any(s.name == WEBHOOK_EMIT_SERVICE_NAME for s in prim.host_contract)
-    assert prim.spec_schema is WebhookSpec
-    assert prim.apply_spec is not None  # addable via app_add_primitive
+def test_static_verifier_accepts_only_canonical_provenanced_tree() -> None:
+    app, tree = _verified_tree()
+    result = webhook_verify(app, _design(), tree)
+    assert result.ok, result.detail
+    assert all(check.passed for check in result.checks)
 
 
-def test_no_host_service_actually_registered_for_webhook_emit() -> None:
-    # declaration only: the host_contract names webhook.emit but the SEAM must
-    # NOT register a live handler under that name.
-    from disco.core.host_services import get_host_service
+def test_static_verifier_fails_missing_provenance() -> None:
+    app, tree = _verified_tree()
+    del tree[".disco/primitives/webhook.json"]
+    result = webhook_verify(app, _design(), tree)
+    assert not result.ok
+    check = next(c for c in result.checks if c.name == "webhook_provenance_binding")
+    assert not check.passed and "missing" in check.evidence
 
-    assert get_host_service(WEBHOOK_EMIT_SERVICE_NAME) is None
+
+def test_static_verifier_fails_tampered_worker() -> None:
+    app, tree = _verified_tree()
+    tree["worker/index.ts"] = tree["worker/index.ts"].replace(
+        'crypto.subtle.verify("HMAC"', "Promise.resolve(true) // tampered"
+    )
+    result = webhook_verify(app, _design(), tree)
+    assert not result.ok
+    check = next(c for c in result.checks if c.name == "webhook_trusted_tree")
+    assert not check.passed and "worker/index.ts" in check.evidence
+
+
+@pytest.mark.parametrize("secret", ["whsec_do_not_ship_1234", "webhook_secret_do_not_ship"])
+def test_static_verifier_fails_secret_shaped_material_anywhere(secret: str) -> None:
+    app, tree = _verified_tree()
+    tree["README-secret.txt"] = f"credential={secret}\n"
+    result = webhook_verify(app, _design(), tree)
+    assert not result.ok
+    check = next(c for c in result.checks if c.name == "webhook_static_secret_absence")
+    assert not check.passed and "README-secret.txt" in check.evidence

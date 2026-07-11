@@ -6,8 +6,8 @@ Covers, against an in-memory sandbox:
     declared endpoint renders in the "Handler pending secure setup" state, and
     the whole regenerated tree stays inert (no worker route / no sig-verify code);
   * provenance — `.disco/primitives/webhook.json` records tier=template_only +
-    the applied spec, and the tool's success carries the Disco-owned note;
-  * fold onto a foreign (hello) base app — AppSpec gains the webhooks docs page;
+    the complete applied-spec list, and the tool's success carries the Disco-owned note;
+  * unsupported foreign bases are refused instead of receiving a false live surface;
   * refusals — invalid spec (unknown key / bad direction) refused WITH the
     expected schema; identical re-apply refused loudly (duplicate endpoint_id —
     never a hollow success).
@@ -107,7 +107,7 @@ async def test_provenance_and_appspec_fold_persisted():
     record = json.loads(sbx._fs[".disco/primitives/webhook.json"])
     assert record["primitive_id"] == "webhook"
     assert record["tier"] == "template_only"
-    assert record["spec"] == _SPEC
+    assert record["specs"] == [_SPEC]
 
     app_data = json.loads(sbx._fs[APPSPEC_RELPATH])
     page = next(p for p in app_data["pages"] if p["id"] == "webhooks")
@@ -117,18 +117,31 @@ async def test_provenance_and_appspec_fold_persisted():
     assert WEBHOOK_PENDING_MARKER in section["content"]["subheading"]
 
 
-# ---- fold onto a foreign base app --------------------------------------------------
+async def test_repeat_add_preserves_complete_endpoint_provenance():
+    sbx = FakeSandboxInstance()
+    assert (await _create_app(sbx, "webhook")).success is True
+    assert (await _add(sbx, dict(_SPEC))).success is True
+    second = {
+        "endpoint_id": "billing_events",
+        "direction": "outbound",
+        "event_types": ["invoice.paid"],
+        "description": "Billing lifecycle emitter.",
+    }
+    assert (await _add(sbx, second)).success is True
+    record = json.loads(sbx._fs[".disco/primitives/webhook.json"])
+    assert record["specs"] == [_SPEC, second]
 
 
-async def test_add_webhook_to_hello_app_folds_docs_page():
+# ---- unsupported base refusal ------------------------------------------------------
+
+
+async def test_add_webhook_to_hello_app_is_refused():
     sbx = FakeSandboxInstance()
     assert (await _create_app(sbx, "hello")).success is True
     out = await _add(sbx, dict(_SPEC))
-    assert out.success is True, out.content
-    app_data = json.loads(sbx._fs[APPSPEC_RELPATH])
-    page = next(p for p in app_data["pages"] if p["id"] == "webhooks")
-    assert page["route"] == "/webhooks"
-    assert [s["id"] for s in page["sections"]] == ["webhook_order_events"]
+    assert out.success is False
+    assert "D1-backed records primitive" in out.content
+    assert ".disco/primitives/webhook.json" not in sbx._fs
 
 
 # ---- refusals -----------------------------------------------------------------------

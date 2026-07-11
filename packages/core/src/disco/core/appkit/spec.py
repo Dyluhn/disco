@@ -645,6 +645,52 @@ class StripeMeta(BaseModel):
         return value
 
 
+class WebhookEndpointMeta(BaseModel):
+    """One non-secret webhook contract lowered into trusted Worker code."""
+
+    model_config = _STRICT
+
+    endpoint_id: _IdStr
+    direction: Literal["inbound", "outbound"]
+    event_types: tuple[_ShortStr, ...] = Field(min_length=1, max_length=12)
+
+    @field_validator("endpoint_id")
+    @classmethod
+    def _endpoint_id_is_safe(cls, value: str) -> str:
+        if not _IDENT_RE.fullmatch(value):
+            raise ValueError("webhook endpoint_id must be a snake_case identifier")
+        return value
+
+    @field_validator("event_types")
+    @classmethod
+    def _event_types_are_safe(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        event_re = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*$")
+        if any(len(event) > 64 or event_re.fullmatch(event) is None for event in value):
+            raise ValueError("webhook event types must be bounded dotted snake_case")
+        _require_unique(value, what="webhook event type")
+        return value
+
+
+class WebhookMeta(BaseModel):
+    """Resolved webhook contracts; target URLs and signing keys stay host-side."""
+
+    model_config = _STRICT
+
+    app_binding: _IdStr
+    endpoints: tuple[WebhookEndpointMeta, ...] = Field(min_length=1, max_length=24)
+
+    @field_validator("app_binding")
+    @classmethod
+    def _app_binding_is_safe(cls, value: str) -> str:
+        if re.fullmatch(r"app_[0-9a-f]{32}", value) is None:
+            raise ValueError("Webhook app_binding must match 'app_' plus 32 lowercase hex digits")
+        return value
+
+    @model_validator(mode="after")
+    def _endpoint_ids_unique(self) -> WebhookMeta:
+        _require_unique((endpoint.endpoint_id for endpoint in self.endpoints), what="webhook endpoint")
+        return self
+
 class AppSpec(BaseModel):
     """The app STRUCTURE the scaffold generator consumes.
 
@@ -677,6 +723,9 @@ class AppSpec(BaseModel):
     # WO-F4.1 - non-secret Stripe data-plane metadata.  Absent metadata is
     # excluded so every unrelated AppSpec and generated tree stays byte-stable.
     stripe: StripeMeta | None = Field(default=None, exclude_if=lambda value: value is None)
+    # WO-F3.3 - non-secret webhook data-plane metadata. Runtime targets and
+    # signing keys remain in host-owned configuration/secret stores.
+    webhooks: WebhookMeta | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("roles")
     @classmethod
