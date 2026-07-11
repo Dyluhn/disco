@@ -293,6 +293,18 @@ async def test_tampered_worker_secret_exfil_fails_trusted_bytes_and_secret_scan(
     assert checks["stripe_static_secret_absence"].passed is False
 
 
+async def test_tampered_stripe_runtime_entrypoint_fails_trusted_bytes():
+    _, app, design, tree = await _stripe_gate_inputs()
+    tree["wrangler.toml"] = tree["wrangler.toml"].replace(
+        'main = "worker/index.ts"', 'main = "worker/attacker.ts"'
+    )
+    result = stripe_verify(app, design, tree)
+    check = next(item for item in result.checks if item.name == "stripe_trusted_tree")
+    assert result.ok is False
+    assert check.passed is False
+    assert "wrangler.toml" in check.evidence
+
+
 async def test_host_live_dispatch_is_mandatory_and_result_consistent():
     _, app, design, tree = await _stripe_gate_inputs()
     prim = required_security_primitives(app)[0]
