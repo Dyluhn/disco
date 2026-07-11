@@ -150,7 +150,9 @@ async def test_lifecycle_installs_exact_order_and_rotates(stripe_runtime) -> Non
     assert active[0].allowed_services == frozenset({"payments.ready", "payments.checkout"})
     assert active[0].allowed_origins == frozenset({_ORIGIN})
     assert token_mutations == [
+        "host_token_candidate_mint_attempted",
         "host_token_candidate_minted",
+        "host_token_rotation_finish_attempted",
         "host_token_rotation_finished",
     ]
 
@@ -235,7 +237,9 @@ async def test_probe_failure_revokes_candidate_and_preserves_old(stripe_runtime)
     assert len(records) == 2 and sum(record.is_active for record in records) == 1
     assert sink.calls[-1] == ("STRIPE_RUNTIME_READY", "0")
     assert token_mutations == [
+        "host_token_candidate_mint_attempted",
         "host_token_candidate_minted",
+        "host_token_candidate_revoke_attempted",
         "host_token_candidate_revoked",
     ]
 
@@ -346,16 +350,25 @@ async def test_http_runtime_probe_is_exact_bounded_and_admin_authenticated(
 
 
 @pytest.mark.integration
-async def test_http_probe_drives_generated_worker_admin_auth_semantics() -> None:
-    """Real generated Worker: bad admin is 401 and good admin reaches the probe body."""
-    import sys
+async def test_http_probe_drives_generated_worker_and_real_ready_bus(
+    tmp_path: Path,
+) -> None:
+    """Production probe -> generated workerd Worker -> mocked payments.ready bus."""
+    import os
+    import select
+    import shutil
+    import ssl
+    import subprocess
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-    core_tests = Path(__file__).resolve().parents[2] / "core" / "tests"
-    sys.path.insert(0, str(core_tests))
-    from _workerd_harness import WorkerdApp, wrangler_available
-
-    if not wrangler_available():
-        pytest.skip("wrangler/workerd is required for the integrated runtime probe")
+    wrangler_bin = shutil.which("wrangler")
+    node_bin = shutil.which("node")
+    npm_bin = shutil.which("npm")
+    if wrangler_bin is None or node_bin is None or npm_bin is None:
+        pytest.skip("node + npm + wrangler/workerd are required for the integrated runtime probe")
     recipe = get_recipe("editorial-ledger")
     assert recipe is not None
     stripe_spec = StripeSpec(
@@ -366,19 +379,183 @@ async def test_http_probe_drives_generated_worker_admin_auth_semantics() -> None
     )
     app = apply_stripe_spec(default_records_auth_app_spec("Probe", recipe), stripe_spec)
     tree = generate(app, recipe.to_design_spec())
+    app_dir = tmp_path / "app"
+    for relpath, contents in tree.items():
+        target = app_dir / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(contents, encoding="utf-8")
+    (app_dir / "dist").mkdir()
+    (app_dir / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
+    bundle_dir = tmp_path / "bundle"
+    command_env = os.environ.copy()
+    command_env["WRANGLER_SEND_METRICS"] = "false"
+    install_result = subprocess.run(
+        [npm_bin, "install", "--ignore-scripts", "--no-audit", "--no-fund"],
+        cwd=app_dir,
+        env=command_env,
+        capture_output=True,
+        text=True,
+    )
+    assert install_result.returncode == 0, (
+        f"Generated app dependency install failed\nstdout={install_result.stdout}"
+        f"\nstderr={install_result.stderr}"
+    )
+    bundle_result = subprocess.run(
+        [
+            wrangler_bin,
+            "deploy",
+            "--config",
+            str(app_dir / "wrangler.toml"),
+            "--dry-run",
+            "--outdir",
+            str(bundle_dir),
+        ],
+        cwd=app_dir,
+        env=command_env,
+        capture_output=True,
+        text=True,
+    )
+    assert bundle_result.returncode == 0, (
+        f"Wrangler build failed\nstdout={bundle_result.stdout}\nstderr={bundle_result.stderr}"
+    )
+    bundles = [*bundle_dir.rglob("*.js"), *bundle_dir.rglob("*.mjs")]
+    assert len(bundles) == 1, bundles
+    token = "a2v0." + "A" * 22 + "." + "B" * 43
+    miniflare_entry = (
+        Path(wrangler_bin).resolve().parents[1] / "node_modules/miniflare/dist/src/index.js"
+    )
+    assert miniflare_entry.exists()
     worker_port = _free_tcp_port()
-    with WorkerdApp(tree, admin_token=_ADMIN) as worker:
-        worker.boot(worker_port)
-        bad_status, _ = worker.get("/api/stripe/runtime-probe", token="wrong-admin-token")
-        assert bad_status == 401
-        good_status, good_body = worker.get("/api/stripe/runtime-probe", token=_ADMIN)
-        assert good_status == 200
-        assert json.loads(good_body) == {"ready": False}
-        # Drive the same real route with the production probe implementation.
-        probe = HttpStripeWorkerProbe()
-        origin = f"http://127.0.0.1:{worker_port}"
+    host_bus_worker = tmp_path / "host-bus.mjs"
+    host_bus_worker.write_text(
+        f"""export default {{
+  async fetch(request) {{
+    let body;
+    try {{ body = await request.json(); }} catch {{ return Response.json({{ ready: false }}); }}
+    const keys = body && typeof body === "object" ? Object.keys(body).sort() : [];
+    const valid = new URL(request.url).pathname === "/_disco/svc/payments.ready"
+      && request.method === "POST"
+      && request.headers.get("authorization") === {json.dumps(f"Bearer {token}")}
+      && keys.join(",") === "binding_proof,plan_selector,webhook_proof"
+      && body.plan_selector === "pro_member"
+      && /^[0-9a-f]{{64}}$/.test(body.binding_proof)
+      && /^[0-9a-f]{{64}}$/.test(body.webhook_proof);
+    return Response.json({{ ready: valid }});
+  }},
+}};
+""",
+        encoding="utf-8",
+    )
+    harness = tmp_path / "miniflare.mjs"
+    harness.write_text(
+        f"""import {{ Miniflare }} from {json.dumps(miniflare_entry.as_uri())};
+const mf = new Miniflare({{
+  host: "127.0.0.1", port: {worker_port},
+  workers: [{{
+    name: "stripe-app", modules: true,
+    scriptPath: {json.dumps(str(bundles[0]))}, compatibilityDate: "2025-01-01",
+    d1Databases: {{ DB: "stripe-probe-test" }}, outboundService: {{ name: "host-bus" }},
+    bindings: {{
+      ADMIN_TOKEN: {json.dumps(_ADMIN)},
+      STRIPE_WEBHOOK_SECRET: "integration_webhook_secret",
+      STRIPE_APP_BINDING_SECRET: "integration-binding-secret-at-least-32-bytes",
+      STRIPE_RUNTIME_READY: "0", DISCO_SVC_BUS: "https://bus.example",
+      DISCO_SVC_TOKEN: {json.dumps(token)},
+    }},
+  }}, {{
+    name: "host-bus", modules: true,
+    scriptPath: {json.dumps(str(host_bus_worker))}, compatibilityDate: "2025-01-01",
+  }}],
+}});
+await mf.ready;
+console.log("READY");
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, async () => {{
+  await mf.dispose(); process.exit(0);
+}});
+setInterval(() => {{}}, 1000);
+""",
+        encoding="utf-8",
+    )
+    node = subprocess.Popen(
+        [node_bin, str(harness)],
+        cwd=tmp_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    assert node.stdout is not None
+    readable, _, _ = select.select([node.stdout], [], [], 20)
+    if not readable:
+        node.terminate()
+        stdout, stderr = node.communicate(timeout=10)
+        raise AssertionError(f"Miniflare did not start\nstdout={stdout}\nstderr={stderr}")
+    assert node.stdout.readline().strip() == "READY"
+    cert = tmp_path / "cert.pem"
+    key = tmp_path / "key.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(cert, key)
+    proxy_responses: list[tuple[int, bytes]] = []
+
+    class ProxyHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{worker_port}{self.path}",
+                headers={"Authorization": self.headers.get("authorization", "")},
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    status, body = response.status, response.read()
+            except urllib.error.HTTPError as exc:
+                status, body = exc.code, exc.read()
+            proxy_responses.append((status, body))
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return None
+
+    proxy = ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    proxy.socket = tls.wrap_socket(proxy.socket, server_side=True)
+    proxy_thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    proxy_thread.start()
+    proxy_port = int(proxy.server_address[1])
+    try:
+        probe = HttpStripeWorkerProbe(transport=httpx.AsyncHTTPTransport(verify=False))
+        origin = f"https://localhost:{proxy_port}"
         assert await probe.payments_ready(origin, "wrong-admin-token") is False
-        assert await probe.payments_ready(origin, _ADMIN) is False
+        assert await probe.payments_ready(origin, _ADMIN) is True, proxy_responses
+    finally:
+        proxy.shutdown()
+        proxy.server_close()
+        proxy_thread.join(timeout=5)
+        node.terminate()
+        node.communicate(timeout=10)
 
 
 def _free_tcp_port() -> int:
@@ -551,7 +728,10 @@ async def test_full_deploy_runner_order_and_records_contain_names_not_values(
     rendered = json.dumps(result.transcript) + persisted
     assert webhook not in rendered and _ADMIN not in rendered
     assert "secret_put:STRIPE_WEBHOOK_SECRET" in persisted
+    assert "secret_put_attempt:STRIPE_WEBHOOK_SECRET" in persisted
+    assert "host_token_candidate_mint_attempted" in persisted
     assert "host_token_candidate_minted" in persisted
+    assert "host_token_rotation_finish_attempted" in persisted
     assert "host_token_rotation_finished" in persisted
     assert "a2v0." not in persisted
     tokens.close()

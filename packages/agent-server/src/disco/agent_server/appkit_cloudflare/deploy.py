@@ -87,8 +87,11 @@ _log = logging.getLogger(__name__)
 
 _HOST_TOKEN_LIFECYCLE_MUTATIONS = frozenset(
     {
+        "host_token_candidate_mint_attempted",
         "host_token_candidate_minted",
+        "host_token_rotation_finish_attempted",
         "host_token_rotation_finished",
+        "host_token_candidate_revoke_attempted",
         "host_token_candidate_revoked",
     }
 )
@@ -2480,6 +2483,7 @@ class _DeploySecretWriter:
         self.effective_digest: str | None = None
 
     async def __call__(self, name: str, value: str) -> bool:
+        self._record_named_mutation(f"secret_put_attempt:{name}")
         result = await self._runner.run(
             [self._wrangler_bin, "secret", "put", name],
             cwd=self._staged,
@@ -2495,7 +2499,11 @@ class _DeploySecretWriter:
         )
         if not result.ok:
             return False
-        self._mutations.append(f"secret_put:{name}")
+        self._record_named_mutation(f"secret_put:{name}")
+        return True
+
+    def _record_named_mutation(self, name: str) -> None:
+        self._mutations.append(name)
         _persist_record(
             self._live_workspace,
             self._record_rel,
@@ -2505,7 +2513,6 @@ class _DeploySecretWriter:
             effective_digest=self.effective_digest,
             store=self._store,
         )
-        return True
 
     async def put_legacy_admin(self, value: str) -> CommandResult:
         """Preserve the pre-Stripe ADMIN_TOKEN behavior and mutation label."""
@@ -2529,16 +2536,7 @@ class _DeploySecretWriter:
     def record_host_token_mutation(self, name: str) -> None:
         if name not in _HOST_TOKEN_LIFECYCLE_MUTATIONS:
             raise ValueError("invalid host-token lifecycle mutation name")
-        self._mutations.append(name)
-        _persist_record(
-            self._live_workspace,
-            self._record_rel,
-            self._plan,
-            status="in_progress",
-            mutations=self._mutations,
-            effective_digest=self.effective_digest,
-            store=self._store,
-        )
+        self._record_named_mutation(name)
 
 
 def _recheck_stripe_after_build(lifecycle: StripeDeploymentLifecycle | None, staged: Path) -> None:

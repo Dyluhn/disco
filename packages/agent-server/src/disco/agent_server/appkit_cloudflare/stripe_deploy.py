@@ -59,7 +59,13 @@ class HttpStripeWorkerProbe:
         self._transport = transport
 
     async def payments_ready(self, deployed_origin: str, admin_token: str) -> bool:
-        url = deployed_origin + _RUNTIME_PROBE_PATH
+        try:
+            origin = _canonical_https_origin(
+                deployed_origin, label="Stripe deployed Worker origin"
+            )
+        except StripeDeployError:
+            return False
+        url = origin + _RUNTIME_PROBE_PATH
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(10.0),
@@ -343,6 +349,7 @@ class StripeDeploymentLifecycle:
                     f"wrangler secret put {name}",
                     f"could not install required Worker binding {name}",
                 )
+        self._record_mutation("host_token_candidate_mint_attempted")
         candidate = self._token_store.rotate(
             self._conversation_id,
             self._owner_id,
@@ -368,6 +375,7 @@ class StripeDeploymentLifecycle:
                 "stripe_runtime_probe",
                 "the active Worker could not prove payments.ready through its new capability",
             )
+        self._record_mutation("host_token_rotation_finish_attempted")
         self._token_store.finish_rotation(
             self._conversation_id,
             self._audience,
@@ -392,6 +400,7 @@ class StripeDeploymentLifecycle:
                 ready_zero_confirmed = False
         if self._candidate_selector is not None and not self._rotation_finished:
             try:
+                self._record_mutation("host_token_candidate_revoke_attempted")
                 if self._token_store.revoke(self._candidate_selector):
                     self._record_mutation("host_token_candidate_revoked")
                 candidate_safe = self._token_store.verify(self._candidate_selector) is None
