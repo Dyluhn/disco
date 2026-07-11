@@ -195,7 +195,7 @@ def _scan_tree(root: Path) -> tuple[dict[str, str], int]:
         raise StorageError(f"workspace directory missing: {root}")
     hashes: dict[str, str] = {}
     total_bytes = 0
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
         rel = path.relative_to(root).as_posix()
         if is_runtime_secret_path(rel):
             continue
@@ -495,7 +495,9 @@ class ProjectStore:
             workspace = self._version_dir(conversation_id, record) / _WORKSPACE
             if not workspace.is_dir():
                 continue
-            for path in sorted(p for p in workspace.rglob("*") if p.is_file()):
+            for path in sorted(
+                p for p in workspace.rglob("*") if p.is_file() and not p.is_symlink()
+            ):
                 if is_runtime_secret_path(path.relative_to(workspace).as_posix()):
                     continue
                 stat = path.stat()
@@ -652,5 +654,7 @@ class ProjectStore:
         yield from sorted(
             p
             for p in workspace.rglob("*")
-            if p.is_file() and not is_runtime_secret_path(p.relative_to(workspace).as_posix())
+            if p.is_file()
+            and not p.is_symlink()
+            and not is_runtime_secret_path(p.relative_to(workspace).as_posix())
         )

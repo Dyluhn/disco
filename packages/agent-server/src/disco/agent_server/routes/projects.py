@@ -590,6 +590,7 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
                 rel = p.relative_to(workspace).as_posix()
                 if (
                     p.is_file()
+                    and not p.is_symlink()
                     and not p.name.startswith("_codeact")
                     and not is_runtime_secret_path(rel)
                 ):

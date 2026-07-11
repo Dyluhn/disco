@@ -178,6 +178,39 @@ async def test_runtime_secret_files_never_persist_or_rehydrate(tmp_path: Path) -
     assert set(fresh.files) == {"index.html", ".dev.vars.example"}
 
 
+async def test_snapshot_removes_legacy_links_before_writing(tmp_path: Path) -> None:
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"host-value")
+    (dest / "index.html").symlink_to(outside)
+
+    await snapshot_workspace(_FakeSandbox({"index.html": b"sandbox-value"}), dest)
+
+    assert outside.read_bytes() == b"host-value"
+    assert not (dest / "index.html").is_symlink()
+    assert (dest / "index.html").read_bytes() == b"sandbox-value"
+
+
+async def test_rehydrate_and_zip_skip_legacy_symlinks(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    src = tmp_path / "workspace"
+    src.mkdir()
+    (src / "safe.txt").write_bytes(b"safe")
+    outside = tmp_path / "host-secret.txt"
+    outside.write_bytes(b"must-not-cross-boundary")
+    (src / "leak.txt").symlink_to(outside)
+
+    fresh = _FakeSandbox()
+    assert await rehydrate_workspace(fresh, src) == 1
+    assert fresh.files == {"safe.txt": b"safe"}
+    blob = b"".join(zip_workspace(src))
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        assert zf.namelist() == ["safe.txt"]
+
+
 async def test_snapshot_preserves_last_good_file_on_transient_read_failure(
     tmp_path: Path,
 ) -> None:

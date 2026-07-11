@@ -123,7 +123,14 @@ async def snapshot_workspace(
     (_SNAPSHOT_MAX_CONSECUTIVE_FAILURES consecutive failures) or an unlistable
     workspace ROOT raises — those mean "we saved nothing trustworthy".
     """
+    if dest.is_symlink():
+        raise WorkspaceArchiveError("snapshot destination must not be a symlink")
     dest.mkdir(parents=True, exist_ok=True)
+    # A legacy/host-planted link inside the durable tree must never turn a
+    # sandbox write into an arbitrary host-file overwrite. Snapshot trees carry
+    # regular files only, so links have no valid persistence meaning.
+    for link in sorted((p for p in dest.rglob("*") if p.is_symlink()), reverse=True):
+        link.unlink()
 
     paths: list[str] = []
     skipped: list[str] = []
@@ -222,7 +229,7 @@ async def rehydrate_workspace(sandbox: _WorkspaceIO, src: Path) -> int:
     if not src.exists() or not src.is_dir():
         return 0
     count = 0
-    for path in sorted(p for p in src.rglob("*") if p.is_file()):
+    for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
         rel = path.relative_to(src).as_posix()
         if is_runtime_secret_path(rel):
             continue
@@ -248,7 +255,7 @@ def zip_workspace(src: Path) -> Iterator[bytes]:
         raise FileNotFoundError(f"workspace directory not found: {src}")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(p for p in src.rglob("*") if p.is_file()):
+        for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
             rel = path.relative_to(src).as_posix()
             if not is_runtime_secret_path(rel):
                 zf.write(path, arcname=rel)
