@@ -17,17 +17,17 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import subprocess
+from pathlib import Path
 
 import pytest
-from disco.core.appkit.spec import AppSpec
-from disco.core.appkit.semantic_metadata import METADATA_VERSION
 from disco.core.appkit import (
+    RECORDS_PRIMITIVE_ID,
     Action,
     DesignSpec,
     Entity,
     EntityField,
     Page,
-    RECORDS_PRIMITIVE_ID,
     Section,
     SectionContent,
     check_drizzle_schema,
@@ -38,6 +38,8 @@ from disco.core.appkit import (
     resolve_lead_entity,
     synthesized_lead_entity,
 )
+from disco.core.appkit.semantic_metadata import METADATA_VERSION
+from disco.core.appkit.spec import AppSpec
 
 _LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST = (
     "cfe5bfd3497d8e566d2e804286143694307a184ed68d230d4e01e83c3b165d13"
@@ -45,7 +47,7 @@ _LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST = (
 
 # The single most common generated-site tells the generator must never emit.
 _AI_PURPLE = ("#7c3aed", "#8b5cf6", "#6366f1", "#a855f7")
-_GENERIC_FONT_PRIMARY = ('font-family: inter', 'family=Inter', 'family=Geist')
+_GENERIC_FONT_PRIMARY = ("font-family: inter", "family=Inter", "family=Geist")
 
 
 def _design() -> DesignSpec:
@@ -70,7 +72,8 @@ def _app() -> AppSpec:
                         kind="hero",
                         variant_id="hero.asymmetric-editorial",
                         content=SectionContent(
-                            heading="We build things", subheading="On time.",
+                            heading="We build things",
+                            subheading="On time.",
                             cta_label="Get a quote",
                         ),
                     ),
@@ -79,7 +82,8 @@ def _app() -> AppSpec:
                         kind="features",
                         variant_id="features.alternating-rows",
                         content=SectionContent(
-                            heading="What we do", items=("Design", "Build", "Ship"),
+                            heading="What we do",
+                            items=("Design", "Build", "Ship"),
                         ),
                     ),
                     Section(
@@ -107,9 +111,7 @@ def _app() -> AppSpec:
                 ),
             ),
         ),
-        primary_actions=(
-            Action(id="submit_lead", label="Send", type="submit", target="lead"),
-        ),
+        primary_actions=(Action(id="submit_lead", label="Send", type="submit", target="lead"),),
     )
 
 
@@ -210,7 +212,7 @@ def test_form_component_emits_reactive_submit_contract():
     assert 'useSubmit("/api/leads")' in form
     assert "function validateRequired(): boolean" in form
     assert 'fieldErrors["name"]' in form
-    assert 'if (!validateRequired()) return;' in form
+    assert "if (!validateRequired()) return;" in form
     assert 'disabled={state.kind === "submitting"}' in form
     assert 'state.kind === "submitting" ? "Sending…"' in form
     assert 'aria-live="polite"' in form
@@ -272,9 +274,10 @@ def test_lead_gen_worker_and_schema_outputs_stay_stable():
     recipe = get_recipe("editorial-ledger")
     assert recipe is not None
     tree = generate(default_lead_gen_app_spec("Acme", recipe), recipe.to_design_spec())
-    assert _digest_paths(
-        tree, ("schema.sql", "worker/index.ts", "src/db/schema.ts")
-    ) == _LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST
+    assert (
+        _digest_paths(tree, ("schema.sql", "worker/index.ts", "src/db/schema.ts"))
+        == _LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST
+    )
 
 
 def test_generated_jsx_braces_and_parens_balanced():
@@ -313,10 +316,10 @@ def test_document_and_section_roots_carry_disco_semantic_attrs():
     ):
         comp = next(tree[p] for p in tree if p.endswith(stem))
         assert 'data-disco-file=".disco/appspec.json"' in comp, stem
-        assert f'data-disco-section={json.dumps(section_id)}' in comp, stem
-        assert f'data-disco-screen-label={json.dumps(screen_label)}' in comp, stem
+        assert f"data-disco-section={json.dumps(section_id)}" in comp, stem
+        assert f"data-disco-screen-label={json.dumps(screen_label)}" in comp, stem
         # the Epic G marker is still present (coverage + back-compat)
-        assert f'data-appkit-section={json.dumps(section_id)}' in comp, stem
+        assert f"data-appkit-section={json.dumps(section_id)}" in comp, stem
 
 
 def test_content_elements_carry_field_slot_tags():
@@ -359,8 +362,7 @@ def test_generic_section_branch_carries_appkit_and_disco_markers():
                     "route": "/",
                     "title": "Home",
                     "sections": [
-                        {"id": "custom_block", "kind": "custom",
-                         "content": {"heading": "Custom"}},
+                        {"id": "custom_block", "kind": "custom", "content": {"heading": "Custom"}},
                     ],
                 }
             ],
@@ -457,18 +459,18 @@ def _app_with_colliding_section_ids() -> AppSpec:
                 id="about-us",
                 route="/about-us",
                 title="About",
-                sections=(
-                    Section(id="top-bar", kind="hero",
-                            content=SectionContent(heading="A")),
-                ),
+                sections=(Section(id="top-bar", kind="hero", content=SectionContent(heading="A")),),
             ),
             Page(
                 id="about_us",
                 route="/about_us",
                 title="About 2",
                 sections=(
-                    Section(id="top_bar", kind="features",
-                            content=SectionContent(heading="B", items=("x",))),
+                    Section(
+                        id="top_bar",
+                        kind="features",
+                        content=SectionContent(heading="B", items=("x",)),
+                    ),
                 ),
             ),
         ),
@@ -479,9 +481,7 @@ def _app_with_colliding_section_ids() -> AppSpec:
                 fields=(EntityField(name="email", type="str", required=True),),
             ),
         ),
-        primary_actions=(
-            Action(id="submit_lead", label="Send", type="submit", target="lead"),
-        ),
+        primary_actions=(Action(id="submit_lead", label="Send", type="submit", target="lead"),),
     )
 
 
@@ -508,7 +508,7 @@ def test_collision_app_tsx_imports_resolve_to_real_files():
     app_tsx = tree["src/App.tsx"]
     import_names: list[str] = []
     for line in app_tsx.splitlines():
-        if line.startswith("import ") and './components/' in line:
+        if line.startswith("import ") and "./components/" in line:
             sym = line.split("import ", 1)[1].split(" from", 1)[0].strip()
             path = line.split('"./components/', 1)[1].rsplit('"', 1)[0]
             import_names.append(sym)
@@ -631,9 +631,7 @@ def test_check_drizzle_schema_passes_on_generated_tree_and_catches_drift():
 
     missing_column = {
         **tree,
-        "src/db/schema.ts": tree["src/db/schema.ts"].replace(
-            '  message: text("message"),\n', ""
-        ),
+        "src/db/schema.ts": tree["src/db/schema.ts"].replace('  message: text("message"),\n', ""),
     }
     missing_res = check_drizzle_schema(missing_column)
     assert not missing_res.passed
@@ -668,7 +666,9 @@ def test_resolve_lead_synthesized_when_absent():
 
 def test_ensure_lead_entity_appends_when_missing():
     app = AppSpec(
-        schema_version=1, app_kind="lead_gen", name="Bare",
+        schema_version=1,
+        app_kind="lead_gen",
+        name="Bare",
         pages=(Page(id="home", route="/", title="Home", sections=()),),
     )
     assert not app.entities
@@ -775,9 +775,7 @@ def test_worker_read_endpoints_are_auth_gated_and_fail_closed():
     # both reads guard before touching the DB
     assert worker.count("if (!isAuthorized(request, env)) {") == 2
     # POST submission stays public (no auth guard on the POST branch)
-    post_branch = worker.split('request.method === "POST"')[1].split(
-        'request.method === "GET"'
-    )[0]
+    post_branch = worker.split('request.method === "POST"')[1].split('request.method === "GET"')[0]
     assert "isAuthorized" not in post_branch
 
 
@@ -944,9 +942,7 @@ def test_multiword_font_is_url_encoded_in_href_not_broken_out():
     html_out = generate(_app(), design)["index.html"]
     assert "family=Libre+Franklin" in html_out
     # no raw space inside the encoded family, no attribute/tag breakout via the href
-    link = next(
-        line for line in html_out.splitlines() if "fonts.googleapis.com/css2" in line
-    )
+    link = next(line for line in html_out.splitlines() if "fonts.googleapis.com/css2" in line)
     href = link.split('href="', 1)[1].split('"', 1)[0]  # value inside href="…"
     assert href.startswith("https://fonts.googleapis.com/css2?")
     assert "Libre Franklin" not in href  # the raw (unencoded) family never appears
@@ -1011,3 +1007,389 @@ def test_default_lead_gen_app_spec_is_complete():
     assert kinds == ["hero", "features", "form", "footer"]
     assert any(e.id == "lead" for e in app.entities)
     assert any(a.type == "submit" for a in app.primary_actions)
+
+
+# ---- WO-A2.3: host-service client shim ---------------------------------------
+
+# Strings that must NEVER appear in the emitted tree (no sentinel bearer, no
+# secret patterns, no sk_/whsec_).
+_SECRET_PATTERNS = (
+    "Bearer replace-me",
+    "Bearer placeholder",
+    "sk_live",
+    "sk_test",
+    "whsec_",
+    "import.meta.env.DISCO_SVC",
+    "import.meta.env.DISCO_",
+)
+# Paths the frontend bundle owns (must never import worker/disco-client.ts).
+_FRONTEND_PREFIXES = ("src/", "index.html")
+
+
+def _host_worker_tree() -> dict[str, str]:
+    return {
+        "worker/index.ts": (
+            "interface Env {\n"
+            "  ASSETS: { fetch: (req: Request) => Promise<Response> };\n"
+            "}\n"
+            "export default { fetch(_req: Request, _env: Env): Response {\n"
+            "  return new Response('ok');\n"
+            "} };\n"
+        ),
+        "index.html": "<!doctype html>\n",
+    }
+
+
+def _install_host_worker_primitive(monkeypatch: pytest.MonkeyPatch) -> None:
+    from disco.core.appkit import PrimitiveDefinition
+    from disco.core.appkit import generator as generator_module
+    from disco.core.appkit.primitives import HostService
+
+    defn = PrimitiveDefinition(
+        id="test_host_worker",
+        default_app_spec=lambda name, recipe: _app(),
+        prepare_app_spec=lambda app: app,
+        generate=lambda app, design: _host_worker_tree(),
+        host_contract=(HostService("svc.ping"),),
+    )
+    monkeypatch.setattr(generator_module, "resolve_primitive", lambda _kind: defn)
+
+
+def test_disco_client_shim_emitted_for_host_worker(monkeypatch: pytest.MonkeyPatch):
+    """A real Worker-shaped host-contract tree gets the shim and Env bindings."""
+    _install_host_worker_primitive(monkeypatch)
+    tree = generate(_app(), _design())
+    assert "worker/disco-client.ts" in tree
+    assert "DISCO_SVC_BUS?: string" in tree["worker/index.ts"]
+    assert "DISCO_SVC_TOKEN?: string" in tree["worker/index.ts"]
+
+
+def test_host_contract_without_worker_fails_loudly():
+    """Stripe remains activation-blocked until its fill emits a real Worker."""
+    from disco.core.appkit.stripe_primitive import STRIPE_PRIMITIVE_ID
+
+    stripe_app = AppSpec(
+        schema_version=1,
+        app_kind=STRIPE_PRIMITIVE_ID,
+        name="Stripe App",
+        pages=(),
+    )
+    with pytest.raises(ValueError, match="must emit worker/index.ts"):
+        generate(stripe_app, _design())
+
+
+def test_disco_client_shim_not_emitted_for_lead_gen():
+    """Lead-gen primitive has empty host_contract — shim must NOT appear."""
+    tree = generate(_app(), _design())
+    assert "worker/disco-client.ts" not in tree, (
+        "lead_gen has empty host_contract — shim must not appear"
+    )
+
+
+def test_disco_client_shim_not_emitted_for_directory():
+    """Directory primitive has empty host_contract — shim must NOT appear."""
+    from disco.core.appkit import default_directory_app_spec
+
+    recipe = get_recipe("editorial-ledger")
+    assert recipe is not None
+    tree = generate(default_directory_app_spec("Dir", recipe), recipe.to_design_spec())
+    assert "worker/disco-client.ts" not in tree, (
+        "directory has empty host_contract — shim must not appear"
+    )
+
+
+def test_disco_client_shim_content_invariants(monkeypatch: pytest.MonkeyPatch):
+    """The shim's code meets every security and structural invariant."""
+    _install_host_worker_primitive(monkeypatch)
+    tree = generate(_app(), _design())
+    shim = tree["worker/disco-client.ts"]
+
+    # ---- required API shape ----
+    assert "export async function svc(" in shim
+    assert "env: { DISCO_SVC_BUS?: string; DISCO_SVC_TOKEN?: string }" in shim
+    assert "service: string" in shim
+    assert "payload: unknown" in shim
+    assert "Promise<unknown>" in shim
+    assert "SvcResult" not in shim
+    assert "ok: true" not in shim
+
+    # ---- env-only, never caller-supplied ----
+    assert "env.DISCO_SVC_BUS" in shim
+    assert "env.DISCO_SVC_TOKEN" in shim
+
+    # ---- URL validation via URL constructor ----
+    assert "new URL(bus)" in shim
+    assert "busUrl.protocol" in shim
+    assert "busUrl.username" in shim
+    assert "busUrl.password" in shim
+    assert "busUrl.search" in shim
+    assert "busUrl.hash" in shim
+    assert "busUrl.pathname" in shim
+    assert "busUrl.origin" in shim
+
+    # ---- token validation: a2v0 Bearer format ----
+    assert "TOKEN_RE" in shim
+    assert "TOKEN_RE.test(token)" in shim
+
+    # ---- fixed URL construction ----
+    assert "/_disco/svc/" in shim
+    assert "encodeURIComponent(service)" in shim
+
+    # ---- POST JSON only; cache: no-store ----
+    assert 'method: "POST"' in shim
+    assert '"Content-Type": "application/json"' in shim
+    assert 'cache: "no-store"' in shim
+
+    # ---- request body as UTF-8 bytes, 64 KiB bound ----
+    assert "TextEncoder" in shim
+    assert "JSON.stringify(payload)" in shim
+    assert "MAX_REQUEST_BYTES" in shim
+    assert "bodyBytes.byteLength > MAX_REQUEST_BYTES" in shim
+    assert "body: bodyBytes" in shim
+
+    # ---- Authorization Bearer from env only ----
+    assert '"Authorization"' in shim
+    assert "Bearer" in shim
+
+    # ---- workerd-supported manual redirects, rejected by the non-2xx gate ----
+    assert 'redirect: "manual"' in shim
+
+    # ---- AbortController timeout ----
+    assert "AbortController" in shim
+    assert "BUS_TIMEOUT_MS" in shim
+
+    # ---- Content-Type check on response ----
+    assert 'response.headers.get("Content-Type")' in shim
+    assert 'mediaType !== "application/json"' in shim
+
+    # ---- bounded streaming response (reader chunks, NOT arrayBuffer) ----
+    assert "response.body.getReader()" in shim
+    assert "reader.read()" in shim
+    assert "await reader.cancel()" in shim
+    assert "total > MAX_RESPONSE_BYTES" in shim
+    assert "MAX_RESPONSE_BYTES" in shim
+    assert "chunks.push(value)" in shim
+    assert "arrayBuffer" not in shim
+
+    # ---- top-level JSON object required on response ----
+    assert "TextDecoder" in shim
+    assert "{ fatal: true }" in shim
+    assert "JSON.parse(text)" in shim
+    assert "Array.isArray(parsed)" in shim
+    assert 'typeof parsed !== "object"' in shim
+
+    # ---- sanitized status-class errors for non-200 responses ----
+    assert "statusClass" in shim
+    assert '"4xx"' in shim
+    assert '"5xx"' in shim
+
+    # ---- sanitized errors: never echo bus/token/service/body/statusText ----
+    assert 'throw new Error("host service unavailable");' in shim
+    assert 'throw new Error("invalid service");' in shim
+    assert 'throw new Error("invalid payload");' in shim
+    assert 'throw new Error("payload too large");' in shim
+    assert 'throw new Error("host service error");' in shim
+    assert "response.statusText" not in shim
+    assert "errObj" not in shim
+
+    # ---- grammar + length cap ----
+    assert "SERVICE_RE" in shim
+    assert "MAX_SERVICE_LEN" in shim
+    assert 'busUrl.protocol === "http:" && !isLoopback(busUrl.hostname)' in shim
+    assert "const BUS_TIMEOUT_MS = 10000" in shim
+
+    # ---- no sentinel bearer leaked ----
+    for pat in _SECRET_PATTERNS:
+        assert pat not in shim, f"forbidden pattern {pat!r} found in shim"
+
+    # ---- structurally balanced ----
+    assert shim.count("{") == shim.count("}")
+    assert shim.count("(") == shim.count(")")
+
+
+def test_disco_client_shim_never_imported_from_frontend(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """No src/ or index.html file imports or references the disco-client shim."""
+    _install_host_worker_primitive(monkeypatch)
+    tree = generate(_app(), _design())
+    for path, contents in tree.items():
+        if not any(path.startswith(p) for p in _FRONTEND_PREFIXES):
+            continue
+        assert "disco-client" not in contents, f"frontend file {path} must not import disc-client"
+        assert "DISCO_SVC_BUS" not in contents, f"frontend file {path} must not reference host bus"
+        assert "DISCO_SVC_TOKEN" not in contents, (
+            f"frontend file {path} must not reference host token"
+        )
+
+
+def test_no_import_meta_env_host_service():
+    """Vite browser bundle cannot receive bindings via import.meta.env.
+
+    No generated file, in any primitive, may reference host service env vars
+    through the Vite import.meta.env path (browser code has no env bindings).
+    The shim reads DISCO_SVC_BUS / DISCO_SVC_TOKEN only from Worker env."""
+    tree = generate(_app(), _design())
+    blob = "\n".join(tree.values())
+    assert "import.meta.env.DISCO_SVC" not in blob
+    assert "import.meta.env.DISCO_" not in blob
+
+
+def test_dev_vars_example_is_byte_stable_for_unrelated_primitive():
+    """A2.3 does not globally alter the existing lead-gen secret template."""
+    tree = generate(_app(), _design())
+    dev_vars = tree[".dev.vars.example"]
+    assert "DISCO_SVC_BUS" not in dev_vars
+    assert "DISCO_SVC_TOKEN" not in dev_vars
+
+
+def test_byte_stability_preserved_for_lead_gen_non_host_service():
+    """Lead-gen primitive with empty host_contract must have unchanged critical
+    paths (schema, worker, drizzle)."""
+    recipe = get_recipe("editorial-ledger")
+    assert recipe is not None
+    tree = generate(default_lead_gen_app_spec("Acme", recipe), recipe.to_design_spec())
+    assert (
+        _digest_paths(tree, ("schema.sql", "worker/index.ts", "src/db/schema.ts"))
+        == _LEAD_GEN_ACME_WORKER_SCHEMA_DIGEST
+    )
+
+
+def test_disco_client_shim_deterministic(monkeypatch: pytest.MonkeyPatch):
+    """The shim (when emitted) is deterministic: same spec → byte-identical tree."""
+    _install_host_worker_primitive(monkeypatch)
+    app = _app()
+    a = generate(app, _design())
+    b = generate(app, _design())
+    assert a == b
+    assert "worker/disco-client.ts" in a
+    assert a["worker/disco-client.ts"] == b["worker/disco-client.ts"]
+
+
+def test_generate_preserves_primitive_key_order(monkeypatch: pytest.MonkeyPatch):
+    """The dispatcher must not globally reorder unrelated primitive output."""
+    from disco.core.appkit import PrimitiveDefinition
+    from disco.core.appkit import generator as generator_module
+
+    defn = PrimitiveDefinition(
+        id="order_fixture",
+        default_app_spec=lambda name, recipe: _app(),
+        prepare_app_spec=lambda app: app,
+        generate=lambda app, design: {"z-last": "z", "a-first": "a"},
+    )
+    monkeypatch.setattr(generator_module, "resolve_primitive", lambda _kind: defn)
+    assert list(generate(_app(), _design())) == ["z-last", "a-first"]
+
+
+def test_disco_client_ts_executes_security_contract(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Execute the emitted TypeScript with Node's TS loader; this is not a substring test."""
+    _install_host_worker_primitive(monkeypatch)
+    shim_path = tmp_path / "disco-client.ts"
+    shim_path.write_text(generate(_app(), _design())["worker/disco-client.ts"])
+    harness_path = tmp_path / "harness.mjs"
+    harness_path.write_text(
+        """
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const { svc } = await import(pathToFileURL(process.argv[2]).href);
+const token = "a2v0.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const env = { DISCO_SVC_BUS: "https://bus.example", DISCO_SVC_TOKEN: token };
+let timeoutSeen = 0;
+globalThis.setTimeout = (_fn, ms) => { timeoutSeen = ms; return 1; };
+globalThis.clearTimeout = () => {};
+const errorOf = async (fn) => {
+  try { await fn(); } catch (error) { return String(error); }
+  throw new Error("expected rejection");
+};
+const assertSanitized = (message) => {
+  const secrets = ["secret-url", token, "status-secret", "body-secret"];
+  for (const secret of secrets) assert.equal(message.includes(secret), false);
+};
+
+let request;
+globalThis.fetch = async (url, init) => {
+  request = { url, init };
+  const headers = { "Content-Type": "Application/JSON; Charset=UTF-8" };
+  return new Response('{"ok":true}', { headers });
+};
+assert.deepEqual(await svc(env, "svc.ping", { value: 1 }), { ok: true });
+assert.equal(timeoutSeen, 10000);
+assert.equal(request.url, "https://bus.example/_disco/svc/svc.ping");
+assert.equal(request.init.method, "POST");
+assert.equal(request.init.redirect, "manual");
+assert.equal(request.init.cache, "no-store");
+assert.equal(new TextDecoder().decode(request.init.body), '{"value":1}');
+globalThis.fetch = async () => new Response(null, {
+  status: 302, headers: { Location: "https://redirect-secret.example" },
+});
+assertSanitized(await errorOf(() => svc(env, "svc.ping", {})));
+globalThis.fetch = async () => new Response('{"ok":true}', {
+  headers: { "Content-Type": "application/json" },
+});
+
+const badBuses = ["http://example.com", "ftp://localhost",
+  "https://user:pass@bus.example", "https://bus.example/path"];
+for (const bus of badBuses) {
+  const error = await errorOf(
+    () => svc({ ...env, DISCO_SVC_BUS: bus }, "svc.ping", {}),
+  );
+  assert.equal(error.includes("host service unavailable"), true);
+}
+for (const bus of ["http://localhost", "http://127.0.0.2", "http://[::1]"]) {
+  assert.deepEqual(await svc({ ...env, DISCO_SVC_BUS: bus }, "svc.ping", {}), { ok: true });
+}
+assert.equal((await errorOf(() => svc(env, "Svc.Ping", {}))).includes("invalid service"), true);
+const invalidPayload = await errorOf(
+  () => svc(env, "svc.ping", { toJSON: () => [] }),
+);
+assert.equal(invalidPayload.includes("invalid payload"), true);
+
+let cancelled = 0;
+const cancellable = () => new ReadableStream({
+  start(controller) {
+    controller.enqueue(new TextEncoder().encode("body-secret"));
+  },
+  cancel() { cancelled += 1; },
+});
+globalThis.fetch = async () => new Response(cancellable(), {
+  status: 500,
+  statusText: "status-secret",
+  headers: { "Content-Type": "application/json" },
+});
+let message = await errorOf(() => svc(env, "svc.ping", {}));
+assert.equal(cancelled, 1); assertSanitized(message);
+globalThis.fetch = async () => new Response(cancellable(), {
+  headers: { "Content-Type": "text/plain" },
+});
+message = await errorOf(() => svc(env, "svc.ping", {}));
+assert.equal(cancelled, 2); assertSanitized(message);
+const jsonHeaders = { "Content-Type": "application/json" };
+globalThis.fetch = async () => new Response(null, { headers: jsonHeaders });
+const nullBody = await errorOf(() => svc(env, "svc.ping", {}));
+assert.equal(nullBody.includes("host service error"), true);
+globalThis.fetch = async () => new Response(
+  new Uint8Array([0xc3, 0x28]), { headers: jsonHeaders },
+);
+assertSanitized(await errorOf(() => svc(env, "svc.ping", {})));
+globalThis.fetch = async () => new Response(
+  new Uint8Array(256 * 1024 + 1), { headers: jsonHeaders },
+);
+assertSanitized(await errorOf(() => svc(env, "svc.ping", {})));
+globalThis.fetch = async () => { throw new Error(`secret-url ${token}`); };
+assertSanitized(await errorOf(() => svc(env, "svc.ping", {})));
+globalThis.fetch = async () => new Response(new ReadableStream({
+  pull(controller) { controller.error(new Error("body-secret")); },
+}), { headers: jsonHeaders });
+assertSanitized(await errorOf(() => svc(env, "svc.ping", {})));
+"""
+    )
+    result = subprocess.run(
+        ["node", "--experimental-strip-types", str(harness_path), str(shim_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

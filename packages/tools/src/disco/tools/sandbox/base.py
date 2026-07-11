@@ -13,6 +13,8 @@ from typing import NoReturn, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
+from disco.core.workspace_paths import strip_redundant_workspace_prefix
+
 from ..anatomy import Capability
 
 
@@ -32,25 +34,6 @@ def clean_sandbox_env(workspace: object) -> dict[str, str]:
         "TMPDIR": ws,
     }
 
-
-def strip_redundant_workspace_prefix(path: str) -> str:
-    """ROOT-2 (runthru-v2): the sandbox cwd IS the workspace, but the build/agent
-    prompts say files live in '/workspace', so the model often writes paths like
-    'workspace/index.html' (a redundant relative prefix). Joining that onto the
-    workspace root produced '/workspace/workspace/index.html' — which broke the
-    live preview (the server serves the workspace ROOT, so it 404'd on the doubled
-    path) AND plan-step done-conditions / file_exists (they check the root). An
-    ABSOLUTE '/workspace/foo' already resolves correctly in the container but
-    ESCAPES in the process backend, so normalize BOTH forms to a path relative to
-    the workspace root. Only strips ONE leading 'workspace/' or '/workspace/' — a
-    nested 'src/workspace/x' is untouched.
-    """
-    for prefix in ("/workspace/", "workspace/"):
-        if path.startswith(prefix):
-            return path[len(prefix) :]
-    if path in ("/workspace", "workspace"):
-        return ""  # the workspace root itself
-    return path
 
 
 class SandboxError(Exception):
@@ -176,6 +159,10 @@ class SandboxSpec(BaseModel):
     # host-owned, metadata, sibling, and private addresses. Legacy NETWORK
     # grants resolve to this same boundary; no model-shaped spec gets a raw bridge.
     public_web: bool = False
+    # A narrow sandbox -> host-service capability. This does NOT carry a bearer or
+    # upstream address. Backends provision a lifecycle-owned relay and expose only
+    # its non-secret internal URL; the runtime injector owns credentials separately.
+    host_services: bool = False
 
     def egress_allowed(self, host: str) -> bool:
         """[CONTRACT §7] Deny-by-default: a host is reachable only if explicitly
@@ -250,6 +237,16 @@ class SandboxInstance(Protocol):
     # the box FS). C18 and C1c consume this to resolve done-condition predicates.
     @property
     def workspace_path(self) -> str | None: ...
+
+
+@runtime_checkable
+class HostServiceRelayInstance(Protocol):
+    """Optional additive seam implemented only by relay-capable real backends."""
+
+    @property
+    def host_service_relay_url(self) -> str | None:
+        """Non-secret URL reachable only inside this sandbox's network."""
+        ...
 
 
 @runtime_checkable

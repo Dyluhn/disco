@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine, Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
@@ -1519,7 +1519,7 @@ class AgentLoop:
         _callable = getattr(self.executor, "callable_tool_names", None)
         if callable(_callable):
             try:
-                if action.tool_call.tool_name not in set(_callable()):
+                if action.tool_call.tool_name not in set(cast(Iterable[str], _callable())):
                     return Disp.FALLTHROUGH, action
             except Exception:  # noqa: BLE001 — introspection failure → normal gating
                 pass

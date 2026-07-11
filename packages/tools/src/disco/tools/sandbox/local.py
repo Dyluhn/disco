@@ -32,6 +32,7 @@ from ._container import (
     resolve_bounds,
 )
 from .base import SandboxSpec, SandboxUnavailableError
+from .capability_relay import RelayConfigurationError, parse_upstream
 from .config import SandboxConfig, default_local_config
 from .gvisor import GvisorSandboxService, _keepalive_command
 from .naming import LABEL_CONV, SBX_NAME_PREFIX
@@ -83,18 +84,33 @@ class LocalSandboxService(GvisorSandboxService):
         cpu, mem_mb, pids, disk_mb = resolve_bounds(spec, self._cfg)
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         mode = egress_mode(spec)
+        if spec.host_services:
+            try:
+                relay_upstream = parse_upstream(self._cfg.host_service_upstream)
+            except RelayConfigurationError as exc:
+                raise SandboxUnavailableError(str(exc)) from exc
+            if relay_upstream.scheme != "https":
+                raise SandboxUnavailableError(
+                    "container host-service relay requires a reachable HTTPS upstream; "
+                    "sidecar loopback is not the agent-server host"
+                )
         # Per-mode network config (the three-way egress posture; egress_mode docstring).
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
+        host_service_relay_url = None
         net_name = ""  # set in the filtered branch; used by the Fix6 forwarder launch
-        if mode in {"filtered", "public"}:
+        if mode in {"filtered", "public"} or spec.host_services:
             # Reuse the gVisor proxy setup unchanged — same docker-py client, same
             # internal-network + sidecar pattern (the local tier just differs in its
             # workspace being a named volume, not a host bind).
-            egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
-                client, spec, instance_id, conversation_id
-            )
+            (
+                egress_network,
+                egress_sidecar,
+                environment,
+                net_name,
+                host_service_relay_url,
+            ) = self._setup_filtered_egress(client, spec, instance_id, conversation_id)
             net_kwargs = {"network": net_name}
             ports: dict[str, str | None] | None = None  # inbound preview on internal net
         else:  # sealed
@@ -168,4 +184,10 @@ class LocalSandboxService(GvisorSandboxService):
         # it, 502. Best-effort (never raises), same as the parent.
         if mode in {"filtered", "public"} and egress_sidecar is not None:
             self._launch_inbound_forwarder(egress_sidecar, container, net_name)
-        return container, egress_network, egress_sidecar, volume
+        return (
+            container,
+            egress_network,
+            egress_sidecar,
+            volume,
+            host_service_relay_url,
+        )

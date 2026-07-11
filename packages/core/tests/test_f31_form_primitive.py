@@ -83,18 +83,19 @@ def _folded_tree() -> tuple[AppSpec, dict[str, str]]:
 
 # ---- 1. non-regression: pre-existing primitives are byte-identical -----------------
 #
-# The golden hashes below were computed at PRISTINE 9baf7316 (this branch's base
-# commit, before any F3.1 edit) over generate()'s sorted {path: contents} tree,
-# json-canonicalized. Recomputing them here proves the F3.1 emitter changes did
-# not move a single byte of the existing primitives' output.
+# The golden hashes below pin the complete deterministic generated tree.  WO-F4.1
+# intentionally adds the reviewed package-lock.json to Vite-capable outputs; any
+# subsequent byte change still requires an explicit re-pin here.
 
 _GOLDEN_HASHES = {
-    "lead_gen": "297daf8bafc6cb952ba4293a5cd36fe7c24b54d10d7b401bffefacc7ef96dcc7",
+    "lead_gen": "e43ba2d918404a98e0963b227e1d53ab45d7de0c12cd1c914fc51476a8d3755d",
     "directory": "300fb2487a86fee8f2d47ce8fc5a4426010e43584e565744f3b76813df75bebb",
-    "records": "0ddf4d9874de4648ba7df7382b1ee71609f6ae771460b2a458f7093f246e05af",
-    "records_auth": "8c472bc9390eedac6befaa3e318559e279294e7e95e756c6e538207ce1f5c7f0",
+    "records": "243337de655694182ef2c6af2e4648081586ef07a1a0462d0421c2050789054b",
+    # WO-F4.1 hardens the shared auth CSRF comparison from host-only to exact
+    # scheme+host+port origin equality; that intentional byte change is re-pinned.
+    "records_auth": "b7c500495acd0d411f92a69f2c45f12177012beddc85749b304152105b6cf0b1",
     "hello": "8c1b9a6863df3dfefac330ec444327248ab8968d530c601b0f42ee9f4241a4f6",
-    "legacy_lead_fallback": "d041ffa81c1d028f7db5766cf9394bcef3ee86ce925de38b19dee68692132a4c",
+    "legacy_lead_fallback": "e66debb1eddf8ba2c4002ecde5288c009457d1be9ccf93d69df59e207b16d56c",
 }
 
 

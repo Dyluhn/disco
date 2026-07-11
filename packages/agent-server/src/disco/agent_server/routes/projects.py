@@ -17,14 +17,18 @@ from typing import Any, NoReturn
 from disco.core import DeliverableEvent, EventSource, LLMMessage, MessageEvent
 from disco.core.auth import AuthSession
 from disco.core.store.sqlite import SqliteEventStore, install_owner_id
-from disco.tools.projects import StorageStatus, aiter_zip_workspace
+from disco.tools.projects import (
+    StorageStatus,
+    aiter_zip_workspace,
+    is_runtime_secret_path,
+)
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
 
+from ..auth import current_owner_id, current_session, require_admin_session
 from ..runtime import ConversationRuntime
 from ..title_service import fallback_title
-from ..auth import current_owner_id, current_session, require_admin_session
 from ._common import require_owned_conversation
 
 _MAX_IMPORT_ZIP_BYTES = 50 * 1024 * 1024
@@ -93,6 +97,12 @@ def _safe_zip_rel(raw_name: str) -> str:
     parts = PurePosixPath(norm).parts
     if any(part in {"", ".", ".."} for part in parts):
         _reject_import(400, "zip_slip", f"zip entry escapes the project root: {raw_name!r}")
+    if is_runtime_secret_path(norm):
+        _reject_import(
+            400,
+            "runtime_secret_file",
+            f"import contains forbidden runtime secret path: {raw_name!r}",
+        )
     return norm
 
 
@@ -117,6 +127,12 @@ def _scan_import_tree(src: Path, *, skip_git_dir: bool) -> tuple[list[_ImportFil
         if path.is_symlink():
             continue
         rel = path.relative_to(root).as_posix()
+        if is_runtime_secret_path(rel):
+            _reject_import(
+                400,
+                "runtime_secret_file",
+                f"import contains forbidden runtime secret path: {rel!r}",
+            )
         if skip_git_dir and ".git" in PurePosixPath(rel).parts:
             continue
         size = path.stat().st_size
@@ -218,9 +234,7 @@ async def _clone_git_url(git_url: str, dest: Path) -> None:
     except OSError as exc:
         _reject_import(400, "git_clone_failed", f"failed to launch git: {exc}")
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=_GIT_CLONE_TIMEOUT_S
-        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_GIT_CLONE_TIMEOUT_S)
     except TimeoutError as exc:
         proc.kill()
         await proc.communicate()
@@ -234,9 +248,7 @@ async def _parse_import_source(request: Request) -> _ImportSource:
     content_type = request.headers.get("content-type", "")
     if content_type.startswith("multipart/form-data"):
         form = await request.form()
-        uploads = [
-            value for _key, value in form.multi_items() if isinstance(value, UploadFile)
-        ]
+        uploads = [value for _key, value in form.multi_items() if isinstance(value, UploadFile)]
         if len(uploads) != 1:
             _reject_import(400, "invalid_request", "multipart import requires exactly one zip file")
         upload = uploads[0]
@@ -342,9 +354,7 @@ async def _handle_list_projects(
     if status != StorageStatus.OK:
         return {"projects": [], "status": status.value, "root": str(ps.root or "")}
     records = ps.list_projects()
-    summaries = await store.list_conversation_summaries(
-        owner_id=owner_id, limit=500, cursor=None
-    )
+    summaries = await store.list_conversation_summaries(owner_id=owner_id, limit=500, cursor=None)
     by_id = {s.conversation_id: s for s in summaries}
     projects = []
     for r in records:
@@ -411,9 +421,7 @@ async def _handle_import_project(
                 _copy_scanned_tree(files, workspace)
         else:
             assert source.root is not None
-            files, stats = _scan_import_tree(
-                source.root, skip_git_dir=source.skip_git_dir
-            )
+            files, stats = _scan_import_tree(source.root, skip_git_dir=source.skip_git_dir)
             _copy_scanned_tree(files, workspace)
     except _ImportRejected as exc:
         if workspace.exists():
@@ -466,9 +474,7 @@ async def _handle_import_project(
     }
 
 
-def make_projects_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.get("/api/projects")
@@ -501,9 +507,7 @@ def make_projects_router(
         summaries = await store.list_conversation_summaries(
             owner_id=owner_id, limit=500, cursor=None
         )
-        candidates = [
-            s.conversation_id for s in summaries if not s.title or retitle_fallbacks
-        ]
+        candidates = [s.conversation_id for s in summaries if not s.title or retitle_fallbacks]
         titled = await runtime.title_service().backfill(
             candidates, retitle_fallbacks=retitle_fallbacks
         )
@@ -548,9 +552,7 @@ def make_projects_router(
             raise HTTPException(status_code=404, detail={"reason": "files_missing"})
         workspace = ps.path_for(conversation_id)
         headers = {
-            "Content-Disposition": (
-                f'attachment; filename="{conversation_id}.zip"'
-            ),
+            "Content-Disposition": (f'attachment; filename="{conversation_id}.zip"'),
         }
         return StreamingResponse(
             aiter_zip_workspace(workspace),
@@ -585,10 +587,14 @@ def make_projects_router(
         workspace = ps.path_for(conversation_id)
         if workspace and workspace.is_dir():
             for p in sorted(workspace.rglob("*")):
-                if p.is_file() and not p.name.startswith("_codeact"):
-                    files.append(
-                        {"path": str(p.relative_to(workspace)), "bytes": p.stat().st_size}
-                    )
+                rel = p.relative_to(workspace).as_posix()
+                if (
+                    p.is_file()
+                    and not p.is_symlink()
+                    and not p.name.startswith("_codeact")
+                    and not is_runtime_secret_path(rel)
+                ):
+                    files.append({"path": str(p.relative_to(workspace)), "bytes": p.stat().st_size})
         # the agent's last deliverable handoff, if any
         deliverable = None
         with contextlib.suppress(Exception):

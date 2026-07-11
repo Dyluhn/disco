@@ -16,7 +16,7 @@ from disco.core import (
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools.projects import StorageStatus
+from disco.tools.projects import StorageStatus, is_runtime_secret_path
 from fastapi import APIRouter, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -28,9 +28,9 @@ from ._common import (
     _MAX_FILE_BYTES,
     _MAX_FILES_PER_REQUEST,
     _declared_artifacts,
-    require_owned_conversation,
     _reject_if_imported,
     _sanitize_name,
+    require_owned_conversation,
 )
 
 # C5 — Content-Security-Policy applied when ?inline=true. sandbox allow-scripts
@@ -44,8 +44,7 @@ from ._common import (
 # DISCO_PREVIEW_FRAME_ANCESTORS = space-separated extra origins; the default covers the
 # standard local dev + loopback hosts (override to add a tunnel/tailnet origin).
 _DEFAULT_PREVIEW_ANCESTORS = (
-    "http://localhost:5173 http://127.0.0.1:5173 "
-    "http://localhost:8000 http://127.0.0.1:8000"
+    "http://localhost:5173 http://127.0.0.1:5173 http://localhost:8000 http://127.0.0.1:8000"
 )
 _INLINE_CSP = (
     "sandbox allow-scripts; "
@@ -58,12 +57,12 @@ _INLINE_CSP = (
 ).strip()
 
 
-async def _read_artifact_bytes(
-    runtime: Any, conversation_id: str, norm: str
-) -> bytes | None:
+async def _read_artifact_bytes(runtime: Any, conversation_id: str, norm: str) -> bytes | None:
     """Read a declared artifact's bytes: the live sandbox first, then the host
     ProjectStore snapshot (so a FINISHED run with a reaped sandbox still serves).
     Returns None if neither source has it. Caller enforces size + 404."""
+    if is_runtime_secret_path(norm):
+        return None
     # 1) live sandbox (a running/suspended-but-live conversation)
     session = runtime.live_session(conversation_id)
     if session is not None:
@@ -80,9 +79,7 @@ async def _read_artifact_bytes(
     return None
 
 
-def make_files_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_files_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.post("/conversations/{conversation_id}/files")
@@ -145,17 +142,21 @@ def make_files_router(
 
             data = await upload.read()
             if len(data) > _MAX_FILE_BYTES:
-                rejected.append({
-                    "name": raw_name,
-                    "reason": f"file exceeds 25 MB limit ({len(data):,} bytes)",
-                })
+                rejected.append(
+                    {
+                        "name": raw_name,
+                        "reason": f"file exceeds 25 MB limit ({len(data):,} bytes)",
+                    }
+                )
                 continue
 
             if running_total + len(data) > _MAX_CONV_BYTES:
-                rejected.append({
-                    "name": raw_name,
-                    "reason": "conversation upload quota (100 MB) would be exceeded",
-                })
+                rejected.append(
+                    {
+                        "name": raw_name,
+                        "reason": "conversation upload quota (100 MB) would be exceeded",
+                    }
+                )
                 continue
 
             # Collision: suffix -2, -3, …
@@ -203,16 +204,10 @@ def make_files_router(
             # dissolving into a lossy summary.
             if len(saved) == 1:
                 ds_name = f"uploads/{saved[0]['name']}"
-                ds_docs = (
-                    f"path=uploads/{saved[0]['name']} "
-                    f"size={saved[0]['bytes']:,} bytes"
-                )
+                ds_docs = f"path=uploads/{saved[0]['name']} size={saved[0]['bytes']:,} bytes"
             else:
                 ds_name = f"uploads/{len(saved)}_files"
-                ds_docs = "\n".join(
-                    f"- uploads/{s['name']}  ({s['bytes']:,} bytes)"
-                    for s in saved
-                )
+                ds_docs = "\n".join(f"- uploads/{s['name']}  ({s['bytes']:,} bytes)" for s in saved)
             await store.append(
                 conversation_id,
                 DatasourceEvent(name=ds_name, docs=ds_docs),

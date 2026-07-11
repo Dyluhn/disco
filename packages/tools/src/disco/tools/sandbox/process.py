@@ -44,6 +44,8 @@ from .base import (
     SandboxUnavailableError,
     strip_redundant_workspace_prefix,
 )
+from .capability_relay import CapabilityRelayServer, RelayConfigurationError, serve_in_thread
+from .config import SandboxConfig
 
 # ROOT-1 (slides spiral): a genuine `/workspace`-rooted path token in a shell
 # command — the leading `/workspace` AND the rest of the path up to the next token
@@ -130,14 +132,29 @@ class ProcessSandboxInstance:
     shares_host_network: bool = True
 
     def __init__(
-        self, id: str, owner_id: str, conversation_id: str, spec: SandboxSpec, workspace: Path
+        self,
+        id: str,
+        owner_id: str,
+        conversation_id: str,
+        spec: SandboxSpec,
+        workspace: Path,
+        relay: CapabilityRelayServer | None = None,
     ) -> None:
         self.id = id
         self.owner_id = owner_id
         self.conversation_id = conversation_id
         self.spec = spec
         self._workspace = workspace.resolve()
+        self._relay = relay
         self._destroyed = False
+
+    @property
+    def host_service_relay_url(self) -> str | None:
+        """Loopback is reachable because this dev-only backend shares host networking."""
+        if self._relay is None:
+            return None
+        host, port = self._relay.server_address[:2]
+        return f"http://{host}:{port}"
 
     def _alive(self) -> None:
         if self._destroyed:
@@ -447,6 +464,11 @@ class ProcessSandboxInstance:
     async def destroy(self) -> None:
         self._destroyed = True
 
+        if self._relay is not None:
+            await asyncio.to_thread(self._relay.shutdown)
+            self._relay.server_close()
+            self._relay = None
+
         # Cleanup tmux sessions on destroy (BP-01).
         # Container backends need nothing (container death kills the tmux server),
         # but the process backend shares the host tmux server, so we must clean up explicitly.
@@ -482,8 +504,9 @@ class ProcessSandboxService:
     # remains the convenient default for local dev only.
     is_production_valid = False
 
-    def __init__(self, root: str | None = None) -> None:
+    def __init__(self, root: str | None = None, *, config: SandboxConfig | None = None) -> None:
         self._root = Path(root or tempfile.mkdtemp(prefix="disco-sbx-")).resolve()
+        self._cfg = config or SandboxConfig(backend="process")
         self._instances: dict[str, ProcessSandboxInstance] = {}
 
     async def create(
@@ -492,7 +515,23 @@ class ProcessSandboxService:
         instance_id = f"sbx_{uuid.uuid4().hex}"
         workspace = self._root / instance_id
         workspace.mkdir(parents=True, exist_ok=True)
-        instance = ProcessSandboxInstance(instance_id, owner_id, conversation_id, spec, workspace)
+        relay: CapabilityRelayServer | None = None
+        try:
+            if spec.host_services:
+                relay = CapabilityRelayServer(
+                    "127.0.0.1", 0, self._cfg.host_service_upstream
+                )
+                serve_in_thread(relay)
+            instance = ProcessSandboxInstance(
+                instance_id, owner_id, conversation_id, spec, workspace, relay
+            )
+        except Exception as exc:
+            if relay is not None:
+                relay.server_close()
+            shutil.rmtree(workspace, ignore_errors=True)
+            if isinstance(exc, RelayConfigurationError):
+                raise SandboxUnavailableError(str(exc)) from exc
+            raise
         self._instances[instance_id] = instance
         return instance
 

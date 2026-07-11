@@ -31,6 +31,7 @@ from disco.core.host_services import (
     get_host_service,
     host_service_names,
     register_host_service,
+    return_url_allowed,
 )
 from pydantic import BaseModel
 
@@ -84,9 +85,7 @@ def test_host_service_names_reports_registrations() -> None:
 
 
 async def test_ping_echoes_payload_shape() -> None:
-    result = await call_host_service(
-        PING_SERVICE_NAME, {"b": 2, "a": 1}, HostServiceContext()
-    )
+    result = await call_host_service(PING_SERVICE_NAME, {"b": 2, "a": 1}, HostServiceContext())
     assert result == {
         "ok": True,
         "service": PING_SERVICE_NAME,
@@ -133,7 +132,9 @@ async def test_schema_violation_is_typed_error_and_handler_never_fires() -> None
     _SCHEMA_CALLS.clear()
     with pytest.raises(HostServicePayloadError, match="svc.test.schema_echo"):
         await call_host_service(
-            "svc.test.schema_echo", {"repeat": 2}, HostServiceContext()  # message missing
+            "svc.test.schema_echo",
+            {"repeat": 2},
+            HostServiceContext(),  # message missing
         )
     assert _SCHEMA_CALLS == []
     # typed errors share the HostServiceError base the bus dispatches on
@@ -158,3 +159,31 @@ async def test_unknown_service_is_typed_error() -> None:
     with pytest.raises(UnknownHostServiceError, match="svc.definitely.missing"):
         await call_host_service("svc.definitely.missing", {}, HostServiceContext())
     assert issubclass(UnknownHostServiceError, HostServiceError)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://app.example.com/success",
+        "https://app.example.com/cancel?from=checkout",
+    ],
+)
+def test_return_url_allowed_uses_credential_bound_origin(url: str) -> None:
+    ctx = HostServiceContext(allowed_origins=frozenset({"https://app.example.com"}))
+    assert return_url_allowed(ctx, url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/success",
+        "https://app.example.com.evil.example/success",
+        "https://user@app.example.com/success",
+        "javascript:alert(1)",
+        "https://app.example.com/success#fragment",
+    ],
+)
+def test_return_url_allowed_fails_closed(url: str) -> None:
+    ctx = HostServiceContext(allowed_origins=frozenset({"https://app.example.com"}))
+    assert not return_url_allowed(ctx, url)
+    assert not return_url_allowed(HostServiceContext(), url)

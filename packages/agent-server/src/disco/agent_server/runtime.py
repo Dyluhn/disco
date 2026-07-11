@@ -19,8 +19,6 @@ import contextlib
 import json
 import logging
 import os
-import posixpath
-import re
 import shutil
 import time
 import uuid
@@ -49,7 +47,6 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
-    VerifierStartedEvent,
     VerifierVerdictEvent,
     WorkspaceRestoredEvent,
     render_skills_for_prompt,
@@ -66,7 +63,6 @@ from disco.core.contract import (
     BuildContract,
     BuildContractRegistry,
     BuildPhaseTracker,
-    ContractKind,
     ContractScopeGuard,
     Phase,
     ScopeDecision,
@@ -118,7 +114,6 @@ from disco.retrieval.deep_research import (
 )
 from disco.retrieval.wiring import retrieval_capability_handlers
 from disco.tools import (
-    REGISTRY_EGRESS_ALLOW,
     WORKFLOW_ROUTER_ALLOWED_TOOLS,
     AppKitPhaseState,
     AppKitToolExecutor,
@@ -151,11 +146,8 @@ from disco.tools.projects import (
     snapshot_workspace,
 )
 from disco.tools.sandbox import (
-    SandboxConfig,
     SandboxInstance,
     SandboxUnavailableError,
-    preflight_build_sandbox_backend,
-    service_from_config,
 )
 from disco.tools.sandbox._container import PREVIEW_PORT
 from disco.tools.sandbox.shell_sessions import SessionInfo, SessionView
@@ -173,6 +165,7 @@ from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
 from .space_store import JsonSpaceStore
+from .stripe_live_verifier import make_stripe_live_verifier
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
@@ -182,7 +175,6 @@ from .workflow_schedule import WorkflowScheduleRunRecord
 
 logger = logging.getLogger(__name__)
 
-_HOST_VERIFY_CANARY_FLAG = "HOST_VERIFY_CANARY"
 _TOOLSCOPE_AUDIT_FLAG = "TOOLSCOPE_AUDIT"
 _WORKFLOW_ROUTER_FLAG = "WORKFLOW_ROUTER"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -198,11 +190,6 @@ class WorkspaceVersionNotFound(LookupError):
 
 class WorkspaceRestoreStorageError(RuntimeError):
     """Workspace restore could not complete because storage or sandbox I/O failed."""
-
-
-def host_verify_canary_enabled() -> bool:
-    """True iff DISCO_HOST_VERIFY_CANARY is truthy (default OFF)."""
-    return str(disco_env(_HOST_VERIFY_CANARY_FLAG) or "").strip().lower() in _TRUTHY
 
 
 def toolscope_audit_enabled() -> bool:
@@ -244,61 +231,13 @@ def _workflow_history_fields(
     return fallback_output_path, "unverified"
 
 
-class _ToolScopeAuditRecorder:
-    """Per-conversation REL-3 audit counters and deny-log emission."""
-
-    def __init__(self, conversation_id: str) -> None:
-        self.conversation_id = conversation_id
-        self.total_tools = 0
-        self.would_denies_by_phase: dict[str, int] = {}
-        self._summary_emitted = False
-
-    def record(self, tool: str, phase: Phase, decision: ScopeDecision) -> None:
-        if self._summary_emitted:
-            self.total_tools = 0
-            self.would_denies_by_phase.clear()
-            self._summary_emitted = False
-        self.total_tools += 1
-        if decision.allowed:
-            return
-        phase_value = phase.value
-        self.would_denies_by_phase[phase_value] = self.would_denies_by_phase.get(phase_value, 0) + 1
-        logger.info(
-            "toolscope audit would-deny conversation=%s phase=%s tool=%s reason=%s",
-            self.conversation_id,
-            phase_value,
-            tool,
-            decision.reason,
-            extra={
-                "event": "toolscope_audit_would_deny",
-                "conversation": self.conversation_id,
-                "phase": phase_value,
-                "tool": tool,
-                "reason": decision.reason,
-            },
-        )
-
-    def emit_summary(self, status: ConversationStatus) -> None:
-        if self._summary_emitted:
-            return
-        by_phase = dict(sorted(self.would_denies_by_phase.items()))
-        logger.info(
-            "toolscope audit summary conversation=%s status=%s total_tools=%d "
-            "would_denies_by_phase=%s",
-            self.conversation_id,
-            status.value,
-            self.total_tools,
-            by_phase,
-            extra={
-                "event": "toolscope_audit_summary",
-                "conversation": self.conversation_id,
-                "status": status.value,
-                "total_tools": self.total_tools,
-                "would_denies_by_phase": by_phase,
-            },
-        )
-        self._summary_emitted = True
-
+from .build_contract_service import (  # noqa: E402
+    _AUDIT_KIND_TERMS,
+    BuildContractService,
+    _ToolScopeAuditRecorder,
+    host_verify_canary_enabled,
+)
+from .sandbox_runtime_service import SandboxRuntimeService  # noqa: E402
 
 # WALK-18 — max seconds resume waits for a cooperatively-cancelled loop task to
 # wind down before hard-cancelling it (a cooperative Stop already persisted the
@@ -506,57 +445,15 @@ def _has_unfinished_plan(events: list) -> bool:
     return not has_finished
 
 
-def effective_local_runtime(backend: str, runtime: str) -> str:
-    """The OCI runtime the `local` (Docker/Podman socket) backend ACTUALLY runs under.
-
-    DISCO_LOCAL_RUNTIME is the deployment knob for it — set it to `runsc` on a gVisor
-    host so config-driven local sandboxes actually run under gVisor. It was previously
-    honored ONLY on the DISCO_SANDBOX override path (__main__), so with the compose
-    default (DISCO_SANDBOX unset → config-driven) it was SILENTLY IGNORED and local
-    sandboxes ran under plain runc despite the operator asking for runsc (found live
-    2026-07-09). Scoped to `local` (the runtime isn't user-selectable in Settings for it,
-    so this can't clash with a UI choice); gVisor/podman carry their own runtimes.
-
-    Shared by the run path (`build_sandbox_service`) AND the Settings 'Test connection'
-    probe (`probe_sandbox_config`) so they build the SAME runtime — otherwise Test
-    connection validates `runc` (the DTO default) and false-greens on a runsc-only host
-    while the real run path (runsc) fails its `_require_runtime` healthcheck."""
-    if backend == "local":
-        return disco_env("LOCAL_RUNTIME", runtime) or runtime
-    return runtime
-
-
-def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
-    """Map the persisted SandboxSettings → the concrete SandboxBackend — the ONE place
-    that knows the backend↔config mapping (settings drive the active backend). Podman is
-    real, verified backend code, but a STUB in THIS environment (VM 202 destroyed) — it
-    constructs but isn't live/verifiable here; completed at the Meta deployment."""
-    runtime = effective_local_runtime(settings.backend, settings.runtime)
-    cfg = SandboxConfig(
-        backend=settings.backend,
-        docker_socket=settings.docker_socket,
-        podman_url=settings.podman_url,
-        runtime=runtime,
-        image=settings.image,
-        workspace_root=settings.workspace_root,
-        # the host previews are reachable at — set PMX_PREVIEW_HOST to a LAN/tailnet IP so
-        # previews work from other devices, not just the agent-server's host (else derived).
-        preview_host=disco_env("PREVIEW_HOST", ""),
-    )
-    # The backend↔config mapping lives in ONE place (disco.tools.sandbox) so the
-    # Settings connectivity preflight (ConfigState.test_sandbox) builds the SAME
-    # backend this live builder does — no parallel mapping to drift. Podman remains a
-    # stub in THIS environment (see docstring); it constructs but isn't live here.
-    service = service_from_config(cfg)
-    # EPIC H (P0) FAIL-CLOSED production-validity preflight. This is THE Build/soak
-    # sandbox builder, so it refuses the unisolated `process` dev backend BY DEFAULT —
-    # `process` shares the host PID + network namespace and is the source of the
-    # `kill <pid>` takedown incidents. A developer running plain local dev re-permits it
-    # with DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1. This INVERTS the old fail-OPEN
-    # DISCO_REQUIRE_PRODUCTION_SANDBOX opt-in (which silently left soak/Build on `process`
-    # unless an operator REMEMBERED the protection var). Container backends always pass.
-    return preflight_build_sandbox_backend(service)
-
+# effective_local_runtime + build_sandbox_service live in sandbox_runtime_service (pulled
+# out with the rest of the sandbox resolution path). Re-export so callers that import
+# from disco.agent_server.runtime (__main__ + tests) keep working unchanged.
+from .sandbox_runtime_service import (  # noqa: E402, F811
+    build_sandbox_service as build_sandbox_service,
+)
+from .sandbox_runtime_service import (  # noqa: E402
+    effective_local_runtime as effective_local_runtime,
+)
 
 # Live model-server probe: derive the ACTUALLY-SERVED model name + context window
 # from the backend, rather than trusting the static ModelEntry — which drifts (a
@@ -753,6 +650,14 @@ class ConversationRuntime:
     UI writes; `_router_now()` reloads it each request, so reassigning a role takes
     effect on the next research call / new conversation without a restart."""
 
+    _AUDIT_KIND_TERMS = _AUDIT_KIND_TERMS
+
+    def _build_sandbox_service_from_config(self, settings: SandboxSettings) -> SandboxService:
+        return build_sandbox_service(settings)
+
+    def _host_verify_flags_enabled(self) -> bool:
+        return host_verify_canary_enabled() or host_verify_authoritative_enabled()
+
     def __init__(
         self,
         store: SqliteEventStore,
@@ -773,13 +678,11 @@ class ConversationRuntime:
         # so a skill toggled in Settings affects the next conversation without a
         # restart — same live-reload model as the config + sandbox stores.
         self._skill_store = skill_store or SkillStore()
-        # The Build surface runs tools through a SandboxBackend. An explicitly injected
-        # service is an OVERRIDE (tests / `PMX_SANDBOX` at startup); otherwise the backend
-        # is read PER-REQUEST from the persisted SandboxSettings (the Settings selector),
-        # mirroring how `_router_now()` reloads model assignments — so a settings change
-        # drives the next conversation's sandbox without a restart.
+        # Sandbox backend: injected override (tests / DISCO_SANDBOX) or persisted
+        # SandboxSettings per request (see SandboxRuntimeService).
         self._injected_sandbox = sandbox_service
         self._sandbox_spec = sandbox_spec or SandboxSpec()
+        self._sandbox = SandboxRuntimeService(self)
         # per-conversation driver model override (the Build chat model picker → the
         # AGENT_DRIVER for that conversation; RouterAgent applies it).
         # B0: PERSISTED (not just in-memory) — a server restart used to silently revert
@@ -835,22 +738,15 @@ class ConversationRuntime:
         self._artifact_mode: dict[str, bool] = {}
         # EPIC F: per-conversation AppKit mode flag. In-memory only, default OFF.
         self._appkit_mode: dict[str, bool] = {}
-        # CONTRACT-ACTIVATE: per-conversation Build contract + live phase tracker. In an
-        # artifact-mode run the executor's ContractScopeGuard reads the tracker's phase
-        # to gate tools (e.g. no raw rewrite during the edit phase). Default contract is
-        # CUSTOM (permissive but real); an optional declared kind narrows it.
+        # CONTRACT-ACTIVATE: per-conversation Build contract + live phase tracker
+        # (decomposed into BuildContractService; mutable dicts stay here so tests read them).
         self._build_contract_registry = BuildContractRegistry.default()
         self._build_kind: dict[str, str] = {}
         self._build_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
-        # CONTRACT-DURABILITY: conversations whose contract fold-on-load already ran
-        # this process (positive OR negative outcome). Prevents re-reading the event
-        # log on every turn of long chat conversations that never declared a brief.
         self._contract_fold_attempted: set[str] = set()
-        # REL-3 audit mode keeps its observe-only tracker separate from the
-        # authoritative build tracker so turning the flag on cannot change delivery
-        # mode/finalizer/starter-kit behavior in the default build path.
         self._build_audit_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
         self._toolscope_audits: dict[str, _ToolScopeAuditRecorder] = {}
+        self._contract = BuildContractService(self)
         # P3 — global last-selected driver model (single-value sidecar). Persisted
         # so a new conversation seeds from whatever the user picked last; falls back
         # to RouterConfig.default_model when never set. B0 pattern (atomic writes).
@@ -1273,65 +1169,13 @@ class ConversationRuntime:
         return "research"
 
     def _sandbox_service_now(self) -> SandboxService:
-        """The active sandbox backend: the injected override if present, else built from
-        the persisted SandboxSettings (reloaded each time — the Settings selector drives it)."""
-        if self._injected_sandbox is not None:
-            return self._injected_sandbox
-        return build_sandbox_service(self._config_store.load().sandbox)
+        return self._sandbox._sandbox_service_now()
 
     async def probe_active_sandbox(self) -> tuple[bool, str, str]:
-        """Reachability of the ACTIVE (persisted) sandbox backend — probed HERE, on the
-        agent-server, because this is the process that actually runs sandboxes (it owns
-        the container socket; the app-server does not). Uses the SAME service the run
-        path builds (`_sandbox_service_now`), so the banner and a real run can never
-        disagree. Returns (reachable, backend, detail). Never raises."""
-        from disco.tools.sandbox import probe_sandbox_reachability, sandbox_endpoint_label
-
-        settings = self._config_store.load().sandbox
-        try:
-            service = self._sandbox_service_now()
-        except Exception as exc:  # noqa: BLE001 — a construction failure is a RESULT
-            endpoint = sandbox_endpoint_label(
-                settings.backend, settings.docker_socket, settings.podman_url
-            )
-            return False, settings.backend, f"{endpoint}: {exc}"
-        # Report the ACTIVE backend the service ACTUALLY probes, not the persisted config:
-        # a DISCO_SANDBOX override injects a service that can differ from Settings, so
-        # trust the service being probed (service.name) so the banner names the real one.
-        backend = getattr(service, "name", settings.backend) or settings.backend
-        endpoint = sandbox_endpoint_label(backend, settings.docker_socket, settings.podman_url)
-        ok, _status, detail = await probe_sandbox_reachability(service, endpoint)
-        return ok, backend, ("" if ok else detail)
+        return await self._sandbox.probe_active_sandbox()
 
     async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]:
-        """Probe a GIVEN sandbox config (the Settings 'Test connection' preflight, before
-        it is saved) — same environment + classifier as the active-backend probe.
-        Returns (ok, status, detail). Never raises."""
-        from disco.tools.sandbox import (
-            SandboxConfig,
-            probe_sandbox_reachability,
-            sandbox_endpoint_label,
-            service_from_config,
-        )
-
-        endpoint = sandbox_endpoint_label(
-            settings.backend, settings.docker_socket, settings.podman_url
-        )
-        try:
-            cfg = SandboxConfig(
-                backend=settings.backend,
-                docker_socket=settings.docker_socket,
-                podman_url=settings.podman_url,
-                # Same env-effective runtime the run path uses (build_sandbox_service),
-                # so 'Test connection' can't false-green under a runsc-only host.
-                runtime=effective_local_runtime(settings.backend, settings.runtime),
-                image=settings.image,
-                workspace_root=settings.workspace_root,
-            )
-            service = service_from_config(cfg)
-        except Exception as exc:  # noqa: BLE001 — construction failure is a RESULT
-            return False, "error", f"{endpoint}: {exc}"
-        return await probe_sandbox_reachability(service, endpoint)
+        return await self._sandbox.probe_sandbox_config(settings)
 
     def _driver_context_window(self) -> int | None:
         """The context window of the model currently assigned to AGENT_DRIVER, for
@@ -1530,451 +1374,61 @@ class ConversationRuntime:
     def activate_contract_for_brief(
         self, conversation_id: str, build_brief: BuildBrief | None
     ) -> None:
-        """CONTRACT-ACTIVATE (2026-07-10): declare the build contract from the
-        classified BuildBrief — the production caller set_build_kind never had.
-
-        FIRST DECLARATION WINS: once a kind is set for a conversation it is never
-        re-declared here, so a mid-run steer message (which also carries a brief)
-        cannot reset the phase tracker or evict a live loop. Unmapped/unknown
-        app_kinds leave the conversation on the CUSTOM contract exactly as before
-        activation existed. What this turns on for a mapped build: the contract's
-        starter-kit RECOMMENDATION (scaffold_starter's omitted-kind fallback), the
-        verification finalizer alias, the delivery-mode label, and honest
-        kind-resolved audit — NOT hard tool enforcement, which remains an
-        artifact-mode-only wiring (see the executor guard selection)."""
-        if build_brief is None or conversation_id in self._build_kind:
-            return
-        from disco.core.contract import ContractKind, contract_kind_for_app_kind
-
-        kind = contract_kind_for_app_kind(getattr(build_brief, "app_kind", None))
-        # An UNMAPPED brief records the CUSTOM sentinel (codex defect #2): without
-        # it, "first declaration wins" was false for unmapped kinds — a LATER
-        # mapped brief could re-declare mid-conversation and reset the trackers
-        # under a live pinned run. CUSTOM resolves to the same contract the
-        # no-declaration path always used, so behavior is otherwise unchanged;
-        # only the first-wins guarantee becomes real.
-        self.set_build_kind(conversation_id, (kind or ContractKind.CUSTOM).value)
+        return self._contract.activate_contract_for_brief(conversation_id, build_brief)
 
     async def _fold_contract_from_history(self, conversation_id: str) -> None:
-        """CONTRACT-DURABILITY (2026-07-10): restore a restarted process's contract
-        identity + phase from the persisted event log.
-
-        `_build_kind` / `_build_trackers` are process-local, so an agent-server
-        restart mid-build silently dropped the declared contract (codex four-fix
-        review, residual #4) — the resumed run continued contract-less until the
-        next brief-bearing turn. The durable record already exists: every brief-
-        bearing turn persists the ENVIRONMENT `<build_brief>` MessageEvent, tool
-        outcomes persist as Action/Observation pairs, and host verify outcomes
-        persist as `VerifierVerdictEvent`s. This fold replays them:
-
-        * kind — the FIRST persisted brief's `app_kind`, through the SAME
-          `contract_kind_for_app_kind` → CUSTOM-sentinel mapping activation uses,
-          so a fold can never disagree with what activation would have declared
-          (first-wins holds across restarts).
-        * phase — successful tool calls through `BuildPhaseTracker.note_tool_success`
-          and pass/fail verdicts through `note_verifier_result`, in event order —
-          the exact transition inputs the live run feeds.
-
-        Runs at most once per process per conversation (`_contract_fold_attempted`);
-        no-ops for conversations that never declared a brief, and for build-like
-        surfaces only. Never raises: a fold failure degrades to today's behavior
-        (contract-less until the next brief), logged for the audit trail."""
-        if conversation_id in self._build_kind or conversation_id in self._contract_fold_attempted:
-            return
-        if self._surface_of(conversation_id) not in self._BUILD_LIKE_SURFACES:
-            return
-        # Mark BEFORE the await so a concurrent second turn doesn't double-fold;
-        # a failure below unmarks so a later turn may retry.
-        self._contract_fold_attempted.add(conversation_id)
-        try:
-            events = await self._store.get_events(conversation_id)
-        except Exception:  # noqa: BLE001 — degrade to contract-less, never block the turn
-            self._contract_fold_attempted.discard(conversation_id)
-            _LOG.warning(
-                "contract fold: event read failed for %s; continuing contract-less",
-                conversation_id,
-                exc_info=True,
-            )
-            return
-
-        from .build_messages import parse_build_brief_content
-
-        app_kind: str | None = None
-        brief_seq = -1
-        for i, ev in enumerate(events):
-            if isinstance(ev, MessageEvent) and ev.source == EventSource.ENVIRONMENT:
-                payload = parse_build_brief_content(ev.message.content, meta=ev.meta)
-                if payload is not None:
-                    raw = payload.get("app_kind")
-                    app_kind = raw if isinstance(raw, str) else None
-                    brief_seq = i
-                    break  # FIRST brief wins, matching activate_contract_for_brief
-        if app_kind is None:
-            return  # never declared — identical to today's no-brief behavior
-
-        from disco.core.contract import ContractKind, contract_kind_for_app_kind
-
-        # NOTE (codex review, accepted residuals): (a) only app_kind is durable, so a
-        # mapping change across a DEPLOY re-resolves it under the new version's opinion
-        # (finding #6 — deliberate: the mapping is code, not conversation state);
-        # (b) the attempted-marker is not a lock — with today's synchronous SQLite
-        # get_events the fold cannot interleave with a concurrent sender (finding #9,
-        # latent for alternate stores only); (c) this is one O(N) full-log scan, once
-        # per process per conversation, the same cost class as the resume seam's own
-        # get_state/get_events materializations (finding #10).
-        kind = contract_kind_for_app_kind(app_kind) or ContractKind.CUSTOM
-        # A restarted process has no cached loop for this conversation, so the
-        # eviction inside set_build_kind is a no-op there; if a loop WAS lazily
-        # built contract-less before this fold ran, the same guarded eviction
-        # rebakes it exactly as a live activation would.
-        self.set_build_kind(conversation_id, kind.value)
-        # Phase replay ONLY where live wiring records phase: the artifact-mode
-        # executor is the one path that wires on_tool_success to the AUTHORITATIVE
-        # tracker (codex finding #2) — a normal build's tracker never advances live,
-        # so folding one would restore a phase the process never had.
-        if not self._effective_artifact_mode(conversation_id):
-            _LOG.info(
-                "contract fold: %s restored kind=%s (kind-only: not an artifact run)",
-                conversation_id,
-                kind.value,
-            )
-            return
-        self._build_scope_guard(conversation_id)
-        entry = self._build_trackers.get(conversation_id)
-        if entry is None:  # non-artifact surface guard declined — kind alone stands
-            return
-        tracker = entry[1]
-        actions: dict[str, str] = {}
-        # Replay starts AFTER the declaration (codex finding #1): live activation
-        # creates a fresh BOOTSTRAP tracker at declaration time, so pre-brief tool
-        # successes / verdicts never advanced it.
-        for ev in events[brief_seq + 1 :]:
-            if isinstance(ev, ActionEvent):
-                actions[ev.id] = ev.tool_call.tool_name
-            elif isinstance(ev, ObservationEvent):
-                if ev.tool_result.success:
-                    tool = actions.get(ev.action_id)
-                    if tool:
-                        tracker.note_tool_success(tool)
-            elif isinstance(ev, VerifierStartedEvent):
-                # The finalizer alias is canonicalized to `finish` before the event
-                # log (codex finding #4) — the durable VERIFY marker is the verifier
-                # START event, same edge note_finalizer_called drives live.
-                tracker.note_finalizer_called()
-            elif isinstance(ev, VerifierVerdictEvent):
-                verdict = str(ev.verdict) if ev.verdict is not None else None
-                if verdict is not None:
-                    # Live parity (codex finding #3): the verify hook treats EVERY
-                    # non-pass verdict (incl. unavailable/unverifiable) as not-passed.
-                    tracker.note_verifier_result(passed=verdict == "pass")
-        _LOG.info(
-            "contract fold: %s restored kind=%s phase=%s from %d events",
-            conversation_id,
-            kind.value,
-            tracker.current().value,
-            len(events),
-        )
+        return await self._contract._fold_contract_from_history(conversation_id)
 
     def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
-        """Declare the build contract kind for a conversation (e.g. 'appkit.leadgen').
-        Unset/None ⇒ the CUSTOM contract. Resets any existing tracker for the run."""
-        if kind:
-            self._build_kind[conversation_id] = kind
-        else:
-            self._build_kind.pop(conversation_id, None)
-        self._build_trackers.pop(conversation_id, None)
-        self._build_audit_trackers.pop(conversation_id, None)
-        # The executor bakes contract-derived state at build time (the starter-kit
-        # ToolContext stamp + the scaffold_starter advertise split), so a cached
-        # loop/executor would keep serving the OLD contract after activation
-        # (codex four-fix review defect #2). Reuse the settings-change eviction:
-        # guarded against live runs, and it re-parks the live sandbox session so
-        # the rebuilt loop adopts the SAME workspace.
-        self._evict_loop_for_model_change(conversation_id)
+        return self._contract.set_build_kind(conversation_id, kind)
 
     def expected_delivery_mode(self, conversation_id: str) -> str | None:
-        """P5: the host-owned delivery SHAPE ("app"|"files") the conversation's build
-        contract declares — the agent-server deliverable surface reads this to label /
-        validate a handoff (so a deck run can't be handed off as a runnable app).
-        Resolves the contract on first use; None when no build contract governs the run
-        (a plain chat conversation has no delivery shape)."""
-        entry = self._build_trackers.get(conversation_id)
-        if entry is None:
-            # only a build/artifact run has a delivery shape — don't fabricate a
-            # contract for an ordinary conversation.
-            if not (
-                self._effective_artifact_mode(conversation_id)
-                or conversation_id in self._build_kind
-            ):
-                return None
-            self._build_scope_guard(conversation_id)  # resolves + caches the contract
-            entry = self._build_trackers.get(conversation_id)
-        return entry[0].artifact.delivery_mode if entry is not None else None
+        return self._contract.expected_delivery_mode(conversation_id)
 
     def _starter_kit_for(self, conversation_id: str) -> str | None:
-        """P7: the active contract's starter_kit name (app_shell / lead_form), stamped on
-        the executor's ToolContext so scaffold_starter materializes THIS build's starter.
-        None for a non-build run or a contract with no starter_kit."""
-        if conversation_id not in self._build_kind:
-            return None
-        self._build_scope_guard(conversation_id)  # resolve + cache (contract, tracker)
-        return self._build_trackers[conversation_id][0].artifact.starter_kit
-
-    # NOTE (2026-07-09): the interim `_narrow_scope_for_starter` advertising
-    # withhold was removed the same day it landed — scaffold_starter is now a
-    # catalog tool (the model picks the kind; the contract's kit is only the
-    # omitted-kind fallback), so it works on every build and the false
-    # affordance it papered over no longer exists. The generic advertise-split
-    # preservation in _apply_mcp_scope stays: weak-tier withheld tools rely on it.
+        return self._contract._starter_kit_for(conversation_id)
 
     def _finalizer_alias_for(self, conversation_id: str) -> str | None:
-        """P6: the contract's verification finalizer to advertise as a `finish` alias —
-        ONLY for a RESOLVED, NON-CUSTOM contract. A plain build, a declared "custom" kind,
-        or an unknown kind that falls back to CUSTOM gets None (never fabricate the generic
-        ready_for_artifact_verification finalizer)."""
-        if conversation_id not in self._build_kind:
-            return None
-        self._build_scope_guard(conversation_id)  # resolve + cache (contract, tracker)
-        resolved = self._build_trackers[conversation_id][0]
-        if resolved.kind is ContractKind.CUSTOM:
-            return None
-        return resolved.verify.finalizer
+        return self._contract._finalizer_alias_for(conversation_id)
 
     def note_build_verify_result(self, conversation_id: str, *, passed: bool) -> None:
-        """Advance the build-phase tracker on a host VERIFY outcome (pass → EXPORT, fail
-        → REPAIR so the model may use the repair tools to fix). The BOOTSTRAP→EDIT→VERIFY
-        edges are driven automatically by tool success (on_tool_success); this is the
-        entry point the verification gate calls for the VERIFY→EXPORT/REPAIR edge.
-        No-op if the conversation has no active build tracker."""
-        entry = self._build_trackers.get(conversation_id)
-        if entry is not None:
-            entry[1].note_verifier_result(passed=passed)
+        return self._contract.note_build_verify_result(conversation_id, passed=passed)
 
     def _host_verify_canary_hook_for(
         self, conversation_id: str
     ) -> Callable[[VerifierVerdictEvent], Awaitable[None]] | None:
-        if not (host_verify_canary_enabled() or host_verify_authoritative_enabled()):
-            return None
-
-        async def _hook(event: VerifierVerdictEvent) -> None:
-            await self._record_host_verify_canary(conversation_id, event)
-
-        return _hook
+        return self._contract._host_verify_canary_hook_for(conversation_id)
 
     async def _record_host_verify_canary(
         self, conversation_id: str, event: VerifierVerdictEvent
     ) -> None:
-        """REL-1d canary bookkeeping for a persisted host verifier verdict.
-
-        This is deliberately non-authoritative: it advances phase telemetry and
-        stamps the REL-2a manifest, but the finish outcome remains owned by the
-        existing gate path.
-        """
-        # Default/CUSTOM build runs have no finalizer alias, so they may not have
-        # touched the contract resolver yet. Ensure the tracker exists before the
-        # previously-dead verifier-result edge is called.
-        if self._surface_of(conversation_id) in self._BUILD_LIKE_SURFACES:
-            self._build_scope_guard(conversation_id)
-        passed = event.verdict == "pass"
-        self.note_build_verify_result(conversation_id, passed=passed)
-
-        path = posixpath.normpath(str(event.artifact_path or "").strip())
-        if path in ("", ".") or path.startswith("/") or path == ".." or path.startswith("../"):
-            logger.info(
-                "host verify canary skipped manifest stamp for %s: invalid artifact path %r",
-                conversation_id,
-                event.artifact_path,
-            )
-            return
-
-        sbx = getattr(self._executors.get(conversation_id), "sandbox", None)
-        if sbx is None:
-            logger.info(
-                "host verify canary skipped manifest stamp for %s: sandbox unavailable",
-                conversation_id,
-            )
-            return
-
-        store = ArtifactMemoryStore(sbx)
-        existing = next((r for r in await store.read_artifacts() if r.path == path), None)
-        base = existing or ArtifactRecord(path=path, kind=event.artifact_kind or "files")
-        kind = event.artifact_kind or base.kind
-        await store.upsert_artifact(
-            base.model_copy(
-                update={
-                    "path": path,
-                    "kind": kind,
-                    "verified": passed,
-                    "verify_verdict": event.verdict,
-                }
-            )
-        )
-
-    _AUDIT_KIND_TERMS: tuple[tuple[ContractKind, tuple[str, ...]], ...] = (
-        (
-            ContractKind.DECK,
-            (
-                "slide deck",
-                "slides",
-                "presentation",
-                "powerpoint",
-                "pptx",
-                "deck",
-            ),
-        ),
-        (
-            ContractKind.DOCUMENT,
-            (
-                "document",
-                "report",
-                "white paper",
-                "whitepaper",
-                "pdf",
-                "proposal",
-                "briefing memo",
-            ),
-        ),
-        (
-            ContractKind.APPKIT_LEADGEN,
-            (
-                "lead gen",
-                "lead-gen",
-                "lead generation",
-                "lead form",
-                "contact form",
-                "signup form",
-                "sign-up form",
-            ),
-        ),
-        (
-            ContractKind.INTERACTIVE_PROTOTYPE,
-            (
-                "interactive prototype",
-                "prototype",
-                "calculator",
-                "quiz",
-                "game",
-                "simulator",
-            ),
-        ),
-        (
-            ContractKind.STATIC_SITE,
-            (
-                "static site",
-                "landing page",
-                "website",
-                "web site",
-                "homepage",
-                "portfolio",
-                "site",
-            ),
-        ),
-        (
-            ContractKind.WORKFLOW_OUTPUT,
-            (
-                "workflow output",
-                "workflow",
-                "automation output",
-            ),
-        ),
-    )
+        return await self._contract._record_host_verify_canary(conversation_id, event)
 
     def _conversation_user_text_sync(self, conversation_id: str) -> str:
-        """Best-effort sync read of user text for build-kind audit classification.
-
-        Loop composition is synchronous, so use the same SQLite recovery pattern as
-        _surface_of. Non-SQLite test stores simply get the CUSTOM fallback.
-        """
-        conn = getattr(self._store, "_conn", None)
-        if conn is None:
-            return ""
-        chunks: list[str] = []
-        try:
-            rows = conn.execute(
-                "SELECT payload FROM events WHERE conversation_id = ? "
-                "AND kind = 'message' ORDER BY seq ASC LIMIT 8",
-                (conversation_id,),
-            ).fetchall()
-        except Exception:  # noqa: BLE001 — audit classification is best-effort
-            return ""
-        for row in rows:
-            try:
-                payload = json.loads(row["payload"])
-            except Exception:  # noqa: BLE001
-                continue
-            if payload.get("source") != EventSource.USER.value:
-                continue
-            msg = payload.get("message") or {}
-            content = msg.get("content")
-            if isinstance(content, str):
-                chunks.append(content)
-        return "\n".join(chunks)
+        return self._contract._conversation_user_text_sync(conversation_id)
 
     def _classify_build_kind_for_audit(self, conversation_id: str) -> str | None:
-        """Conservative REL-3 audit kind classifier.
-
-        Explicit contract IDs win. Otherwise only obvious artifact terms classify;
-        weak/unknown prompts fall back to the existing tightened CUSTOM contract.
-        """
-        text = self._conversation_user_text_sync(conversation_id).lower()
-        if not text:
-            return None
-        for kind in ContractKind:
-            if kind.value in text:
-                return kind.value
-        compact = re.sub(r"[^a-z0-9.+-]+", " ", text)
-        for kind, terms in self._AUDIT_KIND_TERMS:
-            if any(term in compact for term in terms):
-                return kind.value
-        return None
+        return self._contract._classify_build_kind_for_audit(conversation_id)
 
     def _build_contract_for(
         self, conversation_id: str, *, classify_default: bool = False
     ) -> BuildContract:
-        kind = self._build_kind.get(conversation_id)
-        if kind is None and classify_default:
-            kind = self._classify_build_kind_for_audit(conversation_id)
-        brief = {"kind": kind} if kind else None
-        return self._build_contract_registry.get_for_brief(brief, strict_kind=False)
+        return self._contract._build_contract_for(
+            conversation_id, classify_default=classify_default
+        )
 
     def _toolscope_audit_recorder(self, conversation_id: str) -> _ToolScopeAuditRecorder:
-        recorder = self._toolscope_audits.get(conversation_id)
-        if recorder is None:
-            recorder = _ToolScopeAuditRecorder(conversation_id)
-            self._toolscope_audits[conversation_id] = recorder
-        return recorder
+        return self._contract._toolscope_audit_recorder(conversation_id)
 
     def _build_scope_audit_guard(
         self, conversation_id: str
     ) -> tuple[ContractScopeGuard, Callable[[str], None]]:
-        """REL-3 audit guard for default build-like runs.
-
-        It resolves a kind-classified contract when possible, falls back to the
-        tightened CUSTOM contract, and observes would-denies without enforcing.
-        """
-        entry = self._build_audit_trackers.get(conversation_id)
-        if entry is None:
-            contract = self._build_contract_for(conversation_id, classify_default=True)
-            entry = (contract, BuildPhaseTracker(contract))
-            self._build_audit_trackers[conversation_id] = entry
-        contract, tracker = entry
-        recorder = self._toolscope_audit_recorder(conversation_id)
-        return (
-            ContractScopeGuard.for_contract(
-                contract,
-                tracker.current,
-                observe=True,
-                observer=recorder.record,
-            ),
-            tracker.note_tool_success,
-        )
+        return self._contract._build_scope_audit_guard(conversation_id)
 
     def _emit_toolscope_audit_summary(
         self, conversation_id: str, status: ConversationStatus
     ) -> None:
-        recorder = self._toolscope_audits.get(conversation_id)
-        if recorder is not None:
-            recorder.emit_summary(status)
+        return self._contract._emit_toolscope_audit_summary(conversation_id, status)
 
     def _build_scope_guard(
         self,
@@ -1982,23 +1436,7 @@ class ConversationRuntime:
         *,
         observer: Callable[[str, Phase, ScopeDecision], None] | None = None,
     ) -> tuple[ContractScopeGuard | None, Callable[[str], None] | None]:
-        """The (guard, on_tool_success) pair governing tools for an artifact run, or
-        (None, None). Resolves+caches the conversation's contract and a fresh phase
-        tracker on first use; the guard reads the tracker's LIVE phase per call."""
-        entry = self._build_trackers.get(conversation_id)
-        if entry is None:
-            contract = self._build_contract_for(conversation_id)
-            entry = (contract, BuildPhaseTracker(contract))
-            self._build_trackers[conversation_id] = entry
-        contract, tracker = entry
-        return (
-            ContractScopeGuard.for_contract(
-                contract,
-                tracker.current,
-                observer=observer,
-            ),
-            tracker.note_tool_success,
-        )
+        return self._contract._build_scope_guard(conversation_id, observer=observer)
 
     # ---- last-selected model (P3) — delegators to RuntimeSettings -----------
 
@@ -2227,65 +1665,7 @@ class ConversationRuntime:
         surface: str = "build",
         mcp_egress_hosts: frozenset[str] | None = None,
     ) -> SandboxSpec:
-        """The egress-posture spec for a Build sandbox. FILTERED by default
-        (BP-G10: build boxes get the allowlisting proxy now that E8 wired the
-        proxy on every backend — gVisor, podman, local). The legacy
-        PMX_BUILD_EGRESS=open value widens to arbitrary public web through the
-        same private-denying boundary; it never selects a raw bridge. Used both by
-        _compose_build_loop and upload_session so pending sessions and build
-        sessions share the same spec.
-
-        When mcp_egress_hosts is provided, they are UNIONed into the egress_allow set
-        (SUPERSET, not replacement) — the pre-existing registry hosts AND the MCP
-        hosts both survive (rung B egress-proxy routing)."""
-        if surface == "agent":
-            # S-W5: the browser gets the public web, not a raw bridge. The
-            # public posture is carried separately so backends must place it
-            # behind the private/non-global-denying sidecar.
-            egress = disco_env("AGENT_EGRESS", "public").lower().strip()
-        else:
-            egress = disco_env("BUILD_EGRESS", "filtered").lower().strip()
-        if egress == "filtered":
-            base_allow = REGISTRY_EGRESS_ALLOW
-            if mcp_egress_hosts:
-                base_allow = frozenset(base_allow | mcp_egress_hosts)
-            return self._sandbox_spec.model_copy(
-                update={
-                    "egress_allow": base_allow,
-                    "public_web": False,
-                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
-                }
-            )
-        if egress == "public":
-            return self._sandbox_spec.model_copy(
-                update={
-                    "egress_allow": frozenset(),
-                    "public_web": True,
-                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
-                }
-            )
-        if egress in {"sealed", "none"}:
-            return self._sandbox_spec.model_copy(
-                update={
-                    "egress_allow": frozenset(),
-                    "public_web": False,
-                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
-                }
-            )
-        if egress not in {"open", "raw"}:
-            raise ValueError(
-                f"invalid {surface.upper()}_EGRESS={egress!r}; expected one of "
-                "filtered, public, sealed, open, or raw"
-            )
-        # Legacy open/raw configuration is retained as a compatibility alias for
-        # public-web-only. No runtime setting grants a model-controlled sandbox
-        # the daemon's raw bridge.
-        spec_update = {
-            "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
-            "public_web": True,
-            "egress_allow": frozenset(),
-        }
-        return self._sandbox_spec.model_copy(update=spec_update)
+        return self._sandbox._build_sandbox_spec(surface=surface, mcp_egress_hosts=mcp_egress_hosts)
 
     def upload_session(self, conversation_id: str) -> SandboxSession:
         return self._sessions.upload_session(conversation_id)
@@ -2328,6 +1708,44 @@ class ConversationRuntime:
         """[G1/DR-4] Return the accumulated upload Passages for this conversation
         (empty list if none were ingested, e.g. non-text uploads only)."""
         return list(self._upload_passages.get(conversation_id, []))
+
+    def _build_common_exec_kwargs(
+        self,
+        session: SandboxSession,
+        broker: CapabilityBroker,
+        conversation_id: str,
+        model_policy: ModelExecutionPolicy,
+        read_char_budget: int,
+        scope_guard: Any,
+        on_tool_success: Any,
+        workflow_router_mode: bool,
+        workflow_events: Any,
+    ) -> dict[str, Any]:
+        return dict(
+            # SandboxSession is a drop-in SandboxInstance (it implements the
+            # protocol at runtime); the `id` attribute differs only in being a
+            # property rather than a plain attribute, which trips the
+            # type-checker's invariance check on a protocol field. Cast to
+            # the protocol type so the type checker is happy without
+            # touching runtime behavior.
+            sandbox=cast(SandboxInstance, session),
+            broker=broker,
+            conversation_id=conversation_id,
+            model_policy=model_policy,
+            # ROOT-5: the conversation's effective (override-aware) driver endpoint, so
+            # LLM-using tools (slides_generate) author with the model the user picked.
+            driver_llm=self._effective_driver_endpoint(conversation_id),
+            # CW-6: capability-derived file_read page budget (see above).
+            read_char_budget=read_char_budget,
+            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only;
+            # optional observe-only audit on normal/AppKit builds).
+            scope_guard=scope_guard,
+            on_tool_success=on_tool_success,
+            # P7: the active contract's starter_kit for scaffold_starter.
+            starter_kit=self._starter_kit_for(conversation_id),
+            workflow_events=workflow_events if workflow_router_mode else None,
+            primitive_live_verifier=make_stripe_live_verifier(),
+        )
 
     def _compose_build_loop(
         self,
@@ -2444,29 +1862,16 @@ class ConversationRuntime:
                 payload=payload,
             )
 
-        _common_exec_kwargs: dict[str, Any] = dict(
-            # SandboxSession is a drop-in SandboxInstance (it implements the
-            # protocol at runtime); the `id` attribute differs only in being a
-            # property rather than a plain attribute, which trips the
-            # type-checker's invariance check on a protocol field. Cast to
-            # the protocol type so the type checker is happy without
-            # touching runtime behavior.
-            sandbox=cast(SandboxInstance, session),
-            broker=broker,
-            conversation_id=conversation_id,
-            model_policy=model_policy,
-            # ROOT-5: the conversation's effective (override-aware) driver endpoint, so
-            # LLM-using tools (slides_generate) author with the model the user picked.
-            driver_llm=self._effective_driver_endpoint(conversation_id),
-            # CW-6: capability-derived file_read page budget (see above).
-            read_char_budget=_read_char_budget,
-            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only;
-            # optional observe-only audit on normal/AppKit builds).
-            scope_guard=_scope_guard,
-            on_tool_success=_on_tool_success,
-            # P7: the active contract's starter_kit for scaffold_starter.
-            starter_kit=self._starter_kit_for(conversation_id),
-            workflow_events=_workflow_events if _workflow_router_mode else None,
+        _common_exec_kwargs = self._build_common_exec_kwargs(
+            session,
+            broker,
+            conversation_id,
+            model_policy,
+            _read_char_budget,
+            _scope_guard,
+            _on_tool_success,
+            _workflow_router_mode,
+            _workflow_events,
         )
         executor: DefaultToolExecutor
         if _appkit_mode:

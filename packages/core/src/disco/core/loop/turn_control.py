@@ -275,27 +275,10 @@ async def _serve_path_missing(loop, path: str) -> bool:  # noqa: ANN001 — Agen
         return False
 
 
-def _strip_redundant_workspace_prefix_for_serve(path: str) -> str:
-    """Normalize model-facing /workspace paths using the sandbox helper when present.
-
-    Core is installable without the tools package, so keep the fallback byte-for-byte
-    with disco.tools.sandbox.base.strip_redundant_workspace_prefix.
-    """
-    try:
-        from disco.tools.sandbox.base import strip_redundant_workspace_prefix
-
-        return strip_redundant_workspace_prefix(path)
-    except Exception:  # noqa: BLE001 — core-only install path
-        for prefix in ("/workspace/", "workspace/"):
-            if path.startswith(prefix):
-                return path[len(prefix):]
-        if path in ("/workspace", "workspace"):
-            return ""
-        return path
-
-
 def _normalize_serve_path(path: str) -> str:
-    return _strip_redundant_workspace_prefix_for_serve(path.strip())
+    from disco.core.workspace_paths import strip_redundant_workspace_prefix
+
+    return strip_redundant_workspace_prefix(path.strip())
 
 
 def _serve_path_is_workspace_root(path: str) -> bool:

@@ -52,6 +52,13 @@ from disco.core.appkit.local_verify import (
     cloudflare_export_ready,
     main_points_at_worker_entry,
 )
+from disco.core.appkit.spec import (
+    AppSpec,
+    DesignSpec,
+    load_app_spec_from_bytes,
+    load_design_spec_from_bytes,
+)
+from disco.core.appkit.stripe_primitive import stripe_verify
 from disco.core.llm.secrets import SecretStore, WeakSecretError
 
 from ..redaction import redact_text
@@ -63,6 +70,12 @@ from .models import (
     DeployStep,
     RefusalReason,
 )
+from .stripe_deploy import (
+    StripeDeployContext,
+    StripeDeployError,
+    StripeDeploymentLifecycle,
+    stripe_lifecycle_for,
+)
 from .wrangler import BuildBackend, BuildResult, CommandResult, CommandRunner
 
 try:  # fcntl is POSIX-only; a non-POSIX host degrades to the in-process lock (logged).
@@ -71,6 +84,17 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
     _fcntl = None  # type: ignore[assignment]
 
 _log = logging.getLogger(__name__)
+
+_HOST_TOKEN_LIFECYCLE_MUTATIONS = frozenset(
+    {
+        "host_token_candidate_mint_attempted",
+        "host_token_candidate_minted",
+        "host_token_rotation_finish_attempted",
+        "host_token_rotation_finished",
+        "host_token_candidate_revoke_attempted",
+        "host_token_candidate_revoked",
+    }
+)
 
 # ---- credential slots --------------------------------------------------------
 
@@ -847,24 +871,30 @@ def _stage_deploy_tree(workspace: Path) -> Path:
                 # tree we own (not a workspace path), so it needs no workspace guard.
                 data = read_workspace_file(src, workspace_root, text=False)
                 dest.write_bytes(data if data is not None else b"")
-        # SEC-4/BUILD-1: the canonical-worker gate (_assert_worker_is_canonical, run
-        # POST-build) regenerates worker/index.ts from THIS app's spec and requires the
-        # staged worker to match it. The spec lives under `.disco/` — pruned from the
-        # deploy walk above (it is internal, never published) — so stage it EXPLICITLY:
-        # a guarded read of the live spec, byte-copied into the IMMUTABLE staged tree.
-        # The canonical regeneration then runs against a FROZEN spec captured atomically
-        # with the rest of the tree (the sandbox build only syncs `dist` back, never
-        # `.disco/`), so it is TOCTOU-proof — a concurrent writer to the live workspace
-        # can't redirect what "canonical" means after staging. An escaping `.disco`/spec
-        # symlink fails closed in the guarded reader. A missing spec is simply not staged;
-        # the POST-build gate then refuses (fail closed) on the absent spec.
-        spec_src = workspace / _APPSPEC_RELPATH
-        if spec_src.exists():
-            spec_bytes = read_workspace_file(spec_src, workspace_root, text=False)
-            if spec_bytes is not None:
-                spec_dest = staged / _APPSPEC_RELPATH
-                spec_dest.parent.mkdir(parents=True, exist_ok=True)
-                spec_dest.write_bytes(spec_bytes)
+        # Trusted reconstruction inputs live under the otherwise-pruned `.disco`
+        # tree. Freeze them explicitly alongside the deploy bytes so pre/post-build
+        # verification cannot race a live AppSpec, DesignSpec, or Stripe provenance
+        # rewrite. Missing inputs remain absent and the trusted verifier fails closed.
+        trusted_inputs = (
+            _APPSPEC_RELPATH,
+            ".disco/designspec.json",
+            ".disco/primitives/stripe.json",
+        )
+        for relpath in trusted_inputs:
+            src = workspace / relpath
+            if not src.exists():
+                continue
+            st = src.lstat()
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+                raise DeployRefused(
+                    RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
+                    f"A trusted deployment input is not a single-link regular file: {relpath}.",
+                )
+            data = read_workspace_file(src, workspace_root, text=False)
+            if data is not None:
+                dest = staged / relpath
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
     except BaseException:
         shutil.rmtree(staged, ignore_errors=True)
         raise
@@ -1603,6 +1633,12 @@ def _assert_worker_auth_verified(workspace: Path) -> None:
             "No worker/index.ts in the staged deploy tree — cannot verify the admin-token "
             "auth gate. Refusing to deploy an unverified Worker (fail closed).",
         )
+    # Stripe is records-only; invoke its authoritative trusted-tree verifier
+    # rather than the legacy lead-specific inspector. This exact check is
+    # repeated post-build to close the build TOCTOU.
+    if _guarded_app_is_stripe(workspace):
+        _assert_stripe_trusted_tree(workspace)
+        return
     try:
         from disco.core.appkit.spec import Entity
         from disco.tools.builtin.verify_appkit_app import inspect_worker
@@ -1666,6 +1702,83 @@ def _normalize_worker_source(src: str) -> str:
     return "\n".join(line.rstrip() for line in lines).rstrip("\n")
 
 
+def _load_guarded_app_spec(staged: Path) -> AppSpec:
+    """Load the frozen staged AppSpec through the deploy path's guarded reader."""
+    spec_text = read_workspace_file(staged / _APPSPEC_RELPATH, staged.resolve())
+    if not (spec_text and spec_text.strip()):
+        raise DeployRefused(
+            RefusalReason.WORKER_NOT_CANONICAL,
+            "No .disco/appspec.json in the staged deploy tree — cannot validate "
+            "the generated Worker or its deployment bindings (fail closed).",
+        )
+    try:
+        return load_app_spec_from_bytes(spec_text)
+    except Exception as exc:
+        raise DeployRefused(
+            RefusalReason.WORKER_NOT_CANONICAL,
+            f"Could not validate the staged app spec ({exc}); refusing to deploy an "
+            "unverifiable Worker (fail closed).",
+        ) from exc
+
+
+def _guarded_app_is_stripe(staged: Path) -> bool:
+    """Best-effort dispatch hint; airtight spec validation still runs later."""
+    spec_text = read_workspace_file(staged / _APPSPEC_RELPATH, staged.resolve())
+    if not (spec_text and spec_text.strip()):
+        return False
+    try:
+        return load_app_spec_from_bytes(spec_text).stripe is not None
+    except Exception:
+        return False
+
+
+def _load_guarded_design_spec(staged: Path) -> DesignSpec:
+    raw = read_workspace_file(staged / ".disco/designspec.json", staged.resolve())
+    if not (raw and raw.strip()):
+        raise DeployRefused(
+            RefusalReason.STRIPE_TRUSTED_TREE,
+            "Stripe deployment requires .disco/designspec.json for trusted reconstruction.",
+        )
+    try:
+        return load_design_spec_from_bytes(raw)
+    except Exception as exc:
+        raise DeployRefused(
+            RefusalReason.STRIPE_TRUSTED_TREE,
+            f"Could not validate the staged Stripe design spec ({exc}).",
+        ) from exc
+
+
+def _assert_stripe_trusted_tree(staged: Path) -> None:
+    """Run the exact core Stripe verifier over its on-disk trusted path set."""
+    app = _load_guarded_app_spec(staged)
+    if app.stripe is None:
+        return
+    design = _load_guarded_design_spec(staged)
+    try:
+        from disco.core.appkit.generator import generate
+
+        paths = set(generate(app, design))
+    except Exception as exc:
+        raise DeployRefused(
+            RefusalReason.STRIPE_TRUSTED_TREE,
+            f"Could not reconstruct the trusted Stripe deploy tree ({exc}).",
+        ) from exc
+    paths.update({".disco/appspec.json", ".disco/primitives/stripe.json"})
+    tree: dict[str, str] = {}
+    for relpath in sorted(paths):
+        text = read_workspace_file(staged / relpath, staged.resolve())
+        if text is not None:
+            tree[relpath] = text
+    result = stripe_verify(app, design, tree)
+    if result.ok:
+        return
+    failures = [f"{check.name}: {check.evidence}" for check in result.checks if not check.passed]
+    raise DeployRefused(
+        RefusalReason.STRIPE_TRUSTED_TREE,
+        "Stripe trusted-tree verification failed: " + "; ".join(failures),
+    )
+
+
 def _assert_worker_is_canonical(staged: Path) -> None:
     """SEC-4 / BUILD-1: REQUIRE the staged ``worker/index.ts`` to BE the canonical Worker
     the AppKit generator deterministically emits from this app's spec — else
@@ -1697,21 +1810,12 @@ def _assert_worker_is_canonical(staged: Path) -> None:
     generator is imported FUNCTION-LOCALLY (it pulls the core layer) so a stale/broken
     import refuses rather than crashing the deploy."""
     workspace_root = staged.resolve()
-    spec_text = read_workspace_file(staged / _APPSPEC_RELPATH, workspace_root)
-    if not (spec_text and spec_text.strip()):
-        raise DeployRefused(
-            RefusalReason.WORKER_NOT_CANONICAL,
-            "No .disco/appspec.json in the staged deploy tree — cannot regenerate the "
-            "canonical Worker to match the deployed one. Refusing to deploy an "
-            "unverifiable Worker (fail closed).",
-        )
     try:
         from disco.core.appkit.generator import generate
         from disco.core.appkit.spec import (
             DesignSpec,
             Palette,
             Typography,
-            load_app_spec_from_bytes,
         )
     except ImportError as exc:  # pragma: no cover - defensive; fail CLOSED
         raise DeployRefused(
@@ -1720,7 +1824,7 @@ def _assert_worker_is_canonical(staged: Path) -> None:
             "Worker we cannot prove canonical (fail closed).",
         ) from exc
     try:
-        app_spec = load_app_spec_from_bytes(spec_text)
+        app_spec = _load_guarded_app_spec(staged)
         # The worker generators do not read design decisions; pass a fixed internal
         # DesignSpec so reconstruction has no staged input beyond the frozen AppSpec.
         canonical_design = DesignSpec(
@@ -1953,6 +2057,23 @@ def _deploy_steps(worker: str, db_name: str) -> list[DeployStep]:
 # ---- the HARD-GATED executor -------------------------------------------------
 
 
+def _stripe_lifecycle_for_deploy(
+    staged: Path,
+    store: SecretStore,
+    context: StripeDeployContext | None,
+) -> StripeDeploymentLifecycle | None:
+    try:
+        return stripe_lifecycle_for(
+            _load_guarded_app_spec(staged),
+            owner_id=context.owner_id if context is not None else None,
+            conversation_id=context.conversation_id if context is not None else None,
+            secret_store=store,
+            dependencies=context.dependencies if context is not None else None,
+        )
+    except StripeDeployError as exc:
+        raise DeployRefused(RefusalReason.STRIPE_RUNTIME_CONFIG, exc.detail) from exc
+
+
 async def execute_deploy(
     workspace: Path,
     store: SecretStore,
@@ -1963,6 +2084,7 @@ async def execute_deploy(
     runner: CommandRunner | None = None,
     build_backend: BuildBackend | None = None,
     admin_token: str | None = None,
+    stripe_context: StripeDeployContext | None = None,
 ) -> DeployExecutionResult:
     """The single entry point for a (possibly real) deploy. Enforces the four
     hard gates IN ORDER, then either returns the dry-run plan (default, no side
@@ -2133,6 +2255,7 @@ async def execute_deploy(
                 # config-redirect var is forwarded — see _WRANGLER_ENV_ALLOWLIST), so the only
                 # remaining redirect vector is this on-disk ancestor walk.
                 _assert_no_ancestor_wrangler_config(staged)
+                stripe_lifecycle = _stripe_lifecycle_for_deploy(staged, store, stripe_context)
                 return await _run_real_deploy(
                     workspace,
                     staged,
@@ -2144,6 +2267,7 @@ async def execute_deploy(
                     snap_token=snap_token,
                     snap_account=snap_account,
                     deploy_home=str(deploy_home),
+                    stripe_lifecycle=stripe_lifecycle,
                 )
             finally:
                 shutil.rmtree(staged, ignore_errors=True)
@@ -2330,6 +2454,191 @@ def _record_deploy_step(
     transcript.append(f"$ {label}\n[exit {res.returncode}]\n" + out + ("\n" + err if err else ""))
 
 
+class _DeploySecretWriter:
+    """Write one Worker secret and durably record its NAME, never its value/output."""
+
+    def __init__(
+        self,
+        runner: CommandRunner,
+        wrangler_bin: str,
+        staged: Path,
+        deploy_env: dict[str, str],
+        transcript: list[str],
+        live_workspace: Path,
+        record_rel: Path,
+        plan: DeployPlan,
+        mutations: list[str],
+        store: SecretStore,
+    ) -> None:
+        self._runner = runner
+        self._wrangler_bin = wrangler_bin
+        self._staged = staged
+        self._deploy_env = deploy_env
+        self._transcript = transcript
+        self._live_workspace = live_workspace
+        self._record_rel = record_rel
+        self._plan = plan
+        self._mutations = mutations
+        self._store = store
+        self.effective_digest: str | None = None
+
+    async def __call__(self, name: str, value: str) -> bool:
+        self._record_named_mutation(f"secret_put_attempt:{name}")
+        result = await self._runner.run(
+            [self._wrangler_bin, "secret", "put", name],
+            cwd=self._staged,
+            env=self._deploy_env,
+            stdin=value,
+        )
+        _record_deploy_step(
+            self._transcript,
+            f"wrangler secret put {name}",
+            result,
+            (),
+            capture_output=False,
+        )
+        if not result.ok:
+            return False
+        self._record_named_mutation(f"secret_put:{name}")
+        return True
+
+    def _record_named_mutation(self, name: str) -> None:
+        self._mutations.append(name)
+        _persist_record(
+            self._live_workspace,
+            self._record_rel,
+            self._plan,
+            status="in_progress",
+            mutations=self._mutations,
+            effective_digest=self.effective_digest,
+            store=self._store,
+        )
+
+    async def put_legacy_admin(self, value: str) -> CommandResult:
+        """Preserve the pre-Stripe ADMIN_TOKEN behavior and mutation label."""
+        result = await self._runner.run(
+            [self._wrangler_bin, "secret", "put", "ADMIN_TOKEN"],
+            cwd=self._staged,
+            env=self._deploy_env,
+            stdin=value,
+        )
+        _record_deploy_step(
+            self._transcript,
+            "wrangler secret put ADMIN_TOKEN",
+            result,
+            (),
+            capture_output=False,
+        )
+        if result.ok:
+            self._mutations.append("secret_put")
+        return result
+
+    def record_host_token_mutation(self, name: str) -> None:
+        if name not in _HOST_TOKEN_LIFECYCLE_MUTATIONS:
+            raise ValueError("invalid host-token lifecycle mutation name")
+        self._record_named_mutation(name)
+
+
+def _recheck_stripe_after_build(lifecycle: StripeDeploymentLifecycle | None, staged: Path) -> None:
+    if lifecycle is None:
+        return
+    _assert_stripe_trusted_tree(staged)
+    try:
+        lifecycle.recheck_after_build(_load_guarded_app_spec(staged))
+    except StripeDeployError as exc:
+        raise DeployRefused(RefusalReason.STRIPE_RUNTIME_CONFIG, exc.detail) from exc
+
+
+async def _activate_stripe_worker(
+    lifecycle: StripeDeploymentLifecycle,
+    *,
+    deployed_url: str | None,
+    admin_token: str,
+    fresh_worker: bool,
+    writer: _DeploySecretWriter,
+) -> StripeDeployError | None:
+    try:
+        await lifecycle.activate(
+            deployed_url=deployed_url,
+            admin_token=admin_token,
+            fresh_worker=fresh_worker,
+            put_secret=writer,
+            record_mutation=writer.record_host_token_mutation,
+        )
+    except StripeDeployError as exc:
+        if await lifecycle.fail_closed(writer):
+            return exc
+        return StripeDeployError(
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
+        )
+    except Exception:
+        if await lifecycle.fail_closed(writer):
+            return StripeDeployError(
+                "stripe_runtime_activation",
+                "Stripe activation failed unexpectedly and was disabled",
+            )
+        return StripeDeployError(
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
+        )
+    return None
+
+
+async def _install_worker_bindings(
+    lifecycle: StripeDeploymentLifecycle | None,
+    *,
+    deployed_url: str | None,
+    admin_token: str | None,
+    fresh_worker: bool,
+    writer: _DeploySecretWriter,
+) -> StripeDeployError | None:
+    if lifecycle is not None and admin_token is not None:
+        return await _activate_stripe_worker(
+            lifecycle,
+            deployed_url=deployed_url,
+            admin_token=admin_token,
+            fresh_worker=fresh_worker,
+            writer=writer,
+        )
+    if admin_token is not None:
+        result = await writer.put_legacy_admin(admin_token)
+        if not result.ok:
+            return StripeDeployError(
+                "wrangler secret put ADMIN_TOKEN",
+                f"secret put failed (exit {result.returncode})",
+            )
+    return None
+
+
+async def _quiesce_stripe_worker(
+    lifecycle: StripeDeploymentLifecycle | None,
+    worker_exists: bool,
+    writer: _DeploySecretWriter,
+) -> StripeDeployError | None:
+    if lifecycle is None or not worker_exists:
+        return None
+    try:
+        await lifecycle.quiesce_existing_worker(writer)
+    except StripeDeployError as exc:
+        if await lifecycle.fail_closed(writer):
+            return exc
+        return StripeDeployError(
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
+        )
+    except Exception:
+        if await lifecycle.fail_closed(writer):
+            return StripeDeployError(
+                "stripe_runtime_quiesce", "Stripe could not be disabled before deployment"
+            )
+        return StripeDeployError(
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
+        )
+    return None
+
+
 async def _run_real_deploy(
     live_workspace: Path,
     staged: Path,
@@ -2342,6 +2651,7 @@ async def _run_real_deploy(
     snap_token: str,
     snap_account: str | None,
     deploy_home: str,
+    stripe_lifecycle: StripeDeploymentLifecycle | None = None,
 ) -> DeployExecutionResult:
     """Drive the deploy sequence (idempotent) against the IMMUTABLE *staged* copy —
     NEVER the live mutable workspace (SEC-6/SEC-7/CORR-2). The UNTRUSTED build runs in
@@ -2449,6 +2759,7 @@ async def _run_real_deploy(
     # against). Re-scan the staged tree HERE — AFTER sync-back, BEFORE the first Cloudflare
     # mutation — and refuse (ALT_WRANGLER_CONFIG) so a build-emitted alt config never deploys.
     _assert_sole_wrangler_config(staged)
+    _recheck_stripe_after_build(stripe_lifecycle, staged)
 
     # 2. Decide D1 provisioning from the EXACT-parsed `d1 list` (SEC-15/CORR-8): match
     #    the database by EXACT name (no substring, no first-UUID fallback). The `d1 list`
@@ -2486,20 +2797,9 @@ async def _run_real_deploy(
         # (owner-owned, pre-existing) database.
         _assert_schema_safe_for_adopt(staged)
 
-    # SEC-10 (Worker): BEFORE `wrangler deploy` (which OVERWRITES a same-name script),
-    # preflight whether a Worker of this name already exists on the account. If it does
-    # and NO signed prior Disco record proves we own it, it is an UNRELATED resource —
-    # REFUSE rather than clobber someone else's Worker (the SAME ownership gate D1 adoption
-    # uses). The preflight (`deployments list`) is READ-ONLY — still no mutation.
-    #
-    # SEC-10-A (fail CLOSED on an ambiguous preflight): a NONZERO exit is NOT blindly
-    # treated as "Worker absent" — that would let an old wrangler, an auth/permission/
-    # transport error, or a malformed invocation fall open to a clobbering deploy. Only a
-    # SUCCESSFUL, parsed result that explicitly shows the Worker absent (empty deployments
-    # array) — OR a nonzero exit carrying a DOCUMENTED Cloudflare "script not found" signal
-    # (code 10007 / script_not_found) — may proceed as fresh. Any other nonzero/errored
-    # preflight is ambiguous → DeployRefused(WORKER_PREFLIGHT_FAILED). A malformed
-    # (non-array) body on a SUCCESSFUL call ABORTS (never overwrite off unparseable output).
+    # SEC-10: the read-only preflight may proceed only on a parsed existence
+    # verdict or Cloudflare's documented script-not-found signal. Ambiguity fails
+    # closed; an existing Worker additionally requires a signed ownership record.
     preflight = await runner.run(
         _wr("deployments", "list", "--name", plan.worker_name, "--json"),
         cwd=staged,
@@ -2592,6 +2892,22 @@ async def _run_real_deploy(
             attempt_record_path=rp,
         )
 
+    secret_writer = _DeploySecretWriter(
+        runner,
+        wrangler_bin,
+        staged,
+        deploy_env,
+        transcript,
+        live_workspace,
+        record_rel,
+        plan,
+        mutations,
+        store,
+    )
+    quiesce_error = await _quiesce_stripe_worker(stripe_lifecycle, worker_exists, secret_writer)
+    if quiesce_error is not None:
+        return _fail(quiesce_error.step, quiesce_error.detail)
+
     database_id: str | None
     if creating:
         created = await runner.run(_wr("d1", "create", plan.db_name), cwd=staged, env=deploy_env)
@@ -2658,6 +2974,7 @@ async def _run_real_deploy(
     # the staged tree POST-build and POST-D1-substitution (what wrangler actually
     # uploads), not just the plan-time pre-build digest.
     effective_digest = _tree_digest(staged)
+    secret_writer.effective_digest = effective_digest
 
     # 4. Deploy the Worker + assets. ABORT before the secret-put on failure.
     # SEC (config-source bypass): PIN the config explicitly to the staged wrangler.toml so
@@ -2687,24 +3004,17 @@ async def _run_real_deploy(
         store=store,
     )
 
-    # 5. Set ADMIN_TOKEN via stdin (never argv). Deploy-class.
-    if admin_token:
-        sec = await runner.run(
-            _wr("secret", "put", "ADMIN_TOKEN"),
-            cwd=staged,
-            env=deploy_env,
-            stdin=admin_token,
-        )
-        # NEVER record this step's stdout/stderr — wrangler can echo the stdin
-        # token, and it must not reach the transcript/record. Record only success.
-        record("wrangler secret put ADMIN_TOKEN", sec, capture_output=False)
-        if not sec.ok:
-            return _fail(
-                "wrangler secret put ADMIN_TOKEN", f"secret put failed (exit {sec.returncode})"
-            )
-        mutations.append("secret_put")
-
     deployed_url = _extract_url(deployed.stdout)
+    binding_error = await _install_worker_bindings(
+        stripe_lifecycle,
+        deployed_url=deployed_url,
+        admin_token=admin_token,
+        fresh_worker=not worker_exists,
+        writer=secret_writer,
+    )
+    if binding_error is not None:
+        return _fail(binding_error.step, binding_error.detail)
+
     # Finalize the SAME durable record (persists for idempotency/audit); the staged copy
     # is torn down by the caller.
     record_path = _persist_record(

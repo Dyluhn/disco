@@ -11,9 +11,9 @@ import urllib.parse
 
 import httpx
 import websockets
-from disco.core.store.sqlite import SqliteEventStore
 from disco.core.auth import PREVIEW_BOOTSTRAP_PATH, PreviewCapabilitySigner
-from disco.tools.projects import StorageError, StorageStatus
+from disco.core.store.sqlite import SqliteEventStore
+from disco.tools.projects import StorageError, StorageStatus, is_runtime_secret_path
 from disco.tools.sandbox._container import NOVNC_PORT, PREVIEW_PORT, USER_PORTS
 from disco.tools.sandbox.base import strip_redundant_workspace_prefix
 from fastapi import APIRouter, HTTPException, Query, Request, Response, WebSocket
@@ -49,6 +49,8 @@ def _serve_static_from_snapshot(
     at projects/{cid}/workspace/ — returning a 503 for a file we HAVE is the bug the
     user hit ("preview not available" on a completed app). Jailed to the snapshot
     workspace (mirrors files.py), normalizes a redundant 'workspace/' prefix."""
+    if is_runtime_secret_path(rel_path):
+        return None
     try:
         ps = runtime.project_store()
         if ps is None or ps.status() != StorageStatus.OK:
@@ -130,9 +132,7 @@ def _preview_bootstrap_url(request: Request, cid8: str, port: int, intent: str) 
     fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
     scheme = fwd_proto if fwd_proto in {"http", "https"} else url.scheme
     query = urllib.parse.urlencode({"intent": intent})
-    return urllib.parse.urlunparse(
-        (scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", query, "")
-    )
+    return urllib.parse.urlunparse((scheme, netloc, PREVIEW_BOOTSTRAP_PATH, "", query, ""))
 
 
 async def _wake_for_preview(
@@ -144,9 +144,7 @@ async def _wake_for_preview(
         return await runtime.wake_for_preview(cid8, port)  # type: ignore[call-arg]
 
 
-async def _proxy_websocket_to_upstream(
-    websocket: WebSocket, upstream: str, rel_path: str
-) -> None:
+async def _proxy_websocket_to_upstream(websocket: WebSocket, upstream: str, rel_path: str) -> None:
     """Bridge preview WebSocket frames to the live upstream (Vite HMR, etc.)."""
     upstream_parsed = urllib.parse.urlparse(upstream)
     ws_scheme = "wss" if upstream_parsed.scheme in {"https", "wss"} else "ws"
@@ -254,10 +252,12 @@ def _register_live_browser_start_route(
             cfg = runtime._config_store.load()
             if not cfg.live_browser.enabled:
                 return Response(
-                    _json.dumps({
-                        "reason": "disabled",
-                        "message": "Live browser is off — enable it in Settings → Agent.",
-                    }),
+                    _json.dumps(
+                        {
+                            "reason": "disabled",
+                            "message": "Live browser is off — enable it in Settings → Agent.",
+                        }
+                    ),
                     status_code=503,
                     media_type="application/json",
                 )
@@ -268,19 +268,27 @@ def _register_live_browser_start_route(
         session = runtime.live_session(conversation_id)
         if session is None:
             return Response(
-                _json.dumps({
-                    "reason": "no_sandbox",
-                    "message": "No sandbox running for this conversation — start the agent first.",
-                }),
+                _json.dumps(
+                    {
+                        "reason": "no_sandbox",
+                        "message": (
+                            "No sandbox running for this conversation — start the agent first."
+                        ),
+                    }
+                ),
                 status_code=503,
                 media_type="application/json",
             )
         if not getattr(session, "supports_live_view", False):
             return Response(
-                _json.dumps({
-                    "reason": "unsupported_backend",
-                    "message": "Live browser needs the gVisor sandbox — this backend can't run it.",
-                }),
+                _json.dumps(
+                    {
+                        "reason": "unsupported_backend",
+                        "message": (
+                            "Live browser needs the gVisor sandbox — this backend can't run it."
+                        ),
+                    }
+                ),
                 status_code=503,
                 media_type="application/json",
             )
@@ -289,10 +297,12 @@ def _register_live_browser_start_route(
             res = await session.exec_shell("curl -sf http://127.0.0.1:8901/health", timeout_s=3)
             if res.exit_code != 0:
                 return Response(
-                    _json.dumps({
-                        "reason": "no_daemon",
-                        "message": "Browser daemon not running — use the browser tool first.",
-                    }),
+                    _json.dumps(
+                        {
+                            "reason": "no_daemon",
+                            "message": "Browser daemon not running — use the browser tool first.",
+                        }
+                    ),
                     status_code=503,
                     media_type="application/json",
                 )
@@ -304,10 +314,12 @@ def _register_live_browser_start_route(
             )
             if res2.exit_code != 0:
                 return Response(
-                    _json.dumps({
-                        "reason": "live_start_failed",
-                        "message": "Failed to start live view stack.",
-                    }),
+                    _json.dumps(
+                        {
+                            "reason": "live_start_failed",
+                            "message": "Failed to start live view stack.",
+                        }
+                    ),
                     status_code=503,
                     media_type="application/json",
                 )
@@ -329,18 +341,22 @@ def _register_live_browser_start_route(
         upstream = await _wake_for_preview(runtime, cid8, NOVNC_PORT, owner_id=owner_id)
         if upstream is None:
             return Response(
-                _json.dumps({
-                    "reason": "no_upstream",
-                    "message": "noVNC port not yet exposed by the sandbox.",
-                }),
+                _json.dumps(
+                    {
+                        "reason": "no_upstream",
+                        "message": "noVNC port not yet exposed by the sandbox.",
+                    }
+                ),
                 status_code=503,
                 media_type="application/json",
             )
-        return JSONResponse({
-            "ready": True,
-            "novnc_path": "/vnc.html?autoconnect=1&view_only=1",
-            "port": NOVNC_PORT,
-        })
+        return JSONResponse(
+            {
+                "ready": True,
+                "novnc_path": "/vnc.html?autoconnect=1&view_only=1",
+                "port": NOVNC_PORT,
+            }
+        )
 
 
 def _register_live_browser_status_routes(
@@ -412,9 +428,7 @@ def _register_live_browser_status_routes(
         return JSONResponse({"ok": True})
 
 
-def make_preview_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_preview_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
     _register_preview_capability_route(router, store)
     _register_live_browser_start_route(router, store, runtime)
@@ -465,9 +479,7 @@ def make_preview_router(
         # bytes under a "viewing vN" banner — a false affordance. Version requests
         # serve from the version snapshot or 404, full stop.
         if version is not None:
-            served = _serve_static_from_snapshot(
-                runtime, conversation_id, path, version=version
-            )
+            served = _serve_static_from_snapshot(runtime, conversation_id, path, version=version)
             if served is not None:
                 return served
             return Response("version not found", status_code=404, media_type="text/plain")
@@ -484,9 +496,7 @@ def make_preview_router(
             # runthru-v2: the sandbox can't be woken (finished build / backend
             # unavailable), but the built static site may already be on the host
             # snapshot — serve it directly instead of a 503 for a file we have.
-            served = _serve_static_from_snapshot(
-                runtime, conversation_id, path, version=version
-            )
+            served = _serve_static_from_snapshot(runtime, conversation_id, path, version=version)
             if served is not None:
                 return served
             return Response("preview not available", status_code=503, media_type="text/plain")
@@ -502,7 +512,9 @@ def make_preview_router(
             served = await _fetch_inside_response(runtime, conversation_id, PREVIEW_PORT, path)
             if served is not None:
                 return served
-            return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+            return Response(
+                "preview upstream unreachable", status_code=502, media_type="text/plain"
+            )  # noqa: E501
         media_type = r.headers.get("content-type", "text/html")
         return Response(
             content=inject_element_mention_picker(r.content, media_type),
@@ -583,7 +595,9 @@ def make_preview_router(
             served = await _fetch_inside_response(runtime, conversation_id, port, path)
             if served is not None:
                 return served
-            return Response("preview upstream unreachable", status_code=502, media_type="text/plain")  # noqa: E501
+            return Response(
+                "preview upstream unreachable", status_code=502, media_type="text/plain"
+            )  # noqa: E501
         media_type = r.headers.get("content-type", "text/html")
         return Response(
             content=inject_element_mention_picker(r.content, media_type),

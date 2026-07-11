@@ -173,6 +173,39 @@ def test_download_returns_zip_with_real_files(store, tmp_path):
         assert zf.read("sub/b.txt") == b"beta"
 
 
+def test_download_and_manifest_exclude_legacy_runtime_secret_files(store, tmp_path):
+    runtime = _runtime(store, root=str(tmp_path))
+    ps = ProjectStore(str(tmp_path))
+    cid = "conv_secret_hygiene"
+    workspace = ps.path_for(cid)
+    workspace.mkdir(parents=True)
+    (workspace / "index.html").write_bytes(b"ok")
+    (workspace / ".dev.vars").write_bytes(b"STRIPE_WEBHOOK_SECRET=whsec_real")
+    (workspace / ".dev.vars.example").write_bytes(b"STRIPE_WEBHOOK_SECRET=replace-me")
+    ps.write_manifest(
+        cid,
+        title="safe export",
+        owner_id="local",
+        created_at="2026-06-06T00:00:00Z",
+        file_count=3,
+        total_bytes=100,
+    )
+    store.create_conversation(cid, owner_id="local", title="safe export")
+    client = TestClient(create_app(store, runtime=runtime))
+
+    download = client.get(f"/api/projects/{cid}/download")
+    assert download.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(download.content)) as zf:
+        assert sorted(zf.namelist()) == [".dev.vars.example", "index.html"]
+
+    manifest = client.get(f"/api/projects/{cid}/manifest")
+    assert manifest.status_code == 200
+    assert {item["path"] for item in manifest.json()["files"]} == {
+        ".dev.vars.example",
+        "index.html",
+    }
+
+
 def test_download_files_missing_returns_404_with_reason(store, tmp_path):
     runtime = _runtime(store, root=str(tmp_path))
     ps = ProjectStore(str(tmp_path))
@@ -260,6 +293,37 @@ def test_import_zip_rejects_zip_slip(store, tmp_path):
     assert res.status_code == 400
     assert res.json()["detail"]["reason"] == "zip_slip"
     assert client.get("/api/projects").json()["projects"] == []
+
+
+@pytest.mark.parametrize("secret_path", [".env", ".env.local", "nested/.dev.vars.prod"])
+def test_import_zip_rejects_runtime_secret_files(store, tmp_path, secret_path):
+    runtime = _runtime(store, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    payload = _zip_bytes({"index.html": b"ok", secret_path: b"SECRET=real"})
+
+    res = client.post(
+        "/api/projects/import",
+        files={"file": ("unsafe.zip", payload, "application/zip")},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"]["reason"] == "runtime_secret_file"
+    assert client.get("/api/projects").json()["projects"] == []
+
+
+def test_import_zip_keeps_runtime_secret_template(store, tmp_path):
+    runtime = _runtime(store, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    payload = _zip_bytes({".dev.vars.example": b"SECRET=replace-me"})
+
+    res = client.post(
+        "/api/projects/import",
+        files={"file": ("template.zip", payload, "application/zip")},
+    )
+
+    assert res.status_code == 200
+    workspace = ProjectStore(str(tmp_path)).path_for(res.json()["conversation_id"])
+    assert (workspace / ".dev.vars.example").read_bytes() == b"SECRET=replace-me"
 
 
 def test_import_zip_enforces_file_count_cap(store, tmp_path, monkeypatch):
@@ -401,9 +465,7 @@ def test_browse_storage_hides_and_refuses_escaping_symlink(store, tmp_path, monk
     assert escaped.json()["detail"]["reason"] == "outside_allowed_roots"
 
 
-def test_browse_storage_emits_allow_and_deny_audit_records(
-    store, tmp_path, caplog, monkeypatch
-):
+def test_browse_storage_emits_allow_and_deny_audit_records(store, tmp_path, caplog, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     runtime = _runtime(store, root=str(tmp_path))
     client = TestClient(create_app(store, runtime=runtime))

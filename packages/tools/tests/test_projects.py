@@ -15,6 +15,7 @@ import pytest
 from disco.tools.projects import (
     ProjectStore,
     StorageStatus,
+    is_runtime_secret_path,
     rehydrate_workspace,
     snapshot_workspace,
     validate_root,
@@ -38,7 +39,7 @@ class _FakeSandbox:
             if k == path:
                 raise OSError("not a directory")
             if k.startswith(prefix):
-                children.add(k[len(prefix):].split("/", 1)[0])
+                children.add(k[len(prefix) :].split("/", 1)[0])
         if not children:
             raise FileNotFoundError(path)
         return sorted(children)
@@ -135,6 +136,97 @@ async def test_workspace_roundtrip(tmp_path: Path) -> None:
     assert rows[0].files_missing is False
 
 
+def test_runtime_secret_path_classifier_keeps_only_explicit_templates() -> None:
+    for path in (
+        ".env",
+        ".env.local",
+        "nested/.ENV.production.local",
+        ".dev.vars",
+        "worker/.dev.vars.production",
+    ):
+        assert is_runtime_secret_path(path)
+    for path in (
+        ".env.example",
+        ".env.sample",
+        "nested/.dev.vars.dist",
+        ".dev.vars.template",
+        "src/environment.ts",
+    ):
+        assert not is_runtime_secret_path(path)
+
+
+async def test_runtime_secret_files_never_persist_or_rehydrate(tmp_path: Path) -> None:
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    (dest / ".dev.vars").write_bytes(b"STALE_SECRET=must-disappear")
+    source = _FakeSandbox(
+        {
+            "index.html": b"ok",
+            ".dev.vars": b"STRIPE_WEBHOOK_SECRET=whsec_real",
+            "nested/.env.production": b"STRIPE_KEY=rk_real",
+            ".dev.vars.example": b"STRIPE_WEBHOOK_SECRET=replace-me",
+        }
+    )
+
+    result = await snapshot_workspace(source, dest)
+
+    assert set(result.paths) == {"index.html", ".dev.vars.example"}
+    assert not (dest / ".dev.vars").exists()
+    assert not (dest / "nested" / ".env.production").exists()
+    fresh = _FakeSandbox()
+    assert await rehydrate_workspace(fresh, dest) == 2
+    assert set(fresh.files) == {"index.html", ".dev.vars.example"}
+
+
+async def test_snapshot_removes_legacy_links_before_writing(tmp_path: Path) -> None:
+    dest = tmp_path / "snap"
+    dest.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"host-value")
+    (dest / "index.html").symlink_to(outside)
+
+    await snapshot_workspace(_FakeSandbox({"index.html": b"sandbox-value"}), dest)
+
+    assert outside.read_bytes() == b"host-value"
+    assert not (dest / "index.html").is_symlink()
+    assert (dest / "index.html").read_bytes() == b"sandbox-value"
+
+
+async def test_rehydrate_and_zip_skip_legacy_symlinks(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    src = tmp_path / "workspace"
+    src.mkdir()
+    (src / "safe.txt").write_bytes(b"safe")
+    outside = tmp_path / "host-secret.txt"
+    outside.write_bytes(b"must-not-cross-boundary")
+    (src / "leak.txt").symlink_to(outside)
+
+    fresh = _FakeSandbox()
+    assert await rehydrate_workspace(fresh, src) == 1
+    assert fresh.files == {"safe.txt": b"safe"}
+    blob = b"".join(zip_workspace(src))
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        assert zf.namelist() == ["safe.txt"]
+
+
+async def test_snapshot_preserves_last_good_file_on_transient_read_failure(
+    tmp_path: Path,
+) -> None:
+    dest = tmp_path / "snap"
+    (dest / "data").mkdir(parents=True)
+    (dest / "data" / "locked.bin").write_bytes(b"last-good")
+    source = _FlakySandbox(
+        {"index.html": b"fresh", "data/locked.bin": b"unreadable"},
+        broken={"data/locked.bin"},
+    )
+
+    await snapshot_workspace(source, dest)
+
+    assert (dest / "data" / "locked.bin").read_bytes() == b"last-good"
+
+
 # ---- graceful failure -------------------------------------------------------
 
 
@@ -205,6 +297,19 @@ async def test_zip_contains_real_files(tmp_path: Path) -> None:
         assert names == ["a.txt", "sub/b.txt"]
         assert zf.read("a.txt") == b"alpha"
         assert zf.read("sub/b.txt") == b"beta-binary"
+
+
+def test_zip_excludes_runtime_secret_files_but_keeps_templates(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    src = tmp_path / "workspace"
+    src.mkdir()
+    (src / ".env").write_bytes(b"SECRET=real")
+    (src / ".dev.vars.example").write_bytes(b"SECRET=replace-me")
+    blob = b"".join(zip_workspace(src))
+    with zipfile.ZipFile(io.BytesIO(blob)) as zf:
+        assert zf.namelist() == [".dev.vars.example"]
 
 
 # ---- snapshot resilience (the dc-02 live-rung defect) ------------------------
@@ -286,8 +391,6 @@ async def test_snapshot_oversized_file_skipped_not_fatal(tmp_path: Path) -> None
     """An oversized artifact is skipped + recorded, not a snapshot-killer: the
     cap's job is to bound disk usage, not to hold the whole project hostage."""
     payload = {"small.txt": b"ok", "huge.bin": b"x" * 64}
-    result = await snapshot_workspace(
-        _FakeSandbox(payload), tmp_path / "snap", max_file_bytes=32
-    )
+    result = await snapshot_workspace(_FakeSandbox(payload), tmp_path / "snap", max_file_bytes=32)
     assert result.paths == ["small.txt"]
     assert len(result.skipped) == 1 and "huge.bin" in result.skipped[0]

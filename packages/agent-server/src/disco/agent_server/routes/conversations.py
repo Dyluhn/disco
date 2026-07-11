@@ -7,7 +7,7 @@ import logging
 import posixpath
 import uuid
 from dataclasses import asdict
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from disco.core import (
     DEFAULT_OWNER_ID,
@@ -45,6 +45,9 @@ from ._common import (
     require_owned_conversation,
 )
 
+if TYPE_CHECKING:
+    from ..host_token_store import HostTokenStore
+
 
 class ConversationSummaryDTO(BaseModel):
     """Library row the History and Spaces surfaces list."""
@@ -64,6 +67,7 @@ class SetConversationSpaceBody(BaseModel):
 
 
 _LOG = logging.getLogger(__name__)
+_REQUEST_DEFAULT = cast(Request, None)
 
 
 def _resolve_model(
@@ -206,13 +210,15 @@ async def _create_conversation_response(
 
 
 def make_conversations_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    host_token_store: HostTokenStore | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
     @router.post("/conversations")
     async def create_conversation(
-        body: CreateConversationBody, request: Request = cast(Request, None)
+        body: CreateConversationBody, request: Request = _REQUEST_DEFAULT
     ) -> dict:
         return await _create_conversation_response(store, runtime, body, request)
 
@@ -272,9 +278,7 @@ def make_conversations_router(
         return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
 
     @router.post("/conversations/{conversation_id}/messages")
-    async def post_message(
-        conversation_id: str, body: SendMessageBody, request: Request
-    ) -> dict:
+    async def post_message(conversation_id: str, body: SendMessageBody, request: Request) -> dict:
         # Append a USER message, then KICK the loop (Stage 2).
         # Routed THROUGH the conversation's pinned Build kernel (A1 finding #1):
         # for the default `disco` kernel this is byte-identical to the inline
@@ -283,9 +287,7 @@ def make_conversations_router(
         _reject_if_imported(store, conversation_id)
         brief = classify_build_brief(body.content) if body.build_brief is not None else None
         if runtime is not None:
-            stored = await runtime.send_user_turn(
-                conversation_id, body.content, build_brief=brief
-            )
+            stored = await runtime.send_user_turn(conversation_id, body.content, build_brief=brief)
         else:
             pending = []
             if brief is not None:
@@ -295,9 +297,7 @@ def make_conversations_router(
         return {"event_id": stored.id, "seq": stored.seq}
 
     @router.post("/conversations/{conversation_id}/followup")
-    async def post_followup(
-        conversation_id: str, body: SendMessageBody, request: Request
-    ) -> dict:
+    async def post_followup(conversation_id: str, body: SendMessageBody, request: Request) -> dict:
         """Submit a follow-up question on a finished Deep Research report (RP-13).
 
         Appends the question as a USER message, then kicks the loop. The runtime
@@ -428,11 +428,16 @@ def make_conversations_router(
         """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
         revoke its capabilities. Always-available; the UI (Prompt 4) wires a button."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
+        _revoke_host_tokens(host_token_store, conversation_id)
         sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
         if runtime is not None:
             await runtime.kill(conversation_id)
         state = await store.get_state(conversation_id)
-        return {"killed": True, "state": state.model_dump(mode="json"), "sandbox_instance_ids": sandbox_ids}
+        return {
+            "killed": True,
+            "state": state.model_dump(mode="json"),
+            "sandbox_instance_ids": sandbox_ids,
+        }
 
     @router.post("/conversations/{conversation_id}/resume")
     async def post_resume_conversation(conversation_id: str, request: Request) -> dict:
@@ -470,9 +475,7 @@ def make_conversations_router(
             return {"versions": []}
 
     @router.post("/conversations/{conversation_id}/versions/{seq}/restore")
-    async def restore_workspace_version(
-        conversation_id: str, seq: int, request: Request
-    ) -> dict:
+    async def restore_workspace_version(conversation_id: str, seq: int, request: Request) -> dict:
         if runtime is None:
             raise HTTPException(status_code=503, detail={"reason": "runtime_unavailable"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
@@ -520,12 +523,18 @@ def make_conversations_router(
         owner-scoped DB delete is the authority on whether the row is actually removed."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         owner_id = current_owner_id(request)
+        _revoke_host_tokens(host_token_store, conversation_id)
         if runtime is not None:
             await runtime.forget_conversation(conversation_id)
         deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
         return {"id": conversation_id, "deleted": deleted}
 
     return router
+
+
+def _revoke_host_tokens(token_store: HostTokenStore | None, conversation_id: str) -> None:
+    if token_store is not None:
+        token_store.revoke_for_conversation(conversation_id)
 
 
 def make_conversation_library_router(

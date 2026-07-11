@@ -421,7 +421,7 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     has_header = bool(spec and spec.headers)
     data_rows = list(spec.rows) if spec and spec.rows else []
     n_cols = (
-        len(spec.headers) if has_header
+        len(spec.headers) if spec is not None and spec.headers
         else max((len(r) for r in data_rows), default=0)
     )
     if spec is None or n_cols == 0 or (not has_header and not data_rows):

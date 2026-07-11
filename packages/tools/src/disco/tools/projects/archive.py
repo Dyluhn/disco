@@ -14,6 +14,7 @@ file) and tunable per call.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import zipfile
 from collections.abc import AsyncIterator, Iterator
@@ -51,6 +52,25 @@ _SNAPSHOT_EXCLUDED_DIRS = frozenset(
 # (a dropped ssh pipe fails every subsequent call) — abort instead of grinding
 # through thousands of doomed round-trips.
 _SNAPSHOT_MAX_CONSECUTIVE_FAILURES = 10
+_SAFE_TEMPLATE_SUFFIXES = frozenset({"example", "sample", "dist", "template"})
+
+
+def is_runtime_secret_path(relative_path: str) -> bool:
+    """Whether a workspace path can carry runtime credentials.
+
+    Real dotenv/dev-var files never enter snapshots, versions, imports, manifests,
+    rehydration, or downloads. Explicit template suffixes remain exportable.
+    """
+    parts = tuple(part.lower() for part in Path(relative_path).parts)
+    for name in parts:
+        for stem in (".dev.vars", ".env"):
+            if name == stem:
+                return True
+            if name.startswith(stem + "."):
+                suffix = name.rsplit(".", 1)[-1]
+                if suffix not in _SAFE_TEMPLATE_SUFFIXES:
+                    return True
+    return False
 
 
 class _WorkspaceIO(Protocol):
@@ -103,10 +123,18 @@ async def snapshot_workspace(
     (_SNAPSHOT_MAX_CONSECUTIVE_FAILURES consecutive failures) or an unlistable
     workspace ROOT raises — those mean "we saved nothing trustworthy".
     """
+    if dest.is_symlink():
+        raise WorkspaceArchiveError("snapshot destination must not be a symlink")
     dest.mkdir(parents=True, exist_ok=True)
+    # A legacy/host-planted link inside the durable tree must never turn a
+    # sandbox write into an arbitrary host-file overwrite. Snapshot trees carry
+    # regular files only, so links have no valid persistence meaning.
+    for link in sorted((p for p in dest.rglob("*") if p.is_symlink()), reverse=True):
+        link.unlink()
 
     paths: list[str] = []
     skipped: list[str] = []
+    preserve_paths: set[str] = set()
     total_bytes = 0
     consecutive_failures = 0
 
@@ -131,12 +159,16 @@ async def snapshot_workspace(
         except Exception as exc:  # noqa: BLE001 — tolerated per-entry, fatal at root
             if not rel:
                 raise WorkspaceArchiveError(f"list_dir {rel!r} failed: {exc}") from exc
+            preserve_paths.add(rel)
             _skip(rel, f"list_dir failed: {exc}")
             return
         for name in entries:
             if name in _SNAPSHOT_EXCLUDED_DIRS:
                 continue  # reproducible dependency/cache tree — never snapshot
             child = f"{rel}/{name}" if rel else name
+            if is_runtime_secret_path(child):
+                skipped.append(f"{child}: runtime secret path excluded")
+                continue
             # Distinguish files from directories with a probe: list_dir on a file
             # raises SandboxError. We try read_file first (the common case is a
             # file) and fall back to recursing if reads fail with a recognizable
@@ -148,6 +180,7 @@ async def snapshot_workspace(
                 try:
                     await sandbox.list_dir(child)
                 except Exception as exc:  # noqa: BLE001
+                    preserve_paths.add(child)
                     _skip(child, f"could not read or descend: {exc}")
                     continue
                 await _walk(child, depth + 1)
@@ -164,6 +197,19 @@ async def snapshot_workspace(
 
     await _walk("", 0)
     paths.sort()
+    saved = set(paths)
+    for stale in sorted(p for p in dest.rglob("*") if p.is_file()):
+        rel = stale.relative_to(dest).as_posix()
+        if (
+            rel not in saved
+            and not any(
+                rel == protected or rel.startswith(protected + "/") for protected in preserve_paths
+            )
+        ) or is_runtime_secret_path(rel):
+            stale.unlink()
+    for directory in sorted((p for p in dest.rglob("*") if p.is_dir()), reverse=True):
+        with contextlib.suppress(OSError):
+            directory.rmdir()
     return SnapshotResult(
         file_count=len(paths), total_bytes=total_bytes, paths=paths, skipped=skipped
     )
@@ -183,8 +229,10 @@ async def rehydrate_workspace(sandbox: _WorkspaceIO, src: Path) -> int:
     if not src.exists() or not src.is_dir():
         return 0
     count = 0
-    for path in sorted(p for p in src.rglob("*") if p.is_file()):
+    for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
         rel = path.relative_to(src).as_posix()
+        if is_runtime_secret_path(rel):
+            continue
         try:
             await sandbox.write_file(rel, path.read_bytes())
         except Exception as exc:  # noqa: BLE001 — surface the real path
@@ -207,8 +255,10 @@ def zip_workspace(src: Path) -> Iterator[bytes]:
         raise FileNotFoundError(f"workspace directory not found: {src}")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for path in sorted(p for p in src.rglob("*") if p.is_file()):
-            zf.write(path, arcname=path.relative_to(src).as_posix())
+        for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
+            rel = path.relative_to(src).as_posix()
+            if not is_runtime_secret_path(rel):
+                zf.write(path, arcname=rel)
     buf.seek(0)
     chunk = 64 * 1024
     while True:

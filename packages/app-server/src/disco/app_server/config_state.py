@@ -17,6 +17,16 @@ from typing import TYPE_CHECKING, Any
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from disco.core.llm.config import McpSettings, ProviderSettings
+from disco.core.stripe_host_service import (
+    PAYMENTS_CHECKOUT_SERVICE_NAME,
+    STRIPE_API_URL,
+    STRIPE_SECRET_REF,
+    StripeAppConfig,
+    StripeAppConfigStore,
+    configure_stripe_restricted_key,
+    configure_stripe_webhook_secret,
+    ensure_stripe_binding_secret,
+)
 
 if TYPE_CHECKING:
     # The shared mcp_approvals DB connection — a duck-typed sqlite3-like conn
@@ -64,12 +74,18 @@ from .config.mappers import (
     _entry_from,
     _image_gen_from,
     _live_browser_from,
-    _mcp_live_status,
     _models_from,
     _projects_from,
     _role_fallback_from,
     _sandbox_from,
     _tts_from,
+)
+from .mcp_config_service import McpConfigService
+from .provider_config_service import (
+    ProviderConfigService,
+)
+from .provider_config_service import (
+    ProviderInUseError as ProviderInUseError,
 )
 
 
@@ -81,14 +97,6 @@ class ConfigValidationError(Exception):
         super().__init__(detail or reason)
         self.reason = reason
         self.detail = detail
-
-
-class ProviderInUseError(Exception):
-    """Raised when deleting a provider would strand catalogue models."""
-
-    def __init__(self, model_names: list[str]) -> None:
-        super().__init__(", ".join(model_names))
-        self.model_names = model_names
 
 
 # ---- the session-scoped config state ----------------------------------------
@@ -111,6 +119,7 @@ class ConfigState:
         secrets: SecretStore | None = None,
         skills: SkillStore | None = None,
         db_conn: _ApprovalConn | None = None,
+        stripe_configs: StripeAppConfigStore | None = None,
     ) -> None:
         if store is not None:
             self._store = store
@@ -125,6 +134,14 @@ class ConfigState:
         # DB connection for mcp_approvals table (shared with agent-server).
         # When None (tests without a DB), MCP config persists to ConfigStore only.
         self._db_conn = db_conn
+        self._stripe_configs = stripe_configs
+        self._provider_config = ProviderConfigService(
+            self._store,
+            self._secrets,
+            add_model=lambda body: self.add_model(body),
+            remove_model=lambda model_id: self.remove_model(model_id),
+        )
+        self._mcp_service = McpConfigService(self._store, self._secrets, db_conn)
 
     def _approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None:
         _origin_wiring.sign_origin(self._store, self._secrets, url, purpose, secret_ref)
@@ -198,156 +215,36 @@ class ConfigState:
     # provider objects (definition + encrypted key + catalogue model toggles) -
 
     def _provider_dto(self, provider: ProviderSettings) -> ProviderDTO:
-        return ProviderDTO(
-            id=provider.id,
-            label=provider.label,
-            base_url=provider.base_url,
-            kind=provider.kind,
-            secret_name=provider.secret_name,
-            has_key=bool(self._resolve_secret_value(provider.secret_name)),
-        )
+        return self._provider_config._provider_dto(provider)
 
     def _save_providers(self, providers: dict[str, ProviderSettings]) -> None:
-        cfg = self._store.load()
-        self._store.save(cfg.model_copy(update={"providers": providers}))
+        self._provider_config._save_providers(providers)
 
     def providers(self) -> list[ProviderDTO]:
-        return [self._provider_dto(p) for p in self._store.load().providers.values()]
+        return self._provider_config.providers()
 
     def provider_settings(self, provider_id: str) -> ProviderSettings:
-        provider = self._store.load().providers.get(provider_id)
-        if provider is None:
-            raise KeyError(provider_id)
-        return provider
+        return self._provider_config.provider_settings(provider_id)
 
     def provider_origin_approved(self, provider: ProviderDTO) -> bool:
-        return _origin_wiring.provider_origin_approved(self._store, self._secrets, provider)
+        return self._provider_config.provider_origin_approved(provider)
 
     def _unique_provider_id(self, label: str) -> str:
-        import re
-
-        base = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "provider"
-        existing = self._store.load().providers
-        if base not in existing:
-            return base
-        i = 2
-        while f"{base}-{i}" in existing:
-            i += 1
-        return f"{base}-{i}"
+        return self._provider_config._unique_provider_id(label)
 
     def create_provider(self, body: ProviderCreate) -> ProviderDTO:
-        label = body.label.strip()
-        base_url = body.base_url.strip().rstrip("/")
-        api_key = body.api_key.strip()
-        if not label:
-            raise ValueError("label is empty")
-        if not base_url:
-            raise ValueError("base_url is empty")
-        from disco.core.host_egress import origin_for_url
-
-        try:
-            valid_origin = origin_for_url(base_url)
-        except ValueError as exc:
-            raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
-        if valid_origin is None:
-            raise ValueError("base_url must be an absolute HTTP(S) URL")
-        if not api_key:
-            raise ValueError("api_key is empty")
-        provider_id = self._unique_provider_id(label)
-        secret_name = f"provider_{provider_id}"
-        try:
-            self._secrets.set_secret(secret_name, api_key)
-        except RuntimeError as exc:
-            raise ValueError(str(exc)) from exc
-        cfg = self._store.load()
-        provider = ProviderSettings(
-            id=provider_id,
-            label=label,
-            base_url=base_url,
-            kind=body.kind,
-            secret_name=secret_name,
-        )
-        self._store.save(
-            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: provider}})
-        )
-        _origin_wiring.approve_provider_origin(self._store, self._secrets, provider)
-        return self._provider_dto(provider)
+        return self._provider_config.create_provider(body)
 
     def update_provider(self, provider_id: str, patch: ProviderPatch) -> ProviderDTO:
-        cfg = self._store.load()
-        provider = cfg.providers.get(provider_id)
-        if provider is None:
-            raise KeyError(provider_id)
-        updates: dict[str, Any] = {}
-        if patch.label is not None:
-            label = patch.label.strip()
-            if not label:
-                raise ValueError("label is empty")
-            updates["label"] = label
-        if patch.base_url is not None:
-            base_url = patch.base_url.strip().rstrip("/")
-            if not base_url:
-                raise ValueError("base_url is empty")
-            from disco.core.host_egress import origin_for_url
-
-            try:
-                valid_origin = origin_for_url(base_url)
-            except ValueError as exc:
-                raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
-            if valid_origin is None:
-                raise ValueError("base_url must be an absolute HTTP(S) URL")
-            updates["base_url"] = base_url
-        if patch.kind is not None:
-            updates["kind"] = patch.kind
-        if patch.api_key is not None:
-            api_key = patch.api_key.strip()
-            if not api_key:
-                raise ValueError("api_key is empty")
-            try:
-                self._secrets.set_secret(provider.secret_name, api_key)
-            except RuntimeError as exc:
-                raise ValueError(str(exc)) from exc
-        updated = provider.model_copy(update=updates)
-        self._store.save(
-            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
-        )
-        # A base-URL save or explicit key rotation is the operator approval
-        # gesture. Cosmetic edits never bless a previously unapproved origin.
-        if patch.base_url is not None or patch.api_key is not None:
-            _origin_wiring.approve_provider_origin(self._store, self._secrets, updated)
-        return self._provider_dto(updated)
+        return self._provider_config.update_provider(provider_id, patch)
 
     def delete_provider(self, provider_id: str) -> None:
-        cfg = self._store.load()
-        provider = cfg.providers.get(provider_id)
-        if provider is None:
-            raise KeyError(provider_id)
-        refs = [
-            f"{key} ({entry.model_id})"
-            for key, entry in cfg.models.items()
-            if entry.api_key_env == provider.secret_name
-        ]
-        if refs:
-            raise ProviderInUseError(refs)
-        providers = {k: v for k, v in cfg.providers.items() if k != provider_id}
-        self._store.save(cfg.model_copy(update={"providers": providers}))
-        self._secrets.clear_secret(provider.secret_name)
+        self._provider_config.delete_provider(provider_id)
 
     def _unique_provider_catalogue_id(
         self, provider_id: str, model_id: str, label: str | None
     ) -> str:
-        import re
-
-        stem = label.strip() if label and label.strip() else model_id
-        slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "model"
-        base = f"prov-{provider_id}-{slug}"
-        existing = self._store.load().models
-        if base not in existing:
-            return base
-        i = 2
-        while f"{base}-{i}" in existing:
-            i += 1
-        return f"{base}-{i}"
+        return self._provider_config._unique_provider_catalogue_id(provider_id, model_id, label)
 
     def enable_provider_model(
         self,
@@ -355,95 +252,29 @@ class ConfigState:
         body: ProviderEnableBody,
         catalogue_model: ProviderCatalogueModelDTO | None = None,
     ) -> list[ModelDTO]:
-        provider = self.provider_settings(provider_id)
-        model_id = body.model_id.strip()
-        if not model_id:
-            raise ValueError("model_id is empty")
-        cfg = self._store.load()
-        for entry in cfg.models.values():
-            if entry.api_key_env == provider.secret_name and entry.model_id == model_id:
-                return _models_from(cfg)
-        catalogue_id = self._unique_provider_catalogue_id(
-            provider.id,
-            model_id,
-            body.label or (catalogue_model.label if catalogue_model else None),
-        )
-        # Context: NEVER silently default — context_window drives the engine's
-        # context budgeting, so a wrong-low guess (the old 8192) over-snips every
-        # build on a big model. The caller must supply it when the provider's
-        # catalogue doesn't report one.
-        context_window = (
-            body.context_window
-            if body.context_window is not None
-            else (catalogue_model.context_window if catalogue_model else None)
-        )
-        if context_window is None:
-            raise ValueError(
-                f"context window required: {provider.label} does not report context "
-                "windows — pass context_window with the model's real limit"
-            )
-        # Pricing: only claim a pay model the catalogue actually reported.
-        # Absent pricing → "unknown" (rendered as such), never a fake Free.
-        prices_known = catalogue_model is not None and (
-            catalogue_model.price_in_per_m is not None
-            or catalogue_model.price_out_per_m is not None
-        )
-        # Capabilities: provider catalogues rarely report them (Go reports none),
-        # and an EMPTY set silently disqualifies the model from the Build/agent
-        # driver pickers (tool-calling gate) — the enable "works" but the model
-        # only surfaces in capability-agnostic roles, which reads as broken.
-        # Default modern-serving table stakes (tool_calling + json_mode; +
-        # long_context per its >~64k semantics); a genuinely tool-less model
-        # fails loudly at run time, which is diagnosable — invisibility is not.
-        # ANCHORED_EDIT stays opt-in by design (unknown models must not get it).
-        capabilities = catalogue_model.capabilities if catalogue_model else []
-        if not capabilities:
-            capabilities = ["tool_calling", "json_mode"] + (
-                ["long_context"] if context_window >= 65536 else []
-            )
-        upsert = ModelUpsert(
-            id=catalogue_id,
-            model_id=model_id,
-            base_url=provider.base_url,
-            api_key_env=provider.secret_name,
-            context_window=context_window,
-            capabilities=capabilities,
-            price_in_per_m=(
-                catalogue_model.price_in_per_m
-                if prices_known and catalogue_model.price_in_per_m is not None
-                else 0.0
-            ),
-            price_out_per_m=(
-                catalogue_model.price_out_per_m
-                if prices_known and catalogue_model.price_out_per_m is not None
-                else 0.0
-            ),
-            pricing_mode="metered" if prices_known else "unknown",
-        )
-        return self.add_model(upsert)
+        return self._provider_config.enable_provider_model(provider_id, body, catalogue_model)
 
     def disable_provider_model(self, provider_id: str, catalogue_id: str) -> list[ModelDTO]:
-        provider = self.provider_settings(provider_id)
-        cfg = self._store.load()
-        entry = cfg.models.get(catalogue_id)
-        if entry is None:
-            raise ValueError(f"unknown model {catalogue_id!r}")
-        if entry.api_key_env != provider.secret_name:
-            raise ValueError(f"{catalogue_id!r} does not belong to provider {provider_id!r}")
-        return self.remove_model(catalogue_id)
+        return self._provider_config.disable_provider_model(provider_id, catalogue_id)
 
     # generic provider secrets (encrypted at rest, keyed by api_key_env name) ---
     # "openrouter" is reserved for the dedicated route/UI above; the generic
     # surface neither lists nor accepts it (avoids two UIs fighting over one slot).
 
-    _RESERVED_SECRET = "openrouter"
+    _RESERVED_SECRETS = frozenset({"openrouter", STRIPE_SECRET_REF})
+
+    @classmethod
+    def _reserved_secret(cls, name: str) -> bool:
+        return name in cls._RESERVED_SECRETS or name.startswith(
+            ("stripe.binding.", "stripe.webhook.")
+        )
 
     def list_secrets(self) -> SecretsListDTO:
-        names = [n for n in self._secrets.secret_names() if n != self._RESERVED_SECRET]
+        names = [n for n in self._secrets.secret_names() if not self._reserved_secret(n)]
         # The SPECIFIC stored keys that can't be decrypted (named, so the UI can
         # say which to fix) — generic, not the OpenRouter-only `locked` property.
         locked_names = [
-            n for n in self._secrets.undecryptable_names() if n != self._RESERVED_SECRET
+            n for n in self._secrets.undecryptable_names() if not self._reserved_secret(n)
         ]
         return SecretsListDTO(
             names=sorted(names),
@@ -467,8 +298,9 @@ class ConfigState:
         name = name.strip()
         from disco.core.llm.secret_refs import is_control_secret_ref
 
-        if name == self._RESERVED_SECRET:
-            raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
+        if self._reserved_secret(name):
+            route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
+            raise ValueError(f"use the dedicated {route} route for the {name} credential")
         if is_control_secret_ref(name):
             raise ValueError(f"{name} is an internal control secret and cannot be a provider ref")
         if not value.strip():
@@ -481,10 +313,62 @@ class ConfigState:
 
     def clear_secret(self, name: str) -> SecretStatus:
         name = name.strip()
-        if name == self._RESERVED_SECRET:
-            raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
+        from disco.core.llm.secret_refs import is_control_secret_ref
+
+        if self._reserved_secret(name):
+            route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
+            raise ValueError(f"use the dedicated {route} route for the {name} credential")
+        if is_control_secret_ref(name):
+            raise ValueError(f"{name} is an internal control secret and cannot be cleared")
         self._secrets.clear_secret(name)
         return self.secret_status(name)
+
+    def configure_stripe_app(
+        self,
+        *,
+        owner_id: str,
+        audience: str,
+        restricted_key: str,
+        webhook_secret: str,
+        plan_selector: str,
+        stripe_price_id: str,
+        allowed_return_origins: frozenset[str],
+        enabled: bool,
+    ) -> StripeAppConfig:
+        """Owner-only settings seam; the key is write-only and separately encrypted."""
+        if self._stripe_configs is None:
+            raise RuntimeError("Stripe configuration store is not wired to shared host state")
+        self._stripe_configs.validate_configuration(
+            owner_id=owner_id,
+            audience=audience,
+            plan_selector=plan_selector,
+            stripe_price_id=stripe_price_id,
+            allowed_return_origins=allowed_return_origins,
+            enabled=enabled,
+        )
+        configure_stripe_restricted_key(self._secrets, restricted_key)
+        configure_stripe_webhook_secret(
+            self._secrets,
+            owner_id,
+            audience,
+            webhook_secret,
+        )
+        ensure_stripe_binding_secret(self._secrets, owner_id, audience)
+        config = self._stripe_configs.configure(
+            owner_id=owner_id,
+            audience=audience,
+            plan_selector=plan_selector,
+            stripe_price_id=stripe_price_id,
+            allowed_return_origins=allowed_return_origins,
+            enabled=enabled,
+            secret_store=self._secrets,
+        )
+        self._approve_origin(
+            STRIPE_API_URL,
+            PAYMENTS_CHECKOUT_SERVICE_NAME,
+            STRIPE_SECRET_REF,
+        )
+        return config
 
     def _resolve_secret_value(self, name: str) -> str | None:
         from disco.core.llm.secret_refs import resolve_provider_secret
@@ -1059,253 +943,34 @@ class ConfigState:
     # mcp (live, persistent CRUD) — rung B ----------------------------------
 
     def _mcp_config(self) -> McpSettings:
-        return self._store.load().mcp
+        return self._mcp_service._mcp_config()
 
     def _mcp_approvals(self) -> dict[str, dict]:
-        """Read all approval rows keyed by server name."""
-        if self._db_conn is None:
-            return {}
-        try:
-            from disco.tools.mcp.migrations import list_mcp_approvals
-
-            rows = list_mcp_approvals(self._db_conn)
-            return {r["server"]: r for r in rows}
-        except Exception:
-            return {}
+        return self._mcp_service._mcp_approvals()
 
     def _mcp_approval_pending(self) -> dict[str, dict]:
-        """E6 (#10): read the per-server DRIFT rows the agent-server wrote.
-
-        Each row is the AUTHORITATIVE new_hash the live agent-server pool
-        computed at startup when it detected a description_hash mismatch
-        against `mcp_approvals`. The app-server surfaces this on
-        `McpConnectionDTO.new_description_hash` so the ApprovalDiff renders
-        the REAL fingerprint of the changed tool set — not a stub of the
-        stored hash. The agent-server clears the row in the same transaction
-        as `create_mcp_approval` (the operator accepted the new tools), so
-        `new_description_hash` is `None` once a server is in sync.
-        """
-        if self._db_conn is None:
-            return {}
-        try:
-            from disco.tools.mcp.migrations import list_mcp_approval_pending
-
-            rows = list_mcp_approval_pending(self._db_conn)
-            return {r["server"]: r for r in rows}
-        except Exception:
-            return {}
+        return self._mcp_service._mcp_approval_pending()
 
     def _mcp_config_approvals(self) -> dict[str, dict]:
-        if self._db_conn is None:
-            return {}
-        try:
-            from disco.tools.mcp.migrations import list_mcp_config_approvals
-
-            rows = list_mcp_config_approvals(self._db_conn)
-            return {r["server"]: r for r in rows}
-        except Exception:
-            return {}
+        return self._mcp_service._mcp_config_approvals()
 
     def mcp_connections(self) -> list[McpConnectionDTO]:
-        """Live pool projection: every configured server + its approval status.
-
-        E6 (#10): also projects `new_description_hash` from the
-        `mcp_approval_pending` drift table. When the live agent-server pool
-        just computed a fresh hash that differs from the stored approval,
-        `new_description_hash` carries that AUTHORITATIVE value and the
-        frontend ApprovalDiff uses it for the new-hash side of the diff
-        (and as the body of the re-approve POST). When the server is in
-        sync (no drift row), `new_description_hash` is `None` and the UI
-        does not show a diff banner.
-        """
-        cfg = self._mcp_config()
-        approvals = self._mcp_approvals()
-        config_approvals = self._mcp_config_approvals()
-        pending = self._mcp_approval_pending()
-        out: list[McpConnectionDTO] = []
-        for name, srv in cfg.servers.items():
-            url = (
-                srv.get("url", "") or srv.get("command", [""])[0]
-                if srv.get("command")
-                else srv.get("url", "")
-            )
-            ap = approvals.get(name)
-            cap = config_approvals.get(name)
-            pd = pending.get(name)
-            from disco.tools.mcp.approval import compute_config_hash
-
-            current_config_hash = compute_config_hash({"name": name, **srv})
-            config_pending = cap is None or cap["config_hash"] != current_config_hash
-            out.append(
-                McpConnectionDTO(
-                    id=name,
-                    name=name,
-                    url=url,
-                    status=(
-                        "approval_required"
-                        if config_pending or pd is not None or ap is None
-                        else _mcp_live_status(ap)
-                    ),
-                    transport=srv.get("transport"),
-                    risk_tier=srv.get("risk_tier"),
-                    description_hash=ap["description_hash"] if ap else None,
-                    # E6: pass the AUTHORITATIVE new_hash through verbatim —
-                    # NEVER recompute here, the backend is the source of
-                    # truth. None when the server is in sync.
-                    new_description_hash=pd["new_hash"] if pd else None,
-                    config_hash=cap["config_hash"] if cap else None,
-                    new_config_hash=current_config_hash if config_pending else None,
-                    approved_at=ap["approved_at"] if ap else None,
-                    enabled=srv.get("enabled", True),
-                )
-            )
-        return out
+        return self._mcp_service.mcp_connections()
 
     def create_mcp_server(self, body: McpServerConfigDTO) -> McpConnectionDTO:
-        cfg = self._mcp_config()
-        if body.name in cfg.servers:
-            raise ValueError(f"server {body.name!r} already exists")
-        srv: dict = {
-            "transport": body.transport,
-            "url": body.url,
-            "enabled": body.enabled,
-            "allowed_tools": body.allowed_tools,
-            "risk_tier": body.risk_tier,
-        }
-        if body.transport == "stdio":
-            srv["command"] = [body.url]
-        servers = {**cfg.servers, body.name: srv}
-        new_cfg = cfg.model_copy(update={"servers": servers})
-        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
-        from disco.tools.mcp.approval import compute_config_hash
-
-        config_hash = compute_config_hash({"name": body.name, **srv})
-        return McpConnectionDTO(
-            id=body.name,
-            name=body.name,
-            url=body.url,
-            status="approval_required",
-            transport=body.transport,
-            risk_tier=body.risk_tier,
-            enabled=body.enabled,
-            new_config_hash=config_hash,
-        )
+        return self._mcp_service.create_mcp_server(body)
 
     def update_mcp_server(self, name: str, patch: McpServerPatchDTO) -> McpConnectionDTO | None:
-        cfg = self._mcp_config()
-        if name not in cfg.servers:
-            return None
-        existing = cfg.servers[name]
-        updated = {**existing}
-        if patch.transport:
-            updated["transport"] = patch.transport
-        if patch.url:
-            updated["url"] = patch.url
-        if patch.enabled is not None:
-            updated["enabled"] = patch.enabled
-        if "allowed_tools" in patch.model_fields_set:
-            updated["allowed_tools"] = patch.allowed_tools
-        if patch.risk_tier:
-            updated["risk_tier"] = patch.risk_tier
-        servers = {**cfg.servers, name: updated}
-        new_cfg = cfg.model_copy(update={"servers": servers})
-        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
-        approvals = self._mcp_approvals()
-        ap = approvals.get(name)
-        config_approvals = self._mcp_config_approvals()
-        cap = config_approvals.get(name)
-        from disco.tools.mcp.approval import compute_config_hash
-
-        current_config_hash = compute_config_hash({"name": name, **updated})
-        config_pending = cap is None or cap["config_hash"] != current_config_hash
-        return McpConnectionDTO(
-            id=name,
-            name=name,
-            url=updated.get("url", ""),
-            status="approval_required" if config_pending else _mcp_live_status(ap),
-            transport=updated.get("transport"),
-            risk_tier=updated.get("risk_tier"),
-            description_hash=ap["description_hash"] if ap else None,
-            approved_at=ap["approved_at"] if ap else None,
-            enabled=updated.get("enabled", True),
-            config_hash=cap["config_hash"] if cap else None,
-            new_config_hash=current_config_hash if config_pending else None,
-        )
+        return self._mcp_service.update_mcp_server(name, patch)
 
     def delete_mcp_server(self, name: str) -> bool:
-        cfg = self._mcp_config()
-        if name not in cfg.servers:
-            return False
-        servers = {k: v for k, v in cfg.servers.items() if k != name}
-        new_cfg = cfg.model_copy(update={"servers": servers})
-        self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
-        # Also remove the approval row.
-        if self._db_conn is not None:
-            try:
-                from disco.tools.mcp.migrations import (
-                    delete_mcp_approval,
-                    delete_mcp_config_approval,
-                )
-
-                delete_mcp_approval(self._db_conn, name)
-                delete_mcp_config_approval(self._db_conn, name)
-            except Exception:
-                pass
-        return True
+        return self._mcp_service.delete_mcp_server(name)
 
     def approve_mcp_server(self, name: str, body: McpServerApproveDTO) -> McpConnectionDTO:
-        """Approve or re-approve — mutates the single row, never inserts a second."""
-        cfg = self._mcp_config()
-        if name not in cfg.servers:
-            raise KeyError(f"unknown server {name!r}")
-        if self._db_conn is None:
-            raise RuntimeError("no DB connection for approval persistence")
-        from disco.tools.mcp.approval import compute_config_hash
-        from disco.tools.mcp.migrations import (
-            create_mcp_approval,
-            create_mcp_config_approval,
-            get_mcp_approval_pending,
-        )
-
-        srv = cfg.servers[name]
-        if body.approval_kind == "config":
-            expected = compute_config_hash({"name": name, **srv})
-            if body.config_hash != expected:
-                raise ValueError("stale or missing MCP configuration hash")
-            create_mcp_config_approval(self._db_conn, name, expected)
-            _origin_wiring.approve_mcp_server_origin(self._store, self._secrets, name, srv)
-        else:
-            pending = get_mcp_approval_pending(self._db_conn, name)
-            if (
-                body.description_hash is None
-                or pending is None
-                or body.description_hash != pending["new_hash"]
-            ):
-                raise ValueError("stale or missing MCP tool-schema hash")
-            create_mcp_approval(self._db_conn, name, body.description_hash)
-
-        return next(c for c in self.mcp_connections() if c.id == name)
+        return self._mcp_service.approve_mcp_server(name, body)
 
     def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]:
-        return _origin_wiring.mcp_secret_refs(srv)
+        return self._mcp_service._mcp_secret_refs(srv)
 
     def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
-        """Return old-vs-new hash diff for the approve UI. None = no diff or no
-        stored approval."""
-        if self._db_conn is None:
-            return None
-        from disco.tools.mcp.migrations import get_mcp_approval
-
-        old = get_mcp_approval(self._db_conn, name)
-        if old is None:
-            return None
-        old_hash = old["description_hash"]
-        if old_hash == new_hash:
-            return None
-        return {
-            "server": name,
-            "old_hash": old_hash,
-            "new_hash": new_hash,
-            "approved_at": old["approved_at"],
-            "approved_by": old["approved_by"],
-        }
+        return self._mcp_service.mcp_approval_diff(name, new_hash)

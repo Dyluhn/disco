@@ -34,10 +34,10 @@ rather than raising / returning UNSET on a fresh machine.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
-import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -46,6 +46,8 @@ from pathlib import Path
 from typing import Any
 
 from disco.core.owners import install_owner_id
+
+from .archive import is_runtime_secret_path
 
 # Used both as the manifest filename and the workspace subdirectory; constants
 # here so the agent-server doesn't depend on string literals scattered around.
@@ -193,8 +195,10 @@ def _scan_tree(root: Path) -> tuple[dict[str, str], int]:
         raise StorageError(f"workspace directory missing: {root}")
     hashes: dict[str, str] = {}
     total_bytes = 0
-    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
         rel = path.relative_to(root).as_posix()
+        if is_runtime_secret_path(rel):
+            continue
         stat = path.stat()
         hashes[rel] = _file_sha256(path)
         total_bytes += stat.st_size
@@ -284,9 +288,7 @@ class ProjectStore:
     settings round-trip + the read-only browse endpoint work even on a bad
     root (the user has to be able to see + fix the configuration)."""
 
-    def __init__(
-        self, root_str: str, *, version_byte_budget: int = _MAX_VERSION_BYTES
-    ) -> None:
+    def __init__(self, root_str: str, *, version_byte_budget: int = _MAX_VERSION_BYTES) -> None:
         # _configured keeps the raw value for the settings DTO (so the UI can
         # display what the user explicitly saved, not the auto-default path).
         self._configured_str = root_str
@@ -357,9 +359,7 @@ class ProjectStore:
         records.sort(key=lambda r: r.seq)
         return records
 
-    def _write_version_index(
-        self, conversation_id: str, records: list[VersionRecord]
-    ) -> None:
+    def _write_version_index(self, conversation_id: str, records: list[VersionRecord]) -> None:
         payload = [_version_to_dict(record) for record in sorted(records, key=lambda r: r.seq)]
         _write_json_atomic(self._versions_index(conversation_id), payload)
 
@@ -390,10 +390,7 @@ class ProjectStore:
             source = live_workspace / rel
             target = dest_workspace / rel
             target.parent.mkdir(parents=True, exist_ok=True)
-            if (
-                previous_workspace is not None
-                and previous_hashes.get(rel) == live_hashes[rel]
-            ):
+            if previous_workspace is not None and previous_hashes.get(rel) == live_hashes[rel]:
                 previous_source = previous_workspace / rel
                 try:
                     os.link(previous_source, target)
@@ -414,7 +411,7 @@ class ProjectStore:
         if newest is not None and newest.tree_digest == digest:
             return None
 
-        seq = (max((record.seq for record in records), default=0) + 1)
+        seq = max((record.seq for record in records), default=0) + 1
         record = VersionRecord(
             seq=seq,
             ts=_now_iso(),
@@ -454,9 +451,7 @@ class ProjectStore:
         records.sort(key=lambda r: r.seq, reverse=True)
         return records
 
-    def set_version_pinned(
-        self, conversation_id: str, seq: int, pinned: bool
-    ) -> VersionRecord:
+    def set_version_pinned(self, conversation_id: str, seq: int, pinned: bool) -> VersionRecord:
         """Mark a version as retention-protected in the index and sidecar."""
         if not _safe_seq(seq):
             raise StorageError(f"unsafe version seq: {seq!r}")
@@ -493,16 +488,18 @@ class ProjectStore:
             return workspace
         raise StorageError(f"unknown version seq: {seq!r}")
 
-    def _versions_total_bytes(
-        self, conversation_id: str, records: list[VersionRecord]
-    ) -> int:
+    def _versions_total_bytes(self, conversation_id: str, records: list[VersionRecord]) -> int:
         seen: set[tuple[int, int]] = set()
         total = 0
         for record in records:
             workspace = self._version_dir(conversation_id, record) / _WORKSPACE
             if not workspace.is_dir():
                 continue
-            for path in sorted(p for p in workspace.rglob("*") if p.is_file()):
+            for path in sorted(
+                p for p in workspace.rglob("*") if p.is_file() and not p.is_symlink()
+            ):
+                if is_runtime_secret_path(path.relative_to(workspace).as_posix()):
+                    continue
                 stat = path.stat()
                 key = (stat.st_dev, stat.st_ino)
                 if key in seen:
@@ -559,9 +556,7 @@ class ProjectStore:
                 continue  # don't surface a corrupt manifest as a project row
             workspace = entry / _WORKSPACE
             files_missing = (
-                not workspace.exists()
-                or not workspace.is_dir()
-                or not any(workspace.rglob("*"))
+                not workspace.exists() or not workspace.is_dir() or not any(workspace.rglob("*"))
             )
             owner_id, legacy_unclaimed = _manifest_owner(data)
             records.append(
@@ -594,9 +589,7 @@ class ProjectStore:
             raise StorageError(f"manifest unreadable: {exc}") from exc
         workspace = self.path_for(conversation_id)
         files_missing = (
-            not workspace.exists()
-            or not workspace.is_dir()
-            or not any(workspace.rglob("*"))
+            not workspace.exists() or not workspace.is_dir() or not any(workspace.rglob("*"))
         )
         owner_id, legacy_unclaimed = _manifest_owner(data)
         return ProjectRecord(
@@ -658,4 +651,10 @@ class ProjectStore:
         workspace = self.path_for(conversation_id)
         if not workspace.is_dir():
             raise StorageError(f"workspace directory missing: {workspace}")
-        yield from sorted(p for p in workspace.rglob("*") if p.is_file())
+        yield from sorted(
+            p
+            for p in workspace.rglob("*")
+            if p.is_file()
+            and not p.is_symlink()
+            and not is_runtime_secret_path(p.relative_to(workspace).as_posix())
+        )

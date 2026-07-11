@@ -112,6 +112,25 @@ async def test_connect_to_denied_host_is_403_and_never_dials_upstream():
         upstream.close()
 
 
+async def test_explicit_denied_host_overrides_public_or_allowlisted_access():
+    proxy = AllowlistProxy(
+        lambda _host: True,
+        host="127.0.0.1",
+        port=0,
+        denied_hosts=["bus.example.com"],
+    )
+    await proxy.start()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+        writer.write(b"CONNECT bus.example.com:443 HTTP/1.1\r\n\r\n")
+        await writer.drain()
+        assert b"403" in await reader.readline()
+        assert proxy.denied == 1 and proxy.allowed == 0
+        writer.close()
+    finally:
+        await proxy.aclose()
+
+
 async def test_http_absolute_form_denied_host_is_403():
     proxy = await _proxy(["api.github.com"])
     try:
