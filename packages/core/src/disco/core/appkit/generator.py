@@ -2017,8 +2017,15 @@ def generate(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, str]:
     prim = resolve_primitive(app_spec.app_kind)
     if app_spec.stripe is not None and app_spec.app_kind != RECORDS_PRIMITIVE_ID:
         raise ValueError("Stripe can only be generated on the auth-capable records primitive")
+    if app_spec.webhooks is not None and app_spec.app_kind != RECORDS_PRIMITIVE_ID:
+        raise ValueError("Webhooks can only be generated on the auth-capable records primitive")
     tree = prim.generate(app_spec, design_spec)
-    if prim.host_contract or app_spec.stripe is not None:
+    standalone_pending_webhook = prim.id == "webhook" and app_spec.webhooks is None
+    if (
+        (prim.host_contract and not standalone_pending_webhook)
+        or app_spec.stripe is not None
+        or app_spec.webhooks is not None
+    ):
         _apply_host_services_shim(tree)
     return tree
 
@@ -2635,6 +2642,7 @@ importlib.import_module(".collection_primitive", package=__package__)
 importlib.import_module(".analytics_primitive", package=__package__)
 importlib.import_module(".blog_primitive", package=__package__)
 importlib.import_module(".feature_flags_primitive", package=__package__)
+importlib.import_module(".webhook_primitive", package=__package__)
 
 
 __all__ = [

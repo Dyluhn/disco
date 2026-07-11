@@ -959,6 +959,39 @@ class AppAddPrimitiveTool:
                     f"invalid {prim.id!r} spec: {exc}. Expected schema: {schema_json}"
                 ) from exc
 
+            # F3.3 is intentionally repeat-addable (one spec per endpoint). Its
+            # provenance must cover EVERY endpoint, not just the latest write;
+            # otherwise direct AppSpec injection could widen the trusted Worker
+            # routes while leaving one unrelated provenance record behind.
+            webhook_specs: list[dict[str, Any]] | None = None
+            if prim.id == "webhook":
+                record_relpath = f"{_PRIMITIVES_RELDIR}/{prim.id}.json"
+                webhook_specs = []
+                if await ctx.sandbox.file_exists(record_relpath):
+                    try:
+                        old_record = json.loads(
+                            (await ctx.sandbox.read_file(record_relpath)).decode("utf-8")
+                        )
+                        if not isinstance(old_record, dict):
+                            raise ValueError("record is not an object")
+                        old_values = (
+                            old_record.get("specs")
+                            if "specs" in old_record
+                            else [old_record.get("spec")]
+                        )
+                        if not isinstance(old_values, list) or not old_values:
+                            raise ValueError("record has no specs")
+                        webhook_specs = [
+                            prim.spec_schema.model_validate(value).model_dump(mode="json")
+                            for value in old_values
+                        ]
+                    except Exception as exc:  # noqa: BLE001 - fail closed before tree writes
+                        raise _AppKitError(
+                            "existing webhook provenance is invalid; refusing to widen "
+                            "the security-sensitive endpoint set"
+                        ) from exc
+                webhook_specs.append(validated.model_dump(mode="json"))
+
             try:
                 new_app = prim.apply_spec(app, validated)
             except Exception as exc:  # noqa: BLE001
@@ -981,8 +1014,11 @@ class AppAddPrimitiveTool:
                 "primitive_id": prim.id,
                 "tier": prim.tier,
                 "applied_at": datetime.now(UTC).isoformat(),
-                "spec": validated.model_dump(mode="json"),
             }
+            if webhook_specs is not None:
+                record["specs"] = webhook_specs
+            else:
+                record["spec"] = validated.model_dump(mode="json")
             await ctx.sandbox.write_file(
                 record_relpath,
                 (json.dumps(record, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
