@@ -92,6 +92,10 @@ if TYPE_CHECKING:
     from .stripe_host_service import StripeAppConfigStore
 
 
+
+AiChatComplete = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+
 class HostServiceError(Exception):
     """Base class for typed host-service dispatch errors (bus → HTTP mapping)."""
 
@@ -139,6 +143,7 @@ class HostServiceContext:
     credential_generation: int = 0
     request_timeout_s: float = 5.0
     stripe_config_store: StripeAppConfigStore | None = None
+    ai_chat_complete: AiChatComplete | None = None
 
 
 def return_url_allowed(ctx: HostServiceContext, url: str) -> bool:
@@ -173,6 +178,17 @@ HostServiceHandler = Callable[[dict[str, Any], HostServiceContext], Awaitable[di
 
 
 @dataclass(frozen=True)
+class HostServiceUsage:
+    """Request-scoped token usage used by the WO-A4 quota plane."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+HostServiceUsageReader = Callable[[dict[str, Any]], HostServiceUsage]
+
+
+@dataclass(frozen=True)
 class HostServiceDefinition:
     """One host service: its dotted name ("svc.ping", "email.send"), the async
     handler, a human/model-facing description, and an OPTIONAL pydantic payload
@@ -183,6 +199,9 @@ class HostServiceDefinition:
     handler: HostServiceHandler
     description: str
     payload_schema: type[BaseModel] | None = None
+    estimate_usage: HostServiceUsageReader | None = None
+    read_usage: HostServiceUsageReader | None = None
+    timeout_s: float = 6.0
 
 
 # The registry, keyed by dotted service name. Services register at import time
@@ -197,6 +216,8 @@ def register_host_service(defn: HostServiceDefinition) -> None:
     a duplicate is a bug, never a silent shadow."""
     if not valid_host_service_name(defn.name):
         raise ValueError(f"invalid host service name: {defn.name!r}")
+    if not 0.1 <= defn.timeout_s <= 120.0:
+        raise ValueError("host service timeout must be between 0.1 and 120 seconds")
     existing = _REGISTRY.get(defn.name)
     if existing is not None and existing is not defn:
         raise ValueError(f"duplicate host service name: {defn.name!r}")
