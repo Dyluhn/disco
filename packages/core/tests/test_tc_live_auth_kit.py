@@ -389,8 +389,14 @@ def test_auth_kit_blocks_path_confusion_and_survives_malformed_input(tmp_path: P
             "/__health/%2E%2E/notes",
             "/__health/x/%2e%2e/%2e%2e/notes",
             "/__health%2f%2e%2e/notes",
+            # double / over-encoded variants (convergence PoC): must not leak
+            # even if a downstream router decodes more than once.
+            "/__health/%252e%252e/notes",
+            "/__health/%25%32%65%25%32%65/notes",
+            "/__health/%c0%ae%c0%ae/notes",
         ):
-            st, _b = _raw_request(port, "GET", climb)
+            st, body = _raw_request(port, "GET", climb)
+            assert b"secret" not in body.lower(), f"climb {climb!r} leaked protected content"
             assert st != 200, f"encoded-dot climb {climb!r} reached the handler -> {st}"
 
         # #2 — malformed credential TYPES must not crash the process.

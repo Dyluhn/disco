@@ -15,6 +15,7 @@ shipped in the registry.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import select
@@ -288,3 +289,55 @@ def test_rbac_kit_probe_fails_when_the_role_guard_is_absent(tmp_path: Path) -> N
     assert verdict.passed is False, verdict.model_dump()
     failing = {c.name for c in verdict.checks if not c.passed}
     assert "member_forbidden" in failing, verdict.model_dump()
+
+
+def _rbac_login(port: int, user: dict) -> str | None:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+    try:
+        conn.request(
+            "POST", "/auth/login", body=json.dumps(user).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        set_cookie = resp.getheader("Set-Cookie") or ""
+        resp.read()
+        if resp.status != 200:
+            return None
+        return set_cookie.split(";", 1)[0]
+    finally:
+        conn.close()
+
+
+def _rbac_get(port: int, path: str, cookie: str) -> tuple[int, bytes]:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+    try:
+        conn.request("GET", path, headers={"Cookie": cookie})
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
+def test_rbac_kit_member_cannot_climb_via_case_matrix_or_encoding(tmp_path: Path) -> None:
+    """Convergence regression: a member must not reach /admin by case variation,
+    matrix params, or percent-encoding — the guard normalizes all of them before
+    matching roleRoutes. Uses the case-insensitive app handler (Express-like)."""
+    workspace = _write_workspace(tmp_path, _SERVER_JS_WRAPPED)
+    proc, port = _boot_node_server(workspace)
+    try:
+        member = _rbac_login(port, _MEMBER)
+        admin = _rbac_login(port, _ADMIN)
+        assert member and admin, f"login failed member={member} admin={admin}"
+        # sanity: admin reaches /admin, member is blocked on the canonical path.
+        assert _rbac_get(port, "/admin", admin)[0] == 200
+        assert _rbac_get(port, "/admin", member)[0] == 403
+        for climb in (
+            "/ADMIN", "/Admin", "/aDmIn",
+            "/%41dmin", "/%41DMIN",
+            "/admin;x", "/admin;jsessionid=1",
+            "/admin/%252e%252e/admin",
+        ):
+            st, body = _rbac_get(port, climb, member)
+            assert st == 403, f"member reached {climb!r} -> {st} {body[:40]!r}"
+    finally:
+        _kill(proc)
