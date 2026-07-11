@@ -83,7 +83,9 @@ def resolve_provider_secret(
         if strong_required:
             return secret_store.get_secret(OPENROUTER_REF, strong_required=True)
         return secret_store.get_openrouter_key()
-    return secret_store.get_secret(name, strong_required=strong_required)
+    if strong_required:
+        return secret_store.get_secret(name, strong_required=True)
+    return secret_store.get_secret(name)
 
 
 def secret_ref_allowed_for_origin(ref: str | None, url: str | None) -> bool:

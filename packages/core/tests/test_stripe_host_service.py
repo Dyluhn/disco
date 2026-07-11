@@ -27,13 +27,17 @@ from disco.core.stripe_host_service import (
     configure_stripe_restricted_key,
     configure_stripe_webhook_secret,
     ensure_stripe_binding_secret,
+    stripe_binding_secret_ref,
     stripe_correlation_tag,
+    stripe_runtime_proof,
 )
 
 _MASTER_KEY = "strong-test-master-key-0123456789-ABCDE"
 _RESTRICTED_KEY = "rk_test_abcdefghijklmnopqrstuvwxyz"
 _PRICE_ID = "price_ABCdef123456"
 _ORIGIN = "https://app.example.com"
+_BINDING_SECRET = "stb_" + "A" * 43
+_WEBHOOK_SECRET = "whsec_test_signing_secret"
 
 
 def _secret_store(tmp_path: Path) -> SecretStore:
@@ -48,7 +52,12 @@ def _configured(
 ) -> tuple[StripeAppConfigStore, SecretStore, OriginApprovalStore]:
     secrets = _secret_store(tmp_path)
     configure_stripe_restricted_key(secrets, _RESTRICTED_KEY)
-    configure_stripe_webhook_secret(secrets, "owner-1", "app-1", "whsec_test_signing_secret")
+    configure_stripe_webhook_secret(secrets, "owner-1", "app-1", _WEBHOOK_SECRET)
+    secrets.set_secret(
+        stripe_binding_secret_ref("owner-1", "app-1"),
+        _BINDING_SECRET,
+        strong_required=True,
+    )
     ensure_stripe_binding_secret(secrets, "owner-1", "app-1")
     configs = StripeAppConfigStore(tmp_path / "state.db")
     configs.configure(
@@ -92,6 +101,18 @@ def _payload(**overrides: Any) -> dict[str, Any]:
         "user_id": 42,
         "success_path": "/billing/success",
         "cancel_path": "/billing/cancel",
+        "binding_proof": stripe_runtime_proof(_BINDING_SECRET, "app-1", "pro"),
+        "webhook_proof": stripe_runtime_proof(_WEBHOOK_SECRET, "app-1", "pro"),
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _ready_payload(**overrides: Any) -> dict[str, Any]:
+    payload = {
+        "plan_selector": "pro",
+        "binding_proof": stripe_runtime_proof(_BINDING_SECRET, "app-1", "pro"),
+        "webhook_proof": stripe_runtime_proof(_WEBHOOK_SECRET, "app-1", "pro"),
     }
     payload.update(overrides)
     return payload
@@ -284,11 +305,16 @@ async def test_readiness_is_dynamic_and_performs_no_egress(
     )
     ctx = _ctx(configs, secrets, approvals)
     ctx = replace(ctx, allowed_services=frozenset({PAYMENTS_READY_SERVICE_NAME}))
-    assert await call_host_service(PAYMENTS_READY_SERVICE_NAME, {"plan_selector": "pro"}, ctx) == {
+    assert await call_host_service(PAYMENTS_READY_SERVICE_NAME, _ready_payload(), ctx) == {
         "ready": True
     }
+    configure_stripe_webhook_secret(secrets, "owner-1", "app-1", "whsec_rotated_signing_secret")
+    assert await call_host_service(PAYMENTS_READY_SERVICE_NAME, _ready_payload(), ctx) == {
+        "ready": False
+    }
+    configure_stripe_webhook_secret(secrets, "owner-1", "app-1", _WEBHOOK_SECRET)
     configs.disable("owner-1", "app-1")
-    assert await call_host_service(PAYMENTS_READY_SERVICE_NAME, {"plan_selector": "pro"}, ctx) == {
+    assert await call_host_service(PAYMENTS_READY_SERVICE_NAME, _ready_payload(), ctx) == {
         "ready": False
     }
 

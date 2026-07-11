@@ -89,8 +89,8 @@ def emit_stripe_env_ts() -> str:
     )
 
 
-def _emit_stripe_verification_ts(meta: StripeMeta) -> str:
-    """Constants plus raw-body, signature, and envelope verification code."""
+def _emit_stripe_runtime_ts(meta: StripeMeta) -> str:
+    """Public constants plus fail-closed runtime binding and freshness checks."""
     flag = json.dumps(meta.entitlement_flag)
     app_binding = json.dumps(meta.app_binding)
     selector = json.dumps(meta.plan_selector)
@@ -130,9 +130,8 @@ function stripeBusBindingsValid(env: Env): boolean {{
     && (bus.pathname === "" || bus.pathname === "/");
 }}
 
-function stripeRuntimeReady(env: Env): boolean {{
-  return env.STRIPE_RUNTIME_READY === "1"
-    && typeof env.STRIPE_WEBHOOK_SECRET === "string"
+function stripeRuntimeBindingsReady(env: Env): boolean {{
+  return typeof env.STRIPE_WEBHOOK_SECRET === "string"
     && env.STRIPE_WEBHOOK_SECRET.length > 0
     && typeof env.STRIPE_APP_BINDING_SECRET === "string"
     && env.STRIPE_APP_BINDING_SECRET.length >= 32
@@ -140,7 +139,42 @@ function stripeRuntimeReady(env: Env): boolean {{
     && stripeBusBindingsValid(env);
 }}
 
-function stripeJson(data: unknown, status = 200): Response {{
+function stripeRuntimeReady(env: Env): boolean {{
+  return env.STRIPE_RUNTIME_READY === "1" && stripeRuntimeBindingsReady(env);
+}}
+
+async function stripeRuntimeProof(secret: string): Promise<string> {{
+  const input = new TextEncoder().encode(
+    `stripe-runtime\0${{STRIPE_APP_BINDING}}\0${{STRIPE_PLAN_SELECTOR}}`,
+  );
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(secret), {{ name: "HMAC", hash: "SHA-256" }}, false, ["sign"],
+  );
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, input));
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}}
+
+async function stripeRuntimeProofs(
+  env: Env,
+): Promise<{{ binding_proof: string; webhook_proof: string }} | null> {{
+  if (!stripeRuntimeBindingsReady(env)) return null;
+  const binding = env.STRIPE_APP_BINDING_SECRET;
+  const webhook = env.STRIPE_WEBHOOK_SECRET;
+  if (typeof binding !== "string" || typeof webhook !== "string") return null;
+  return {{
+    binding_proof: await stripeRuntimeProof(binding),
+    webhook_proof: await stripeRuntimeProof(webhook),
+  }};
+}}
+"""
+
+
+def _emit_stripe_verification_ts(meta: StripeMeta) -> str:
+    """Raw-body, signature, and envelope verification code."""
+    return _emit_stripe_runtime_ts(meta) + f"""{''}function stripeJson(
+  data: unknown,
+  status = 200,
+): Response {{
   return json(data, status, {{ "Cache-Control": "no-store" }});
 }}
 
@@ -421,6 +455,9 @@ async function applyStripeEvent(env: Env, event: StripeEnvelope): Promise<Respon
 }}
 
 async function stripeWebhook(request: Request, env: Env): Promise<Response> {{
+  if (env.STRIPE_RUNTIME_READY !== "1") {{
+    return stripeJson({{ error: "payments unavailable" }}, 503);
+  }}
   const body = await readStripeBody(request);
   if (body === null || !(await stripeSignatureValid(
     env, request.headers.get("Stripe-Signature"), body,
@@ -439,6 +476,22 @@ async function stripeWebhook(request: Request, env: Env): Promise<Response> {{
 def _emit_stripe_endpoints_ts() -> str:
     """Verified status and host-service checkout endpoints."""
     return f"""{""}
+async function stripeHostReady(env: Env): Promise<boolean> {{
+  const proofs = await stripeRuntimeProofs(env);
+  if (proofs === null) return false;
+  try {{
+    const result = await svc(env, "payments.ready", {{
+      plan_selector: STRIPE_PLAN_SELECTOR,
+      ...proofs,
+    }});
+    return typeof result === "object" && result !== null && !Array.isArray(result)
+      && Object.keys(result).length === 1
+      && (result as Record<string, unknown>).ready === true;
+  }} catch {{
+    return false;
+  }}
+}}
+
 async function stripeStatus(request: Request, env: Env): Promise<Response> {{
   const session = await resolveSession(request, env);
   if (session === null) {{
@@ -446,17 +499,7 @@ async function stripeStatus(request: Request, env: Env): Promise<Response> {{
       ready: false, authenticated: false, entitled: false, message: null,
     }});
   }}
-  let ready = false;
-  if (stripeRuntimeReady(env)) {{
-    try {{
-      const result = await svc(env, "payments.ready", {{ plan_selector: STRIPE_PLAN_SELECTOR }});
-      ready = typeof result === "object" && result !== null && !Array.isArray(result)
-        && Object.keys(result).length === 1
-        && (result as Record<string, unknown>).ready === true;
-    }} catch {{
-      ready = false;
-    }}
-  }}
+  const ready = stripeRuntimeReady(env) && await stripeHostReady(env);
   const entitled = session.roles.includes(STRIPE_ENTITLEMENT);
   return stripeJson({{
     ready,
@@ -480,11 +523,14 @@ async function stripeCheckout(
   if (session === null) return stripeJson({{ error: "unauthorized" }}, 401);
   let result: unknown;
   try {{
+    const proofs = await stripeRuntimeProofs(env);
+    if (proofs === null) return stripeJson({{ error: "payments unavailable" }}, 503);
     result = await svc(env, "payments.checkout", {{
       plan_selector: STRIPE_PLAN_SELECTOR,
       user_id: session.userId,
       success_path: "/",
       cancel_path: "/",
+      ...proofs,
     }});
   }} catch {{
     return stripeJson({{ error: "checkout unavailable" }}, 502);
@@ -503,6 +549,13 @@ async function stripeCheckout(
     return stripeJson({{ error: "checkout unavailable" }}, 502);
   }}
   return stripeJson({{ url: parsed.toString() }});
+}}
+
+async function stripeRuntimeProbe(request: Request, env: Env): Promise<Response> {{
+  if (!(await isAdminAuthorized(request, env))) {{
+    return stripeJson({{ error: "unauthorized" }}, 401);
+  }}
+  return stripeJson({{ ready: await stripeHostReady(env) }});
 }}
 """
 
@@ -530,6 +583,9 @@ def emit_stripe_webhook_route_ts() -> str:
 def emit_stripe_browser_routes_ts() -> str:
     """Same-origin browser routes inserted after the shared CSRF gate."""
     return (
+        '    if (rawPath === "/api/stripe/runtime-probe" && request.method === "GET") {\n'
+        "      return stripeRuntimeProbe(request, env);\n"
+        "    }\n"
         '    if (rawPath === "/api/stripe/status" && request.method === "GET") {\n'
         "      return stripeStatus(request, env);\n"
         "    }\n"

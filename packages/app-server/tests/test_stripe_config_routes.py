@@ -17,6 +17,7 @@ from disco.core.stripe_host_service import (
     STRIPE_SECRET_REF,
     StripeAppConfigStore,
     stripe_binding_secret_ref,
+    stripe_runtime_proof,
     stripe_webhook_secret_ref,
 )
 from fastapi.testclient import TestClient
@@ -158,6 +159,13 @@ def test_default_app_config_is_visible_to_separate_agent_store_and_handler(
             assert config is not None
             secrets = SecretStore()
             approvals = ConfigStore().approval_store(secret_store=secrets)
+            binding_secret = secrets.get_secret(
+                stripe_binding_secret_ref("owner-a", "app-1"), strong_required=True
+            )
+            webhook_secret = secrets.get_secret(
+                stripe_webhook_secret_ref("owner-a", "app-1"), strong_required=True
+            )
+            assert binding_secret is not None and webhook_secret is not None
 
             def fake_stripe(*_args, **_kwargs):
                 return GuardedResponse(
@@ -179,6 +187,8 @@ def test_default_app_config_is_visible_to_separate_agent_store_and_handler(
                         "user_id": 42,
                         "success_path": "/billing/success",
                         "cancel_path": "/billing/cancel",
+                        "binding_proof": stripe_runtime_proof(binding_secret, "app-1", "pro"),
+                        "webhook_proof": stripe_runtime_proof(webhook_secret, "app-1", "pro"),
                     },
                     HostServiceContext(
                         secret_store=secrets,

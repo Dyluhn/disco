@@ -21,6 +21,8 @@ def _payload(**extra: Any) -> dict[str, Any]:
         "user_id": 42,
         "success_path": "/billing/success",
         "cancel_path": "/billing/cancel",
+        "binding_proof": "0" * 64,
+        "webhook_proof": "0" * 64,
     }
     payload.update(extra)
     return payload
