@@ -19,6 +19,7 @@ import contextlib
 import logging
 
 from disco.core.auth import allowed_frontend_origins
+from disco.core.quota import SqliteQuotaStore
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.stripe_host_service import StripeAppConfigStore
 from disco.core.webhook_host_service import WebhookAppConfigStore
@@ -93,6 +94,7 @@ def create_app(
     *,
     runtime: ConversationRuntime | None = None,
     host_token_store: HostTokenStore | None = None,
+    quota_store: SqliteQuotaStore | None = None,
     stripe_config_store: StripeAppConfigStore | None = None,
     webhook_config_store: WebhookAppConfigStore | None = None,
 ) -> FastAPI:
@@ -106,6 +108,8 @@ def create_app(
     owns_token_store = host_token_store is None
     event_db_path = getattr(store, "db_path", None) or ":memory:"
     token_store = host_token_store or HostTokenStore(event_db_path)
+    owns_quota_store = quota_store is None
+    quotas = quota_store or SqliteQuotaStore(event_db_path)
     owns_stripe_config_store = stripe_config_store is None
     stripe_configs = stripe_config_store or StripeAppConfigStore(event_db_path)
     owns_webhook_config_store = webhook_config_store is None
@@ -160,6 +164,8 @@ def create_app(
         finally:
             if owns_token_store:
                 token_store.close()
+            if owns_quota_store:
+                quotas.close()
             if owns_stripe_config_store:
                 stripe_configs.close()
             if owns_webhook_config_store:
@@ -167,6 +173,7 @@ def create_app(
 
     app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
     app.state.host_token_store = token_store
+    app.state.quota_store = quotas
     app.state.stripe_config_store = stripe_configs
     app.state.webhook_config_store = webhook_configs
     app.add_middleware(AgentAuthMiddleware, store=store)
@@ -201,6 +208,7 @@ def create_app(
             store,
             runtime,
             token_store,
+            quotas,
             stripe_configs,
             webhook_configs,
         )

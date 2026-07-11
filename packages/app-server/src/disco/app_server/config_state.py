@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from disco.core.llm.config import McpSettings, ProviderSettings
-from disco.core.quota import QuotaConfig, QuotaUsage, SqliteQuotaStore, StoredQuotaConfig
+from disco.core.quota import SqliteQuotaStore
 from disco.core.stripe_host_service import (
     PAYMENTS_CHECKOUT_SERVICE_NAME,
     STRIPE_API_URL,
@@ -380,53 +380,6 @@ class ConfigState:
             STRIPE_SECRET_REF,
         )
         return config
-
-    # per-app host-service quotas -------------------------------------------
-
-    def configure_app_quota(
-        self,
-        *,
-        owner_id: str,
-        audience: str,
-        limits: QuotaConfig,
-        service: str | None = None,
-    ) -> StoredQuotaConfig:
-        if self._quota_store is None:
-            raise RuntimeError("quota store is not wired to shared host state")
-        return self._quota_store.configure(
-            owner_id=owner_id,
-            audience=audience,
-            limits=limits,
-            service=service,
-        )
-
-    def app_quota_config(
-        self, owner_id: str, audience: str, *, service: str | None = None
-    ) -> StoredQuotaConfig | None:
-        if self._quota_store is None:
-            raise RuntimeError("quota store is not wired to shared host state")
-        return self._quota_store.get_config(owner_id, audience, service=service)
-
-    def delete_app_quota(self, owner_id: str, audience: str, *, service: str | None = None) -> bool:
-        if self._quota_store is None:
-            raise RuntimeError("quota store is not wired to shared host state")
-        return self._quota_store.delete_config(owner_id, audience, service=service)
-
-    def app_quota_usage(
-        self, owner_id: str, audience: str, *, service: str | None = None
-    ) -> QuotaUsage:
-        if self._quota_store is None:
-            raise RuntimeError("quota store is not wired to shared host state")
-        return self._quota_store.get_usage(
-            owner_id=owner_id,
-            audience=audience,
-            service=service,
-        )
-
-    def default_app_quota(self) -> QuotaConfig:
-        if self._quota_store is None:
-            raise RuntimeError("quota store is not wired to shared host state")
-        return self._quota_store.default_config
 
     def configure_webhook_inbound(
         self,
@@ -1074,3 +1027,10 @@ class ConfigState:
 
     def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
         return self._mcp_service.mcp_approval_diff(name, new_hash)
+
+
+def app_quota_store(state: ConfigState) -> SqliteQuotaStore:
+    """Return the shared quota service or fail closed when host wiring is absent."""
+    if state._quota_store is None:
+        raise RuntimeError("quota store is not wired to shared host state")
+    return state._quota_store

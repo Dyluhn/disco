@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from disco.agent_server.ai_chat_host_service import (
     AI_CHAT_SERVICE_NAME,
     estimate_ai_chat_usage,

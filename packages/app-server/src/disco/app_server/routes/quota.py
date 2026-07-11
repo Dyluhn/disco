@@ -15,7 +15,7 @@ from ..config.dtos import (
     QuotaStatusDTO,
     QuotaUsageDTO,
 )
-from ..config_state import ConfigState
+from ..config_state import ConfigState, app_quota_store
 
 _SERVICE_PATTERN = r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$"
 ServiceQuery = Annotated[
@@ -63,7 +63,7 @@ def make_quota_router(state: ConfigState) -> APIRouter:
         service: ServiceQuery = None,
     ) -> QuotaConfigStatus:
         try:
-            stored = state.configure_app_quota(
+            stored = app_quota_store(state).configure(
                 owner_id=current_owner_id(request),
                 audience=audience,
                 service=service,
@@ -91,7 +91,9 @@ def make_quota_router(state: ConfigState) -> APIRouter:
         service: ServiceQuery = None,
     ) -> QuotaConfigStatus:
         try:
-            stored = state.app_quota_config(current_owner_id(request), audience, service=service)
+            stored = app_quota_store(state).get_config(
+                current_owner_id(request), audience, service=service
+            )
         except QuotaConfigurationError as exc:
             raise HTTPException(status_code=400, detail={"reason": "invalid_quota_scope"}) from exc
         except RuntimeError as exc:
@@ -110,7 +112,9 @@ def make_quota_router(state: ConfigState) -> APIRouter:
         service: ServiceQuery = None,
     ) -> Response:
         try:
-            deleted = state.delete_app_quota(current_owner_id(request), audience, service=service)
+            deleted = app_quota_store(state).delete_config(
+                current_owner_id(request), audience, service=service
+            )
         except QuotaConfigurationError as exc:
             raise HTTPException(status_code=400, detail={"reason": "invalid_quota_scope"}) from exc
         except RuntimeError as exc:
@@ -127,13 +131,14 @@ def make_quota_router(state: ConfigState) -> APIRouter:
     ) -> QuotaStatusDTO:
         owner_id = current_owner_id(request)
         try:
-            exact = state.app_quota_config(owner_id, audience, service=service)
+            store = app_quota_store(state)
+            exact = store.get_config(owner_id, audience, service=service)
             aggregate = (
-                state.app_quota_config(owner_id, audience)
+                store.get_config(owner_id, audience)
                 if service is not None and exact is None
                 else None
             )
-            usage = state.app_quota_usage(owner_id, audience, service=service)
+            usage = store.get_usage(owner_id=owner_id, audience=audience, service=service)
             if exact is not None:
                 config = _config_dto(exact)
             elif aggregate is not None:
@@ -149,7 +154,7 @@ def make_quota_router(state: ConfigState) -> APIRouter:
                     audience=audience,
                     service=service,
                     source="default",
-                    limits=_limits_dto(state.default_app_quota()),
+                    limits=_limits_dto(store.default_config),
                 )
         except QuotaConfigurationError as exc:
             raise HTTPException(status_code=400, detail={"reason": "invalid_quota_scope"}) from exc
