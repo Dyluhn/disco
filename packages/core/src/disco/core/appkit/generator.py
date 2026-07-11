@@ -34,6 +34,7 @@ import html
 import importlib
 import json
 import re
+from pathlib import Path
 from urllib.parse import quote
 
 from . import semantic_metadata as _md
@@ -1499,6 +1500,31 @@ def _emit_package_json(app: AppSpec, db_name: str) -> str:
     return json.dumps(pkg, indent=2, ensure_ascii=False) + "\n"
 
 
+_LOCK_TEMPLATE_PATH = Path(__file__).with_name("lock_template") / "package-lock.json"
+try:
+    _LOCK_TEMPLATE = json.loads(_LOCK_TEMPLATE_PATH.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:  # pragma: no cover - package defect
+    raise RuntimeError("AppKit dependency lock template is unavailable") from exc
+
+
+def _emit_package_lock_json(app: AppSpec) -> str:
+    """Emit the repository-pinned AppKit dependency graph for ``npm ci``.
+
+    Only the root package identity varies per generated application; all
+    resolved package versions and integrity hashes are checked-in data.
+    """
+    lock = json.loads(json.dumps(_LOCK_TEMPLATE))
+    name = _slug(app.name)
+    if not isinstance(lock, dict) or not isinstance(lock.get("packages"), dict):
+        raise RuntimeError("AppKit dependency lock template is invalid")
+    root = lock["packages"].get("")
+    if not isinstance(root, dict):
+        raise RuntimeError("AppKit dependency lock template has no root package")
+    lock["name"] = name
+    root["name"] = name
+    return json.dumps(lock, indent=2, ensure_ascii=False) + "\n"
+
+
 def _emit_tsconfig() -> str:
     cfg = {
         "compilerOptions": {
@@ -2049,6 +2075,7 @@ def _generate_lead_gen(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, 
     files: dict[str, str] = {
         "index.html": _emit_index_html(app_spec, design_spec),
         "package.json": _emit_package_json(app_spec, db_name),
+        "package-lock.json": _emit_package_lock_json(app_spec),
         "drizzle.config.ts": _emit_drizzle_config_ts(),
         "tsconfig.json": _emit_tsconfig(),
         "vite.config.ts": _emit_vite_config(),

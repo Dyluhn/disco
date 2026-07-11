@@ -538,6 +538,8 @@ def _stripe_trusted_tree_check(
         "worker/index.ts",
         "worker/disco-client.ts",
         "wrangler.toml",
+        "package.json",
+        "package-lock.json",
         "schema.sql",
         "migrations/0001_init.sql",
         "src/db/schema.ts",
@@ -550,8 +552,9 @@ def _stripe_trusted_tree_check(
         "stripe_trusted_tree",
         not mismatched,
         (
-            "Stripe Worker, host client, Wrangler entrypoint, SQL schemas, pricing component, "
-            "and canonical AppSpec are byte-identical to Disco's trusted projection."
+            "Stripe Worker, host client, Wrangler entrypoint, dependency lock, SQL schemas, "
+            "pricing component, and canonical AppSpec are byte-identical to Disco's trusted "
+            "projection."
             if not mismatched
             else "security-sensitive Stripe file mismatch: " + ", ".join(mismatched)
         ),

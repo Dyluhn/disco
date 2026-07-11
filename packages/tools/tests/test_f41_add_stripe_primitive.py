@@ -305,6 +305,16 @@ async def test_tampered_stripe_runtime_entrypoint_fails_trusted_bytes():
     assert "wrangler.toml" in check.evidence
 
 
+async def test_tampered_stripe_dependency_lock_fails_trusted_bytes():
+    _, app, design, tree = await _stripe_gate_inputs()
+    tree["package-lock.json"] += "\n"
+    result = stripe_verify(app, design, tree)
+    check = next(item for item in result.checks if item.name == "stripe_trusted_tree")
+    assert result.ok is False
+    assert check.passed is False
+    assert "package-lock.json" in check.evidence
+
+
 async def test_host_live_dispatch_is_mandatory_and_result_consistent():
     _, app, design, tree = await _stripe_gate_inputs()
     prim = required_security_primitives(app)[0]
