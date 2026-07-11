@@ -1,8 +1,9 @@
-# Disco — security state (single source of truth, 2026-07-10)
+# Disco — security state (single source of truth, 2026-07-11)
 
-Code snapshot at `disclaude/mega-campaign` @ `17869bdb`. This file records everything
-security-related: what is DONE (committed), what remains separately DEFERRED,
-and the gate that currently protects the tree.
+Code snapshot at `disclaude/mega-campaign` @ `83c593a6`. This file records everything
+security-related: what is DONE (committed), what remains separately DEFERRED, and the
+gate that currently protects the tree. The W1–W6 close-out was recorded at `17869bdb`;
+the later A2.2/A2.3 and F4.1 Stripe work are included below.
 
 Companion detail: `sec-work-remaining/disco-security-fix-campaign.md` (the wave-by-wave campaign
 log + close-out evidence).
@@ -21,6 +22,9 @@ log + close-out evidence).
 | S-W5 | Per-surface isolated egress, real workspace/resource caps, bounded output/event/WS boundaries, fail-closed DoD, argv-safe preview | `10433330` |
 | S-W6 | Immutable share projections, audited storage-root picker, live WS redaction, XLSX injection escaping, env hygiene, generic-provider origin pinning | `17869bdb` |
 | — | Origin-approval ledger: surface silently-dropped entries + fail-closed/warn-once regression | `8157745b`, `d6651e7e` |
+| A2.2 | Authenticated per-app host-service bus + narrow sandbox capability relay | `cd57f830`, `205d8c6b` |
+| A2.3 | Hardened generated-Worker host-service client shim | `ef19bac6` |
+| F4.1 | Stripe key custody, verified Worker webhooks, entitlement transaction, deploy lifecycle, mandatory live exploit proof | `8f356c1e` |
 
 These are live on the branch and covered by full package/frontend suites, the
 contract/fuzz/fault gates, and clean lint on every changed file. Repository-wide
@@ -46,7 +50,9 @@ generic-provider URL cannot receive the stored key.
 
 The Codex half of the requested post-campaign round-pair is complete. An independent
 Opus pass was not available in this execution environment, so that extra assurance
-pass remains explicitly outstanding; it is not an unimplemented code wave.
+pass remains explicitly outstanding; it is not an unimplemented code wave. A2.2/A2.3
+and F4.1 were completed afterward; their verification evidence is recorded in
+`docs/HANDOFF-2026-07-11-stripe.md`.
 
 ---
 
@@ -58,39 +64,29 @@ sprint. Each has a design/spec doc so the later work is fill-in-the-blanks, not 
 rebuild.
 
 ### 3a. Host-service bus — the auth surface
-- **What's built:** the registry + dispatcher (`disco.core.host_services`,
-  commit `2c8e56fd`) with a zero-dependency `svc.ping` reference and NO auth.
-- **What's deferred:** the bus endpoint that exposes it to generated apps needs a
-  per-app, conversation-bound bearer (minted host-side, injected as a Worker env
-  var, never in the app tree). `call_host_service` MUST NOT be exposed to the
-  sandbox without that layer.
-- **Design input:** `sec-work-remaining/wo-a2-host-bus-design-notes.md` (committed) — token
-  shape/TTL/revocation, the agent-server host surface, the sandbox→host
-  reachability constraints, the open questions.
+- **Complete:** A2.2 now supplies the per-app, conversation-bound bearer, host-side
+  mint/revocation, authenticated bus endpoint, and narrow relay. A2.3 emits the hardened
+  Worker client shim. The original design notes remain useful context, but this is no
+  longer a deferred implementation wave.
 
 ### 3b. Scoped-credential / quota plane (was WO-A4)
 - **Deferred entirely.** Per-app token minting/rotation/scope + per-app usage
   accounting, quota, and rate-limiting at the bus. Prerequisite input is 3a's v0
   bearer. No code written.
 
-### 3c. Two fail-closed scaffolds (built, unmerged, security fill documented)
-Built as `tier="template_only"` with `verify=None` so they are FAIL-CLOSED (see §4).
-Left in worktree branches — NOT registered, NOT in the tree.
+### 3c. Remaining fail-closed scaffold
+
+F4.1 graduated from its original fail-closed scaffold into the real Stripe primitive at
+`8f356c1e`. The generic F3.3 webhook scaffold remains intentionally unmerged and
+unregistered with `verify=None`.
 
 | Scaffold | Branch (commit) | Security-fill spec |
 |----------|-----------------|--------------------|
-| Payment checkout seam | `disclaude/f41-stripe-seam` (`60436fa8`) | `docs/wo-f41-stripe-security-spec.md` (on that branch) |
 | Webhook endpoint seam | `disclaude/f33-webhook-seam` (`ec622888`) | `docs/wo-f33-webhook-security-spec.md` (on that branch) |
 
-Both are now committed on their branches (worktrees removed) — the work is durably
-preserved, not just dirty worktree state. The generator force-import that would
-register each primitive is on the branch only, so neither is registered in
-`mega-campaign`.
-
-The specs enumerate exactly what the security session must build to flip each from
-`verify=None` to a real harness: host-side secret custody, signature verification,
-idempotency-in-one-transaction, SSRF/rebind rejection (all composing the §1 S-W2
-chokepoints), plus the adversarial harness each must pass.
+The F3.3 spec enumerates the host-side secret custody, signature verification,
+idempotency, SSRF/rebind rejection, and real adversarial harness required to graduate
+it. Do not merge it as a false affordance or weaken the fail-closed gate to make it ship.
 
 ---
 
@@ -150,8 +146,8 @@ harnesses are built yet; the framework hook (§4) is what they plug into.
 ## 7. One-line summary
 
 Auth, secret custody, egress chokepoint, the host-execution floor, MCP approval
-integrity, isolation/resource bounds, and the output-sink/share wave are DONE and
-gated. The credential/quota plane and the two payment/webhook scaffolds'
-security fills are DEFERRED with specs written. The framework's fail-closed gate keeps anything
-security-critical from shipping unverified. Packaging's one blocker is flipping the
-sandbox default off the root-equivalent socket.
+integrity, isolation/resource bounds, output-sink/share hardening, the authenticated
+host-service bus, and the Stripe security fill are DONE and gated. The credential/quota
+plane and generic F3.3 webhook fill remain deferred. The framework's fail-closed gate
+keeps anything security-critical from shipping unverified. Packaging's one blocker is
+flipping the sandbox default off the root-equivalent socket.

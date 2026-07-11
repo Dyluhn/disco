@@ -1,4 +1,4 @@
-# HANDOFF — WO-F4.1 Stripe security fill (2026-07-11)
+# HANDOFF — security campaign and WO-F4.1 Stripe fill (2026-07-11)
 
 ## Completed and published
 
@@ -9,6 +9,29 @@ At the time this handoff was written, local and remote were synchronized.
 The preserved `disclaude/f33-webhook-seam` scaffold was deliberately **not** merged:
 F4.1 owns the Stripe-specific inbound Worker route, while F3.3 remains its separate,
 unfilled generic webhook primitive.
+
+## Broader security work-order board
+
+The Stripe fill was **not** the whole security delivery. The following work was already
+complete, integrated, and remains in `mega-campaign`:
+
+| Work order | Status | Principal commit |
+| --- | --- | --- |
+| S-W1 — auth, CORS, owner scoping | complete | `e028d2ac` |
+| S-W2 — secret-ref resolution and approved-origin egress | complete | `17c47761` |
+| S-W-Pi — remove Pi integration attack surface | complete | `76b4e397` |
+| S-W3 — host-execution/gVisor-bypass floor | complete | `1b762e3f` |
+| S-W4 — MCP pre-connect and schema-drift approval | complete | `212f6e89` |
+| S-W5 — isolated egress, resource/output/event bounds | complete | `10433330` |
+| S-W6 — immutable shares and output-sink hardening | complete | `17869bdb` |
+| A2.2 — authenticated host-service bus and capability relay | complete | `cd57f830`, `205d8c6b` |
+| A2.3 — hardened Worker host-service client | complete | `ef19bac6` |
+| F4.1 — Stripe checkout/webhook security fill | complete | `8f356c1e` |
+
+The trusted-components campaign was also already integrated at `daa306b3`; its later
+adversarial fixes close auth/RBAC normalization, encoded-path, XFF/413, and lockfile
+integrity regressions. It is a separate campaign, but is security-relevant context for
+any future component work.
 
 ## What F4.1 now provides
 
@@ -65,3 +88,15 @@ The requested Firefox screenshot could not be captured: the in-app browser was n
 available in this environment. The generated UI did pass the frontend build and live
 Worker verifier paths, but visual evidence should be captured in an environment where
 the Firefox browser surface is available before a UI release.
+
+## Remaining security-classed work
+
+- **WO-A4 remains deferred:** per-app credential rotation, usage accounting, quotas, and
+  rate limiting above the now-complete A2 bearer layer.
+- **F3.3 remains deferred and fail-closed:** `disclaude/f33-webhook-seam` is not merged or
+  registered. Its generic webhook security fill must have its own real exploit harness.
+- **Packaging remains a release blocker:** the root-equivalent container socket must not be
+  the inherited default; make the isolated `runsc`/gVisor backend the documented default.
+- **Independent assurance remains outstanding:** the historical W1–W6 campaign received the
+  Codex close-out pass; an independent Opus-class review was unavailable. Run that review
+  without reopening already-completed implementation waves.
