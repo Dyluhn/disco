@@ -49,7 +49,10 @@ the first live one is WO-A2.4 ``email.send``)::
     #     if not secret_ref_allowed_for_origin(_SECRET_REF, _SEND_URL):
     #         return {"ok": False, "error": "secret ref not allowed for this origin"}
     #     # 3. the target origin must carry a SIGNED operator approval
-    #     if ctx.approvals is None or not ctx.approvals.is_approved(_SEND_URL, _PURPOSE, _SECRET_REF):
+    #     approved = ctx.approvals is not None and ctx.approvals.is_approved(
+    #         _SEND_URL, _PURPOSE, _SECRET_REF
+    #     )
+    #     if not approved:
     #         return {"ok": False, "error": "origin awaiting operator approval"}
     #     # 4. all wire traffic goes through the guarded egress chokepoint
     #     try:
@@ -60,6 +63,7 @@ the first live one is WO-A2.4 ``email.send``)::
     #             headers={"Authorization": f"Bearer {secret}"},
     #             body=json.dumps(payload).encode("utf-8"),
     #             allow_hosts=ctx.allow_hosts,
+    #             timeout_s=ctx.request_timeout_s,
     #         )
     #     except EgressDenied as exc:
     #         return {"ok": False, "error": f"egress denied: {exc}"}
@@ -74,9 +78,11 @@ that only need the registry shape.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -97,6 +103,18 @@ class HostServicePayloadError(HostServiceError):
     """The payload failed the service's declared ``payload_schema`` (bus → 422)."""
 
 
+MAX_HOST_SERVICE_NAME_BYTES = 128
+_HOST_SERVICE_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+
+
+def valid_host_service_name(name: str) -> bool:
+    """Return whether name has the one canonical A2 dotted-service shape."""
+    return (
+        len(name.encode("utf-8")) <= MAX_HOST_SERVICE_NAME_BYTES
+        and _HOST_SERVICE_NAME_RE.fullmatch(name) is not None
+    )
+
+
 @dataclass(frozen=True)
 class HostServiceContext:
     """The host-plane dependencies a handler composes, shaped for the S-W2 calls:
@@ -111,6 +129,39 @@ class HostServiceContext:
     secret_store: SecretStore | None = None
     approvals: OriginApprovalStore | None = None
     allow_hosts: frozenset[str] | None = None
+    app_id: str = ""
+    conversation_id: str = ""
+    owner_id: str = ""
+    allowed_services: frozenset[str] = frozenset()
+    allowed_origins: frozenset[str] = frozenset()
+    credential_kind: str = ""
+    credential_generation: int = 0
+    request_timeout_s: float = 5.0
+
+
+def return_url_allowed(ctx: HostServiceContext, url: str) -> bool:
+    """Check a callback/return URL against credential-bound app origins.
+
+    This is separate from outbound service egress and signed operator approval.
+    Any handler accepting a browser return or callback URL must call this helper.
+    """
+    try:
+        parsed = urlsplit(url)
+        _ = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        return False
+    from .host_egress import origin_for_url
+
+    origin = origin_for_url(url)
+    return origin is not None and origin in ctx.allowed_origins
 
 
 # A handler takes the (validated) payload dict + the host-plane context and
@@ -142,6 +193,8 @@ def register_host_service(defn: HostServiceDefinition) -> None:
     """Register a host service (idempotent for the SAME definition object). A
     second, DIFFERENT definition for an already-claimed name is a hard error —
     a duplicate is a bug, never a silent shadow."""
+    if not valid_host_service_name(defn.name):
+        raise ValueError(f"invalid host service name: {defn.name!r}")
     existing = _REGISTRY.get(defn.name)
     if existing is not None and existing is not defn:
         raise ValueError(f"duplicate host service name: {defn.name!r}")
@@ -226,9 +279,12 @@ __all__ = [
     "HostServiceError",
     "HostServiceHandler",
     "HostServicePayloadError",
+    "MAX_HOST_SERVICE_NAME_BYTES",
     "UnknownHostServiceError",
     "call_host_service",
     "get_host_service",
     "host_service_names",
     "register_host_service",
+    "return_url_allowed",
+    "valid_host_service_name",
 ]

@@ -29,6 +29,8 @@ from fastapi import APIRouter, HTTPException, Request, Response, WebSocket
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from .host_service_bus import is_bus_route_raw
+
 _LOG = logging.getLogger(__name__)
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
@@ -173,6 +175,12 @@ class AgentAuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         method = request.method.upper()
         if _is_public_http(path, method):
+            return await call_next(request)
+        # WO-A2.2: the host-service bus uses its own bearer-token auth and must
+        # never be authenticated by session cookies, admin pairing, query params,
+        # or CSRF tokens. Bypass the `/_disco/svc/` prefix so the bus route itself
+        # enforces the strict dotted-service shape and returns 400 for malformed names.
+        if is_bus_route_raw(request.scope.get("raw_path", b"")):
             return await call_next(request)
         origin = request.headers.get("origin")
         # allowlist OR same-host (the single-front-door deploy: Origin == Host).
