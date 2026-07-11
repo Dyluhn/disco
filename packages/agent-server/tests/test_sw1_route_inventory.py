@@ -1,20 +1,18 @@
 from __future__ import annotations
 
+import pytest
+from disco.agent_server import auth as agent_auth
+from disco.agent_server.app import create_app as create_agent_app
+from disco.agent_server.auth import AgentAuthMiddleware
+from disco.app_server import auth as app_auth
+from disco.app_server.app import create_app as create_app_server
+from disco.app_server.auth import _ADMIN_PREFIXES, AppAuthMiddleware, _is_admin_path
+from disco.core.auth import CSRF_HEADER, SESSION_COOKIE, SessionSigner
+from disco.core.store.sqlite import SqliteEventStore
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute, APIWebSocketRoute
 from fastapi.testclient import TestClient
-import pytest
 from starlette.websockets import WebSocketDisconnect
-
-from disco.agent_server.app import create_app as create_agent_app
-from disco.agent_server import auth as agent_auth
-from disco.agent_server.auth import AgentAuthMiddleware
-from disco.app_server.app import create_app as create_app_server
-from disco.app_server import auth as app_auth
-from disco.app_server.auth import AppAuthMiddleware, _ADMIN_PREFIXES, _is_admin_path
-from disco.core.auth import CSRF_HEADER, SESSION_COOKIE, SessionSigner
-from disco.core.store.sqlite import SqliteEventStore
-
 
 _UNSAFE = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 FRONTEND_ORIGIN = "http://localhost:5173"
@@ -94,6 +92,7 @@ def _sample_path(path: str) -> str:
         "{secret_name}": "secret_missing",
         "{model_key}": "model_missing",
         "{server_name}": "server_missing",
+        "{service:path}": "svc.ping",
         "{space_id}": "space_missing",
     }
     concrete = path
@@ -130,7 +129,8 @@ def test_agent_route_inventory_is_globally_auth_gated() -> None:
         for path, _, klass in inventory
     )
     assert not [
-        path for path, methods, _ in inventory
+        path
+        for path, methods, _ in inventory
         if path.endswith("/browser/live-url") and "GET" in methods
     ]
 
@@ -143,7 +143,7 @@ def test_agent_route_inventory_actual_enforcement(monkeypatch) -> None:
     unauth = TestClient(app)
     owner_a = TestClient(app)
     owner_b = TestClient(app)
-    csrf_a = _install_session(owner_a, owner_id="owner-a", admin=True)
+    _csrf_a = _install_session(owner_a, owner_id="owner-a", admin=True)
     csrf_b = _install_session(owner_b, owner_id="owner-b", admin=True)
 
     checked = 0
@@ -156,13 +156,17 @@ def test_agent_route_inventory_actual_enforcement(monkeypatch) -> None:
             continue
         method = sorted(methods)[0]
         concrete = _sample_path(path)
+        if path == "/_disco/svc/{service:path}":
+            missing = _request(unauth, method, concrete)
+            evil_origin = _request(unauth, method, concrete, headers={"Origin": EVIL_ORIGIN})
+            assert missing.status_code == evil_origin.status_code == 401
+            checked += 1
+            continue
 
         unauth_resp = _request(unauth, method, concrete)
         assert unauth_resp.status_code == 401, (method, path, unauth_resp.status_code)
 
-        bad_origin = _request(
-            unauth, method, concrete, headers={"Origin": EVIL_ORIGIN}
-        )
+        bad_origin = _request(unauth, method, concrete, headers={"Origin": EVIL_ORIGIN})
         assert bad_origin.status_code == 403, (method, path, bad_origin.status_code)
 
         if method in _UNSAFE:
@@ -227,7 +231,6 @@ def test_agent_websocket_inventory_actual_enforcement() -> None:
             pass
 
 
-
 def test_app_route_inventory_is_auth_gated_and_admin_classified() -> None:
     app = create_app_server(SqliteEventStore(":memory:"))
     assert AppAuthMiddleware in _middleware_classes(app)
@@ -257,7 +260,7 @@ def test_app_route_inventory_actual_enforcement(monkeypatch) -> None:
     owner_a = TestClient(app)
     owner_b = TestClient(app)
     non_admin = TestClient(app)
-    csrf_a = _install_session(owner_a, owner_id="owner-a", admin=True)
+    _csrf_a = _install_session(owner_a, owner_id="owner-a", admin=True)
     csrf_b = _install_session(owner_b, owner_id="owner-b", admin=True)
     _install_session(non_admin, owner_id="owner-a", admin=False)
 
@@ -275,9 +278,7 @@ def test_app_route_inventory_actual_enforcement(monkeypatch) -> None:
         unauth_resp = _request(unauth, method, concrete)
         assert unauth_resp.status_code == 401, (method, path, unauth_resp.status_code)
 
-        bad_origin = _request(
-            unauth, method, concrete, headers={"Origin": EVIL_ORIGIN}
-        )
+        bad_origin = _request(unauth, method, concrete, headers={"Origin": EVIL_ORIGIN})
         assert bad_origin.status_code == 403, (method, path, bad_origin.status_code)
 
         if method in _UNSAFE:

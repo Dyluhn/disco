@@ -28,6 +28,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from .appkit_cloudflare import CloudflareDeployCorsMiddleware, make_cloudflare_router
 from .auth import AgentAuthMiddleware, make_auth_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
+from .host_service_bus import make_host_service_bus_router
+from .host_token_store import HostTokenStore
 from .routes import (
     make_activity_router,
     make_conversation_library_router,
@@ -82,13 +84,24 @@ def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
         _LOG.warning("Builtin workflow seed failed", exc_info=True)
 
 
-def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None = None) -> FastAPI:
+def create_app(
+    store: SqliteEventStore,
+    *,
+    runtime: ConversationRuntime | None = None,
+    host_token_store: HostTokenStore | None = None,
+) -> FastAPI:
     """Build the FastAPI app over a given store. The store is injected so tests
     drive it headlessly. `runtime` runs the agent loop with real inference (Stage
     2); pass None in tests that only exercise the wire layer (the loop won't run)."""
 
+    # WO-A2.2: durable operational token store for the host-service bus. Shares
+    # the event-store DB path so tokens survive restarts; falls back to :memory:
+    # for ephemeral wire tests.
+    owns_token_store = host_token_store is None
+    token_store = host_token_store or HostTokenStore(store.db_path or ":memory:")
+
     @contextlib.asynccontextmanager
-    async def lifespan(_app: FastAPI):
+    async def _runtime_lifespan(_app: FastAPI):
         # On startup, start the MCP pool (RP-05) and reconcile orphaned RUNNING
         # conversations — loops that died with a previous server process. Without
         # this they show 'RUNNING' forever in History / the Deep Research read-only
@@ -128,7 +141,17 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             with contextlib.suppress(Exception):
                 await runtime._close_mcp_pool()
 
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            async with _runtime_lifespan(_app):
+                yield
+        finally:
+            if owns_token_store:
+                token_store.close()
+
     app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
+    app.state.host_token_store = token_store
     app.add_middleware(AgentAuthMiddleware, store=store)
     app.add_middleware(
         CORSMiddleware,
@@ -154,9 +177,12 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     # original relative order; the `{path:path}` catch-alls (workspace/artifacts/
     # preview-app/port) live inside their domain routers after the literal routes.
     app.include_router(make_auth_router())
+    # WO-A2.2: host-service bus. Included early so the literal `/_disco/svc/{service}`
+    # route is matched before any catch-all `{path:path}` routers.
+    app.include_router(make_host_service_bus_router(store, runtime, token_store))
     app.include_router(make_health_router(store, runtime))
     app.include_router(make_mcp_router(store, runtime))
-    app.include_router(make_conversations_router(store, runtime))
+    app.include_router(make_conversations_router(store, runtime, token_store))
     app.include_router(make_conversation_library_router(store, runtime))
     app.include_router(make_models_router(store, runtime))
     app.include_router(make_files_router(store, runtime))
