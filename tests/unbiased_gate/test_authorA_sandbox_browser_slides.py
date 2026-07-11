@@ -140,7 +140,7 @@ def test_pb_remote_podman_filtered_session_publishes_and_forwards_preview_port()
         backend="podman",
         runtime="crun",
         image="disco-sandbox:base",
-        podman_url="http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock",
+        podman_url="http+ssh://sandbox@203.0.113.47/run/user/1000/podman/podman.sock",
     )
     service = PodmanSandboxService(cfg, client=client, cli_runner=cli_runner)
 
@@ -159,7 +159,7 @@ def test_pb_remote_podman_filtered_session_publishes_and_forwards_preview_port()
         cli_url=service._cli_url,
         container_name=name,
         cli_runner=cli_runner,
-        preview_host="100.73.110.47",
+        preview_host="203.0.113.47",
     )
     instance._egress_sidecar = sidecar
 
@@ -175,7 +175,7 @@ def test_pb_remote_podman_filtered_session_publishes_and_forwards_preview_port()
     assert "10.89.0.3" in forwarder_commands[-1]
     assert str(PREVIEW_PORT) in forwarder_commands[-1]
 
-    assert instance.expose_port(PREVIEW_PORT) == f"http://100.73.110.47:{20_000 + PREVIEW_PORT}"
+    assert instance.expose_port(PREVIEW_PORT) == f"http://203.0.113.47:{20_000 + PREVIEW_PORT}"
 
 
 def test_w23_long_bullets_render_as_one_mult_paragraph_autofit_text_frame() -> None:

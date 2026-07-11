@@ -189,3 +189,46 @@ repo venv.
 ## Gaps
 
 No required packaging verification remains unproved.
+
+## Security default close-out (2026-07-11)
+
+The deploy-path security follow-up changed the inherited sandbox daemon from
+`/var/run/docker.sock` to the current user's rootless Podman socket. The
+Settings-facing backend remains `local`; the existing service dispatcher uses
+Podman's native client for a Podman socket. gVisor/runsc remains an opt-in runtime
+tier, and the process backend retains its separate dev-only opt-in.
+
+Default Compose resolution:
+
+```bash
+XDG_RUNTIME_DIR=/run/user/$(id -u) uvx podman-compose config
+```
+
+Exit `0`; the resolved mount was:
+
+```text
+/run/user/1000/podman/podman.sock:/var/run/docker.sock
+```
+
+The documented `DISCO_SANDBOX_SOCKET=/var/run/docker.sock` root-Docker opt-in
+was also config-validated. Exit `0`; it resolved to
+`/var/run/docker.sock:/var/run/docker.sock` and never affects the default.
+
+The live default socket was proved to be rootless:
+
+```bash
+podman --url unix:///run/user/1000/podman/podman.sock \
+  info --format '{{.Host.Security.Rootless}}'
+```
+
+Output `true`, exit `0`.
+
+Focused verification:
+
+- Python sandbox/config/persistence tests: 74 passed, exit `0`; the additional
+  agent-server sandbox-route file passed 7 tests, exit `0`.
+- Frontend Sandbox Settings tests: 10 passed, exit `0`.
+- Frontend shipping TypeScript check: exit `0`.
+- Changed-file Ruff: exit `0`.
+- Architecture budget, import contracts, generated-diagram freshness, and
+  basedpyright: all exit `0`; basedpyright reported 0 errors/warnings/notes.

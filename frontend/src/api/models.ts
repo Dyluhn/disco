@@ -148,10 +148,10 @@ export async function updateAssignments(patch: AssignmentsPatch): Promise<ModelA
 let fixtureSandbox: SandboxConfig = {
   backend: "local",
   docker_socket: "unix:///var/run/docker.sock",
-  podman_url: "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock",
+  podman_url: "unix:///run/user/1000/podman/podman.sock",
   runtime: "runc",
-  image: "pmx-sandbox:base",
-  workspace_root: "/opt/sandbox/workspaces",
+  image: "disco-sandbox:base",
+  workspace_root: "/var/lib/disco/workspaces",
 };
 
 export async function getSandboxConfig(): Promise<SandboxConfig> {

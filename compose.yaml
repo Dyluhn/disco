@@ -1,14 +1,15 @@
 # disco — one-command self-host.
 #
-#   docker compose up -d --build
+#   podman compose up -d --build
 #   open http://localhost:8088
 #
 # Optional: copy .env.example to .env when you need non-default ports, provider
-# keys, or a Podman socket. The model endpoint is configured in the UI after boot.
+# keys, or the explicitly less-safe root Docker socket. The model endpoint is
+# configured in the UI after boot.
 #
 # Defaults bind to 127.0.0.1. Do not set DISCO_BIND=0.0.0.0 without your own TLS
-# and auth boundary in front. TODO(security-track): the sandbox socket mount stays
-# root-equivalent on the host until the security track changes that posture.
+# and auth boundary in front. The sandbox daemon defaults to the current user's
+# rootless Podman socket; /var/run/docker.sock is never selected implicitly.
 name: disco
 
 services:
@@ -128,20 +129,25 @@ services:
       # Where the agent-server reaches sandbox-published preview ports (host-gateway).
       DISCO_PREVIEW_HOST: "${DISCO_PREVIEW_HOST:-${PMX_PREVIEW_HOST:-host.docker.internal}}"
       # gVisor: DISCO_LOCAL_RUNTIME=runsc runs every spawned sandbox container
-      # under gVisor (host prereq: runsc installed + registered in dockerd's
-      # runtimes — https://gvisor.dev/docs/user_guide/install/). Default runc
+      # under gVisor (host prereq: runsc installed + registered in the selected
+      # Podman/Docker daemon's runtimes — https://gvisor.dev/docs/user_guide/install/).
+      # Default runc
       # keeps today's behavior:
-      #   DISCO_LOCAL_RUNTIME=runsc docker compose up -d
+      #   DISCO_LOCAL_RUNTIME=runsc podman compose up -d
       DISCO_LOCAL_RUNTIME: "${DISCO_LOCAL_RUNTIME:-runc}"
-      # NOTE: DISCO_SANDBOX is intentionally UNSET — the backend stays Settings-driven
-      # (defaults to `local`, which uses the mounted socket below).
+      # Blank keeps the backend Settings-driven. Non-blank is an explicit operator
+      # override; `process` additionally requires the dev-only opt-in below.
+      DISCO_SANDBOX: "${DISCO_SANDBOX:-}"
+      DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV: "${DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV:-0}"
     volumes:
       - disco-data:/data
-      # The host container socket → the agent-server spawns sibling sandbox
-      # containers through it. SECURITY: this is root-equivalent on the host.
-      # TODO(security-track): prefer a rootless Podman socket; keep the default
-      # posture unchanged in this packaging track.
-      - "${DISCO_SANDBOX_SOCKET:-${PMX_SANDBOX_SOCKET:-/var/run/docker.sock}}:/var/run/docker.sock"
+      # Docker-compatible API endpoint used to spawn sibling sandbox containers.
+      # SAFE DEFAULT: the current user's rootless Podman socket. The fixed target
+      # is an in-container Docker-API compatibility name; it does not imply that
+      # the host source is Docker or root-owned. Operators who deliberately accept
+      # Docker's root-equivalent source must opt in with
+      # DISCO_SANDBOX_SOCKET=/var/run/docker.sock.
+      - "${DISCO_SANDBOX_SOCKET:-${PMX_SANDBOX_SOCKET:-${XDG_RUNTIME_DIR:-/run/user/1000}/podman/podman.sock}}:/var/run/docker.sock"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

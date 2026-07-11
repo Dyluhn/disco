@@ -95,8 +95,8 @@ the Firefox browser surface is available before a UI release.
   rate limiting above the now-complete A2 bearer layer.
 - **F3.3 remains deferred and fail-closed:** `disclaude/f33-webhook-seam` is not merged or
   registered. Its generic webhook security fill must have its own real exploit harness.
-- **Packaging remains a release blocker:** the root-equivalent container socket must not be
-  the inherited default; make the isolated `runsc`/gVisor backend the documented default.
+- **Packaging follow-up (subsequently corrected):** local rootless Podman is the intended
+  default; gVisor/runsc remains an optional stronger tier for compatible hosts.
 - **Independent assurance remains outstanding:** the historical W1–W6 campaign received the
   Codex close-out pass; an independent Opus-class review was unavailable. Run that review
   without reopening already-completed implementation waves.

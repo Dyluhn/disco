@@ -64,7 +64,7 @@ def make_sandbox_router(runtime: ConversationRuntime | None) -> APIRouter:
             podman_url=body.podman_url or "",
             runtime=body.runtime or "runc",
             image=body.image or "disco-sandbox:base",
-            workspace_root=body.workspace_root or "/opt/sandbox/workspaces",
+            workspace_root=body.workspace_root or "/var/lib/disco/workspaces",
         )
         ok, status, detail = await runtime.probe_sandbox_config(settings)
         return {"ok": ok, "status": status, "detail": detail, "provider": body.backend}

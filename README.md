@@ -107,8 +107,9 @@ edits or a required `.env` file:
 ```bash
 git clone <repo-url>
 cd disclaude
-docker compose up -d --build
-docker compose logs app-server
+systemctl --user enable --now podman.socket
+podman compose up -d --build
+podman compose logs app-server
 open http://localhost:8088
 ```
 
@@ -117,11 +118,12 @@ Configure a driver model after boot in **Settings -> Models & Providers**, then
 prove the configuration:
 
 ```bash
-docker compose exec agent-server disco-verify --quick
+podman compose exec agent-server disco-verify --quick
 ```
 
 Copy `.env.example` to `.env` only when you need to override ports, bind
-addresses, provider keys, or the sandbox socket.
+addresses, provider keys, or the sandbox socket. The default is local rootless
+Podman; Docker's root-owned socket is available only as an explicit override.
 
 See [`docs/self-host.md`](./docs/self-host.md) for Podman notes, offline asset
 smoke commands, and the bundled-weight license inventory.

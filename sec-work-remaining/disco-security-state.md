@@ -129,17 +129,24 @@ harnesses are built yet; the framework hook (§4) is what they plug into.
 
 ---
 
-## 6. Packaging (Epic P) — the one open security item in the deploy path
+## 6. Packaging (Epic P) — deploy-path security close-out
 
-- The compose `agent-server` mounts `/var/run/docker.sock` (root-equivalent on the
-  host). Fine for a trusted single-user box; **unacceptable as the default others
-  inherit.** P3/P4 must make the isolated `runsc`/gVisor backend the documented
-  default and gate the docker.sock/process path behind an explicit opt-in. This
-  couples packaging to the isolation work (S-W3/S-W4/S-W5 done).
-- The `process` sandbox backend is dev-only and already fail-closed in prod
+- **Default: local rootless Podman.** Compose mounts the current user's Podman
+  socket (`$XDG_RUNTIME_DIR/podman/podman.sock`, with the conventional
+  `/run/user/1000` fallback), never `/var/run/docker.sock` implicitly. This local
+  isolation tier works on Linux and WSL2 without granting the agent-server root
+  control of the host container daemon.
+- **Optional stronger tier: gVisor/runsc.** gVisor remains separately deployable
+  and opt-in via `DISCO_LOCAL_RUNTIME=runsc`; it is intentionally not the default
+  because it does not run cleanly in common WSL2 environments.
+- Docker's root-equivalent `/var/run/docker.sock` is available only through an
+  explicit `DISCO_SANDBOX_SOCKET` override. The unisolated `process` backend is
+  likewise dev-only and already fail-closed unless
+  `DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1` is explicit
   (`preflight_build_sandbox_backend`, S-W3).
-- Host-specific defaults to scrub before publishing (P3): `workspace_root`,
-  `podman_url` in `core/llm/config.py`.
+- OSS defaults no longer contain a private homelab address or the host-specific
+  `/opt/sandbox/workspaces` path; Podman and workspace defaults are local and
+  portable.
 
 ---
 
@@ -149,5 +156,5 @@ Auth, secret custody, egress chokepoint, the host-execution floor, MCP approval
 integrity, isolation/resource bounds, output-sink/share hardening, the authenticated
 host-service bus, and the Stripe security fill are DONE and gated. The credential/quota
 plane and generic F3.3 webhook fill remain deferred. The framework's fail-closed gate
-keeps anything security-critical from shipping unverified. Packaging's one blocker is
-flipping the sandbox default off the root-equivalent socket.
+keeps anything security-critical from shipping unverified. Packaging now defaults to
+local rootless Podman, with gVisor available as an opt-in stronger tier.

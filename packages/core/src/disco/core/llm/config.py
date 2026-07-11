@@ -121,11 +121,13 @@ class SandboxConnection(BaseModel):
     Each backend now keeps its own block; the ACTIVE block is mirrored to the flat
     ``SandboxSettings`` fields the live backend builder reads."""
 
+    # In-container Docker-compatible endpoint. Compose supplies it from rootless
+    # Podman by default; the host source is controlled separately.
     docker_socket: str = "unix:///var/run/docker.sock"
-    podman_url: str = "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock"
+    podman_url: str = "unix:///run/user/1000/podman/podman.sock"
     runtime: str = "runc"
     image: str = "disco-sandbox:base"
-    workspace_root: str = "/opt/sandbox/workspaces"
+    workspace_root: str = "/var/lib/disco/workspaces"
 
 
 def _ssh_endpoint_hostless(endpoint: str) -> bool:
@@ -177,12 +179,14 @@ def default_connection_for(backend: str) -> SandboxConnection:
     config's bad gvisor ``ssh://sandbox@`` must not carry into Local). gVisor seeds the
     host-less ``ssh://sandbox@`` prefill (the user fills the Tailscale host — flagged
     invalid on save until then, but gvisor-SHAPED, not an inherited local socket); local
-    seeds the LOCAL docker socket; podman seeds the rootless remote (crun)."""
+    seeds the local Docker-compatible socket; podman seeds the local rootless
+    socket (crun)."""
     if backend == "gvisor":
         return SandboxConnection(docker_socket="ssh://sandbox@", runtime="runsc")
     if backend == "podman":
-        return SandboxConnection(runtime="crun")  # keeps the default rootless podman_url
-    # local / process: the local Docker socket + runc (process ignores it at runtime).
+        return SandboxConnection(runtime="crun")  # keeps the local rootless podman_url
+    # local / process: the local Docker-compatible endpoint + runc (process
+    # ignores it at runtime). Compose supplies this endpoint from rootless Podman.
     return SandboxConnection(docker_socket="unix:///var/run/docker.sock", runtime="runc")
 
 
@@ -203,19 +207,21 @@ class SandboxSettings(BaseModel):
     # seconds a non-RUNNING sandbox may sit idle before suspend
     idle_ttl_s: int = 1800
     # which backend is active. "process" (dev, host) | "gvisor" (strong, remote) |
-    # "local" (container, same host) | "podman" (remote; a STUB in this environment).
+    # "local" (container, same host) | "podman" (native local/remote API).
     # W3 C-1: a fail-CLOSED Literal allowlist — an unknown value can no longer flow
     # downstream and silently resolve to host execution (`service_from_config`).
     backend: Literal["gvisor", "local", "podman", "process"] = "local"
-    # gVisor / Docker host endpoint — a local socket OR Docker-over-SSH (ssh://user@host).
+    # In-container Docker-compatible endpoint. Compose supplies it from rootless
+    # Podman by default; gVisor can explicitly select Docker-over-SSH.
     docker_socket: str = "unix:///var/run/docker.sock"
-    # Podman native remote (rootless socket over Tailscale SSH).
-    podman_url: str = "http+ssh://sandbox@100.73.110.47/run/user/1000/podman/podman.sock"
+    # Podman native API. The OSS default is the conventional local rootless socket;
+    # remote operators explicitly replace it with their own http+ssh:// endpoint.
+    podman_url: str = "unix:///run/user/1000/podman/podman.sock"
     # the OCI runtime: runsc (gVisor), runc/crun (local/podman).
     runtime: str = "runc"
     image: str = "disco-sandbox:base"
     # host dir bind-mounted to the container workspace (gVisor); local uses a named volume.
-    workspace_root: str = "/opt/sandbox/workspaces"
+    workspace_root: str = "/var/lib/disco/workspaces"
     # per-backend SAVED connection blocks (backend id → its connection). Retained across
     # switches so a flip of `backend` restores that backend's last-known setup. Empty on a
     # fresh/legacy config; seeded from the active flat fields on the first save/merge.

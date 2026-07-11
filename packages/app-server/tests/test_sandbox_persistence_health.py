@@ -45,7 +45,7 @@ def _obj(**over) -> SandboxConfigDTO:
     base = {
         "backend": "process",
         "docker_socket": "unix:///var/run/docker.sock",
-        "podman_url": "http+ssh://sandbox@100.73.110.47/run/podman.sock",
+        "podman_url": "http+ssh://sandbox@203.0.113.47/run/podman.sock",
         "runtime": "runc",
         "image": "disco-sandbox:base",
         "workspace_root": "/opt/sandbox/workspaces",
@@ -69,7 +69,11 @@ def test_switch_backend_preserves_other_backends_connection(state):
     state.update_sandbox_config(_obj(backend="gvisor", docker_socket=gvisor_sock, runtime="runsc"))
     # 2. switch to local (its own docker_socket)
     state.update_sandbox_config(
-        _obj(backend="local", docker_socket="unix:///var/run/docker.sock", runtime="runc")
+        _obj(
+            backend="local",
+            docker_socket="unix:///var/run/docker.sock",
+            runtime="runc",
+        )
     )
     # 3. the persisted config remembers gVisor's connection block verbatim
     cfg = state.sandbox_config()
@@ -86,7 +90,11 @@ def test_active_flat_fields_track_the_active_backend(state):
         _obj(backend="gvisor", docker_socket="ssh://sandbox@host-a", runtime="runsc")
     )
     state.update_sandbox_config(
-        _obj(backend="local", docker_socket="unix:///var/run/docker.sock", runtime="runc")
+        _obj(
+            backend="local",
+            docker_socket="unix:///var/run/docker.sock",
+            runtime="runc",
+        )
     )
     cfg = state.sandbox_config()
     assert cfg.docker_socket == "unix:///var/run/docker.sock"  # active = local
