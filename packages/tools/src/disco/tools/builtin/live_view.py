@@ -29,15 +29,18 @@ Security model (hardened after the gpt-5.5 BLOCK review):
     occupied by a foreign process is treated as a hazard — we refuse rather than bridge
     to an unknown (possibly non-view-only) VNC server.
 
-P5 live jail acceptance on the production gVisor backend (VM 201, destroyed) is still
-the only piece that needs that specific hardware; the loopback-bind / view-only / teardown
-invariants are provable on any container backend (rootless podman included).
+P5 live jail acceptance PASSED on the production gVisor backend (VM 201, runsc):
+accepted 2026-06-19 and re-verified live 2026-07-09 (stack up under runsc, x11vnc
+loopback+view-only held, 5901 container-external-unreachable, 6080 streaming). The
+loopback-bind / view-only / teardown invariants remain provable on any container
+backend (rootless podman included).
 """
 
 from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -85,17 +88,29 @@ def _xvfb_running() -> bool:
 
 
 def _port_listening(port: int) -> bool:
-    """Return True if ANY process is listening on :port (best-effort, foreign-detection)."""
+    """Return True if ANY socket holds :port (best-effort, foreign-detection).
+
+    Pure-stdlib BIND PROBE — deliberately no external binary. The original
+    implementation shelled out to `lsof`, and when the sandbox image shipped
+    without lsof the FileNotFoundError path returned False — silently DISARMING
+    the foreign-listener gate (found live 2026-07-09). A bind probe cannot be
+    disarmed by image drift, and its failure mode points the SAFE direction:
+    any unexpected bind error reads as "occupied", so the callers refuse to
+    start rather than bridge to an unknown.
+
+    SO_REUSEADDR keeps TIME_WAIT residue from a just-torn-down stack reading as
+    occupied (the quick close→reopen path); an ACTIVE listener — the
+    loopback-bound x11vnc included, since a 0.0.0.0 bind overlaps every
+    interface — still fails the bind with EADDRINUSE."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
-        result = subprocess.run(
-            ["lsof", "-ti", f":{port}"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-        )
-        return result.returncode == 0 and result.stdout.strip() != ""
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        probe.bind(("0.0.0.0", port))
+        return False  # we could bind → nothing is on the port
+    except OSError:
+        return True  # EADDRINUSE (or any bind failure) → occupied; fail closed
+    finally:
+        probe.close()
 
 
 def _foreign_on_port(port: int, ours: Any) -> bool:

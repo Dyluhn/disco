@@ -188,11 +188,7 @@ async def test_process_backend_expose_port_defense():
             return False
 
     unbound = next(
-        (
-            port
-            for port in sorted(USER_PORTS - reserved_control_ports())
-            if not _bound(port)
-        ),
+        (port for port in sorted(USER_PORTS - reserved_control_ports()) if not _bound(port)),
         None,
     )
     if unbound is None:
@@ -225,7 +221,7 @@ async def test_process_exec_shell_does_not_rewrite_arbitrary_wrapped_strings(mon
 
     from disco.tools.sandbox.process import ProcessSandboxInstance
 
-    captured: list[str] = []
+    captured: list[tuple[str, ...]] = []
 
     class _FakeProc:
         returncode = 0
@@ -233,11 +229,11 @@ async def test_process_exec_shell_does_not_rewrite_arbitrary_wrapped_strings(mon
         async def communicate(self):
             return (b"", b"")
 
-    async def _fake_create(cmd, **kwargs):
-        captured.append(cmd)
+    async def _fake_create(*argv, **kwargs):
+        captured.append(argv)
         return _FakeProc()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_create)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create)
 
     with tempfile.TemporaryDirectory() as tmp:
         inst = ProcessSandboxInstance("i", "o", "c", SandboxSpec(), Path(tmp))
@@ -249,7 +245,8 @@ async def test_process_exec_shell_does_not_rewrite_arbitrary_wrapped_strings(mon
         captured.clear()
         wrapped = "tmux send-keys -t disco-c-preview -l 'python3 -m http.server 3000'"
         await inst.exec_shell(wrapped, timeout_s=10)
-        assert captured == [wrapped]  # verbatim — exec_shell never rewrites ports
+        assert len(captured) == 1
+        assert captured[0][4] == wrapped  # helper receives it verbatim; no port rewrite
 
 
 async def test_process_exec_shell_still_refuses_reserved_kill_and_arbitrary_bind():
@@ -342,7 +339,7 @@ async def test_process_exec_shell_allows_normal_build_commands(monkeypatch):
 
     from disco.tools.sandbox.process import ProcessSandboxInstance
 
-    captured: list[str] = []
+    captured: list[tuple[str, ...]] = []
 
     class _FakeProc:
         returncode = 0
@@ -350,11 +347,11 @@ async def test_process_exec_shell_allows_normal_build_commands(monkeypatch):
         async def communicate(self):
             return (b"", b"")
 
-    async def _fake_create(cmd, **kwargs):
-        captured.append(cmd)
+    async def _fake_create(*argv, **kwargs):
+        captured.append(argv)
         return _FakeProc()
 
-    monkeypatch.setattr(asyncio, "create_subprocess_shell", _fake_create)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create)
 
     controls = (
         "pytest --version",
@@ -373,6 +370,7 @@ async def test_process_exec_shell_allows_normal_build_commands(monkeypatch):
             res = await inst.exec_shell(cmd, timeout_s=10)
             assert res.exit_code == 0, cmd
             assert len(captured) == 1, cmd  # reached the launcher exactly once
+            assert captured[0][4] == cmd
         await inst.destroy()
 
 

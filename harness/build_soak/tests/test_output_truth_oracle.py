@@ -314,3 +314,22 @@ def test_elision_waiver_allows_marker():
         workspace={"index.html": "<h1>Build Smoke OK</h1>\n<!-- truncated for brevity -->"},
     )
     assert results[0].passed, results[0].to_dict()
+
+
+def test_must_contain_is_case_insensitive():
+    """2026-07-09 overnight soak: the model wrote 'Hearth & Crumb Bakery' and the
+    case-sensitive 'bakery' check FAILed a correct page. must_contain asserts
+    natural-language CONTENT; capitalization is content-neutral."""
+    results = _run(
+        scenario={
+            "id": "bakery",
+            "assertions": {
+                "workspace": {"files": [{"path": "index.html", "must_contain": ["bakery"]}]},
+                "terminal_status_in": ["FINISHED"],
+            },
+        },
+        workspace={"index.html": "<title>Hearth &amp; Crumb Bakery</title>"},
+    )
+    assert results[0].passed, (
+        f"capitalized 'Bakery' must satisfy must_contain ['bakery']: {results[0].to_dict()}"
+    )

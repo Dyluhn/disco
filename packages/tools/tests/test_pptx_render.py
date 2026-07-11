@@ -747,10 +747,13 @@ def test_lower_deck_embeds_image_assets_into_pptx_and_html():
         ],
     )
 
-    # Without assets → placeholder (the old, broken behavior is the documented default).
+    # Without assets → the THEMED ART fallback (2026-07-07: inline SVG replaces
+    # the dead "[image]" box; see test_deck_schema's art-fallback test).
     deck_plain = lower_deck(authored)
     assert all(el.image_bytes is None for s in deck_plain.slides for el in s.elements)
-    assert "[image]" in render_html(deck_plain)
+    plain_html = render_html(deck_plain)
+    assert "[image]" not in plain_html
+    assert "<svg" in plain_html
 
     # With assets keyed by the image slide's index → embedded.
     deck = lower_deck(authored, image_assets={0: png})

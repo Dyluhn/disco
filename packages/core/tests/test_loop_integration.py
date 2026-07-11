@@ -16,14 +16,135 @@ from disco.core import (
     ConversationStatus,
     ErrorEvent,
     EventSource,
+    LLMMessage,
     MessageEvent,
+    PlanEvent,
+    StatusEvent,
 )
-from disco.core.llm import DefaultLLMRouter, LLMContentFiltered, ProposedToolCall
-from disco.core.loop import NeverConfirm, RouterAgent
+from disco.core.llm import (
+    DefaultLLMRouter,
+    LLMContentFiltered,
+    OperatingMode,
+    ProposedToolCall,
+    ToolSpec,
+)
+from disco.core.llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
+from disco.core.loop import BuildAgent, NeverConfirm, RouterAgent
 from llm_fakes import FakeModelProvider, simple_config  # the router-contract test config
 from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
+_EMPTY_REASONING_REPAIR_REMINDER = (
+    "Your previous response produced no visible text and no tool call — call exactly "
+    "one tool now, or say in plain text what you need."
+)
+_PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
+_PROSE_NOOP_REPAIR_REMINDER = (
+    "You described the next action instead of performing it — call the tool for it "
+    "in THIS turn."
+)
+_READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
+
+
+def _empty_reasoning_response(reasoning_len: int = 17) -> dict:
+    return {
+        "text": "",
+        "finish_reason": "stop",
+        "response_metadata": {
+            EMPTY_REASONING_ONLY_METADATA_KEY: {
+                "finish_reason": "stop",
+                "content_len": 0,
+                "reasoning_len": reasoning_len,
+                "tool_call_count": 0,
+            }
+        },
+    }
+
+
+def _diagnostic_events(events: list):
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == EMPTY_REASONING_ONLY_METADATA_KEY
+    ]
+
+
+def _prose_noop_diagnostic_events(events: list):
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == _PROSE_NOOP_REPAIR_DIAGNOSTIC
+    ]
+
+
+def _read_churn_diagnostic_events(events: list):
+    return [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == _READ_CHURN_NUDGE_DIAGNOSTIC
+    ]
+
+
+def _tool_specs(*names: str) -> list[ToolSpec]:
+    return [
+        ToolSpec(name=name, description=name, parameters_schema={})
+        for name in names
+    ]
+
+
+def _tool_step(tool_name: str, arguments: dict) -> dict:
+    return {
+        "tool_calls": [
+            ProposedToolCall(tool_name=tool_name, arguments=arguments),
+        ]
+    }
+
+
+def _small_read_step(path: str = "index.html", *, offset: int = 1, limit: int = 6) -> dict:
+    return _tool_step("file_read", {"path": path, "offset": offset, "limit": limit})
+
+
+def _whole_read_step(path: str = "index.html") -> dict:
+    return _tool_step("file_read", {"path": path})
+
+
+def _finish_tool_step(summary: str = "done") -> dict:
+    return _tool_step("finish", {"summary": summary})
+
+
+async def _run_scripted_execution(
+    steps: list[dict],
+    *,
+    tool_names: tuple[str, ...] = ("file_read",),
+):
+    provider = SequenceProvider(steps)
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor(tools=_tool_specs(*tool_names))
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+    await loop.send_message("work")
+    state = await loop.run()
+    return state, await store.get_events(CID), provider, executor
+
+
+async def _seed_approved_incomplete_plan(store):
+    await store.append(
+        CID,
+        MessageEvent(
+            source=EventSource.USER,
+            message=LLMMessage(role="user", content="build it"),
+        ),
+    )
+    await store.append(CID, PlanEvent(summary="build it", steps=[{"title": "ship"}]))
+    await store.append(
+        CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
+    )
 
 
 async def test_loop_router_event_contracts_compose():
@@ -74,6 +195,529 @@ async def test_loop_router_event_contracts_compose():
     replayed = ConversationState.reconstruct(CID, events)
     assert replayed.execution_status == ConversationStatus.FINISHED
     assert replayed == ConversationState.reconstruct(CID, events)  # pure
+
+
+async def test_empty_reasoning_turn_retries_once_and_executes_tool():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=23),
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert provider.calls == 3
+    assert provider.seen[1].messages[-1].content == _EMPTY_REASONING_REPAIR_REMINDER
+
+    events = await store.get_events(CID)
+    diagnostics = _diagnostic_events(events)
+    assert len(diagnostics) == 1
+    assert diagnostics[0].meta["finish_reason"] == "stop"
+    assert diagnostics[0].meta["content_len"] == 0
+    assert diagnostics[0].meta["reasoning_len"] == 23
+    assert diagnostics[0].meta["tool_call_count"] == 0
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+
+
+async def test_truly_blank_turn_retries_once_and_executes_tool():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=0),
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert provider.calls == 3
+    assert provider.seen[1].messages[-1].content == _EMPTY_REASONING_REPAIR_REMINDER
+
+    diagnostics = _diagnostic_events(await store.get_events(CID))
+    assert len(diagnostics) == 1
+    assert diagnostics[0].meta["reasoning_len"] == 0
+
+
+async def test_empty_reasoning_retry_empty_counts_into_actionless_breaker():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=11),
+            _empty_reasoning_response(reasoning_len=13),
+            {"text": ""},
+            {"text": ""},
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop.mode = OperatingMode.LONG_HORIZON
+    await _seed_approved_incomplete_plan(store)
+
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert len(_diagnostic_events(events)) == 2
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert provider.calls == 4
+
+
+async def test_prose_noop_in_execution_retries_once_and_executes_tool():
+    provider = SequenceProvider(
+        [
+            {"text": "Let me list the files next."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert provider.calls == 3
+    assert provider.seen[1].messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
+
+    events = await store.get_events(CID)
+    diagnostics = _prose_noop_diagnostic_events(events)
+    assert len(diagnostics) == 1
+    assert diagnostics[0].meta["content_len"] == len("Let me list the files next.")
+    assert not any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.message.content == "Let me list the files next."
+        for e in events
+    )
+    assert not any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+
+
+async def test_prose_noop_retry_prose_again_counts_into_actionless_breaker():
+    provider = SequenceProvider(
+        [
+            {"text": "I will inspect the files next."},
+            {"text": "Still about to inspect."},
+            {"text": "ordinary no-op 2"},
+            {"text": "ordinary no-op 3"},
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop.mode = OperatingMode.LONG_HORIZON
+    await _seed_approved_incomplete_plan(store)
+
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert len(_prose_noop_diagnostic_events(events)) == 1
+    assert [
+        e.message.content
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and (
+            e.message.content.startswith("Still")
+            or e.message.content.startswith("ordinary")
+        )
+    ] == ["Still about to inspect.", "ordinary no-op 2", "ordinary no-op 3"]
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert provider.calls == 4
+
+
+async def test_same_path_small_file_reads_warn_then_feed_actionless_ladder():
+    provider = SequenceProvider(
+        [_small_read_step(offset=i) for i in range(1, 24)]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor(tools=_tool_specs("file_read"))
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+    loop.mode = OperatingMode.LONG_HORIZON
+    await _seed_approved_incomplete_plan(store)
+
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    diagnostics = _read_churn_diagnostic_events(events)
+    assert [d.meta["count"] for d in diagnostics] == [5, 10, 15]
+    assert all(d.meta["path"] == "index.html" for d in diagnostics)
+    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    assert any(
+        isinstance(e, StatusEvent)
+        and e.status == ConversationStatus.PAUSED
+        and e.detail == "actionless"
+        for e in events
+    )
+
+
+async def test_read_churn_resets_after_edit_before_warning_threshold():
+    steps = (
+        [_small_read_step(offset=i) for i in range(1, 5)]
+        + [
+            _tool_step(
+                "file_edit",
+                {"path": "index.html", "old": "before", "new": "after"},
+            )
+        ]
+        + [_small_read_step(offset=i) for i in range(5, 9)]
+        + [_finish_tool_step()]
+    )
+
+    state, events, _provider, executor = await _run_scripted_execution(
+        steps, tool_names=("file_read", "file_edit")
+    )
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [call.tool_name for call in executor.calls] == [
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_edit",
+        "file_read",
+        "file_read",
+        "file_read",
+        "file_read",
+    ]
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_whole_file_read_resets_streak_after_first_warning():
+    steps = (
+        [_small_read_step(offset=i) for i in range(1, 7)]
+        + [_whole_read_step()]
+        + [_small_read_step(offset=i) for i in range(7, 11)]
+        + [_finish_tool_step()]
+    )
+
+    state, events, _provider, _executor = await _run_scripted_execution(steps)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    diagnostics = _read_churn_diagnostic_events(events)
+    assert [d.meta["count"] for d in diagnostics] == [5]
+
+
+async def test_read_churn_alternating_paths_do_not_warn():
+    steps = [
+        _small_read_step("index.html" if i % 2 == 0 else "styles.css", offset=i)
+        for i in range(1, 13)
+    ] + [_finish_tool_step()]
+
+    state, events, _provider, _executor = await _run_scripted_execution(steps)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_full_file_reads_do_not_warn():
+    steps = [_whole_read_step() for _ in range(3)] + [_finish_tool_step()]
+
+    state, events, _provider, _executor = await _run_scripted_execution(steps)
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_planning_mode_reads_do_not_warn():
+    provider = SequenceProvider(
+        [_small_read_step(offset=i) for i in range(1, 7)]
+        + [
+            _tool_step(
+                "submit_plan",
+                {"summary": "p", "steps": [{"title": "do it"}]},
+            )
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor(tools=_tool_specs("file_read"))
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+    loop.mode = OperatingMode.PLANNING
+
+    await loop.send_message("plan")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+    assert _read_churn_diagnostic_events(events) == []
+
+
+async def test_read_churn_rearms_after_reset():
+    steps = (
+        [_small_read_step(offset=i) for i in range(1, 6)]
+        + [
+            _tool_step(
+                "file_edit",
+                {"path": "index.html", "old": "before", "new": "after"},
+            )
+        ]
+        + [_small_read_step(offset=i) for i in range(6, 11)]
+        + [_finish_tool_step()]
+    )
+
+    state, events, _provider, _executor = await _run_scripted_execution(
+        steps, tool_names=("file_read", "file_edit")
+    )
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    diagnostics = _read_churn_diagnostic_events(events)
+    assert [d.meta["count"] for d in diagnostics] == [5, 5]
+    assert [d.meta["path"] for d in diagnostics] == ["index.html", "index.html"]
+
+
+async def test_second_prose_noop_in_same_execution_segment_gets_no_second_nudge():
+    provider = SequenceProvider(
+        [
+            {"text": "Let me list the files next."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {"text": "Now I will check the current directory."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("inspect the workspace")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell", "shell"]
+    events = await store.get_events(CID)
+    assert len(_prose_noop_diagnostic_events(events)) == 1
+    assert sum(
+        1
+        for req in provider.seen
+        if req.messages and req.messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
+    ) == 1
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.message.content == "Now I will check the current directory."
+        for e in events
+    )
+
+
+async def test_planning_mode_prose_turn_gets_no_prose_noop_nudge():
+    provider = SequenceProvider(
+        [
+            {"text": "I will gather context and then submit a plan."},
+            {
+                "tool_calls": [
+                    ProposedToolCall(
+                        tool_name="submit_plan",
+                        arguments={"summary": "p", "steps": [{"title": "do it"}]},
+                    )
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
+    loop.mode = OperatingMode.PLANNING
+
+    await loop.send_message("build it")
+    state = await loop.run()
+
+    events = await store.get_events(CID)
+    assert _prose_noop_diagnostic_events(events) == []
+    assert not any(
+        _PROSE_NOOP_REPAIR_REMINDER in m.content
+        for req in provider.seen
+        for m in req.messages
+    )
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.AGENT
+        and e.message.content == "I will gather context and then submit a plan."
+        for e in events
+    )
+    assert state.execution_status == ConversationStatus.AWAITING_PLAN_APPROVAL
+
+
+async def test_empty_reasoning_and_prose_noop_repairs_are_independent():
+    provider = SequenceProvider(
+        [
+            _empty_reasoning_response(reasoning_len=19),
+            {"text": "I will list the files next."},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "listed"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("list the files")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    events = await store.get_events(CID)
+    assert len(_diagnostic_events(events)) == 1
+    assert len(_prose_noop_diagnostic_events(events)) == 1
+    assert provider.seen[1].messages[-1].content == _EMPTY_REASONING_REPAIR_REMINDER
+    assert provider.seen[2].messages[-1].content == _PROSE_NOOP_REPAIR_REMINDER
+
+
+async def test_ordinary_prose_noop_does_not_empty_reasoning_retry():
+    provider = SequenceProvider(
+        [
+            {"text": "plain no-op"},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("check cwd")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 3
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    events = await store.get_events(CID)
+    assert _diagnostic_events(events) == []
+    assert not any(
+        _EMPTY_REASONING_REPAIR_REMINDER in m.content
+        for req in provider.seen
+        for m in req.messages
+    )
+
+
+async def test_ordinary_tool_call_turn_is_untouched_by_empty_reasoning_repair():
+    provider = SequenceProvider(
+        [
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("check cwd")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 2
+    assert [c.tool_name for c in executor.calls] == ["shell"]
+    assert _diagnostic_events(await store.get_events(CID)) == []
+
+
+async def test_finish_length_empty_turn_uses_existing_truncation_repair():
+    provider = SequenceProvider(
+        [
+            {"text": "", "finish_reason": "length"},
+            {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "pwd"})]},
+            {
+                "tool_calls": [
+                    ProposedToolCall(tool_name="finish", arguments={"summary": "checked"})
+                ],
+            },
+        ]
+    )
+    router = DefaultLLMRouter(simple_config(), {"ollama": provider, "openrouter": provider})
+    agent = BuildAgent(router, conversation_id=CID)
+    executor = FakeExecutor()
+    loop, store = build_loop(agent, executor=executor, policy=NeverConfirm())
+
+    await loop.send_message("check cwd")
+    state = await loop.run()
+
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert provider.calls == 3
+    events = await store.get_events(CID)
+    assert _diagnostic_events(events) == []
+    assert any(
+        isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "cut off mid-sentence" in e.message.content
+        for e in events
+    )
+    assert not any(
+        _EMPTY_REASONING_REPAIR_REMINDER in m.content
+        for req in provider.seen
+        for m in req.messages
+    )
 
 
 async def test_truncated_prose_does_not_end_run_and_injects_continue_reminder():

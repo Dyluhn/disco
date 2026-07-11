@@ -18,6 +18,7 @@ from disco.core.llm import (
     ModelRole,
     is_context_window_exceeded,
 )
+from disco.core.llm import routing as routing_module
 from llm_fakes import FakeModelProvider, build_router
 
 
@@ -46,12 +47,14 @@ async def test_context_window_error_is_terminal_no_retry():
     assert local.calls == 1  # no retry on a terminal error
 
 
-async def test_auth_error_is_terminal_no_retry():
+async def test_auth_error_retries_once_then_terminal(monkeypatch):
+    monkeypatch.setattr(routing_module, "_AUTH_RETRY_DELAY_S", 0)
     local = FakeModelProvider("ollama", raises=LLMAuthError("bad key"))
     router, _sink, _ = build_router(local=local)
-    with pytest.raises(LLMAuthError):
+    with pytest.raises(LLMAuthError) as excinfo:
         await router.complete(_req())
-    assert local.calls == 1
+    assert str(excinfo.value) == "bad key"
+    assert local.calls == 2
 
 
 async def test_content_filter_is_terminal_and_typed():

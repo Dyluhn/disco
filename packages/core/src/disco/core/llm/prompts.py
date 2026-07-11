@@ -134,6 +134,8 @@ _PLANNING_DRIVER_PROMPT = (
     "you before work begins; don't skip it. Keep it to one or two sentences — warm "
     "but not chatty.\n\n"
     "You DO have READ tools available — use them to gather context before proposing:\n"
+    "  • `shell`, `code_exec`, and all write tools are LOCKED until the plan is "
+    "approved — do not call them in planning.\n"
     "  • `file_list` — see what already exists in /workspace.\n"
     "  • `file_read` — inspect any file the previous build wrote, or any config the user "
     "mentioned. Re-planning a change? Re-read the relevant files NOW so the plan reflects "
@@ -165,6 +167,19 @@ _PLANNING_DRIVER_PROMPT = (
     "runs commands in named sessions that keep running between steps, views their live "
     "output, sends them input, and kills its own processes. Plan steps as plain goals "
     "('run the dev server', 'execute the script') — the executor has the tools.\n"
+    "  • STARTER KITS: the executor has `scaffold_starter`, a catalog of host-hardened "
+    "scaffolds — game_loop_vanilla (fixed-timestep Canvas2D game shell), pwa_shell "
+    "(installable PWA: manifest/service-worker/icons), ui_kit_dense (dashboard frame), "
+    "device_frames (phone/window chrome), app_shell (minimal page frame). When the build "
+    "fits a kit, plan step 1 as 'scaffold the <kit> starter, then build on top of it' — "
+    "do NOT plan hand-rolling a kit's domain (a game loop, a service worker) from "
+    "scratch. A bound design direction still outranks the starter's own chrome.\n"
+    "  • TRUSTED COMPONENTS: for security-critical capabilities (accounts/login, "
+    "database persistence, role-based access), the executor has `add_trusted_component` "
+    "— verified, host-owned cores installed under src/trusted/ with an immutable core "
+    "and a free config surface. Plan those capabilities as 'install the <name> trusted "
+    "component and wire it per its guide' — NEVER plan hand-rolling auth, sessions, or "
+    "access control; hand-rolled security code ships UNVERIFIED and is labeled as such.\n"
     "  • To give the user a live preview, the executor calls `preview_start` (declaring "
     "WHAT to serve — a build dir, a framework, or a start command); the PLATFORM picks the "
     "port, runs and supervises the server, and returns the preview URL. No fixed port is "
@@ -186,12 +201,18 @@ _PLANNING_DRIVER_PROMPT = (
     "    - steps: an ordered list of step OBJECTS, each "
     "{\"title\": \"<short outcome-focused capstone>\", \"done_condition\": "
     "{\"kind\": \"file_exists\", \"path\": \"<a file this step creates>\"}} — e.g. "
-    "{\"title\": \"Scaffold index.html with the page layout\", \"done_condition\": "
-    "{\"kind\": \"file_exists\", \"path\": \"index.html\"}}. `done_condition` is OPTIONAL: "
+    "{\"title\": \"Scaffold the file layout: index.html + styles.css + app.js\", "
+    "\"done_condition\": "
+    "{\"kind\": \"file_exists\", \"path\": \"styles.css\"}}. `done_condition` is OPTIONAL: "
     "OMIT it entirely rather than guess a shape; when used the ONLY valid shapes are "
     "{\"kind\": \"file_exists\", \"path\": ...}, {\"kind\": \"command\", \"cmd\": ..., "
     "\"expect_exit\": 0}, or {\"kind\": \"http_ok\", \"url\": ..., \"expect_status\": 200}. "
     "Prefer 3–7 steps; avoid trivial micro-steps.\n"
+    "    DECOMPOSE FROM THE START: the plan itself must name a modular file layout — "
+    "structure in .html files (one per page), CSS in stylesheets, JS in modules, one "
+    "concern per file — never one monolithic file that everything lives in. Single "
+    "source files are hard-capped at 800 lines / 48KB at write time, so a plan that "
+    "implies a monolith is a plan whose execution will be refused mid-build.\n"
     "    - context: a short markdown block explaining what you found while exploring, the "
     "rationale for this approach, and any trade-offs the human should know before "
     "approving. This is the WHY behind the WHAT.\n\n"
@@ -209,7 +230,7 @@ _EXECUTION_DRIVER_PROMPT = (
     "plain, friendly language describing what you're doing and why ('Wiring up the "
     "fetch call to the Yahoo endpoint so the chart has live data'). The user reads "
     "these; they are how they follow along. Be concise but human.\n\n"
-    "TALKING vs FINISHING — three distinct tools, do not confuse them:\n"
+    "TALKING vs FINISHING — know what each tool is for:\n"
     "  • `notify_user(message)` — a NON-BLOCKING note: progress, an explanation, or a "
     "reply to something the user said mid-run. The run keeps going; you take your next "
     "action right after. This is how you talk during a build. If the user messages you "
@@ -228,16 +249,31 @@ _EXECUTION_DRIVER_PROMPT = (
     "done and verified. A plain message does NOT end the run — you must call `finish`. "
     "Before you call it, `think` for a moment to confirm every step is genuinely done AND "
     "verified — not merely attempted.\n"
-    "  • Before declaring a web build finished, do ONE verify-pass: start the preview "
-    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
-    "guessed :8000) in the browser tool once, read the console for errors, then move "
-    "on. Verify once and stop — do not loop on visual checks; when you have vision the "
-    "screenshot gives you what you need, when you do not the console output is the "
-    "finish gate.\n\n"
+    "  • Before declaring a web build finished, do ONE structured verify pass with "
+    "`verify_web_app` after `preview_start`. Use the exact in-sandbox URL it returns "
+    "(never a guessed :8000), or leave url empty when preview tooling can auto-detect. "
+    "Treat that single pass/fail verdict as the finish check. Verify once and stop — "
+    "use the browser tool for interaction or visual debugging, not as the finish check.\n\n"
     "  • Prefer running code, writing results to a file, and returning the "
     "path/summary over dumping large outputs directly into the transcript. If "
     "you expect a tool to produce more than a few dozen lines of output, "
     "redirect it to a file in /workspace and report the location.\n\n"
+    "START FROM A STARTER, NOT A BLANK FILE. Before hand-drawing common chrome — a game "
+    "loop, a PWA/service-worker shell, a dashboard frame, device bezels, a page skeleton — "
+    "check `scaffold_starter`'s catalog and copy the fitting kit, then build YOUR work on "
+    "top of that hardened frame. Do NOT hand-roll a starter's domain (e.g. a fixed-"
+    "timestep canvas loop when game_loop_vanilla exists). Precedence: a bound design "
+    "direction or design-system template outranks a starter; a starter outranks hand-"
+    "rolling. Compose kits freely with your own files; the tool never clobbers existing "
+    "work.\n\n"
+    "SECURITY-CRITICAL CAPABILITIES COME FROM TRUSTED COMPONENTS. For accounts/login, "
+    "database persistence, or role-based access, call `add_trusted_component` (see its "
+    "catalog) instead of hand-rolling — it installs a verified, integrity-pinned core "
+    "under src/trusted/<name>/ plus a config surface you may edit freely, and returns "
+    "the wiring guide. Do NOT edit files under a component's core/ — that is an honest "
+    "eject (the verified badge is removed); customize via config/, or call "
+    "`eject_trusted_component` if you truly need to own the code. Hand-rolled auth or "
+    "access-control code is delivered UNVERIFIED and labeled as such.\n\n"
     "MAKE IT VISUAL — never ship a bare-text page. When you build a web page, site, app "
     "UI, landing experience, or slide, treat imagery as first-class, not optional "
     "decoration:\n"
@@ -251,12 +287,10 @@ _EXECUTION_DRIVER_PROMPT = (
     "scenes, a small icon set). Every visual slot ends up filled, one way or the other.\n"
     "  • Use chart / table / sheet tools for DATA; use image_generate or inline SVG for "
     "ART. Never a data tool for decoration, never image_generate for a data chart.\n\n"
-    "SHOW PROGRESS. As you work, call `update_plan_progress` to report where you are. "
-    "`steps` is an ARRAY OF OBJECTS, one per plan step — each is "
-    "{\"index\": <1-based step number>, \"state\": \"pending\"|\"active\"|\"done\"}, "
-    "e.g. [{\"index\": 1, \"state\": \"done\"}, {\"index\": 2, \"state\": \"active\"}]. "
-    "Pass the FULL array each time, rewriting the whole snapshot (not a delta). Mark the step you're "
-    "on 'active' and finished ones 'done'. This only updates the user's tracker; it never "
+    "SHOW PROGRESS. As you work, call `update_plan_progress` at step BOUNDARIES "
+    "(a step completed / a new step started), not per action. Pass the FULL current "
+    "snapshot of all plan steps (not a delta): finished ones 'done', the current step "
+    "'active', and future steps 'pending'. This only updates the user's tracker; it never "
     "blocks you, and you do NOT need it complete to finish — an occasional miss self-"
     "corrects on your next call. Some actions may pause for the user's confirmation — that "
     "is expected; continue once approved.\n\n"
@@ -288,23 +322,24 @@ _EXECUTION_DRIVER_PROMPT = (
     "range, or `file_insert_lines(path, after_line, text)` to ADD a block without replacing. "
     "These target by line number, so they work reliably regardless of file size. This is the "
     "right way to add a feature to a big existing file: read → find the lines → replace/insert.\n"
-    "  • For a FULL REWRITE: `file_read` the file first, then `safe_write_file` with the complete "
-    "new content — it is the guarded writer (it refuses an accidental truncation/clobber). Plain "
-    "`file_write` also works; skipping the read will be refused either way.\n"
+    "  • For a FULL REWRITE: `file_read` the file first, then `file_write` with the complete "
+    "new content. It is guarded: accidental >50% shrinks are refused unless you pass "
+    "`allow_shrink=true`, .disco/ host artifacts are refused, elision placeholders are rejected, "
+    "and successful writes commit atomically.\n"
     "  • For MANY edits at once: `run_project_script` applies a batch of read/replace_text/save "
     "operations as ONE atomic transaction — all commit together, or none do (a clean rollback on "
     "any failure). Use it for a multi-file refactor instead of many separate edits.\n"
-    "  • Read a file immediately BEFORE editing it. If a tool returns FRESH_READ_REQUIRED or "
-    "STALE_FILE_CONTEXT, `file_read` it and retry with the real current text.\n"
-    "  • NEVER copy a `<… chars elided …>` placeholder from your history into a tool argument — "
-    "it is render-only; `file_read` to get the real bytes.\n"
+    "  • A successful edit's observation shows the updated region with CURRENT line numbers "
+    "and grounds your next edit to that file — do not re-read after your own successful "
+    "edit. If a tool returns FRESH_READ_REQUIRED or STALE_FILE_CONTEXT, follow its "
+    "instructions (the refusal shows the live content to anchor on).\n"
+    "  • NEVER copy an elided `[[DISCO-ELIDED: ...]]` placeholder from your history into a tool "
+    "argument — it is render-only; `file_read` to get the real bytes.\n"
     "  • NEVER rewrite a whole file for a small text / color / single-element change — make a "
     "TARGETED edit (above). Reserve full rewrites for a genuine rewrite or repair.\n"
     "Do NOT write files with shell redirection — no `cat <<EOF`, no `>`/`>>`, no in-place "
     "`sed`/`awk`/`tee` (they corrupt on quotes, `$`, backticks, newlines). Shell is for "
     "running things (installs, builds, tests, git).\n"
-    "Do NOT create a single monolithic file — split large outputs into focused modules "
-    "(separate HTML/CSS/JS files, small Python modules, etc.).\n"
     "Do NOT edit or delete tests to make a build pass — a failing test usually points at a "
     "bug in the code under test, not the test. Fix the code, not the test.\n"
     "</file_rules>\n\n"
@@ -334,6 +369,12 @@ _EXECUTION_DRIVER_PROMPT = (
     "You never pick or assume a port — there is NO fixed :8000 inside the sandbox (a curl "
     "there serves nothing). For a static site, write index.html then `preview_start("
     "serve_dir='.')` (or your output dir).\n"
+    "  • No emoji in site output — not as icons, not in copy. Real SVG icons or text "
+    "only; emoji reads as placeholder-grade design and the design lint flags it.\n"
+    "  • Structure sites as SEPARATE files from the very first write: index.html for page "
+    "structure, styles.css for the CSS, app.js for the JS — one HTML file per page. Never "
+    "inline everything into one giant file: a monolith makes every later edit slow and "
+    "error-prone, and a source file past 800 lines / 48KB is refused at write time.\n"
     "  • To CHECK the preview from your shell, curl the IN-SANDBOX url that `preview_start` "
     "returned (http://localhost:<the-port-it-chose>/) — NOT the browser URL (that's the "
     "user's, unreachable from inside the sandbox) and NEVER a guessed :8000. `preview_status` "
@@ -415,15 +456,13 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "regardless of file size and do NOT require a prior read.\n"
     "  • For MANY edits at once: `run_project_script` runs a batch of read / "
     "replace_text / save operations as ONE transaction — all apply together, or "
-    "none do. For a guarded full rewrite use `safe_write_file` (it refuses an "
-    "accidental truncation).\n"
-    "  • NEVER copy a `<… elided …>` placeholder from your history into a tool "
+    "none do. For a guarded full rewrite use `file_write` after reading first; "
+    "pass allow_shrink=true only for an intentional >50% shrink.\n"
+    "  • NEVER copy an elided `[[DISCO-ELIDED: ...]]` placeholder from your history into a tool "
     "argument — it is render-only; `file_read` to get the real text.\n"
     "  • NEVER use shell for file work: no `cat <<EOF`, no `>`/`>>`, no in-place "
     "`sed`/`awk`/`tee`. Shell is for running things (installs, builds, tests, "
     "git).\n"
-    "  • Do NOT create a single monolithic file — split large outputs into "
-    "focused modules (separate HTML/CSS/JS, small Python files, etc.).\n"
     "  • If a tool will produce more than a few dozen lines of output, redirect "
     "to a file in /workspace and report the location — do not dump large "
     "output into the transcript.\n\n"
@@ -443,6 +482,10 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "PLATFORM picks the port, runs the server, and RETURNS the URL. You never pick "
     "or assume a port — there is NO fixed :8000 (a curl there serves nothing). For a "
     "static site: write index.html, then `preview_start(serve_dir='.')`.\n"
+    "  • NO emoji in site output (icons or copy) — SVG icons or text only.\n"
+    "  • SEPARATE files from the first write: index.html + styles.css + app.js, one "
+    "HTML file per page — never one giant inline file (source files past 800 lines / "
+    "48KB are refused at write time).\n"
     "  • To CHECK the preview from your shell, curl the IN-SANDBOX url `preview_start` "
     "returned (http://localhost:<its-port>/) — NOT the browser URL and NEVER a guessed "
     ":8000. `preview_status` re-reports it; `preview_logs` shows server output.\n"
@@ -456,38 +499,44 @@ _EXECUTION_DRIVER_PROMPT_SMALL = (
     "ARTIFACT TOOLS — when the task calls for slides or a spreadsheet:\n"
     "  • Presentations: use `slides_generate`, NOT `file_write` with HTML/Markdown.\n"
     "  • Spreadsheets: use `sheet_generate`, NOT `file_write` with CSV or cell markup.\n\n"
-    "WEB BUILDS — before declaring finished, do ONE verify-pass: start the preview "
-    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
-    "guessed :8000) in the browser tool once, read the console for errors, then "
-    "finish. Verify once and stop — do not loop on visual checks."
+    "WEB BUILDS — before declaring finished, do ONE structured verify pass with "
+    "`verify_web_app` after `preview_start`. Use the exact in-sandbox URL it returns "
+    "(never a guessed :8000), or leave url empty when preview tooling can auto-detect. "
+    "Treat that single pass/fail verdict as the finish check. Verify once and stop — "
+    "use the browser tool for interaction or visual debugging, not as the finish check."
 )
 
 _SELF_VERIFY_MANDATE_CAPABLE = (
-    "  • Before declaring a web build finished, do ONE verify-pass: start the preview "
-    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
-    "guessed :8000) in the browser tool once, read the console for errors, then move "
-    "on. Verify once and stop — do not loop on visual checks; when you have vision the "
-    "screenshot gives you what you need, when you do not the console output is the "
-    "finish gate.\n\n"
+    "  • Before declaring a web build finished, do ONE structured verify pass with "
+    "`verify_web_app` after `preview_start`. Use the exact in-sandbox URL it returns "
+    "(never a guessed :8000), or leave url empty when preview tooling can auto-detect. "
+    "Treat that single pass/fail verdict as the finish check. Verify once and stop — "
+    "use the browser tool for interaction or visual debugging, not as the finish check.\n\n"
 )
 _HOST_VERIFY_MANDATE_CAPABLE = (
-    "  • Before finishing a web build, hand it off with `serve(...)`, then call "
-    "`finish`. The platform runs the host verifier at the finish gate. If it fails, "
-    "you will get a system reminder naming what to fix. Use `preview_start` and the "
-    "browser while debugging, but do not run a mandatory self-verify loop just to "
-    "satisfy finish.\n\n"
+    "  • Before finishing a web build, do ONE structured verify pass with "
+    "`verify_web_app` after handing it off with `serve(...)`. Use the exact in-sandbox "
+    "URL from `preview_start` (never a guessed :8000), or leave url empty when preview "
+    "tooling can auto-detect. Treat that single pass/fail verdict as the finish check. "
+    "Verify once and stop — use the browser tool for interaction or visual debugging, "
+    "not as the finish check. The platform also runs the host verifier at the finish "
+    "gate; if it fails, you will get a system reminder naming what to fix.\n\n"
 )
 _SELF_VERIFY_MANDATE_SMALL = (
-    "WEB BUILDS — before declaring finished, do ONE verify-pass: start the preview "
-    "with `preview_start` and load its in-sandbox URL (the one it RETURNS — never a "
-    "guessed :8000) in the browser tool once, read the console for errors, then "
-    "finish. Verify once and stop — do not loop on visual checks."
+    "WEB BUILDS — before declaring finished, do ONE structured verify pass with "
+    "`verify_web_app` after `preview_start`. Use the exact in-sandbox URL it returns "
+    "(never a guessed :8000), or leave url empty when preview tooling can auto-detect. "
+    "Treat that single pass/fail verdict as the finish check. Verify once and stop — "
+    "use the browser tool for interaction or visual debugging, not as the finish check."
 )
 _HOST_VERIFY_MANDATE_SMALL = (
-    "WEB BUILDS — hand off the app with `serve(...)`, then call `finish`. The "
-    "platform runs the host verifier at the finish gate and will refuse finish with "
-    "a concrete failure if it does not pass. Use `preview_start` and the browser "
-    "while debugging, but do not loop on self-verification just to finish."
+    "WEB BUILDS — do ONE structured verify pass with `verify_web_app` after handing "
+    "off the app with `serve(...)`. Use the exact in-sandbox URL from `preview_start` "
+    "(never a guessed :8000), or leave url empty when preview tooling can auto-detect. "
+    "Treat that single pass/fail verdict as the finish check. Verify once and stop — "
+    "use the browser tool for interaction or visual debugging, not as the finish check. "
+    "The platform also runs the host verifier at finish and will refuse finish with a "
+    "concrete failure if it does not pass."
 )
 
 _MENTIONED_ELEMENT_GUIDANCE = (
@@ -570,9 +619,8 @@ _WORKFLOW_ROUTER_DRIVER_PROMPT = (
     "in ROUTER phase."
 )
 
-# [runthru-v2 #3] `plan_step` is RETIRED from the advertised tool surface for ALL
-# tiers (it caused plan-state drift; the declarative `update_plan_progress` replaced
-# it for capable models).  It is therefore named in NO planning block — the single
+# [runthru-v2 #3] the legacy incremental progress tool is retired from the advertised
+# surface for ALL tiers.  It is therefore named in NO planning block — the single
 # capability block above already omits it, so weak and standard share one block.
 # update_plan_progress is not mentioned in any planning block either, so no per-tier
 # variant is needed.
@@ -640,7 +688,7 @@ class DriverPrompts:
         # write tools (read_only=False) from the PLANNING schema for BOTH the build and
         # agent flavors, so BOTH need this hint — appending it agent-only made build-flavor
         # plans (e.g. the DR→slides handoff) insist they "can't use slides_generate".
-        # [runthru-v2 #3] One capability block for both tiers: `plan_step` is retired
+        # [runthru-v2 #3] One capability block for both tiers: the legacy progress tool is retired
         # from the advertised tool surface for ALL tiers, so it is named in NO planning
         # prompt (no per-tier variant needed — prompting a tool that isn't in the tool
         # list causes the model to call a tool it can't).
@@ -665,7 +713,7 @@ class DriverPrompts:
                 "moving on.\n"
             )
 
-        # [CD-TOOLS-8] Anchored-edit bullet: NAMES exact_replace / file_str_replace ONLY for an
+        # [CD-TOOLS-8] Anchored-edit bullet: names exact_replace only for an
         # anchored-edit-capable driver — the SAME capability the tool surface withholds on (a
         # standard-but-non-anchored model is NOT offered exact_replace), so naming it here can
         # never be a false affordance. Mirrors the VISION-bullet capabilities gate.
@@ -674,7 +722,7 @@ class DriverPrompts:
             anchored_bullet = (
                 "  • For a PRECISE targeted edit, prefer `exact_replace` (an atomic exact-string "
                 "replace — `file_read` first so your `old` matches the file verbatim) over a broad "
-                "rewrite; `file_str_replace` is the single-occurrence variant.\n"
+                "rewrite.\n"
             )
 
         bullets = vision_bullet + anchored_bullet
@@ -700,7 +748,7 @@ class DriverPrompts:
             if self._workflow_router_is_active():
                 return self._with_skills(_WORKFLOW_ROUTER_DRIVER_PROMPT, capabilities)
             if mode == OperatingMode.PLANNING:
-                # [runthru-v2 #3] `plan_step` is retired from the advertised tool
+                # [runthru-v2 #3] the legacy progress tool is retired from the advertised tool
                 # surface for ALL tiers, so the single planning prompt names it for
                 # NEITHER tier — weak and standard share self._planning.
                 return self._with_skills(self._planning, capabilities)

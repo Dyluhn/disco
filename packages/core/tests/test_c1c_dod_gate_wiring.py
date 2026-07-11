@@ -109,13 +109,23 @@ async def test_arms_dod_spec_from_file_exists_on_approval(tmp_path):
     ws.mkdir()
     (ws / "index.html").write_text("<h1>home</h1>")  # satisfy it so the run finishes
     sbx = _FakeSandbox(str(ws))
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [
-            _plan_step("create index.html", {"kind": "file_exists", "path": "index.html"}),
-        ]}),
-        action_step("shell", {"command": "echo build"}),
-        _finish_call(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        _plan_step(
+                            "create index.html", {"kind": "file_exists", "path": "index.html"}
+                        ),
+                    ],
+                },
+            ),
+            action_step("shell", {"command": "echo build"}),
+            _finish_call(),
+        ]
+    )
     _events, store = await _run(agent, sbx)
     spec = await store.get_dod_spec(CID)
     assert spec is not None, "the gate must be armed from the plan's file_exists condition"
@@ -133,19 +143,30 @@ async def test_blocks_finish_when_declared_file_missing(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()  # index.html deliberately NOT planted
     sbx = _FakeSandbox(str(ws))
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [
-            _plan_step("create index.html", {"kind": "file_exists", "path": "index.html"}),
-        ]}),
-        action_step("shell", {"command": "echo did not actually write the file"}),
-        _finish_call(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        _plan_step(
+                            "create index.html", {"kind": "file_exists", "path": "index.html"}
+                        ),
+                    ],
+                },
+            ),
+            action_step("shell", {"command": "echo did not actually write the file"}),
+            _finish_call(),
+        ]
+    )
     events, store = await _run(agent, sbx)
     assert await store.get_dod_spec(CID) is not None  # gate was armed
     assert _dod_refused(events), "finish must be REFUSED while the declared deliverable is missing"
     # the refusal must NAME the unmet predicate so the model knows what to fix
     refusal = next(
-        e for e in events
+        e
+        for e in events
         if isinstance(e, MessageEvent) and "Definition-of-Done evaluator found" in e.message.content
     )
     assert "index.html" in refusal.message.content
@@ -159,13 +180,23 @@ async def test_releases_finish_when_declared_file_present(tmp_path):
     ws.mkdir()
     (ws / "index.html").write_text("<h1>home</h1>")
     sbx = _FakeSandbox(str(ws))
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [
-            _plan_step("create index.html", {"kind": "file_exists", "path": "index.html"}),
-        ]}),
-        action_step("shell", {"command": "echo wrote index.html"}),
-        _finish_call(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        _plan_step(
+                            "create index.html", {"kind": "file_exists", "path": "index.html"}
+                        ),
+                    ],
+                },
+            ),
+            action_step("shell", {"command": "echo wrote index.html"}),
+            _finish_call(),
+        ]
+    )
     events, _store = await _run(agent, sbx)
     fs = _final_status(events)
     assert fs is not None and fs.status == ConversationStatus.FINISHED
@@ -178,13 +209,17 @@ async def test_empty_guard_no_predicate_leaves_gate_dark(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     sbx = _FakeSandbox(str(ws))
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [_plan_step("just do it")]}),
-        action_step("shell", {"command": "echo build"}),
-        _finish_call(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [_plan_step("just do it")]}),
+            action_step("shell", {"command": "echo build"}),
+            _finish_call(),
+        ]
+    )
     events, store = await _run(agent, sbx)
-    assert await store.get_dod_spec(CID) is None, "no checkable predicate → no spec (no false-block)"
+    assert await store.get_dod_spec(CID) is None, (
+        "no checkable predicate → no spec (no false-block)"
+    )
     fs = _final_status(events)
     assert fs is not None and fs.status == ConversationStatus.FINISHED
 
@@ -201,11 +236,21 @@ async def test_arms_after_restart_from_persisted_plan_event(tmp_path):
     (ws / "index.html").write_text("<h1>home</h1>")
     sbx = _FakeSandbox(str(ws))
     # loop 1: submit a plan (persists the PlanEvent), but do NOT approve.
-    agent1 = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [
-            _plan_step("create index.html", {"kind": "file_exists", "path": "index.html"}),
-        ]}),
-    ])
+    agent1 = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        _plan_step(
+                            "create index.html", {"kind": "file_exists", "path": "index.html"}
+                        ),
+                    ],
+                },
+            ),
+        ]
+    )
     loop1, store = build_loop(agent1, executor=_SandboxExecutor(sbx), conversation_id=CID)
     loop1.mode = OperatingMode.PLANNING
     loop1._planning_tools = frozenset(["file_read"])
@@ -233,14 +278,18 @@ async def test_revision_monotonically_extends_the_dod(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     sbx = _FakeSandbox(str(ws))
-    loop, store = build_loop(
-        ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id=CID
-    )
+    loop, store = build_loop(ScriptedAgent([]), executor=_SandboxExecutor(sbx), conversation_id=CID)
     # First plan → arms {index.html}.
     p1 = loop._plan_from_args(
-        {"summary": "v1", "steps": [
-            {"title": "create index.html", "done_condition": {"kind": "file_exists", "path": "index.html"}},
-        ]},
+        {
+            "summary": "v1",
+            "steps": [
+                {
+                    "title": "create index.html",
+                    "done_condition": {"kind": "file_exists", "path": "index.html"},
+                },
+            ],
+        },
         [],
     )
     await loop._emit(p1)
@@ -250,10 +299,16 @@ async def test_revision_monotonically_extends_the_dod(tmp_path):
     # Revision (the steer "also add a Contact page") → EXTENDS to require contact.html.
     events = await store.get_events(CID)
     p2 = loop._plan_from_args(
-        {"summary": "v2", "steps": [
-            {"title": "index", "done_condition": {"kind": "file_exists", "path": "index.html"}},
-            {"title": "contact", "done_condition": {"kind": "file_exists", "path": "contact.html"}},
-        ]},
+        {
+            "summary": "v2",
+            "steps": [
+                {"title": "index", "done_condition": {"kind": "file_exists", "path": "index.html"}},
+                {
+                    "title": "contact",
+                    "done_condition": {"kind": "file_exists", "path": "contact.html"},
+                },
+            ],
+        },
         events,
     )
     await loop._emit(p2)
@@ -265,13 +320,14 @@ async def test_revision_monotonically_extends_the_dod(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_infra_release_emits_unverified_advisory(tmp_path):
-    """v2.1 + honest-incomplete: when the gate RELEASES on an infra-only failure (a denied
-    command), it allows finish BUT records a visible ADVISORY note naming what could not be
-    verified — not a silent clean pass."""
+async def test_infra_failure_blocks_finish_with_visible_unverified_reason(tmp_path):
+    """S-W5 D4: an unavailable check is not a pass. A denied command keeps
+    finish blocked and records the specific unverifiable predicate."""
+    import sys
+
     from disco.core.dod import CommandExitPredicate, DoDSpec
     from disco.core.dod_evaluator import DoDEvaluator
-    import sys
+
     sys.path.insert(0, "packages/core/tests")
     from test_dod_evaluator import _denied_command_runner, _passing_http_probe
 
@@ -284,18 +340,20 @@ async def test_infra_release_emits_unverified_advisory(tmp_path):
             ws, command_runner=_denied_command_runner, http_probe=_passing_http_probe
         ),
     )
-    await store.set_dod_spec(CID, DoDSpec(predicates=[CommandExitPredicate(cmd="make", expect_exit=0)]))
+    await store.set_dod_spec(
+        CID, DoDSpec(predicates=[CommandExitPredicate(cmd="make", expect_exit=0)])
+    )
     passed = await loop._finish.finish_dod_gate_passed()
-    assert passed is True  # released on infra
+    assert passed is False
     events = await store.get_events(CID)
-    advisories = [
-        e for e in events
-        if isinstance(e, MessageEvent)
-        and isinstance(e.meta, dict)
-        and e.meta.get("advisory") == "dod_unverified_at_finish"
+    blockers = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent) and "Definition-of-Done evaluator found" in e.message.content
     ]
-    assert len(advisories) == 1
-    assert "could NOT be verified" in advisories[0].message.content
+    assert len(blockers) == 1
+    assert "could not verify" in blockers[0].message.content
+    assert "hard-denied" in blockers[0].message.content
 
 
 @pytest.mark.asyncio
@@ -306,13 +364,23 @@ async def test_command_predicate_arms_in_v2(tmp_path):
     ws = tmp_path / "ws"
     ws.mkdir()
     sbx = _FakeSandbox(str(ws))
-    agent = ScriptedAgent([
-        action_step("submit_plan", {"summary": "p", "steps": [
-            _plan_step("run the build", {"kind": "command", "cmd": "make", "expect_exit": 0}),
-        ]}),
-        action_step("shell", {"command": "echo build"}),
-        _finish_call(),
-    ])
+    agent = ScriptedAgent(
+        [
+            action_step(
+                "submit_plan",
+                {
+                    "summary": "p",
+                    "steps": [
+                        _plan_step(
+                            "run the build", {"kind": "command", "cmd": "make", "expect_exit": 0}
+                        ),
+                    ],
+                },
+            ),
+            action_step("shell", {"command": "echo build"}),
+            _finish_call(),
+        ]
+    )
     _events, store = await _run(agent, sbx)
     spec = await store.get_dod_spec(CID)
     assert spec is not None, "command predicates now arm the gate (v2.1)"

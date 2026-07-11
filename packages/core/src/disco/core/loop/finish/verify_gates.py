@@ -17,6 +17,7 @@ from .common import (
     _LOG,
     _PREVIEW_PORTS,
     _VERIFY_MARKER_PREFIX,
+    _appkit_scope_active,
     _artifact_record_kind,
     _bounded_verifier_check_results,
     _browser_content_meaningful,
@@ -41,6 +42,7 @@ from .common import (
     _real_web_failure_evidence,
     _safe_deliverable_file_path,
     _screenshot_from_verdict,
+    _tc_components_installed,
     _vision_mode,
 )
 
@@ -76,6 +78,13 @@ class _FinishVerifyMixin(_FinishGateProto):
         MEDIUM and run unimpeded. Returns (passed, malformed): `passed` is True
         iff the check ran and passed; `malformed` is True iff the verify command
         itself is broken (command-not-found / SyntaxError) rather than the task."""
+        if _appkit_scope_active(self._loop):
+            # Strict AppKit has no raw shell surface. Its authoritative finish
+            # verification is the structured `verify_appkit_app` gate that runs
+            # later in the shared finish path, so the model-authored shell probe is
+            # a redundant impossible check here.
+            return True, False
+
         call = ToolCall(tool_name="shell", arguments={"command": command})
         # meta marker: this shell action is the GATE'S probe, not the agent's
         # work. Phase-B re-run #6 (2026-06-10): an unmarked probe counted as a
@@ -1510,10 +1519,18 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         is_appkit = verify_tool == "verify_appkit_app" or (
             getattr(self._loop.executor, "appkit_phase", None) is not None
         )
-        if (
-            self._loop._planning_tools
-            and self._loop.mode != OperatingMode.PLANNING
-            and (is_appkit or _is_web_deliverable(events))
+        # WO-TC3: a build that installed trusted components must pass through this
+        # gate even without a web-deliverable marker — the component integrity/deps/
+        # probe checks ride the verify_web_app verdict. This is kept OUT of the
+        # _planning_tools guard on purpose: verification is forced by the mere fact
+        # that components were installed, so the security property does not depend
+        # on the (currently true) invariant that the install tool only ever lives
+        # in a plan-gated scope. add_trusted_component can only fire in the build
+        # surface, so no non-build finish is affected in practice.
+        tc_installed = _tc_components_installed(events)
+        if self._loop.mode != OperatingMode.PLANNING and (
+            tc_installed
+            or (self._loop._planning_tools and (is_appkit or _is_web_deliverable(events)))
         ):
             # W-45: when the structured `verify_web_app` tool is in the execution
             # set (the build surface), consume its VERDICT as the primary check —

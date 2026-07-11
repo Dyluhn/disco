@@ -69,9 +69,8 @@ _BINARY_DELIVERABLE_EXTS = frozenset(
 # Per-conversation read-before-rewrite tracker (F1).
 # Structure: {conv_id: {"read_since_write": set[str]}}
 #   read_since_write: canonical paths (workspace-prefix-stripped) for which a
-#     successful FileReadTool.run has occurred since the path's last successful
-#     mutation (file_write / file_append / file_edit / file_replace_lines /
-#     file_insert_lines / file_str_replace) in this conversation.
+#     successful FileReadTool.run or success-observation-bearing mutator has
+#     shown current content for this conversation.
 #     A write to a path that (a) EXISTS on disk AND (b) is NOT in this set is
 #     REFUSED — the model must file_read the file first.
 #     A NEW file (does not exist yet) is always allowed.
@@ -132,13 +131,15 @@ def clear_conversation_read_state(conv_id: str) -> None:
 def _conv_state(conv_id: str) -> dict[str, Any]:
     s = _read_state.get(conv_id)
     if s is None:
-        # read_since_write: the coarse F1 bit (path grounded since last write).
+        # read_since_write: the coarse F1 bit (path has current visible grounding).
         # reads: CD-TOOLS-1 sha-aware per-path read records for the fresh-edit guard —
         #   {canonical_path: {"sha": <full-file sha at read>, "ranges": [(start,end)],
         #    "full": bool}}. `ranges` are 1-based inclusive line spans the model SAW
-        #   un-elided (a real file_read page); `full` is True for a whole-file read.
+        #   un-elided (a real file_read page or mutator success view); `full` is True
+        #   when that view covers the whole file.
         # targeted_read_grounded: reads[path] came from model-visible numbered content that can
-        # ground targeted edits without granting read_since_write / blind file_write.
+        # ground targeted edits. Refusal-delivered reads set this without read_since_write;
+        # successful mutators set both.
         s = {
             "read_since_write": set(),
             "edit_grounded": set(),
@@ -174,10 +175,8 @@ def _increment_old_text_not_found_count(conv_id: str, path: str) -> int:
 
 def _clear_grounding(conv_id: str, path: str) -> None:
     """[REL-RC-D/G] Fully un-ground `path`: drop the read-since-write, edit-grounded, and
-    targeted-read bits. Called by every line-shifting/non-anchored mutation (full/blind file_write &
-    file_append & safe_write, line-shifting file_replace_lines & file_insert_lines, and external
-    run_script edits) — after those the model must get fresh content before it can edit or rewrite
-    again."""
+    targeted-read bits. Used for mutating paths that do not return a current numbered
+    observation (for example safe_write_file and external run_script edits)."""
     canon = _canonical(path)
     st = _conv_state(conv_id)
     st["read_since_write"].discard(canon)
@@ -188,11 +187,20 @@ def _clear_grounding(conv_id: str, path: str) -> None:
 
 
 # CD-TOOLS-1 — the internal elision-marker family, re-expressed locally so the tools
-# package does not import from disco.core (layering). Mirrors core.events
-# _ELISION_MARKER_RE / _ELISION_PARAPHRASE_RE: an "<N chars … elided|full content …>"
-# render marker the model must never echo back into source.
+# package does not import from disco.core here. Mirrors core.events
+# _ELISION_MARKER_RE / _ELISION_PARAPHRASE_RE: the canonical
+# "[[DISCO-ELIDED: N chars ...]]" sentinel and historical angle-bracket render
+# markers the model must never echo back into source.
 _EDIT_ELISION_RE = re.compile(
-    r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full\s+content|placeholder)\b[^>]*>",
+    r"(?:"
+    r"\[\[\s*DISCO-ELIDED:\s*\d[\d,]*\s*chars\b[^\]]*?\]\]"
+    r"|"
+    r"<\s*\d[\d,]*\s*chars\b[^>]*?\b(?:elided|full\s+content|placeholder)\b[^>]*>"
+    r"|"
+    r"<(?=[^>]*\b(?:elided|full\s+content|placeholder)\b)[^>]*"
+    r"(?:re-issue the call or file_read the path|do not copy this placeholder"
+    r"|do not copy or re-send|already applied to the workspace)[^>]*>"
+    r")",
     re.IGNORECASE,
 )
 
@@ -205,7 +213,8 @@ _EDIT_ELISION_RE = re.compile(
 _GUARD_FRESH_READ_MIN_BYTES = 1_500
 _REFUSAL_READ_FULL_MAX_BYTES = 64 * 1024
 _LINE_REFUSAL_WINDOW_RADIUS = 40
-_LINE_SUCCESS_WINDOW_RADIUS = 40
+_UPDATED_REGION_WINDOW_RADIUS = 10
+_FILE_WRITE_SUCCESS_HEAD_LINES = 40
 
 
 def _has_elision_marker(*texts: str | None) -> bool:
@@ -287,6 +296,7 @@ def _line_refusal_read(
     current_bytes: bytes,
     sha: str,
     attempted_lines: tuple[int, int] | None,
+    window_radius: int = _LINE_REFUSAL_WINDOW_RADIUS,
 ) -> tuple[str, dict[str, Any]]:
     """Render and record the fresh content carried by a line-edit refusal.
 
@@ -299,7 +309,7 @@ def _line_refusal_read(
     if full:
         start, end = (1, max(total, 1))
     else:
-        start, end = _line_span(total, attempted_lines, _LINE_REFUSAL_WINDOW_RADIUS)
+        start, end = _line_span(total, attempted_lines, window_radius)
 
     canon = _canonical(path)
     st = _conv_state(conv_id)
@@ -475,33 +485,75 @@ def _old_text_not_found_refusal(
     path: str,
     *,
     current_bytes: bytes,
-    base_content: str,
+    attempted_old: str,
+    attempted_new: str,
     error: str,
+    tool_name: str = "file_edit",
+    base_content: str | None = None,
 ) -> ToolOutcome:
     """REL-6: anchored old-text misses are self-recovering refusal reads."""
     import hashlib
 
     count = _increment_old_text_not_found_count(conv_id, path)
-    content = base_content
+    text = current_bytes.decode("utf-8", errors="replace")
+    already_applied = _find_text_lines(text, attempted_new)
+    if already_applied is not None:
+        start, end = already_applied
+        content = (
+            f"the replacement text is already present at lines {start}-{end} — "
+            "the edit already applied; do not re-issue it."
+        )
+    else:
+        content = (
+            f"{tool_name} refused: your `old` text was not found in {path} "
+            "(the file has changed since you composed it, or the anchor differs in whitespace / "
+            "unicode — e.g. decorative characters often drift)."
+        )
+        if base_content:
+            content += "\n\n" + base_content
     structured: dict[str, Any] = {
         "kind": "old_text_not_found",
         "path": path,
         "old_text_not_found_count": count,
     }
-    delivered_content = len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES
+    delivered_content = False
+    if already_applied is not None:
+        delivered_content = len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES
+        attempted_lines = already_applied if delivered_content else None
+    else:
+        match_lines = _best_fuzzy_old_match_lines(text, attempted_old)
+        delivered_content = (
+            len(current_bytes) <= _REFUSAL_READ_FULL_MAX_BYTES or match_lines is not None
+        )
+        attempted_lines = match_lines
     if delivered_content:
         sha = hashlib.sha256(current_bytes).hexdigest()
+        if len(current_bytes) > _REFUSAL_READ_FULL_MAX_BYTES and attempted_lines is not None:
+            content += "\n\nBest fuzzy match region in the current file:"
         fresh_content, delivered = _line_refusal_read(
             conv_id,
             path,
             current_bytes=current_bytes,
             sha=sha,
-            attempted_lines=None,
+            attempted_lines=attempted_lines,
+            window_radius=10,
         )
         content += fresh_content
         structured["delivered_read"] = delivered
+    elif len(current_bytes) > _REFUSAL_READ_FULL_MAX_BYTES:
+        content += (
+            "\n\nNo plausible fuzzy match was found, and the file is larger than the "
+            "64KB refusal-read cap. Read the exact region you want to change, then retry."
+        )
+    if already_applied is None:
+        content += (
+            "\n\nAnchor your next edit on the CURRENT text shown above (copy it exactly), "
+            "or use file_replace_lines with the line numbers shown."
+        )
     if count >= 2:
-        if delivered_content:
+        if already_applied is not None:
+            content += "\n\nRepeated already-applied edit: do not re-send this replacement."
+        elif delivered_content:
             content += (
                 "\n\nRepeated old-text miss: your `old` text does not appear in the file "
                 "— do NOT re-send it; the exact current content is above, copy the region "
@@ -521,22 +573,163 @@ def _old_text_not_found_refusal(
     )
 
 
-def _line_success_content(
-    path: str,
-    text: str,
-    *,
-    changed_lines: tuple[int, int],
-    prefix: str,
-) -> str:
-    total = len(text.splitlines())
-    start, end = _line_span(total, changed_lines, _LINE_SUCCESS_WINDOW_RADIUS)
-    numbered = _numbered_line_window(text, start_line=start, end_line=end, total_lines=total)
-    return (
-        f"{prefix}\n\nUpdated content for {path} "
-        f"[lines {start}-{end} of {total}; total lines: {total}]. "
-        "Line numbers may have shifted — use these for any next line edit:\n"
-        f"{numbered}"
+def _find_text_lines(text: str, needle: str) -> tuple[int, int] | None:
+    """Return the 1-based line span where ``needle`` first appears, if it is non-empty."""
+    if not needle.strip():
+        return None
+    idx = text.find(needle)
+    if idx < 0:
+        return None
+    start = text.count("\n", 0, idx) + 1
+    line_count = max(1, len(needle.splitlines()))
+    return (start, start + line_count - 1)
+
+
+def _best_fuzzy_old_match_lines(text: str, old: str) -> tuple[int, int] | None:
+    """Find a plausible current line span for a stale anchored edit."""
+    from difflib import SequenceMatcher
+
+    old = _strip_line_numbers(old).strip("\n")
+    if not old.strip():
+        return None
+
+    lines = text.splitlines()
+    if not lines:
+        return None
+
+    old_lines = old.splitlines() or [old]
+    target = _norm_ws(old)
+    target_nonblank = "\n".join(ln.strip() for ln in old_lines if ln.strip())
+    if target_nonblank:
+        target = target_nonblank
+    if not target:
+        return None
+
+    target_line_count = max(1, len([ln for ln in old_lines if ln.strip()]) or len(old_lines))
+    candidate_sizes = sorted(
+        {
+            max(1, target_line_count - 1),
+            target_line_count,
+            target_line_count + 1,
+        }
     )
+    best: tuple[float, int, int] | None = None
+    for size in candidate_sizes:
+        if size > len(lines):
+            continue
+        for idx in range(0, len(lines) - size + 1):
+            candidate = "\n".join(ln.strip() for ln in lines[idx : idx + size] if ln.strip())
+            if not candidate:
+                continue
+            score = SequenceMatcher(None, target, candidate).ratio()
+            if best is None or score > best[0]:
+                best = (score, idx + 1, idx + size)
+
+    if best is None or best[0] < 0.55:
+        return None
+    return (best[1], best[2])
+
+
+def _bounded_updated_region_view(view: str) -> str:
+    raw = view.encode("utf-8")
+    if len(raw) <= _REFUSAL_READ_FULL_MAX_BYTES:
+        return view
+    notice = "\n[updated-region view truncated at 64KB]"
+    budget = max(0, _REFUSAL_READ_FULL_MAX_BYTES - len(notice.encode("utf-8")))
+    return raw[:budget].decode("utf-8", errors="ignore").rstrip() + notice
+
+
+def _post_change_line_span(before: str, after: str) -> tuple[int, int]:
+    """Best-effort 1-based span of changed lines in the post-edit file."""
+    from difflib import SequenceMatcher
+
+    before_lines = before.splitlines()
+    after_lines = after.splitlines()
+    spans: list[tuple[int, int]] = []
+    for tag, _i1, _i2, j1, j2 in SequenceMatcher(
+        None, before_lines, after_lines
+    ).get_opcodes():
+        if tag == "equal":
+            continue
+        spans.append((j1 + 1, max(j2, j1 + 1)))
+    if not spans:
+        return (1, max(1, len(after_lines)))
+    return (min(lo for lo, _hi in spans), max(hi for _lo, hi in spans))
+
+
+def _record_success_grounding(
+    conv_id: str,
+    path: str,
+    post_write_bytes: bytes,
+    *,
+    start_line: int,
+    end_line: int,
+    full: bool,
+) -> None:
+    """A successful mutator's returned view is fresh grounding for that path."""
+    import hashlib
+
+    canon = _canonical(path)
+    st = _conv_state(conv_id)
+    st["read_since_write"].add(canon)
+    st["edit_grounded"].add(canon)
+    st["targeted_read_grounded"].add(canon)
+    st["reads"][canon] = {
+        "sha": hashlib.sha256(post_write_bytes).hexdigest(),
+        "full": full,
+        "ranges": [(start_line, end_line)],
+    }
+    st["no_op_edit_counts"].pop(canon, None)
+    st["old_text_not_found_counts"].pop(canon, None)
+
+
+def _updated_region_success_content(
+    conv_id: str,
+    path: str,
+    post_write_bytes: bytes,
+    *,
+    prefix: str,
+    changed_lines: tuple[int, int] | None = None,
+    file_write_head: bool = False,
+) -> str:
+    text = post_write_bytes.decode("utf-8", errors="replace")
+    total = len(text.splitlines())
+    if total <= 0:
+        start, end = (1, 0)
+    elif file_write_head:
+        start, end = (1, min(total, _FILE_WRITE_SUCCESS_HEAD_LINES))
+    else:
+        start, end = _line_span(
+            total, changed_lines or (1, 1), _UPDATED_REGION_WINDOW_RADIUS
+        )
+    numbered = (
+        _numbered_line_window(text, start_line=start, end_line=end, total_lines=total)
+        if total > 0 and end >= start
+        else ""
+    )
+    parts = [f"applied — lines {start}-{end} now read:"]
+    if numbered:
+        parts.append(numbered)
+    if file_write_head:
+        parts.append(f"[total lines: {total}]")
+    raw_view = "\n".join(parts)
+    view = _bounded_updated_region_view(raw_view)
+    delivered_end = end
+    if view != raw_view:
+        delivered_numbers = [
+            int(m.group(1)) for m in re.finditer(r"(?m)^\s*(\d+)\t", view)
+        ]
+        delivered_end = max(delivered_numbers) if delivered_numbers else start - 1
+    full = total <= 0 or (start == 1 and delivered_end >= total)
+    _record_success_grounding(
+        conv_id,
+        path,
+        post_write_bytes,
+        start_line=start,
+        end_line=delivered_end,
+        full=full,
+    )
+    return f"{prefix}\n\n{view}"
 
 
 def guard_fresh_edit(
@@ -570,8 +763,9 @@ def guard_fresh_edit(
             error="ELISION_MARKER_REJECTED",
             content=(
                 f"Edit refused — the edit text for {path} contains an internal elision "
-                "placeholder (e.g. '<… chars elided …>'); that marker is render-only and must "
-                "never be written into a file. Read the file, then edit with the real text."
+                "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); that marker is render-only "
+                "and must never be written into a file. Read the file, then edit with the "
+                "real text."
             ),
             structured={
                 "kind": "elision_marker_rejected",
@@ -676,68 +870,6 @@ def guard_fresh_edit(
                 line_refusal_read=line_refusal_read,
             )
     return None
-
-
-def reground_after_anchored_edit(
-    conv_id: str, path: str, new_bytes: bytes, *, line_numbers_valid: bool = False
-) -> None:
-    """[REL-RC-D/G] After a HOST-VALIDATED ANCHORED edit (file_edit / file_str_replace /
-    exact_replace), or a line-count-preserving file_replace_lines edit, ADVANCE the file's grounding
-    to the just-written bytes instead of discarding it. Set `line_numbers_valid=True` only when the
-    edit is known not to have shifted numeric targets.
-
-    Root cause this fixes: the successful-mutation paths discarded only the coarse read_since_write
-    bit and left `reads[path].sha` at the PRE-edit value. So the model's OWN next same-file edit saw
-    rec.sha(v1) != disk_sha(v2) and was refused as STALE_FILE_CONTEXT — the guard misreporting a
-    tracked, deterministic, host-validated edit as EXTERNAL drift. Back-to-back same-file edits then
-    wedged the loop into STUCK (the REL-RC-D revise_thrice failure).
-
-    Preserves the PRIOR grounding SHAPE (Codex plan gate): keep whole-file grounding ONLY if the
-    read was already full; NEVER promote a partial read to whole-file. A partial/absent prior
-    grounding is DROPPED (not advanced) — advancing it would either lie about whole-file knowledge
-    or carry line ranges that this edit may have shifted; the next edit then honestly requires a
-    fresh read (auto-groundable) rather than inheriting a stale-but-fresh-sha partial window.
-
-    Grounding is granted on the SEPARATE `edit_grounded` signal, NOT `read_since_write`: an anchored
-    edit lets the model make its NEXT anchored edit (guard_fresh_edit honors edit_grounded), but the
-    coarse read bit stays cleared so a blind full file_write is STILL refused until a genuine read
-    (the Mode-B rewrite-from-memory protection is untouched).
-
-    Deliberately NOT called for line-shifting line edits (file_replace_lines with a different output
-    line count / file_insert_lines) or full/blind writes (file_write / file_append / safe_write_file)
-    or external mutations (run_script): a later numeric line target or a from-memory rewrite can be
-    stale even under a correct fresh sha, so those keep clearing grounding and force a fresh targeted
-    read/refusal-read."""
-    import hashlib
-
-    canon = _canonical(path)
-    st = _conv_state(conv_id)
-    prior = (st.get("reads") or {}).get(canon)
-    # The read bit is always cleared on mutation (a blind full rewrite still needs a fresh read).
-    st["read_since_write"].discard(canon)
-    st["no_op_edit_counts"].pop(canon, None)
-    st["old_text_not_found_counts"].pop(canon, None)
-    if prior is not None and prior.get("full"):
-        # Whole-file grounding stays whole-file, advanced to the post-edit bytes the engine wrote,
-        # and re-grants EDIT grounding so the model's own next anchored edit isn't false-STALE.
-        new_line_count = new_bytes.count(b"\n") + 1
-        st["reads"][canon] = {
-            "sha": hashlib.sha256(new_bytes).hexdigest(),
-            "full": True,
-            "ranges": [(1, new_line_count)],
-        }
-        st["edit_grounded"].add(canon)
-        if line_numbers_valid:
-            st["targeted_read_grounded"].add(canon)
-        else:
-            st["targeted_read_grounded"].discard(canon)
-    else:
-        # Partial/absent grounding: drop the stale sha record so it can't produce a FALSE
-        # STALE_FILE_CONTEXT, and clear edit grounding → the next edit gets an honest
-        # FRESH_READ_REQUIRED (never promote partial context to whole-file).
-        (st.get("reads") or {}).pop(canon, None)
-        st["edit_grounded"].discard(canon)
-        st["targeted_read_grounded"].discard(canon)
 
 
 def _canonical(path: str) -> str:
@@ -847,12 +979,12 @@ async def _gated_write(
     pre = _syntax_errors(path, old_text) if old_text is not None else []
     post = _syntax_errors(path, new_text)
     introduced = [e for e in post if e not in pre]
-    await ctx.sandbox.write_file(path, new_bytes)
+    await _atomic_write(ctx.sandbox, path, new_bytes)
     if not introduced:
         return None
     if old_text is not None:
         # AUTO-REVERT: restore previous content so the workspace stays consistent.
-        await ctx.sandbox.write_file(path, old_text.encode("utf-8"))
+        await _atomic_write(ctx.sandbox, path, old_text.encode("utf-8"))
         kept = "it was NOT applied (previous content kept)"
     else:
         kept = "it was applied (new file; no prior content to revert)"
@@ -885,11 +1017,11 @@ class FileReadTool:
         name="file_read",
         description=(
             "Read a UTF-8 text file from the workspace, with 1-based LINE NUMBERS. "
-            "For large files pass `offset` (1-based start line) + `limit` (line "
-            "count) to read a slice. Prefer `file_edit` (pass the exact text you see "
+            "Files under the source-size cap fit in ONE whole read — omit "
+            "offset/limit by default; slice only genuinely large files. Prefer `file_edit` (pass the exact text you see "
             "as `old`) for targeted changes; the line numbers also let you target "
-            "`file_replace_lines`, but re-read right before each line edit since they "
-            "shift after every change."
+            "`file_replace_lines`, but re-read the RANGE you are about to edit right "
+            "before a line edit (numbers shift after every change)."
         ),
         args_model=FileReadArgs,
         needs=_FS,
@@ -901,12 +1033,10 @@ class FileReadTool:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         data = await ctx.sandbox.read_file(args.path)
         # F1 — set the read-since-write bit for this path so a subsequent
-        # file_write is allowed (the happy path: read → write). Applies to ALL
-        # tiers (not gated on ctx.assist) — the thrash root-cause hits capable
-        # models too, and the guard must be symmetric. The internal
-        # ctx.sandbox.read_file() calls inside _gated_write and each mutator's
-        # own read do NOT go through this method, so they do NOT set the bit —
-        # only an explicit model-issued file_read counts as grounding evidence.
+        # file_write is allowed (the happy path: read → write). Successful
+        # mutators also set this via their returned numbered observations.
+        # Internal ctx.sandbox.read_file() calls inside _gated_write and each
+        # mutator's own preflight read do NOT set the bit by themselves.
         import hashlib
 
         _disk_sha = hashlib.sha256(data).hexdigest()  # CD-TOOLS-1 fresh-edit grounding
@@ -1020,9 +1150,103 @@ class FileReadTool:
         return ToolOutcome(success=True, content=header + "\n".join(out))
 
 
+# MONO-1 — monolith write gate (all tiers, like F1/ROOT-2). A single giant source
+# file is a build-killing trap: every later edit must be grounded through the
+# read-before-edit gates, and on a 1,700-line file that becomes a paginated
+# read→edit→refuse spiral (live forensics: one 71KB index.html cost 32 edit
+# refusals and the whole Playwright budget; multi-file builds of the same scope
+# paid 4-6 and passed). Prevention has to happen AT CREATION — linting is too
+# late — so file_write/file_append refuse to create or GROW a web-source file
+# past the cap, with a nudge naming the split. Targeted edit tools are exempt so
+# an existing monolith stays repairable, and shrinking rewrites are always
+# allowed (len(new) <= len(old)) so cleanup is never blocked.
+_MONOLITH_SOURCE_EXTS = frozenset(
+    {"html", "htm", "css", "js", "mjs", "cjs", "jsx", "ts", "tsx", "vue", "svelte"}
+)
+_MONOLITH_MAX_LINES = 800
+_MONOLITH_MAX_BYTES = 48 * 1024
+
+
+# Per-extension split recipes: the refusal must tell the agent EXACTLY what to do
+# with the content it just tried to write — a bare "split it up" leaves it guessing
+# and re-attempting. The agent still holds the full content, so the recipe is
+# phrased as "re-issue it as these smaller writes".
+_MONOLITH_RECIPES: dict[str, str] = {
+    "html": (
+        "Re-issue this content as several smaller writes: (1) move everything inside "
+        "your <style> tags into styles.css and replace them with "
+        '<link rel="stylesheet" href="styles.css">; (2) move your <script> bodies '
+        'into app.js and replace them with <script src="app.js"></script>; '
+        "(3) if it contains several pages or large independent sections, write each "
+        "as its own .html file and link between them."
+    ),
+    "css": (
+        "Re-issue this content as several smaller stylesheets split by concern — "
+        "e.g. base.css (reset/typography/variables), layout.css (grid/sections), "
+        "components.css (cards/forms/buttons) — and add one <link> per sheet."
+    ),
+    "js": (
+        "Re-issue this content as several ES modules split by concern (one feature "
+        "per file), wire them with import/export, and load the entry with "
+        '<script type="module" src="app.js"></script>.'
+    ),
+}
+for _alias, _canon in (("htm", "html"), ("mjs", "js"), ("cjs", "js"), ("jsx", "js"),
+                       ("ts", "js"), ("tsx", "js"), ("vue", "js"), ("svelte", "js")):
+    _MONOLITH_RECIPES[_alias] = _MONOLITH_RECIPES[_canon]
+
+
+def _monolith_refusal(
+    path: str, *, tool_name: str, n_lines: int, n_bytes: int
+) -> ToolOutcome:
+    # Name the exact tripwire — the agent must know precisely what flagged it.
+    tripped = []
+    if n_lines > _MONOLITH_MAX_LINES:
+        tripped.append(f"{n_lines} lines > the {_MONOLITH_MAX_LINES}-line cap")
+    if n_bytes > _MONOLITH_MAX_BYTES:
+        tripped.append(
+            f"{n_bytes / 1024:.1f}KB > the {_MONOLITH_MAX_BYTES // 1024}KB cap"
+        )
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    recipe = _MONOLITH_RECIPES.get(ext, _MONOLITH_RECIPES["html"])
+    return ToolOutcome(
+        success=False,
+        error="monolith_write",
+        content=(
+            f"{tool_name} refused — single-source-file size gate: {path} would be "
+            f"{' and '.join(tripped)} (per-file limit for source files). Nothing was "
+            f"written; you still have the full content in hand. {recipe} Smaller "
+            f"files keep every later edit cheap and reliable — this is a hard gate, "
+            f"so re-attempting the same oversized write will be refused again."
+        ),
+    )
+
+
+def _monolith_gate(
+    path: str, *, tool_name: str, new_bytes: bytes, old_len: int | None
+) -> ToolOutcome | None:
+    """Refuse creating/growing a web-source file past the monolith cap.
+    old_len None = new file. Shrinking/equal rewrites always pass."""
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else ""
+    if ext not in _MONOLITH_SOURCE_EXTS:
+        return None
+    if old_len is not None and len(new_bytes) <= old_len:
+        return None  # never block a shrink/cleanup, even of a legacy monolith
+    n_lines = new_bytes.count(b"\n") + (0 if new_bytes.endswith(b"\n") else 1)
+    if len(new_bytes) <= _MONOLITH_MAX_BYTES and n_lines <= _MONOLITH_MAX_LINES:
+        return None
+    return _monolith_refusal(
+        path, tool_name=tool_name, n_lines=n_lines, n_bytes=len(new_bytes)
+    )
+
+
 class FileWriteArgs(BaseModel):
     path: str = Field(description="Workspace-relative path to write.")
     content: str = Field(description="Full UTF-8 content to write.")
+    allow_shrink: bool = Field(
+        default=False,
+        description="Set true to permit a write that shrinks an existing file by >50% (otherwise refused).",
+    )
 
 
 class FileWriteTool:
@@ -1033,7 +1257,13 @@ class FileWriteTool:
             "(preferred over shell redirection for new files). To change an EXISTING "
             "file, make a targeted edit with file_edit / file_replace_lines instead — "
             "only rewrite a whole existing file when a targeted edit cannot express "
-            "the change."
+            "the change. Whole-file rewrites are guarded: read the file first, do not "
+            "copy elision placeholders, and pass allow_shrink=true only when a >50% "
+            "shrink is intentional. Writes to host-managed .disco/ artifacts are "
+            "refused, and successful writes commit atomically. Source files (.html/.css/.js/…) are capped at "
+            f"{_MONOLITH_MAX_LINES} lines / {_MONOLITH_MAX_BYTES // 1024}KB each — "
+            "structure sites as separate files (index.html + styles.css + app.js; "
+            "one HTML file per page), never one monolith."
         ),
         args_model=FileWriteArgs,
         needs=_FS,
@@ -1048,6 +1278,24 @@ class FileWriteTool:
             )
         ) is not None:
             return g
+        if _has_elision_marker(args.content):
+            return ToolOutcome(
+                success=False,
+                error="ELISION_MARKER_REJECTED",
+                content=(
+                    f"file_write refused — content for {args.path} contains an internal elision "
+                    "placeholder (for example '[[DISCO-ELIDED: ...]]'). That marker is only a "
+                    "rendered transcript placeholder, not file content. Recipe: call file_read "
+                    "for the current file or source region, then retry file_write with the real "
+                    "complete text."
+                ),
+                structured={
+                    "kind": "elision_marker_rejected",
+                    "path": args.path,
+                    "next_required_action": "file_read",
+                    "suggested_args": {"path": args.path},
+                },
+            )
         # Read existing content once — used by both the F1 guard and the W3 syntax gate.
         old_bytes: bytes | None = None
         old_text: str | None = None
@@ -1059,15 +1307,10 @@ class FileWriteTool:
             old_bytes = None
             old_text = None
         # F1 — read-before-rewrite guard (ALL tiers, no assist gate). Refuse a
-        # file_write to an EXISTING file if there has been no successful
-        # file_read of it since the path's last successful mutation in this
-        # conversation. A NEW (nonexistent) file is always allowed — there is no
-        # prior content to ground on. The old F3 "second untracked write forces
-        # replace" escape hatch is REMOVED; the only way past this refusal is an
-        # actual file_read (which sets the read-since-write bit), or using a
-        # targeted edit tool (file_replace_lines / file_insert_lines / file_edit)
-        # which does not require a full-rewrite guard because it operates on
-        # specific lines anchored to the current content.
+        # file_write to an EXISTING file if neither a successful file_read nor a
+        # success-observation-bearing mutator has grounded the current path in
+        # this conversation. A NEW (nonexistent) file is always allowed — there is no
+        # prior content to ground on.
         if old_text is not None:  # file exists (we read it above)
             # ROOT-2 — binary-deliverable clobber guard. The target is an EXISTING file
             # of a generated-binary type; a text file_write would corrupt it. Refuse
@@ -1108,15 +1351,57 @@ class FileWriteTool:
                 tool_name="file_write",
                 current_bytes=old_bytes,
             )
+        if (
+            old_text is not None
+            and len(args.content) < 0.5 * len(old_text)
+            and not args.allow_shrink
+        ):
+            return ToolOutcome(
+                success=False,
+                error="FILE_WRITE_SHRINK_REJECTED",
+                content=(
+                    f"file_write refused — this would shrink {args.path} from {len(old_text)} "
+                    f"to {len(args.content)} chars (>50% smaller), which usually means an "
+                    "accidental truncation or stale full-file rewrite. Recipe: if the shrink "
+                    "is intentional, retry with allow_shrink=true after confirming the current "
+                    "file content; otherwise use file_edit, file_replace_lines, or "
+                    "file_insert_lines for the targeted change."
+                ),
+                structured={
+                    "kind": "file_write_shrink_rejected",
+                    "path": args.path,
+                    "old_chars": len(old_text),
+                    "new_chars": len(args.content),
+                    "next_required_action": "file_write",
+                    "suggested_args": {
+                        "path": args.path,
+                        "content": args.content,
+                        "allow_shrink": True,
+                    },
+                },
+            )
+        # MONO-1 — refuse creating/growing a source-file monolith (see gate docstring).
+        if (
+            m := _monolith_gate(
+                args.path,
+                tool_name="file_write",
+                new_bytes=raw,
+                old_len=len(old_bytes) if old_bytes is not None else None,
+            )
+        ) is not None:
+            return m
         gated = await _gated_write(ctx, args.path, raw, old_text)
         if gated is not None:
             return gated
-        # F1 — clear the read-since-write bit: the file has been mutated, so the
-        # next file_write must be preceded by another file_read.
-        _clear_grounding(ctx.conversation_id, args.path)
         return ToolOutcome(
             success=True,
-            content=f"wrote {len(raw)} bytes to {args.path}",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                raw,
+                prefix=f"wrote {len(raw)} bytes to {args.path}",
+                file_write_head=True,
+            ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, raw),
         )
@@ -1137,7 +1422,9 @@ class FileAppendTool:
         description=(
             "Append UTF-8 content to a workspace file (creating it if absent). Use "
             "this instead of shell `>>` — raw-shell append corrupts on special "
-            "characters."
+            "characters. Growing a source file (.html/.css/.js/…) past "
+            f"{_MONOLITH_MAX_LINES} lines / {_MONOLITH_MAX_BYTES // 1024}KB is "
+            "refused — put new sections/pages in their own files instead."
         ),
         args_model=FileAppendArgs,
         needs=_FS,
@@ -1169,15 +1456,39 @@ class FileAppendTool:
                 tool_name="file_append",
                 current_bytes=existing,
             )
+        # MONO-1 — an append that grows a source file PAST the monolith cap is the
+        # same trap as a monolith file_write, arriving in installments. Refuse only
+        # the CROSSING (the RESULTING size is what's judged, not this chunk); a file
+        # already over the cap (legacy, pre-gate) stays freely appendable so repairs
+        # of an existing monolith are never obstructed — the gate's job is to stop
+        # new monoliths forming, not to wall off old ones mid-fix.
+        already_over = old_text is not None and (
+            len(existing) > _MONOLITH_MAX_BYTES
+            or existing.count(b"\n") + 1 > _MONOLITH_MAX_LINES
+        )
+        if not already_over and (
+            m := _monolith_gate(
+                args.path,
+                tool_name="file_append",
+                new_bytes=combined,
+                old_len=None,  # judge the resulting size outright (no shrink case here)
+            )
+        ) is not None:
+            return m
         # W3 — syntax gate: write combined; auto-revert to old if errors introduced.
         gated = await _gated_write(ctx, args.path, combined, old_text)
         if gated is not None:
             return gated
-        # F1 — file_append is a successful mutation: clear the read-since-write bit.
-        _clear_grounding(ctx.conversation_id, args.path)
+        changed = _post_change_line_span(old_text or "", combined.decode("utf-8", errors="replace"))
         return ToolOutcome(
             success=True,
-            content=f"appended {len(append_bytes)} bytes to {args.path}",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                combined,
+                prefix=f"appended {len(append_bytes)} bytes to {args.path}",
+                changed_lines=changed,
+            ),
             artifacts=[args.path],
             structured=_write_artifact_structured(args.path, combined),
         )
@@ -1190,7 +1501,7 @@ class FileListArgs(BaseModel):
 class FileListTool:
     definition = ToolDef(
         name="file_list",
-        description="List the entries of a directory in the workspace.",
+        description="List the entries of ONE directory level in the workspace (not recursive) — names + kind; descend by listing subdirectories.",
         args_model=FileListArgs,
         needs=_FS,
         runs_in="sandbox",
@@ -1262,7 +1573,8 @@ class FileEditTool:
             "pasted-in line numbers). This is the SAFEST targeted edit — it anchors on "
             "the text you give, so it can't hit the wrong place. For a large file, read "
             "the relevant section first (file_read with offset/limit) and pass that exact "
-            "snippet as `old`."
+            "snippet as `old`. Your previous edit's observation shows the CURRENT "
+            "numbering for that region — use it; re-read only if you edited elsewhere since."
         ),
         args_model=FileEditArgs,
         needs=_FS,
@@ -1313,7 +1625,7 @@ class FileEditTool:
         _elines = (
             (text.count("\n", 0, _idx) + 1, text.count("\n", 0, _idx) + 1 + args.old.count("\n"))
             if _idx >= 0
-            else None
+            else _best_fuzzy_old_match_lines(text, args.old)
         )
         _blocked = guard_fresh_edit(
             ctx.conversation_id,
@@ -1332,6 +1644,8 @@ class FileEditTool:
                 ctx.conversation_id,
                 args.path,
                 current_bytes=_raw,
+                attempted_old=args.old,
+                attempted_new=args.new,
                 error="old_text_not_found",
                 base_content=(
                     f"`old` not found in {args.path} (tried exact + whitespace-tolerant)."
@@ -1362,14 +1676,18 @@ class FileEditTool:
         gated = await _gated_write(ctx, args.path, updated.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # [REL-RC-D] file_edit is a HOST-VALIDATED ANCHORED mutation: advance grounding to the
-        # post-edit bytes (don't discard) so the model's own next same-file edit isn't false-STALE.
-        reground_after_anchored_edit(ctx.conversation_id, args.path, updated.encode("utf-8"))
+        updated_bytes = updated.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=f"edited {args.path} ({how})",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                updated_bytes,
+                prefix=f"edited {args.path} ({how})",
+                changed_lines=_post_change_line_span(text, updated),
+            ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, updated.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, updated_bytes),
         )
 
 
@@ -1390,8 +1708,8 @@ class FileReplaceLinesTool:
         description=(
             "Replace lines [start_line, end_line] (1-based, inclusive) of a file with "
             "`new_text`. Good for large files where reproducing exact text is hard. "
-            "IMPORTANT: re-read the file IMMEDIATELY before each call — line numbers "
-            "shift after any edit, and a stale range silently overwrites the wrong lines. "
+            "IMPORTANT: your previous edit's observation shows the CURRENT numbering "
+            "for that region — use it; re-read only if you edited elsewhere since. "
             "Use file_insert_lines to insert without replacing."
         ),
         args_model=FileReplaceLinesArgs,
@@ -1458,22 +1776,14 @@ class FileReplaceLinesTool:
         if gated is not None:
             return gated
         replaced = max(0, end - args.start_line + 1)
-        if replaced == len(new_lines):
-            # [REL-RC-G] Same line count means numeric line targets did not shift; advance the
-            # full-file grounding shape just like an anchored edit so consecutive line edits work.
-            reground_after_anchored_edit(
-                ctx.conversation_id, args.path, out.encode("utf-8"), line_numbers_valid=True
-            )
-        else:
-            # F1 — line-shifting replacement: clear grounding; the next line edit must use the
-            # fresh numbered content delivered on refusal or do an explicit file_read.
-            _clear_grounding(ctx.conversation_id, args.path)
         changed_hi = args.start_line + max(len(new_lines), 1) - 1
+        out_bytes = out.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=_line_success_content(
+            content=_updated_region_success_content(
+                ctx.conversation_id,
                 args.path,
-                out,
+                out_bytes,
                 changed_lines=(args.start_line, changed_hi),
                 prefix=(
                     f"replaced lines {args.start_line}-{end} of {args.path} "
@@ -1481,7 +1791,7 @@ class FileReplaceLinesTool:
                 ),
             ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, out.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, out_bytes),
         )
 
 
@@ -1550,20 +1860,20 @@ class FileInsertLinesTool:
         gated = await _gated_write(ctx, args.path, out.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # F1 — file_insert_lines is a successful mutation: clear the read-since-write bit.
-        _clear_grounding(ctx.conversation_id, args.path)
         changed_start = args.after_line + 1
         changed_hi = changed_start + max(len(ins), 1) - 1
+        out_bytes = out.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=_line_success_content(
+            content=_updated_region_success_content(
+                ctx.conversation_id,
                 args.path,
-                out,
+                out_bytes,
                 changed_lines=(changed_start, changed_hi),
                 prefix=f"inserted {len(ins)} lines after line {args.after_line} of {args.path}",
             ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, out.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, out_bytes),
         )
 
 
@@ -1634,7 +1944,7 @@ class FileStrReplaceTool:
         _elines = (
             (text.count("\n", 0, _idx) + 1, text.count("\n", 0, _idx) + 1 + args.old_str.count("\n"))
             if _idx >= 0
-            else None
+            else _best_fuzzy_old_match_lines(text, args.old_str)
         )
         _blocked = guard_fresh_edit(
             ctx.conversation_id, args.path, current_bytes=_raw,
@@ -1666,23 +1976,29 @@ class FileStrReplaceTool:
                     gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
                     if gated is not None:
                         return gated
-                    # [REL-RC-D] anchored mutation → advance grounding to the post-edit bytes.
-                    reground_after_anchored_edit(
-                        ctx.conversation_id, args.path, new_text.encode("utf-8")
-                    )
+                    new_bytes = new_text.encode("utf-8")
                     return ToolOutcome(
                         success=True,
-                        content=f"replaced in {args.path} (whitespace-stripped match)",
+                        content=_updated_region_success_content(
+                            ctx.conversation_id,
+                            args.path,
+                            new_bytes,
+                            prefix=f"replaced in {args.path} (whitespace-stripped match)",
+                            changed_lines=_post_change_line_span(text, new_text),
+                        ),
                         artifacts=[args.path],
                         structured=_write_artifact_structured(
-                            args.path, new_text.encode("utf-8")
+                            args.path, new_bytes
                         ),
                     )
             return _old_text_not_found_refusal(
                 ctx.conversation_id,
                 args.path,
                 current_bytes=_raw,
+                attempted_old=args.old_str,
+                attempted_new=args.new_str,
                 error="old_str_not_found",
+                tool_name="file_str_replace",
                 base_content=(
                     f"`old_str` did not appear verbatim in {args.path}. Copy the exact "
                     "current region you want to replace."
@@ -1694,13 +2010,18 @@ class FileStrReplaceTool:
         gated = await _gated_write(ctx, args.path, new_text.encode("utf-8"), text)
         if gated is not None:
             return gated
-        # [REL-RC-D] anchored mutation → advance grounding to the post-edit bytes.
-        reground_after_anchored_edit(ctx.conversation_id, args.path, new_text.encode("utf-8"))
+        new_bytes = new_text.encode("utf-8")
         return ToolOutcome(
             success=True,
-            content=f"replaced in {args.path}",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                new_bytes,
+                prefix=f"replaced in {args.path}",
+                changed_lines=_post_change_line_span(text, new_text),
+            ),
             artifacts=[args.path],
-            structured=_write_artifact_structured(args.path, new_text.encode("utf-8")),
+            structured=_write_artifact_structured(args.path, new_bytes),
         )
 
 
@@ -1904,7 +2225,7 @@ class ExactReplaceTool:
                     error="ELISION_MARKER_REJECTED",
                     content=(
                         f"exact_replace refused — an edit for {args.path} contains an internal elision "
-                        "placeholder (e.g. '<… chars elided …>'); read the file and use the real text."
+                        "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); read the file and use the real text."
                     ),
                     structured={
                         "kind": "elision_marker_rejected",
@@ -1942,7 +2263,10 @@ class ExactReplaceTool:
                     ctx.conversation_id,
                     args.path,
                     current_bytes=raw,
+                    attempted_old=e.old_string,
+                    attempted_new=e.new_string,
                     error="EXACT_REPLACE_NO_MATCH",
+                    tool_name="exact_replace",
                     base_content=(
                         f"exact_replace: old_string not found in {args.path}: "
                         f"{e.old_string[:60]!r}."
@@ -2011,12 +2335,15 @@ class ExactReplaceTool:
         # (8) all checks passed → ONE atomic write (never write-then-revert). All-or-nothing.
         new_bytes = new_text.encode("utf-8")
         await _atomic_write(ctx.sandbox, args.path, new_bytes)
-        # [REL-RC-D] exact_replace is anchored (position-spliced from live-disk snippet matches) →
-        # advance grounding to the post-edit bytes so a follow-up same-file edit isn't false-STALE.
-        reground_after_anchored_edit(ctx.conversation_id, args.path, new_bytes)
         return ToolOutcome(
             success=True,
-            content=f"exact_replace applied {len(spans)} replacement(s) to {args.path}.",
+            content=_updated_region_success_content(
+                ctx.conversation_id,
+                args.path,
+                new_bytes,
+                prefix=f"exact_replace applied {len(spans)} replacement(s) to {args.path}.",
+                changed_lines=_post_change_line_span(text, new_text),
+            ),
             artifacts=[args.path],
             structured=_write_artifact_structured(
                 args.path,
@@ -2070,7 +2397,7 @@ class SafeWriteFileTool:
                 error="ELISION_MARKER_REJECTED",
                 content=(
                     f"safe_write_file refused — content for {args.path} contains an internal elision "
-                    "placeholder (e.g. '<… chars elided …>'); read the file and write the real text."
+                    "placeholder (e.g. '[[DISCO-ELIDED: ...]]'); read the file and write the real text."
                 ),
                 structured={
                     "kind": "elision_marker_rejected",

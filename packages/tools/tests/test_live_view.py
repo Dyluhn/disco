@@ -90,6 +90,44 @@ def test_ensure_live_tears_down_on_partial_failure():
         mock_wd.assert_not_called()           # no watchdog for a stack that didn't come up
 
 
+def test_port_listening_detects_real_listener_including_loopback_only():
+    """The bind probe must see a REAL listener — including one bound to loopback
+    only (exactly how x11vnc binds): a 0.0.0.0 probe-bind overlaps every
+    interface, so EADDRINUSE fires either way. And a freed port reads free."""
+    import socket
+
+    import disco.tools.builtin.live_view as lv_mod
+
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))  # loopback-bound, like x11vnc
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        assert lv_mod._port_listening(port) is True
+    finally:
+        srv.close()
+    # No connection was ever made, so no TIME_WAIT — the freed port reads free.
+    assert lv_mod._port_listening(port) is False
+
+
+def test_port_listening_uses_no_external_binary():
+    """Regression (found live 2026-07-09): the old lsof-based probe returned False
+    when lsof was MISSING from the sandbox image — silently DISARMING the
+    foreign-listener fail-closed gate. The probe must be pure-stdlib: it may not
+    shell out at all, so image drift can never neuter it again."""
+    import disco.tools.builtin.live_view as lv_mod
+
+    with patch.object(
+        lv_mod.subprocess, "run", side_effect=AssertionError("probe must not shell out")
+    ), patch.object(
+        lv_mod.subprocess, "Popen", side_effect=AssertionError("probe must not shell out")
+    ):
+        # Port 1 is privileged: the bind fails (not with EADDRINUSE) and the probe
+        # must report OCCUPIED — the fail-closed direction — without any subprocess.
+        assert lv_mod._port_listening(1) is True
+
+
 def test_x11vnc_fails_closed_on_foreign_listener():
     """B3: a VNC server we did NOT start already on 5901 → refuse, never reuse/bridge."""
     import disco.tools.builtin.live_view as lv_mod
@@ -158,9 +196,12 @@ def test_watchdog_tears_down_on_partial_death():
     import disco.tools.builtin.live_view as lv_mod
 
     _reset_state()
-    dead = MagicMock(); dead.poll.return_value = 0       # exited
-    alive1 = MagicMock(); alive1.poll.return_value = None  # still running
-    alive2 = MagicMock(); alive2.poll.return_value = None
+    dead = MagicMock()
+    dead.poll.return_value = 0  # exited
+    alive1 = MagicMock()
+    alive1.poll.return_value = None  # still running
+    alive2 = MagicMock()
+    alive2.poll.return_value = None
     lv_mod._state["xvfb"] = alive1
     lv_mod._state["x11vnc"] = alive2
     lv_mod._state["websockify"] = dead
@@ -180,7 +221,8 @@ def test_watchdog_no_teardown_when_all_dead():
 
     _reset_state()
     for k in lv_mod._state:
-        p = MagicMock(); p.poll.return_value = 0
+        p = MagicMock()
+        p.poll.return_value = 0
         lv_mod._state[k] = p
     lv_mod._watchdog_stop.clear()
 

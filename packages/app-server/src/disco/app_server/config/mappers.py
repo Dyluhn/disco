@@ -45,7 +45,18 @@ def _display_key(key: str) -> str:
     return _humanize(key.removeprefix("or-"))
 
 
-def _pricing_mode(entry: ModelEntry) -> Literal["metered", "subscription", "free"]:
+def _display_label_key(key: str, entry: ModelEntry) -> str:
+    """Provider-enabled entries carry ids like `prov-<provider>-<model>` for
+    uniqueness; showing that raw ("Prov Opencode Go Deepseek V4 Flash") leaks
+    plumbing into the label. Strip the provider scaffolding — the provider is
+    already visible via the host chip — and humanize just the model part."""
+    if entry.api_key_env and entry.api_key_env.startswith("provider_"):
+        slug = entry.api_key_env.removeprefix("provider_")
+        return _humanize(key.removeprefix("prov-").removeprefix(f"{slug}-"))
+    return _display_key(key)
+
+
+def _pricing_mode(entry: ModelEntry) -> Literal["metered", "subscription", "free", "unknown"]:
     """Resolve the effective pay model for the cost surfaces (W-05). An explicit
     `entry.pricing_mode` wins; otherwise derive for back-compat: any price → metered,
     else free. Always a concrete value on the wire so the frontend never has to guess
@@ -82,6 +93,8 @@ def _endpoint_host(base_url: str | None) -> str | None:
 def _note(entry) -> str:
     """A quiet provenance caption from REAL config: context window, quant, endpoint
     — so the settings catalogue reflects what's actually deployed, not seed labels."""
+    if not entry.base_url:
+        return "not configured - add endpoint base URL"
     bits: list[str] = []
     ctx = entry.context_window
     bits.append(f"{ctx // 1000}K ctx" if ctx >= 1000 else f"{ctx} ctx")
@@ -102,7 +115,7 @@ def _models_from(config: RouterConfig) -> list[ModelDTO]:
         out.append(
             ModelDTO(
                 id=key,
-                label=f"{_display_key(key)} — {_model_name(entry.model_id)}",
+                label=f"{_display_label_key(key, entry)} — {_model_name(entry.model_id)}",
                 provider=_provider_view(entry),
                 price_in_per_m=entry.price_in_per_m,
                 price_out_per_m=entry.price_out_per_m,

@@ -36,7 +36,7 @@ populated by the time anything calls `generate` / the tools resolve a primitive.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -53,6 +53,12 @@ LEAD_GEN_PRIMITIVE_ID = "lead_gen"
 DIRECTORY_PRIMITIVE_ID = "directory"
 RECORDS_PRIMITIVE_ID = "records"
 HELLO_PRIMITIVE_ID = "hello"
+FORM_PRIMITIVE_ID = "form"
+SEO_PRIMITIVE_ID = "seo"
+COLLECTION_PRIMITIVE_ID = "collection"
+FEATURE_FLAGS_PRIMITIVE_ID = "feature_flags"
+BLOG_PRIMITIVE_ID = "blog"
+ANALYTICS_PRIMITIVE_ID = "analytics"
 
 
 @dataclass(frozen=True)
@@ -65,12 +71,24 @@ class HostService:
 
 
 @dataclass(frozen=True)
+class VerifyCheck:
+    """One named leg of a primitive verify run: pass/fail + a short human evidence
+    string. WO-A3: the verifier tool maps these 1:1 into its W-45 verdict checks."""
+
+    name: str
+    passed: bool
+    evidence: str
+
+
+@dataclass(frozen=True)
 class PrimitiveVerifyResult:
     """Result of a primitive's adversarial build-gate verify hook. WO-A3 wires it
-    into the build gate; WO-A0 only defines the shape (default None = no extra verify)."""
+    into the build gate via `verify_appkit_app`'s dispatch; `checks` carries the
+    per-leg breakdown (defaulted, so pre-WO-A3 constructions are unaffected)."""
 
     ok: bool
     detail: str = ""
+    checks: tuple[VerifyCheck, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,7 +108,15 @@ class PrimitiveDefinition:
     is "addable" iff BOTH `spec_schema` and `apply_spec` are set; the AppSpec stays
     the single source of truth and the app's own base primitive regenerates the
     whole tree from the folded spec (no per-addon file overlay — the sandbox
-    protocol has no delete, so overlays would strand stale files)."""
+    protocol has no delete, so overlays would strand stale files).
+
+    WO-A3 evolves the `verify` signature to
+    ``(AppSpec | None, DesignSpec | None, Mapping[str, str]) -> PrimitiveVerifyResult``:
+    the specs are Optional (a missing/unreadable spec still verifies, failing with
+    the usual "run app_create first" evidence) and the tree maps relpath → ON-DISK
+    text — a missing file is an ABSENT KEY (checks use ``tree.get(path)`` and treat
+    None as missing, the same semantics the verifier tool's sandbox reads have).
+    Nothing implemented the WO-A0 signature, so this is a free evolution."""
 
     id: str
     default_app_spec: Callable[[str, SiteRecipe], AppSpec]
@@ -100,7 +126,10 @@ class PrimitiveDefinition:
     tier: Literal["fillable", "template_only"] = "fillable"
     host_contract: tuple[HostService, ...] = ()
     spec_schema: type[BaseModel] | None = None
-    verify: Callable[[AppSpec, DesignSpec, dict[str, str]], PrimitiveVerifyResult] | None = None
+    verify: (
+        Callable[[AppSpec | None, DesignSpec | None, Mapping[str, str]], PrimitiveVerifyResult]
+        | None
+    ) = None
     apply_spec: Callable[[AppSpec, BaseModel], AppSpec] | None = None
 
 
@@ -160,13 +189,20 @@ def primitive_ids() -> frozenset[str]:
 
 
 __all__ = [
+    "ANALYTICS_PRIMITIVE_ID",
+    "COLLECTION_PRIMITIVE_ID",
+    "BLOG_PRIMITIVE_ID",
     "DIRECTORY_PRIMITIVE_ID",
+    "FEATURE_FLAGS_PRIMITIVE_ID",
+    "FORM_PRIMITIVE_ID",
     "HELLO_PRIMITIVE_ID",
     "LEAD_GEN_PRIMITIVE_ID",
     "RECORDS_PRIMITIVE_ID",
+    "SEO_PRIMITIVE_ID",
     "HostService",
     "PrimitiveDefinition",
     "PrimitiveVerifyResult",
+    "VerifyCheck",
     "get_primitive",
     "primitive_ids",
     "register_primitive",

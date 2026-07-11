@@ -7,6 +7,7 @@
 
 import * as Dropdown from "@radix-ui/react-dropdown-menu";
 import { Check, ChevronDown, Cpu } from "lucide-react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/cn";
 import { driverCostTag } from "@/lib/cost";
 import { useDriverModels, useLastSelectedModel } from "@/hooks/useDriverModels";
@@ -88,7 +89,9 @@ export function BuildModelPicker({
         className="flex max-w-[15rem] items-center gap-hair rounded-control border border-hairline bg-surface-1 px-inline py-hair font-ui text-[0.76rem] text-text-muted transition-colors hover:border-hairline-strong hover:text-text disabled:opacity-50"
       >
         <Cpu className="size-3.5 shrink-0" aria-hidden />
-        <span className="truncate">{current?.label ?? "Default model"}</span>
+        <span className="truncate">
+          {current?.label ?? (models.length === 0 ? "Configure model" : "Default model")}
+        </span>
         {current && (
           <span className={cn("shrink-0", costClass(current))}>· {costTag(current)}</span>
         )}
@@ -100,6 +103,14 @@ export function BuildModelPicker({
           sideOffset={6}
           className="z-50 min-w-[14rem] rounded-card border border-hairline bg-bg p-px shadow-none"
         >
+          {models.length === 0 && (
+            <div className="flex max-w-[16rem] flex-col gap-hair px-inline py-inline font-ui text-[0.78rem] text-text-muted">
+              <span>No driver model is configured.</span>
+              <Link className="font-medium text-accent hover:underline" to="/settings#catalogue">
+                Configure in Settings
+              </Link>
+            </div>
+          )}
           {free.length > 0 && (
             <>
               <Dropdown.Label className="px-inline py-hair font-ui text-[0.66rem] uppercase tracking-wide text-text-faint">

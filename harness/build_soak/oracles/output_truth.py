@@ -197,15 +197,19 @@ class OutputTruthOracle:
             content = files[path]
             proof = _proof_for(workspace_manifest, path)
             content_stable = _content_stable_for(workspace_manifest, path)
+            # Case-INSENSITIVE: these assert natural-language content ("bakery")
+            # against model-authored copy ("Hearth & Crumb Bakery"). Capitalization
+            # is content-neutral; a case-sensitive check FAILed a correct page on
+            # the 2026-07-09 overnight soak (ARTIFACT_TRUTH_MISMATCH on 'bakery').
             for needle in spec.get("must_contain") or []:
-                if needle not in content:
+                if needle.lower() not in content.lower():
                     content_mismatches.append({
                         "path": path, "check": "must_contain",
                         "missing_substring": needle, "proof": proof,
                         "content_stable": content_stable,
                     })
             for needle in spec.get("must_not_contain") or []:
-                if needle in content:
+                if needle.lower() in content.lower():
                     content_mismatches.append({
                         "path": path, "check": "must_not_contain",
                         "forbidden_substring": needle, "proof": proof,
@@ -264,7 +268,7 @@ class OutputTruthOracle:
                 ]
             preview_content = str(preview.get("content", ""))
             for needle in preview_assert.get("must_contain") or []:
-                if needle not in preview_content:
+                if needle.lower() not in preview_content.lower():
                     return [
                         failing(
                             _ORACLE,

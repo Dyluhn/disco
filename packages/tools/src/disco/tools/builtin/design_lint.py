@@ -63,6 +63,7 @@ from disco.core.design import DesignDirection, direction_from_markdown
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
+from ._outcomes import fail_outcome
 
 if TYPE_CHECKING:
     from ..sandbox.base import SandboxInstance
@@ -2148,17 +2149,24 @@ def lint_design(
     }
 
 
+_RENDER_FINDING_LIMIT = 20
+
+
 def _render(verdict: dict[str, Any]) -> str:
     lines = [f"DESIGN_LINT: {'PASS' if verdict['ok'] else 'FINDINGS'}", verdict["summary"]]
     if not verdict["design_spec_present"]:
         lines.append("note: no .disco/designspec.json — off-default values can't be justified.")
     elif not verdict["design_spec_valid"]:
         lines.append("note: .disco/designspec.json is invalid — justifications ignored.")
-    for f in verdict["findings"][:25]:
+    findings = verdict["findings"]
+    for f in findings[:_RENDER_FINDING_LIMIT]:
         lines.append(
             f"  [{f['severity']}] {f['rule_id']} ({f['choice_key']}) "
             f"{f['path']}:{f['line']} — {f['evidence']}"
         )
+    omitted = len(findings) - _RENDER_FINDING_LIMIT
+    if omitted > 0:
+        lines.append(f"…and {omitted} more findings — fix the above first, then re-run.")
     return "\n".join(lines)
 
 
@@ -2221,7 +2229,7 @@ class DesignLintTool:
                 structured=verdict,
             )
         except Exception as e:  # noqa: BLE001 — never crash the loop; report a scan error
-            return ToolOutcome(success=False, content="", error=f"design_lint error: {e}")
+            return fail_outcome(f"design_lint error: {e}")
 
     async def _load_direction(self, ctx: ToolContext) -> DesignDirection | None:
         """Read the committed design direction from durable context and recover the

@@ -32,14 +32,16 @@ from .enforce import (
     decide_tool_in_scope,
 )
 from .phase import BuildPhaseTracker
-from .registry import BuildContractRegistry
+from .registry import APP_KIND_TO_CONTRACT, BuildContractRegistry, contract_kind_for_app_kind
 from .scopes import PHASE_NEUTRAL_TOOLS, ContractToolScopes, Phase, compile_tool_scopes
 
 __all__ = [
     "DANGEROUS_TOOLS",
     "ArtifactContract",
     "BuildContract",
+    "APP_KIND_TO_CONTRACT",
     "BuildContractRegistry",
+    "contract_kind_for_app_kind",
     "BuildPhaseTracker",
     "ContractKind",
     "ContractScopeGuard",

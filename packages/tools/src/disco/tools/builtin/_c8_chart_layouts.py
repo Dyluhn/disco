@@ -182,20 +182,28 @@ def html_chart_content(title: str, spec: ChartSpec, theme: Theme) -> str:
 
 def html_table_content(title: str, spec: TableSpec, theme: Theme) -> str:
     """Inner HTML for a table slide — native HTML table, not chart fallback."""
-    if not spec.headers:
+    has_header = bool(spec.headers)
+    rows = list(spec.rows) if spec.rows else []
+    # Renderable with EITHER headers or rows — a headerless-but-populated table (the
+    # comparison-table case) must still render, not collapse to "(no table data)".
+    if not has_header and not rows:
         return (
             f'<h2 class="slide-heading">{_html.escape(title)}</h2>\n'
             f'<div class="slide-rule"></div>\n'
             f'<p class="slide-table-empty">(no table data)</p>'
         )
-    thead = "".join(f"<th>{_html.escape(h)}</th>" for h in spec.headers)
+    thead = (
+        f"<thead><tr>{''.join(f'<th>{_html.escape(h)}</th>' for h in spec.headers)}</tr></thead>"
+        if has_header
+        else ""
+    )
     tbody_rows = "".join(
         "<tr>" + "".join(f"<td>{_html.escape(str(c))}</td>" for c in row) + "</tr>"
-        for row in spec.rows
+        for row in rows
     )
     table_html = (
         f'<table class="slide-table">'
-        f"<thead><tr>{thead}</tr></thead>"
+        f"{thead}"
         f"<tbody>{tbody_rows}</tbody>"
         f"</table>"
     )
@@ -313,12 +321,21 @@ def _chart_fallback_pptx_table(
                 run.font.bold = True
                 run.font.size = Pt(11)
 
-    # Series rows
+    # Series rows — explicit theme fill/text (same dark-theme contrast fix as
+    # layout_table_slide_pptx; the default light banding is never trusted).
     for i, s in enumerate(spec.series):
         table.cell(i + 1, 0).text = str(s.get("name", ""))
         for j, v in enumerate(s.get("data", [])):
             if j + 1 < n_cols:
                 table.cell(i + 1, j + 1).text = str(v)
+        for j in range(n_cols):
+            cell = table.cell(i + 1, j)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _rgb(theme.surface_1)
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(11)
+                    run.font.color.rgb = _rgb(theme.text)
 
 
 def _chart_empty_placeholder(
@@ -397,13 +414,23 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     spec: TableSpec | None = getattr(slide, "table", None)
     tbl_h = _SLIDE_H - content_top - _MARGIN
 
-    if spec is None or not spec.headers:
+    # A table is renderable when it has EITHER headers or rows. The old gate bailed on
+    # empty `headers` alone and discarded a fully-populated `rows` (gauntlet 2026-07-07:
+    # a 7-row comparison table with headers==[] rendered as "[no data]", losing every
+    # row). Only fall through to the placeholder when there is genuinely nothing.
+    has_header = bool(spec and spec.headers)
+    data_rows = list(spec.rows) if spec and spec.rows else []
+    n_cols = (
+        len(spec.headers) if has_header
+        else max((len(r) for r in data_rows), default=0)
+    )
+    if spec is None or n_cols == 0 or (not has_header and not data_rows):
         _chart_empty_placeholder(prs_slide, _MARGIN, content_top, _CW, tbl_h, theme)
         _maybe_notes(prs_slide, slide)
         return
 
-    n_rows = len(spec.rows) + 1  # header + data rows
-    n_cols = len(spec.headers)
+    row_offset = 1 if has_header else 0
+    n_rows = len(data_rows) + row_offset
 
     tbl = prs_slide.shapes.add_table(
         n_rows, n_cols,
@@ -411,27 +438,39 @@ def layout_table_slide_pptx(prs_slide: Any, slide: Any, theme: Theme) -> None:
     )
     table = tbl.table
 
-    # Header row — accent background, white bold text
-    for j, hdr in enumerate(spec.headers):
-        cell = table.cell(0, j)
-        cell.text = str(hdr)
-        cell.fill.solid()
-        cell.fill.fore_color.rgb = _rgb(theme.accent)
-        for para in cell.text_frame.paragraphs:
-            for run in para.runs:
-                run.font.color.rgb = _rgb("#ffffff")
-                run.font.bold = True
-                run.font.size = Pt(12)
+    # Header row — accent background, white bold text (only when headers supplied).
+    if has_header:
+        for j, hdr in enumerate(spec.headers):
+            cell = table.cell(0, j)
+            cell.text = str(hdr)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _rgb(theme.accent)
+            for para in cell.text_frame.paragraphs:
+                for run in para.runs:
+                    run.font.color.rgb = _rgb("#ffffff")
+                    run.font.bold = True
+                    run.font.size = Pt(12)
 
-    # Data rows
-    for i, row in enumerate(spec.rows):
+    # Data rows. In the headerless case the first column carries the row labels
+    # (dimension names in a comparison table), so bold it for scannability instead
+    # of leaving a flat, hard-to-read grid.
+    # Cell fill is set EXPLICITLY from the theme: python-pptx's default table style
+    # is a light banded fill, so on a dark theme the near-white ``theme.text`` runs
+    # were invisible on the default light cells (gauntlet e-web 2026-07-07 — data
+    # rows unreadable). surface_1 + theme.text is self-consistent on any theme,
+    # matching the two_by_two quadrant treatment.
+    for i, row in enumerate(data_rows):
         for j in range(n_cols):
             val = str(row[j]) if j < len(row) else ""
-            cell = table.cell(i + 1, j)
+            cell = table.cell(i + row_offset, j)
             cell.text = val
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _rgb(theme.surface_1)
             for para in cell.text_frame.paragraphs:
                 for run in para.runs:
                     run.font.size = Pt(11)
                     run.font.color.rgb = _rgb(theme.text)
+                    if not has_header and j == 0:
+                        run.font.bold = True
 
     _maybe_notes(prs_slide, slide)

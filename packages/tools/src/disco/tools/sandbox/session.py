@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -52,6 +53,7 @@ class TrackedService:
     rematerialize hook re-issues the same `command` on a fresh box, so a
     multi-service build survives suspend/wake end-to-end (BP-G9 acceptance).
     """
+
     name: str
     port: int
     command: str
@@ -118,6 +120,7 @@ class SandboxSession:
         self._auto_preview_disabled = False
 
         from .shell_sessions import ShellSessionManager
+
         # Process backend shares the host tmux server across conversations, so
         # session names need a per-conversation namespace; container backends get
         # an isolated tmux server each (service.name per SandboxService protocol).
@@ -170,6 +173,7 @@ class SandboxSession:
         if self._kernel is None:
             inst = await self._ensure()
             from .kernel import ManagedKernel, _default_idle_timeout_s
+
             timeout = (
                 self._kernel_idle_timeout_s
                 if self._kernel_idle_timeout_s is not None
@@ -177,6 +181,7 @@ class SandboxSession:
             )
             if self._service.name == "process":
                 from .kernel import ProcessKernel
+
                 res = await inst.exec_shell("pwd", timeout_s=5)
                 ws = res.stdout.strip()
                 self._kernel = ManagedKernel(
@@ -185,6 +190,7 @@ class SandboxSession:
                 )
             else:
                 from .kernel import GatewayKernel
+
                 self._kernel = ManagedKernel(
                     lambda: GatewayKernel(inst, self.sessions),
                     idle_timeout_s=timeout,
@@ -549,7 +555,7 @@ class SandboxSession:
         if nl < 0:
             return None  # curl missing / no header line → not reachable
         header = out[:nl]
-        b64 = out[nl + 1:].strip()
+        b64 = out[nl + 1 :].strip()
         parts = header.split("\t")
         status_str = parts[0].strip()
         ctype = parts[1].strip() if len(parts) > 1 else ""
@@ -577,7 +583,7 @@ class SandboxSession:
         try:
             res = await inst.exec_shell(
                 # Find first index.html, skipping internal dirs, sort shallowest first
-                f"find {workspace} -name 'index.html'"
+                f"find {shlex.quote(workspace)} -name 'index.html'"
                 f" -not -path '*/.pmx/*' -not -path '*/node_modules/*'"
                 f" | sort | head -1",
                 timeout_s=5,
@@ -586,6 +592,7 @@ class SandboxSession:
                 found = res.stdout.strip()
                 if found:
                     import os as _os
+
                     subdir = _os.path.dirname(found)
                     if subdir and subdir != workspace:
                         return subdir
@@ -636,26 +643,34 @@ class SandboxSession:
         workspace = res.stdout.strip()
         # W6: serve the deepest index.html directory, not always the workspace root.
         serve_dir = await self._detect_serve_dir(inst, workspace)
-        cmd = f"python3 -m http.server {port} -d {serve_dir}"
+        # S-W5 D5: argv-serialize every component. ``serve_dir`` originates in
+        # the model-authored workspace and may contain shell metacharacters;
+        # interpolating it into a command made preview restart an execution sink.
+        preview_argv = ["python3", "-m", "http.server", str(port), "-d", serve_dir]
+        cmd = shlex.join(preview_argv)
 
-        await self.sessions.exec(
-            "preview",
-            cmd,
-            exec_dir=serve_dir
-        )
+        await self.sessions.exec("preview", cmd, exec_dir=serve_dir)
         # BP-G9: register the static preview as a tracked service so the wake
         # machinery has a single source of truth for "what to rematerialize on
         # a fresh box" — works alongside the C3 `_persistent_servers` dict that
         # `shell_exec` populates implicitly.
         self._tracked_services[port] = TrackedService(
-            name="preview", port=port, command=cmd, exec_dir=serve_dir,
+            name="preview",
+            port=port,
+            command=cmd,
+            exec_dir=serve_dir,
         )
         return True
 
     # ---- BP-G9: multi-service tracking + exposure -------------------------
 
     async def ensure_service(
-        self, name: str, port: int, command: str, *, exec_dir: str | None = None,
+        self,
+        name: str,
+        port: int,
+        command: str,
+        *,
+        exec_dir: str | None = None,
     ) -> str | None:
         """BP-G9 — start + track a USER_PORT-binding service.
 
@@ -685,9 +700,7 @@ class SandboxSession:
         from .port_owner import port_owner
 
         if port not in USER_PORTS:
-            raise SandboxError(
-                f"port {port} is not in USER_PORTS; refusing to track as service"
-            )
+            raise SandboxError(f"port {port} is not in USER_PORTS; refusing to track as service")
 
         inst = await self._ensure()
         owner = await port_owner(inst, port)
@@ -697,7 +710,10 @@ class SandboxSession:
             # on this port") but DON'T fight the current owner. The
             # rematerialize skip-check will short-circuit on recreate.
             self._tracked_services[port] = TrackedService(
-                name=name, port=port, command=command, exec_dir=exec_dir,
+                name=name,
+                port=port,
+                command=command,
+                exec_dir=exec_dir,
             )
             return None
 
@@ -708,7 +724,10 @@ class SandboxSession:
 
         await self.sessions.exec(name, command, exec_dir=cwd)
         self._tracked_services[port] = TrackedService(
-            name=name, port=port, command=command, exec_dir=cwd,
+            name=name,
+            port=port,
+            command=command,
+            exec_dir=cwd,
         )
         return inst.expose_port(port)
 

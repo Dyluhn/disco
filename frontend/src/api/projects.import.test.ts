@@ -1,27 +1,59 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importProject } from "@/api/projects";
-import * as clientModule from "@/api/client";
+import type {
+  browseStorage as browseStorageFn,
+  importProject as importProjectFn,
+} from "@/api/projects";
 
-function makeFetchStub(body: object, status = 200) {
-  return vi.fn().mockResolvedValue({
+type ImportProject = typeof importProjectFn;
+type BrowseStorage = typeof browseStorageFn;
+
+function jsonResponse(body: object, status = 200): Response {
+  return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(),
     json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
+  } as unknown as Response;
+}
+
+function makeFetchStub(body: object, status = 200) {
+  return vi.fn(async (url: RequestInfo | URL) => {
+    if (String(url) === "http://agent/api/auth/session") {
+      return jsonResponse({ authenticated: true, csrf_token: "csrf-token" });
+    }
+    return jsonResponse(body, status);
   });
+}
+
+async function importLiveProjects(): Promise<{
+  importProject: ImportProject;
+  browseStorage: BrowseStorage;
+}> {
+  vi.resetModules();
+  vi.stubGlobal("__DISCO_ENV", { AGENT_BASE: "http://agent" });
+  return import("@/api/projects");
+}
+
+function importCall(stub: ReturnType<typeof vi.fn>) {
+  const call = stub.mock.calls.find(([url]) =>
+    String(url).includes("/api/projects/import"),
+  );
+  if (!call) throw new Error("project import endpoint was not called");
+  return call as [string, RequestInit];
 }
 
 describe("importProject", () => {
   beforeEach(() => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
-    vi.spyOn(clientModule, "agentHttpBase").mockReturnValue("http://agent");
+    vi.unstubAllGlobals();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   it("posts a zip as multipart form data", async () => {
+    const { importProject } = await importLiveProjects();
     const payload = { conversation_id: "conv_zip", files: 1, bytes: 5, title: "App" };
     const stub = makeFetchStub(payload);
     vi.stubGlobal("fetch", stub);
@@ -30,38 +62,64 @@ describe("importProject", () => {
     const result = await importProject({ kind: "zip", file });
 
     expect(result).toEqual(payload);
-    const [url, init] = stub.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe("http://agent/api/projects/import?owner_id=local");
+    const [url, init] = importCall(stub);
+    expect(url).toBe("http://agent/api/projects/import");
     expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
+    expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
     expect(init.body).toBeInstanceOf(FormData);
-    expect((init.headers as Record<string, string> | undefined)?.["content-type"]).toBeUndefined();
+    expect(new Headers(init.headers).get("content-type")).toBeNull();
     expect((init.body as FormData).get("file")).toBe(file);
   });
 
   it("posts a local folder path as JSON", async () => {
+    const { importProject } = await importLiveProjects();
     const payload = { conversation_id: "conv_path", files: 2, bytes: 10, title: "Existing" };
     const stub = makeFetchStub(payload);
     vi.stubGlobal("fetch", stub);
 
     await importProject({ kind: "path", path: "/tmp/existing" });
 
-    const [_url, init] = stub.mock.calls[0] as [string, RequestInit];
-    expect(init.headers).toEqual({ "content-type": "application/json" });
+    const [, init] = importCall(stub);
+    expect(new Headers(init.headers).get("content-type")).toBe("application/json");
+    expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
     expect(init.body).toBe(JSON.stringify({ path: "/tmp/existing" }));
   });
 
   it("posts a git URL as JSON", async () => {
+    const { importProject } = await importLiveProjects();
     const payload = { conversation_id: "conv_git", files: 3, bytes: 20, title: "Repo" };
     const stub = makeFetchStub(payload);
     vi.stubGlobal("fetch", stub);
 
     await importProject({ kind: "git", gitUrl: "https://example.com/repo.git" });
 
-    const [_url, init] = stub.mock.calls[0] as [string, RequestInit];
+    const [, init] = importCall(stub);
     expect(init.body).toBe(JSON.stringify({ git_url: "https://example.com/repo.git" }));
   });
 
+  it("sends the session-bound CSRF header on the protected storage browse GET", async () => {
+    const { browseStorage } = await importLiveProjects();
+    const stub = makeFetchStub({
+      path: "/home/dylan",
+      parent: null,
+      selectable: "ok",
+      entries: [],
+    });
+    vi.stubGlobal("fetch", stub);
+
+    await browseStorage("/home/dylan");
+
+    const call = stub.mock.calls.find(([url]) => String(url).includes("/api/storage/browse?"));
+    expect(call).toBeDefined();
+    const [url, init] = call as unknown as [string, RequestInit];
+    expect(url).toContain("path=%2Fhome%2Fdylan");
+    expect((init.method ?? "GET").toUpperCase()).toBe("GET");
+    expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
+  });
+
   it("surfaces the backend import error reason and message", async () => {
+    const { importProject } = await importLiveProjects();
     vi.stubGlobal(
       "fetch",
       makeFetchStub(

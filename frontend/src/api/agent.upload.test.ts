@@ -6,50 +6,82 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { uploadFiles } from "@/api/agent";
-import * as clientModule from "@/api/client";
+import type { uploadFiles as uploadFilesFn } from "@/api/agent";
 
 // ---- helpers ----------------------------------------------------------------
 
-function makeFetchStub(body: object, status = 200) {
-  return vi.fn().mockResolvedValue({
+type UploadFiles = typeof uploadFilesFn;
+
+function jsonResponse(body: object, status = 200): Response {
+  return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers(),
     json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
+  } as unknown as Response;
+}
+
+function makeFetchStub(body: object, status = 200) {
+  return vi.fn(async (url: RequestInfo | URL) => {
+    if (String(url) === "http://agent/api/auth/session") {
+      return jsonResponse({ authenticated: true, csrf_token: "csrf-token" });
+    }
+    return jsonResponse(body, status);
   });
+}
+
+async function importLiveAgent(): Promise<{ uploadFiles: UploadFiles }> {
+  vi.resetModules();
+  vi.stubGlobal("__DISCO_ENV", { AGENT_BASE: "http://agent" });
+  return import("@/api/agent");
+}
+
+async function importOfflineAgent(): Promise<{ uploadFiles: UploadFiles }> {
+  vi.resetModules();
+  vi.unstubAllGlobals();
+  return import("@/api/agent");
+}
+
+function uploadCall(stub: ReturnType<typeof vi.fn>) {
+  const call = stub.mock.calls.find(([url]) =>
+    String(url).includes("/conversations/"),
+  );
+  if (!call) throw new Error("upload endpoint was not called");
+  return call as [string, RequestInit];
 }
 
 // ---- tests ------------------------------------------------------------------
 
 describe("uploadFiles", () => {
-  // Activate live mode so the function hits fetch, not the offline fixture.
   beforeEach(() => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
-    vi.spyOn(clientModule, "agentHttpBase").mockReturnValue("http://agent");
+    vi.unstubAllGlobals();
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   it("posts FormData (not JSON) to /conversations/{cid}/files", async () => {
+    const { uploadFiles } = await importLiveAgent();
     const stub = makeFetchStub({ saved: [], rejected: [] });
     vi.stubGlobal("fetch", stub);
 
     const file = new File(["hello"], "test.csv", { type: "text/csv" });
     await uploadFiles("conv_123", [file]);
 
-    expect(stub).toHaveBeenCalledOnce();
-    const [url, init] = stub.mock.calls[0] as [string, RequestInit];
+    const [url, init] = uploadCall(stub);
     expect(url).toBe("http://agent/conversations/conv_123/files");
     expect(init.method).toBe("POST");
     expect(init.body).toBeInstanceOf(FormData);
+    expect(init.credentials).toBe("include");
+    expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
     // Content-Type must NOT be set (let the browser add the multipart boundary)
-    expect((init.headers as Record<string, string> | undefined)?.["content-type"]).toBeUndefined();
+    expect(new Headers(init.headers).get("content-type")).toBeNull();
   });
 
   it("appends each File under the 'files' field", async () => {
+    const { uploadFiles } = await importLiveAgent();
     const stub = makeFetchStub({ saved: [], rejected: [] });
     vi.stubGlobal("fetch", stub);
 
@@ -57,7 +89,7 @@ describe("uploadFiles", () => {
     const f2 = new File(["b"], "b.csv");
     await uploadFiles("conv_x", [f1, f2]);
 
-    const fd = stub.mock.calls[0][1].body as FormData;
+    const fd = uploadCall(stub)[1].body as FormData;
     const all = fd.getAll("files");
     expect(all).toHaveLength(2);
     expect((all[0] as File).name).toBe("a.csv");
@@ -65,6 +97,7 @@ describe("uploadFiles", () => {
   });
 
   it("returns the saved/rejected payload", async () => {
+    const { uploadFiles } = await importLiveAgent();
     const payload = {
       saved: [{ name: "data.csv", bytes: 42 }],
       rejected: [{ name: "big.bin", reason: "file exceeds 25 MB limit" }],
@@ -77,7 +110,7 @@ describe("uploadFiles", () => {
   });
 
   it("returns empty arrays in offline mode (agentLive = false)", async () => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(false);
+    const { uploadFiles } = await importOfflineAgent();
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
@@ -87,6 +120,7 @@ describe("uploadFiles", () => {
   });
 
   it("returns the 413 payload without throwing (partial rejection)", async () => {
+    const { uploadFiles } = await importLiveAgent();
     const payload = {
       saved: [{ name: "ok.txt", bytes: 5 }],
       rejected: [{ name: "big.bin", reason: "file exceeds 25 MB limit" }],

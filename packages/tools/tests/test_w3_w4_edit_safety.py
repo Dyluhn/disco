@@ -1,12 +1,12 @@
-"""W3/W4 — syntax-gate writes + auto-revert + capability-gated file_str_replace.
+"""W3/W4 — syntax-gate writes + auto-revert + capability-gated exact_replace.
 
 W3 — _gated_write: every writer runs new content through _syntax_errors and
 diff-filters against pre-existing errors so pre-existing breakage is not
 counted against the edit. On new errors: AUTO-REVERT + failure outcome.
 
-W4 — file_str_replace: anchored str-replace offered only to capable models
-(Requirement.ANCHORED_EDIT); registry withholds it from the weak tier's
-advertised set.
+W4 — exact_replace: anchored exact-match replacement is offered only to capable
+models (Requirement.ANCHORED_EDIT); retired edit tools stay implemented but are
+outside the agent scope.
 """
 
 from __future__ import annotations
@@ -324,41 +324,43 @@ async def test_w4_str_replace_with_w3_gate_reverts_bad_python():
 # ===========================================================================
 
 
-def test_w4_registry_withholds_str_replace_from_non_anchored_policy():
-    """standard + anchored_edit=False: file_str_replace is in AGENT_TOOLS but
-    NOT in the advertised set (the policy's withheld_tools drives the exclusion)."""
+def test_w4_registry_withholds_exact_replace_from_non_anchored_policy():
+    """standard + anchored_edit=False: exact_replace is allowed but not advertised."""
     scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
-    assert "file_str_replace" in scope.allowed_tools
+    assert "exact_replace" in scope.allowed_tools
     assert scope.advertised_tools is not None
-    assert "file_str_replace" not in scope.advertised_tools
+    assert "exact_replace" not in scope.advertised_tools
 
 
-def test_w4_registry_grants_str_replace_to_standard_anchored_policy():
-    """standard + anchored_edit=True: file_str_replace is in the advertised set.
-
-    NOTE: advertised_tools is now a concrete set (no longer None). plan_step is RETIRED
-    from the advertised surface for EVERY tier (runthru-v2 #3, state-drift), so even the
-    standard/anchored policy narrows the surface to AGENT_TOOLS minus plan_step. None
-    ("advertise all") would have re-offered the retired tool, so the surface is now
-    explicit: file_str_replace advertised, plan_step withheld."""
+def test_w4_registry_grants_exact_replace_to_standard_anchored_policy():
+    """standard + anchored_edit=True: exact_replace is in the advertised set."""
     scope = agent_scope(model_policy=ModelExecutionPolicy.standard())
-    assert "file_str_replace" in scope.allowed_tools
-    assert scope.advertised_tools is not None
-    assert "file_str_replace" in scope.advertised_tools
-    assert "plan_step" not in scope.advertised_tools
+    assert "exact_replace" in scope.allowed_tools
+    assert scope.advertised_tools is None or "exact_replace" in scope.advertised_tools
 
 
-def test_w4_file_str_replace_in_agent_tools():
-    """file_str_replace must be in AGENT_TOOLS (security allowlist)."""
-    assert "file_str_replace" in AGENT_TOOLS
+def test_retired_edit_surface_tools_not_in_agent_tools():
+    """Retired edit/progress tools stay implemented but are not in AGENT_TOOLS."""
+    assert not {"file_str_replace", "find_and_edit", "safe_write_file", "plan_step"} & AGENT_TOOLS
 
 
-def test_w4_non_anchored_policy_advertised_excludes_str_replace():
-    """standard + anchored_edit=False advertises AGENT_TOOLS minus the anchored-edit tools
-    (file_str_replace AND exact_replace) AND minus plan_step. plan_step is RETIRED from the
-    advertised surface for EVERY tier (runthru-v2 #3, state-drift); the non-anchored capability
-    additionally withholds the anchored-edit tools (exact_replace added in CD-TOOLS-2)."""
-    scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
-    assert scope.advertised_tools == AGENT_TOOLS - frozenset(
-        {"file_str_replace", "exact_replace", "plan_step"}
+def test_edit_trio_present_for_all_agent_tiers():
+    trio = {"file_edit", "file_replace_lines", "file_insert_lines"}
+    policies = (
+        ModelExecutionPolicy.standard(),
+        ModelExecutionPolicy(tier="standard", anchored_edit=False),
+        ModelExecutionPolicy(tier="weak", anchored_edit=False),
     )
+    for policy in policies:
+        scope = agent_scope(model_policy=policy)
+        advertised = (
+            scope.allowed_tools if scope.advertised_tools is None else scope.advertised_tools
+        )
+        assert trio <= scope.allowed_tools
+        assert trio <= advertised
+
+
+def test_w4_non_anchored_policy_advertised_excludes_exact_replace():
+    """standard + anchored_edit=False advertises AGENT_TOOLS minus exact_replace."""
+    scope = agent_scope(model_policy=ModelExecutionPolicy(tier="standard", anchored_edit=False))
+    assert scope.advertised_tools == AGENT_TOOLS - frozenset({"exact_replace"})

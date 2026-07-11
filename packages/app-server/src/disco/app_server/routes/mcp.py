@@ -8,6 +8,7 @@ from ..config.dtos import (
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
+    McpServerPatchDTO,
 )
 from ..config_state import ConfigState
 
@@ -27,7 +28,7 @@ def make_mcp_router(state: ConfigState) -> APIRouter:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.patch("/api/mcp/servers/{name}")
-    async def update_mcp_server(name: str, body: McpServerConfigDTO) -> McpConnectionDTO:
+    async def update_mcp_server(name: str, body: McpServerPatchDTO) -> McpConnectionDTO:
         result = state.update_mcp_server(name, body)
         if result is None:
             raise HTTPException(status_code=404, detail=f"unknown server {name!r}")
@@ -44,6 +45,8 @@ def make_mcp_router(state: ConfigState) -> APIRouter:
             return state.approve_mcp_server(name, body)
         except KeyError:
             raise HTTPException(status_code=404, detail=f"unknown server {name!r}") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 

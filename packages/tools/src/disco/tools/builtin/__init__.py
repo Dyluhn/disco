@@ -9,6 +9,8 @@ placeholder — the model declares intent, the platform owns the port/serving/he
 
 from __future__ import annotations
 
+from disco.core.flags import appkit_enabled
+
 from ..registry import ToolRegistry
 from ._deck_patch import DeckPatchTool
 from .app_kit import APPKIT_V2_TOOLS
@@ -55,6 +57,7 @@ from .slides import SlidesTool
 from .subagent import DelegateExploreTool
 from .system import CodeExecTool, ShellTool
 from .think import ThinkTool
+from .trusted_components import AddTrustedComponentTool, EjectTrustedComponentTool
 from .verify_app import VerifyWebAppTool
 from .workflow_controls import WorkflowNeedsInputTool, WorkflowSkipTool
 
@@ -105,6 +108,12 @@ __all__ = [
     "WorkflowSkipTool",
     "build_default_registry",
 ]
+
+def _trusted_registry_nonempty() -> bool:
+    from disco.core.trusted_components.registry import TrustedComponentRegistry
+
+    return bool(TrustedComponentRegistry.default().names())
+
 
 def build_default_registry() -> ToolRegistry:
     """Register the core toolset. The EPIC F preview surface (preview_start/status/
@@ -160,12 +169,24 @@ def build_default_registry() -> ToolRegistry:
         # LEGACY app_snapshot_version stays the registered owner of its name
         # (governed persisted-v1 paths depend on it) — skip the v2 duplicate here;
         # the AppKit executor registers the full v2 set for strict-mode builds.
+        # KILL SWITCH: DISCO_APPKIT_ENABLED=0 drops the whole v2 set — app_*
+        # becomes unknown_tool everywhere (the legacy pair above is a different,
+        # governed surface and stays).
         *(
             cls()
-            for cls in APPKIT_V2_TOOLS
+            for cls in (APPKIT_V2_TOOLS if appkit_enabled() else ())
             if cls().definition.name != "app_snapshot_version"
         ),
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
+        # WO-TC2: the trusted-components tier — verified vendored security cores.
+        # Free-form Build scope only (AGENT_TOOLS); strict AppKit/artifact/research
+        # scopes never include the names. Registered ONLY when the registry ships
+        # components — an installable-nothing tool is a false affordance (review #7).
+        *(
+            (AddTrustedComponentTool(), EjectTrustedComponentTool())
+            if _trusted_registry_nonempty()
+            else ()
+        ),
         # image_generate: keyless/local image synthesis (PIL procedural; configurable
         # via Settings to use OpenAI-compatible or ComfyUI backends). No backend pinned
         # here — the tool re-reads the saved provider per call (config honored live).

@@ -14,14 +14,19 @@ import sys
 import pytest
 from disco.core import SecurityRisk
 from disco.tools.mcp.approval import (
+    compute_config_hash,
     compute_description_hash,
 )
 from disco.tools.mcp.config import McpServerConfig, McpSettings
 from disco.tools.mcp.migrations import (
     create_mcp_approval,
+    create_mcp_config_approval,
     list_mcp_approvals,
+    list_mcp_config_approvals,
 )
 from disco.tools.mcp.pool import McpPool
+
+from packages.tools.tests.mcp_fakes import FAKE_TOOL_DESCRIPTORS
 
 
 def _fake_stdio_server_config(
@@ -48,10 +53,28 @@ def _fake_stdio_server_config(
 def _make_pool(
     servers: dict[str, McpServerConfig] | None = None,
     approvals: dict[str, str] | None = None,
+    config_approvals: dict[str, str] | None = None,
 ) -> McpPool:
-    """Build a pool with the given servers, optionally pre-approved."""
-    settings = McpSettings(enabled=True, servers=servers or {})
-    return McpPool(settings, approvals=approvals)
+    """Build a pool whose ordinary fixtures are explicitly approved.
+
+    Passing an empty mapping is distinct from omitting one and is used by
+    refusal tests. Production remains fail-closed when either ledger is empty.
+    """
+    actual_servers = servers or {}
+    if approvals is None:
+        approvals = {
+            name: compute_description_hash(FAKE_TOOL_DESCRIPTORS)
+            for name, srv in actual_servers.items()
+            if srv.transport == "stdio"
+        }
+    if config_approvals is None:
+        config_approvals = {name: compute_config_hash(srv) for name, srv in actual_servers.items()}
+    settings = McpSettings(enabled=True, servers=actual_servers)
+    return McpPool(
+        settings,
+        approvals=approvals,
+        config_approvals=config_approvals,
+    )
 
 
 @pytest.mark.asyncio
@@ -68,6 +91,7 @@ async def test_pool_start_with_fake_server():
         assert "mcp__fake_srv__add" in names
         assert "mcp__fake_srv__read_file" in names
         assert "mcp__fake_srv__list_files" in names
+        assert {t.runs_in for t in snapshot} == {"in_process"}
     finally:
         await pool.aclose()
 
@@ -170,19 +194,7 @@ async def test_pool_approval_match_does_not_raise():
     """When the stored approval hash matches the current tools, start
     proceeds and the server is 'connected'."""
     srv = _fake_stdio_server_config()
-    # Compute the expected hash from the RAW tool descriptions (not the fenced
-    # ones in ToolDef). The pool hashes the original MCP tool descriptions.
-    raw_tool_descs = [
-        {"name": "echo", "description": "Echo back the message"},
-        {"name": "add", "description": "Add two numbers together"},
-        {"name": "read_file", "description": "Read a file from the server temp dir"},
-        {"name": "list_files", "description": "List files in the temp dir"},
-        {
-            "name": "get_env",
-            "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
-        },
-    ]
-    expected_hash = compute_description_hash(raw_tool_descs)
+    expected_hash = compute_description_hash(FAKE_TOOL_DESCRIPTORS)
 
     # Start a pool with the correct approval hash
     pool = _make_pool(
@@ -204,6 +216,7 @@ async def test_pool_approval_from_real_db_table():
     """D1: The production path — pool started with approvals read from a
     real mcp_approvals table row. A description mismatch marks the server
     as approval_required (not a hand-constructed approvals dict)."""
+    srv = _fake_stdio_server_config()
     # Create an in-memory SQLite DB with the mcp_approvals table
     conn = sqlite3.connect(":memory:")
     conn.execute(
@@ -221,6 +234,7 @@ async def test_pool_approval_from_real_db_table():
         "fake_srv",
         "0000000000000000000000000000000000000000000000000000000000000000",
     )
+    create_mcp_config_approval(conn, "fake_srv", compute_config_hash(srv))
 
     # Read approvals the production way (as _start_mcp_pool does)
     approvals: dict[str, str] = {}
@@ -229,10 +243,16 @@ async def test_pool_approval_from_real_db_table():
     assert approvals == {
         "fake_srv": "0000000000000000000000000000000000000000000000000000000000000000"
     }
+    config_approvals = {
+        row["server"]: row["config_hash"] for row in list_mcp_config_approvals(conn)
+    }
 
     # Start pool with approvals from the DB — same path as _start_mcp_pool
-    srv = _fake_stdio_server_config()
-    pool = _make_pool({"fake_srv": srv}, approvals=approvals)
+    pool = _make_pool(
+        {"fake_srv": srv},
+        approvals=approvals,
+        config_approvals=config_approvals,
+    )
     try:
         await pool.start()
         # The mismatch is detected via the real DB-loaded approval
@@ -248,24 +268,18 @@ async def test_pool_approval_from_real_db_table():
         await pool.aclose()
 
     # Now store the CORRECT hash and verify it works
-    raw_tool_descs = [
-        {"name": "echo", "description": "Echo back the message"},
-        {"name": "add", "description": "Add two numbers together"},
-        {"name": "read_file", "description": "Read a file from the server temp dir"},
-        {"name": "list_files", "description": "List files in the temp dir"},
-        {
-            "name": "get_env",
-            "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
-        },
-    ]
-    correct_hash = compute_description_hash(raw_tool_descs)
+    correct_hash = compute_description_hash(FAKE_TOOL_DESCRIPTORS)
     create_mcp_approval(conn, "fake_srv", correct_hash)
 
     approvals2: dict[str, str] = {}
     for row in list_mcp_approvals(conn):
         approvals2[row["server"]] = row["description_hash"]
 
-    pool2 = _make_pool({"fake_srv": srv}, approvals=approvals2)
+    pool2 = _make_pool(
+        {"fake_srv": srv},
+        approvals=approvals2,
+        config_approvals=config_approvals,
+    )
     try:
         await pool2.start()
         assert pool2.started is True
@@ -277,16 +291,43 @@ async def test_pool_approval_from_real_db_table():
 
 
 @pytest.mark.asyncio
-async def test_pool_approval_db_no_row_means_first_time():
-    """When there is no approval row in the DB, the pool starts normally
-    (first-time setup — no approval to check against)."""
+async def test_pool_approval_db_no_row_refuses_before_connect():
+    """No config approval means first use refuses before discovery."""
     srv = _fake_stdio_server_config()
-    pool = _make_pool({"fake_srv": srv}, approvals={})  # empty approvals
+    pool = _make_pool({"fake_srv": srv}, approvals={}, config_approvals={})
     try:
         await pool.start()
         assert pool.started is True
         status = pool.server_status()
-        assert status["fake_srv"] == "connected"
+        assert status["fake_srv"] == "approval_required"
+        assert pool.snapshot() == []
+        pending = pool.approval_pending()["fake_srv"]
+        assert pending["kind"] == "config"
+        assert pending["old_hash"] == ""
+        assert pending["new_hash"] == compute_config_hash(srv)
+    finally:
+        await pool.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pool_first_tool_schema_requires_approval_after_config_approval():
+    """Config approval permits discovery, but first-seen schemas still deny use."""
+    srv = _fake_stdio_server_config()
+    pool = _make_pool(
+        {"fake_srv": srv},
+        approvals={},
+        config_approvals={"fake_srv": compute_config_hash(srv)},
+    )
+    try:
+        await pool.start()
+        assert pool.server_status()["fake_srv"] == "approval_required"
+        assert pool.snapshot() == []
+        pending = pool.approval_pending()["fake_srv"]
+        assert pending["kind"] == "tools"
+        assert pending["old_hash"] == ""
+        assert pending["new_hash"] == compute_description_hash(FAKE_TOOL_DESCRIPTORS)
+        with pytest.raises(RuntimeError, match="not connected"):
+            await pool.call_tool("fake_srv", "echo", {"message": "blocked"})
     finally:
         await pool.aclose()
 
@@ -361,6 +402,7 @@ async def test_pool_streamable_http_deferred():
 
 # ---- D5: tool invocation integration test -----------------------------------
 
+
 @pytest.mark.asyncio
 async def test_pool_call_tool_via_client():
     """D5: A registered+approved tool is invoked through the pool and
@@ -419,6 +461,7 @@ async def test_pool_call_tool_unknown_server_raises():
 
 # ---- P1: teardown of unapproved server ---------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_approval_mismatch_tears_down_unapproved_server():
     """P1: After approval mismatch, pool.call_tool(server, ...) RAISES
@@ -443,6 +486,7 @@ async def test_approval_mismatch_tears_down_unapproved_server():
 
 # ---- P3: WS frame mcp_approval_required --------------------------------------
 
+
 def test_mcp_approval_required_frame_reaches_ws_client():
     """P3: an `mcp_approval_required` ephemeral frame is dispatched over the LIVE
     websocket as a typed WSServerFrame. This drives the REAL production boundary
@@ -459,9 +503,7 @@ def test_mcp_approval_required_frame_reaches_ws_client():
 
     store = SqliteEventStore(":memory:")
     client = TestClient(create_app(store))
-    cid = client.post("/conversations", json={"owner_id": "local"}).json()[
-        "conversation_id"
-    ]
+    cid = client.post("/conversations", json={"owner_id": "local"}).json()["conversation_id"]
 
     with client.websocket_connect(f"/ws/conversations/{cid}") as ws:
         assert ws.receive_json()["type"] == "state"
@@ -496,6 +538,7 @@ def test_mcp_approval_required_frame_reaches_ws_client():
 
 
 # ---- P5: wrapper-level invocation test ---------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_mcp_tool_wrapper_run_returns_real_tool_outcome():

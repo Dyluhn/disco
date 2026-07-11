@@ -239,6 +239,77 @@ async def test_invalid_format_rejected(tmp_workspace):
     assert not (tmp_workspace / "bad.docx").exists()
 
 
+async def test_no_content_fails_loudly_instead_of_blank_deck(tmp_workspace):
+    """Gauntlet root-cause (2026-07-07): a driver called slides_generate with
+    theme + slide_count + format but NO ``goal`` and NO ``markdown``. The old gate
+    silently fell through to the Marp path with empty content → a 1-slide, zero-text
+    deck reported as success. The tool must now REFUSE loudly (so the driver re-calls
+    with ``goal``) rather than ship a blank deliverable."""
+    tool = SlidesTool()
+    ctx = _ctx(_jailed_sandbox(tmp_workspace))
+
+    outcome = await tool.run(
+        SlidesGenerateArgs(
+            filename="ptq-llm-deep-research",
+            format="pptx",
+            theme='{"palette": {"primary": "#1E3A5F"}, "style": "modern"}',
+            slide_count=7,
+            # note: NO goal, NO markdown — the exact failing call shape
+        ),
+        ctx,
+    )
+
+    assert not outcome.success
+    assert "goal" in outcome.content
+    assert outcome.error and "neither goal nor markdown" in outcome.error
+    # Critically: NOTHING was written — no blank deck shipped.
+    assert not (tmp_workspace / "ptq-llm-deep-research.pptx").exists()
+    assert not (tmp_workspace / "ptq-llm-deep-research.html").exists()
+
+
+async def test_hostile_filename_chars_stripped(tmp_workspace):
+    """Gauntlet e-web (2026-07-07): the driver passed filename='>deck-name' and every
+    artifact landed with a literal '>' prefix. OS/shell-hostile chars are stripped;
+    the sanitized name is used for all artifacts."""
+    tool = SlidesTool()
+    ctx = _ctx(_jailed_sandbox(tmp_workspace))
+
+    with patch("disco.tools.builtin.slides._marp_available", return_value=False):
+        outcome = await tool.run(
+            SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename=">my|deck?", format="html"),
+            ctx,
+        )
+
+    assert outcome.success
+    assert (tmp_workspace / "mydeck.html").exists()
+    assert not any(p.name.startswith(">") for p in tmp_workspace.iterdir())
+
+
+async def test_all_invalid_filename_rejected(tmp_workspace):
+    """A filename that is NOTHING BUT invalid characters fails loudly."""
+    tool = SlidesTool()
+    ctx = _ctx(_jailed_sandbox(tmp_workspace))
+    outcome = await tool.run(
+        SlidesGenerateArgs(markdown=_THREE_SLIDE_MD, filename=">>??", format="html"), ctx
+    )
+    assert not outcome.success
+    assert "invalid" in (outcome.error or "")
+
+
+async def test_whitespace_markdown_also_refused(tmp_workspace):
+    """mode='markdown' with effectively-empty markdown is the same no-content case."""
+    tool = SlidesTool()
+    ctx = _ctx(_jailed_sandbox(tmp_workspace))
+
+    outcome = await tool.run(
+        SlidesGenerateArgs(markdown="   \n  ", filename="empty", format="pptx", mode="markdown"),
+        ctx,
+    )
+
+    assert not outcome.success
+    assert not (tmp_workspace / "empty.pptx").exists()
+
+
 # ---- marp-absent clean failures ----------------------------------------------
 
 

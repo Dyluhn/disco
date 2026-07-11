@@ -1,0 +1,414 @@
+# Disco Security Fix Campaign — wave-by-wave log + close-out evidence
+
+**Status (2026-07-10): W1–W6 EXECUTED.** Wave 1 (`e028d2ac`), Wave 2
+(`17c47761`, tree-identical to archived `2408e40f`), Wave-Pi (`76b4e397` — removed the
+Pi integration, attack-surface reduction), Wave 3 (`1b762e3f`), and Wave 4
+(`212f6e89`), Wave 5 (`10433330`), and Wave 6 (`17869bdb`) are **DONE + committed** on
+`disclaude/mega-campaign`; a follow-up surfaced
+the silently-dropped origin-approval ledger entries (`8157745b`) and a regression proof
+now pins its fail-closed/warn-once behavior (`d6651e7e`). The Codex close-out re-audit is
+complete; only the unavailable independent Opus assurance pass remains outstanding.
+The single source of truth for current security state is
+`sec-work-remaining/disco-security-state.md`; this file is its detailed campaign log.
+
+**Plan history:** Dylan signed off "use best practices, go with your recommendations" + "continuously give it to codex until it is not blocked" (2026-06-20). Iterative codex gpt-5.5 plan-review loop **CONVERGED** (2 consecutive not-BLOCK): **r1 BLOCK (9) → r2 SHIP-WITH-FIXES (10) → r3 BLOCK (7) → r4 SHIP-WITH-FIXES (8) → r5 SHIP-WITH-FIXES (2 + impl note)** — ALL folded in (see §Plan-review changelog blocks). codex r5: "coverage complete; round-4 edits landed."
+
+## Plan-review changelog (codex gpt-5.5, BLOCK → addressed)
+1. **[BLOCKER] Auth transport** — a JS-readable bearer token leaks (hostile page loads `/env.js` cross-origin) AND can't be sent by browser WS / preview iframes / artifact downloads. → Wave 1 rewritten to **HttpOnly SameSite cookie + CSRF + strict WS `Origin` check + short-lived signed preview/artifact URLs**, with an explicit auth-transport matrix.
+2. **[BLOCKER] B1 secret-ref** — C8 survives if `build_providers` keeps reading `env=dict(os.environ)`; and blanket-rejecting `DISCO_*`/`PMX_*` breaks legit `DISCO_GEMMA_API_KEY`/`DISCO_OPENROUTER_API_KEY`. → B1 rewritten: secret-ref-id ≠ env name, provider-secret map from SecretStore ONLY (drop the os.environ-seeded path), reject only sensitive CONTROL vars, + migration path.
+3. **[BLOCKER] B2 egress** — hard-blocking RFC1918 breaks the shipped local-model defaults on `192.168.1.x` + self-host encoders. → B2 split into TWO policy classes: untrusted/model URLs hard-deny private; operator-configured provider endpoints may be private but require authenticated config + origin-pin + explicit operator trust.
+4. **[HIGH] M4** got a concrete task (serve `seq <= bundle_seq`) — owner-scoping alone doesn't close a public share token serving a live log.
+5. **[HIGH] H11/H12** — added the `runs_in`-honesty fix (split local file-write from host remote-call) on top of B2's egress/key routing.
+6. **[HIGH] D1** — network filtering must be HOST-enforced (not model-tamperable netns iptables); preserve container loopback; block host gateway, sibling subnets, IPv6 ULA/link-local, `169.254.0.0/16`.
+7. **[MED] M2** got a concrete jail task (or explicit accepted-risk reclassification).
+8. **[MED] C-3** — `shlex` alone can't resolve command-substitution/var-indirection; real protection is C-2 (in-sandbox execution) + a conservative metachar-aware deny floor.
+9. **[MED] Verification** — added exploit-variant acceptance tests (token-bootstrap inclusion; WS no-token + hostile Origin; Host-header preview auth; C8 proving no request is SENT; DNS-rebind/IPv6/redirect chains; huge-output H17; share post-issue exclusion; private-provider allow/deny by class).
+
+### Plan-review round 2 (codex gpt-5.5: **SHIP-WITH-FIXES**, no unmapped finding — folded in)
+A1. **Auth bootstrap** — HttpOnly cookies are set by the SERVER (`Set-Cookie`), not frontend JS; and app-server (:8800), agent-server (:8000), and `*.localhost` preview are SEPARATE origins one cookie can't span. → Wave 1 gets a concrete bootstrap/session-minting design + per-origin carrier matrix + signed tokens for preview HTTP+WS/noVNC.
+A2. **Client-controlled ownership** — `CreateConversationBody.owner_id` + `owner_id` query params are client-set, and `store.append()` auto-creates unknown convs as `DEFAULT_OWNER_ID`. → Wave 1 must ignore/remove all client owner params, reject writes to unknown/non-owned convs before append, + a route-inventory test.
+A3. **D1 must not weaken Build egress** — "own network, NAT'd" for ALL surfaces would give Build/artifact arbitrary public egress (today it's finite-filtered). → split egress by SURFACE: Build/artifact stays finite-allowlist; only Agent/browser gets public-web-private-denied.
+A4. **D1 host-enforcement must be concrete** — a per-instance bridge alone blocks nothing; Docker `internal=True` also kills public web. → choose backend-specific host firewall (DOCKER-USER/nftables for Docker/gVisor/local; rootless equiv for Podman) + fail-closed if rules can't install.
+A5. **B6 can't live in `run()`** — the confirm gate reads STATIC `ToolDef.runs_in` via `tool_scope()` BEFORE execution; image/audio pick remote backend at call time. → pre-execution dynamic scope/risk decision OR split local-vs-remote registry entries; confirm must fire BEFORE any HTTP/key resolution.
+A6. **B1 migration must be exact + fail-closed** — define when/how migration runs if `SecretStore.can_store` is false/locked; import only configured provider ref names; map OpenRouter env → reserved `openrouter`; fail closed w/ UI diagnostic; include startup/prewarm/model-list probes in C8 tests.
+A7. **M4 must freeze the FULL projection** — `share_export` emits live `last_seq`/`state`/`cassette` too; filtering only events still leaks. → `share_export(before_seq=...)` builds events+cassette+state+last_seq from the bounded set.
+A8. **M9 needs a real workspace quota** — `storage_opt size` won't cap the gVisor host bind-mount / named volumes. → XFS project quota / loopback fs / tmpfs / backend-specific volume quota; fail closed if unavailable.
+A9. **H17 acceptance broadened** — `shell_exec`/`code_exec` huge stdout, event-payload max/spill, slow-WS bounded queue, symlink/non-regular reads, + cap `HostPreviewProxy` request buffering (`host_proxy.py:187`).
+A10. **M2 is a product decision** — `/api/storage/browse` IS the Settings new-projects-root picker; jailing it to the existing root breaks choosing a new one. → decide: authenticated-local-operator accepted-risk (CSRF + audit + narrow roots) vs a redesigned picker. (Flagged for Dylan in §Resolved decisions.)
+
+### Plan-review round 3 (codex gpt-5.5: **BLOCK** — sufficiency gaps in round-2 fixes; folded in)
+B1'. **Migration can re-legitimize C8** — C8 is *arbitrary* host env, not just control vars. If config was already poisoned with `api_key_env=AWS_SECRET_ACCESS_KEY`/`GITHUB_TOKEN`, "import configured refs, reject only control vars" would STORE that host secret. → B1 migration must **allowlist known legacy provider env names per provider slot**, quarantine/reject every other env-name ref, and run **NO startup/prewarm/model-list request until the ref is migrated or operator-approved**.
+M3'. **MCP approval must be PRE-CONNECT** — Wave 4 gated tool *invocation*, but stdio launches the host subprocess + lists tools, and HTTP MCP connects, BEFORE approval — so launch/init side effects already hit the host. → add a **pre-connect approval of the server config itself** (transport/command/args/url/env-refs/allowed-tools/risk-tier); for stdio do NOT run the command for discovery until launch-approval exists (or discover in a throwaway constrained sandbox); THEN separately hash canonical live tool schemas for drift (H7).
+A1'. **API cookie must NOT reach model-controlled preview origins** — preview content under `*.localhost` is untrusted model JS; a cookie scoped to reach it lets that JS drive same-site API/WS, and a reusable signed URL in the iframe URL can be read+exfiltrated by the model page. → API cookie **host-only to the real app/API origin, never `*.localhost`**; preview/noVNC/artifact capabilities are **separate, short-lived, scoped to method+cid+port+path/prefix+expiry**, with **no authority over API or WS control routes**.
+A4'. **Route inventory = generated test, not hand-list** — easy misses remain (`/ws/research` takes an optional `conversation_id` for seed passages; some GETs have side effects). → a **FastAPI route-table test that fails any non-public route lacking auth/owner enforcement**; classify unsafe GETs → POST+CSRF or scoped signed-intent.
+B2'. **MCP HTTP is a Class-2 endpoint** — it resolves secret-backed headers with `follow_redirects=True` → can forward credentials across redirects / to an unapproved origin. → include MCP HTTP URLs in Class-2 origin-pinning + redirect revalidation; configured headers must NOT cross to a different origin unless explicitly trusted. (`mcp/http.py:98`.)
+C2'. **`process` backend is not a sandbox** — Wave 3 says predicates "run in the sandbox," but if `process` is dev-flag-enabled, C3/C6 command predicates still execute host-like. → when backend=`process`, **disable command predicates OR require explicit per-predicate host-risk confirmation**; do NOT describe this path as closed by C-2.
+V'. **Verification adds** — arbitrary-env (non-control) migration poisoning; MCP stdio command NOT launched before approval; API cookie absent from preview hosts; preview signed token cannot reach API/WS/noVNC beyond its scope; M7 encoder exfil denial/approval; H12 audio remote confirm ordering; M2 symlink-under-allowed-root → `/etc`.
+
+### Plan-review round 4 (codex gpt-5.5: **SHIP-WITH-FIXES, not BLOCK** — "ready to start Wave 1 with these"; folded in)
+B2''. **Existing Class-2 endpoints need migration/quarantine too** (not just future writes) — a pre-existing poisoned `base_url` is probed at startup (`runtime.py:850,871,956`, `wiring.py:96`). → every existing provider/search/extract/encoder/MCP-HTTP origin starts **untrusted until operator-approved**; NO startup/prewarm/model-list/vision/DR/MCP-HTTP request fires before approval. Regression: a persisted malicious `base_url` ⇒ assert ZERO wire traffic.
+B6'. **`slides_generate` has the same host-remote/sandbox-label problem** as image/audio — declares `runs_in="sandbox"` (`slides.py:336`) then C2 path does host HTTP with keys (`_slides_pipeline.py:243`). → add slides C2 to B6: markdown rendering stays sandbox-scoped, but goal/C2 generation gets the same pre-execution host-scope/split-tool + confirm before `_resolve_slides_llm()`/`_call_llm()`/remote image select.
+A6''. **Preview capability carrier = exact** — the Host-header proxy is MIDDLEWARE not a route (`host_proxy.py:15`), and suspended-wake still resolves `DEFAULT_OWNER_ID` (`preview_service.py:82`). → mint a short-lived **HttpOnly host-only cookie for `{cid8}-{port}.localhost`** scoped to full `conversation_id`+owner+port+method+path-prefix; **validate before `wake_for_preview`**; add MIDDLEWARE-specific tests (the route-table test won't see this).
+A1''. **Cookie scoping is host-scoped, not port-scoped** (technical fix) — a host-only `localhost` cookie covers `localhost:8800` AND `localhost:8000` (good) but NOT `127.0.0.1` and NOT `*.localhost`. → pick a **canonical host (or a single reverse-proxy origin)** before coding; **never `Domain=.localhost`** (that leaks the API cookie to preview JS). The earlier "separate origins one cookie can't span" wording was imprecise.
+B4'. **`file://` denial needs a trusted-asset exception** — the brand CSS legitimately uses local `file://` FONT assets (`report_export.py:482`). → the WeasyPrint `url_fetcher` **allowlists only packaged static assets** and denies all REPORT-authored `file://` + attachments + private HTTP + redirects + unknown schemes.
+H3''/M3''. **`http_ok` has TWO implementations** — plan-step (`plan_conditions.py:282`) AND DoD (`dod_evaluator.py:358`, prechecks `_egress_allowed()` then `urllib` which follows redirects). → test BOTH, incl. public→private redirect.
+M2'. **M2 symlink-under-allowed-root into the Wave 6 body** (was changelog-only): resolved target AND every traversed child must stay under allowed roots, or symlinked dirs aren't browsable.
+M4''. **Wording/sequencing** — Wave 1 "removes reachability of M4" is wrong (share is public-by-token); M4 is fixed in Wave 6, not Wave 1.
+
+### Plan-review round 5 (codex gpt-5.5: **SHIP-WITH-FIXES** — 2nd consecutive not-BLOCK; "coverage complete, round-4 edits landed"; folded in → LOOP CONVERGED)
+D1'. **[High] Tailnet/host-publish hairpin to sibling sandboxes** — even with per-instance bridge + RFC1918 block, sandbox ports are PUBLISHED on the daemon host (`gvisor.py:267` publishes user ports + internal `8899`; `_container.py:47,138`), and the preview host can be a remote/tailnet IP. So sandbox A can reach sibling B via `http://<daemon tailnet-100.x / public IP>:<published-port>` — Tailscale CGNAT `100.64.0.0/10` is NOT RFC1918. → D1 must deny ALL non-global RFC6890 ranges **+ all host-owned interface IPs (public AND tailnet)** from sandbox egress, AND **bind published ports to daemon loopback only** (or drop direct publishing in favor of the authenticated preview proxy); **never publish `INTERNAL_PORTS` (`8899` kernel gateway) externally**. Acceptance: sandbox A → sibling B via the host's tailnet/public IP + mapped preview/noVNC/kernel ports is BLOCKED.
+A2'. **[High] App-server GLOBAL-state authorization (DECISION)** — config/secrets/MCP/skills are global mutable state (`skills.py:18`, `config.py:31`, `secrets.py:47`, `mcp.py:22`; enabled skills injected into ALL prompts `runtime.py:705`). Auth+CSRF closes the drive-by (H14) but not multi-owner impact (any authenticated owner could inject a global skill / change everyone's provider keys). **DECIDED: app-server settings = operator/ADMIN-only global state** (they configure the whole install, not per-conversation user data; single-operator local today, stays admin-only when hosted). Route-inventory test (A8) asserts the required auth CLASS (admin vs authenticated), not merely "authenticated." Acceptance: a non-admin owner CANNOT create a globally-visible skill or mutate provider/secrets/MCP.
+B2'''. **[impl note] Class-1 chokepoint = connect-time + proxy-independent** — use `trust_env=False` / a controlled transport, validate every RESOLVED sockaddr actually connected to (not just the hostname), and revalidate on redirect (defeats DNS-rebind). The DNS-rebind/redirect acceptance tests are the proof target.
+SEQ. Wave 1 alone does NOT close model-origin SSRF / PDF file-read (C4/C7 remain until Wave 2) — keep that framing.
+**Branch:** the executed waves landed on `disclaude/mega-campaign` (the plan was drafted on `build-surface-recovery-ux`; no remote, never push main).
+**Source:** the 7-round convergence audit (Opus 4.8 + codex gpt-5.5, adversarial, two independent reviewers). Finding ledger: the original `/tmp/sec_known.md` scratch file is gone — current status lives in `sec-work-remaining/disco-security-state.md`.
+**Tally:** 8 Critical · 17 High · 10 Medium · 3 Low = 38 findings.
+
+> Threat model (verbatim from the audit): a MODEL-CONTROLLED agent can call tools, run code_exec/shell, author plans/DoD predicates, write files, drive a browser, and emit output persisted to events + streamed over WS + replayed into LLM context. "Unsafe" = the host (its filesystem, env, secrets, processes) or another tenant/conversation. Also in-scope: a hostile webpage the user visits (drive-by to the loopback API), and a caller who merely knows a `conversation_id`.
+
+> Dylan's accepted-risk note: his Tailscale is just himself + workstation + mini-PC, so the no-auth exposure is *currently* low-blast-radius — but it remains a **critical product issue** for any shared/hosted deployment, and the drive-by-from-a-hostile-webpage vector applies even on a single-user box. Fixing it is in scope.
+
+---
+
+## Root-cause map (why 38 findings are really ~5 problems)
+
+| Root | What it is | Findings |
+|---|---|---|
+| **A — no-auth + wildcard CORS** | Both local servers accept every request with `DEFAULT_OWNER_ID` and `allow_origins=*`; a hostile webpage the user visits can drive the loopback API cross-origin, and anyone who knows a `conversation_id` can read/control it. | C5, H6, H8 + sinks H2, H10, H13(reach), H14, M2, M4(reach), M7(reach) |
+| **B — egress unfiltered + key/URL unvalidated** | Host-side operations fetch model/config-controlled URLs with no SSRF guard and no chokepoint; `api_key_env` resolves arbitrary host env vars (incl. the master key); `base_url` is not host-pinned. | C4, **C8**, H1, H11, H12, M3, M5, M7, C7 |
+| **C — availability / isolation hardening** | No resource caps anywhere; sandbox network isolation incomplete (sibling reach, agent surface defaults open); a couple of internal-boundary escapes. | **H15, H16, H17**, M8, M9, M10 |
+| **STANDALONE — host execution** | Code paths that execute model-authored commands on the HOST, bypassing gVisor entirely. | C1, C2, C3, C6, H9, M1 |
+| **STANDALONE — MCP approval integrity** | The MCP tool-approval gate can be bypassed or under-scoped. | H3, H4, H5, H7 |
+| **STANDALONE — output sinks** | Model-authored content rendered into a document that the *user's* app executes. | C7 (PDF), M6 (xlsx) |
+| **LOW / ops** | Dead redaction, gitignore, generic-provider host-pin, KDF hardening. | L1, L2, L3 (+ Fernet→Argon2id) |
+
+**Key convergence facts (both reviewers, independently):**
+- The model **cannot self-escalate** from inside a conversation it legitimately drives — no model-callable tool mutates provider config/secrets. C8/H13/H14/M7 all *require* ROOT-A (the no-auth surface). → **Fixing ROOT-A removes the reachability of most Highs; the per-sink fixes are defense-in-depth.**
+- After the assumed fixes, **no** new cross-conversation read/control, sandbox escape, host-file-read sink, kernel-gateway break, or auth-replay remains. Crypto is sound (`conv_{uuid4}` 122-bit; share token 128-bit; kernel token = `HMAC(master, sandbox_id)`; gVisor instance ids server-minted).
+
+---
+
+## Sequencing rationale
+
+Roots-first, dependency-ordered. **Wave 1 (auth) is the keystone** — it collapses the reachability of ~9 findings, so doing it first means the later per-sink fixes are belt-and-braces rather than the only line of defense. Each wave is independently shippable and independently verified.
+
+Per-wave discipline (the HARD GATES, every wave):
+1. **Build** the fix + a real-sample test harness (verbatim captured inputs, injected through the real endpoint — no cassettes, real results only).
+2. **gpt-5.5 adversarial review** (`codex exec -c model=gpt-5.5 -c model_reasoning_effort=xhigh`) — must reach SHIP (fix every BLOCK/major).
+3. **Real-app verification** — exercise the actual exploit pre-fix (prove it works), then post-fix (prove it's closed); for any UI-visible change, Playwright/Firefox screenshot + `SendUserFile`. Green unit counts are NOT evidence.
+4. **Preserve originals**; no hardcoded state to pass tests; flag any gap explicitly.
+5. **Commit** (message ends with the `Co-Authored-By: Claude Opus 4.8 (1M context)` trailer).
+
+---
+
+## Wave 1 — ROOT-A: authentication, CORS, owner-scoping  *(keystone)* — **DONE (`e028d2ac`)**
+
+**Closes:** C5, H6, H8; removes reachability of H2, H10, H13, H14, M2, M7. (NOT M4 — share bundles are public-by-token, so owner-scoping doesn't touch them; M4 is fixed in Wave 6.)
+
+**Auth design (DECIDED — HttpOnly cookie + CSRF, per codex blocker #1).** The servers bind `127.0.0.1`; the live threats are (a) drive-by from a hostile webpage, and (b) any local process hitting the loopback API. A JS-readable bearer is REJECTED: it leaks (a hostile page can load it via the `/env.js` bootstrap) and it can't be attached by the surfaces that need it (browser WS, preview iframes, artifact downloads). Use:
+- A per-install secret → an **HttpOnly, Secure-where-applicable, SameSite=Lax/Strict session cookie** set by the frontend origin; sent automatically by fetch, WS handshake, iframes, and downloads. Not readable by hostile JS.
+- A **CSRF token** (double-submit or per-session) required on every state-changing request — this is what stops the drive-by, since SameSite alone isn't universally sufficient.
+- **Strict WS `Origin` checks** (CORS does NOT protect WebSockets) + the cookie on the WS handshake.
+- **Short-lived signed URLs** for preview-proxy + artifact/file downloads that can't carry the cookie cleanly (or scope the cookie to cover them).
+
+**FIRST sub-task — bootstrap design + auth-transport matrix (write before coding).**
+- **Bootstrap/session minting** (codex r2-A1, historical design proposal): the cookie is set by the SERVER via `Set-Cookie` (frontend JS cannot set HttpOnly). The proposal used a startup-printed one-time loopback token; the shipped design instead exchanges a reusable secret-derived operator pairing token, permits loopback auto-retrieval, and requires operator transfer for remote self-hosted browsers. Both paths retain Origin checks.
+- **Cookie host strategy (codex r4-A1'' — cookies are HOST-scoped, not port-scoped):** a host-only `localhost` cookie covers BOTH `localhost:8800` and `localhost:8000` (so the two API servers CAN share it) but NOT `127.0.0.1` and NOT `*.localhost`. So: pick a **canonical host** (use `localhost` consistently, or unify behind ONE reverse-proxy origin — cleanest) and **NEVER set `Domain=.localhost`** (that would hand the API cookie to model-authored preview JS). The API cookie stays host-only to the real app/API host; preview is a SEPARATE capability (A6).
+- **Auth-transport matrix:** enumerate every surface + its carrier — fetch APIs, WS handshake, Host-header preview proxy, noVNC WS, artifact/inline-file downloads, share viewer (intentionally public-by-token — exempt), file uploads, the `/env.js`/bootstrap (must NOT carry the secret). Each row: carrier (cookie / signed URL / public), CSRF needed?, Origin-checked?.
+
+Tasks:
+- **A1** Owner identity derived from the authenticated session (not `DEFAULT_OWNER_ID`), threaded into every agent-server route + WS subscribe.
+- **A2** App-server (config/secrets/mcp/skills/projects routes): require auth, AND treat config/secrets/MCP/skills as **operator/ADMIN-only GLOBAL state** (codex r5-A2' — DECIDED; they configure the whole install + inject into ALL prompts via `runtime.py:705`, not per-conversation user data). The route-inventory test (A8) asserts the required auth CLASS (admin vs merely authenticated). Acceptance: a non-admin owner CANNOT create a globally-visible skill or mutate provider config / secrets / MCP.
+- **A3** CORS: replace `allow_origins=["*"]` on both servers with the exact frontend origin + `allow_credentials=True`; do NOT rely on CORS for WS (Origin-check it). (`agent_server/app.py:99-105`, `app_server/app.py:44`)
+- **A4** Object-level authorization: `conversation_id`, `project_id`, `share` reads/writes verify owner ownership — not just "id exists" (H2, H10). Add `_safe_segment()` to `ProjectStore.delete()` (H10).
+- **A5** CSRF tokens on state-changing requests; cookie set/rotate flow.
+- **A6 — preview/noVNC/artifact use SCOPED capabilities, NOT the API cookie** (codex r3-A1'). Preview content under `*.localhost` is UNTRUSTED model-authored JS. So: the API session cookie is **host-only to the real app/API origin — NEVER scoped to `*.localhost`** (else model JS drives the API same-site). The Host-header preview proxy (`preview_service.py:33-43`) + noVNC + artifact downloads get **separate, short-lived capabilities scoped to method + cid + port + path/prefix + expiry**, with **no authority over API or WS control routes**, and not readable-then-replayable by the model page (don't put a reusable bearer in the iframe URL the model can scrape). **Exact carrier (codex r4-A6''):** the authenticated API mints a short-lived **HttpOnly host-only cookie for `{cid8}-{port}.localhost`** scoped to the full `conversation_id` + owner + port + method + path-prefix; the proxy MIDDLEWARE (`host_proxy.py:15` — not a FastAPI route, so the generated route-table test won't see it) **validates it before `wake_for_preview`** (which today still resolves `DEFAULT_OWNER_ID`, `preview_service.py:82`). Add **middleware-specific tests** for this surface.
+- **A7** Remove client-controlled ownership (codex r2-A2): ignore/strip `CreateConversationBody.owner_id` + all `owner_id` query params (`routes/_common.py:74`, `conversations.py:47`); owner comes from the session ONLY. Reject writes to unknown/non-owned conversations BEFORE `store.append()` (which today auto-creates them as `DEFAULT_OWNER_ID`, `sqlite.py:388`).
+- **A8 — GENERATED route-inventory test** (codex r2-A2 + r3-A4'): a FastAPI route-table test that **fails any non-public route lacking auth/owner enforcement** (not a hand-list — catches misses like `/ws/research`'s optional `conversation_id` seed-passage path, `ws.py:212`). Classify unsafe GETs with side effects → POST+CSRF or a scoped signed-intent. Covers WS, uploads, schedules, report export/audio, preview, sessions, projects, skills, MCP, app-server conversation delete.
+
+**Acceptance:** (1) scripted drive-by `fetch('http://127.0.0.1:8000/conversations/<id>/events',{credentials:'include',mode:'cors'})` from a non-frontend origin is BLOCKED (CORS preflight + no valid CSRF); (2) a WS connect with NO cookie and with a hostile `Origin` is rejected; (3) the Host-header preview proxy rejects an unauthenticated/unsigned request; (4) cross-owner conversation/project access → 403; (5) the bootstrap response contains NO secret (grep the served `/env.js`); (6) the real UI still works end-to-end incl. live WS + preview iframe (screenshot).
+
+---
+
+## Wave 2 — ROOT-B: secret-resolution + egress chokepoint (host-side) — **DONE (`17c47761`, tree-identical to archived `2408e40f`; follow-up `8157745b` surfaced the silently-dropped origin-approval ledger entries)**
+
+**Closes:** C4, C8, H1, H11, H12, M3, M5, M7(host side), C7(fetch side); subsumes L3. (H11/H12 fully via B2 egress + B6 runs_in.)
+
+- **B1 — secret-ref ≠ env-name; provider-secret map from SecretStore ONLY** (rewritten per codex blocker #2). The bug isn't only `_resolve_secret`'s fallthrough — `build_providers(cfg, env=dict(os.environ))` (`wiring.py:128`, fed from `runtime._router_now:695`) resolves `api_key_env` against a full os.environ copy, so C8 survives any per-site patch that leaves that env path. Fix:
+  - Build the provider-secret mapping from the **SecretStore only** (by secret-ref id), NOT from an `os.environ`-seeded dict. Drop the `or os.environ.get(name)` fallthrough at every site (`_resolve_secret:661`, `report_audio.py:114,251`, `runtime.py:844,865,974`, `audio_overview.py:346`, `_slides_pipeline.py:106-113`, `image_gen.py:779,795`).
+  - Treat the config field as a **secret-ref id**, decoupled from host env-var names. Reject only the **sensitive control vars** (`DISCO_SECRET_KEY`/`PMX_SECRET_KEY` + other internal control envs) — do NOT blanket-reject `DISCO_*`/`PMX_*`, which would break legit refs `DISCO_GEMMA_API_KEY` / `DISCO_OPENROUTER_API_KEY` (`config.py:349,377`).
+  - **Migration path (exact + fail-closed + ALLOWLISTED, codex r2-A6 + r3-B1'):** treat the legacy `api_key_env` as a `secret_ref`. On upgrade, import ONLY env names on a **per-provider-slot allowlist of KNOWN legacy provider env names** (e.g. `DISCO_OPENROUTER_API_KEY`→reserved `openrouter`, `DISCO_GEMMA_API_KEY`→gemma slot). **Quarantine/reject every other env-name ref** — C8 is *arbitrary* host env (`AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, …), so a poisoned config must NOT be auto-legitimized by migration. Run **NO startup/prewarm/model-list probe (`runtime.py:842`) for a ref until it's migrated or explicitly operator-approved.** If `SecretStore.can_store` is false/locked, **fail closed** with a UI diagnostic (never silently fall back to env). C8 tests cover probe paths + arbitrary-non-control-env poisoning. (C8 + R6 note (i).)
+- **B2 — TWO egress policy classes, not one blanket block** (rewritten per codex blocker #3). Hard-blocking all RFC1918 would break the shipped local-model defaults on `192.168.1.x` (`config.py:313`) and self-host encoder modes.
+  - **Class 1 — untrusted / model-authored URLs** (`extract` C4, `http_ok` M3, report-PDF resources C7, preview-redirect H1 via `follow_redirects=False` + re-validate): route through one SSRF-guarded chokepoint that **hard-denies** loopback / link-local / RFC1918 / `169.254`; enforce the egress allowlist; apply Dylan's **layered / isolation-scoped** approval posture (auto-allow allowlisted public; approve-once-remembered per new external host on the weak `process` backend; private ranges never approvable). NOTE `http_ok` has **TWO implementations** (codex r4): plan-step (`plan_conditions.py:282`) AND DoD (`dod_evaluator.py:358`, prechecks `_egress_allowed()` then `urllib` which follows redirects) — fix + test BOTH, incl. a public→private redirect. **Chokepoint = connect-time + proxy-independent** (codex r5-B2'''): `trust_env=False`/controlled transport, validate every RESOLVED sockaddr actually connected to (not just the hostname), revalidate on redirect (defeats DNS-rebind).
+  - **Class 2 — operator-configured provider endpoints** (LLM `base_url`, encoder/rerank/NLI URLs M7, ComfyUI, **and MCP HTTP URLs** — codex r3-B2', which resolve secret-backed headers with `follow_redirects=True`, `mcp/http.py:98`): MAY be private (the homelab case), but require authenticated config (Wave 1) + **origin-pinning** + **redirect revalidation** + explicit operator trust. Configured/secret-backed headers must NOT be forwarded across a redirect to a different origin unless explicitly trusted. Not model-reachable, so not subject to Class-1 hard-deny. **Existing endpoints must MIGRATE, not just future writes** (codex r4-B2''): every already-persisted provider/search/extract/encoder/MCP-HTTP origin starts **untrusted until operator-approved**, and NO startup/prewarm/model-list/vision/DR/MCP-HTTP request fires before approval. Regression: a persisted malicious `base_url` ⇒ assert ZERO wire traffic.
+- **B3 — host-pin `base_url` per provider** (the generic openai-tier provider ships a key to any `base_url`). Folds into B2 Class-2 pinning. (L3.)
+- **B4 — report-PDF WeasyPrint `url_fetcher` ALLOWLIST packaged assets, deny everything else** (codex r4-B4'). The brand CSS legitimately uses local `file://` FONT assets, so a blanket `file://` deny breaks branded PDFs. The custom `url_fetcher` allowlists ONLY packaged static brand assets and denies all REPORT-authored `file://` + attachments + private HTTP + redirects + unknown schemes — *in addition to* routing through B2 Class-1; strip/sanitize `<img>`/`url()`/raw-HTML from report markdown pre-render. (C7 file-read→exfil.)
+- **B5 — redact provider error bodies** to status/type/provider-safe summary before they enter events/LLM context. (M5.)
+- **B6 — `runs_in` honesty for remote tool backends, decided PRE-EXECUTION** (codex HIGH #5 + r2-A5). `image_generate` (`image_gen.py:852`) and `audio_overview` (`audio_overview.py:301`) advertise `runs_in="sandbox"` but pick a remote backend AT CALL TIME and do host-side HTTP with keys → no host-scope confirm fires. The confirm gate reads STATIC `ToolDef.runs_in` via `DefaultToolExecutor.tool_scope()` (`executor.py:69`) BEFORE execution — so a fix inside `run()` is too late. Therefore: either (a) **split local vs remote into separate registry entries/tools** (remote one declares host scope), or (b) add a **pre-execution dynamic scope/risk hook** the gate consults. **Acceptance:** the pending host-scope confirmation appears BEFORE any HTTP request or key resolution (assert ordering, not just that a confirm eventually shows). (H11, H12 — the half B2 doesn't cover.) **Also `slides_generate`** (codex r4-B6'): declares `runs_in="sandbox"` (`slides.py:336`) but its goal/C2 path does host HTTP with keys (`_slides_pipeline.py:243`) — markdown-only rendering stays sandbox-scoped, but C2 generation gets the same pre-execution host-scope/split + confirm before `_resolve_slides_llm()`/`_call_llm()`/remote-image select.
+
+**Acceptance:** (1) a report with `<link rel="attachment" href="file:///.../secrets.json">` → PDF with NO embedded secret (C7); (2) a provider config `api_key_env=DISCO_SECRET_KEY` + `base_url=<test host>` resolves to NOTHING and proves **no request is sent** (capture the wire, not just "no bearer") (C8); (3) `extract`/`http_ok` → `169.254.169.254`, `127.0.0.1:8800`, an IPv6 private addr, and a DNS-rebind/redirect chain to a private host are ALL blocked (C4/M3); (4) a legit `DISCO_GEMMA_API_KEY` ref + a `192.168.1.x` operator LLM still works (no regression); (5) `image_generate` in remote mode triggers the host-scope confirm (H11).
+
+---
+
+## Wave 3 — STANDALONE host-execution cluster (gVisor bypass) — **DONE (`1b762e3f`)**
+
+**Closes:** C1, C2, C3, C6, H9, M1, H13.
+
+- **C-1 — sandbox backend = fail-CLOSED `Literal` allowlist.** `SandboxConfigDTO.backend` / `SandboxConfig.backend` → `Literal["gvisor","local","podman","process"]`; unknown → raise or default to gvisor (not ProcessSandbox); gate `"process"` behind an explicit dev flag. (H13.)
+- **C-2 — plan/DoD `command` predicates run IN the sandbox**, never host-side `subprocess(shell=True)`. (`plan_conditions.py:228,246`, `dod_evaluator.py:289,303`.) (C3, C6.)
+- **C-3 — harden the live hard-deny FLOOR** (refined per codex MED #8). The structural fix for host-wipe is **C-2** (predicates run in-sandbox, so a wipe hits the container, not the host). The live `hard_deny_reason` floor (`analyzers.py:92-101`) still needs improvement, but `shlex` alone CANNOT resolve command-substitution `$(...)` or var-indirected paths `X=/;rm -rf "$X"`. So: parse rm + recursive + force (any quoting / long-or-short flags / `--` / `--no-preserve-root`) vs protected roots via shlex WHERE it applies, AND add a conservative deny on destructive commands wrapped in shell metacharacters (`$(`, backticks, `;`+var-assign) rather than pretending to evaluate them. Floor is defense-in-depth; C-2 is the real guarantee. (H9, C6.)
+- **C-4 — process backend hardening** (for the dev-flag-gated case): `ProcessKernel.start()` gets a scrubbed `env=` (no secrets) (C1); document the cwd-only weak isolation prominently (C2). **`process` is NOT a sandbox** (codex r3-C2'): when backend=`process`, **disable command/DoD predicates entirely OR require an explicit per-predicate host-risk confirmation** — do NOT treat C-2 ("run in sandbox") as closing C3/C6 on this backend.
+- **C-5 — kernel-gateway token hygiene:** don't pass the token in argv (`kernel.py:372` → env/file); block `__`-prefixed sessions in `shell_*` tools; stop `server_status`/HTTP session-list from listing internal sessions. (M1.)
+
+**Acceptance:** a plan/DoD `command: "rm -rf -- /"` (and the 5 other bypass variants) is DENIED; a DoD `command` predicate runs in the container (proven by it not seeing a host-only file); `backend:"garbage"` fails closed (no host downgrade).
+
+**STATUS: DONE + gpt-5.5-reviewed (2026-07-06, commit `1b762e3f`).** All five sub-fixes landed with tests (old-vs-new proof for C-3, canary-leak proof for C-4, routing proof for C-2). Two adversarial-review rounds; the C-3 floor was rewritten to command-position analysis (shlex `_command_word_index`) catching `\rm`/`'r'm`/`command rm`/`sudo rm`/`bash -lc`/`find <root> -delete`/path-traversal/`$(…)` while NOT false-positiving on `echo rm -rf /` or `find . -delete`. C-2 also hardened the plan-step predicate path (floor before exec_shell AND the host fallback). C-1 coercion forces `runtime=runsc` (not just `backend=gvisor`).
+
+**Acknowledged residuals (deferred to Wave 5 — isolation — NOT host-exec regressions):**
+- **DoD command predicates are skipped on container backends** (`workspace_path is None` → gate dark). This is *pre-existing* and safe (no host exec); the C-2 fix targets the local/process backends that DID host-exec. To ALSO verify command/http predicates in-sandbox on gVisor, relax the `_DoDWorkspaceUnavailable` short-circuit when `exec_shell` exists — a finish-gate behavior change needing soak.
+- **The in-sandbox model can reach its OWN kernel session/token** (`/proc/<gw>/environ`, or a raw `tmux capture-pane -t disco-__kernel` from a normal session). NOT a privilege escalation — the model already has authorized `code_exec`, and the token is `HMAC(master, sandbox_id)` (per-sandbox, can't drive another). True isolation = internal sessions on a separate tmux socket + a distinct PID/UID namespace (Wave 5). The C-5 fixes still close the argv leak, the casual `shell_view("__kernel")` path, and listing enumeration.
+- **Process backend `code_exec` can read the agent-server's `/proc/*/environ`.** The process backend is dev-only and FAIL-CLOSED in production (C-1 preflight refuses it absent `DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV`). Inherent to an unisolated dev backend; the C-4 env-scrub is defense-in-depth.
+
+---
+
+## Wave 4 — STANDALONE MCP approval integrity — **DONE (`212f6e89`)**
+
+**Closes:** H3, H4, H5, H7.
+
+- **H3' — approval must be PRE-CONNECT, not pre-invocation** (codex r3-M3'). Today stdio launches the host subprocess + lists tools (`stdio.py:112`), and HTTP MCP connects (`pool.py:150`), BEFORE any approval — so launch/init side effects already hit the host. Add a **pre-connect approval of the server CONFIG itself** (transport / command / args / url / env-refs / allowed-tools / risk-tier). For stdio, do NOT run the command for discovery until launch-approval exists (or run discovery in a throwaway constrained sandbox). **Acceptance:** the MCP stdio command is NOT spawned before approval.
+- **H3** First-use approval: a new MCP server (`stored is None`) must require ApprovalRequired, not auto-register. (`pool.py:163`.)
+- **H4** stdio MCP tools run on the HOST — fix the `runs_in="sandbox"` mislabel (`stdio.py:55`) so the host-scope confirm gate fires.
+- **H5** Wire configured `risk_tier` into the build-loop analyzer (`RuleBasedAnalyzer(base_risk_by_tool=...)`) so a HIGH-risk MCP tool with a bland name still gates. (`analyzers.py:207`.)
+- **H7** Fold the canonical `inputSchema` into `compute_description_hash` so a re-approved server can't silently rewrite param schemas / inject text into property descriptions. (`approval.py:50-63`.)
+
+**Acceptance:** registering a new MCP server prompts approval; a stdio MCP tool triggers the host-scope confirm; flipping a tool's `inputSchema` re-triggers approval.
+
+**STATUS: DONE + adversarially re-read (2026-07-10, commit `212f6e89`).** The app-server
+now stores configuration approvals separately from live tool-schema approvals. The
+canonical config fingerprint covers transport, ordered command/args, URL, secret-reference
+maps (never resolved values), allowed hosts/tools, and risk tier; `enabled` is deliberately
+excluded because it does not change what executes. Both stdio and HTTP paths compare that
+backend-computed fingerprint before spawn/connect, and the test/probe route refuses ad-hoc
+or request-overridden targets. Discovery then requires a second, authoritative hash over
+tool name, description, and canonical `inputSchema`; first sight and later drift both deny
+registration and tear down the live client. Stale/client-chosen approval hashes receive
+409, and partial PATCH requests no longer reset omitted transport/risk fields.
+
+Execution scope and policy are honest: stdio and HTTP MCP tools are `in_process`, each
+configured `risk_tier` is projected into the live `RuleBasedAnalyzer`, and high-risk MCP
+actions reach `BlastRadiusConfirm` even in artifact/sealed workflow modes.
+
+**Exploit proof, both directions:** against parent `d6651e7e`, the real stdio fake executed
+before any approval and printed `spawned=True status=connected tools=5 scope=sandbox`.
+Against `212f6e89`, marker-command tests prove unapproved/changed config cannot spawn or
+connect, and a real JSON-RPC stdio server with schema drift printed
+`status=approval_required old=51cb297f1bd2 new=c27f35170659 tools=0`.
+
+**Adversarial notes:** the check runs before every transport side effect; a missing or
+unreadable approval store produces empty approval maps and therefore denial; clients cannot
+choose the config hash (it is recomputed from saved config) or the tool hash (the approve
+route accepts only the live pool's pending hash); config drift, first-use schema, and schema
+drift all fail closed. Probe URL/transport overrides were removed so an approved config
+cannot authorize a different target.
+
+**Verification:** complete agent-server, core, tools, app-server, and frontend suites were
+green; frontend typecheck and the contract/fuzz/fault fitness gates were green; all changed
+Python files pass Ruff. The repository-wide `make lint` gate still reports 1,187 inherited,
+unrelated lint findings. No rule was weakened and no unrelated mass-format was performed;
+this repo-wide gate debt is explicit rather than misreported as green.
+
+---
+
+## Wave 5 — ROOT-C: availability / isolation hardening — **DONE (`10433330`)**
+
+**Closes:** H15, H16, H17, M8, M9, M10.
+
+**Sandbox-egress design (DECIDED — per-surface policy + per-instance network + HOST-enforced private block; codex HIGH #6 + r2-A3/A4).** H16 shows "default filtered" can't hold for the **agent** surface (the live-browser needs the whole public web; the filtered allowlist is the finite `REGISTRY_EGRESS_ALLOW`). But the fix must NOT hand *every* surface public egress. Design:
+- **Per-surface egress class (do NOT collapse them):** **Build/artifact stays finite-filtered** (`REGISTRY_EGRESS_ALLOW`) by default — a Build box must NOT be able to `curl https://example.com`. **Agent/browser** gets public-web-but-private-denied. Operator-approved widening is explicit.
+- Each sandbox on its **own user-defined network** (sibling-isolated), NAT'd so the agent browser keeps the public web.
+- **Concrete host-enforced private block (NOT model-tamperable in-netns iptables, NOT Docker `internal=True` which also kills public web):** daemon-host `DOCKER-USER`/nftables rules for Docker/gVisor/local; the rootless equivalent for Podman; remote-host install + verification for the VM-201 path. **Fail CLOSED** if the rules can't be installed (don't start the sandbox with open egress). Block **ALL non-global RFC6890 ranges + every host-owned interface IP — including the host's PUBLIC and TAILNET (`100.64.0.0/10`) addresses** (codex r5-D1', NOT just RFC1918): host bridge gateway, sibling subnets, RFC1918 (incl. 192.168.1.x homelab), IPv6 ULA + link-local, `169.254.0.0/16`. **Preserve container loopback** (browser/preview bind it).
+- **No host-published sibling hairpin (codex r5-D1'):** today sandbox ports are published on the daemon host (`gvisor.py:267`, `_container.py:47,138`), so A could reach B via `http://<daemon tailnet/public IP>:<port>` even with bridge isolation. → **bind published ports to daemon loopback only**, or drop direct publishing in favor of the authenticated preview proxy; **NEVER publish `INTERNAL_PORTS` (kernel gateway `8899`) externally.**
+- Reliable per-instance network **cleanup** on destroy.
+
+Tasks:
+- **D1** Implement the per-surface egress design above → fixes H15 (agent default open) + H16 (sibling reach + browser-forces-open). **Acceptance:** Build sandbox CANNOT reach `https://example.com` by default; Agent sandbox CAN reach a public host but CANNOT reach `169.254.169.254`, the host gateway, `192.168.1.x`, an IPv6 ULA, a sibling container, or a private host via DNS-rebind/redirect; if host firewall rules fail to install, the sandbox fails closed (no open-egress start).
+- **D2 — resource-cap sweep (pattern, every `containers.run`):** wire the declared-but-unused `disk_mb` (`base.py:54`) into a **REAL workspace quota** — `storage_opt size` does NOT cap the gVisor host bind-mount (`gvisor.py:294`) or local/podman named volumes (`local.py:112`, `podman.py:407`), so pick **XFS project quota / loopback fs / tmpfs / backend-specific volume quota** and **fail closed if unavailable** (codex r2-A8); add `pids_limit`, `ulimit nofile`; consider read-only rootfs + bounded tmpfs; age-out/remove ephemeral workspaces on `destroy`. **Acceptance:** `df /workspace` shows the cap, `fallocate -l 500G` is denied, workspace is gone after destroy. (M9.)
+- **D3 — cap sandbox→host transfer at the boundary:** byte caps + read timeouts on `shell` capture and `file_read` (`cat`); reject non-regular/symlink files for workspace reads + snapshot; store head/tail + spill reference; enforce a max event payload size; **bound/drop the unbounded WS ephemeral queues**; cap `HostPreviewProxy` request buffering (`host_proxy.py:187`). **Acceptance (codex r2-A9):** `shell_exec`/`code_exec` emitting huge stdout, a 500 MB `file_read`, a `/dev/zero` symlink read, the event-payload max/spill path, and a slow WS subscriber all stay bounded (no agent-server OOM). (`_container.py:275,307`, `system.py:54`, `events.py:258`, `sqlite.py:402`.) (H17.)
+- **D4 — DoD finish-gate never auto-releases on repeated model refusal:** unmet owner DoD terminally blocks or pauses for explicit user override. (`finish.py:53,464`.) (M8 — also the "looks-done-but-isn't" integrity issue.)
+- **D5 — preview command uses argv, not shell-composition:** never interpolate a model-authored `serve_dir` into a shell string; sanitize it / force a fixed root in artifact mode. (`preview_service.py:198`.) (M10.)
+
+**Acceptance:** two sandboxes can't reach each other on the bridge; `curl 169.254.169.254` from the agent sandbox is blocked; `fallocate -l 500G` is quota-denied; `file_read` of a 500 MB file / `/dev/zero` symlink is capped (no host OOM); a `x; touch /tmp/pwned #/index.html` artifact does NOT execute on preview restart; a build with an unmet DoD does not auto-finish.
+
+**STATUS: DONE + adversarially re-read (2026-07-10, commit `10433330`).**
+
+**Implementation.** Build and artifact sandboxes default to the finite registry allowlist;
+agent/browser sandboxes get arbitrary public HTTP(S), but no model-shaped setting reaches a
+raw bridge. Both public and filtered modes place the sandbox on its own internal no-NAT
+network and expose the outside world only through a dual-homed, host-managed policy sidecar.
+The sidecar resolves once, rejects the whole answer set if any address is non-global or
+host-owned, pins the validated IP for connect, restricts public mode to ports 80/443, drops
+all capabilities, disables forwarding, and must pass readiness before the sandbox starts.
+Local and remote host interface inventories are authoritative and fail closed; remote
+published ports are reached through local SSH loopback tunnels. Every host mapping is bound
+to daemon loopback, including the internal kernel mapping, and only `USER_PORTS` can become
+a user URL.
+
+Every container create now has CPU, memory, PID, and `nofile` ceilings. `disk_mb` materializes
+as a size-capped tmpfs workspace volume on gVisor, local, and native Podman; creation fails
+instead of falling back to an uncapped volume, and destroy/orphan reconciliation removes the
+volume, sidecar, network, and tunnel. Shell output crosses the runtime API only as bounded
+head/tail plus a capped in-workspace prefix spill. File reads use no-follow descriptor walks,
+regular-file checks, a 32 MiB ceiling, and a read timeout. Kernel streams/images, durable
+event payloads, durable/ephemeral subscriber queues, preview request/HTML buffering, and WS
+recovery are bounded. Slow durable subscribers close with 1013 and can replay by sequence.
+
+The external DoD gate treats missing/unverifiable evidence as unmet and pauses after its
+bounded retry budget; it never converts refusal into `FINISHED`. Container evidence is read
+through the sandbox namespace. Static-preview commands are argv-serialized with
+`shlex.join`, and Chromium is explicitly attached to the policy proxy.
+
+**Exploit proof, both directions.** The pre-fix live network probe showed that two ordinary
+separate rootless-Podman NAT networks could route to one another, disproving the assumption
+that distinct bridge names alone isolated siblings; the old DoD regression suite also
+encoded the unsafe cap-release as its expected result. With `10433330`, the exact native
+`PodmanSandboxService` path produced: public `example.com` → 200; metadata
+`169.254.169.254` and LAN `192.168.1.1` → 403; direct sibling connect → refused; proxied
+sibling connect → 403; filtered Build `example.com` → 403 while npm registry → 200. All
+published bindings reported `HostIp=127.0.0.1`. `df` reported a 16 MiB `/workspace`,
+`fallocate -l 500G` failed `ENOSPC`, `pids.max=32`, and `ulimit -n=256`. A separate 128 MiB
+box killed a 512 MiB allocation at exit 137 and changed `memory.events oom_kill` from 0 to
+1. Each proof ended with zero labeled containers, networks, and volumes. The first native
+attempts also caught two SDK-only serialization errors (random loopback port and
+no-new-privileges shapes); both failed cleanly with zero residue and were fixed before the
+successful proof.
+
+Regression coverage is concentrated in
+`packages/tools/tests/test_sw5_isolation_bounds.py` and
+`packages/core/tests/test_sw5_event_bounds.py`, with focused additions for DNS rebinding,
+mixed-address poisoning, browser proxying, preview argv injection, DoD refusal, backend
+resource wiring, bounded shell/kernel/file output, request buffering, and WS overflow.
+
+**Adversarial notes.** Checks run before network/container side effects wherever possible;
+partial sidecar/main-container failures remove every resource. Empty or unreadable host
+inventory, invalid policy config, missing quota support, proxy readiness failure, unknown
+egress mode, non-loopback daemon bindings, unverifiable DoD evidence, and oversized payloads
+all deny. DNS answers are backend-resolved and pinned rather than client-chosen; one private
+answer poisons a mixed set. Re-reading the diff found and fixed three additional holes before
+commit: sealed workflows could inherit agent `public_web`, local inventory omitted secondary
+interfaces, and the container DoD size check used a `test --` form rejected by the real
+image. The `process` backend still cannot provide network isolation and remains dev-only,
+fail-closed for production.
+
+**Verification:** complete tools, core, and agent-server suites are green; contract, fuzz,
+and fault gates are green; every changed Python file passes Ruff. Repository-wide
+`make lint` still reports 1,111 inherited findings outside this wave. No lint rule or
+security assertion was weakened.
+
+---
+
+## Wave 6 — output sinks + share/storage + lows + ops hardening — **DONE (`17869bdb`)**
+
+**Closes:** M4, M2, M6, L1, L2, L3 (if not already in B3), + Fernet KDF.
+
+- **M4 — share bundle = point-in-time snapshot of the FULL projection** (codex HIGH #4 + r2-A7; owner-scoping does NOT close this — the share is intentionally public-by-token). `share_export()` emits not just events but live `last_seq`, `state`, and `cassette` (`share_service.py:87,119`); filtering only events still leaks later state/metadata. So `share_export(before_seq=row["bundle_seq"])` must build **events + cassette + state + last_seq** from the bounded event set. **Acceptance:** events AND derived state/cassette/last_seq added AFTER share creation are absent from the served bundle.
+- **M2 — `/api/storage/browse` is a PRODUCT decision, not just a jail** (codex MED #7 + r2-A10). This endpoint IS the Settings new-projects-root picker (`routes/storage.py:19`), so jailing it to the existing projects root *breaks choosing a new root*. **DECISION for Dylan** (see §Resolved decisions item 4): (a) accepted authenticated-local-operator risk — keep the picker but require auth + CSRF + audit-log + narrow it to sensible roots (home, /mnt, /media) not `/`,`/etc`; or (b) redesign the picker (type-a-path-and-validate instead of browse-the-host-fs). Default recommendation: **(a)** — least disruption, and post-Wave-1 it's authenticated. **Acceptance:** unauthenticated browse → 401; authenticated browse of `/etc`,`/root` → 403 (outside allowed roots); **a symlink UNDER an allowed root that points to `/etc` is NOT browsable** (codex r4-M2' — resolved target AND every traversed child must stay under allowed roots, else symlinked dirs aren't browsable); the real Settings picker still works (screenshot).
+- **M6** xlsx formula injection: reject any `=`-cell (data rows AND headers, `sheets.py:272,290`) whose first token isn't an allowed function; block `|`, `!`, `[`, and leading non-alpha after `=`; default untrusted leading-sigil strings to escaped literals. (DDE/external-ref, not just `HYPERLINK`.)
+- **L1** Dead `redact_frame`/`redact_text` (`redaction.py:222`): either wire it into the live WS path or remove the docstring claim that live frames are redacted (truth-in-affordance).
+- **L2** `.gitignore` `.env` + `frontend/.env.development.local`; untrack the committed `.env`.
+- **L3** Generic openai-tier provider host-pin (folds into B3 if done there).
+- **Ops (optional):** SecretStore Fernet KDF (`secrets.py:96-101`) unsalted single-pass SHA-256 → consider Argon2id. Fine today for a high-entropy master key (already weak-key-guarded, 0600/0700); operator-hardening, not a fix-1-4 survivor.
+
+**Acceptance:** an xlsx cell `=cmd|'/c calc'!A1` is written as an escaped literal, not a live formula; `.env` no longer tracked.
+
+**STATUS: DONE + adversarially re-read (2026-07-10, commit `17869bdb`).**
+
+**Implementation.** Public share tokens now pass their captured sequence boundary into
+`share_export`; events, cassette, reconstructed state, and both `last_seq` fields derive
+only from that bounded event set. Token rows also capture title and surface because those
+fields live outside the event log; an idempotent SQLite migration freezes current metadata
+for legacy links. Direct owner exports remain intentionally live.
+
+`/api/storage/browse` is an admin-only, session-CSRF-bound read even though it is a GET.
+It authorizes the resolved target before existence/type checks, permits only `$HOME`,
+`/mnt`, and `/media`, stops parent navigation at those roots, never advertises symlinks as
+browsable, and emits structured allow/deny audit records without file contents. The shared
+frontend client adds the CSRF header to this protected read. `/`, `/etc`, `/root`, `/usr`,
+and an under-home symlink to `/etc` deny.
+
+Every outbound JSON frame on the conversation and research WebSockets now crosses one
+`redact_frame` helper, including persisted events, ephemeral file deltas, state, errors, and
+research tokens/finals. XLSX headers and data cells share one writer: only an exact
+`=ALLOWED_FUNCTION(...)` rooted in the allowlist is live; bare arithmetic/references,
+unknown/nested unsafe functions, DDE/external-reference characters (`|`, `!`, `[`), leading
+non-alpha after `=`, leading whitespace, and `+`/`-`/`@`/other formula sigils are explicit
+string cells.
+
+Generic provider catalogue probes are now bound to a signed tuple of exact origin,
+provider purpose, and provider-specific secret ref. The gate runs before cache lookup,
+secret decryption, or wire I/O; cosmetic edits cannot bless a poisoned URL, and base URLs
+must be absolute HTTP(S). `.env` and `frontend/.env.development.local` are ignored and both
+are absent from the index.
+
+The optional Fernet KDF change was considered and deliberately not mixed into this wave.
+Fresh installs already generate a high-entropy 32-byte master key, weak keys warn, and a
+safe KDF migration must version ciphertext *and* the HMAC-signed approval ledger to avoid
+locking existing secrets or turning the ledger into a cheap password verifier. Argon2id
+therefore remains an explicit operator-hardening follow-up, not a surviving campaign
+finding.
+
+**Exploit proof.** The regression suite appends search/cassette/status events and changes
+the title after token issue; the public bundle retains only the pre-share query, RUNNING
+state, captured seq/title/surface, and contains none of the post-share IDs/text. Real XLSX
+files reopen with every malicious header/data payload as `data_type="s"` and a leading
+literal escape. Real WebSocket clients receive redaction markers instead of canaries on
+persisted, ephemeral, and research streams.
+
+The restarted live agent stack produced: unauthenticated storage browse `401`, authenticated
+without CSRF `403`, `$HOME` browse `200` (126 immediate entries), and `/etc` `403`; the live
+service log recorded the CSRF denial, allowed listing, and outside-root denial. The approved
+browser-control surface was unavailable, so no screenshot artifact could be captured; the
+actual frontend request path is instead pinned by its live-mode CSRF test and the complete
+frontend suite.
+
+For the required real exfil proof, isolated `systemd --user` app/sink units exercised the
+real HTTP server and TCP sinks. The approved provider origin received exactly one
+authenticated `/v1/models` request. After stopping the server, poisoning only the persisted
+base URL, and restarting with the original signed ledger/key, the catalogue endpoint returned
+`403`; the attacker sink stayed at `0` requests. All temporary units/files were removed.
+
+**Adversarial notes.** The unreviewed archive draft was not merged. Re-reading it found four
+material gaps and the implementation was strengthened before commit: its formula predicate
+admitted bare `=A1+B1`; it bounded event-derived share fields but left live title/surface;
+the frontend did not send CSRF on GET; and the generic provider catalogue path bypassed the
+S-W2 origin ledger. A second pass removed the configured-project-root trust exception from
+storage, bound provider cache hits as well as network misses, made legacy share migration
+rollback-compatible, and checked every outbound send site. Missing approval, malformed URL,
+missing CSRF, forbidden/missing root, broken/symlink child, old token metadata, and unknown
+formula all fail closed. No client chooses the comparison value that authorizes a provider
+origin; only the separately HMAC-signed ledger does.
+
+**Verification:** the complete core, agent-server, tools, and app-server suites are green;
+frontend is `968/968`; contract `3/3`, fuzz `5/5`, fault `9/9`; production TypeScript
+typecheck, Vite production bundle, changed-file ESLint, and Ruff on every changed Python file
+are green. Repository-wide Ruff reports 1,100 inherited findings. The combined
+`npm run build` still includes pre-existing test-only TypeScript errors in unrelated files;
+none names a changed file, while the production typecheck and bundle are clean.
+
+---
+
+## Post-campaign re-audit
+
+After all waves land, run ONE more Opus+codex round-pair against the patched tree to confirm the tail collapsed (especially that ROOT-A's reachability removal + ROOT-B's chokepoint actually closed the sinks, and no fix introduced a regression). This is the "verify the dead end" close-out.
+
+**Status (2026-07-10):** the Codex half is complete. It re-inventoried the public share,
+storage, WS, spreadsheet, and generic-provider sinks; the review found and fixed the four
+gaps listed above, then reran full suites and real sinks. An independent Opus reviewer was
+not available in this execution environment, so that second-model assurance half remains
+outstanding and is recorded in `HANDOVER-PROMPT.md`; no implementation wave remains parked.
+
+## Resolved decisions (Dylan: "use best practices, go with your recommendations", 2026-06-20; revised per codex plan-review)
+1. **Wave 1 auth = HttpOnly SameSite cookie + CSRF + strict WS `Origin` checks + short-lived signed preview/artifact URLs** (NOT a JS-readable bearer — codex blocker #1). A cookie is sent automatically by browser navigation surfaces (WS, iframes, downloads) that can't add an `Authorization` header, is not readable by a hostile page's JS, and SameSite + CSRF closes the drive-by. CORS is tightened too but is NOT relied on for WS (Origin-checked instead).
+2. **Wave 5 sandbox-egress design = per-instance Docker network + HOST-enforced private-range block** (codex blocker/HIGH #6). Each sandbox on its own user-defined network (sibling-isolated) with the private/metadata block enforced HOST-side (Docker network config / host firewall / an immutable layer), NOT model-tamperable in-netns rules. Preserve container loopback for browser/preview internals; block host gateway + sibling subnets + IPv6 ULA/link-local + `169.254.0.0/16`. Agent live-browser keeps the full public web (so "default filtered" can't hold — H16).
+3. **Scope/sequencing = all six waves, roots-first** (Wave 1 keystone first). Each wave independently shippable + verified; if time-boxing is ever needed, Waves 1–3 are the security core.
+5. **App-server settings = operator/ADMIN-only global state** (codex r5-A2', DECIDED) — config/secrets/MCP/skills configure the whole install + inject into all prompts, so they're admin-scoped, not per-owner. A regular authenticated owner can't change provider keys or inject a global skill. (Single-operator local today; stays correct when hosted.)
+4. **M2 storage-browse (NEW product decision, codex r2-A10) = recommend option (a)** — keep the Settings projects-root picker but, post-auth, require auth + CSRF + audit + narrow it to sensible roots (home/mnt/media), NOT a full-host browser. (Jailing it to the *existing* root would break choosing a new project root.) Flag if you'd rather redesign the picker (option b).

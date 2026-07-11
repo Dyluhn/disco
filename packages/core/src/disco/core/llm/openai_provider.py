@@ -21,7 +21,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import time
 from collections.abc import AsyncIterator, Iterable
 from typing import Any, Literal
 
@@ -38,6 +40,7 @@ from .errors import (
 )
 from .toolcall_recovery import recover_tool_calls
 from .types import (
+    EMPTY_REASONING_ONLY_METADATA_KEY,
     CompletionRequest,
     CompletionResponse,
     ProposedToolCall,
@@ -157,12 +160,99 @@ def _truncate_think_block(content: str) -> str:
     return _F5_THINK_BLOCK_RE.sub(_maybe, content)
 
 
+def _host_speaks_chat_template_kwargs(base_url: str) -> bool:
+    """`chat_template_kwargs` is a llama.cpp / vLLM SERVER extension, not part of
+    the OpenAI schema. Lenient clouds ignore it, but strict ones (e.g. Fireworks
+    behind an aggregator) reject the whole request: HTTP 400 "Extra inputs are
+    not permitted" — one hidden field bricks the model. Send it only to hosts
+    that plausibly run a self-hosted server: loopback / RFC-1918 / CGNAT
+    (tailscale) IPs, dot-less LAN hostnames, or explicitly local suffixes."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    host = (urlsplit(base_url).hostname or "").lower()
+    if not host:
+        return False
+    if host.endswith((".ts.net", ".local", ".lan", ".home.arpa", ".internal")):
+        return True
+    if "." not in host:  # bare intranet hostname (e.g. "blackbox")
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_private or ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")
+
+
 def _sanitize_tool_name(name: str) -> str:
     """Sanitize tool names for OpenAI boundary (dots are forbidden).
     Strip everything before the last dot and filter to [a-zA-Z0-9_-]."""
     if "." in name:
         name = name.split(".")[-1]
     return re.sub(r"[^a-zA-Z0-9_-]", "", name)
+
+
+def _normalize_tool_call_ordering(msgs: list[dict]) -> list[dict]:
+    """Enforce the strict tool-call/result adjacency the wire format requires.
+
+    MiniMax (and, per the OpenAI spec, every compliant provider) rejects a
+    message list where a ``role:"tool"`` result does not IMMEDIATELY follow the
+    assistant message whose ``tool_calls`` declared its ``tool_call_id`` —
+    observed live as ``bad_request_error`` 2013, "tool call result does not
+    follow tool call". Our render pipeline (``view_render``) runs many history
+    transforms — microcompact tombstoning, context-pack insertion at index 1,
+    model-summarization condensation, prefix/tail snapshot injection, the
+    DR→agent workflow handoff — any of which can drop a turn or splice a message
+    between an assistant tool-call and its result, leaving the pair non-adjacent
+    (or the result orphaned). Lenient servers (llama.cpp, vLLM) tolerate it;
+    MiniMax does not. This is a harness-side wire-assembly defect, NOT a model
+    failure, so the repair belongs here at the serialization boundary — the
+    single choke point that owns the wire contract.
+
+    The pass rebuilds the list so that:
+      * each assistant ``tool_calls`` is immediately followed by its result
+        messages, in the SAME order the calls were declared;
+      * a declared tool_call with no result anywhere gets a minimal stub result
+        (a dropped/condensed observation — the model continues; it does not 400);
+      * an orphan ``role:"tool"`` result (its declaring assistant turn was
+        dropped) is removed.
+
+    It is a NO-OP (identical output ordering) when the list already satisfies the
+    invariant, so the cache-stable capable-model prefix is untouched on the
+    healthy path.
+    """
+    result_by_id: dict[str, dict] = {}
+    for m in msgs:
+        if m.get("role") == "tool":
+            cid = m.get("tool_call_id")
+            if cid is not None and cid not in result_by_id:
+                result_by_id[cid] = m
+
+    out: list[dict] = []
+    for m in msgs:
+        if m.get("role") == "tool":
+            # Re-emitted (in declaration order) right after its assistant turn
+            # below — skip the free-standing occurrence. An orphan result (no
+            # declaring assistant) is simply never re-emitted → dropped.
+            continue
+        out.append(m)
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                cid = tc.get("id")
+                if cid is None:
+                    continue
+                res = result_by_id.get(cid)
+                if res is not None:
+                    out.append(res)
+                else:
+                    out.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": cid,
+                            "content": "[tool result unavailable — omitted from context]",
+                        }
+                    )
+    return out
 
 
 class OpenAIProvider:
@@ -184,6 +274,7 @@ class OpenAIProvider:
         self._key = api_key
         self._timeout = timeout_s
         self._enable_thinking = enable_thinking
+        self._speaks_ctk = _host_speaks_chat_template_kwargs(base_url)
         self._caps = frozenset(capabilities)
         self._transport = transport  # test seam (httpx.MockTransport); None = real
 
@@ -315,6 +406,10 @@ class OpenAIProvider:
 
         source_messages = [_shape(m) for m in req.messages]
         msgs = [self._message(m) for m in source_messages]
+        # Provider wire-contract guard: guarantee every tool result immediately
+        # follows the assistant tool_call that declared it (MiniMax 2013; OpenAI
+        # spec). No-op when the render pipeline already produced an adjacent list.
+        msgs = _normalize_tool_call_ordering(msgs)
         # B9: Assistant prefill. Append as a trailing
         # assistant message; compatible servers (llama.cpp, vLLM, Anthropic)
         # will continue from here.
@@ -369,7 +464,7 @@ class OpenAIProvider:
         # capable-model path free of that risk.
         if req.assist and (req.attempt or 1) >= 2:
             et = False
-        if et is not None:
+        if et is not None and self._speaks_ctk:
             body["chat_template_kwargs"] = {"enable_thinking": et}
         if stream:
             body["stream_options"] = {"include_usage": True}
@@ -509,11 +604,36 @@ class OpenAIProvider:
             or 0
         )
 
+    @staticmethod
+    def _empty_reasoning_only_metadata(
+        *,
+        finish_reason: FinishReason,
+        content_len: int,
+        reasoning_len: int,
+        tool_call_count: int,
+    ) -> dict:
+        if (
+            finish_reason == "stop"
+            and content_len == 0
+            and tool_call_count == 0
+        ):
+            return {
+                EMPTY_REASONING_ONLY_METADATA_KEY: {
+                    "finish_reason": finish_reason,
+                    "content_len": content_len,
+                    "reasoning_len": reasoning_len,
+                    "tool_call_count": tool_call_count,
+                }
+            }
+        return {}
+
     def _to_response(self, req: CompletionRequest, model: str, data: dict) -> CompletionResponse:
         choice = (data.get("choices") or [{}])[0]
         msg = choice.get("message") or {}
         usage = data.get("usage") or {}
         model_content = msg.get("content") or ""
+        reasoning_content = msg.get("reasoning_content")
+        reasoning_len = len(reasoning_content) if isinstance(reasoning_content, str) else 0
         # B9: Completion is a continuation of the prefill.
         text = (req.assistant_prefill or "") + model_content
         # F1: weak-model recovery. When the structured tool_calls channel is empty
@@ -525,12 +645,13 @@ class OpenAIProvider:
         recovered: list[ProposedToolCall] = []
         finish_reason = _map_finish(choice.get("finish_reason"))
         if not raw_tool_calls and req.assist:
-            recovered = recover_tool_calls(model_content, msg.get("reasoning_content"))
+            recovered = recover_tool_calls(model_content, reasoning_content)
             if recovered:
                 finish_reason = "tool_calls"
+        tool_calls = raw_tool_calls or recovered
         return CompletionResponse(
             text=text,
-            tool_calls=raw_tool_calls or recovered,
+            tool_calls=tool_calls,
             usage=TokenUsage(
                 input_tokens=int(usage.get("prompt_tokens", 0) or 0),
                 output_tokens=int(usage.get("completion_tokens", 0) or 0),
@@ -541,6 +662,12 @@ class OpenAIProvider:
             model_used=data.get("model", model),
             request_id=req.request_id,
             routing=None,  # the router attaches the RoutingDecision (RT1)
+            response_metadata=self._empty_reasoning_only_metadata(
+                finish_reason=finish_reason,
+                content_len=len(model_content),
+                reasoning_len=reasoning_len,
+                tool_call_count=len(tool_calls),
+            ),
         )
 
     @staticmethod
@@ -660,7 +787,36 @@ class OpenAIProvider:
 
     # -- the ModelProvider protocol -------------------------------------------
 
+    def _ledger_emit(self, req: CompletionRequest, model: str) -> None:
+        """Provider-request ledger (2026-07-09): when DISCO_PROVIDER_LEDGER names a
+        file, append one relay-format JSONL record per outbound completion request —
+        {ts (epoch float), host, model, has_tools, conversation_id}. This is the
+        DIRECT-driver equivalent of the MiniMax relay's log: the build-soak harness
+        adjudicates provider-after-terminal (runaway loops) from it, and previously
+        REFUSED to run against direct drivers (no relay in the path = nothing to
+        audit). Schema matches harness provider_ledger.parse_relay_log's structured
+        branch; conversation_id scoping keeps PARALLEL soak lanes from
+        cross-contaminating each other's after-terminal counts. Best-effort:
+        ledger failure must never fail a live request. Unset env ⇒ zero overhead."""
+        path = os.environ.get("DISCO_PROVIDER_LEDGER")
+        if not path:
+            return
+        try:
+            raw_cid = (req.metadata or {}).get("conversation_id")
+            rec = {
+                "ts": time.time(),
+                "host": httpx.URL(self._base).host or self._base,
+                "model": model,
+                "has_tools": bool(req.tools),
+                "conversation_id": str(raw_cid).strip() if raw_cid else None,
+            }
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except Exception:  # noqa: BLE001 — auditing must never break the request path
+            pass
+
     async def complete(self, req: CompletionRequest, *, model: str) -> CompletionResponse:
+        self._ledger_emit(req, model)
         try:
             async with self._client() as client:
                 resp = await client.post(
@@ -696,6 +852,7 @@ class OpenAIProvider:
         finish: str | None = None
         usage: dict = {}
         model_used = model
+        self._ledger_emit(req, model)
         try:
             async with self._client() as client:
                 async with client.stream(
@@ -790,6 +947,7 @@ class OpenAIProvider:
             raise LLMTransientError(f"connection error: {exc}", provider=self.name) from exc
 
         accumulated_text = "".join(content)
+        reasoning_content = "".join(reasoning_buf)
         tool_calls: list[ProposedToolCall] = self._tool_calls(
             [
                 {
@@ -806,7 +964,7 @@ class OpenAIProvider:
         # see byte-identical behavior to today.
         finish_reason = _map_finish(finish)
         if not tool_calls and req.assist:
-            recovered = recover_tool_calls(accumulated_text, "".join(reasoning_buf))
+            recovered = recover_tool_calls(accumulated_text, reasoning_content)
             if recovered:
                 tool_calls = recovered
                 finish_reason = "tool_calls"
@@ -823,6 +981,12 @@ class OpenAIProvider:
             model_used=model_used,
             request_id=req.request_id,
             routing=None,
+            response_metadata=self._empty_reasoning_only_metadata(
+                finish_reason=finish_reason,
+                content_len=len(accumulated_text) - len(req.assistant_prefill or ""),
+                reasoning_len=len(reasoning_content),
+                tool_call_count=len(tool_calls),
+            ),
         )
         yield StreamChunk(done=True, final=final)
 

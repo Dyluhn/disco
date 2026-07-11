@@ -31,6 +31,8 @@ unaffected.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections import defaultdict
 from collections.abc import AsyncIterator
 from typing import Literal, Protocol, runtime_checkable
@@ -55,10 +57,10 @@ from .prompts import (
 )
 from .provider import ModelProvider
 from .types import (
-    CompletionRequest,
-    CompletionResponse,
     DRIVER_ROLES,
     FALLBACK_ELIGIBLE_ROLES,
+    CompletionRequest,
+    CompletionResponse,
     ModelRole,
     Requirement,
     RoutingDecision,
@@ -70,6 +72,8 @@ from .types import (
 # pure resilience (retry the SAME assigned model), never model escalation.
 _MAX_ATTEMPTS = 5
 _ROLE_FALLBACK_MAX_ATTEMPTS = 2
+_AUTH_RETRY_DELAY_S = 2.0
+_LOG = logging.getLogger(__name__)
 
 # The routing paths. v1.2 emits "pinned"/"manual"; "local"/"overflow" are kept in
 # the Literal for the DORMANT intelligent-routing revival path and for back-compat
@@ -384,12 +388,30 @@ class DefaultLLMRouter:
         active_triggers = list(overflow_triggers)
         max_attempts = _MAX_ATTEMPTS
         used_fallback = False
+        auth_retry_used = False
 
         attempt = 1
         while True:
             try:
                 resp = await provider.complete(exec_req, model=model_id)
-            except (LLMContextWindowExceeded, LLMAuthError, LLMContentFiltered) as exc:
+            except LLMAuthError as exc:
+                if not auth_retry_used:
+                    auth_retry_used = True
+                    _LOG.warning("transient auth failure, retrying once: %s", exc)
+                    await asyncio.sleep(_AUTH_RETRY_DELAY_S)
+                    attempt += 1
+                    continue
+                self._record_failure(
+                    req,
+                    entry,
+                    active_path,
+                    active_reason,
+                    exc,
+                    chosen_model=model_id,
+                    provider_name=provider_name,
+                )
+                raise
+            except (LLMContextWindowExceeded, LLMContentFiltered) as exc:
                 # Terminal: no retry, no escalation. Emit one decision, propagate.
                 self._record_failure(
                     req,
@@ -458,6 +480,7 @@ class DefaultLLMRouter:
         active_triggers = list(overflow_triggers)
         max_attempts = _MAX_ATTEMPTS
         used_fallback = False
+        auth_retry_used = False
         exec_req = self._inject_prompt(self._attach_context_metadata(req, ctx), entry)
 
         # Same-model transient retry as `complete` — but GUARDED: a stream can only
@@ -493,7 +516,24 @@ class DefaultLLMRouter:
                         yielded_any = True
                         yield chunk
                 return  # stream completed cleanly
-            except (LLMContextWindowExceeded, LLMAuthError, LLMContentFiltered) as exc:
+            except LLMAuthError as exc:
+                if not yielded_any and not auth_retry_used:
+                    auth_retry_used = True
+                    _LOG.warning("transient auth failure, retrying once: %s", exc)
+                    await asyncio.sleep(_AUTH_RETRY_DELAY_S)
+                    attempt += 1
+                    continue
+                self._record_failure(
+                    req,
+                    entry,
+                    active_path,
+                    active_reason,
+                    exc,
+                    chosen_model=model_id,
+                    provider_name=provider_name,
+                )
+                raise
+            except (LLMContextWindowExceeded, LLMContentFiltered) as exc:
                 self._record_failure(
                     req,
                     entry,

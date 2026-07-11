@@ -12,9 +12,7 @@ from ..share_viewer import _SHARE_VIEWER_HTML
 from ._common import require_owned_conversation
 
 
-def make_share_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None
-) -> APIRouter:
+def make_share_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/conversations/{conversation_id}/share")
@@ -27,14 +25,10 @@ def make_share_router(
         revocation flips `revoked_at` (a 410 Gone is a probe, so revoked
         tokens look identical to never-issued ones to the viewer)."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         owner_id = current_owner_id(request)
-        result = await runtime.create_share_link_async(
-            conversation_id, owner_id=owner_id
-        )
+        result = await runtime.create_share_link_async(conversation_id, owner_id=owner_id)
         if not result.get("ok"):
             raise HTTPException(
                 status_code=404,
@@ -63,9 +57,7 @@ def make_share_router(
         owned by the caller). Owner-scoped: a caller can only revoke a
         token it issued (the WHERE clause filters by owner_id)."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         ok = runtime.revoke_share_link(token, owner_id=current_owner_id(request))
         return {"ok": ok, "token": token, "revoked": ok}
 
@@ -76,14 +68,10 @@ def make_share_router(
         bundle) and for the reviewer's standalone-rung check. The bundle
         IS the share-viewer payload: same shape, same scrubbing."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         owner_id = current_owner_id(request)
-        result = await runtime.share_export(
-            conversation_id, owner_id=owner_id
-        )
+        result = await runtime.share_export(conversation_id, owner_id=owner_id)
         if not result.get("ok"):
             raise HTTPException(
                 status_code=404,
@@ -130,13 +118,11 @@ def make_share_router(
     @router.get("/api/share/{token}/bundle")
     async def share_bundle(token: str) -> dict:
         """Fetch the scrubbed bundle for a valid share token. The endpoint
-        rebuilds the bundle on every call from the live event log (the
-        log is append-only; re-export is deterministic). 404 for missing
-        or revoked tokens."""
+        rebuilds the bundle on every call from the token's captured sequence
+        boundary. Appends made after link creation are never included. 404 for
+        missing or revoked tokens."""
         if runtime is None:
-            raise HTTPException(
-                status_code=503, detail={"ok": False, "reason": "no_runtime"}
-            )
+            raise HTTPException(status_code=503, detail={"ok": False, "reason": "no_runtime"})
         row = runtime.lookup_share_link(token)
         if row is None:
             # 404 with NO distinguishing detail — revoked and never-issued
@@ -144,7 +130,9 @@ def make_share_router(
             # token string sees 404 every time.
             raise HTTPException(status_code=404, detail={"ok": False, "reason": "not_found"})
         result = await runtime.share_export(
-            row["conversation_id"], owner_id=row["owner_id"]
+            row["conversation_id"],
+            owner_id=row["owner_id"],
+            before_seq=row["bundle_seq"],
         )
         if not result.get("ok"):
             raise HTTPException(
@@ -155,6 +143,10 @@ def make_share_router(
         # time so the UI can show "this link is N events behind the
         # current run" if the conversation has progressed since then.
         bundle = result["bundle"]
+        # Title/surface live in the conversations table rather than the event
+        # log, so the token row captures them separately at issue time.
+        bundle["title"] = row["bundle_title"]
+        bundle["surface"] = row["bundle_surface"]
         bundle["share"] = {
             "token": token,
             "owner_id": row["owner_id"],

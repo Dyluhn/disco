@@ -25,7 +25,6 @@ from ..events import (
     MessageEvent,
     ObservationEvent,
     PlanEvent,
-    StatusEvent,
 )
 from ..llm import (
     BudgetExceeded,
@@ -36,6 +35,7 @@ from ..llm import (
     LLMTransientError,
     OperatingMode,
 )
+from ..llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
 from ..view import View, repair_tool_call_adjacency
 from . import signals, view_render
 from .boundaries import AgentStep
@@ -96,6 +96,21 @@ _PLANNING_TOOL_REFUSAL_NEEDLE = "is not available in PLANNING mode"
 _PLANNING_TOOL_REFUSAL_ESCALATE_AT = 2
 _PLANNING_TOOL_REFUSAL_NARROW_AT = 3
 _PLANNING_TOOL_REFUSAL_READ_TOOLS = frozenset({"file_read"})
+_EMPTY_REASONING_REPAIR_REMINDER = (
+    "Your previous response produced no visible text and no tool call — call exactly "
+    "one tool now, or say in plain text what you need."
+)
+_PROSE_NOOP_REPAIR_REMINDER = (
+    "You described the next action instead of performing it — call the tool for it "
+    "in THIS turn."
+)
+
+
+def _view_has_current_objective(view: View) -> bool:
+    return any(
+        "<current-objective>" in (message.content or "")
+        for message in view.messages
+    )
 
 
 def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
@@ -148,6 +163,32 @@ def planning_tool_refusal_streak(events: list[Event]) -> int:
 class Driver:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
+
+    async def _persist_empty_reasoning_diagnostic(self, diagnostic: dict) -> None:
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=_EMPTY_REASONING_REPAIR_REMINDER),
+                meta={
+                    "diagnostic": EMPTY_REASONING_ONLY_METADATA_KEY,
+                    **diagnostic,
+                },
+            )
+        )
+
+    async def _persist_prose_noop_diagnostic(self, step: AgentStep) -> None:
+        await self._loop._emit(
+            MessageEvent(
+                source=EventSource.ENVIRONMENT,
+                message=LLMMessage(role="user", content=_PROSE_NOOP_REPAIR_REMINDER),
+                meta={
+                    "diagnostic": signals.PROSE_NOOP_REPAIR_DIAGNOSTIC,
+                    "content_len": len(step.thought),
+                    "tool_call_count": 0,
+                    "llm_response_id": step.llm_response_id,
+                },
+            )
+        )
 
     def build_stream_hook(self) -> StreamHook | None:
         """Per-step watch-it-write hook (or None if no sink is wired). Decodes the
@@ -285,6 +326,7 @@ class Driver:
         suppress_meta_tools: bool = False,
         force_submit_only: bool = False,
         force_read_tools: frozenset[str] | None = None,
+        mode: OperatingMode | None = None,
     ) -> list:
         """Mode-scoped tool visibility. With no planning_tools configured this is a
         pass-through (Research / default). While PLANNING the agent sees ONLY the
@@ -319,8 +361,9 @@ class Driver:
             _serve_tool_singleton,
         )
 
+        effective_mode = mode or self._loop.mode
         tools = self._loop.executor.available_tools()
-        if self._loop.mode == OperatingMode.PLANNING:
+        if effective_mode == OperatingMode.PLANNING:
             # FORCED-SUBMIT RECOVERY (prose planning). When the engine has escalated a
             # stuck prose-planning segment, narrow the offered
             # tools to submit_plan + READ tools (file_read/file_list) — NOT submit-only.
@@ -384,9 +427,10 @@ class Driver:
                 return True
 
             planner_tools = [t for t in tools if _planner_ok(getattr(t, "name", None))]
-            # Append the VIRTUAL ask_user + questions_v2 + clarify even while planning: an under-specified
-            # task most needs clarification BEFORE a plan is committed (the user
-            # named a detail only they know). ask_user is read-only-safe — the loop
+            # Append the VIRTUAL ask_user + questions_v2 + clarify even while
+            # planning: an under-specified task most needs clarification BEFORE a
+            # plan is committed (the user named a detail only they know).
+            # ask_user is read-only-safe — the loop
             # intercepts it (never executes it against the sandbox) and halts at the
             # Ask-gate, same as in execution. questions_v2 is the structured §K
             # batch-intake variant; clarify stays as a legacy alias. Without this
@@ -543,18 +587,31 @@ class Driver:
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
         # Withhold the meta/handoff virtuals until this session's first
         # real action (see _tools_for_step docstring — Phase-B re-run #4).
+        cached_mode = self._loop.mode
+        mode = self._loop._reconcile_mode_from_events(events)
+        if (
+            cached_mode == OperatingMode.PLANNING
+            and mode != OperatingMode.PLANNING
+            and _view_has_current_objective(view)
+        ):
+            _LOG.error(
+                "Mode desync corrected for %s at composition: cached=%s effective=%s",
+                self._loop.conversation_id,
+                cached_mode.value,
+                mode.value,
+            )
         fresh_session = (
-            self._loop.mode != OperatingMode.PLANNING
+            mode != OperatingMode.PLANNING
             and signals.actions_since_last_resume(events) == 0
         )
         # Forced-submit recovery narrows the offered tools to submit_plan plus a bounded
         # read set. Prose-plan loops key off a replayed event marker; repeated planning
         # refusals key off the tail refusal streak in the same event log.
         planning_refusal_force = (
-            self._loop.mode == OperatingMode.PLANNING
+            mode == OperatingMode.PLANNING
             and planning_tool_refusal_streak(events) >= _PLANNING_TOOL_REFUSAL_NARROW_AT
         )
-        force_submit_only = self._loop.mode == OperatingMode.PLANNING and (
+        force_submit_only = mode == OperatingMode.PLANNING and (
             signals.prose_plan_force_submit(events) or planning_refusal_force
         )
         force_read_tools = (
@@ -565,6 +622,8 @@ class Driver:
             requery_count = 0
             provider_retry_count = 0  # P2: tracks LLMProviderUnavailable occurrences
             protocol_repair_count = 0
+            empty_reasoning_repair_count = 0
+            prose_noop_repair_count = 0
             transient_messages: list[LLMMessage] = []
             repaired_view: View | None = None
             while True:
@@ -585,8 +644,9 @@ class Driver:
                             suppress_meta_tools=fresh_session,
                             force_submit_only=force_submit_only,
                             force_read_tools=force_read_tools,
+                            mode=mode,
                         ),
-                        mode=self._loop.mode,
+                        mode=mode,
                         overflow_signal=view_render.overflow_signal(events),
                         on_stream=self.build_stream_hook(),
                         temperature=escape_temp,
@@ -608,6 +668,41 @@ class Driver:
                             else None
                         ),
                     )
+
+                    if step.empty_reasoning_diagnostic is not None:
+                        await self._persist_empty_reasoning_diagnostic(
+                            step.empty_reasoning_diagnostic
+                        )
+                        if empty_reasoning_repair_count < 1:
+                            empty_reasoning_repair_count += 1
+                            transient_messages.append(
+                                LLMMessage(
+                                    role="user",
+                                    content=_EMPTY_REASONING_REPAIR_REMINDER,
+                                )
+                            )
+                            continue
+
+                    if (
+                        mode != OperatingMode.PLANNING
+                        and step.tool_call is None
+                        and not step.finished
+                        and not step.truncated
+                        and step.thought.strip()
+                        and prose_noop_repair_count < 1
+                        and not signals.prose_noop_repair_seen_current_execution_segment(
+                            events
+                        )
+                    ):
+                        prose_noop_repair_count += 1
+                        await self._persist_prose_noop_diagnostic(step)
+                        transient_messages.append(
+                            LLMMessage(
+                                role="user",
+                                content=_PROSE_NOOP_REPAIR_REMINDER,
+                            )
+                        )
+                        continue
 
                     # Rung 7: Invalid-tool reroute (weak-model FC kit).
                     # Valid JSON but unknown tool name -> if we haven't
@@ -643,6 +738,7 @@ class Driver:
                                 suppress_meta_tools=fresh_session,
                                 force_submit_only=force_submit_only,
                                 force_read_tools=force_read_tools,
+                                mode=mode,
                             )
                             offered_names = {t.name for t in offered_tools}
                             # Mirror the assistant's turn so the next call's

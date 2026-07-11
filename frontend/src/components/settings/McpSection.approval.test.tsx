@@ -81,13 +81,21 @@ function installFetch() {
       // E6: clearing the pending row (the operator accepted the drift) — the
       // app-server returns the row without new_description_hash; subsequent
       // GET /api/mcp must reflect that.
-      serverState[idx] = {
-        ...serverState[idx],
-        description_hash: body.description_hash,
-        new_description_hash: undefined,
-        approved_at: "2026-02-02T00:00:00Z",
-        status: "connected",
-      };
+      serverState[idx] =
+        body.approval_kind === "config"
+          ? {
+              ...serverState[idx],
+              config_hash: body.config_hash,
+              new_config_hash: undefined,
+              status: "approval_required",
+            }
+          : {
+              ...serverState[idx],
+              description_hash: body.description_hash,
+              new_description_hash: undefined,
+              approved_at: "2026-02-02T00:00:00Z",
+              status: "connected",
+            };
       return jsonResponse(serverState[idx]);
     }
     throw new Error(`unexpected fetch: ${method} ${url}`);
@@ -142,10 +150,10 @@ describe("McpSection — approval diff over the real fetch path", () => {
       expect(screen.getByText("ChangingServer")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Re-approve"));
+    await user.click(screen.getByText("Review"));
 
     await waitFor(() => {
-      expect(screen.getByText(/Tool descriptions changed/)).toBeInTheDocument();
+      expect(screen.getByText(/Tool schemas changed/)).toBeInTheDocument();
     });
     // Assert the diff CONTENT, not merely that a banner exists.
     expect(screen.getByText(/Old hash:/)).toBeInTheDocument();
@@ -166,13 +174,13 @@ describe("McpSection — approval diff over the real fetch path", () => {
       expect(screen.getByText("ChangingServer")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Re-approve")); // open the diff
+    await user.click(screen.getByText("Review")); // open the diff
 
-    // Confirm (the banner's own "Re-approve" submit button).
+    // Confirm (the banner's own "Approve" submit button).
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Re-approve$/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^Approve$/ })).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: /Re-approve$/ }));
+    await user.click(screen.getByRole("button", { name: /^Approve$/ }));
 
     await waitFor(() => {
       const calls = approveCalls(fetchStub);
@@ -184,7 +192,10 @@ describe("McpSection — approval diff over the real fetch path", () => {
       // set, so the body MUST be the AUTHORITATIVE new hash the live pool
       // computed, not the OLD/approved hash (which was the stub bug).
       const body = JSON.parse((init as RequestInit).body as string);
-      expect(body).toEqual({ description_hash: NEW_HASH });
+      expect(body).toEqual({
+        approval_kind: "tools",
+        description_hash: NEW_HASH,
+      });
       expect(body.description_hash).not.toBe(OLD_HASH);
     });
   });
@@ -197,7 +208,7 @@ describe("McpSection — approval diff over the real fetch path", () => {
       expect(screen.getByText("ChangingServer")).toBeInTheDocument();
     });
 
-    await user.click(screen.getByText("Re-approve"));
+    await user.click(screen.getByText("Review"));
     await waitFor(() => {
       expect(screen.getByText("Dismiss")).toBeInTheDocument();
     });
@@ -205,7 +216,7 @@ describe("McpSection — approval diff over the real fetch path", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByText(/Tool descriptions changed/),
+        screen.queryByText(/Tool schemas changed/),
       ).not.toBeInTheDocument();
     });
     expect(approveCalls(fetchStub).length).toBe(0);
@@ -218,5 +229,40 @@ describe("McpSection — approval diff over the real fetch path", () => {
     });
     expect(screen.getByText(/streamable_http/)).toBeInTheDocument();
     expect(screen.getByText(/high/)).toBeInTheDocument();
+  });
+
+  it("approves the exact pending server configuration fingerprint", async () => {
+    serverState = [
+      {
+        id: "new-config",
+        name: "NewConfig",
+        url: "stdio://safe-command",
+        status: "approval_required",
+        transport: "stdio",
+        risk_tier: "medium",
+        config_hash: OLD_HASH,
+        new_config_hash: NEW_HASH,
+        enabled: true,
+      },
+    ];
+    const user = userEvent.setup();
+    renderMcp();
+
+    await waitFor(() => expect(screen.getByText("NewConfig")).toBeInTheDocument());
+    await user.click(screen.getByText("Review"));
+    expect(
+      screen.getByText(/Server configuration approval required/),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Approve$/ }));
+
+    await waitFor(() => {
+      const calls = approveCalls(fetchStub);
+      expect(calls.length).toBe(1);
+      const body = JSON.parse((calls[0][1] as RequestInit).body as string);
+      expect(body).toEqual({
+        approval_kind: "config",
+        config_hash: NEW_HASH,
+      });
+    });
   });
 });

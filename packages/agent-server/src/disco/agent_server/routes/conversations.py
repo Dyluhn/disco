@@ -3,16 +3,21 @@ kill/resume, and the workspace-image serve."""
 
 from __future__ import annotations
 
+import logging
 import posixpath
 import uuid
 from dataclasses import asdict
 from typing import cast
 
 from disco.core import (
-    ConversationStatus,
     DEFAULT_OWNER_ID,
+    ConversationStatus,
+    EventSource,
+    LLMMessage,
+    MessageEvent,
 )
 from disco.core.appkit import classify_build_brief
+from disco.core.flags import appkit_enabled
 from disco.core.store.base import ConversationSummary
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
@@ -35,9 +40,9 @@ from ._common import (
     SendMessageBody,
     UpdateSettingsBody,
     _build_brief_message,
-    require_owned_conversation,
     _reject_if_imported,
     _user_message,
+    require_owned_conversation,
 )
 
 
@@ -58,20 +63,36 @@ class SetConversationSpaceBody(BaseModel):
     space_id: str | None = None
 
 
-def _resolve_model(body_model_override: str | None, runtime: ConversationRuntime) -> str | None:
+_LOG = logging.getLogger(__name__)
+
+
+def _resolve_model(
+    body_model_override: str | None, runtime: ConversationRuntime
+) -> tuple[str | None, str | None]:
     """P3 — resolve the effective driver model for a new conversation.
 
     Precedence: explicit body.model_override > last-selected (if valid in cfg)
     > None (fall through to RouterConfig.default_model). The cfg guard prevents
-    a stale/deleted model key from composing an invalid routing decision."""
+    a stale/deleted model key from composing an invalid routing decision.
+
+    Returns (model_override, environment_note). The note is populated only when
+    a stale last-selected model is ignored so the new conversation can explain
+    why it fell back to the default."""
     if body_model_override:
-        return body_model_override
+        return body_model_override, None
     last = runtime.get_last_selected_model()
     if last:
         cfg = runtime._config_store.load()
         if last in cfg.models:
-            return last
-    return None
+            return last, None
+        note = (
+            f"your previously selected model '{last}' is no longer available; "
+            f"using the default '{cfg.default_model}'"
+        )
+        _LOG.warning(note)
+        runtime.set_last_selected_model(None)
+        return None, f"⚠ {note}"
+    return None, None
 
 
 async def _owner_for_create_request(request: Request | None) -> str:
@@ -95,6 +116,19 @@ async def _create_conversation_response(
     body: CreateConversationBody,
     request: Request | None,
 ) -> dict:
+    # KILL SWITCH: an explicit appkit_mode request against a deployment that
+    # disabled AppKit is refused loudly BEFORE any event is persisted — a silent
+    # downgrade to free-form would be a false affordance (the caller asked for
+    # the strict allowlist and validated mutators and would not get them).
+    if body.appkit_mode and not appkit_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "AppKit is disabled on this deployment (DISCO_APPKIT_ENABLED=0). "
+                "Create the conversation without appkit_mode to build free-form, "
+                "or re-enable the flag and restart disco-agent."
+            ),
+        )
     conversation_id = f"conv_{uuid.uuid4().hex}"
     session = current_session(request) if request is not None else None
     owner_id = await _owner_for_create_request(request)
@@ -123,10 +157,17 @@ async def _create_conversation_response(
     )
     # Select surface and pin the driver model if the picker chose one.
     if runtime is not None:
+        model_override, model_note = _resolve_model(body.model_override, runtime)
         runtime.set_surface(conversation_id, body.surface)
-        runtime.set_model_override(
-            conversation_id, _resolve_model(body.model_override, runtime)
-        )
+        runtime.set_model_override(conversation_id, model_override)
+        if model_note is not None:
+            await store.append(
+                conversation_id,
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=model_note),
+                ),
+            )
         if body.autonomous:
             runtime.set_autonomous(conversation_id, True)
         if body.quiet:

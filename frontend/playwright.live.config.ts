@@ -17,8 +17,14 @@ import { defineConfig, devices } from "@playwright/test";
  * Run: npx playwright test --config playwright.live.config.ts <spec>
  * Precondition: agent-server up on 127.0.0.1:8000 (the spec fails fast if not).
  */
-const PORT = 5174;
-const BASE_URL = `http://localhost:${PORT}`;
+// LIVE_PORT lets the gauntlet run several browsers concurrently on distinct
+// ports (5174/5175/5176 …) against the SAME live servers — parallel DR lanes.
+// LIVE_BASE_URL targets a REMOTE deploy instead (e.g. http://100.81.82.115:8088):
+// the remote serves its own packaged UI, so no local vite webServer is spawned.
+// Remote fleet lanes = one Disco stack per host, each with its own engine.
+const PORT = Number(process.env.LIVE_PORT ?? 5174);
+const REMOTE = (process.env.LIVE_BASE_URL ?? "").replace(/\/$/, "");
+const BASE_URL = REMOTE || `http://localhost:${PORT}`;
 
 export default defineConfig({
   testDir: "./e2e-live",
@@ -34,10 +40,15 @@ export default defineConfig({
     viewport: { width: 1280, height: 800 },
   },
   projects: [{ name: "firefox", use: { ...devices["Desktop Firefox"] } }],
-  webServer: {
-    command: `npm run dev -- --port ${PORT} --strictPort`,
-    url: BASE_URL,
-    reuseExistingServer: false,
-    timeout: 60_000,
-  },
+  // Remote mode brings its own served UI; only local mode spins a vite dev server.
+  ...(REMOTE
+    ? {}
+    : {
+        webServer: {
+          command: `npm run dev -- --port ${PORT} --strictPort`,
+          url: BASE_URL,
+          reuseExistingServer: false,
+          timeout: 60_000,
+        },
+      }),
 });

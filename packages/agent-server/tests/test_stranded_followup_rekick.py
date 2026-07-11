@@ -117,9 +117,12 @@ async def test_stuck_wedge_rekicks_stranded_followup(tmp_path, monkeypatch):
     await rt._store.append(CID, _action())
     await rt._store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
     await rt._store.append(CID, _user("make it dark mode"))  # stranded follow-up
-    # Already re-kicked once for the silent stall → the next finalize takes the
-    # STUCK-append (wedge) path rather than the non-terminal recovery re-kick.
-    rt._nonterminal_rekicks[CID] = 1
+    # Genuinely wedged: at the no-progress re-kick cap AND no forward progress
+    # since the last re-kick (watermark past the last productive action), so this
+    # finalize takes the STUCK-append (wedge) path rather than another recovery
+    # re-kick. (A run that keeps making progress resets the budget and never STUCKs.)
+    rt._nonterminal_rekicks[CID] = rt._MAX_NONTERMINAL_REKICKS
+    rt._last_rekick_progress_seq[CID] = 10_000
     rt.kick = MagicMock()  # type: ignore[method-assign]
 
     await rt._finalize_clean_return(CID)
@@ -127,6 +130,61 @@ async def test_stuck_wedge_rekicks_stranded_followup(tmp_path, monkeypatch):
     state = await rt._store.get_state(CID)
     assert state.execution_status is ConversationStatus.STUCK
     rt.kick.assert_called_once_with(CID)
+
+
+# ── progress-reset: a WORKING iteration never falsely STUCKs ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_progressing_run_never_stucks(tmp_path, monkeypatch):
+    """Regression (Pillar-B iteration transient-STUCK): a run that keeps making
+    forward progress across many non-terminal returns must NEVER terminalize to
+    STUCK — each new successful productive action resets the wedge budget."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation(CID, owner_id="local")
+    await rt._store.append(CID, _user("build me a landing page"))
+    await rt._store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
+    rt.kick = MagicMock()  # type: ignore[method-assign]
+
+    boundaries = rt._MAX_NONTERMINAL_REKICKS + 5
+    for i in range(boundaries):
+        act = ActionEvent(
+            thought="writing",
+            tool_call=ToolCall(tool_name="file_write", arguments={"path": f"f{i}", "content": "y"}),
+        )
+        await rt._store.append(CID, act)
+        await rt._store.append(
+            CID,
+            ObservationEvent(
+                tool_result=ToolResult(
+                    call_id=f"c{i}", tool_name="file_write", success=True, content="ok"
+                ),
+                action_id=act.id,
+            ),
+        )
+        await rt._finalize_clean_return(CID)
+        state = await rt._store.get_state(CID)
+        assert state.execution_status is ConversationStatus.RUNNING, f"false STUCK at boundary {i}"
+    assert rt.kick.call_count == boundaries
+
+
+@pytest.mark.asyncio
+async def test_no_progress_run_still_stucks(tmp_path, monkeypatch):
+    """Safety net intact: a run making NO productive progress across the cap of
+    non-terminal returns DOES terminalize to STUCK (never RUNNING forever)."""
+    rt = _rt(tmp_path, monkeypatch)
+    rt._store.create_conversation(CID, owner_id="local")
+    await rt._store.append(CID, _user("build me a landing page"))
+    await rt._store.append(CID, StatusEvent(status=ConversationStatus.RUNNING))
+    rt.kick = MagicMock()  # type: ignore[method-assign]
+
+    stuck = False
+    for _ in range(rt._MAX_NONTERMINAL_REKICKS + 2):
+        await rt._finalize_clean_return(CID)
+        if (await rt._store.get_state(CID)).execution_status is ConversationStatus.STUCK:
+            stuck = True
+            break
+    assert stuck, "a no-progress wedge must still reach STUCK"
 
 
 # ── guard: a clean finish with NO follow-up never re-kicks ──────────────────────

@@ -9,7 +9,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PreviewPane } from "@/components/build/canvas/PreviewPane";
@@ -29,6 +29,8 @@ vi.mock("@/api/client", async () => {
     ...actual,
     agentHttpBase: () => "http://agent.test:8000",
     previewHostUrl: () => "http://preview.test",
+    previewBootstrapUrl: (_cid: string, _port: number, targetPath = "/") =>
+      Promise.resolve(`http://preview.test${targetPath}`),
   };
 });
 
@@ -66,15 +68,23 @@ afterEach(() => {
 });
 
 function renderPane(status: ConversationStatus, events: AgentEvent[]) {
-  return render(
+  const rendered = render(
     withClient(<PreviewPane status={status} cid="conv_reload1" events={events} />),
   );
+  // The product now defaults to the deterministic rendered/srcdoc view. W-42
+  // specifically governs the live-server iframe, so switch to that view before
+  // asserting its cache-busting URL.
+  fireEvent.click(screen.getByRole("button", { name: /live server/i }));
+  return rendered;
 }
 
 describe("PreviewPane — W-42 auto-refresh", () => {
-  it("bumps reloadKey (debounced) when a file is rewritten while RUNNING", () => {
+  it("bumps reloadKey (debounced) when a file is rewritten while RUNNING", async () => {
     const v1 = [fileWrite("index.html", "<h1>one</h1>")];
     const { rerender } = renderPane("RUNNING", v1);
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(liveSrc()).toBe("http://preview.test/?r=0");
 
     // Agent rewrites the file → new content → signature changes.
@@ -82,21 +92,26 @@ describe("PreviewPane — W-42 auto-refresh", () => {
     rerender(withClient(<PreviewPane status="RUNNING" cid="conv_reload1" events={v2} />));
 
     // Debounced: nothing yet before the timer fires.
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(200);
+      await Promise.resolve();
     });
     expect(liveSrc()).toBe("http://preview.test/?r=0");
 
     // After the debounce window the iframe reloads.
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(600);
+      await Promise.resolve();
     });
     expect(liveSrc()).toBe("http://preview.test/?r=1");
   });
 
-  it("does NOT bump when the files are unchanged", () => {
+  it("does NOT bump when the files are unchanged", async () => {
     const v1 = [fileWrite("index.html", "<h1>one</h1>")];
     const { rerender } = renderPane("RUNNING", v1);
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(liveSrc()).toBe("http://preview.test/?r=0");
 
     // Re-render with an equivalent file set (same path + content).
@@ -109,21 +124,26 @@ describe("PreviewPane — W-42 auto-refresh", () => {
         />,
       ),
     );
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1000);
+      await Promise.resolve();
     });
     expect(liveSrc()).toBe("http://preview.test/?r=0");
   });
 
-  it("does NOT auto-reload when not RUNNING (finished preview isn't fought)", () => {
+  it("does NOT auto-reload when not RUNNING (finished preview isn't fought)", async () => {
     const v1 = [fileWrite("index.html", "<h1>one</h1>")];
     const { rerender } = renderPane("FINISHED", v1);
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(liveSrc()).toBe("http://preview.test/?r=0");
 
     const v2 = [fileWrite("index.html", "<h1>two — much longer now</h1>")];
     rerender(withClient(<PreviewPane status="FINISHED" cid="conv_reload1" events={v2} />));
-    act(() => {
+    await act(async () => {
       vi.advanceTimersByTime(1000);
+      await Promise.resolve();
     });
     expect(liveSrc()).toBe("http://preview.test/?r=0");
   });

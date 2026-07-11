@@ -29,6 +29,12 @@ const AGENT_BASE = ((RT.AGENT_BASE ?? import.meta.env.VITE_AGENT_BASE) ?? "").re
 const CSRF_HEADER = "X-Disco-CSRF";
 const csrfByBase = new Map<string, string>();
 const sessionInitByBase = new Map<string, Promise<void>>();
+// Both servers share ONE session cookie (same host + signing secret), so two
+// bases minting CONCURRENTLY race: the second Set-Cookie replaces the session
+// the first base's CSRF token was bound to → "csrf required" on a fresh visit.
+// Serialize all session inits through one chain; a base whose init runs second
+// then sees the already-authenticated shared session and adopts its token.
+let sessionInitChain: Promise<void> = Promise.resolve();
 
 /** True when a backend base URL is configured — the api modules call it live. */
 export function isLive(): boolean {
@@ -43,11 +49,22 @@ export function isDemoMode(): boolean {
   return !isLive() && !agentLive();
 }
 
+/** ws(s):// base for a configured HTTP base. Handles BOTH base shapes: an
+ * absolute URL (split-origin dev: http://host:8000 → ws://host:8000) and the
+ * same-origin relative prefix (the single-front-door default: "/svc/agent" →
+ * ws://<page-host>/svc/agent — nginx upgrades and forwards to the backend). */
+function wsBase(base: string): string {
+  if (base.startsWith("http")) return base.replace(/^http/, "ws");
+  const loc = globalThis.location;
+  const proto = loc?.protocol === "https:" ? "wss:" : "ws:";
+  return `${proto}//${loc?.host ?? "localhost"}${base}`;
+}
+
 /** The agent-server research WebSocket URL (ws://… derived from VITE_AGENT_BASE),
  * or null when unconfigured — callers fall back to the fixture stream. */
 export function researchWsUrl(): string | null {
   if (!AGENT_BASE) return null;
-  return `${AGENT_BASE.replace(/^http/, "ws")}/ws/research`;
+  return `${wsBase(AGENT_BASE)}/ws/research`;
 }
 
 export function ensureAgentSession(): Promise<void> {
@@ -67,7 +84,7 @@ export function agentLive(): boolean {
  * when unconfigured (Build falls back to a fixture trace offline/in tests). */
 export function agentWsUrl(path: string): string | null {
   if (!AGENT_BASE) return null;
-  return `${AGENT_BASE.replace(/^http/, "ws")}${path}`;
+  return `${wsBase(AGENT_BASE)}${path}`;
 }
 
 /** Origin-true preview URL (DC-01): http://{cid8}-{port}.localhost:8000/.
@@ -77,7 +94,9 @@ export function agentWsUrl(path: string): string | null {
 export function previewHostUrl(cid: string, port: number, base: string = AGENT_BASE): string | null {
   if (!base) return null;
   const cid8 = cid.replace(/^conv_/, "").slice(0, 8);
-  const url = new URL(base);
+  // Relative (same-origin) bases resolve against the page's own origin — the
+  // front-door nginx forwards {cid8}-{port}.* Hosts to the agent-server.
+  const url = new URL(base, globalThis.location?.origin ?? "http://localhost");
   if (url.hostname === "127.0.0.1" || url.hostname === "localhost") {
     url.hostname = `${cid8}-${port}.localhost`;
   } else {
@@ -178,11 +197,41 @@ async function ensureSessionFor(base: string): Promise<void> {
   if (!base) return;
   const existing = sessionInitByBase.get(base);
   if (existing) return existing;
-  const pending = initializeSession(base).finally(() => {
-    if (!csrfByBase.has(base)) sessionInitByBase.delete(base);
-  });
+  const pending = sessionInitChain
+    .catch(() => undefined) // one base's failure must not wedge the other
+    .then(() => initializeSession(base))
+    .finally(() => {
+      if (!csrfByBase.has(base)) sessionInitByBase.delete(base);
+    });
   sessionInitByBase.set(base, pending);
+  sessionInitChain = pending.catch(() => undefined);
   return pending;
+}
+
+/** Thrown when a base needs the operator's pairing token and none could be
+ * auto-obtained (the containerized / remote self-host case: the browser is not
+ * on the server's loopback, so the token-fetch convenience is refused). The
+ * app-root <PairingGate> catches this and prompts for the token. */
+export class PairingRequiredError extends Error {
+  constructor(readonly base: string) {
+    super("pairing required");
+    this.name = "PairingRequiredError";
+  }
+}
+
+function mintSession(base: string, token: string | null): Promise<Response> {
+  return fetch(`${base}/api/auth/mint`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify(token ? { pairing_token: token } : {}),
+  });
+}
+
+async function adoptMinted(base: string, minted: Response): Promise<void> {
+  const body = (await minted.json()) as { csrf_token?: string };
+  if (!body.csrf_token) throw new ApiError("auth mint missing csrf", minted.status);
+  csrfByBase.set(base, body.csrf_token);
 }
 
 async function initializeSession(base: string): Promise<void> {
@@ -199,13 +248,13 @@ async function initializeSession(base: string): Promise<void> {
       return;
     }
   }
-  let minted = await fetch(`${base}/api/auth/mint`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: "{}",
-  });
+  // Tokenless mint: succeeds when a shared cookie already exists, or on a
+  // loopback dev host with auto-pair. A 401 means a pairing token is required.
+  let minted = await mintSession(base, null);
   if (minted.status === 401) {
+    // Loopback convenience: a SAME-HOST browser can read the token off the
+    // server directly (the endpoint refuses remote clients). In a container the
+    // browser is never loopback, so this simply fails over to the paste prompt.
     const pairing = await fetch(`${base}/api/auth/pairing-token`, {
       credentials: "include",
       headers: { accept: "application/json" },
@@ -214,31 +263,69 @@ async function initializeSession(base: string): Promise<void> {
       const body = await pairing.json().catch(() => null) as
         | { pairing_token?: string }
         | null;
-      if (body?.pairing_token) {
-        minted = await fetch(`${base}/api/auth/mint`, {
-          method: "POST",
-          credentials: "include",
-          headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify({ pairing_token: body.pairing_token }),
-        });
-      }
+      if (body?.pairing_token) minted = await mintSession(base, body.pairing_token);
     }
   }
+  // Still unauthorized → the operator must paste the token (from server logs).
+  if (minted.status === 401) throw new PairingRequiredError(base);
   if (!minted.ok) throw new ApiError("auth mint failed", minted.status);
-  const body = await minted.json() as { csrf_token?: string };
-  if (!body.csrf_token) throw new ApiError("auth mint missing csrf", minted.status);
-  csrfByBase.set(base, body.csrf_token);
+  await adoptMinted(base, minted);
+}
+
+/** Explicit auth bootstrap for the app-root <PairingGate>: ensure a session for
+ * BOTH live bases. No-op in fixture/demo mode (no base configured). Propagates
+ * PairingRequiredError so the gate can prompt for the token. */
+export async function bootstrapSessions(): Promise<void> {
+  if (isLive()) await ensureApiSession();
+  if (agentLive()) await ensureAgentSession();
+}
+
+/** Pair with the operator's pasted token. Mints the FIRST live base with the
+ * token — which sets the session cookie BOTH servers share (same host + signing
+ * secret) — then lets every other base ADOPT that cookie via its own session
+ * check. A second mint is deliberately avoided: it would replace the cookie the
+ * first base's CSRF token is bound to (the documented shared-cookie race). */
+export async function pairWithToken(token: string): Promise<void> {
+  const bases = [BASE, AGENT_BASE].filter((b) => b.length > 0);
+  if (bases.length === 0) return;
+  const minted = await mintSession(bases[0], token);
+  if (minted.status === 401) throw new PairingRequiredError(bases[0]);
+  if (!minted.ok) throw new ApiError("pairing failed", minted.status);
+  await adoptMinted(bases[0], minted);
+  sessionInitByBase.set(bases[0], Promise.resolve());
+  for (const base of bases.slice(1)) {
+    sessionInitByBase.delete(base); // clear any failed init so it re-runs clean
+    csrfByBase.delete(base);
+    await ensureSessionFor(base); // adopts the shared cookie via /api/auth/session
+  }
 }
 
 async function authFetch(base: string, pathOrUrl: string, init: RequestInit): Promise<Response> {
   await ensureSessionFor(base);
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
-  if (base && ["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+  let csrfProtectedRead = false;
+  if (method === "GET") {
+    try {
+      csrfProtectedRead = new URL(pathOrUrl, "http://disco.invalid").pathname.endsWith(
+        "/api/storage/browse",
+      );
+    } catch {
+      csrfProtectedRead = false;
+    }
+  }
+  if (base && (["POST", "PUT", "PATCH", "DELETE"].includes(method) || csrfProtectedRead)) {
     const csrf = csrfByBase.get(base);
     if (csrf) headers.set(CSRF_HEADER, csrf);
   }
-  const url = pathOrUrl.startsWith("http") ? pathOrUrl : `${base}${pathOrUrl}`;
+  // Already-based inputs pass through untouched: absolute URLs (split-origin
+  // dev), and callers that build `agentHttpBase() + path` themselves (deck
+  // export, project download/import) — with a RELATIVE base those would
+  // otherwise get the prefix twice ("/svc/agent/svc/agent/…").
+  const url =
+    pathOrUrl.startsWith("http") || (base.length > 0 && pathOrUrl.startsWith(`${base}/`))
+      ? pathOrUrl
+      : `${base}${pathOrUrl}`;
   return fetch(url, { ...init, headers, credentials: "include" });
 }
 

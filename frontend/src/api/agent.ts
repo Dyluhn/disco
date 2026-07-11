@@ -353,11 +353,11 @@ export async function resumeConversation(
 // ---- live: the conversation WebSocket (history-then-live) -------------------
 
 // Reconnect with exponential backoff. A dropped socket (network blip, server
-// restart) used to send a FATAL error frame and die — a transient drop became a
-// permanent failure. Now we reconnect silently: on reopen the server replays
-// history-then-live and the reducers dedup events by id, so no work is lost. Only
-// after exhausting retries do we surface the error.
-const _RECONNECT_MAX_ATTEMPTS = 6;
+// restart, stale half-open connection) is retryable forever: on reopen the server
+// replays history-then-live and the reducers dedup events by id, so no work is lost.
+const _RECONNECT_DEGRADED_AFTER_ATTEMPTS = 6;
+const _RECONNECT_BACKOFF_CAP_MS = 15000;
+const _STALE_FRAME_TIMEOUT_MS = 45000;
 
 // exported for the reconnect test; not part of the public api (use subscribeConversation)
 export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void): AgentHandle {
@@ -365,19 +365,54 @@ export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void):
   let ws: WebSocket | null = null;
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let degraded = false;
   const queue: WSClientFrame[] = [];
 
+  const clearWatchdog = () => {
+    if (watchdogTimer) clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+  };
+
+  const armWatchdog = (socket: WebSocket) => {
+    clearWatchdog();
+    if (closed) return;
+    watchdogTimer = setTimeout(() => {
+      if (closed || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.close();
+    }, _STALE_FRAME_TIMEOUT_MS);
+  };
+
+  const resetAttemptOnVisible = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "visible") {
+      attempt = 0;
+    }
+  };
+
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", resetAttemptOnVisible);
+  }
+
   async function connect() {
+    timer = null;
     await ensureAgentSession();
     if (closed) return;
-    ws = new WebSocket(agentWsUrl(`/ws/conversations/${cid}`)!);
-    ws.onopen = () => {
+    const socket = new WebSocket(agentWsUrl(`/ws/conversations/${cid}`)!);
+    ws = socket;
+    socket.onopen = () => {
+      if (closed || ws !== socket) return;
       attempt = 0; // a successful connection resets the backoff
-      for (const f of queue) ws?.send(JSON.stringify(f));
+      armWatchdog(socket);
+      if (degraded) {
+        degraded = false;
+        onFrame({ type: "connection", state: "connected" });
+      }
+      for (const f of queue) socket.send(JSON.stringify(f));
       queue.length = 0;
     };
-    ws.onmessage = (ev) => {
-      if (closed) return;
+    socket.onmessage = (ev) => {
+      if (closed || ws !== socket) return;
+      armWatchdog(socket);
       try {
         onFrame(JSON.parse(ev.data) as WSServerFrame);
       } catch {
@@ -386,20 +421,19 @@ export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void):
     };
     // onclose is the definitive "connection ended" signal (onerror fires first but
     // a close always follows); reconnect from here.
-    ws.onclose = () => {
-      if (closed) return;
+    socket.onclose = () => {
+      if (closed || ws !== socket) return;
+      clearWatchdog();
+      ws = null;
       attempt += 1;
-      if (attempt > _RECONNECT_MAX_ATTEMPTS) {
-        onFrame({
-          type: "error",
-          error: { detail: "lost connection to the agent server (couldn't reconnect)" },
-        });
-        return;
+      if (attempt > _RECONNECT_DEGRADED_AFTER_ATTEMPTS && !degraded) {
+        degraded = true;
+        onFrame({ type: "connection", state: "degraded" });
       }
-      const delay = Math.min(1000 * 2 ** (attempt - 1), 15000); // 1s,2s,…capped 15s
+      const delay = Math.min(1000 * 2 ** (attempt - 1), _RECONNECT_BACKOFF_CAP_MS);
       timer = setTimeout(() => void connect(), delay);
     };
-    ws.onerror = () => {
+    socket.onerror = () => {
       /* onclose handles teardown + reconnect */
     };
   }
@@ -414,6 +448,10 @@ export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void):
     cancel: () => {
       closed = true;
       if (timer) clearTimeout(timer);
+      clearWatchdog();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", resetAttemptOnVisible);
+      }
       ws?.close();
     },
   };

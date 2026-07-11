@@ -8,8 +8,6 @@ workspace and run it in the instance.
 
 from __future__ import annotations
 
-import os
-import uuid
 from typing import Literal
 
 from disco.core import SecurityRisk
@@ -17,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from ..anatomy import Capability, ToolContext, ToolDef, ToolOutcome
 from ..sandbox.base import ExecResult
+from ._shell_caps import cap_shell_observation
 
 # The executor enforces a HARD ceiling (`wait_for(ctx.timeout_s)`). A graceful tool
 # gives its in-container `timeout` a little less, so that fires FIRST and we return a
@@ -24,34 +23,27 @@ from ..sandbox.base import ExecResult
 # the executor's bare `timeout` failure. The executor's ceiling stays a pure backstop.
 _GRACE_S = 5
 
-# HS-01: when a weak-model driver is being helped (`ctx.assist`), redirect a
-# runaway stdout to a workspace file so the loop can still see *head*+*tail* of
-# what ran (and grep the rest later) instead of getting a single wall of text
-# that overflows the model's context. Capable-model path is unaffected because
-# the gate is `ctx.assist` (capable models don't trigger the spill).
-_SPILL_HEAD_BYTES = 2048  # leading 2KB
-_SPILL_TAIL_BYTES = 2048  # trailing 2KB (often the error / final state)
-_SPILL_FILENAME = ".disco-spill-{uuid}.log"  # T8 also skips these in the snapshot
-
-
-def _spill_threshold_bytes() -> int:
-    """HS-01 threshold in bytes. Default 50KB, overridable via
-    `DISCO_SHELL_SPILL_KB`. Read at call-time so tests can monkeypatch the env
-    var per-case without process-level state."""
-    try:
-        kb = int(os.environ.get("DISCO_SHELL_SPILL_KB", "50"))
-    except (TypeError, ValueError):
-        kb = 50
-    if kb <= 0:
-        kb = 50
-    return kb * 1024
-
-
 def _inner_timeout(ceiling_s: int) -> int:
     return max(1, ceiling_s - _GRACE_S)
 
 
-def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int) -> ToolOutcome:
+async def _spill_full_output(ctx, body: str) -> str | None:
+    """Best-effort save of over-cap shell output to a workspace file so evidence
+    survives the observation cap (a rerun is not always reproducible). Returns
+    the workspace-relative path, or None when saving isn't possible."""
+    if ctx is None or ctx.sandbox is None:
+        return None
+    import uuid
+
+    path = f".disco-spill-{uuid.uuid4().hex[:8]}.log"
+    try:
+        await ctx.sandbox.write_file(path, body.encode("utf-8", errors="replace"))
+    except Exception:  # noqa: BLE001 — spill is best-effort; fall back to the rerun hint
+        return None
+    return path
+
+
+async def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int, ctx=None) -> ToolOutcome:
     """Map an ExecResult to a ToolOutcome. A timeout is a DISTINCT, legible signal
     (not just a nonzero exit): the partial output is preserved and `timed_out` is
     surfaced in `structured`, so the loop can tell 'killed for running too long' from
@@ -74,15 +66,34 @@ def _exec_outcome(res: ExecResult, *, what: str, timeout_s: int) -> ToolOutcome:
             error = f"{what} exited {res.exit_code}"
     else:
         error = None
+    spill_path = None
+    if len(body) > 4_000:  # matches the cap threshold in _shell_caps
+        spill_path = await _spill_full_output(ctx, body)
+    content, cap_meta = cap_shell_observation(body, spill_path=spill_path)
+    structured = {
+        "exit_code": res.exit_code,
+        "timed_out": res.timed_out,
+    }
+    if cap_meta is None:
+        structured.update(
+            {
+                "stdout": res.stdout,
+                "stderr": res.stderr,
+                "output_truncated": False,
+            }
+        )
+    else:
+        structured.update(
+            {
+                "stdout_chars": len(res.stdout),
+                "stderr_chars": len(res.stderr),
+                **cap_meta,
+            }
+        )
     return ToolOutcome(
         success=ok,
-        content=body,
-        structured={
-            "exit_code": res.exit_code,
-            "stdout": res.stdout,
-            "stderr": res.stderr,
-            "timed_out": res.timed_out,
-        },
+        content=content,
+        structured=structured,
         error=error,
     )
 
@@ -95,7 +106,8 @@ class ShellTool:
     definition = ToolDef(
         name="shell",
         description=(
-            "Run a shell command inside the sandbox (installs, builds, tests, git) "
+            "One-shot: runs to completion and returns output — the default for "
+            "installs, builds, tests, git. Run a shell command inside the sandbox "
             "and return its output. NOT for creating or editing files — use "
             "file_write / file_edit / file_append for that, never `>`, `>>`, `sed`, "
             "`tee`, or a here-doc."
@@ -110,30 +122,7 @@ class ShellTool:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
         inner = _inner_timeout(ctx.timeout_s)
         res = await ctx.sandbox.exec_shell(args.command, timeout_s=inner)
-        outcome = _exec_outcome(res, what="command", timeout_s=inner)
-        # HS-01: spill huge stdout to a workspace file, GATED by ctx.assist
-        # (added by T1). When the gate is OFF (capable-model path) this is a
-        # no-op and the outcome is byte-identical to what `_exec_outcome`
-        # produced — the only difference is the extra `await write_file` and
-        # the conditional that follows it, both of which short-circuit.
-        if ctx.assist and len(res.stdout) > _spill_threshold_bytes():
-            spill_name = _SPILL_FILENAME.format(uuid=uuid.uuid4().hex)
-            spill_path = os.path.join(ctx.workspace_path or "", spill_name)
-            await ctx.sandbox.write_file(spill_path, res.stdout.encode("utf-8"))
-            head = res.stdout[:_SPILL_HEAD_BYTES]
-            tail = res.stdout[-_SPILL_TAIL_BYTES:]
-            marker = (
-                f"\n\u2026[truncated; full output at {spill_path} \u2014 "
-                "file_read or grep it]\n"
-            )
-            new_content = head + marker + tail
-            # Preserve all structured fields; add a machine-readable spill path.
-            new_structured = dict(outcome.structured) if outcome.structured else {}
-            new_structured["spill_path"] = spill_path
-            outcome = outcome.model_copy(
-                update={"content": new_content, "structured": new_structured}
-            )
-        return outcome
+        return await _exec_outcome(res, what="command", timeout_s=inner, ctx=ctx)
 
 
 class CodeExecArgs(BaseModel):
@@ -178,4 +167,4 @@ class CodeExecTool:
         fname = "_codeact.js"
         await ctx.sandbox.write_file(fname, args.code.encode("utf-8"))
         res = await ctx.sandbox.exec_shell(f"node {fname}", timeout_s=inner)
-        return _exec_outcome(res, what="node", timeout_s=inner)
+        return await _exec_outcome(res, what="node", timeout_s=inner, ctx=ctx)

@@ -25,12 +25,55 @@ from typing import TYPE_CHECKING
 
 from ..events import Event, EventAdapter, event_to_json_dict
 from ..migration import migrate_event
-from ..owners import DEFAULT_OWNER_ID, install_owner_id
+from ..owners import DEFAULT_OWNER_ID, install_owner_id  # noqa: F401 - public re-export
 from ..state import ConversationState
 from .base import ConversationSummary, EventFilter, Page
 
 if TYPE_CHECKING:  # annotations only; runtime uses a local import (dod.py is a leaf)
     from ..dod import DoDSpec
+
+MAX_EVENT_PAYLOAD_BYTES = 1024 * 1024
+EVENT_SUBSCRIBER_QUEUE_MAX = 256
+EPHEMERAL_SUBSCRIBER_QUEUE_MAX = 128
+
+
+class EventPayloadTooLarge(ValueError):
+    """An event exceeded the durable payload ceiling and was not persisted."""
+
+
+class SubscriberOverflow(RuntimeError):
+    """A durable subscriber fell behind and must reconnect for replay."""
+
+
+class _SubscriberOverflowMarker:
+    pass
+
+
+_SUBSCRIBER_OVERFLOW = _SubscriberOverflowMarker()
+
+
+def _estimated_json_upper_bound(value: object, *, stop_after: int) -> int:
+    """Conservative, allocation-light JSON size estimate with early exit."""
+    total = 0
+    stack = [value]
+    while stack and total <= stop_after:
+        item = stack.pop()
+        if item is None or isinstance(item, (bool, int, float)):
+            total += 24
+        elif isinstance(item, str):
+            total += (len(item) if item.isascii() else len(item) * 6) + 2
+        elif isinstance(item, dict):
+            total += 2 + len(item) * 2
+            for key, child in item.items():
+                stack.append(str(key))
+                stack.append(child)
+        elif isinstance(item, (list, tuple)):
+            total += 2 + len(item)
+            stack.extend(item)
+        else:
+            total += len(str(item)) * 6 + 2
+    return total
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS events (
@@ -69,6 +112,8 @@ CREATE TABLE IF NOT EXISTS share_tokens (
     created_at     TEXT    NOT NULL,
     revoked_at     TEXT,                  -- NULL = active; ISO-8601 if revoked
     bundle_seq     INTEGER NOT NULL,      -- the last_seq captured at export time
+    bundle_title   TEXT,                  -- title captured at token issue time
+    bundle_surface TEXT NOT NULL DEFAULT 'research', -- surface captured at issue
     -- The bundle is rebuilt on demand (events are append-only; the share
     -- selector walks the live log) — this column is the seq boundary the
     -- future re-export uses to detect "the conversation moved since the link
@@ -138,6 +183,15 @@ CREATE TABLE IF NOT EXISTS mcp_approval_pending (
     new_hash        TEXT NOT NULL,  -- the AUTHORITATIVE live pool's hash
     detected_at     TEXT NOT NULL   -- ISO-8601
 );
+CREATE TABLE IF NOT EXISTS mcp_config_approvals (
+    -- S-W4: approval of the server configuration happens before connect.
+    -- This ledger is separate from discovered tool-schema approvals because
+    -- discovery itself may spawn host code or perform network side effects.
+    server          TEXT PRIMARY KEY,
+    config_hash     TEXT NOT NULL,
+    approved_at     TEXT NOT NULL,
+    approved_by     TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS dod_specs (
     -- C1a: external Definition-of-Done spec, one row per conversation.
     --
@@ -195,6 +249,14 @@ class SqliteEventStore:
         except sqlite3.OperationalError:
             pass  # column already exists
         try:
+            self._conn.execute("ALTER TABLE share_tokens ADD COLUMN bundle_title TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            self._conn.execute("ALTER TABLE share_tokens ADD COLUMN bundle_surface TEXT")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN surface TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
@@ -209,10 +271,27 @@ class SqliteEventStore:
             self._conn.execute("ALTER TABLE conversations ADD COLUMN origin TEXT")
         except sqlite3.OperationalError:
             pass  # column already exists
+        # Legacy share rows could not preserve their original metadata. Freeze
+        # the current values once at upgrade so they at least stop tracking
+        # future title/surface changes after this security migration. The NULL
+        # surface is the migration marker; newly issued rows always set it even
+        # when their captured title is legitimately NULL.
+        self._conn.execute(
+            "UPDATE share_tokens SET bundle_title = "
+            "(SELECT title FROM conversations WHERE conversations.conversation_id = "
+            "share_tokens.conversation_id) WHERE bundle_surface IS NULL"
+        )
+        self._conn.execute(
+            "UPDATE share_tokens SET bundle_surface = COALESCE("
+            "(SELECT surface FROM conversations WHERE conversations.conversation_id = "
+            "share_tokens.conversation_id), 'research') WHERE bundle_surface IS NULL"
+        )
         self._conn.commit()
         self._write_lock = asyncio.Lock()
         # conversation_id -> set of live subscriber queues.
-        self._subscribers: dict[str, set[asyncio.Queue[Event]]] = defaultdict(set)
+        self._subscribers: dict[str, set[asyncio.Queue[Event | _SubscriberOverflowMarker]]] = (
+            defaultdict(set)
+        )
         # conversation_id -> set of EPHEMERAL subscriber queues. These carry
         # transient frames (watch-it-write file-stream deltas) that are broadcast
         # to live listeners but NEVER persisted — they're display-only and would
@@ -308,12 +387,11 @@ class SqliteEventStore:
         `DoDSpec` via the Pydantic model); we don't re-validate on write
         beyond the JSON round-trip, because the spec is frozen upstream."""
         from ..dod import DoDSpec, DoDSpecAlreadySet  # local import: dod.py is a leaf
+
         if not isinstance(spec, DoDSpec):
             # Don't accept free-form dicts here — the storage shape is the
             # Pydantic model. Callers go through DoDSpec(predicates=...).
-            raise TypeError(
-                f"set_dod_spec expects a DoDSpec, got {type(spec).__name__}"
-            )
+            raise TypeError(f"set_dod_spec expects a DoDSpec, got {type(spec).__name__}")
         payload = spec.to_json_dict()
         now = datetime.now(UTC).isoformat()
         async with self._write_lock:
@@ -363,6 +441,7 @@ class SqliteEventStore:
         The returned spec is the live Pydantic model — frozen, so even an
         in-process attempt to mutate the result is a `ValidationError`."""
         from ..dod import DoDSpec
+
         row = self._conn.execute(
             "SELECT spec FROM dod_specs WHERE conversation_id = ?",
             (conversation_id,),
@@ -391,10 +470,9 @@ class SqliteEventStore:
         NOT buy a weakening: even a human operator cannot drop a committed bar
         via this method (the user-facing relax path is a new conversation)."""
         from ..dod import DoDSpec, DoDSpecAlreadySet, is_monotonic_extension
+
         if not isinstance(spec, DoDSpec):
-            raise TypeError(
-                f"replace_dod_spec expects a DoDSpec, got {type(spec).__name__}"
-            )
+            raise TypeError(f"replace_dod_spec expects a DoDSpec, got {type(spec).__name__}")
         payload = spec.to_json_dict()
         now = datetime.now(UTC).isoformat()
         async with self._write_lock:
@@ -459,6 +537,16 @@ class SqliteEventStore:
 
         stored = event.model_copy(update={"seq": next_seq})
         payload = event_to_json_dict(stored)
+        estimate = _estimated_json_upper_bound(payload, stop_after=MAX_EVENT_PAYLOAD_BYTES)
+        if estimate > MAX_EVENT_PAYLOAD_BYTES:
+            raise EventPayloadTooLarge(
+                f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
+            )
+        payload_json = json.dumps(payload, separators=(",", ":"))
+        if len(payload_json.encode("utf-8")) > MAX_EVENT_PAYLOAD_BYTES:
+            raise EventPayloadTooLarge(
+                f"event {event.id} exceeds the {MAX_EVENT_PAYLOAD_BYTES}-byte payload cap"
+            )
         self._conn.execute(
             "INSERT INTO events (conversation_id, seq, id, kind, source, created_at, payload) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -469,7 +557,7 @@ class SqliteEventStore:
                 payload["kind"],
                 payload["source"],
                 payload["timestamp"],
-                json.dumps(payload),
+                payload_json,
             ),
         )
 
@@ -483,7 +571,14 @@ class SqliteEventStore:
         return stored, True
 
     def _publish(self, conversation_id: str, event: Event) -> None:
-        for q in self._subscribers.get(conversation_id, set()):
+        subscribers = self._subscribers.get(conversation_id, set())
+        for q in list(subscribers):
+            if q.full():
+                subscribers.discard(q)
+                while not q.empty():
+                    q.get_nowait()
+                q.put_nowait(_SUBSCRIBER_OVERFLOW)
+                continue
             q.put_nowait(event)
 
     def publish_ephemeral(self, conversation_id: str, frame: dict) -> None:
@@ -492,6 +587,8 @@ class SqliteEventStore:
         listener the frame is simply dropped (the final ActionEvent is the durable
         record). Sync + non-blocking so the agent loop can call it inline."""
         for q in self._eph_subscribers.get(conversation_id, set()):
+            if q.full():
+                q.get_nowait()
             q.put_nowait(frame)
 
     async def subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]:
@@ -499,7 +596,7 @@ class SqliteEventStore:
         return self._subscribe_ephemeral(conversation_id)
 
     async def _subscribe_ephemeral(self, conversation_id: str) -> AsyncIterator[dict]:
-        queue: asyncio.Queue[dict] = asyncio.Queue()
+        queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=EPHEMERAL_SUBSCRIBER_QUEUE_MAX)
         self._eph_subscribers[conversation_id].add(queue)
         try:
             while True:
@@ -602,7 +699,8 @@ class SqliteEventStore:
 
     def conversation_owner_id_sync(self, conversation_id: str) -> str | None:
         row = self._conn.execute(
-            "SELECT owner_id FROM conversations WHERE conversation_id = ? LIMIT 1", (conversation_id,)
+            "SELECT owner_id FROM conversations WHERE conversation_id = ? LIMIT 1",
+            (conversation_id,),
         ).fetchone()
         return row["owner_id"] if row is not None else None
 
@@ -656,7 +754,8 @@ class SqliteEventStore:
         where_clause = " AND ".join(clauses)
         params.extend([limit, offset])
         rows = self._conn.execute(
-            "SELECT conversation_id, owner_id, space_id, title, created_at, status, surface, origin "
+            "SELECT conversation_id, owner_id, space_id, title, created_at, status, "
+            "surface, origin "
             "FROM conversations c "
             f"WHERE {where_clause} "
             "ORDER BY created_at DESC, conversation_id DESC LIMIT ? OFFSET ?",
@@ -695,9 +794,7 @@ class SqliteEventStore:
 
         return summaries
 
-    async def set_conversation_space(
-        self, conversation_id: str, space_id: str | None
-    ) -> None:
+    async def set_conversation_space(self, conversation_id: str, space_id: str | None) -> None:
         """Move a conversation into a Space folder, or clear it to Unfiled."""
         clean_space_id = space_id.strip() if isinstance(space_id, str) else None
         async with self._write_lock:
@@ -737,9 +834,7 @@ class SqliteEventStore:
             )
             if cur.rowcount == 0:
                 return False  # not found OR not owned — no cross-owner deletes
-            self._conn.execute(
-                "DELETE FROM events WHERE conversation_id = ?", (conversation_id,)
-            )
+            self._conn.execute("DELETE FROM events WHERE conversation_id = ?", (conversation_id,))
             self._conn.commit()
         return True
 
@@ -764,6 +859,8 @@ class SqliteEventStore:
         owner_id: str,
         *,
         bundle_seq: int,
+        bundle_title: str | None,
+        bundle_surface: str,
     ) -> None:
         """Persist a new share token pointing at a conversation. The row
         records the conversation + the bundle's last_seq at export time. A
@@ -773,14 +870,16 @@ class SqliteEventStore:
         button issuing a write twice."""
         self._conn.execute(
             "INSERT OR IGNORE INTO share_tokens "
-            "(token, conversation_id, owner_id, created_at, bundle_seq) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(token, conversation_id, owner_id, created_at, bundle_seq, "
+            "bundle_title, bundle_surface) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 token,
                 conversation_id,
                 owner_id,
                 datetime.now().isoformat(),
                 int(bundle_seq),
+                bundle_title,
+                bundle_surface,
             ),
         )
         self._conn.commit()
@@ -792,7 +891,8 @@ class SqliteEventStore:
         viewer (404, not 410), so revocation cannot be probed to confirm a
         conversation exists."""
         row = self._conn.execute(
-            "SELECT token, conversation_id, owner_id, created_at, bundle_seq "
+            "SELECT token, conversation_id, owner_id, created_at, bundle_seq, "
+            "bundle_title, bundle_surface "
             "FROM share_tokens WHERE token = ? AND revoked_at IS NULL",
             (token,),
         ).fetchone()
@@ -804,6 +904,8 @@ class SqliteEventStore:
             "owner_id": row["owner_id"],
             "created_at": row["created_at"],
             "bundle_seq": int(row["bundle_seq"]),
+            "bundle_title": row["bundle_title"],
+            "bundle_surface": row["bundle_surface"] or "research",
         }
 
     def list_share_tokens(self, *, owner_id: str) -> list[dict]:
@@ -811,7 +913,8 @@ class SqliteEventStore:
         "shared links" affordance). Revoked links are NOT returned by
         default; pass `include_revoked=True` for an audit view."""
         rows = self._conn.execute(
-            "SELECT token, conversation_id, owner_id, created_at, bundle_seq "
+            "SELECT token, conversation_id, owner_id, created_at, bundle_seq, "
+            "bundle_title, bundle_surface "
             "FROM share_tokens WHERE owner_id = ? AND revoked_at IS NULL "
             "ORDER BY created_at DESC",
             (owner_id,),
@@ -823,6 +926,8 @@ class SqliteEventStore:
                 "owner_id": r["owner_id"],
                 "created_at": r["created_at"],
                 "bundle_seq": int(r["bundle_seq"]),
+                "bundle_title": r["bundle_title"],
+                "bundle_surface": r["bundle_surface"] or "research",
             }
             for r in rows
         ]
@@ -882,9 +987,7 @@ class SqliteEventStore:
 
     def list_enabled_schedules(self) -> list[dict]:
         """All enabled schedules across all owners — used by the background loop."""
-        rows = self._conn.execute(
-            "SELECT * FROM schedules WHERE enabled = 1"
-        ).fetchall()
+        rows = self._conn.execute("SELECT * FROM schedules WHERE enabled = 1").fetchall()
         return [dict(r) for r in rows]
 
     def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
@@ -950,7 +1053,9 @@ class SqliteEventStore:
     async def _subscribe(self, conversation_id: str, after_seq: int | None) -> AsyncIterator[Event]:
         # Register the live queue FIRST so no append is missed between the
         # history snapshot and going live; the overlap is deduped by seq.
-        queue: asyncio.Queue[Event] = asyncio.Queue()
+        queue: asyncio.Queue[Event | _SubscriberOverflowMarker] = asyncio.Queue(
+            maxsize=EVENT_SUBSCRIBER_QUEUE_MAX
+        )
         self._subscribers[conversation_id].add(queue)
         try:
             history = self._query(
@@ -962,7 +1067,12 @@ class SqliteEventStore:
                     last_seq = max(last_seq, ev.seq)
                 yield ev
             while True:
-                ev = await queue.get()
+                item = await queue.get()
+                if isinstance(item, _SubscriberOverflowMarker):
+                    raise SubscriberOverflow(
+                        "durable event subscriber exceeded its bounded queue; reconnect for replay"
+                    )
+                ev = item
                 if ev.seq is not None and ev.seq <= last_seq:
                     continue  # already delivered from history (overlap dedup)
                 if ev.seq is not None:

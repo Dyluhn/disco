@@ -9,30 +9,71 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  createDeepResearchConversation,
-  exportReport,
   serializeReportToMarkdown,
 } from "@/api/deepResearch";
-import * as clientModule from "@/api/client";
 import type { ReportEvent } from "@/types/agent";
+import type { exportReport as exportReportFn } from "@/api/deepResearch";
 
 // ---- helpers ----------------------------------------------------------------
 
-function makeFetchStub(status = 200, body: BodyInit = new Blob(["data"], { type: "application/pdf" })) {
-  return vi.fn().mockResolvedValue({
+type ExportReport = typeof exportReportFn;
+
+function jsonResponse(body: object, status = 200): Response {
+  return {
     ok: status >= 200 && status < 300,
     status,
-    blob: () => Promise.resolve(body instanceof Blob ? body : new Blob([body])),
-    json: () => Promise.resolve({}),
-    text: () => Promise.resolve(""),
+    headers: new Headers(),
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
+  } as unknown as Response;
+}
+
+function makeFetchStub(status = 200, body: BodyInit = new Blob(["data"], { type: "application/pdf" })) {
+  return vi.fn(async (url: RequestInfo | URL) => {
+    if (String(url) === "http://agent:8123/api/auth/session") {
+      return jsonResponse({ authenticated: true, csrf_token: "csrf-token" });
+    }
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: new Headers(),
+      blob: () => Promise.resolve(body instanceof Blob ? body : new Blob([body])),
+      json: () => Promise.resolve({}),
+      text: () => Promise.resolve(""),
+    } as unknown as Response;
   });
+}
+
+async function importLiveDeepResearch(): Promise<{ exportReport: ExportReport }> {
+  vi.resetModules();
+  vi.stubGlobal("__DISCO_ENV", { AGENT_BASE: "http://agent:8123" });
+  return import("@/api/deepResearch");
+}
+
+async function importDeepResearchWithMockedLiveCreate() {
+  vi.resetModules();
+  vi.unstubAllGlobals();
+  const clientModule = await import("@/api/client");
+  vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
+  const send = vi
+    .spyOn(clientModule, "agentSend")
+    .mockResolvedValue({ conversation_id: "conv_iter" } as never);
+  const { createDeepResearchConversation } = await import("@/api/deepResearch");
+  return { createDeepResearchConversation, send };
+}
+
+function exportCall(stub: ReturnType<typeof vi.fn>) {
+  const call = stub.mock.calls.find(([url]) =>
+    String(url).includes("/report/export"),
+  );
+  if (!call) throw new Error("report export endpoint was not called");
+  return call as [string, RequestInit];
 }
 
 // ---- tests ------------------------------------------------------------------
 
 describe("exportReport", () => {
   beforeEach(() => {
-    vi.spyOn(clientModule, "agentHttpBase").mockReturnValue("http://agent:8123");
     // jsdom has no URL.createObjectURL — stub it so downloadBlob doesn't throw
     vi.stubGlobal("URL", {
       ...URL,
@@ -43,43 +84,51 @@ describe("exportReport", () => {
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
   it("POSTs to agent-server base, not bare /api (pdf)", async () => {
+    const { exportReport } = await importLiveDeepResearch();
     const stub = makeFetchStub(200);
     vi.stubGlobal("fetch", stub);
 
     await exportReport("conv_abc", "pdf");
 
-    expect(stub).toHaveBeenCalledOnce();
-    const [url, init] = stub.mock.calls[0] as [string, RequestInit];
+    const [url, init] = exportCall(stub);
     expect(url).toBe("http://agent:8123/api/conversations/conv_abc/report/export?fmt=pdf");
     expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("include");
+    expect(new Headers(init.headers).get("x-disco-csrf")).toBe("csrf-token");
   });
 
   it("POSTs to agent-server base, not bare /api (pdf, no docx)", async () => {
+    const { exportReport } = await importLiveDeepResearch();
     // W-12: docx export was removed; pdf still routes to the agent-server base.
     const stub = makeFetchStub(200, new Blob(["data"], { type: "application/pdf" }));
     vi.stubGlobal("fetch", stub);
 
     await exportReport("conv_xyz", "pdf");
 
-    expect(stub).toHaveBeenCalledOnce();
-    const [url] = stub.mock.calls[0] as [string, RequestInit];
+    const [url] = exportCall(stub);
     expect(url).toBe("http://agent:8123/api/conversations/conv_xyz/report/export?fmt=pdf");
     // URL must NOT be a bare relative path
     expect(url).not.toMatch(/^\/api\//);
   });
 
   it("throws on non-ok response with detail from JSON body", async () => {
-    const stub = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-      blob: () => Promise.resolve(new Blob()),
-      json: () => Promise.resolve({ detail: { reason: "pandoc unavailable" } }),
-      text: () => Promise.resolve(""),
+    const { exportReport } = await importLiveDeepResearch();
+    const stub = vi.fn(async (url: RequestInfo | URL) => {
+      if (String(url) === "http://agent:8123/api/auth/session") {
+        return jsonResponse({ authenticated: true, csrf_token: "csrf-token" });
+      }
+      return {
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        blob: () => Promise.resolve(new Blob()),
+        json: () => Promise.resolve({ detail: { reason: "pandoc unavailable" } }),
+        text: () => Promise.resolve(""),
+      } as unknown as Response;
     });
     vi.stubGlobal("fetch", stub);
 
@@ -87,6 +136,7 @@ describe("exportReport", () => {
   });
 
   it("throws when fmt is md (client-side path should be used instead)", async () => {
+    const { exportReport } = await importLiveDeepResearch();
     // md is gated before fetch — no network call should be made
     const stub = vi.fn();
     vi.stubGlobal("fetch", stub);
@@ -104,10 +154,8 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
   });
 
   it("sends iterative:true when the toggle is ON (mirrors depth_tier flow)", async () => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
-    const send = vi
-      .spyOn(clientModule, "agentSend")
-      .mockResolvedValue({ conversation_id: "conv_iter" } as never);
+    const { createDeepResearchConversation, send } =
+      await importDeepResearchWithMockedLiveCreate();
 
     await createDeepResearchConversation({ query: "q", iterative: true });
 
@@ -118,10 +166,8 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
   });
 
   it("defaults iterative:false when the toggle is omitted (byte-identical OFF)", async () => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
-    const send = vi
-      .spyOn(clientModule, "agentSend")
-      .mockResolvedValue({ conversation_id: "conv_noiter" } as never);
+    const { createDeepResearchConversation, send } =
+      await importDeepResearchWithMockedLiveCreate();
 
     await createDeepResearchConversation({ query: "q" });
 
@@ -132,10 +178,8 @@ describe("createDeepResearchConversation — A4 iterative grounding", () => {
   });
 
   it("sends sources when per-query sources are selected", async () => {
-    vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
-    const send = vi
-      .spyOn(clientModule, "agentSend")
-      .mockResolvedValue({ conversation_id: "conv_sources" } as never);
+    const { createDeepResearchConversation, send } =
+      await importDeepResearchWithMockedLiveCreate();
 
     await createDeepResearchConversation({ query: "q", sources: ["arxiv", "ddgs"] });
 

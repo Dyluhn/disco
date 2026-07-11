@@ -211,9 +211,9 @@ describe("McpSection — live CRUD over the real fetch path", () => {
           url === "/api/mcp/servers" && init?.method?.toUpperCase() === "POST",
       );
       expect(post).toBeTruthy();
-      expect(
-        (post![1] as RequestInit).headers as Record<string, string>,
-      ).toMatchObject({ "content-type": "application/json" });
+      expect(new Headers((post![1] as RequestInit).headers).get("content-type")).toBe(
+        "application/json",
+      );
       expect(JSON.parse((post![1] as RequestInit).body as string)).toMatchObject({
         name: "MyServer",
         url: "https://my.mcp.server",
@@ -281,13 +281,13 @@ describe("McpSection — live CRUD over the real fetch path", () => {
     expect(screen.getByText("GitHub")).toBeInTheDocument();
   });
 
-  it("shows the Re-approve control and SHA-256 fingerprint for hashed connections", async () => {
+  it("shows the Review control and SHA-256 fingerprint for pending approvals", async () => {
     renderMcp();
     await waitFor(() => {
       expect(screen.getByText("Filesystem")).toBeInTheDocument();
     });
 
-    expect(screen.getAllByText("Re-approve").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Review").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/abc123def456…/)).toBeInTheDocument();
     expect(screen.getByText(/\(SHA-256\)/)).toBeInTheDocument();
   });

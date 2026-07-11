@@ -37,6 +37,22 @@ ROLE_FALLBACK_PROVIDER_KEY = "__role_fallback__"
 # Flag to emit the DRIVER_VISION env deprecation warning at most once per process.
 _DRIVER_VISION_DEPRECATION_LOGGED: bool = False
 
+
+class ProviderSettings(BaseModel):
+    """First-class model provider saved by the app-server settings surface.
+
+    This is inert runtime metadata until one of its models is enabled into the
+    normal catalogue. The secret value itself lives in SecretStore under
+    ``secret_name`` and is never embedded in RouterConfig.
+    """
+
+    id: str
+    label: str
+    base_url: str
+    kind: Literal["openai-compat", "anthropic", "gemini"]
+    secret_name: str
+
+
 class ModelEntry(BaseModel):
     model_id: str  # provider's id string [VERIFY]
     provider: str  # the endpoint key (one OpenAIProvider per distinct backend) [VERIFY]
@@ -52,9 +68,12 @@ class ModelEntry(BaseModel):
     #   "subscription" — a flat-rate plan (e.g. a MiniMax/Claude subscription proxied
     #                    locally): NO per-token price, shown as "Subscription", not "Free".
     #   "free"         — genuinely free (local / no charge).
+    #   "unknown"      — pay model NOT verified (the provider's catalogue reports no
+    #                    pricing). Shown as "pricing unknown", never as Free: a 0
+    #                    price with unknown mode must not read as verified-no-charge.
     # None → DERIVE for back-compat: price 0 → free, else metered (so existing
     # catalogues keep working without a migration).
-    pricing_mode: Literal["metered", "subscription", "free"] | None = None
+    pricing_mode: Literal["metered", "subscription", "free", "unknown"] | None = None
     # [EXTENSION] §8 requires a model family for prompt selection but §7's
     # ModelEntry omitted the field. Optional here: if None, the family is
     # derived from model_id (prompts.derive_family). Set it to pin a [VERIFY]
@@ -420,6 +439,10 @@ class LiveBrowserSettings(BaseModel):
 
 class RouterConfig(BaseModel):
     models: dict[str, ModelEntry]  # key -> entry (the assignable catalogue)
+    # Model-provider connections managed by app-server Settings. They do not
+    # affect routing directly; enabled provider models are ordinary entries in
+    # ``models`` above.
+    providers: dict[str, ProviderSettings] = Field(default_factory=dict)
     # the active sandbox backend + connection (settings-driven; agent-server maps it).
     sandbox: SandboxSettings = Field(default_factory=SandboxSettings)
     # the user-chosen Build-project persistence root (empty = unset).

@@ -1,6 +1,0 @@
-0 errors, 0 warnings, 0 notes
-PYRIGHT_EXIT=0
-FAILED packages/agent-server/tests/test_pi_process.py::test_cancel_keeps_alive_then_aclose_reaps_tree
-FAILED packages/agent-server/tests/test_policy_consistency.py::test_no_contamination_non_anchored_standard_withholds_str_replace_and_plan_step
-FAILED packages/agent-server/tests/test_verify.py::test_run_checks_cascades_skip_when_config_fails
-PYTEST_EXIT=1

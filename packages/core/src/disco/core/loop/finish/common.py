@@ -109,6 +109,25 @@ _HOST_VERIFY_AUTHORITATIVE_FLAG = "HOST_VERIFY_AUTHORITATIVE"
 _FALSY = frozenset({"0", "false", "no", "off"})
 
 
+def _appkit_scope_active(loop: AgentLoop) -> bool:
+    """True when the loop is running under the strict AppKit tool surface.
+
+    The build-phase tool-surface signal is ``verify_appkit_app``: it is present in
+    the AppKit-only allowlist and absent from normal build surfaces.
+    """
+
+    executor = getattr(loop, "executor", None)
+    if executor is None:
+        return False
+    try:
+        return any(
+            getattr(tool, "name", None) == "verify_appkit_app"
+            for tool in executor.available_tools()
+        )
+    except Exception:  # noqa: BLE001 — introspection failure is not an AppKit signal
+        return False
+
+
 def host_verify_authoritative_enabled() -> bool:
     """Default ON unless DISCO_HOST_VERIFY_AUTHORITATIVE is explicitly falsy.
 
@@ -310,6 +329,21 @@ def _last_productive_seq(events: list[Event]) -> int:
             ):
                 return ev.seq or 0
     return 0
+
+
+def _tc_components_installed(events: list[Event]) -> bool:
+    """True when a trusted component was SUCCESSFULLY installed in this
+    conversation (WO-TC3): such a build must pass through the verify_web_app
+    gate even when nothing else marks it as a web deliverable — the component
+    checks (integrity / requires-graph / probe) ride that verdict, and a
+    finish that skipped them would silently drop every verified-component
+    claim. Events-only, pure."""
+    for ev in events:
+        if isinstance(ev, ObservationEvent):
+            tr = ev.tool_result
+            if tr.success and tr.tool_name == "add_trusted_component":
+                return True
+    return False
 
 
 def _is_web_deliverable(events: list[Event]) -> bool:

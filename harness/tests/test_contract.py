@@ -22,6 +22,9 @@ _TS = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "types" / "age
 
 # Deliberate one-sided cases (documented, not bugs):
 _SERVER_PY_ONLY = {"token"}  # research-answer token stream uses a separate FE path
+_SERVER_TS_ONLY = {
+    "connection"
+}  # synthetic browser reconnect state; never arrives from Python
 _CLIENT_PY_ONLY = {"pause"}  # accepted by the wire but not yet implemented/sent by the UI
 _EVENT_PY_ONLY = {"knowledge", "datasource"}  # internal events; not rendered in the UI
 
@@ -41,8 +44,10 @@ def _ts_inline_union_types(union_name: str) -> set[str]:
             continue
         if capturing:
             s = ln.strip()
-            if not s or s.startswith(("export ", "/**", "//")):
+            if not s or s.startswith(("export ", "/**")):
                 break
+            if s.startswith("//"):
+                continue
             out.update(re.findall(r'type:\s*"([^"]+)"', ln))
     return out
 
@@ -52,7 +57,7 @@ def test_ws_server_frame_types_match():
     ts = _ts_inline_union_types("WSServerFrame")
     new = py - ts - _SERVER_PY_ONLY
     assert py - ts == _SERVER_PY_ONLY, f"NEW WSServerFrame drift: py-only={new}"
-    assert not (ts - py), f"TS has a frame Python doesn't: {ts - py}"
+    assert ts - py == _SERVER_TS_ONLY, f"NEW TS-only WSServerFrame drift: {ts - py}"
 
 
 def test_ws_client_frame_types_match():

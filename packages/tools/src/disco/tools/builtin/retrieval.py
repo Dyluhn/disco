@@ -78,7 +78,7 @@ class SearchArgs(BaseModel):
 class SearchTool:
     definition = ToolDef(
         name="search",
-        description="Search the web via the configured provider (SearXNG + optional APIs).",
+        description="Search the web via the configured provider (SearXNG + optional APIs). Returns titles + URLs + snippets — follow up with `extract` on a chosen URL for full readable content.",
         args_model=SearchArgs,
         needs=_NET,
         uses_capabilities=frozenset({"search"}),
@@ -102,7 +102,7 @@ class ExtractArgs(BaseModel):
 class ExtractTool:
     definition = ToolDef(
         name="extract",
-        description="Extract clean, LLM-ready content from a URL (via Firecrawl).",
+        description="Extract clean, LLM-ready content from ONE URL (via Firecrawl) — the follow-up to `search` when a snippet is not enough.",
         args_model=ExtractArgs,
         needs=_NET,
         uses_capabilities=frozenset({"extract"}),

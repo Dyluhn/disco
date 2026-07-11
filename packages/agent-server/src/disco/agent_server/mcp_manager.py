@@ -112,22 +112,32 @@ class McpManager:
         if not mcp_cfg.enabled or not mcp_cfg.servers:
             return
 
-        from disco.tools.mcp.approval import ApprovalRequired
+        from disco.tools.mcp.approval import (
+            ApprovalRequired,
+            ConfigApprovalRequired,
+            compute_config_hash,
+        )
         from disco.tools.mcp.config import (
             McpServerConfig as TypedMcpServerConfig,
         )
         from disco.tools.mcp.config import (
             McpSettings as TypedMcpSettings,
         )
-        from disco.tools.mcp.migrations import list_mcp_approvals
+        from disco.tools.mcp.migrations import (
+            list_mcp_approvals,
+            list_mcp_config_approvals,
+        )
 
         # Read existing approvals from the DB (D1: security gate production path)
         approvals: dict[str, str] = {}
+        config_approvals: dict[str, str] = {}
         try:
             conn = getattr(self._rt._store, "_conn", None)
             if conn is not None:
                 for row in list_mcp_approvals(conn):
                     approvals[row["server"]] = row["description_hash"]
+                for row in list_mcp_config_approvals(conn):
+                    config_approvals[row["server"]] = row["config_hash"]
         except Exception:
             _LOG.warning("MCP pool: failed to read approvals from DB", exc_info=True)
 
@@ -155,7 +165,10 @@ class McpManager:
                 max_active_schemas=mcp_cfg.max_active_schemas,
             )
             self._rt._mcp_pool = McpPool(
-                typed, secrets=self._rt._secret_store, approvals=approvals
+                typed,
+                secrets=self._rt._secret_store,
+                approvals=approvals,
+                config_approvals=config_approvals,
             )
             try:
                 await self._rt._mcp_pool.start()
@@ -174,24 +187,31 @@ class McpManager:
                 # (or worse, shows the same value for both old and new).
                 pending_db_conn = getattr(self._rt._store, "_conn", None)
                 for name, info in self._rt._mcp_pool.approval_pending().items():
+                    kind = info.get("kind", "tools")
                     old_hash = info.get("old_hash", "")
                     new_hash = info.get("new_hash", "")
                     self._rt._mcp_approval_pending[name] = {
+                        "kind": kind,
                         "old_hash": old_hash,
                         "new_hash": new_hash,
                     }
                     _LOG.warning(
-                        "MCP pool: server %r refused — re-approval required "
-                        "(old=%s… new=%s…)",
-                        name, old_hash[:12], new_hash[:12],
+                        "MCP pool: server %r refused — re-approval required (old=%s… new=%s…)",
+                        name,
+                        old_hash[:12],
+                        new_hash[:12],
                     )
-                    if pending_db_conn is not None and old_hash and new_hash:
+                    if kind == "tools" and pending_db_conn is not None and new_hash:
                         try:
                             from disco.tools.mcp.migrations import (
                                 set_mcp_approval_pending,
                             )
+
                             set_mcp_approval_pending(
-                                pending_db_conn, name, old_hash, new_hash,
+                                pending_db_conn,
+                                name,
+                                old_hash,
+                                new_hash,
                             )
                         except Exception:
                             _LOG.warning(
@@ -208,14 +228,30 @@ class McpManager:
                 continue
 
             try:
+                current_config_hash = compute_config_hash(srv)
+                stored_config_hash = config_approvals.get(name)
+                if stored_config_hash != current_config_hash:
+                    raise ConfigApprovalRequired(
+                        name, stored_config_hash or "", current_config_hash
+                    )
                 await self._connect_http(name, srv, approvals)
+            except ConfigApprovalRequired as exc:
+                _LOG.warning("MCP HTTP server %r requires config approval", name)
+                self._rt._mcp_approval_pending[name] = {
+                    "kind": "config",
+                    "old_hash": exc.old_hash,
+                    "new_hash": exc.new_hash,
+                }
             except ApprovalRequired as exc:
                 _LOG.warning(
                     "McpPool: HTTP server %r refused — description_hash changed "
                     "(%s → %s) — re-approval required",
-                    name, exc.old_hash[:12], exc.new_hash[:12],
+                    name,
+                    exc.old_hash[:12],
+                    exc.new_hash[:12],
                 )
                 self._rt._mcp_approval_pending[name] = {
+                    "kind": "tools",
                     "old_hash": exc.old_hash,
                     "new_hash": exc.new_hash,
                 }
@@ -229,8 +265,12 @@ class McpManager:
                         from disco.tools.mcp.migrations import (
                             set_mcp_approval_pending,
                         )
+
                         set_mcp_approval_pending(
-                            http_db_conn, name, exc.old_hash, exc.new_hash,
+                            http_db_conn,
+                            name,
+                            exc.old_hash,
+                            exc.new_hash,
                         )
                     except Exception:
                         _LOG.warning(
@@ -245,9 +285,7 @@ class McpManager:
                     with contextlib.suppress(Exception):
                         await client.close()
             except Exception as exc:
-                _LOG.warning(
-                    "McpPool: HTTP server %r failed to start: %s", name, exc
-                )
+                _LOG.warning("McpPool: HTTP server %r failed to start: %s", name, exc)
                 if name in self._rt._mcp_http_clients:
                     client = self._rt._mcp_http_clients.pop(name)
                     with contextlib.suppress(Exception):
@@ -297,14 +335,18 @@ class McpManager:
 
         # Compute the description hash and check approval
         tool_descs = [
-            {"name": t.name, "description": t.description or ""}
+            {
+                "name": t.name,
+                "description": t.description or "",
+                "inputSchema": t.inputSchema or {},
+            }
             for t in raw_tools
         ]
         new_hash = compute_description_hash(tool_descs)
 
         stored = approvals.get(name)
-        if stored is not None and stored != new_hash:
-            raise ApprovalRequired(name, stored, new_hash)
+        if stored != new_hash:
+            raise ApprovalRequired(name, stored or "", new_hash)
 
         # Build ToolDefs
         allowed = set(srv.allowed_tools) if srv.allowed_tools is not None else None
@@ -336,7 +378,8 @@ class McpManager:
 
         _LOG.info(
             "McpPool: HTTP server %r connected — %d tool(s) registered",
-            name, len(raw_tools),
+            name,
+            len(raw_tools),
         )
 
     def _mcp_origin_approved(self, name: str, srv: McpServerConfig) -> bool:
@@ -346,8 +389,7 @@ class McpManager:
         checker = getattr(self._rt, "_origin_approved", None)
         if callable(checker):
             return all(
-                checker(srv.url, f"mcp:{name}", ref)
-                and secret_ref_allowed_for_origin(ref, srv.url)
+                checker(srv.url, f"mcp:{name}", ref) and secret_ref_allowed_for_origin(ref, srv.url)
                 for ref in refs
             )
         return all(
@@ -382,9 +424,7 @@ class McpManager:
                     return await http_clients[server].call_tool(tool, arguments)
                 if pool is not None:
                     return await pool.call_tool(server, tool, arguments)
-                raise RuntimeError(
-                    f"MCP server {server!r} is not connected"
-                )
+                raise RuntimeError(f"MCP server {server!r} is not connected")
 
         return _MergedCallTarget()
 
@@ -404,35 +444,42 @@ class McpManager:
         if self._rt._mcp_pool is not None and self._rt._mcp_pool.started:
             for tdef in self._rt._mcp_pool.snapshot():
                 from disco.tools.mcp.naming import split_qualified_name
+
                 parts = split_qualified_name(tdef.name)
                 if parts is None:
                     continue
                 server, tool_name = parts
-                mcp_entries.append({
-                    "server": server,
-                    "tool_name": tool_name,
-                    "tool": tdef,
-                })
+                mcp_entries.append(
+                    {
+                        "server": server,
+                        "tool_name": tool_name,
+                        "tool": tdef,
+                    }
+                )
 
         # HTTP tools
         for qname, tdef in self._rt._mcp_http_tools.items():
             from disco.tools.mcp.naming import split_qualified_name
+
             parts = split_qualified_name(qname)
             if parts is None:
                 continue
             server, tool_name = parts
-            mcp_entries.append({
-                "server": server,
-                "tool_name": tool_name,
-                "tool": tdef,
-            })
+            mcp_entries.append(
+                {
+                    "server": server,
+                    "tool_name": tool_name,
+                    "tool": tdef,
+                }
+            )
 
         if mcp_entries:
-            self._rt._mcp_retrieval_searches, self._rt._mcp_retrieval_extractions = \
+            self._rt._mcp_retrieval_searches, self._rt._mcp_retrieval_extractions = (
                 build_retrieval_providers(
                     mcp_entries,
                     call_fn=self._mcp_call_target.call_tool,
                 )
+            )
             _LOG.info(
                 "MCP retrieval: built %d search + %d extraction provider(s)",
                 len(self._rt._mcp_retrieval_searches),

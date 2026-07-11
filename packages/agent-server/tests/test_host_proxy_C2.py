@@ -296,7 +296,12 @@ async def test_5xx_passthrough_no_retry(counting_server):
     )
     # A single hit on localhost should be well under 100ms; the retry budget
     # alone is 750ms of backoff, so this proves the loop didn't run.
-    assert elapsed < 0.1, f"5xx path took {elapsed:.3f}s — retry loop ran?"
+    # The intent is "no retry delay was inserted" (a retry adds seconds — the
+    # auth-retry backoff alone is 2s). 0.1s wall-clock false-failed under
+    # full-suite load (observed 0.18-0.36s of pure scheduler noise); 1.0s still
+    # proves no-retry while surviving a loaded box. request_count==1 above is
+    # the authoritative no-retry check.
+    assert elapsed < 1.0, f"5xx path took {elapsed:.3f}s — retry loop ran?"
 
 
 # ---------------------------------------------------------------------------

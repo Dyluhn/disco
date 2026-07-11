@@ -332,3 +332,31 @@ async def test_dictated_content_gate_releases_loudly_at_cap(tmp_path: Path):
         isinstance(e, StatusEvent) and e.detail == "dictated_content_release"
         for e in events
     )
+
+
+@pytest.mark.asyncio
+async def test_non_appkit_dictated_content_literal_miss_still_refuses_then_cap_releases(
+    tmp_path: Path,
+):
+    loop, store = build_loop(
+        ScriptedAgent([_submit_plan()]),
+        conversation_id="dictated-non-appkit-unchanged",
+        executor=_FSBuildExecutor(tmp_path),
+        mode=OperatingMode.PLANNING,
+        planning_tools=frozenset({"submit_plan"}),
+    )
+    await loop.send_message('Build the artifact with exact label "Required Copy".')
+    await loop.run()
+    await loop.approve_plan()
+
+    loop.agent = ScriptedAgent([_write("other copy"), _finish()])
+    state = await loop.run()
+
+    events = await store.get_events("dictated-non-appkit-unchanged")
+    env = _env_messages(events)
+    assert state.execution_status == ConversationStatus.FINISHED
+    assert sum("quoted user literal is missing" in m for m in env) == (
+        _DICTATED_CONTENT_REFUSAL_CAP
+    )
+    assert any("Required Copy" in m and "artifact.txt" in m for m in env), env
+    assert any("Finished despite missing dictated content" in m for m in env), env

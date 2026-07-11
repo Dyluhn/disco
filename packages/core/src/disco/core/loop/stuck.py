@@ -114,7 +114,14 @@ _WAIT_POLL_TOOLS = frozenset({
 # in signals.py — kept inline so stuck.py stays self-contained; a new tool
 # added to _BOOKKEEPING_TOOLS must also be added here.
 _PLAN_META_TOOLS = frozenset(
-    {"submit_plan", "propose_plan_update", "plan_step", "update_plan_progress", "finish"}
+    {
+        "submit_plan",
+        "propose_plan_update",
+        "plan_step",
+        "update_plan_progress",
+        "finish",
+        "think",
+    }
 )
 
 
@@ -322,22 +329,43 @@ class StuckDetector:
     # action→obs pairs; this pattern works on the raw non-wait action stream.
     # Uses ignore_thought=True so thought paraphrasing does not mask the loop.
     # Wait/poll and plan/meta tools are exempt (same rationale as patterns 1+4).
+    #
+    # 2026-07-09 deck-run autopsy: the implementation had DRIFTED from this
+    # intent — it collapsed the stream to actions-only, so `click → obs(2/9) →
+    # click → obs(3/9) → …` (identical actions, each with a FRESH, CHANGING
+    # observation: the model paging through its own slideshow) counted as a
+    # "run" and killed a legitimately-progressing build. Interleaved repeats are
+    # pattern 1's jurisdiction (it correctly requires the OBSERVATION to repeat
+    # too); this pattern only owns actions with NO observation/error in between.
 
     def _pure_repeat(self, events: list[Event]) -> bool:
         threshold = self.t.repeat_action_observation
         _exempt = _WAIT_POLL_TOOLS | _PLAN_META_TOOLS
-        actions = [
+        # Keep observations/errors in the walked stream — their PRESENCE between
+        # two actions is exactly what distinguishes "the model waited and the
+        # world answered" from a tight no-wait loop. Only exempt ACTIONS are
+        # dropped (a `think` between two clicks does not make them non-adjacent).
+        stream = [
             e for e in events
-            if isinstance(e, ActionEvent)
-            and e.tool_call is not None
-            and e.tool_call.tool_name not in _exempt
+            if isinstance(e, ObservationEvent | AgentErrorEvent)
+            or (
+                isinstance(e, ActionEvent)
+                and e.tool_call is not None
+                and e.tool_call.tool_name not in _exempt
+            )
         ]
-        if len(actions) < threshold:
-            return False
-        last = actions[-1]
+        # Trailing maximal block of ActionEvents (no obs/error inside): the
+        # currently-unanswered burst. An observation ANYWHERE inside would mean
+        # the model did wait at least once — that episode belongs to pattern 1.
         run = 0
-        for x in reversed(actions):
-            if event_content_eq(x, last, ignore_thought=True):
+        last: ActionEvent | None = None
+        for e in reversed(stream):
+            if not isinstance(e, ActionEvent):
+                break
+            if last is None:
+                last = e
+                run = 1
+            elif event_content_eq(e, last, ignore_thought=True):
                 run += 1
             else:
                 break
@@ -455,8 +483,13 @@ class StuckDetector:
         last = pairs[-n:]
         a0, o0 = last[0]
         # W1: ignore_thought=True so thought-paraphrasing does not mask a loop.
+        # ignore_volatile_content=True so the browser's per-action screenshot
+        # path (an incrementing counter) can't make a genuinely DEAD click loop
+        # look like fresh observations — this pattern owns that case now that
+        # _pure_repeat no longer (wrongly) fired across interleaved observations.
         return all(
-            event_content_eq(a, a0, ignore_thought=True) and event_content_eq(o, o0)
+            event_content_eq(a, a0, ignore_thought=True)
+            and event_content_eq(o, o0, ignore_volatile_content=True)
             for a, o in last
         )
 

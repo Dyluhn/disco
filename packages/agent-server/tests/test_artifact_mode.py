@@ -1,7 +1,8 @@
 """C6 — artifact_mode wiring.
 
 Proves:
-1. artifact_mode=True → _compose_build_loop uses NeverConfirm gate,
+1. artifact_mode=True → _compose_build_loop uses BlastRadiusConfirm so
+   confined artifact actions stay automatic while host MCP calls can gate,
    OperatingMode.INTERACTIVE, and the ARTIFACT_TOOLS scope (no shell/browser).
 2. artifact_mode=False/absent → byte-identical to normal build loop
    (BlastRadiusConfirm, PLANNING, AGENT_TOOLS scope).
@@ -13,9 +14,8 @@ from __future__ import annotations
 
 from unittest import mock
 
-import pytest
 from disco.agent_server.runtime import ConversationRuntime
-from disco.core import SqliteEventStore
+from disco.core import SecurityRisk, SqliteEventStore
 from disco.core.llm import DefaultLLMRouter, OperatingMode
 from disco.core.loop import RouterAgent
 from disco.tools import AGENT_TOOLS, ARTIFACT_TOOLS, ProcessSandboxService
@@ -34,11 +34,18 @@ def test_artifact_tools_strict_subset_of_agent_tools():
 def test_artifact_tools_excludes_dangerous_tools():
     """No shell/browser/code_exec/plan-gate/anchored-str-replace in artifact scope."""
     dangerous = {
-        "shell", "shell_exec", "shell_view", "shell_wait",
-        "shell_write_to_process", "shell_kill_process",
+        "shell",
+        "shell_exec",
+        "shell_view",
+        "shell_wait",
+        "shell_write_to_process",
+        "shell_kill_process",
         "browser",
         "code_exec",
-        "preview_start", "preview_status", "preview_logs", "preview_stop",
+        "preview_start",
+        "preview_status",
+        "preview_logs",
+        "preview_stop",
         "server_status",
         "submit_plan",
         "plan_step",
@@ -46,19 +53,26 @@ def test_artifact_tools_excludes_dangerous_tools():
         "delegate_explore",
     }
     assert not (ARTIFACT_TOOLS & dangerous), (
-        f"Artifact scope must not include dangerous tools: "
-        f"{ARTIFACT_TOOLS & dangerous}"
+        f"Artifact scope must not include dangerous tools: {ARTIFACT_TOOLS & dangerous}"
     )
 
 
 def test_artifact_tools_includes_required_tools():
     """ARTIFACT_TOOLS must include file writers + line-edit tools + asset generators."""
     required = {
-        "file_read", "file_write", "file_append", "file_edit",
-        "file_replace_lines", "file_insert_lines",  # line-edit pair (§3 fix)
+        "file_read",
+        "file_write",
+        "file_append",
+        "file_edit",
+        "file_replace_lines",
+        "file_insert_lines",  # line-edit pair (§3 fix)
         "file_list",
-        "search", "extract",
-        "sheet_generate", "slides_generate", "image_generate", "audio_overview",
+        "search",
+        "extract",
+        "sheet_generate",
+        "slides_generate",
+        "image_generate",
+        "audio_overview",
         "think",
     }
     assert required <= ARTIFACT_TOOLS, (
@@ -85,14 +99,26 @@ def _loop_for(rt, cid, *, artifact_mode: bool = False):
         return rt._compose_build_loop(cid, router, agent)
 
 
-def test_compose_artifact_mode_on_uses_never_confirm():
-    """artifact_mode=True → NeverConfirm gate (no per-action approval)."""
-    from disco.core.loop.policies import NeverConfirm
+def test_compose_artifact_mode_on_uses_blast_radius_confirm():
+    """Artifact sandbox work stays automatic, but host MCP work can gate."""
+    from disco.core.loop.policies import BlastRadiusConfirm
 
     rt = _rt()
     loop = _loop_for(rt, "art1", artifact_mode=True)
-    assert isinstance(loop.policy, NeverConfirm), (
-        f"Expected NeverConfirm, got {type(loop.policy).__name__}"
+    assert isinstance(loop.policy, BlastRadiusConfirm), (
+        f"Expected BlastRadiusConfirm, got {type(loop.policy).__name__}"
+    )
+    assert (
+        loop.policy.should_confirm_action(
+            SecurityRisk.HIGH, scope="sandbox", tool_name="artifact_write"
+        )
+        is False
+    )
+    assert (
+        loop.policy.should_confirm_action(
+            SecurityRisk.HIGH, scope="in_process", tool_name="mcp__srv__host_action"
+        )
+        is True
     )
 
 
@@ -100,9 +126,7 @@ def test_compose_artifact_mode_on_uses_interactive_mode():
     """artifact_mode=True → OperatingMode.INTERACTIVE (no plan-gate)."""
     rt = _rt()
     loop = _loop_for(rt, "art2", artifact_mode=True)
-    assert loop.mode == OperatingMode.INTERACTIVE, (
-        f"Expected INTERACTIVE, got {loop.mode}"
-    )
+    assert loop.mode == OperatingMode.INTERACTIVE, f"Expected INTERACTIVE, got {loop.mode}"
 
 
 def test_compose_artifact_mode_on_uses_artifact_scope():
@@ -129,9 +153,7 @@ def test_compose_artifact_mode_off_uses_planning_mode():
     """artifact_mode=False → OperatingMode.PLANNING (unchanged build loop)."""
     rt = _rt()
     loop = _loop_for(rt, "bld2", artifact_mode=False)
-    assert loop.mode == OperatingMode.PLANNING, (
-        f"Expected PLANNING, got {loop.mode}"
-    )
+    assert loop.mode == OperatingMode.PLANNING, f"Expected PLANNING, got {loop.mode}"
 
 
 def test_compose_artifact_mode_off_uses_agent_scope():

@@ -16,13 +16,14 @@ from typing import TYPE_CHECKING, Any
 
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
-from disco.core.llm.config import McpSettings
+from disco.core.llm.config import McpSettings, ProviderSettings
 
 if TYPE_CHECKING:
     # The shared mcp_approvals DB connection — a duck-typed sqlite3-like conn
     # (execute/commit). Type-only import keeps it off the runtime path.
     from disco.tools.mcp.migrations import _ApprovalConn
 
+from . import origin_approval_wiring as _origin_wiring
 from .config.dtos import (
     AssignmentsDTO,
     AssignmentsPatch,
@@ -34,11 +35,17 @@ from .config.dtos import (
     McpConnectionDTO,
     McpServerApproveDTO,
     McpServerConfigDTO,
+    McpServerPatchDTO,
     ModelDTO,
     ModelUpsert,
     OpenRouterKeyStatus,
     ProbeResult,
     ProjectStorageConfigDTO,
+    ProviderCatalogueModelDTO,
+    ProviderCreate,
+    ProviderDTO,
+    ProviderEnableBody,
+    ProviderPatch,
     RoleFallbackConfigDTO,
     SandboxConfigDTO,
     SandboxHealthDTO,
@@ -64,7 +71,6 @@ from .config.mappers import (
     _sandbox_from,
     _tts_from,
 )
-from . import origin_approval_wiring as _origin_wiring
 
 
 class ConfigValidationError(Exception):
@@ -75,6 +81,14 @@ class ConfigValidationError(Exception):
         super().__init__(detail or reason)
         self.reason = reason
         self.detail = detail
+
+
+class ProviderInUseError(Exception):
+    """Raised when deleting a provider would strand catalogue models."""
+
+    def __init__(self, model_names: list[str]) -> None:
+        super().__init__(", ".join(model_names))
+        self.model_names = model_names
 
 
 # ---- the session-scoped config state ----------------------------------------
@@ -112,11 +126,14 @@ class ConfigState:
         # When None (tests without a DB), MCP config persists to ConfigStore only.
         self._db_conn = db_conn
 
-    def _approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None: _origin_wiring.sign_origin(self._store, self._secrets, url, purpose, secret_ref)
+    def _approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None:
+        _origin_wiring.sign_origin(self._store, self._secrets, url, purpose, secret_ref)
 
-    def approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None: _origin_wiring.approve_origin(self._store, self._secrets, url, purpose, secret_ref)
+    def approve_origin(self, url: str, purpose: str, secret_ref: str | None = "") -> None:
+        _origin_wiring.approve_origin(self._store, self._secrets, url, purpose, secret_ref)
 
-    def _approve_model_origin(self, entry: Any, model_id: str | None = None) -> None: _origin_wiring.approve_model_origin(self._store, self._secrets, entry, model_id=model_id)
+    def _approve_model_origin(self, entry: Any, model_id: str | None = None) -> None:
+        _origin_wiring.approve_model_origin(self._store, self._secrets, entry, model_id=model_id)
 
     # models + assignments (the absolute manual model story) ------------------
 
@@ -127,7 +144,9 @@ class ConfigState:
         """Add a model to the catalogue. New models are their own endpoint (the
         endpoint key = the catalogue id). Raises ValueError on a duplicate id."""
         entry = _entry_from(upsert, provider=upsert.id)
-        self._store.add_model(upsert.id, entry); self._approve_model_origin(entry, model_id=upsert.id); return _models_from(self._store.load())
+        self._store.add_model(upsert.id, entry)
+        self._approve_model_origin(entry, model_id=upsert.id)
+        return _models_from(self._store.load())
 
     def update_model(self, model_id: str, upsert: ModelUpsert) -> list[ModelDTO]:
         """Edit an existing model. Preserves its endpoint key so a seeded model
@@ -135,7 +154,9 @@ class ConfigState:
         existing = self._store.load().models.get(model_id)
         provider = existing.provider if existing is not None else model_id
         entry = _entry_from(upsert, provider=provider)
-        self._store.update_model(model_id, entry); self._approve_model_origin(entry, model_id=model_id); return _models_from(self._store.load())
+        self._store.update_model(model_id, entry)
+        self._approve_model_origin(entry, model_id=model_id)
+        return _models_from(self._store.load())
 
     def remove_model(self, model_id: str) -> list[ModelDTO]:
         """Remove a model. Raises ValueError if it's the default or assigned to a
@@ -173,6 +194,243 @@ class ConfigState:
     def clear_openrouter_key(self) -> OpenRouterKeyStatus:
         self._secrets.clear_openrouter_key()
         return self.openrouter_key_status()
+
+    # provider objects (definition + encrypted key + catalogue model toggles) -
+
+    def _provider_dto(self, provider: ProviderSettings) -> ProviderDTO:
+        return ProviderDTO(
+            id=provider.id,
+            label=provider.label,
+            base_url=provider.base_url,
+            kind=provider.kind,
+            secret_name=provider.secret_name,
+            has_key=bool(self._resolve_secret_value(provider.secret_name)),
+        )
+
+    def _save_providers(self, providers: dict[str, ProviderSettings]) -> None:
+        cfg = self._store.load()
+        self._store.save(cfg.model_copy(update={"providers": providers}))
+
+    def providers(self) -> list[ProviderDTO]:
+        return [self._provider_dto(p) for p in self._store.load().providers.values()]
+
+    def provider_settings(self, provider_id: str) -> ProviderSettings:
+        provider = self._store.load().providers.get(provider_id)
+        if provider is None:
+            raise KeyError(provider_id)
+        return provider
+
+    def provider_origin_approved(self, provider: ProviderDTO) -> bool:
+        return _origin_wiring.provider_origin_approved(self._store, self._secrets, provider)
+
+    def _unique_provider_id(self, label: str) -> str:
+        import re
+
+        base = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "provider"
+        existing = self._store.load().providers
+        if base not in existing:
+            return base
+        i = 2
+        while f"{base}-{i}" in existing:
+            i += 1
+        return f"{base}-{i}"
+
+    def create_provider(self, body: ProviderCreate) -> ProviderDTO:
+        label = body.label.strip()
+        base_url = body.base_url.strip().rstrip("/")
+        api_key = body.api_key.strip()
+        if not label:
+            raise ValueError("label is empty")
+        if not base_url:
+            raise ValueError("base_url is empty")
+        from disco.core.host_egress import origin_for_url
+
+        try:
+            valid_origin = origin_for_url(base_url)
+        except ValueError as exc:
+            raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
+        if valid_origin is None:
+            raise ValueError("base_url must be an absolute HTTP(S) URL")
+        if not api_key:
+            raise ValueError("api_key is empty")
+        provider_id = self._unique_provider_id(label)
+        secret_name = f"provider_{provider_id}"
+        try:
+            self._secrets.set_secret(secret_name, api_key)
+        except RuntimeError as exc:
+            raise ValueError(str(exc)) from exc
+        cfg = self._store.load()
+        provider = ProviderSettings(
+            id=provider_id,
+            label=label,
+            base_url=base_url,
+            kind=body.kind,
+            secret_name=secret_name,
+        )
+        self._store.save(
+            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: provider}})
+        )
+        _origin_wiring.approve_provider_origin(self._store, self._secrets, provider)
+        return self._provider_dto(provider)
+
+    def update_provider(self, provider_id: str, patch: ProviderPatch) -> ProviderDTO:
+        cfg = self._store.load()
+        provider = cfg.providers.get(provider_id)
+        if provider is None:
+            raise KeyError(provider_id)
+        updates: dict[str, Any] = {}
+        if patch.label is not None:
+            label = patch.label.strip()
+            if not label:
+                raise ValueError("label is empty")
+            updates["label"] = label
+        if patch.base_url is not None:
+            base_url = patch.base_url.strip().rstrip("/")
+            if not base_url:
+                raise ValueError("base_url is empty")
+            from disco.core.host_egress import origin_for_url
+
+            try:
+                valid_origin = origin_for_url(base_url)
+            except ValueError as exc:
+                raise ValueError("base_url must be an absolute HTTP(S) URL") from exc
+            if valid_origin is None:
+                raise ValueError("base_url must be an absolute HTTP(S) URL")
+            updates["base_url"] = base_url
+        if patch.kind is not None:
+            updates["kind"] = patch.kind
+        if patch.api_key is not None:
+            api_key = patch.api_key.strip()
+            if not api_key:
+                raise ValueError("api_key is empty")
+            try:
+                self._secrets.set_secret(provider.secret_name, api_key)
+            except RuntimeError as exc:
+                raise ValueError(str(exc)) from exc
+        updated = provider.model_copy(update=updates)
+        self._store.save(
+            cfg.model_copy(update={"providers": {**cfg.providers, provider_id: updated}})
+        )
+        # A base-URL save or explicit key rotation is the operator approval
+        # gesture. Cosmetic edits never bless a previously unapproved origin.
+        if patch.base_url is not None or patch.api_key is not None:
+            _origin_wiring.approve_provider_origin(self._store, self._secrets, updated)
+        return self._provider_dto(updated)
+
+    def delete_provider(self, provider_id: str) -> None:
+        cfg = self._store.load()
+        provider = cfg.providers.get(provider_id)
+        if provider is None:
+            raise KeyError(provider_id)
+        refs = [
+            f"{key} ({entry.model_id})"
+            for key, entry in cfg.models.items()
+            if entry.api_key_env == provider.secret_name
+        ]
+        if refs:
+            raise ProviderInUseError(refs)
+        providers = {k: v for k, v in cfg.providers.items() if k != provider_id}
+        self._store.save(cfg.model_copy(update={"providers": providers}))
+        self._secrets.clear_secret(provider.secret_name)
+
+    def _unique_provider_catalogue_id(
+        self, provider_id: str, model_id: str, label: str | None
+    ) -> str:
+        import re
+
+        stem = label.strip() if label and label.strip() else model_id
+        slug = re.sub(r"[^a-z0-9]+", "-", stem.lower()).strip("-") or "model"
+        base = f"prov-{provider_id}-{slug}"
+        existing = self._store.load().models
+        if base not in existing:
+            return base
+        i = 2
+        while f"{base}-{i}" in existing:
+            i += 1
+        return f"{base}-{i}"
+
+    def enable_provider_model(
+        self,
+        provider_id: str,
+        body: ProviderEnableBody,
+        catalogue_model: ProviderCatalogueModelDTO | None = None,
+    ) -> list[ModelDTO]:
+        provider = self.provider_settings(provider_id)
+        model_id = body.model_id.strip()
+        if not model_id:
+            raise ValueError("model_id is empty")
+        cfg = self._store.load()
+        for entry in cfg.models.values():
+            if entry.api_key_env == provider.secret_name and entry.model_id == model_id:
+                return _models_from(cfg)
+        catalogue_id = self._unique_provider_catalogue_id(
+            provider.id,
+            model_id,
+            body.label or (catalogue_model.label if catalogue_model else None),
+        )
+        # Context: NEVER silently default — context_window drives the engine's
+        # context budgeting, so a wrong-low guess (the old 8192) over-snips every
+        # build on a big model. The caller must supply it when the provider's
+        # catalogue doesn't report one.
+        context_window = (
+            body.context_window
+            if body.context_window is not None
+            else (catalogue_model.context_window if catalogue_model else None)
+        )
+        if context_window is None:
+            raise ValueError(
+                f"context window required: {provider.label} does not report context "
+                "windows — pass context_window with the model's real limit"
+            )
+        # Pricing: only claim a pay model the catalogue actually reported.
+        # Absent pricing → "unknown" (rendered as such), never a fake Free.
+        prices_known = catalogue_model is not None and (
+            catalogue_model.price_in_per_m is not None
+            or catalogue_model.price_out_per_m is not None
+        )
+        # Capabilities: provider catalogues rarely report them (Go reports none),
+        # and an EMPTY set silently disqualifies the model from the Build/agent
+        # driver pickers (tool-calling gate) — the enable "works" but the model
+        # only surfaces in capability-agnostic roles, which reads as broken.
+        # Default modern-serving table stakes (tool_calling + json_mode; +
+        # long_context per its >~64k semantics); a genuinely tool-less model
+        # fails loudly at run time, which is diagnosable — invisibility is not.
+        # ANCHORED_EDIT stays opt-in by design (unknown models must not get it).
+        capabilities = catalogue_model.capabilities if catalogue_model else []
+        if not capabilities:
+            capabilities = ["tool_calling", "json_mode"] + (
+                ["long_context"] if context_window >= 65536 else []
+            )
+        upsert = ModelUpsert(
+            id=catalogue_id,
+            model_id=model_id,
+            base_url=provider.base_url,
+            api_key_env=provider.secret_name,
+            context_window=context_window,
+            capabilities=capabilities,
+            price_in_per_m=(
+                catalogue_model.price_in_per_m
+                if prices_known and catalogue_model.price_in_per_m is not None
+                else 0.0
+            ),
+            price_out_per_m=(
+                catalogue_model.price_out_per_m
+                if prices_known and catalogue_model.price_out_per_m is not None
+                else 0.0
+            ),
+            pricing_mode="metered" if prices_known else "unknown",
+        )
+        return self.add_model(upsert)
+
+    def disable_provider_model(self, provider_id: str, catalogue_id: str) -> list[ModelDTO]:
+        provider = self.provider_settings(provider_id)
+        cfg = self._store.load()
+        entry = cfg.models.get(catalogue_id)
+        if entry is None:
+            raise ValueError(f"unknown model {catalogue_id!r}")
+        if entry.api_key_env != provider.secret_name:
+            raise ValueError(f"{catalogue_id!r} does not belong to provider {provider_id!r}")
+        return self.remove_model(catalogue_id)
 
     # generic provider secrets (encrypted at rest, keyed by api_key_env name) ---
     # "openrouter" is reserved for the dedicated route/UI above; the generic
@@ -228,7 +486,10 @@ class ConfigState:
         self._secrets.clear_secret(name)
         return self.secret_status(name)
 
-    def _resolve_secret_value(self, name: str) -> str | None: from disco.core.llm.secret_refs import resolve_provider_secret; return resolve_provider_secret(name, self._secrets)
+    def _resolve_secret_value(self, name: str) -> str | None:
+        from disco.core.llm.secret_refs import resolve_provider_secret
+
+        return resolve_provider_secret(name, self._secrets)
 
     async def test_secret(self, name: str) -> ProbeResult:
         """Probe T4.1: a cheap authenticated call against the OpenAI-compatible
@@ -275,7 +536,16 @@ class ConfigState:
                     "model's api_key_env (Models), then test it there."
                 ),
             )
-        if gate := _origin_wiring.probe_approval_gate(self._store, "model", base_url, provider=provider, secret_ref=name, secrets=self._secrets, require_secret_ref_allowed=True): return gate
+        if gate := _origin_wiring.probe_approval_gate(
+            self._store,
+            "model",
+            base_url,
+            provider=provider,
+            secret_ref=name,
+            secrets=self._secrets,
+            require_secret_ref_allowed=True,
+        ):
+            return gate
         # 2) Decrypt the stored value (or fall back to env).
         value = self._resolve_secret_value(name)
         if not value:
@@ -345,7 +615,10 @@ class ConfigState:
                     detail=f"No base URL set for {provider} — add the service URL above.",
                     provider=provider,
                 )
-            if gate := _origin_wiring.probe_approval_gate(self._store, kind, base_url, provider=provider, secrets=self._secrets): return gate
+            if gate := _origin_wiring.probe_approval_gate(
+                self._store, kind, base_url, provider=provider, secrets=self._secrets
+            ):
+                return gate
             ok, status, detail = await probe_reachable(base_url)
             return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)
         # Paid tiers (tavily / brave / firecrawl): probe the vendor host with the key.
@@ -357,7 +630,16 @@ class ConfigState:
                 detail=f"No endpoint known for provider {provider!r}.",
                 provider=provider,
             )
-        if gate := _origin_wiring.probe_approval_gate(self._store, kind, host, provider=provider, secret_ref=key_env, secrets=self._secrets, require_secret_ref_allowed=True): return gate
+        if gate := _origin_wiring.probe_approval_gate(
+            self._store,
+            kind,
+            host,
+            provider=provider,
+            secret_ref=key_env,
+            secrets=self._secrets,
+            require_secret_ref_allowed=True,
+        ):
+            return gate
         key = self._resolve_secret_value(key_env) if key_env else None
         ok, status, detail = await probe_reachable(host, api_key=key)
         return ProbeResult(ok=ok, status=status, detail=detail, provider=provider)
@@ -457,14 +739,18 @@ class ConfigState:
         (e.g. "gvisor sandbox host ssh://sandbox@<host> unreachable: …") instead of a
         silent failure or a generic 500 later. Bounded by _SANDBOX_PROBE_TIMEOUT_S so a
         dead host fails fast. Never raises for an expected failure — it's a RESULT."""
-        import asyncio
-
         from disco.tools.sandbox import (
             SandboxConfig,
-            SandboxUnavailableError,
+            probe_sandbox_reachability,
+            sandbox_endpoint_label,
             service_from_config,
         )
 
+        # NOTE: this co-located probe only reflects reality when the app-server SHARES the
+        # sandbox host with the run path (dev / single-process). In a split-container deploy
+        # the run path is the AGENT-server (which owns the container socket), so the live UI
+        # probes THERE (routes/sandbox.py) — this path stays for the co-located case + tests.
+        # The classifier is shared (probe_sandbox_reachability) so the two can never drift.
         cfg = SandboxConfig(
             backend=dto.backend,
             docker_socket=dto.docker_socket,
@@ -473,45 +759,17 @@ class ConfigState:
             image=dto.image,
             workspace_root=dto.workspace_root,
         )
-        if dto.backend in ("gvisor", "local"):
-            endpoint = f"{dto.backend} sandbox host {dto.docker_socket}"
-        elif dto.backend == "podman":
-            endpoint = f"podman sandbox host {dto.podman_url}"
-        else:
-            endpoint = f"{dto.backend} sandbox"
-        service = service_from_config(cfg)
+        endpoint = sandbox_endpoint_label(dto.backend, dto.docker_socket, dto.podman_url)
         try:
-            await asyncio.wait_for(service.healthcheck(), self._SANDBOX_PROBE_TIMEOUT_S)
-        except TimeoutError:
+            service = service_from_config(cfg)
+        except Exception as exc:  # noqa: BLE001 — a construction failure is a RESULT
             return ProbeResult(
-                ok=False,
-                status="unreachable",
-                detail=(
-                    f"{endpoint} unreachable: no response within "
-                    f"{self._SANDBOX_PROBE_TIMEOUT_S:.0f}s (the probe timed out)."
-                ),
-                provider=dto.backend,
+                ok=False, status="error", detail=f"{endpoint}: {exc}", provider=dto.backend
             )
-        except SandboxUnavailableError as exc:
-            return ProbeResult(
-                ok=False,
-                status="unreachable",
-                detail=f"{endpoint} unreachable: {exc}",
-                provider=dto.backend,
-            )
-        except Exception as exc:  # noqa: BLE001 — any probe failure is a RESULT, not a 500
-            return ProbeResult(
-                ok=False,
-                status="error",
-                detail=f"{endpoint}: {exc}",
-                provider=dto.backend,
-            )
-        return ProbeResult(
-            ok=True,
-            status="ok",
-            detail=f"{endpoint} is reachable.",
-            provider=dto.backend,
+        ok, status, detail = await probe_sandbox_reachability(
+            service, endpoint, timeout_s=self._SANDBOX_PROBE_TIMEOUT_S
         )
+        return ProbeResult(ok=ok, status=status, detail=detail, provider=dto.backend)
 
     # encoders: bundled-local vs remote (persisted; agent-server honors per request) -
 
@@ -531,7 +789,8 @@ class ConfigState:
                 nli_url=dto.nli_url.strip(),
             )
         )
-        _origin_wiring.approve_encoder_origins(self._store, self._secrets, dto); return _encoders_from(self._store.load())
+        _origin_wiring.approve_encoder_origins(self._store, self._secrets, dto)
+        return _encoders_from(self._store.load())
 
     # TTS: audio-overview toggle / bundled-vs-remote / voices (persisted) --------
 
@@ -555,7 +814,8 @@ class ConfigState:
                 voice_b=dto.voice_b.strip() or "af_bella",
             )
         )
-        _origin_wiring.approve_tts_origin(self._store, self._secrets, dto); return _tts_from(self._store.load())
+        _origin_wiring.approve_tts_origin(self._store, self._secrets, dto)
+        return _tts_from(self._store.load())
 
     # image generation: ComfyUI / OpenAI-compatible / OpenRouter (persisted) ------
 
@@ -582,15 +842,14 @@ class ConfigState:
                 workflow_json=dto.workflow_json.strip(),
             )
         )
-        _origin_wiring.approve_image_gen_origin(self._store, self._secrets, dto); return _image_gen_from(self._store.load())
+        _origin_wiring.approve_image_gen_origin(self._store, self._secrets, dto)
+        return _image_gen_from(self._store.load())
 
     # data sources: web search + extraction provider tiers (persisted) ----------
 
     def data_sources_config(self) -> DataSourcesConfigDTO:
         cfg = self._store.load()
-        return _data_sources_from(
-            cfg, configured_sources=self._configured_research_sources(cfg)
-        )
+        return _data_sources_from(cfg, configured_sources=self._configured_research_sources(cfg))
 
     def update_data_sources_config(self, dto: DataSourcesConfigDTO) -> DataSourcesConfigDTO:
         """Persist the search + extraction provider choices. The agent-server rebuilds
@@ -611,10 +870,9 @@ class ConfigState:
                 api_key_env=dto.extraction_api_key_env.strip(),
             )
         )
-        _origin_wiring.approve_data_source_origins(self._store, self._secrets, dto); cfg = self._store.load()
-        return _data_sources_from(
-            cfg, configured_sources=self._configured_research_sources(cfg)
-        )
+        _origin_wiring.approve_data_source_origins(self._store, self._secrets, dto)
+        cfg = self._store.load()
+        return _data_sources_from(cfg, configured_sources=self._configured_research_sources(cfg))
 
     def _configured_research_sources(self, cfg: RouterConfig) -> list[str]:
         configured: set[str] = set()
@@ -641,7 +899,8 @@ class ConfigState:
                 configured.add(provider)
         return sorted(configured)
 
-    def _approve_data_source_origins(self, dto: DataSourcesConfigDTO) -> None: _origin_wiring.approve_data_source_origins(self._store, self._secrets, dto)
+    def _approve_data_source_origins(self, dto: DataSourcesConfigDTO) -> None:
+        _origin_wiring.approve_data_source_origins(self._store, self._secrets, dto)
 
     # auxiliary-role local fallback (persisted; agent-server reads per request) ---
 
@@ -670,7 +929,10 @@ class ConfigState:
                 api_key_env=api_key_env,
             )
         )
-        _origin_wiring.approve_role_fallback_origin(self._store, self._secrets, dto.enabled, base_url, api_key_env); return _role_fallback_from(self._store.load())
+        _origin_wiring.approve_role_fallback_origin(
+            self._store, self._secrets, dto.enabled, base_url, api_key_env
+        )
+        return _role_fallback_from(self._store.load())
 
     # Live browser (noVNC) toggle (persisted; agent-server reads per request) ------
 
@@ -833,6 +1095,17 @@ class ConfigState:
         except Exception:
             return {}
 
+    def _mcp_config_approvals(self) -> dict[str, dict]:
+        if self._db_conn is None:
+            return {}
+        try:
+            from disco.tools.mcp.migrations import list_mcp_config_approvals
+
+            rows = list_mcp_config_approvals(self._db_conn)
+            return {r["server"]: r for r in rows}
+        except Exception:
+            return {}
+
     def mcp_connections(self) -> list[McpConnectionDTO]:
         """Live pool projection: every configured server + its approval status.
 
@@ -847,6 +1120,7 @@ class ConfigState:
         """
         cfg = self._mcp_config()
         approvals = self._mcp_approvals()
+        config_approvals = self._mcp_config_approvals()
         pending = self._mcp_approval_pending()
         out: list[McpConnectionDTO] = []
         for name, srv in cfg.servers.items():
@@ -856,13 +1130,22 @@ class ConfigState:
                 else srv.get("url", "")
             )
             ap = approvals.get(name)
+            cap = config_approvals.get(name)
             pd = pending.get(name)
+            from disco.tools.mcp.approval import compute_config_hash
+
+            current_config_hash = compute_config_hash({"name": name, **srv})
+            config_pending = cap is None or cap["config_hash"] != current_config_hash
             out.append(
                 McpConnectionDTO(
                     id=name,
                     name=name,
                     url=url,
-                    status=_mcp_live_status(ap),
+                    status=(
+                        "approval_required"
+                        if config_pending or pd is not None or ap is None
+                        else _mcp_live_status(ap)
+                    ),
                     transport=srv.get("transport"),
                     risk_tier=srv.get("risk_tier"),
                     description_hash=ap["description_hash"] if ap else None,
@@ -870,6 +1153,8 @@ class ConfigState:
                     # NEVER recompute here, the backend is the source of
                     # truth. None when the server is in sync.
                     new_description_hash=pd["new_hash"] if pd else None,
+                    config_hash=cap["config_hash"] if cap else None,
+                    new_config_hash=current_config_hash if config_pending else None,
                     approved_at=ap["approved_at"] if ap else None,
                     enabled=srv.get("enabled", True),
                 )
@@ -892,17 +1177,21 @@ class ConfigState:
         servers = {**cfg.servers, body.name: srv}
         new_cfg = cfg.model_copy(update={"servers": servers})
         self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
+        from disco.tools.mcp.approval import compute_config_hash
+
+        config_hash = compute_config_hash({"name": body.name, **srv})
         return McpConnectionDTO(
             id=body.name,
             name=body.name,
             url=body.url,
-            status="disconnected",
+            status="approval_required",
             transport=body.transport,
             risk_tier=body.risk_tier,
             enabled=body.enabled,
+            new_config_hash=config_hash,
         )
 
-    def update_mcp_server(self, name: str, patch: McpServerConfigDTO) -> McpConnectionDTO | None:
+    def update_mcp_server(self, name: str, patch: McpServerPatchDTO) -> McpConnectionDTO | None:
         cfg = self._mcp_config()
         if name not in cfg.servers:
             return None
@@ -914,7 +1203,7 @@ class ConfigState:
             updated["url"] = patch.url
         if patch.enabled is not None:
             updated["enabled"] = patch.enabled
-        if patch.allowed_tools is not None:
+        if "allowed_tools" in patch.model_fields_set:
             updated["allowed_tools"] = patch.allowed_tools
         if patch.risk_tier:
             updated["risk_tier"] = patch.risk_tier
@@ -923,16 +1212,24 @@ class ConfigState:
         self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         approvals = self._mcp_approvals()
         ap = approvals.get(name)
+        config_approvals = self._mcp_config_approvals()
+        cap = config_approvals.get(name)
+        from disco.tools.mcp.approval import compute_config_hash
+
+        current_config_hash = compute_config_hash({"name": name, **updated})
+        config_pending = cap is None or cap["config_hash"] != current_config_hash
         return McpConnectionDTO(
             id=name,
             name=name,
             url=updated.get("url", ""),
-            status=_mcp_live_status(ap),
+            status="approval_required" if config_pending else _mcp_live_status(ap),
             transport=updated.get("transport"),
             risk_tier=updated.get("risk_tier"),
             description_hash=ap["description_hash"] if ap else None,
             approved_at=ap["approved_at"] if ap else None,
             enabled=updated.get("enabled", True),
+            config_hash=cap["config_hash"] if cap else None,
+            new_config_hash=current_config_hash if config_pending else None,
         )
 
     def delete_mcp_server(self, name: str) -> bool:
@@ -945,9 +1242,13 @@ class ConfigState:
         # Also remove the approval row.
         if self._db_conn is not None:
             try:
-                from disco.tools.mcp.migrations import delete_mcp_approval
+                from disco.tools.mcp.migrations import (
+                    delete_mcp_approval,
+                    delete_mcp_config_approval,
+                )
 
                 delete_mcp_approval(self._db_conn, name)
+                delete_mcp_config_approval(self._db_conn, name)
             except Exception:
                 pass
         return True
@@ -959,24 +1260,34 @@ class ConfigState:
             raise KeyError(f"unknown server {name!r}")
         if self._db_conn is None:
             raise RuntimeError("no DB connection for approval persistence")
-        from disco.tools.mcp.migrations import create_mcp_approval, get_mcp_approval
-
-        create_mcp_approval(self._db_conn, name, body.description_hash)
-        ap = get_mcp_approval(self._db_conn, name)
-        srv = cfg.servers[name]; _origin_wiring.approve_mcp_server_origin(self._store, self._secrets, name, srv)
-        return McpConnectionDTO(
-            id=name,
-            name=name,
-            url=srv.get("url", ""),
-            status=_mcp_live_status(ap),
-            transport=srv.get("transport"),
-            risk_tier=srv.get("risk_tier"),
-            description_hash=ap["description_hash"] if ap else None,
-            approved_at=ap["approved_at"] if ap else None,
-            enabled=srv.get("enabled", True),
+        from disco.tools.mcp.approval import compute_config_hash
+        from disco.tools.mcp.migrations import (
+            create_mcp_approval,
+            create_mcp_config_approval,
+            get_mcp_approval_pending,
         )
 
-    def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]: return _origin_wiring.mcp_secret_refs(srv)
+        srv = cfg.servers[name]
+        if body.approval_kind == "config":
+            expected = compute_config_hash({"name": name, **srv})
+            if body.config_hash != expected:
+                raise ValueError("stale or missing MCP configuration hash")
+            create_mcp_config_approval(self._db_conn, name, expected)
+            _origin_wiring.approve_mcp_server_origin(self._store, self._secrets, name, srv)
+        else:
+            pending = get_mcp_approval_pending(self._db_conn, name)
+            if (
+                body.description_hash is None
+                or pending is None
+                or body.description_hash != pending["new_hash"]
+            ):
+                raise ValueError("stale or missing MCP tool-schema hash")
+            create_mcp_approval(self._db_conn, name, body.description_hash)
+
+        return next(c for c in self.mcp_connections() if c.id == name)
+
+    def _mcp_secret_refs(self, srv: dict) -> tuple[str, ...]:
+        return _origin_wiring.mcp_secret_refs(srv)
 
     def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
         """Return old-vs-new hash diff for the approve UI. None = no diff or no

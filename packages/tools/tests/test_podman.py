@@ -86,9 +86,9 @@ class _Volumes:
         self.created: list[str] = []
         self.objects: dict[str, FakeVolume] = {}
 
-    def create(self, name, labels=None):
+    def create(self, name, labels=None, **options):
         self.created.append(name)
-        vol = FakeVolume(name, labels or {})
+        vol = FakeVolume(name, labels or {}, options)
         self.objects[name] = vol
         return vol
 
@@ -104,10 +104,11 @@ class _Volumes:
 
 
 class FakeVolume:
-    def __init__(self, name: str, labels: dict[str, str]) -> None:
+    def __init__(self, name: str, labels: dict[str, str], options: dict) -> None:
         self.name = name
         self.id = "vol-" + name
         self.labels = labels
+        self.options = options
         self.removed = False
         self.remove_kwargs: dict | None = None
 
@@ -174,6 +175,13 @@ class FakeCli:
     def __call__(self, argv, timeout):
         self.calls.append(argv)
         rest = argv[5:]  # after ["podman","--url",url,"exec",name]
+        if rest[0] == "python3" and "DISCO_READ_" in rest[2]:
+            path = rest[3].rstrip("/") + "/" + rest[4]
+            return (
+                (0, self.fs[path], b"")
+                if path in self.fs
+                else (44, b"", b"DISCO_READ_MISSING:no file")
+            )
         if rest[0] == "cat":
             path = rest[-1]
             return (0, self.fs[path], b"") if path in self.fs else (1, b"", b"no file")
@@ -185,6 +193,13 @@ class FakeCli:
             return (0, ("\n".join(names) + "\n").encode() if names else b"", b"")
         if rest[0] == "mkdir":
             return (0, b"", b"")
+        if rest[0] == "stat":
+            path = rest[-1]
+            return (
+                (0, f"{len(self.fs[path])}\n".encode(), b"")
+                if path in self.fs
+                else (1, b"", b"no file")
+            )
         if self.results:
             return self.results.pop(0)
         return (0, b"ok\n", b"")
@@ -212,12 +227,14 @@ async def test_create_exec_close_over_the_socket():
     r = await inst.exec_shell("echo hi", timeout_s=10)
     assert r.stdout == "ok\n" and r.timed_out is False
     assert cli.calls[-1][:5] == ["podman", "--url", svc._cli_url, "exec", f"disco-sbx-{inst.id}"]
-    assert "timeout" in cli.calls[-1]  # in-container timeout wrap
+    assert cli.calls[-1][5:7] == ["python3", "-c"]
+    assert "echo hi" in cli.calls[-1]
     await inst.destroy()
     assert client.last.stopped and client.last.removed
     assert client.last.remove_kwargs == {"force": True, "v": True}
     assert client.volumes.objects[vol].removed is True
     assert client.volumes.objects[vol].labels == {"disco.conversation_id": "c"}
+    assert "size=4096m" in client.volumes.objects[vol].options["driver_opts"]["o"]
 
 
 async def test_never_pulls_when_image_absent():
@@ -235,6 +252,8 @@ async def test_sealed_default_open_when_granted():
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
     )
     assert client.last.create_kwargs["network_mode"] == "bridge"
+    assert next(iter(client.last.create_kwargs["networks"])).startswith("disco-egr-")
+    assert client.networks.created[-1].attrs.get("internal") is True
 
 
 async def test_filtered_podman_spec_uses_proxied_egress_not_sealed():
@@ -390,7 +409,7 @@ def _wire_sandbox_ip(client: FakePodmanClient, ip: str) -> None:
 
 
 async def test_filtered_sidecar_published_with_preview_ports_sandbox_not():
-    from disco.tools.sandbox._container import PUBLISHED_PORTS
+    from disco.tools.sandbox._container import loopback_port_bindings
 
     svc, client, _ = _svc()
     await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
@@ -398,9 +417,9 @@ async def test_filtered_sidecar_published_with_preview_ports_sandbox_not():
     # it's the only member on bridge that CAN publish; the sandbox is internal-only.
     sidecar = client.created[0]
     assert sidecar.name.startswith("disco-egr-")
-    assert sidecar.create_kwargs.get("ports") == {
-        f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)
-    }
+    assert sidecar.create_kwargs.get("ports") == loopback_port_bindings(podman=True)
+    assert sidecar.create_kwargs.get("cap_drop") == ["ALL"]
+    assert sidecar.create_kwargs.get("no_new_privileges") is True
     # The SANDBOX publishes NOTHING (containment).
     assert "ports" not in client.last.create_kwargs
 
@@ -414,9 +433,7 @@ async def test_inbound_forwarder_launched_on_sidecar_via_cli_one_shell():
     # The forwarder is launched on the SIDECAR via the CLI native remote
     # (`podman --url … exec <sidecar> sh -c …`) — podman-py exec_run is broken over
     # the remote API. The command shape mirrors gVisor's FIX6 base64 ONE-SHELL.
-    launched = [
-        c for c in cli.calls if any("inbound_forward.py" in str(a) for a in c)
-    ]
+    launched = [c for c in cli.calls if any("inbound_forward.py" in str(a) for a in c)]
     assert launched, "inbound forwarder was not launched on the sidecar"
     argv = launched[0]
     # Targets the SIDECAR (egress net name), via the proven CLI exec path.
@@ -456,24 +473,26 @@ async def test_expose_port_reads_sidecar_binding_for_filtered():
     inst = await svc.create(_filtered_spec(), owner_id="o", conversation_id="c")
     sidecar, sandbox = client.created[0], client.last
     # The SIDECAR holds the real host-published mapping (it published the ports).
-    sidecar.attrs = {"NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "49160"}]}}}
+    sidecar.attrs = {
+        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "49160"}]}}
+    }
     # A decoy binding on the sandbox must be IGNORED for a filtered box.
     sandbox.attrs.setdefault("NetworkSettings", {})["Ports"] = {
-        "8000/tcp": [{"HostPort": "1"}]
+        "8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "1"}]
     }
     url = inst.expose_port(8000)
-    assert url is not None and url.endswith(":49160"), url  # sidecar's port, not decoy
-    # preview host comes from the remote CLI url (default tailnet host).
-    assert "100.73.110.47" in url, url
+    assert url == "http://127.0.0.1:49160"  # sidecar's port, not decoy
 
 
-async def test_expose_port_reads_sandbox_binding_when_no_sidecar():
+async def test_sealed_sandbox_has_no_sidecar_or_exposed_mapping():
     svc, client, _ = _svc()
-    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")  # sealed
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     assert inst._egress_sidecar is None
-    client.last.attrs = {"NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "33333"}]}}}
+    client.last.attrs = {
+        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "33333"}]}}
+    }
     url = inst.expose_port(8000)
-    assert url is not None and url.endswith(":33333"), url
+    assert url is None
 
 
 def test_preview_host_derived_from_cli_url():

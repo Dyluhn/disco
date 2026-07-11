@@ -92,7 +92,12 @@ class RaisingContainer(_FakeContainerBase):
         raise ConnectionError("docker daemon is gone (simulated)")
 
 
-def _make_inst(container, *, reload_timeout_s: float | None = None) -> ContainerInstance:
+def _make_inst(
+    container,
+    *,
+    reload_timeout_s: float | None = None,
+    spec: SandboxSpec | None = None,
+) -> ContainerInstance:
     """Build a bare `ContainerInstance` for unit-testing the wedge-guard. We
     don't go through `GvisorSandboxService.create` here — the wedge-guard is
     the layer we want to test, in isolation, with the smallest possible setup
@@ -101,7 +106,7 @@ def _make_inst(container, *, reload_timeout_s: float | None = None) -> Container
         id="test-sbx",
         owner_id="o",
         conversation_id="c",
-        spec=SandboxSpec(),
+        spec=spec or SandboxSpec(),
         container=container,
         container_workspace="/workspace",
         stop_timeout_s=5,
@@ -128,7 +133,14 @@ def test_wedge_guard_bounded_for_hung_reload():
     """
     hanging = HangingContainer()
     try:
-        inst = _make_inst(hanging, reload_timeout_s=0.05)
+        # Port discovery is intentionally unavailable for a sealed sandbox.
+        # Give this focused wedge-guard test a networked spec so it reaches
+        # `_resolve_mapping` and exercises the bounded client reload.
+        inst = _make_inst(
+            hanging,
+            reload_timeout_s=0.05,
+            spec=SandboxSpec(public_web=True),
+        )
         # expose_port -> _resolve_mapping -> _safe_reload. On a hung
         # reload, the wedge-guard must raise; `_resolve_mapping` catches
         # that and returns None (no URL), and the caller continues.
@@ -231,7 +243,10 @@ def test_real_death_persists_through_reverify():
 def test_death_reason_helper_never_raises_on_bad_attrs():
     inst = _make_inst(_FakeContainerBase())
     inst._container.attrs = None  # type: ignore[assignment]  — pathological
-    assert inst._death_reason_from_attrs() in ("reason-unavailable", "OOMKilled=None exit=None reason=")
+    assert inst._death_reason_from_attrs() in (
+        "reason-unavailable",
+        "OOMKilled=None exit=None reason=",
+    )
 
 
 def test_wedge_guard_does_not_slow_healthy_clients():
@@ -417,9 +432,16 @@ def _podman_inst(cli_runner):
     from disco.tools.sandbox.podman import PodmanSandboxInstance
 
     return PodmanSandboxInstance(
-        id="sbx", owner_id="o", conversation_id="c", spec=SandboxSpec(),
-        container=object(), container_workspace="/workspace", stop_timeout_s=5,
-        cli_url="unix:///run/podman.sock", container_name="disco-sbx-x", cli_runner=cli_runner,
+        id="sbx",
+        owner_id="o",
+        conversation_id="c",
+        spec=SandboxSpec(),
+        container=object(),
+        container_workspace="/workspace",
+        stop_timeout_s=5,
+        cli_url="unix:///run/podman.sock",
+        container_name="disco-sbx-x",
+        cli_runner=cli_runner,
     )
 
 

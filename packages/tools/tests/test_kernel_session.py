@@ -6,7 +6,26 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from disco.tools.sandbox.kernel import KernelResult, ProcessKernel
+from disco.tools.sandbox.kernel import (
+    _KERNEL_STREAM_CAP,
+    KernelResult,
+    ProcessKernel,
+    _BoundedTextCapture,
+    _cap_kernel_traceback,
+)
+
+
+def test_sw5_kernel_stream_and_traceback_accumulators_are_bounded():
+    capture = _BoundedTextCapture()
+    for _ in range(200):
+        capture.append("x" * 10_000)
+    rendered = capture.render()
+    assert len(rendered) < _KERNEL_STREAM_CAP + 256
+    assert "kernel output truncated" in rendered
+
+    traceback = _cap_kernel_traceback(["E" * 100_000 for _ in range(20)])
+    assert len(traceback) < _KERNEL_STREAM_CAP + 256
+    assert "kernel output truncated" in traceback
 
 
 # 1. Unit tests
@@ -14,12 +33,13 @@ def test_kernel_result_rendering():
     """Test the __str__ method of KernelResult."""
     res = KernelResult(ok=True, stdout="hello", stderr="world", result_repr="42")
     assert str(res) == "hello\nworld\n→ 42"
-    
+
     res = KernelResult(ok=False, stdout="", stderr="", error_traceback="Error!")
     assert str(res) == "Error!"
-    
+
     res = KernelResult(ok=True, stdout="", stderr="", images=[".pmx/plots/0001.png"])
     assert str(res) == "plot saved: .pmx/plots/0001.png"
+
 
 @pytest.mark.asyncio
 async def test_timeout_protocol_state_machine():
@@ -27,25 +47,25 @@ async def test_timeout_protocol_state_machine():
     workspace = "/tmp/test_timeout_mock"
     os.makedirs(workspace, exist_ok=True)
     pk = ProcessKernel(workspace)
-    
+
     # Mock kernel client
     kc = MagicMock()
     kc.get_iopub_msg = AsyncMock()
     kc.get_shell_msg = AsyncMock()
     pk._kc = kc
-    
+
     # Scenario 1: interrupt-succeeds -> intact
     # First call to get_iopub_msg times out (raises Exception)
     # Then interrupt() is called.
     # Then it polls for idle. We'll make it return idle with matching msg_id.
     msg_id = "test_msg_id"
     kc.get_iopub_msg.side_effect = [
-        TimeoutError("timeout"), 
+        TimeoutError("timeout"),
         {
-            "header": {"msg_type": "status"}, 
+            "header": {"msg_type": "status"},
             "content": {"execution_state": "idle"},
-            "parent_header": {"msg_id": msg_id}
-        }
+            "parent_header": {"msg_id": msg_id},
+        },
     ]
     # Need to mock get_shell_msg too for the final success check
     kc.get_shell_msg.return_value = {
@@ -53,32 +73,33 @@ async def test_timeout_protocol_state_machine():
         "content": {"status": "ok"},
     }
     pk.interrupt = AsyncMock()
-    
+
     # Mock execute to return our msg_id
     kc.execute.return_value = msg_id
-    
+
     res = await pk.execute("while True: pass", timeout_s=0.1)
     assert res.timed_out is True
     assert res.restarted is False
     pk.interrupt.assert_called_once()
-    
+
     # Scenario 2: interrupt-hangs -> restart path
     # First call times out.
     # Subsequent calls in the "wait for idle" loop also time out.
     kc.get_iopub_msg.side_effect = TimeoutError("timeout")
     pk.interrupt = AsyncMock()
     pk.restart = AsyncMock()
-    
+
     # Mock time.time to simulate 5 seconds passing quickly
     with patch("time.time") as mock_time:
-        mock_time.side_effect = [100.0, 100.1, 106.0] # start, first check, second check (after 5s)
+        mock_time.side_effect = [100.0, 100.1, 106.0]  # start, first check, second check (after 5s)
         res = await pk.execute("while True: pass", timeout_s=0.1)
-    
+
     assert res.timed_out is True
     assert res.restarted is True
     pk.restart.assert_called_once()
-    
+
     shutil.rmtree(workspace)
+
 
 # 2. Integration tests
 @pytest.mark.integration
@@ -98,6 +119,7 @@ async def test_kernel_integration_state():
     finally:
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -128,7 +150,7 @@ port = s.getsockname()[1]
 """
         res1 = await pk.execute(code1, timeout_s=10)
         assert res1.ok
-        
+
         code2 = """
 t.join()
 s.close()
@@ -141,6 +163,7 @@ s.close()
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
 
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_kernel_integration_interrupt():
@@ -152,16 +175,17 @@ async def test_kernel_integration_interrupt():
     try:
         await pk.start()
         await pk.execute("y = 100", timeout_s=10)
-        
+
         res = await pk.execute("while True: pass", timeout_s=3)
         assert res.timed_out is True
         assert res.restarted is False
-        
+
         res2 = await pk.execute("y", timeout_s=10)
         assert "100" in res2.result_repr
     finally:
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -178,21 +202,22 @@ async def test_kernel_integration_latency():
             await pk.execute(f"data_{i} = list(range(200_000))", timeout_s=10)
             end = time.perf_counter()
             timings.append(end - start)
-        
+
         print("\nCell Index | Time Taken (s)")
         print("-----------|---------------")
         for i, t in enumerate(timings):
             print(f"{i:10d} | {t:.6f}")
-            
+
         m1 = statistics.median(timings[2:12])
         m2 = statistics.median(timings[50:60])
         print(f"\nMedian (2-12): {m1:.6f}")
         print(f"Median (50-60): {m2:.6f}")
-        
+
         assert m2 <= 2 * m1
     finally:
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -219,6 +244,7 @@ plt.show()
         await pk.shutdown()
         shutil.rmtree(workspace, ignore_errors=True)
 
+
 @pytest.mark.asyncio
 async def test_kernel_output_discipline():
     """B2 discipline: big-output -> file + head + marker; small output ->
@@ -226,14 +252,14 @@ async def test_kernel_output_discipline():
     workspace = "/tmp/test_kernel_discipline"
     os.makedirs(workspace, exist_ok=True)
     pk = ProcessKernel(workspace)
-    
+
     # Mock kernel client
     kc = MagicMock()
     kc.execute = MagicMock(return_value="msg_id")
     kc.get_iopub_msg = AsyncMock()
     kc.get_shell_msg = AsyncMock()
     pk._kc = kc
-    
+
     # Mocking successful execution
     kc.get_shell_msg.return_value = {
         "parent_header": {"msg_id": "msg_id"},
@@ -258,14 +284,14 @@ async def test_kernel_output_discipline():
     assert len(res.stdout) < 3000
     assert "[full output: /workspace/.outputs/" in res.stdout
     assert res.stdout.startswith("A" * 500)
-    
+
     # Verify file exists
     outputs_dir = Path(workspace) / ".outputs"
     files = list(outputs_dir.glob("*-out.txt"))
     assert len(files) == 1
     with open(files[0]) as f:
         assert f.read() == big_stdout
-    
+
     # Case 2: Small output
     small_stdout = "hello"
     kc.get_iopub_msg.side_effect = [
@@ -282,7 +308,7 @@ async def test_kernel_output_discipline():
     ]
     res = await pk.execute("print('small')", timeout_s=1)
     assert res.stdout == small_stdout
-    
+
     # Case 3: Traceback (never truncated)
     big_traceback = "E" * 3000
     kc.get_iopub_msg.side_effect = [
@@ -299,5 +325,5 @@ async def test_kernel_output_discipline():
     ]
     res = await pk.execute("raise Error()", timeout_s=1)
     assert res.error_traceback == big_traceback
-    
+
     shutil.rmtree(workspace)

@@ -33,26 +33,21 @@ from disco.core.llm import (
     SecretBox,
     SecretStore,
 )
-from disco.tools.mcp.approval import compute_description_hash
+from disco.tools.mcp.approval import compute_config_hash, compute_description_hash
+from disco.tools.mcp.config import McpServerConfig
 from disco.tools.mcp.migrations import (
     create_mcp_approval,
+    create_mcp_config_approval,
     list_mcp_approval_pending,
     set_mcp_approval_pending,
 )
 
+from packages.tools.tests.mcp_fakes import FAKE_TOOL_DESCRIPTORS
+
 # ---- shared fixtures --------------------------------------------------------
 
 
-_FAKE_SERVER_RAW_TOOLS = [
-    {"name": "echo", "description": "Echo back the message"},
-    {"name": "add", "description": "Add two numbers together"},
-    {"name": "read_file", "description": "Read a file from the server temp dir"},
-    {"name": "list_files", "description": "List files in the temp dir"},
-    {
-        "name": "get_env",
-        "description": "Report this subprocess's view of an env var (SEC-1 leak probe)",
-    },
-]
+_FAKE_SERVER_RAW_TOOLS = FAKE_TOOL_DESCRIPTORS
 _FAKE_SERVER_EXPECTED_HASH = compute_description_hash(_FAKE_SERVER_RAW_TOOLS)
 
 
@@ -88,6 +83,7 @@ def _router_config_with_fake_srv(server_name: str = "fake_e6_srv") -> RouterConf
                     server_name: {
                         "transport": "stdio",
                         "command": _fake_stdio_command(),
+                        "url": "stdio://fake",
                         "risk_tier": SecurityRisk.MEDIUM.value,
                         "enabled": True,
                     }
@@ -95,6 +91,16 @@ def _router_config_with_fake_srv(server_name: str = "fake_e6_srv") -> RouterConf
             },
         }
     )
+
+
+def _server_config_hash(server_name: str = "fake_e6_srv") -> str:
+    cfg = _router_config_with_fake_srv(server_name)
+    srv = McpServerConfig.model_validate({"name": server_name, **cfg.mcp.servers[server_name]})
+    return compute_config_hash(srv)
+
+
+def _approve_server_config(store: SqliteEventStore, server_name: str = "fake_e6_srv") -> None:
+    create_mcp_config_approval(store._conn, server_name, _server_config_hash(server_name))
 
 
 def _runtime_with_mcp(
@@ -107,9 +113,7 @@ def _runtime_with_mcp(
             path=tmp_path / "config.json",
             base_factory=lambda: _router_config_with_fake_srv(server_name),
         ),
-        secret_store=SecretStore(
-            tmp_path / "secrets.json", box=SecretBox(None)
-        ),
+        secret_store=SecretStore(tmp_path / "secrets.json", box=SecretBox(None)),
     )
     return rt
 
@@ -131,9 +135,7 @@ def _config_state(
     return ConfigState(
         config=None,
         store=cfg_store,
-        secrets=SecretStore(
-            tmp_path / "secrets.json", box=SecretBox(None)
-        ),
+        secrets=SecretStore(tmp_path / "secrets.json", box=SecretBox(None)),
         skills=SkillStore(tmp_path / "skills"),
         db_conn=store._conn,
     )
@@ -174,6 +176,7 @@ async def test_e6_real_new_hash_threads_through_pool_db_and_dto(tmp_path):
     store = SqliteEventStore(":memory:")
     # Pre-insert the STALE approval so the pool's hash check raises.
     create_mcp_approval(store._conn, server_name, stale_hash)
+    _approve_server_config(store, server_name)
 
     # The runtime detects drift and writes the AUTHORITATIVE new_hash to the
     # shared table. After start, BOTH the runtime's in-memory
@@ -211,9 +214,7 @@ async def test_e6_real_new_hash_threads_through_pool_db_and_dto(tmp_path):
     #    AUTHORITATIVE new_hash onto McpConnectionDTO.new_description_hash.
     #    No recompute, no stub, no truncation. The frontend's
     #    ApprovalDiff reads this field directly.
-    cfg_state = _config_state(
-        store, tmp_path, server_name, "stdio://fake"
-    )
+    cfg_state = _config_state(store, tmp_path, server_name, "stdio://fake")
     conns = cfg_state.mcp_connections()
     assert len(conns) == 1
     conn = conns[0]
@@ -253,6 +254,7 @@ async def test_e6_unchanged_server_writes_no_drift_row(tmp_path):
     # (`stored != new_hash`) does NOT fire, so `approval_pending()` stays
     # empty and the runtime writes no drift row.
     create_mcp_approval(store._conn, server_name, _FAKE_SERVER_EXPECTED_HASH)
+    _approve_server_config(store, server_name)
 
     rt = _runtime_with_mcp(store, server_name, tmp_path)
     await rt._start_mcp_pool()
@@ -279,19 +281,14 @@ async def test_e6_unchanged_server_writes_no_drift_row(tmp_path):
         #    this server. (We assert on the shared DB — the same one the
         #    app-server reads.)
         rows = list_mcp_approval_pending(store._conn)
-        assert rows == [], (
-            f"mcp_approval_pending must be empty when hashes match; "
-            f"got {rows!r}"
-        )
+        assert rows == [], f"mcp_approval_pending must be empty when hashes match; got {rows!r}"
     finally:
         await rt._close_mcp_pool()
 
     # 4) UI contract: the DTO has `new_description_hash = None` so the
     #    frontend does NOT show an ApprovalDiff banner (the
     #    `c.new_description_hash` guard in McpSection.tsx is what hides it).
-    cfg_state = _config_state(
-        store, tmp_path, server_name, "stdio://fake"
-    )
+    cfg_state = _config_state(store, tmp_path, server_name, "stdio://fake")
     conns = cfg_state.mcp_connections()
     assert len(conns) == 1
     conn = conns[0]
@@ -302,17 +299,12 @@ async def test_e6_unchanged_server_writes_no_drift_row(tmp_path):
     )
 
 
-# ---- TEST 3 (negative): a brand-new server (no approval row) has no drift ---
+# ---- TEST 3: a brand-new server refuses before connect -----------------------
 
 
 @pytest.mark.asyncio
-async def test_e6_first_time_server_writes_no_drift_row(tmp_path):
-    """E6 — when there is NO prior approval row (first-time setup), the
-    pool starts without a drift row and the DTO has `description_hash=None`
-    and `new_description_hash=None`. The operator must explicitly approve
-    to seed the first stored hash; the UI's Re-approve affordance is
-    hidden in that case.
-    """
+async def test_e6_first_time_server_requires_config_approval(tmp_path):
+    """W4 — a first-time server surfaces config approval without spawning."""
     server_name = "fake_e6_srv"
     store = SqliteEventStore(":memory:")
     # No create_mcp_approval — first-time setup.
@@ -321,20 +313,24 @@ async def test_e6_first_time_server_writes_no_drift_row(tmp_path):
     await rt._start_mcp_pool()
     try:
         assert rt._mcp_pool is not None
-        assert rt._mcp_pool.server_status()[server_name] == "connected"
-        assert rt._mcp_pool.approval_pending() == {}
-        assert rt.mcp_approval_state() == {}
+        assert rt._mcp_pool.server_status()[server_name] == "approval_required"
+        pending = rt._mcp_pool.approval_pending()[server_name]
+        assert pending["kind"] == "config"
+        assert pending["old_hash"] == ""
+        assert pending["new_hash"] == _server_config_hash(server_name)
+        assert rt.mcp_approval_state()[server_name] == pending
+        # Config drift is derived directly from the saved config and its
+        # separate approval ledger; it must not pollute the tool-schema table.
         assert list_mcp_approval_pending(store._conn) == []
     finally:
         await rt._close_mcp_pool()
 
-    cfg_state = _config_state(
-        store, tmp_path, server_name, "stdio://fake"
-    )
+    cfg_state = _config_state(store, tmp_path, server_name, "stdio://fake")
     conns = cfg_state.mcp_connections()
     assert len(conns) == 1
     assert conns[0].description_hash is None
     assert conns[0].new_description_hash is None
+    assert conns[0].new_config_hash == _server_config_hash(server_name)
 
 
 # ---- TEST 4 (positive, focused): the app-server READS the drift row --------
@@ -358,6 +354,7 @@ def test_e6_app_server_projects_authoritative_new_hash_from_drift_row(
     store = SqliteEventStore(":memory:")
     # Operator previously approved the old hash.
     create_mcp_approval(store._conn, server_name, _FAKE_SERVER_EXPECTED_HASH)
+    _approve_server_config(store, server_name)
     # The agent-server detected drift and wrote a pending row.
     authoratitive_new = "a" * 64  # a clearly distinct, hand-rolled value
     set_mcp_approval_pending(
@@ -367,9 +364,7 @@ def test_e6_app_server_projects_authoritative_new_hash_from_drift_row(
         new_hash=authoratitive_new,
     )
 
-    cfg_state = _config_state(
-        store, tmp_path, server_name, "stdio://fake"
-    )
+    cfg_state = _config_state(store, tmp_path, server_name, "stdio://fake")
     conns = cfg_state.mcp_connections()
     assert len(conns) == 1
     conn = conns[0]
@@ -402,10 +397,9 @@ async def test_e6_stale_drift_row_replaced_with_fresh_authoritative_value(
     stale_new = "b" * 64  # value a previous, crashed session wrote
     store = SqliteEventStore(":memory:")
     create_mcp_approval(store._conn, server_name, "f" * 64)
+    _approve_server_config(store, server_name)
     # Pre-seed a stale drift row.
-    set_mcp_approval_pending(
-        store._conn, server_name, old_hash="f" * 64, new_hash=stale_new
-    )
+    set_mcp_approval_pending(store._conn, server_name, old_hash="f" * 64, new_hash=stale_new)
     # Sanity: the stale row is in the table.
     rows = list_mcp_approval_pending(store._conn)
     assert len(rows) == 1

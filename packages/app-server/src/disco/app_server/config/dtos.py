@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ModelDTO(BaseModel):
@@ -22,7 +22,7 @@ class ModelDTO(BaseModel):
     price_out_per_m: float
     # W-05: pay model — "metered" | "subscription" | "free". None → the frontend
     # derives it from price/provider for back-compat (price 0 → free, else metered).
-    pricing_mode: Literal["metered", "subscription", "free"] | None = None
+    pricing_mode: Literal["metered", "subscription", "free", "unknown"] | None = None
     capabilities: list[str]
     note: str | None = None
     # raw editable fields (so the edit form prefills the real config, not a view):
@@ -49,7 +49,7 @@ class ModelUpsert(BaseModel):
     price_out_per_m: float = 0.0
     # W-05: how the user pays — threaded so an edited/added subscription model keeps
     # its mode. None → derive (back-compat); not surfaced as free for "subscription".
-    pricing_mode: Literal["metered", "subscription", "free"] | None = None
+    pricing_mode: Literal["metered", "subscription", "free", "unknown"] | None = None
 
 
 class OpenRouterModelDTO(BaseModel):
@@ -79,6 +79,63 @@ class OpenRouterKeyStatus(BaseModel):
 
 class OpenRouterKeyBody(BaseModel):
     key: str
+
+
+ProviderKind = Literal["openai-compat", "anthropic", "gemini"]
+
+
+class ProviderDTO(BaseModel):
+    id: str
+    label: str
+    base_url: str
+    kind: ProviderKind
+    secret_name: str
+    has_key: bool
+
+
+class ProviderPresetDTO(BaseModel):
+    id: str
+    label: str
+    base_url: str
+    kind: ProviderKind
+    requires_base_url: bool = False
+
+
+class ProviderCreate(BaseModel):
+    label: str
+    base_url: str
+    kind: ProviderKind
+    api_key: str
+
+
+class ProviderPatch(BaseModel):
+    label: str | None = None
+    base_url: str | None = None
+    kind: ProviderKind | None = None
+    api_key: str | None = None
+
+
+class ProviderMutationResult(BaseModel):
+    provider: ProviderDTO
+    catalogue_ok: bool
+    catalogue_error: str | None = None
+
+
+class ProviderCatalogueModelDTO(BaseModel):
+    model_id: str
+    label: str
+    context_window: int | None = None
+    price_in_per_m: float | None = None
+    price_out_per_m: float | None = None
+    capabilities: list[str] = []
+
+
+class ProviderEnableBody(BaseModel):
+    model_id: str
+    label: str | None = None
+    # Required when the provider's catalogue doesn't report a context window —
+    # silently defaulting (the old 8192) poisons the engine's context budgeting.
+    context_window: int | None = None
 
 
 class SecretBody(BaseModel):
@@ -353,20 +410,33 @@ class SkillCreate(BaseModel):
 
 
 class McpServerConfigDTO(BaseModel):
-    """POST/PATCH body for creating or updating an MCP server."""
+    """POST body for creating an MCP server."""
 
-    name: str
+    name: str = Field(pattern=r"^[a-z0-9_]+$")
     url: str
-    transport: str = "stdio"  # "stdio" | "streamable_http"
+    transport: Literal["stdio", "streamable_http"] = "stdio"
     enabled: bool = True
     allowed_tools: list[str] | None = None
-    risk_tier: str = "medium"
+    risk_tier: Literal["unknown", "low", "medium", "high"] = "medium"
+
+
+class McpServerPatchDTO(BaseModel):
+    """PATCH body; omitted fields must never reset security-sensitive config."""
+
+    name: str | None = Field(default=None, pattern=r"^[a-z0-9_]+$")
+    url: str | None = None
+    transport: Literal["stdio", "streamable_http"] | None = None
+    enabled: bool | None = None
+    allowed_tools: list[str] | None = None
+    risk_tier: Literal["unknown", "low", "medium", "high"] | None = None
 
 
 class McpServerApproveDTO(BaseModel):
-    """POST body for approve/re-approve — carries the new description hash."""
+    """Approve either pre-connect config or discovered tool schemas."""
 
-    description_hash: str
+    approval_kind: Literal["config", "tools"] = "tools"
+    config_hash: str | None = None
+    description_hash: str | None = None
 
 
 class McpConnectionDTO(BaseModel):
@@ -383,6 +453,8 @@ class McpConnectionDTO(BaseModel):
     # the changed tool set — not a stub of the stored hash. None when the
     # server is in sync (no drift) or has never been approved (first connect).
     new_description_hash: str | None = None
+    config_hash: str | None = None
+    new_config_hash: str | None = None
     approved_at: str | None = None  # ISO-8601
     enabled: bool | None = None
 

@@ -17,18 +17,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import shlex
 
 import pytest
 from disco.tools.sandbox.port_owner import port_owner
 from disco.tools.sandbox.process import ProcessSandboxService
 from disco.tools.sandbox.session import SandboxSession
 
-_PORT = 8188  # free on dev hosts; NOT 8000 (the agent-server owns that here)
+_PORT = 18188  # NOT 8000 (agent-server) and NOT 8188 — ComfyUI's default on dev hosts
 
 
 # ---------------------------------------------------------------------------
 # A4 unit test — no tmux required; fake service + monkeypatched ensure_preview
 # ---------------------------------------------------------------------------
+
 
 class _FakeSandboxInstance:
     """Minimal in-memory SandboxInstance — no filesystem, no subprocess."""
@@ -40,6 +42,7 @@ class _FakeSandboxInstance:
 
     async def exec_shell(self, cmd: str, *, timeout_s: int):
         from disco.tools.sandbox.base import ExecResult
+
         return ExecResult(exit_code=0, stdout="/tmp/fake-workspace", stderr="")
 
     async def read_file(self, path: str) -> bytes:
@@ -129,7 +132,10 @@ async def test_destroy_closes_cached_preview_manager():
 
     session = SandboxSession(_FakeSvc(), conversation_id="conv-pmgr-leak")
     mgr = PreviewManager(
-        session, port_pool=[8188], health_attempts=1, health_interval_s=0.0,
+        session,
+        port_pool=[8188],
+        health_attempts=1,
+        health_interval_s=0.0,
         supervise_interval_s=0.01,
     )
     mgr._ensure_supervisor()  # spin up the supervisor task (as a real start would)
@@ -142,6 +148,44 @@ async def test_destroy_closes_cached_preview_manager():
 
     assert mgr._closed is True
     assert sup.done(), "supervisor task must be cancelled/done after destroy()"
+
+
+@pytest.mark.asyncio
+async def test_static_preview_shell_serializes_model_authored_serve_dir(monkeypatch):
+    """A filename-shaped shell payload remains one argv element on restart."""
+    session = SandboxSession(_FakeSvc(), conversation_id="conv-sw5-preview")
+    instance = _FakeSandboxInstance()
+    session._instance = instance
+    malicious = "/tmp/work/x; touch /tmp/sw5-pwned #"
+
+    async def _no_owner(_instance, _port):
+        return None
+
+    async def _serve_dir(_instance, _workspace):
+        return malicious
+
+    captured = []
+
+    async def _exec(name, command, exec_dir):
+        captured.append((name, command, exec_dir))
+        return None
+
+    monkeypatch.setattr("disco.tools.sandbox.port_owner.port_owner", _no_owner)
+    session._detect_serve_dir = _serve_dir  # type: ignore[method-assign]
+    session.sessions.exec = _exec  # type: ignore[method-assign]
+
+    assert await session.ensure_preview(8000) is True
+    assert len(captured) == 1
+    name, command, exec_dir = captured[0]
+    assert name == "preview" and exec_dir == malicious
+    assert shlex.split(command) == [
+        "python3",
+        "-m",
+        "http.server",
+        "8000",
+        "-d",
+        malicious,
+    ]
 
 
 @pytest.mark.integration

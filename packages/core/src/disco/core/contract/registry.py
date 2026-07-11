@@ -24,6 +24,36 @@ from .models import (
 )
 
 
+# CONTRACT-ACTIVATE harvest (2026-07-10, harness/build_soak/harvest_scopes.py over
+# 35 live soak dossiers): the original 3-tool packs would have DENIED the bulk of
+# real site-building work — shell 143×/30 runs, file_write 42×/18, browser 19×/12,
+# file_insert_lines, file_append, shell_exec, code_exec, run_project_script,
+# context_memory, delegate_explore. For raw-file kinds the file tools ARE the
+# medium (there is no semantic-tool layer to protect, unlike AppKit), so the packs
+# carry the full evidenced working set; the contract's enforcement value here is
+# the read-only VERIFY phase + cross-kind hygiene (deck/doc/app_* tools stay out).
+# codex follow-ups: file_edit in BOOTSTRAP (an artifact-mode "targeted change to
+# an uploaded file" edits before any authoring — CUSTOM always allowed this);
+# scaffold_starter in EDIT + REPAIR (any bootstrap-pack success — even a
+# context_memory list — advances the phase, and the starter must not be
+# stranded behind that flip; the tool is no-clobber, so late calls are safe).
+_SITE_BOOTSTRAP_TOOLS = (
+    "scaffold_starter", "file_write", "file_edit", "preview_start", "shell",
+    "context_memory", "image_generate",
+)
+_SITE_EDIT_TOOLS = (
+    "file_edit", "file_replace_lines", "file_insert_lines", "file_append",
+    "file_write", "shell", "shell_exec", "shell_kill_process", "browser",
+    "code_exec", "run_project_script", "context_memory", "image_generate",
+    "delegate_explore", "scaffold_starter",
+)
+_SITE_REPAIR_TOOLS = (
+    "file_write", "file_edit", "file_replace_lines", "file_insert_lines",
+    "file_append", "shell", "shell_exec", "shell_kill_process", "browser",
+    "context_memory", "scaffold_starter",
+)
+
+
 def _static_site() -> BuildContract:
     return BuildContract(
         kind=ContractKind.STATIC_SITE,
@@ -31,8 +61,8 @@ def _static_site() -> BuildContract:
             kind=ContractKind.STATIC_SITE, required_files=("index.html",), starter_kit="app_shell"
         ),
         # P7: scaffold_starter materializes the app_shell starter; file_write builds it out.
-        bootstrap=ToolPack(name="static.site.bootstrap", tools=("scaffold_starter", "file_write", "preview_start")),
-        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",)),
+        bootstrap=ToolPack(name="static.site.bootstrap", tools=_SITE_BOOTSTRAP_TOOLS),
+        edit=EditContract(edit_tools=_SITE_EDIT_TOOLS, repair_tools=_SITE_REPAIR_TOOLS),
         verify=VerificationContract(finalizer="ready_for_static_site_verification"),
         export=ExportContract(name="static_standalone", pipeline=("preflight", "bundle", "validate", "deliver")),
         prompt_pack="build_static_site",
@@ -119,9 +149,10 @@ def _interactive_prototype() -> BuildContract:
         artifact=ArtifactContract(
             kind=ContractKind.INTERACTIVE_PROTOTYPE, required_files=("index.html",), starter_kit="app_shell"
         ),
-        # P7: scaffold_starter materializes the app_shell starter; file_write builds it out.
-        bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=("scaffold_starter", "file_write", "preview_start")),
-        edit=EditContract(edit_tools=("file_edit", "file_replace_lines")),
+        # Raw-file kind: same evidenced working set as static.site (see the
+        # harvest note above) — prototypes/games are shell/browser-heavy too.
+        bootstrap=ToolPack(name="interactive.prototype.bootstrap", tools=_SITE_BOOTSTRAP_TOOLS),
+        edit=EditContract(edit_tools=_SITE_EDIT_TOOLS, repair_tools=_SITE_REPAIR_TOOLS),
         verify=VerificationContract(finalizer="ready_for_prototype_verification"),
         prompt_pack="build_interactive_prototype",
         ui_card="PrototypeCard",
@@ -140,12 +171,17 @@ def _workflow_output() -> BuildContract:
 
 
 def _custom() -> BuildContract:
-    # the escape hatch: broad tools + rewrite allowed; the generic artifact finalizer.
+    # The escape hatch: broad tools + rewrite allowed; the generic artifact
+    # finalizer. CUSTOM is what every UNMAPPED build runs through, so its packs
+    # must be the BROADEST — the first live audited wave (2026-07-10) showed its
+    # old 2-tool edit pack would-denying 24 shell calls in one ordinary run.
     return BuildContract(
         kind=ContractKind.CUSTOM,
         artifact=ArtifactContract(kind=ContractKind.CUSTOM),
-        bootstrap=ToolPack(name="custom.bootstrap", tools=("file_write", "file_edit", "shell")),
-        edit=EditContract(edit_tools=("file_edit", "file_replace_lines"), repair_tools=("file_write",), rewrite_allowed=True),
+        bootstrap=ToolPack(name="custom.bootstrap", tools=_SITE_BOOTSTRAP_TOOLS),
+        edit=EditContract(
+            edit_tools=_SITE_EDIT_TOOLS, repair_tools=_SITE_REPAIR_TOOLS, rewrite_allowed=True
+        ),
         verify=VerificationContract(finalizer="ready_for_artifact_verification"),
         ui_card="ArtifactCard",
     )
@@ -160,6 +196,35 @@ _BUILTINS = (
     _workflow_output,
     _custom,
 )
+
+# CONTRACT-ACTIVATE (2026-07-10): BuildBrief.app_kind → ContractKind. The brief
+# classifier's vocabulary (core.appkit.build_brief._APP_KINDS — plain strings, no
+# import needed here) maps CONSERVATIVELY: only kinds the browser-artifact
+# contracts genuinely fit. api/cli/data_tool/mobile_app and "unknown" stay
+# UNMAPPED → the CUSTOM escape hatch, exactly as before activation — a wrong
+# contract (its required_files + finalizer) is worse than no contract.
+# NARROWED further after codex review (2026-07-10): app_kind is MEDIUM-BLIND —
+# "text-based terminal game in Python" classifies `game`, "PowerPoint deck about
+# ecommerce trends" classifies `ecommerce` — and a wrongly-mapped browser
+# contract's required_files can mis-gate finish (index.html becomes a
+# dictated-content candidate). Only kinds whose CLASSIFIER KEYWORDS are
+# intrinsically web-medium stay mapped: landing_page/blog ("landing page",
+# "portfolio", "blog", "content site") and web_app ("web app", "website",
+# "saas", "page"). game/dashboard/chat_app/ecommerce → CUSTOM: they lose the
+# starter RECOMMENDATION but keep full catalog access via explicit `kind`.
+APP_KIND_TO_CONTRACT: dict[str, ContractKind] = {
+    "landing_page": ContractKind.STATIC_SITE,
+    "blog": ContractKind.STATIC_SITE,
+    "web_app": ContractKind.INTERACTIVE_PROTOTYPE,
+}
+
+
+def contract_kind_for_app_kind(app_kind: str | None) -> ContractKind | None:
+    """The declared contract kind for a classified BuildBrief.app_kind, or None
+    when the kind has no confident contract mapping (→ stay CUSTOM)."""
+    if not app_kind:
+        return None
+    return APP_KIND_TO_CONTRACT.get(app_kind.strip().lower())
 
 
 class BuildContractRegistry:

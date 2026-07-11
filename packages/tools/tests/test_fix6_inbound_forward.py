@@ -29,7 +29,7 @@ import threading
 import pytest
 from disco.tools.sandbox import GvisorSandboxService, SandboxConfig, SandboxSpec
 from disco.tools.sandbox import inbound_forward as inbf
-from disco.tools.sandbox._container import PUBLISHED_PORTS, USER_PORTS
+from disco.tools.sandbox._container import PUBLISHED_PORTS, USER_PORTS, loopback_port_bindings
 from test_gvisor import FakeContainer, FakeDockerClient
 
 
@@ -57,7 +57,7 @@ async def test_filtered_sidecar_created_with_published_preview_ports(tmp_path):
     # internal-only and runsc can't hot-plug a NIC).
     sidecar = client.runs[0]
     published = sidecar.run_kwargs.get("ports")
-    assert published == {f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)}, published
+    assert published == loopback_port_bindings(), published
     # The SANDBOX, by contrast, publishes NOTHING (containment).
     assert client.last.run_kwargs.get("ports") is None
 
@@ -130,23 +130,42 @@ async def test_resolve_mapping_reads_sidecar_binding_when_filtered(tmp_path):
     )
     sidecar, sandbox = client.runs[0], client.runs[1]
     # The SIDECAR holds the real host-published mapping (it published the ports).
-    sidecar.attrs = {"NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "49160"}]}}}
+    sidecar.attrs = {
+        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "49160"}]}}
+    }
     # A decoy binding on the sandbox must be IGNORED for a filtered box.
-    sandbox.attrs = {"NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "1"}]}}}
+    sandbox.attrs = {
+        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "1"}]}}
+    }
 
     url = inst.expose_port(8000)
     assert url is not None
-    assert url.endswith(":49160"), url  # the SIDECAR's port, not the sandbox decoy
+    assert url == "http://127.0.0.1:49160"  # the SIDECAR's port, not the sandbox decoy
 
 
-async def test_resolve_mapping_reads_sandbox_binding_when_no_sidecar(tmp_path):
+async def test_sealed_sandbox_refuses_decoy_binding_without_sidecar(tmp_path):
     svc, client = _svc(tmp_path)
-    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")  # sealed → no sidecar
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     assert inst._egress_sidecar is None
     sandbox = client.last
-    sandbox.attrs = {"NetworkSettings": {"Ports": {"8000/tcp": [{"HostPort": "33333"}]}}}
+    sandbox.attrs = {
+        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "33333"}]}}
+    }
     url = inst.expose_port(8000)
-    assert url is not None and url.endswith(":33333"), url
+    assert url is None
+
+
+async def test_resolve_mapping_refuses_nonloopback_daemon_binding(tmp_path):
+    svc, client = _svc(tmp_path)
+    inst = await svc.create(
+        SandboxSpec(public_web=True),
+        owner_id="o",
+        conversation_id="c",
+    )
+    inst._egress_sidecar.attrs = {
+        "NetworkSettings": {"Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "33333"}]}}
+    }
+    assert inst.expose_port(8000) is None
 
 
 async def test_resolve_mapping_returns_none_when_no_binding(tmp_path):

@@ -35,6 +35,13 @@ def _runtime(store: SqliteEventStore, *, build_kernel: str = "disco") -> types.S
     fake._run_generation = {}
     fake._emit_toolscope_audit_summary = MagicMock()
     fake.kick = MagicMock()
+    # CONTRACT-ACTIVATE: send_user_turn declares the contract from the brief
+    # before kernel dispatch — a no-op collaborator here (pinning seam only).
+    fake.activate_contract_for_brief = MagicMock()
+    # CONTRACT-DURABILITY: send_user_turn folds any persisted declaration first —
+    # same no-op collaborator treatment (the fold is proven in
+    # test_build_contract_activation.py, not at this pinning seam).
+    fake._fold_contract_from_history = AsyncMock()
 
     control = MagicMock()
     control.confirm = AsyncMock()
@@ -203,6 +210,7 @@ def _finalize_fake(store: SqliteEventStore) -> types.SimpleNamespace:
     fake._run_generation = {}
     fake._last_status = {}
     fake._nonterminal_rekicks = {}
+    fake._last_rekick_progress_seq = {}  # STUCK-fix watermark, popped at finalize
 
     async def _no_auto_resume(cid, status, generation):
         return False

@@ -49,6 +49,7 @@ from disco.core import (
     StatusEvent,
     ToolCall,
     ToolResult,
+    VerifierStartedEvent,
     VerifierVerdictEvent,
     WorkspaceRestoredEvent,
     render_skills_for_prompt,
@@ -261,9 +262,7 @@ class _ToolScopeAuditRecorder:
         if decision.allowed:
             return
         phase_value = phase.value
-        self.would_denies_by_phase[phase_value] = (
-            self.would_denies_by_phase.get(phase_value, 0) + 1
-        )
+        self.would_denies_by_phase[phase_value] = self.would_denies_by_phase.get(phase_value, 0) + 1
         logger.info(
             "toolscope audit would-deny conversation=%s phase=%s tool=%s reason=%s",
             self.conversation_id,
@@ -367,6 +366,7 @@ class _MCPToolWrapper:
                 error=str(exc),
             )
 
+
 class _MetaToolSearchWrapper:
     """Wraps the tool_search meta-tool with the full MCP tool list for searching.
 
@@ -395,6 +395,20 @@ class _MetaToolSearchWrapper:
         return ToolOutcome(success=True, content=content, structured={"results": results})
 
 
+def _mcp_base_risk_by_tool(tools: list[ToolDef]) -> dict[str, SecurityRisk]:
+    """Project operator-configured MCP risk tiers into the live analyzer map.
+
+    Keeping this as a named seam makes H5 testable and prevents a future MCP
+    registry refactor from silently falling back to name-based risk inference.
+    """
+    risks: dict[str, SecurityRisk] = {}
+    for tool in tools:
+        risk = getattr(tool, "base_risk", None)
+        if isinstance(risk, SecurityRisk):
+            risks[tool.name] = risk
+    return risks
+
+
 def _apply_mcp_scope(
     executor: DefaultToolExecutor,
     all_mcp_tools: list,
@@ -415,11 +429,24 @@ def _apply_mcp_scope(
 
     mcp_names = frozenset(t.name for t in all_mcp_tools)
     non_mcp_allowed = executor._scope.allowed_tools
+    # Preserve any pre-existing advertise/callable split (e.g. scaffold_starter
+    # withheld when no starter kit resolves — codex four-fix review defect #1):
+    # the over-cap advertised rebuild below must start from what was ADVERTISED,
+    # not from the wider allowed set, or it silently re-advertises withheld tools.
+    non_mcp_advertised = (
+        executor._scope.advertised_tools
+        if executor._scope.advertised_tools is not None
+        else non_mcp_allowed
+    )
 
     # Extend the security allowlist: ALL MCP tools are callable by qualified name.
-    executor._scope = executor._scope.model_copy(
-        update={"allowed_tools": non_mcp_allowed | mcp_names}
-    )
+    # When a pre-existing advertise split is in place, extend IT too — under the
+    # cap every MCP tool is meant to be visible, and an untouched explicit
+    # advertised set would silently hide them all (complement of defect #1).
+    scope_update: dict[str, Any] = {"allowed_tools": non_mcp_allowed | mcp_names}
+    if executor._scope.advertised_tools is not None:
+        scope_update["advertised_tools"] = non_mcp_advertised | mcp_names
+    executor._scope = executor._scope.model_copy(update=scope_update)
     for tdef in all_mcp_tools:
         executor._registry.register(_MCPToolWrapper(tdef, call_target))
 
@@ -428,16 +455,13 @@ def _apply_mcp_scope(
         from disco.tools.mcp.tool_search import meta_tool_search
 
         ts_def = meta_tool_search()
-        all_tool_descs = [
-            {"name": t.name, "description": t.description}
-            for t in all_mcp_tools
-        ]
+        all_tool_descs = [{"name": t.name, "description": t.description} for t in all_mcp_tools]
         executor._registry.register(_MetaToolSearchWrapper(ts_def, all_tool_descs))
         # tool_search must be in allowed_tools (callable) and advertised_tools (visible).
         executor._scope = executor._scope.model_copy(
             update={
                 "allowed_tools": executor._scope.allowed_tools | {"tool_search"},
-                "advertised_tools": non_mcp_allowed | {"tool_search"},
+                "advertised_tools": non_mcp_advertised | {"tool_search"},
             }
         )
     elif executor._scope.advertised_tools is not None:
@@ -477,10 +501,29 @@ def _has_unfinished_plan(events: list) -> bool:
     if not has_plan:
         return False
     has_finished = any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
-        for e in events
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in events
     )
     return not has_finished
+
+
+def effective_local_runtime(backend: str, runtime: str) -> str:
+    """The OCI runtime the `local` (Docker/Podman socket) backend ACTUALLY runs under.
+
+    DISCO_LOCAL_RUNTIME is the deployment knob for it — set it to `runsc` on a gVisor
+    host so config-driven local sandboxes actually run under gVisor. It was previously
+    honored ONLY on the DISCO_SANDBOX override path (__main__), so with the compose
+    default (DISCO_SANDBOX unset → config-driven) it was SILENTLY IGNORED and local
+    sandboxes ran under plain runc despite the operator asking for runsc (found live
+    2026-07-09). Scoped to `local` (the runtime isn't user-selectable in Settings for it,
+    so this can't clash with a UI choice); gVisor/podman carry their own runtimes.
+
+    Shared by the run path (`build_sandbox_service`) AND the Settings 'Test connection'
+    probe (`probe_sandbox_config`) so they build the SAME runtime — otherwise Test
+    connection validates `runc` (the DTO default) and false-greens on a runsc-only host
+    while the real run path (runsc) fails its `_require_runtime` healthcheck."""
+    if backend == "local":
+        return disco_env("LOCAL_RUNTIME", runtime) or runtime
+    return runtime
 
 
 def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
@@ -488,11 +531,12 @@ def build_sandbox_service(settings: SandboxSettings) -> SandboxService:
     that knows the backend↔config mapping (settings drive the active backend). Podman is
     real, verified backend code, but a STUB in THIS environment (VM 202 destroyed) — it
     constructs but isn't live/verifiable here; completed at the Meta deployment."""
+    runtime = effective_local_runtime(settings.backend, settings.runtime)
     cfg = SandboxConfig(
         backend=settings.backend,
         docker_socket=settings.docker_socket,
         podman_url=settings.podman_url,
-        runtime=settings.runtime,
+        runtime=runtime,
         image=settings.image,
         workspace_root=settings.workspace_root,
         # the host previews are reachable at — set PMX_PREVIEW_HOST to a LAN/tailnet IP so
@@ -677,7 +721,10 @@ def _release_process_memory() -> None:
 
     gc.collect()
     if (os.environ.get("DISCO_DR_MALLOC_TRIM") or "1").strip().lower() in (
-        "0", "off", "false", "none",
+        "0",
+        "off",
+        "false",
+        "none",
     ):
         return
     try:
@@ -690,6 +737,12 @@ def _release_process_memory() -> None:
             trim(0)
     except (OSError, AttributeError, ValueError):  # non-glibc / unavailable
         pass
+
+
+def _default_in_catalog(default: str | None, models: list[dict[str, object]]) -> str | None:
+    """Only highlight a default the returned catalog actually contains — a stale
+    assignment (model removed/renamed) must not point the UI at a ghost entry."""
+    return default if any(m["id"] == default for m in models) else None
 
 
 class ConversationRuntime:
@@ -789,6 +842,10 @@ class ConversationRuntime:
         self._build_contract_registry = BuildContractRegistry.default()
         self._build_kind: dict[str, str] = {}
         self._build_trackers: dict[str, tuple[BuildContract, BuildPhaseTracker]] = {}
+        # CONTRACT-DURABILITY: conversations whose contract fold-on-load already ran
+        # this process (positive OR negative outcome). Prevents re-reading the event
+        # log on every turn of long chat conversations that never declared a brief.
+        self._contract_fold_attempted: set[str] = set()
         # REL-3 audit mode keeps its observe-only tracker separate from the
         # authoritative build tracker so turning the flag on cannot change delivery
         # mode/finalizer/starter-kit behavior in the default build path.
@@ -871,6 +928,12 @@ class ConversationRuntime:
         # transient drop, then terminalize honestly to STUCK so a wedged build is
         # VISIBLE, never RUNNING forever. Reset whenever a run reaches a real status.
         self._nonterminal_rekicks: dict[str, int] = {}
+        # Progress watermark for the non-terminal re-kick budget: the highest
+        # seq of a SUCCESSFUL PRODUCTIVE action we'd seen at the last non-terminal
+        # return. A long, working iteration ends non-terminal across many turn
+        # boundaries; only a NO-PROGRESS wedge should terminalize to STUCK, so a
+        # new productive action since the last re-kick resets the budget.
+        self._last_rekick_progress_seq: dict[str, int] = {}
         # [W-48 P1] Last status a run task ENDED at, per cid (in-process). The sync
         # `_evict_stale_backend` (called at kick) can't await the store, so it reads
         # this to SKIP a conversation PARKED at a gate — evicting a gated conv on a
@@ -937,9 +1000,7 @@ class ConversationRuntime:
         self._mcp = McpManager(self)
         # Share surface (RP-06): scrubbed bundle export/import + revocable
         # share-link issuance. Stateless; wired with the store + resolvers.
-        self._share = ShareService(
-            self._store, self._surface_of, self._project_store_now
-        )
+        self._share = ShareService(self._store, self._surface_of, self._project_store_now)
         # Resume path (DC-05b/c): trailing-degeneracy condensation + resume-context
         # reconstruction + the resume_conversation orchestrator. Reaches live
         # runtime state via a back-reference. See resume_service.py.
@@ -1135,9 +1196,7 @@ class ConversationRuntime:
         the long-horizon engine; Research stays read-only + ungated. Idempotent
         until the loop is built. PERSISTED so a server restart cannot demote a
         Build/DR conversation to the toolless research default (DC-05 re-run #7)."""
-        self._surface[conversation_id] = (
-            surface if surface in self._VALID_SURFACES else "research"
-        )
+        self._surface[conversation_id] = surface if surface in self._VALID_SURFACES else "research"
         self._save_surfaces()
 
     def _surface_of(self, conversation_id: str) -> str:
@@ -1220,6 +1279,60 @@ class ConversationRuntime:
             return self._injected_sandbox
         return build_sandbox_service(self._config_store.load().sandbox)
 
+    async def probe_active_sandbox(self) -> tuple[bool, str, str]:
+        """Reachability of the ACTIVE (persisted) sandbox backend — probed HERE, on the
+        agent-server, because this is the process that actually runs sandboxes (it owns
+        the container socket; the app-server does not). Uses the SAME service the run
+        path builds (`_sandbox_service_now`), so the banner and a real run can never
+        disagree. Returns (reachable, backend, detail). Never raises."""
+        from disco.tools.sandbox import probe_sandbox_reachability, sandbox_endpoint_label
+
+        settings = self._config_store.load().sandbox
+        try:
+            service = self._sandbox_service_now()
+        except Exception as exc:  # noqa: BLE001 — a construction failure is a RESULT
+            endpoint = sandbox_endpoint_label(
+                settings.backend, settings.docker_socket, settings.podman_url
+            )
+            return False, settings.backend, f"{endpoint}: {exc}"
+        # Report the ACTIVE backend the service ACTUALLY probes, not the persisted config:
+        # a DISCO_SANDBOX override injects a service that can differ from Settings, so
+        # trust the service being probed (service.name) so the banner names the real one.
+        backend = getattr(service, "name", settings.backend) or settings.backend
+        endpoint = sandbox_endpoint_label(backend, settings.docker_socket, settings.podman_url)
+        ok, _status, detail = await probe_sandbox_reachability(service, endpoint)
+        return ok, backend, ("" if ok else detail)
+
+    async def probe_sandbox_config(self, settings: SandboxSettings) -> tuple[bool, str, str]:
+        """Probe a GIVEN sandbox config (the Settings 'Test connection' preflight, before
+        it is saved) — same environment + classifier as the active-backend probe.
+        Returns (ok, status, detail). Never raises."""
+        from disco.tools.sandbox import (
+            SandboxConfig,
+            probe_sandbox_reachability,
+            sandbox_endpoint_label,
+            service_from_config,
+        )
+
+        endpoint = sandbox_endpoint_label(
+            settings.backend, settings.docker_socket, settings.podman_url
+        )
+        try:
+            cfg = SandboxConfig(
+                backend=settings.backend,
+                docker_socket=settings.docker_socket,
+                podman_url=settings.podman_url,
+                # Same env-effective runtime the run path uses (build_sandbox_service),
+                # so 'Test connection' can't false-green under a runsc-only host.
+                runtime=effective_local_runtime(settings.backend, settings.runtime),
+                image=settings.image,
+                workspace_root=settings.workspace_root,
+            )
+            service = service_from_config(cfg)
+        except Exception as exc:  # noqa: BLE001 — construction failure is a RESULT
+            return False, "error", f"{endpoint}: {exc}"
+        return await probe_sandbox_reachability(service, endpoint)
+
     def _driver_context_window(self) -> int | None:
         """The context window of the model currently assigned to AGENT_DRIVER, for
         A-S1's model-aware condensation threshold. Best-effort: None on any lookup
@@ -1260,8 +1373,12 @@ class ConversationRuntime:
             cfg = self._config_store.load()
             key = cfg.model_for(ModelRole.AGENT_DRIVER)
             entry = cfg.entry_for(key)
-            if entry and entry.base_url and self._origin_approved(
-                entry.base_url, f"model:{entry.provider}", entry.api_key_env
+            if (
+                entry
+                and entry.base_url
+                and self._origin_approved(
+                    entry.base_url, f"model:{entry.provider}", entry.api_key_env
+                )
             ):
                 if not secret_ref_allowed_for_origin(entry.api_key_env, entry.base_url):
                     return
@@ -1410,6 +1527,154 @@ class ConversationRuntime:
 
     # ---- CONTRACT-ACTIVATE: build contract + live phase ---------------------
 
+    def activate_contract_for_brief(
+        self, conversation_id: str, build_brief: BuildBrief | None
+    ) -> None:
+        """CONTRACT-ACTIVATE (2026-07-10): declare the build contract from the
+        classified BuildBrief — the production caller set_build_kind never had.
+
+        FIRST DECLARATION WINS: once a kind is set for a conversation it is never
+        re-declared here, so a mid-run steer message (which also carries a brief)
+        cannot reset the phase tracker or evict a live loop. Unmapped/unknown
+        app_kinds leave the conversation on the CUSTOM contract exactly as before
+        activation existed. What this turns on for a mapped build: the contract's
+        starter-kit RECOMMENDATION (scaffold_starter's omitted-kind fallback), the
+        verification finalizer alias, the delivery-mode label, and honest
+        kind-resolved audit — NOT hard tool enforcement, which remains an
+        artifact-mode-only wiring (see the executor guard selection)."""
+        if build_brief is None or conversation_id in self._build_kind:
+            return
+        from disco.core.contract import ContractKind, contract_kind_for_app_kind
+
+        kind = contract_kind_for_app_kind(getattr(build_brief, "app_kind", None))
+        # An UNMAPPED brief records the CUSTOM sentinel (codex defect #2): without
+        # it, "first declaration wins" was false for unmapped kinds — a LATER
+        # mapped brief could re-declare mid-conversation and reset the trackers
+        # under a live pinned run. CUSTOM resolves to the same contract the
+        # no-declaration path always used, so behavior is otherwise unchanged;
+        # only the first-wins guarantee becomes real.
+        self.set_build_kind(conversation_id, (kind or ContractKind.CUSTOM).value)
+
+    async def _fold_contract_from_history(self, conversation_id: str) -> None:
+        """CONTRACT-DURABILITY (2026-07-10): restore a restarted process's contract
+        identity + phase from the persisted event log.
+
+        `_build_kind` / `_build_trackers` are process-local, so an agent-server
+        restart mid-build silently dropped the declared contract (codex four-fix
+        review, residual #4) — the resumed run continued contract-less until the
+        next brief-bearing turn. The durable record already exists: every brief-
+        bearing turn persists the ENVIRONMENT `<build_brief>` MessageEvent, tool
+        outcomes persist as Action/Observation pairs, and host verify outcomes
+        persist as `VerifierVerdictEvent`s. This fold replays them:
+
+        * kind — the FIRST persisted brief's `app_kind`, through the SAME
+          `contract_kind_for_app_kind` → CUSTOM-sentinel mapping activation uses,
+          so a fold can never disagree with what activation would have declared
+          (first-wins holds across restarts).
+        * phase — successful tool calls through `BuildPhaseTracker.note_tool_success`
+          and pass/fail verdicts through `note_verifier_result`, in event order —
+          the exact transition inputs the live run feeds.
+
+        Runs at most once per process per conversation (`_contract_fold_attempted`);
+        no-ops for conversations that never declared a brief, and for build-like
+        surfaces only. Never raises: a fold failure degrades to today's behavior
+        (contract-less until the next brief), logged for the audit trail."""
+        if conversation_id in self._build_kind or conversation_id in self._contract_fold_attempted:
+            return
+        if self._surface_of(conversation_id) not in self._BUILD_LIKE_SURFACES:
+            return
+        # Mark BEFORE the await so a concurrent second turn doesn't double-fold;
+        # a failure below unmarks so a later turn may retry.
+        self._contract_fold_attempted.add(conversation_id)
+        try:
+            events = await self._store.get_events(conversation_id)
+        except Exception:  # noqa: BLE001 — degrade to contract-less, never block the turn
+            self._contract_fold_attempted.discard(conversation_id)
+            _LOG.warning(
+                "contract fold: event read failed for %s; continuing contract-less",
+                conversation_id,
+                exc_info=True,
+            )
+            return
+
+        from .build_messages import parse_build_brief_content
+
+        app_kind: str | None = None
+        brief_seq = -1
+        for i, ev in enumerate(events):
+            if isinstance(ev, MessageEvent) and ev.source == EventSource.ENVIRONMENT:
+                payload = parse_build_brief_content(ev.message.content, meta=ev.meta)
+                if payload is not None:
+                    raw = payload.get("app_kind")
+                    app_kind = raw if isinstance(raw, str) else None
+                    brief_seq = i
+                    break  # FIRST brief wins, matching activate_contract_for_brief
+        if app_kind is None:
+            return  # never declared — identical to today's no-brief behavior
+
+        from disco.core.contract import ContractKind, contract_kind_for_app_kind
+
+        # NOTE (codex review, accepted residuals): (a) only app_kind is durable, so a
+        # mapping change across a DEPLOY re-resolves it under the new version's opinion
+        # (finding #6 — deliberate: the mapping is code, not conversation state);
+        # (b) the attempted-marker is not a lock — with today's synchronous SQLite
+        # get_events the fold cannot interleave with a concurrent sender (finding #9,
+        # latent for alternate stores only); (c) this is one O(N) full-log scan, once
+        # per process per conversation, the same cost class as the resume seam's own
+        # get_state/get_events materializations (finding #10).
+        kind = contract_kind_for_app_kind(app_kind) or ContractKind.CUSTOM
+        # A restarted process has no cached loop for this conversation, so the
+        # eviction inside set_build_kind is a no-op there; if a loop WAS lazily
+        # built contract-less before this fold ran, the same guarded eviction
+        # rebakes it exactly as a live activation would.
+        self.set_build_kind(conversation_id, kind.value)
+        # Phase replay ONLY where live wiring records phase: the artifact-mode
+        # executor is the one path that wires on_tool_success to the AUTHORITATIVE
+        # tracker (codex finding #2) — a normal build's tracker never advances live,
+        # so folding one would restore a phase the process never had.
+        if not self._effective_artifact_mode(conversation_id):
+            _LOG.info(
+                "contract fold: %s restored kind=%s (kind-only: not an artifact run)",
+                conversation_id,
+                kind.value,
+            )
+            return
+        self._build_scope_guard(conversation_id)
+        entry = self._build_trackers.get(conversation_id)
+        if entry is None:  # non-artifact surface guard declined — kind alone stands
+            return
+        tracker = entry[1]
+        actions: dict[str, str] = {}
+        # Replay starts AFTER the declaration (codex finding #1): live activation
+        # creates a fresh BOOTSTRAP tracker at declaration time, so pre-brief tool
+        # successes / verdicts never advanced it.
+        for ev in events[brief_seq + 1 :]:
+            if isinstance(ev, ActionEvent):
+                actions[ev.id] = ev.tool_call.tool_name
+            elif isinstance(ev, ObservationEvent):
+                if ev.tool_result.success:
+                    tool = actions.get(ev.action_id)
+                    if tool:
+                        tracker.note_tool_success(tool)
+            elif isinstance(ev, VerifierStartedEvent):
+                # The finalizer alias is canonicalized to `finish` before the event
+                # log (codex finding #4) — the durable VERIFY marker is the verifier
+                # START event, same edge note_finalizer_called drives live.
+                tracker.note_finalizer_called()
+            elif isinstance(ev, VerifierVerdictEvent):
+                verdict = str(ev.verdict) if ev.verdict is not None else None
+                if verdict is not None:
+                    # Live parity (codex finding #3): the verify hook treats EVERY
+                    # non-pass verdict (incl. unavailable/unverifiable) as not-passed.
+                    tracker.note_verifier_result(passed=verdict == "pass")
+        _LOG.info(
+            "contract fold: %s restored kind=%s phase=%s from %d events",
+            conversation_id,
+            kind.value,
+            tracker.current().value,
+            len(events),
+        )
+
     def set_build_kind(self, conversation_id: str, kind: str | None) -> None:
         """Declare the build contract kind for a conversation (e.g. 'appkit.leadgen').
         Unset/None ⇒ the CUSTOM contract. Resets any existing tracker for the run."""
@@ -1419,6 +1684,13 @@ class ConversationRuntime:
             self._build_kind.pop(conversation_id, None)
         self._build_trackers.pop(conversation_id, None)
         self._build_audit_trackers.pop(conversation_id, None)
+        # The executor bakes contract-derived state at build time (the starter-kit
+        # ToolContext stamp + the scaffold_starter advertise split), so a cached
+        # loop/executor would keep serving the OLD contract after activation
+        # (codex four-fix review defect #2). Reuse the settings-change eviction:
+        # guarded against live runs, and it re-parks the live sandbox session so
+        # the rebuilt loop adopts the SAME workspace.
+        self._evict_loop_for_model_change(conversation_id)
 
     def expected_delivery_mode(self, conversation_id: str) -> str | None:
         """P5: the host-owned delivery SHAPE ("app"|"files") the conversation's build
@@ -1447,6 +1719,13 @@ class ConversationRuntime:
             return None
         self._build_scope_guard(conversation_id)  # resolve + cache (contract, tracker)
         return self._build_trackers[conversation_id][0].artifact.starter_kit
+
+    # NOTE (2026-07-09): the interim `_narrow_scope_for_starter` advertising
+    # withhold was removed the same day it landed — scaffold_starter is now a
+    # catalog tool (the model picks the kind; the contract's kit is only the
+    # omitted-kind fallback), so it works on every build and the false
+    # affordance it papered over no longer exists. The generic advertise-split
+    # preservation in _apply_mcp_scope stays: weak-tier withheld tools rely on it.
 
     def _finalizer_alias_for(self, conversation_id: str) -> str | None:
         """P6: the contract's verification finalizer to advertise as a `finish` alias —
@@ -1500,12 +1779,7 @@ class ConversationRuntime:
         self.note_build_verify_result(conversation_id, passed=passed)
 
         path = posixpath.normpath(str(event.artifact_path or "").strip())
-        if (
-            path in ("", ".")
-            or path.startswith("/")
-            or path == ".."
-            or path.startswith("../")
-        ):
+        if path in ("", ".") or path.startswith("/") or path == ".." or path.startswith("../"):
             logger.info(
                 "host verify canary skipped manifest stamp for %s: invalid artifact path %r",
                 conversation_id,
@@ -1725,6 +1999,7 @@ class ConversationRuntime:
             ),
             tracker.note_tool_success,
         )
+
     # ---- last-selected model (P3) — delegators to RuntimeSettings -----------
 
     def get_last_selected_model(self) -> str | None:
@@ -1791,7 +2066,7 @@ class ConversationRuntime:
             default = cfg.model_for(ModelRole.AGENT_DRIVER)
         except Exception:  # noqa: BLE001 — no assignment → no default highlight
             default = None
-        return {"models": models, "default": default}
+        return {"models": models, "default": _default_in_catalog(default, models)}
 
     def _retrieval_handlers(self) -> dict[str, Any]:
         """Lazily build the search/extract capability handlers from the research
@@ -1904,9 +2179,7 @@ class ConversationRuntime:
             )
         return executor
 
-    async def execute_pi_tool(
-        self, conversation_id: str, tool_call: ToolCall
-    ) -> ToolResult:
+    async def execute_pi_tool(self, conversation_id: str, tool_call: ToolCall) -> ToolResult:
         """[D2] Execute ONE externally-driven (Pi sidecar) tool call against this
         conversation's executor, MIRRORING ``observe.execute_and_observe``'s
         Action→Observation pairing: append an ``ActionEvent``, run the executor
@@ -1956,9 +2229,9 @@ class ConversationRuntime:
     ) -> SandboxSpec:
         """The egress-posture spec for a Build sandbox. FILTERED by default
         (BP-G10: build boxes get the allowlisting proxy now that E8 wired the
-        proxy on every backend — gVisor, podman, local). Open only when
-        PMX_BUILD_EGRESS=open is set explicitly (an escape hatch for debug
-        / dev when a real network is genuinely required). Used both by
+        proxy on every backend — gVisor, podman, local). The legacy
+        PMX_BUILD_EGRESS=open value widens to arbitrary public web through the
+        same private-denying boundary; it never selects a raw bridge. Used both by
         _compose_build_loop and upload_session so pending sessions and build
         sessions share the same spec.
 
@@ -1966,18 +2239,52 @@ class ConversationRuntime:
         (SUPERSET, not replacement) — the pre-existing registry hosts AND the MCP
         hosts both survive (rung B egress-proxy routing)."""
         if surface == "agent":
-            egress = disco_env("AGENT_EGRESS", "open").lower().strip()
+            # S-W5: the browser gets the public web, not a raw bridge. The
+            # public posture is carried separately so backends must place it
+            # behind the private/non-global-denying sidecar.
+            egress = disco_env("AGENT_EGRESS", "public").lower().strip()
         else:
             egress = disco_env("BUILD_EGRESS", "filtered").lower().strip()
         if egress == "filtered":
             base_allow = REGISTRY_EGRESS_ALLOW
             if mcp_egress_hosts:
                 base_allow = frozenset(base_allow | mcp_egress_hosts)
-            return self._sandbox_spec.model_copy(update={"egress_allow": base_allow})
-        # Open mode grants full NETWORK — there is no allowlist to union MCP hosts
-        # into; they are already reachable. mcp_egress_hosts only matters under
-        # filtered posture (above).
-        spec_update = {"permitted": self._sandbox_spec.permitted | {Capability.NETWORK}}
+            return self._sandbox_spec.model_copy(
+                update={
+                    "egress_allow": base_allow,
+                    "public_web": False,
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+                }
+            )
+        if egress == "public":
+            return self._sandbox_spec.model_copy(
+                update={
+                    "egress_allow": frozenset(),
+                    "public_web": True,
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+                }
+            )
+        if egress in {"sealed", "none"}:
+            return self._sandbox_spec.model_copy(
+                update={
+                    "egress_allow": frozenset(),
+                    "public_web": False,
+                    "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+                }
+            )
+        if egress not in {"open", "raw"}:
+            raise ValueError(
+                f"invalid {surface.upper()}_EGRESS={egress!r}; expected one of "
+                "filtered, public, sealed, open, or raw"
+            )
+        # Legacy open/raw configuration is retained as a compatibility alias for
+        # public-web-only. No runtime setting grants a model-controlled sandbox
+        # the daemon's raw bridge.
+        spec_update = {
+            "permitted": self._sandbox_spec.permitted - {Capability.NETWORK},
+            "public_web": True,
+            "egress_allow": frozenset(),
+        }
         return self._sandbox_spec.model_copy(update=spec_update)
 
     def upload_session(self, conversation_id: str) -> SandboxSession:
@@ -2041,8 +2348,14 @@ class ConversationRuntime:
         # re-read of the directory. Create a fresh session only when there is none.
         session = self._pending_sessions.pop(conversation_id, None)
         if session is None:
+            egress_surface = self._surface_of(conversation_id)
+            if self._effective_artifact_mode(conversation_id):
+                # Artifact builds do not need the agent browser's arbitrary
+                # public web. Keep them on the finite registry allowlist even
+                # when entered from the general-agent surface.
+                egress_surface = "build"
             sandbox_spec = self._build_sandbox_spec(
-                surface=self._surface_of(conversation_id),
+                surface=egress_surface,
                 mcp_egress_hosts=self._mcp_egress_hosts(),
             )
             if sealed_workflow_run is not None:
@@ -2052,6 +2365,7 @@ class ConversationRuntime:
                         "egress_allow": frozenset(
                             sealed_workflow_run.definition.policies.egress_allow
                         ),
+                        "public_web": False,
                     }
                 )
             session = SandboxSession(
@@ -2088,9 +2402,7 @@ class ConversationRuntime:
         _audit_on = toolscope_audit_enabled()
         if _art_mode:
             _audit_observer = (
-                self._toolscope_audit_recorder(conversation_id).record
-                if _audit_on
-                else None
+                self._toolscope_audit_recorder(conversation_id).record if _audit_on else None
             )
             _scope_guard, _on_tool_success = self._build_scope_guard(
                 conversation_id, observer=_audit_observer
@@ -2182,9 +2494,7 @@ class ConversationRuntime:
             def _workflow_mcp_tool_names(
                 registry: ToolRegistry = workflow_registry,
             ) -> frozenset[str]:
-                return frozenset(
-                    name for name in registry.names() if name.startswith("mcp__")
-                )
+                return frozenset(name for name in registry.names() if name.startswith("mcp__"))
 
             if _workflow_router_mode:
                 for tool in workflow_router_tools(
@@ -2287,6 +2597,7 @@ class ConversationRuntime:
             except Exception:
                 pass  # best-effort; WS frame emission is not critical
         self._executors[conversation_id] = executor
+        _mcp_risks = _mcp_base_risk_by_tool(all_mcp_tools)
         # P6: the contract's verification finalizer, advertised as a per-kind alias of
         # `finish`. Bound on BOTH the loop (dispatch/advertisement/requery) and the agent
         # (batched-call selection); guard the agent hook for test fakes that don't have it.
@@ -2309,25 +2620,26 @@ class ConversationRuntime:
         if sealed_workflow_run is not None:
             assert _workflow_phase is not None
             assert _workflow_phase.compiled_run_scope is not None
-            _sealed_plan_gated = (
-                "submit_plan" in _workflow_phase.compiled_run_scope.allowed_tools
+            _sealed_plan_gated = "submit_plan" in _workflow_phase.compiled_run_scope.allowed_tools
+            _sealed_planning_tools = (
+                frozenset({"submit_plan", "file_list", "file_read", "search", "extract", "think"})
+                & _workflow_phase.compiled_run_scope.allowed_tools
             )
-            _sealed_planning_tools = frozenset(
-                {"submit_plan", "file_list", "file_read", "search", "extract", "think"}
-            ) & _workflow_phase.compiled_run_scope.allowed_tools
             return AgentLoop(
                 conversation_id,
                 self._store,
                 agent,
                 executor,
                 router,
-                RuleBasedAnalyzer(),
-                NeverConfirm(),
+                RuleBasedAnalyzer(_mcp_risks),
+                # Sandboxed workflow actions remain frictionless, while any
+                # HIGH-risk MCP tool (host/in-process by definition) reaches
+                # the human gate. NeverConfirm here would nullify W4's honest
+                # execution-scope label for sealed workflows.
+                BlastRadiusConfirm(),
                 LLMSummarizingCondenser(context_window=self._driver_context_window()),
                 RouterSummarizer(router),
-                mode=OperatingMode.PLANNING
-                if _sealed_plan_gated
-                else OperatingMode.INTERACTIVE,
+                mode=OperatingMode.PLANNING if _sealed_plan_gated else OperatingMode.INTERACTIVE,
                 planning_tools=_sealed_planning_tools if _sealed_plan_gated else frozenset(),
                 autonomous=True,
                 model_policy=model_policy,
@@ -2353,10 +2665,12 @@ class ConversationRuntime:
                 agent,
                 executor,
                 router,
-                RuleBasedAnalyzer(),
-                # No per-action approval for artifact ops — confinement + narrow scope
-                # are the blast-radius controls (NeverConfirm mirrors Research surface).
-                NeverConfirm(),
+                RuleBasedAnalyzer(_mcp_risks),
+                # Artifact-native sandbox operations still auto-approve. Host
+                # MCP actions use their configured risk tier and can gate;
+                # treating them as ordinary confined artifact ops would be a
+                # false security boundary.
+                BlastRadiusConfirm(),
                 LLMSummarizingCondenser(context_window=self._driver_context_window()),
                 RouterSummarizer(router),
                 # INTERACTIVE: no plan-gate; artifact authoring starts immediately.
@@ -2371,11 +2685,9 @@ class ConversationRuntime:
                 host_verifier_verdict_hook=host_verify_canary_hook,
                 host_verify_authoritative=host_verify_authoritative_enabled(),
             )
-        _analyzer = (
-            RuleBasedAnalyzer({"request_custom_build": SecurityRisk.HIGH})
-            if _appkit_mode
-            else RuleBasedAnalyzer()
-        )
+        if _appkit_mode:
+            _mcp_risks["request_custom_build"] = SecurityRisk.HIGH
+        _analyzer = RuleBasedAnalyzer(_mcp_risks)
         _planning_tools = frozenset(
             # read/explore + plan + `think`. `think` is a pure NO-OP reasoning
             # scratchpad (read_only=True, no side effect), so it belongs among
@@ -2502,9 +2814,7 @@ class ConversationRuntime:
         # callback an exception escaping loop.run() killed the task silently and left the
         # conversation at RUNNING forever (the silent hang Dylan hit).
         task.add_done_callback(
-            lambda t, _cid=conversation_id, _gen=generation: self._on_run_task_done(
-                _cid, t, _gen
-            )
+            lambda t, _cid=conversation_id, _gen=generation: self._on_run_task_done(_cid, t, _gen)
         )
 
     def _create_run_task(
@@ -2549,7 +2859,11 @@ class ConversationRuntime:
             ConversationStatus.AWAITING_USER_QUESTION,
         }
     )
-    _MAX_NONTERMINAL_REKICKS = 1
+    # Consecutive NO-PROGRESS non-terminal returns tolerated before STUCK. The
+    # counter resets whenever a run makes a new successful productive action
+    # (see `_finalize_clean_return`), so a long, working iteration never trips it
+    # — only a genuine no-progress wedge accrues toward this cap.
+    _MAX_NONTERMINAL_REKICKS = 3
 
     # Statuses at which a run is BETWEEN turns (terminal or idle) — the kernel pin
     # is released so the next run re-resolves the current selection (finding #1).
@@ -2588,9 +2902,7 @@ class ConversationRuntime:
             # W2 only handled the exception case, so this sat at RUNNING forever
             # (the silent MiniMax-build hang). Reconcile it (re-kick once, else STUCK).
             with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-                asyncio.create_task(
-                    self._finalize_clean_return(conversation_id, generation)
-                )
+                asyncio.create_task(self._finalize_clean_return(conversation_id, generation))
             return
         # An exception escaped loop.run(). Schedule (best-effort) a terminal ERROR.
         # Thread the run-generation (finding #3) so the crash terminalizer — like the
@@ -2598,9 +2910,7 @@ class ConversationRuntime:
         # since reused the pin (it pops `_tasks` before scheduling this async cleanup, so
         # a fresh user turn can start generation N+1 in the window).
         with contextlib.suppress(RuntimeError):  # no running loop (shutdown) → skip
-            asyncio.create_task(
-                self._terminalize_crashed(conversation_id, exc, generation)
-            )
+            asyncio.create_task(self._terminalize_crashed(conversation_id, exc, generation))
 
     async def _maybe_rekick_for_stranded_followup(self, conversation_id: str) -> None:
         """Engine-rekick fix. A follow-up appended while a run is FINALIZING is
@@ -2624,9 +2934,7 @@ class ConversationRuntime:
         try:
             events = await self._store.get_events(conversation_id)
         except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
-            logger.exception(
-                "post-terminal re-kick could not read events for %s", conversation_id
-            )
+            logger.exception("post-terminal re-kick could not read events for %s", conversation_id)
             return
         if not signals.has_unprocessed_user_message(events):
             return  # clean finish, no stranded follow-up → nothing to recover
@@ -2715,10 +3023,7 @@ class ConversationRuntime:
         """
         if status != ConversationStatus.PAUSED:
             return False
-        if (
-            generation is not None
-            and self._run_generation.get(conversation_id) != generation
-        ):
+        if generation is not None and self._run_generation.get(conversation_id) != generation:
             return False
         surface = self._surface_of(conversation_id)
         if surface not in self._BUILD_LIKE_SURFACES:
@@ -2753,9 +3058,7 @@ class ConversationRuntime:
                 conversation_id,
                 MessageEvent(
                     source=EventSource.ENVIRONMENT,
-                    message=LLMMessage(
-                        role="user", content=_ACTIONLESS_AUTO_RESUME_NUDGE
-                    ),
+                    message=LLMMessage(role="user", content=_ACTIONLESS_AUTO_RESUME_NUDGE),
                 ),
             )
         elif pause_count == 2:
@@ -2793,13 +3096,12 @@ class ConversationRuntime:
         # tell a gate-parked conv (don't evict — preserve its mid-gate workspace) from
         # a truly idle/finished one (safe to evict).
         self._last_status[conversation_id] = status
-        if await self._maybe_auto_resume_actionless_pause(
-            conversation_id, status, generation
-        ):
+        if await self._maybe_auto_resume_actionless_pause(conversation_id, status, generation):
             return
         if status in self._CONCLUDED_STATUSES or status in self._RUN_PARKED_STATUSES:
             # Healthy ending → reset the per-cid re-kick budget for the next segment.
             self._nonterminal_rekicks.pop(conversation_id, None)
+            self._last_rekick_progress_seq.pop(conversation_id, None)
             if status in self._CONCLUDED_STATUSES or status is ConversationStatus.IDLE:
                 self._emit_toolscope_audit_summary(conversation_id, status)
             # A run that ended between turns (done/errored/stuck/idle) releases the
@@ -2828,19 +3130,45 @@ class ConversationRuntime:
             return
         # Still RUNNING (the loop emits RUNNING at entry and only leaves it by emitting
         # a different status): the turn ended without concluding.
+        # Progress-reset: a long, WORKING iteration ends non-terminal across many
+        # turn boundaries (each continuation returns RUNNING before the next kick).
+        # Reset the wedge budget whenever a NEW successful productive action landed
+        # since the last non-terminal return — only a run making NO progress across
+        # `_MAX_NONTERMINAL_REKICKS` returns is genuinely wedged. Reads/browser
+        # probes are NOT productive (see signals), so a read-only spin still STUCKs.
+        try:
+            events = await self._store.get_events(conversation_id)
+            successful = signals.successful_action_ids(events)
+            last_prod_seq = max(
+                (
+                    (event.seq or 0)
+                    for event in events
+                    if signals.is_successful_productive_action(event, successful)
+                ),
+                default=0,
+            )
+        except Exception:  # noqa: BLE001 — supervision is best-effort, never re-raise
+            last_prod_seq = self._last_rekick_progress_seq.get(conversation_id, 0)
+        if last_prod_seq > self._last_rekick_progress_seq.get(conversation_id, 0):
+            self._nonterminal_rekicks[conversation_id] = 0  # forward progress → not wedged
+        self._last_rekick_progress_seq[conversation_id] = last_prod_seq
+
         attempts = self._nonterminal_rekicks.get(conversation_id, 0)
         if attempts < self._MAX_NONTERMINAL_REKICKS:
             self._nonterminal_rekicks[conversation_id] = attempts + 1
             logger.warning(
-                "run task for %s returned at %s without concluding; re-kicking once "
-                "(silent-stall recovery)",
+                "run task for %s returned at %s without concluding; re-kicking "
+                "(silent-stall recovery, no-progress attempt %d/%d)",
                 conversation_id,
                 status.value,
+                attempts + 1,
+                self._MAX_NONTERMINAL_REKICKS,
             )
             self.kick(conversation_id)
             return
         # Already re-kicked and STILL non-terminal → stop spinning, mark STUCK honestly.
         self._nonterminal_rekicks.pop(conversation_id, None)
+        self._last_rekick_progress_seq.pop(conversation_id, None)
         try:
             # Re-read under the (rare) race where the re-kick concluded between checks.
             state = await self._store.get_state(conversation_id)
@@ -2897,8 +3225,7 @@ class ConversationRuntime:
                 (
                     e.seq or 0
                     for e in events
-                    if isinstance(e, StatusEvent)
-                    and e.status is ConversationStatus.FINISHED
+                    if isinstance(e, StatusEvent) and e.status is ConversationStatus.FINISHED
                 ),
                 default=0,
             )
@@ -2994,9 +3321,7 @@ class ConversationRuntime:
                 continue
             if state.execution_status is not ConversationStatus.RUNNING:
                 continue
-            logger.warning(
-                "stranded RUNNING conversation %s (no live task) — reconciling", cid
-            )
+            logger.warning("stranded RUNNING conversation %s (no live task) — reconciling", cid)
             with contextlib.suppress(Exception):
                 await self._finalize_clean_return(cid)
             acted += 1
@@ -3022,10 +3347,7 @@ class ConversationRuntime:
             # kicked while this stale crash cleanup was scheduled. The check + the ERROR
             # append below are separated only by synchronous statements (no await), so a
             # newer run can never slip in between the guard and the append.
-            if (
-                generation is not None
-                and self._run_generation.get(conversation_id) != generation
-            ):
+            if generation is not None and self._run_generation.get(conversation_id) != generation:
                 return  # a newer run owns this conversation — the crash is stale, drop it
             if state.execution_status in self._CONCLUDED_STATUSES:
                 return  # already concluded — don't clobber
@@ -3385,9 +3707,7 @@ class ConversationRuntime:
                 reconciled += 1
         return reconciled
 
-    async def _run_with_persistence(
-        self, conversation_id: str, loop: AgentLoop
-    ) -> Any:
+    async def _run_with_persistence(self, conversation_id: str, loop: AgentLoop) -> Any:
         """Snapshot/rehydrate wrapper around `loop.run()`. Surface-aware:
         - Build → snapshot+rehydrate the workspace as before.
         - Deep Research → short-circuit `loop.run()` on the post-plan-approval
@@ -3549,9 +3869,7 @@ class ConversationRuntime:
         *,
         resume_from: ReportEvent | None = None,
     ) -> None:
-        return await self._dr._execute_deep_research(
-            conversation_id, plan, resume_from=resume_from
-        )
+        return await self._dr._execute_deep_research(conversation_id, plan, resume_from=resume_from)
 
     def title_service(self) -> TitleService:
         """Public accessor for the auto-titler (used by the projects backfill route)."""
@@ -3722,8 +4040,13 @@ class ConversationRuntime:
         conversation_id: str,
         *,
         owner_id: str = DEFAULT_OWNER_ID,
+        before_seq: int | None = None,
     ) -> dict[str, Any]:
-        return await self._share.share_export(conversation_id, owner_id=owner_id)
+        return await self._share.share_export(
+            conversation_id,
+            owner_id=owner_id,
+            before_seq=before_seq,
+        )
 
     _IMPORT_MAX_EVENTS = 20_000
 
@@ -3759,9 +4082,7 @@ class ConversationRuntime:
         *,
         owner_id: str = DEFAULT_OWNER_ID,
     ) -> dict[str, Any]:
-        return await self._share.create_share_link_async(
-            conversation_id, owner_id=owner_id
-        )
+        return await self._share.create_share_link_async(conversation_id, owner_id=owner_id)
 
     def lookup_share_link(self, token: str) -> dict | None:
         return self._share.lookup_share_link(token)
@@ -3805,9 +4126,7 @@ class ConversationRuntime:
                 message=LLMMessage(
                     role="user",
                     content=(
-                        "<system-reminder>\n"
-                        f"Project persistence note: {body}\n"
-                        "</system-reminder>"
+                        f"<system-reminder>\nProject persistence note: {body}\n</system-reminder>"
                     ),
                 ),
             ),
@@ -3914,9 +4233,7 @@ class ConversationRuntime:
         — NOT on a pause / gate-park, which stay pinned for resume."""
         self._pinned_kernels.pop(conversation_id, None)
 
-    def _unpin_if_current_generation(
-        self, conversation_id: str, generation: int | None
-    ) -> None:
+    def _unpin_if_current_generation(self, conversation_id: str, generation: int | None) -> None:
         """Clear the kernel pin ONLY if no NEWER run has started since the finalizing
         task began (finding #3, the pin set/clear race). `_on_run_task_done` schedules
         the clean-return finalizer ASYNC; before it runs, a fresh user turn can append +
@@ -3971,6 +4288,20 @@ class ConversationRuntime:
         once the kernel call succeeds,
         so a failed send leaves NO pin and the next attempt re-resolves. A pre-existing
         pin (a steer of a live run) is NOT rolled back — that run stays on its kernel."""
+        # CONTRACT-ACTIVATE: declare the contract kind from the brief BEFORE the
+        # kernel composes the loop, so the starter recommendation / finalizer
+        # alias / delivery mode resolve for this very run. First-wins + guarded
+        # eviction inside — safe on steers and re-sends. Mirrors the kernel-pin
+        # rollback: a declaration made by THIS call is undone if the send never
+        # lands (codex defect #3 — a failed send must not permanently win the
+        # contract for a turn that never entered history).
+        # CONTRACT-DURABILITY: fold any PERSISTED declaration first, so after an
+        # agent-server restart the historical contract wins over this turn's brief
+        # (first-wins holds across restarts) and the phase tracker resumes where
+        # the run left off instead of restarting at BOOTSTRAP.
+        await self._fold_contract_from_history(conversation_id)
+        newly_declared = build_brief is not None and conversation_id not in self._build_kind
+        self.activate_contract_for_brief(conversation_id, build_brief)
         newly_pinned = conversation_id not in self._pinned_kernels
         kernel = self._ensure_kernel_pinned(conversation_id)
         try:
@@ -3984,6 +4315,12 @@ class ConversationRuntime:
         except BaseException:
             if newly_pinned:
                 self._clear_pinned_kernel(conversation_id)
+            if newly_declared:
+                self.set_build_kind(conversation_id, None)
+                # Finding #8: the kernel may have PERSISTED this turn's brief before
+                # raising — release the fold marker so a later fold can rediscover
+                # it instead of a later declaration silently winning.
+                self._contract_fold_attempted.discard(conversation_id)
             raise
 
     async def _run_continuing_control(
@@ -4004,6 +4341,10 @@ class ConversationRuntime:
         kernel call raises (so a failed op leaves no stuck pin), while a pre-existing pin
         from the live run is preserved. Byte-identical for the default `disco` kernel —
         the op still lands on `_control`/`_loop_for` exactly as before, just pinned."""
+        # CONTRACT-DURABILITY (codex finding #7): a confirm/approve-plan can be the
+        # FIRST touch after a restart — fold before the kernel composes a loop, or a
+        # gated conversation continues contract-less.
+        await self._fold_contract_from_history(conversation_id)
         newly_pinned = conversation_id not in self._pinned_kernels
         kernel = self._ensure_kernel_pinned(conversation_id)
         try:
@@ -4113,12 +4454,14 @@ class ConversationRuntime:
     def _condense_trailing_degeneracy(self, events: list):
         return self._resume._condense_trailing_degeneracy(events)
 
-    async def _reconstruct_resume_context(
-        self, conversation_id: str, events: list
-    ) -> list:
+    async def _reconstruct_resume_context(self, conversation_id: str, events: list) -> list:
         return await self._resume._reconstruct_resume_context(conversation_id, events)
 
     async def resume_conversation(self, conversation_id: str) -> dict:
+        # CONTRACT-DURABILITY: a resume after an agent-server restart is exactly
+        # the path that used to lose the contract — fold BEFORE the resume seam
+        # composes a loop so the executor bakes contract-derived state.
+        await self._fold_contract_from_history(conversation_id)
         return await self._resume.resume_conversation(conversation_id)
 
     async def kill(self, conversation_id: str) -> None:
@@ -4166,6 +4509,7 @@ class ConversationRuntime:
             self._run_generation,
             self._loops,
             self._nonterminal_rekicks,
+            self._last_rekick_progress_seq,
             self._last_status,
             self._cancel_flags,
             self._model_override,
@@ -4190,6 +4534,8 @@ class ConversationRuntime:
             self._shadow_folded_finished_seq,
         ):
             cache.pop(conversation_id, None)
+        # CONTRACT-DURABILITY: sets, not dicts — same per-cid leak rule applies.
+        self._contract_fold_attempted.discard(conversation_id)
 
     async def aclose(self) -> None:
         for task in self._tasks.values():
@@ -4462,9 +4808,7 @@ class ConversationRuntime:
             await self._record_workflow_schedule_error(
                 conversation_id,
                 detail="workflow_schedule_run_failed",
-                explanation=(
-                    f"Workflow schedule {schedule_id} failed while running: {exc}"
-                ),
+                explanation=(f"Workflow schedule {schedule_id} failed while running: {exc}"),
             )
             return WorkflowScheduleRunRecord(
                 schedule_id=schedule_id,
@@ -4587,12 +4931,8 @@ class ConversationRuntime:
             model_override=model_override,
         )
 
-    def list_schedules(
-        self, *, owner_id: str, conversation_id: str | None = None
-    ) -> list[dict]:
-        return self._schedule.list_schedules(
-            owner_id=owner_id, conversation_id=conversation_id
-        )
+    def list_schedules(self, *, owner_id: str, conversation_id: str | None = None) -> list[dict]:
+        return self._schedule.list_schedules(owner_id=owner_id, conversation_id=conversation_id)
 
     def delete_schedule(self, schedule_id: str, *, owner_id: str) -> bool:
         return self._schedule.delete_schedule(schedule_id, owner_id=owner_id)

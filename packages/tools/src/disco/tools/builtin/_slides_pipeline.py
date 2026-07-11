@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, get_args
 
 import httpx
@@ -181,6 +182,15 @@ Deck craft rules:
   HARD RULE for decks of 8+ slides: at least TWO slides must be image-bearing \
   (section_divider, full_bleed_image, or photo_grid) — a long deck with zero imagery \
   slides is invalid.
+- VARIETY RULE: no specialty archetype (two_by_two, timeline, diagram, comparison_table, \
+  big_number, quote) more than TWICE per deck — three near-identical layouts in one deck \
+  reads as a template, not a design. A two_by_two is a 2x2 ANALYTICAL grid: use it only \
+  when the four items genuinely trade off along two axes, and give every quadrant a bold \
+  headline PLUS one support line — four floating one-liners in big empty boxes is invalid; \
+  if the content is really just four parallel facts, use bullets instead.
+- comparison_table REQUIRES the "table" field filled with real headers+rows. If you \
+  cannot produce an actual table, do NOT use comparison_table — use bullets or \
+  two_column instead (a comparison slide with a thin body renders mostly empty).
 - Commit a theme with 3-4 named accents, a non-default font pairing (never Inter, \
   Roboto, or Arial), a light/dark token pair, and one project-wide art_direction.
 - Image prompts are slots, not decoration: cover + section dividers + full_bleed_image \
@@ -365,13 +375,23 @@ async def _call_llm(
     *,
     api_key: str | None = None,
     temperature: float = 0.7,
-    max_tokens: int = 8192,
+    max_tokens: int = 24576,
 ) -> str:
     """Call the OpenAI-compatible /chat/completions endpoint.  Returns raw text.
 
     Sends a Bearer Authorization header when `api_key` is provided so a remote
     driver (OpenRouter / paid endpoint) authenticates; local keyless endpoints
-    pass api_key=None and send no auth header (unchanged)."""
+    pass api_key=None and send no auth header (unchanged).
+
+    Gauntlet run-1 root cause (2026-07-07): reasoning drivers (MiniMax M3) think
+    for minutes on outline/fill-sized prompts — the old 120s cap produced
+    ``httpx.ReadTimeout`` whose ``str()`` is EMPTY, so the degraded note carried a
+    blank reason and every deck silently fell back to the plain renderer. Read
+    timeout is now generous (the deck author is a background step, not a UI
+    turn), timeouts raise with a NAMED reason, and the returned content goes
+    through the canonical think-strip — this raw path bypasses the router, so
+    nothing else removes a reasoning model's ``<think>`` span before JSON
+    parsing."""
     payload = {
         "model": model,
         "messages": messages,
@@ -381,17 +401,28 @@ async def _call_llm(
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    async with httpx.AsyncClient(
-        timeout=httpx.Timeout(120.0), trust_env=False, follow_redirects=False
-    ) as client:
-        resp = await client.post(
-            f"{llm_url}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(600.0, connect=30.0),
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
+            resp = await client.post(
+                f"{llm_url}/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.TimeoutException as e:
+        raise RuntimeError(
+            f"{type(e).__name__} after 600s from {llm_url} (reasoning models can "
+            "exceed short caps; the driver endpoint may be slow or wedged)"
+        ) from e
+    from disco.core.think import strip_think_spans
+
+    content = data["choices"][0]["message"]["content"] or ""
+    return strip_think_spans(content)
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +448,35 @@ def _coerce_known_theme_aliases(data: dict) -> dict:
     if isinstance(theme, str) and theme in _THEME_ALIASES:
         data = {**data, "theme": _THEME_ALIASES[theme]}
     return data
+
+
+_VALID_LAYOUT_HINTS: frozenset[str] = frozenset(
+    get_args(get_args(AuthoredSlide.model_fields["layout_hint"].annotation)[0])
+)
+
+
+def _null_invalid_layout_hints(data: dict) -> dict:
+    """Null out off-enum ``layout_hint`` values instead of failing the deck.
+
+    ``layout_hint`` is OPTIONAL — the lowering infers a layout from ``type``/
+    ``archetype`` when it is None. Gauntlet run-1: MiniMax M3 authored creative
+    hints ("hero", "big_number") and the WHOLE outline hard-failed schema
+    validation over a nullable field, degrading the deck to the plain fallback.
+    Unknown hints now become None (a per-slide note in the retry already lists
+    the enum for fields that MUST be exact)."""
+    slides = data.get("slides")
+    if not isinstance(slides, list):
+        return data
+    fixed = []
+    changed = False
+    for s in slides:
+        if isinstance(s, dict):
+            hint = s.get("layout_hint")
+            if hint is not None and hint not in _VALID_LAYOUT_HINTS:
+                s = {**s, "layout_hint": None}
+                changed = True
+        fixed.append(s)
+    return {**data, "slides": fixed} if changed else data
 
 
 # ---------------------------------------------------------------------------
@@ -626,8 +686,28 @@ def _prepare_outline_deck(deck: AuthoredDeck) -> AuthoredDeck:
     return _with_craft_defaults(deck)
 
 
+def _demote_tableless_comparisons(deck: AuthoredDeck) -> AuthoredDeck:
+    """Gauntlet s-arxiv 2026-07-07: a comparison_table slide with NO table
+    payload and a thin body (3 lines) rendered as two column headers + one
+    lonely bullet — a mostly-empty slide. A comparison NEEDS a real table (or
+    at least enough body lines for two balanced columns); anything thinner
+    reads better as plain bullets. Demote in place (render-time normalization —
+    the authored sidecar keeps the model's original)."""
+    for slide in deck.slides:
+        if (
+            slide.archetype == "comparison_table"
+            and slide.table is None
+            and slide.chart is None
+            and len(slide.body or []) < 4
+        ):
+            slide.archetype = "bullets"
+            slide.layout_hint = "bullets"
+    return deck
+
+
 def _prepare_filled_deck(deck: AuthoredDeck) -> AuthoredDeck:
     deck = _with_craft_defaults(deck)
+    deck = _demote_tableless_comparisons(deck)
     deck = _enforce_density_budgets(deck)
     return _ensure_image_slot_prompts(deck)
 
@@ -680,6 +760,7 @@ def _parse_authored_deck(raw: str) -> tuple[AuthoredDeck | None, str]:
     except json.JSONDecodeError as e:
         return None, f"JSON parse error: {e}"
     data = _coerce_known_theme_aliases(data)
+    data = _null_invalid_layout_hints(data)
     try:
         deck = AuthoredDeck.model_validate(data)
     except (ValidationError, Exception) as e:
@@ -713,7 +794,7 @@ async def _stage_outline(
     try:
         raw = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
-        return None, "", f"LLM outline call failed: {e}"
+        return None, "", f"LLM outline call failed: {type(e).__name__}: {e}"
 
     deck, err = _parse_authored_deck(raw)
     if deck is not None:
@@ -758,7 +839,7 @@ async def _stage_fill(
     try:
         raw = await _call_llm(messages, llm_url, model, api_key=api_key)
     except Exception as e:  # noqa: BLE001
-        return None, f"LLM fill call failed: {e}"
+        return None, f"LLM fill call failed: {type(e).__name__}: {e}"
 
     deck, err = _parse_authored_deck(raw)
     if deck is not None:
@@ -788,12 +869,46 @@ def _is_raster_bytes(data: bytes) -> bool:
     return data.startswith(b"\x89PNG\r\n\x1a\n") or data[:3] == b"\xff\xd8\xff"
 
 
+@dataclass
+class ImageGenStats:
+    """Honest per-deck image-generation outcome, surfaced all the way to the
+    slides_generate ToolOutcome (gauntlet 2026-07-07: a mis-configured flux
+    model failed EVERY slide image and the agent had no way to know — the
+    failures died in a server-side log warning)."""
+
+    configured: bool = False
+    wanted: int = 0
+    generated: int = 0
+    failed: list[int] = field(default_factory=list)
+    sample_error: str | None = None
+
+    def note(self) -> str:
+        """One-line human/agent-facing summary for the tool result content."""
+        if self.wanted == 0:
+            return ""
+        if not self.configured:
+            return (
+                f"\nImages: 0/{self.wanted} — image generation is NOT configured; "
+                "themed art fallback used for every image slot. Configure "
+                "Settings → Image generation (and use its Test button) for real images."
+            )
+        if self.failed:
+            reason = f" (first error: {self.sample_error})" if self.sample_error else ""
+            return (
+                f"\nImages: {self.generated}/{self.wanted} generated — "
+                f"{len(self.failed)} FAILED{reason}; themed art fallback used for the "
+                "failed slots. The configured image model may not support image "
+                "output — verify it with Settings → Image generation → Test."
+            )
+        return f"\nImages: {self.generated}/{self.wanted} generated."
+
+
 async def _stage_assets(
     authored: AuthoredDeck,
     ctx: ToolContext,
     backend: ImageBackend | None,
     filename_base: str,
-) -> dict[int, bytes]:
+) -> tuple[dict[int, bytes], ImageGenStats]:
     """For each slide with image_prompt, generate the image, write it to the sandbox
     as a standalone artifact, AND return {authored_slide_index: image_bytes}.
 
@@ -802,17 +917,24 @@ async def _stage_assets(
     bytes were written to disk but never reached the renderer, so every image slide
     fell back to the ``[image]`` placeholder. The on-disk copy is kept too (a
     browsable artifact + back-compat for any path-based consumer).
+
+    Also returns ImageGenStats so the caller can put the REAL image outcome in
+    the tool result instead of burying failures in a log line.
     """
     import hashlib
 
     assets: dict[int, bytes] = {}
+    stats = ImageGenStats(
+        configured=backend is not None,
+        wanted=sum(1 for s in authored.slides if s.image_prompt),
+    )
     # W-50: image generation is OPTIONAL for a deck. When no real image backend is
     # configured (select_image_backend() raised → caller passed None), DEGRADE to
-    # text-only slides — omit images rather than crash. Configure ComfyUI/OpenAI/
-    # OpenRouter in Settings → Image generation to include real images.
+    # art-fallback slides — omit real images rather than crash. Configure ComfyUI/
+    # OpenAI/OpenRouter in Settings → Image generation to include real images.
     if backend is None:
         _LOG.info("no image backend configured — generating image-less (text-only) slides")
-        return assets
+        return assets, stats
     wanted = 0  # slides that requested an image
     failed: list[int] = []  # slide indices whose image generation errored/was rejected
     for i, slide in enumerate(authored.slides):
@@ -860,18 +982,23 @@ async def _stage_assets(
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Image generation failed for slide %d: %s", i, e)
             failed.append(i)
+            if stats.sample_error is None:
+                stats.sample_error = f"{type(e).__name__}: {e}"[:200]
     if failed:
         # One aggregate signal instead of scattered per-slide lines — a backend that
         # is configured but erroring (out of credits, rate-limited) otherwise produced
         # an image-less deck invisibly.
         _LOG.warning(
             "Deck image generation: %d of %d requested slide image(s) failed (slides %s) "
-            "— those slides fall back to the placeholder box.",
+            "— those slides fall back to the themed art placeholder.",
             len(failed),
             wanted,
             ", ".join(str(x) for x in failed),
         )
-    return assets
+    stats.wanted = wanted
+    stats.failed = failed
+    stats.generated = len(assets)
+    return assets, stats
 
 
 # ---------------------------------------------------------------------------
@@ -905,18 +1032,20 @@ async def generate_deck(
     backend: ImageBackend | None,
     *,
     slide_count: int = 5,
-) -> tuple[Deck | None, str | None, str | None, str | None]:
+) -> tuple[Deck | None, str | None, str | None, str | None, ImageGenStats | None]:
     """Run the full C2 generation pipeline.
 
     Returns:
-        (c1_deck, fallback_markdown, error_msg, authored_sidecar)
+        (c1_deck, fallback_markdown, error_msg, authored_sidecar, image_stats)
 
     ``authored_sidecar`` is the ``{filename}.authored.json`` path IFF this run wrote
     it successfully (else None) — the caller advertises the in-app editor only on a
     real, fresh sidecar, never a stale leftover from a prior run whose write failed.
+    ``image_stats`` carries the honest image-generation outcome (configured /
+    generated / failed + first error) for the tool result.
 
-    On success: (Deck, None, None, sidecar-or-None)
-    On fill-stage failure: (None, fallback_markdown_str, error_msg, None)
+    On success: (Deck, None, None, sidecar-or-None, stats)
+    On fill-stage failure: (None, fallback_markdown_str, error_msg, None, None)
     """
     # ROOT-5: honor the CONVERSATION's effective (override-aware) driver model when the
     # executor supplied it — so a deck authored in a conversation that picked a specific
@@ -932,14 +1061,14 @@ async def generate_deck(
         cfg = store.load()
         purpose = _purpose_for_model_endpoint(cfg, llm_url, api_key_env)
         if not store.origin_approved(llm_url, purpose, api_key_env):
-            return None, _outline_to_markdown(None, goal), "LLM origin not approved", None
+            return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
         if not secret_ref_allowed_for_origin(api_key_env, llm_url):
-            return None, _outline_to_markdown(None, goal), "LLM secret_ref not allowed", None
+            return None, _outline_to_markdown(None, goal), "LLM secret_ref not allowed", None, None
         api_key = _resolve_llm_key(api_key_env)
     else:
         llm_url, model, api_key = _resolve_slides_llm()
     if not llm_url:
-        return None, _outline_to_markdown(None, goal), "LLM origin not approved", None
+        return None, _outline_to_markdown(None, goal), "LLM origin not approved", None, None
     system = _WEAK_SYSTEM if ctx.assist else _CAPABLE_SYSTEM
 
     # Stage 1: Outline
@@ -950,7 +1079,7 @@ async def generate_deck(
     if outline is None:
         _LOG.warning("Outline stage failed: %s", outline_err)
         fallback_md = _outline_to_markdown(None, goal)
-        return None, fallback_md, outline_err, None
+        return None, fallback_md, outline_err, None, None
 
     # Stage 2: Fill
     filled, fill_err = await _stage_fill(outline, system, llm_url, model, api_key)
@@ -958,10 +1087,10 @@ async def generate_deck(
     if filled is None:
         _LOG.warning("Fill stage failed: %s — using outline as fallback", fill_err)
         fallback_md = _outline_to_markdown(outline, goal)
-        return None, fallback_md, fill_err, None
+        return None, fallback_md, fill_err, None, None
 
     # Stage 3: Assets (image_prompt → image bytes + sandbox files)
-    image_assets = await _stage_assets(filled, ctx, backend, filename)
+    image_assets, image_stats = await _stage_assets(filled, ctx, backend, filename)
 
     # Stage 4: Lower to C1 Deck (carry generated image bytes so they embed — C7)
     try:
@@ -975,7 +1104,7 @@ async def generate_deck(
     except Exception as e:  # noqa: BLE001
         _LOG.warning("lower_deck failed: %s — falling back to Marp", e)
         fallback_md = _outline_to_markdown(filled, goal)
-        return None, fallback_md, str(e), None
+        return None, fallback_md, str(e), None, None
 
     # A2.0: persist the editable AuthoredDeck source alongside the renders so the
     # in-app deck editor (+ deck_patch tool) can read it back. Best-effort: a write
@@ -993,4 +1122,4 @@ async def generate_deck(
         except Exception as e:  # noqa: BLE001
             _LOG.warning("Failed to persist authored.json for %s: %s", filename, e)
 
-    return deck, None, None, authored_sidecar
+    return deck, None, None, authored_sidecar, image_stats

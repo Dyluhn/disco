@@ -18,6 +18,7 @@ from disco.app_server import create_app
 from disco.app_server.config_state import ConfigState
 from disco.core import SkillStore, SqliteEventStore
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.tools.mcp.migrations import set_mcp_approval_pending
 from fastapi.testclient import TestClient
 
 
@@ -52,8 +53,42 @@ def client(store: SqliteEventStore, tmp_path: Path) -> TestClient:
 
 # ---- helpers ----------------------------------------------------------------
 
+
 def _hash(s: str) -> str:
     return hashlib.sha256(s.encode()).hexdigest()
+
+
+def _connection(client: TestClient, name: str) -> dict:
+    return next(c for c in client.get("/api/mcp").json() if c["name"] == name)
+
+
+def _approve_config(client: TestClient, name: str) -> str:
+    pending = _connection(client, name)["new_config_hash"]
+    assert isinstance(pending, str) and len(pending) == 64
+    response = client.post(
+        f"/api/mcp/servers/{name}/approve",
+        json={"approval_kind": "config", "config_hash": pending},
+    )
+    assert response.status_code == 200, response.text
+    return pending
+
+
+def _approve_tools(
+    client: TestClient,
+    store: SqliteEventStore,
+    name: str,
+    new_hash: str,
+    *,
+    old_hash: str = "",
+) -> dict:
+    # The live agent-server, not the browser, is authoritative for this row.
+    set_mcp_approval_pending(store._conn, name, old_hash, new_hash)
+    response = client.post(
+        f"/api/mcp/servers/{name}/approve",
+        json={"approval_kind": "tools", "description_hash": new_hash},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
 
 
 # ---- CRUD -------------------------------------------------------------------
@@ -82,7 +117,8 @@ def test_mcp_create_and_list_round_trip(client):
     assert data["id"] == "filesystem"
     assert data["name"] == "filesystem"
     assert data["transport"] == "stdio"
-    assert data["status"] == "disconnected"  # no approval yet
+    assert data["status"] == "approval_required"
+    assert len(data["new_config_hash"]) == 64
 
     listed = client.get("/api/mcp").json()
     assert len(listed) == 1
@@ -95,36 +131,51 @@ def test_mcp_create_duplicate_is_400(client):
         "/api/mcp/servers",
         json={"name": "dup", "url": "https://example.com", "transport": "streamable_http"},
     )
-    assert client.post(
-        "/api/mcp/servers",
-        json={"name": "dup", "url": "https://other.com", "transport": "streamable_http"},
-    ).status_code == 400
+    assert (
+        client.post(
+            "/api/mcp/servers",
+            json={"name": "dup", "url": "https://other.com", "transport": "streamable_http"},
+        ).status_code
+        == 400
+    )
 
 
 def test_mcp_patch_toggle_enabled(client):
-    """PATCH toggles enabled; GET reflects it."""
+    """PATCH toggles enabled without resetting transport or configured risk."""
     client.post(
         "/api/mcp/servers",
-        json={"name": "srv1", "url": "https://example.com", "transport": "streamable_http"},
+        json={
+            "name": "srv1",
+            "url": "https://example.com",
+            "transport": "streamable_http",
+            "risk_tier": "high",
+        },
     )
     # Toggle off
     patched = client.patch(
         "/api/mcp/servers/srv1",
-        json={"enabled": False, "name": "srv1", "url": "https://example.com"},
+        json={"enabled": False},
     )
     assert patched.status_code == 200
     assert patched.json()["enabled"] is False
+    assert patched.json()["transport"] == "streamable_http"
+    assert patched.json()["risk_tier"] == "high"
 
     # GET reflects the patch
     listed = client.get("/api/mcp").json()
     assert listed[0]["enabled"] is False
+    assert listed[0]["transport"] == "streamable_http"
+    assert listed[0]["risk_tier"] == "high"
 
 
 def test_mcp_patch_nonexistent_is_404(client):
-    assert client.patch(
-        "/api/mcp/servers/ghost",
-        json={"name": "ghost", "url": "https://example.com"},
-    ).status_code == 404
+    assert (
+        client.patch(
+            "/api/mcp/servers/ghost",
+            json={"name": "ghost", "url": "https://example.com"},
+        ).status_code
+        == 404
+    )
 
 
 def test_mcp_delete_removes_server(client):
@@ -141,16 +192,40 @@ def test_mcp_delete_removes_server(client):
 # ---- approval ---------------------------------------------------------------
 
 
-def test_mcp_approve_creates_approval_row(client):
-    """POST /approve creates an approval row; the server status flips to connected."""
+def test_mcp_config_approve_creates_separate_approval_row(client, store):
+    """Pre-connect approval pins config without fabricating tool approval."""
     client.post(
         "/api/mcp/servers",
         json={"name": "mysrv", "url": "https://tools.example.com", "transport": "streamable_http"},
     )
+    config_hash = _approve_config(client, "mysrv")
+    data = _connection(client, "mysrv")
+    assert data["config_hash"] == config_hash
+    assert data["new_config_hash"] is None
+    assert data["description_hash"] is None
+    # Tool approval remains required until the live server is discovered.
+    assert data["status"] == "approval_required"
+    row = store._conn.execute(
+        "SELECT config_hash FROM mcp_config_approvals WHERE server = ?", ("mysrv",)
+    ).fetchone()
+    assert row[0] == config_hash
+
+
+def test_mcp_tool_approve_requires_authoritative_pending_hash(client, store):
+    client.post(
+        "/api/mcp/servers",
+        json={"name": "mysrv", "url": "https://tools.example.com", "transport": "streamable_http"},
+    )
+    _approve_config(client, "mysrv")
     h = _hash("echo, add, read_file")
-    resp = client.post("/api/mcp/servers/mysrv/approve", json={"description_hash": h})
-    assert resp.status_code == 200
-    data = resp.json()
+
+    forged = client.post(
+        "/api/mcp/servers/mysrv/approve",
+        json={"approval_kind": "tools", "description_hash": h},
+    )
+    assert forged.status_code == 409
+
+    data = _approve_tools(client, store, "mysrv", h)
     assert data["description_hash"] == h
     assert data["approved_at"] is not None
     assert data["status"] == "connected"
@@ -163,8 +238,9 @@ def test_mcp_reapprove_mutates_single_row_not_second_insert(client, store):
         "/api/mcp/servers",
         json={"name": "srv", "url": "https://example.com", "transport": "streamable_http"},
     )
+    _approve_config(client, "srv")
     h1 = _hash("tool_a, tool_b")
-    client.post("/api/mcp/servers/srv/approve", json={"description_hash": h1})
+    _approve_tools(client, store, "srv", h1)
 
     # Count rows — should be exactly 1
     count1 = store._conn.execute(
@@ -174,9 +250,8 @@ def test_mcp_reapprove_mutates_single_row_not_second_insert(client, store):
 
     # Re-approve with a different hash
     h2 = _hash("tool_a, tool_b, tool_c")
-    resp = client.post("/api/mcp/servers/srv/approve", json={"description_hash": h2})
-    assert resp.status_code == 200
-    assert resp.json()["description_hash"] == h2
+    data = _approve_tools(client, store, "srv", h2, old_hash=h1)
+    assert data["description_hash"] == h2
 
     # Still exactly one row
     count2 = store._conn.execute(
@@ -192,10 +267,13 @@ def test_mcp_reapprove_mutates_single_row_not_second_insert(client, store):
 
 
 def test_mcp_approve_nonexistent_server_is_404(client):
-    assert client.post(
-        "/api/mcp/servers/nope/approve",
-        json={"description_hash": _hash("x")},
-    ).status_code == 404
+    assert (
+        client.post(
+            "/api/mcp/servers/nope/approve",
+            json={"approval_kind": "config", "config_hash": _hash("x")},
+        ).status_code
+        == 404
+    )
 
 
 # ---- approval diff ----------------------------------------------------------
@@ -208,8 +286,9 @@ def test_mcp_approval_diff_returns_old_vs_new_hash(client, store):
         "/api/mcp/servers",
         json={"name": "diffsrv", "url": "https://example.com", "transport": "streamable_http"},
     )
+    _approve_config(client, "diffsrv")
     h1 = _hash("old tools")
-    client.post("/api/mcp/servers/diffsrv/approve", json={"description_hash": h1})
+    _approve_tools(client, store, "diffsrv", h1)
 
     # Verify the approval row is there
     row = store._conn.execute(
@@ -221,7 +300,7 @@ def test_mcp_approval_diff_returns_old_vs_new_hash(client, store):
 
     # Now re-approve with new hash and verify the row mutates (not a second row)
     h2 = _hash("new tools")
-    client.post("/api/mcp/servers/diffsrv/approve", json={"description_hash": h2})
+    _approve_tools(client, store, "diffsrv", h2, old_hash=h1)
 
     # Verify old hash is gone, new one is stored
     count = store._conn.execute(
@@ -246,7 +325,7 @@ def test_mcp_approval_diff_no_prior_is_none(client):
     assert row[0]["description_hash"] is None
 
 
-def test_mcp_connection_projection_includes_optional_fields(client):
+def test_mcp_connection_projection_includes_optional_fields(client, store):
     """GET /api/mcp returns the full DTO with new optional fields populated."""
     client.post(
         "/api/mcp/servers",
@@ -258,8 +337,9 @@ def test_mcp_connection_projection_includes_optional_fields(client):
             "risk_tier": "high",
         },
     )
+    _approve_config(client, "fullsrv")
     h = _hash("tool_a, tool_b")
-    client.post("/api/mcp/servers/fullsrv/approve", json={"description_hash": h})
+    _approve_tools(client, store, "fullsrv", h)
     listed = client.get("/api/mcp").json()
     srv = listed[0]
     assert srv["transport"] == "streamable_http"

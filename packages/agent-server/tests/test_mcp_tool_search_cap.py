@@ -133,13 +133,6 @@ def test_zero_mcp_tools_noop():
 
     The no-op check is that allowed_tools and the advertised set are both
     unchanged after _apply_mcp_scope with an empty list.
-
-    Baseline note (plan_step retirement, runthru-v2 #3): a standard-policy
-    executor no longer advertises EVERYTHING (advertised_tools=None). `plan_step`
-    is retired from the advertised surface for every tier, so standard's scope
-    carries an explicit advertised set that EXCLUDES plan_step (but still includes
-    every other allowed tool, e.g. update_plan_progress). The no-op invariant is
-    unchanged: _apply_mcp_scope with [] must not touch that set.
     """
     ex = _executor()
     before_allowed = ex._scope.allowed_tools
@@ -147,12 +140,9 @@ def test_zero_mcp_tools_noop():
     _apply_mcp_scope(ex, [], _FakeCallTarget(), max_active_schemas=20)
     assert ex._scope.allowed_tools == before_allowed
     assert ex._scope.advertised_tools == before_advertised
-    # Standard policy: advertised set is the full allowed set minus the retired
-    # plan_step (no longer None), and only plan_step is dropped.
-    assert ex._scope.advertised_tools is not None
-    assert "plan_step" not in ex._scope.advertised_tools
-    assert "update_plan_progress" in ex._scope.advertised_tools
-    assert ex._scope.advertised_tools == ex._scope.allowed_tools - {"plan_step"}
+    assert ex._scope.advertised_tools is None
+    assert "plan_step" not in ex._scope.allowed_tools
+    assert "update_plan_progress" in ex._scope.allowed_tools
 
 
 # ---- readonly_tool_names planner-safety (allowed_tools, not advertised) ------
@@ -173,3 +163,48 @@ def test_over_cap_readonly_tool_names_from_allowed_not_advertised():
     assert pre_readonly <= post_readonly, (
         "readonly_tool_names shrank after cap wiring — planner backstop weakened"
     )
+
+
+# ---- pre-existing advertise split survives MCP registration (codex #1) -------
+#
+# The runtime may hand _apply_mcp_scope an executor whose scope already withholds
+# a tool (scaffold_starter when no starter kit resolves). Registration must not
+# resurrect it: over the cap, the advertised rebuild must start from the ADVERTISED
+# set (not allowed_tools); under the cap, the explicit advertised set must be
+# EXTENDED with the MCP names (or they'd all be hidden).
+
+
+def _executor_with_withheld(withheld: str) -> DefaultToolExecutor:
+    _policy = ModelExecutionPolicy.standard()
+    scope = agent_scope(model_policy=_policy)
+    advertised = (
+        scope.advertised_tools if scope.advertised_tools is not None else scope.allowed_tools
+    )
+    scope = scope.model_copy(update={"advertised_tools": advertised - {withheld}})
+    return DefaultToolExecutor(build_default_registry(), scope, model_policy=_policy)
+
+
+def test_over_cap_does_not_resurrect_withheld_tools():
+    ex = _executor_with_withheld("scaffold_starter")
+    _apply_mcp_scope(ex, _fake_mcp_tools(25), _FakeCallTarget(), max_active_schemas=20)
+    advertised = ex._scope.advertised_tools
+    assert advertised is not None
+    assert "scaffold_starter" not in advertised, (
+        "over-cap advertised rebuild must start from the prior ADVERTISED set — "
+        "rebuilding from allowed_tools silently re-advertises withheld tools"
+    )
+    assert "scaffold_starter" in ex._scope.allowed_tools  # still callable
+    assert "tool_search" in advertised
+
+
+def test_under_cap_extends_explicit_advertised_with_mcp_names():
+    ex = _executor_with_withheld("scaffold_starter")
+    _apply_mcp_scope(ex, _fake_mcp_tools(3), _FakeCallTarget(), max_active_schemas=20)
+    advertised = ex._scope.advertised_tools
+    assert advertised is not None
+    assert "scaffold_starter" not in advertised  # split preserved
+    for i in range(3):
+        assert f"mcp__srv__tool_{i}" in advertised, (
+            "under-cap MCP tools must be ADDED to an explicit advertised set — "
+            "leaving it untouched would hide every MCP tool"
+        )

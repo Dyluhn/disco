@@ -209,7 +209,7 @@ async def workspace_snapshot_message(
     sandbox each turn and render it as an authoritative, always-fresh message.
 
     WHY (root cause, source-verified + reproduced live): a file_write's body is
-    elided at render time to "<N chars elided — use file_read>" (events._snip_args,
+    elided at render time to a "[[DISCO-ELIDED: N chars ...]]" sentinel (events._snip_args,
     >1.5k chars), and observation-masking + condensation can later erase a
     file_read's output too. A weak driver that doesn't proactively file_read
     every turn therefore loses sight of what's on disk and regenerates files
@@ -398,7 +398,7 @@ def f8_shrink_file_write_args(
     Render-time only: the persisted event log is unchanged. The
     transform runs AFTER ``View.of`` (and the existing
     ``_ARG_SNIP_CHARS`` shaper in events.py) so it OVERRIDES the
-    generic "<N chars elided — use file_read>" marker with a more
+    generic "[[DISCO-ELIDED: N chars ...]]" marker with a more
     useful form: a real 200-char prefix + a path-aware hint. The
     on-disk full content is the recovery surface (file_read /
     workspace snapshot).

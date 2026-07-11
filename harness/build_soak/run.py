@@ -501,8 +501,13 @@ async def drive_scenario(
     blind wall-clock; `hard_cap_s` is the generous safety ceiling (Bug 15)."""
     timeline: list[str] = []
     prompt = str(scenario["prompt"])
-    cid = await client.create_build_conversation(prompt, model=model, autonomous=autonomous)
-    timeline.append(f"created build conversation {cid} (autonomous={autonomous})")
+    appkit = bool(scenario.get("appkit"))
+    cid = await client.create_build_conversation(
+        prompt, model=model, autonomous=autonomous, appkit=appkit
+    )
+    timeline.append(
+        f"created build conversation {cid} (autonomous={autonomous}, appkit={appkit})"
+    )
     state_initial = await client.get_state(cid)
 
     # Optional scenario-provided answer to a mid-build clarifying question (Bug 17). When

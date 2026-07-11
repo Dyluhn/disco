@@ -63,6 +63,7 @@ class AgentStep(BaseModel):
     # ready_for_*_verification finalizer alias rather than plain `finish`.
     requested_verification: bool = False
     llm_response_id: str | None = None  # carried into ActionEvent
+    empty_reasoning_diagnostic: dict[str, Any] | None = None
 
 
 class HostVerificationDeliverable(BaseModel):

@@ -242,8 +242,8 @@ async def test_assist_on_failed_write_does_not_shrink():
     The F8 marker must be ABSENT from the rendered args.
 
     The existing _ARG_SNIP shaper in events.py may still elide the long
-    content to "<N chars elided — use file_read>" (that's the
-    pre-F8 baseline; F8 doesn't change the snip). The headline contract
+    content to the DISCO-ELIDED sentinel (that's the pre-F8 baseline;
+    F8 doesn't change the snip). The headline contract
     here is the ABSENCE of the F8-specific marker, which is the proof
     that F8 didn't fire for this write."""
     events = with_seqs(
@@ -272,11 +272,9 @@ async def test_assist_on_failed_write_does_not_shrink():
     off_content = _content_of(view_off.messages)
     assert "written to" not in off_content
     assert "file_read to recover" not in off_content
-    # Both tiers still elide the long content to the K1 placeholder (F8 didn't fire).
-    # assist-ON keeps the workspace-block marker ("do not copy this placeholder");
-    # assist-OFF uses the de-temptified neutral marker ("do not copy or re-send").
-    assert "chars" in content and "do not copy this placeholder" in content
-    assert "chars" in off_content and "do not copy or re-send" in off_content
+    # Both tiers still elide the long content to the canonical K1 sentinel (F8 didn't fire).
+    assert "[[DISCO-ELIDED:" in content and "history display only" in content
+    assert "[[DISCO-ELIDED:" in off_content and "history display only" in off_content
 
 
 async def test_assist_on_failed_write_keeps_full_content_for_retry():
@@ -302,9 +300,9 @@ async def test_assist_on_failed_write_keeps_full_content_for_retry():
     for c in (on_content, off_content):
         assert "written to" not in c
         assert "file_read to recover" not in c
-        # the long content is still elided; both tier markers carry the anti-copy phrase
-        # ("do not copy this placeholder" assist-ON, "do not copy or re-send" assist-OFF).
-        assert "do not copy" in c
+        # the long content is still elided; both tiers use the same sentinel.
+        assert "[[DISCO-ELIDED:" in c
+        assert "history display only" in c
 
 
 # ---------------------------------------------------------------------------
@@ -336,8 +334,8 @@ async def test_assist_off_byte_identical_even_for_confirmed_write():
     # We don't pin the exact string, but we pin the SHAPE: the `_snip_args`
     # placeholder. K1 reworded it to point at the CURRENT WORKSPACE snapshot
     # (away from "use file_read", which invited the read loop); the structural
-    # signature is "<N chars … full content …>".
-    assert "chars" in content and "elided" in content and "do not copy or re-send" in content
+    # signature is the canonical DISCO-ELIDED sentinel.
+    assert "[[DISCO-ELIDED:" in content and "history display only" in content
 
 
 async def test_assist_off_renders_full_short_content_unchanged():

@@ -71,12 +71,54 @@ _BOOKKEEPING_PLAN_SLACK = 2
 # plan's steps are byte-identical to the immediately-prior plan for >= this many
 # consecutive auto-approved revisions, feed the existing bookkeeping-stuck valve.
 _PROPOSE_PLAN_UPDATE_REPEAT_CAP = 3
+_IDENTICAL_PLAN_NUDGE_DIAGNOSTIC = "identical_plan_nudge"
+_IDENTICAL_PLAN_NUDGE_TEXT = (
+    "This revision is IDENTICAL to the already-approved plan — proposing it "
+    "again does nothing. The plan is current: continue executing its steps, "
+    "mark progress with update_plan_progress, or finish. One more identical "
+    "proposal will halt the run."
+)
 
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass
 # the user can always pick at the circuit-breaker gate to reset the failure streak
 # and let the agent keep going. The frontend renders it as a distinct button;
 # pick_alternative special-cases it (reset streak + resume) rather than running a tool.
 _CONTINUE_OPTION_ID = "__continue__"
+
+
+def _step_titles(plan: PlanEvent) -> list[str]:
+    return [step.title for step in plan.steps]
+
+
+def _prior_plan_and_productive_action_between(
+    events: list[Event], new_plan: PlanEvent
+) -> tuple[PlanEvent | None, bool]:
+    current_idx: int | None = None
+    for idx, event in enumerate(events):
+        if isinstance(event, PlanEvent) and event.id == new_plan.id:
+            current_idx = idx
+    if current_idx is None:
+        return None, False
+
+    prior_idx: int | None = None
+    prior_plan: PlanEvent | None = None
+    for idx in range(current_idx - 1, -1, -1):
+        event = events[idx]
+        if isinstance(event, PlanEvent):
+            prior_idx = idx
+            prior_plan = event
+            break
+    if prior_idx is None or prior_plan is None:
+        return None, False
+
+    for event in events[prior_idx + 1 : current_idx]:
+        if (
+            isinstance(event, ActionEvent)
+            and event.tool_call is not None
+            and event.tool_call.tool_name not in signals._BOOKKEEPING_TOOLS
+        ):
+            return prior_plan, True
+    return prior_plan, False
 
 
 
@@ -231,6 +273,52 @@ async def _serve_path_missing(loop, path: str) -> bool:  # noqa: ANN001 — Agen
         return not await sbx.file_exists(path)
     except Exception:  # noqa: BLE001 — unverifiable → don't block the handoff
         return False
+
+
+def _strip_redundant_workspace_prefix_for_serve(path: str) -> str:
+    """Normalize model-facing /workspace paths using the sandbox helper when present.
+
+    Core is installable without the tools package, so keep the fallback byte-for-byte
+    with disco.tools.sandbox.base.strip_redundant_workspace_prefix.
+    """
+    try:
+        from disco.tools.sandbox.base import strip_redundant_workspace_prefix
+
+        return strip_redundant_workspace_prefix(path)
+    except Exception:  # noqa: BLE001 — core-only install path
+        for prefix in ("/workspace/", "workspace/"):
+            if path.startswith(prefix):
+                return path[len(prefix):]
+        if path in ("/workspace", "workspace"):
+            return ""
+        return path
+
+
+def _normalize_serve_path(path: str) -> str:
+    return _strip_redundant_workspace_prefix_for_serve(path.strip())
+
+
+def _serve_path_is_workspace_root(path: str) -> bool:
+    return path in {"", ".", "./"}
+
+
+def _serve_root_refusal() -> str:
+    return (
+        "serve refused: serve takes the entry FILE path, not the workspace root. "
+        "For a site pass 'index.html' (or your entry file). If index.html exists "
+        "at the root it will be served from there."
+    )
+
+
+async def _coerce_serve_entry_path(loop, raw_path: str) -> tuple[str, bool, bool]:  # noqa: ANN001
+    """Return (normalized_path, root_like, coerced_to_index)."""
+    path = _normalize_serve_path(raw_path)
+    if not _serve_path_is_workspace_root(path):
+        return path, False, False
+    if await _serve_path_verified_present(loop, "index.html"):
+        _LOG.info("serve path %r points at the workspace root; auto-coerced to index.html", raw_path)
+        return "index.html", True, True
+    return path, True, False
 
 
 async def _serve_path_verified_present(loop, path: str) -> bool:  # noqa: ANN001 — AgentLoop, avoids import cycle
@@ -1519,9 +1607,10 @@ class MetaToolHandlers:
         # without busywork, so a VERIFIED-present path passes. Fail-CLOSED here
         # (unverifiable → still refuse); the output-truth gate below stays
         # fail-open — different stakes.
-        _early_path = str((step.tool_call.arguments or {}).get("path") or "").strip()
-        if _early_path in (".", "./"):
-            _early_path = "index.html"
+        _early_raw_path = str((step.tool_call.arguments or {}).get("path") or "").strip()
+        _early_path, _, _ = await _coerce_serve_entry_path(
+            self._loop, _early_raw_path
+        )
         if signals.actions_since_last_resume(events) == 0 and not (
             _early_path and await _serve_path_verified_present(self._loop, _early_path)
         ):
@@ -1538,11 +1627,10 @@ class MetaToolHandlers:
             self._loop._invisible_steps += 1
         else:
             title = str(step.tool_call.arguments.get("title") or "").strip()
-            path = str(step.tool_call.arguments.get("path") or "").strip()
-            # Whole-site handoffs arrive as "." — resolve to the entry file
-            # instead of refusing a finished site (dtsite autopsy).
-            if path in (".", "./") and await _serve_path_verified_present(self._loop, "index.html"):
-                path = "index.html"
+            raw_path = str(step.tool_call.arguments.get("path") or "").strip()
+            path, root_like, coerced_to_index = await _coerce_serve_entry_path(
+                self._loop, raw_path
+            )
             kind = str(step.tool_call.arguments.get("kind") or "app").strip()
             # F3: a sandbox-internal/loopback serve address (e.g. 127.0.0.1:8000) is
             # NOT reachable from the host — drop it so consumers fall back to the
@@ -1550,7 +1638,14 @@ class MetaToolHandlers:
             url = _canonical_deployment_url(str(step.tool_call.arguments.get("url") or ""))
             if kind not in ("app", "files"):
                 kind = "app"
-            if not (title and path):
+            if not title:
+                self._loop._invisible_steps += 1
+            elif root_like and not coerced_to_index:
+                return await self._loop._valve.refuse_fresh_session(
+                    step,
+                    _serve_root_refusal(),
+                )
+            elif not path:
                 self._loop._invisible_steps += 1
             elif any(
                 isinstance(e, DeliverableEvent)
@@ -1570,10 +1665,11 @@ class MetaToolHandlers:
                 # (serve is the SHOW handoff, not verification — the verify gate still proves it works.)
                 return await self._loop._valve.refuse_fresh_session(
                     step,
-                    f"serve refused: the deliverable path {path!r} does not exist in the "
-                    "workspace yet. Create it (write the file / build the app at that path), "
-                    "then serve it. Serve takes the entry FILE path — for a site that is "
-                    "usually index.html.",
+                    f"serve refused: checked normalized deliverable path {path!r}, "
+                    "but it does not exist in the workspace. Serve takes the entry "
+                    "FILE path; for a site that is usually 'index.html'. If the file "
+                    "is elsewhere, pass that workspace-relative entry path; otherwise "
+                    "build or write the intended entry file first, then serve that file.",
                 )
             else:
                 await self._loop._emit(
@@ -1874,7 +1970,9 @@ class MetaToolHandlers:
     async def handle_propose_plan_update(self, step: AgentStep, events: list[Event]) -> Disp:
         assert step.tool_call is not None  # caller (engine loop) dispatches by tool_name
         new_plan = self._loop._plan_from_args(step.tool_call.arguments, events)
-        await self._loop._emit(new_plan)
+        emitted_plan = await self._loop._emit(new_plan)
+        if isinstance(emitted_plan, PlanEvent):
+            new_plan = emitted_plan
         if self._loop._autonomous:
             # No human to approve a mid-run plan revision → auto-approve
             # inline, emitting exactly what approve_plan() would (mode flip
@@ -1887,27 +1985,24 @@ class MetaToolHandlers:
             # C8 (T11): bound the propose_plan_update loop. A weak model
             # in autonomous mode can hammer the same plan revision over
             # and over, never realizing there's no human to approve it.
-            # Compare new_plan.steps to the immediately-prior plan's steps
-            # (ignore summary; an appended/added step counts as DIFFERENT
-            # because list lengths differ). Increment the consecutive-
-            # identical counter on a match, reset on a diff. At >= the
-            # cap, feed the existing bookkeeping-stuck valve (emit the
-            # same `bookkeeping_only` warning + STUCK status the (c.3)
-            # valve emits) — do NOT invent a new halt path. Only in
-            # autonomous mode; interactive path is byte-identical.
-            prior_plan: PlanEvent | None = None
-            for e in reversed(events):
-                if e is new_plan:
-                    continue  # skip the just-emitted new_plan
-                if isinstance(e, PlanEvent):
-                    prior_plan = e
-                    break
-            if (
-                prior_plan is not None
-                and [s.title for s in prior_plan.steps]
-                == [s.title for s in new_plan.steps]
-            ):
-                self._loop._identical_plan_revisions += 1
+            # Compare new_plan.steps to the immediately-prior plan's steps (ignore
+            # summary; an appended/added step counts as DIFFERENT because list
+            # lengths differ). Identical revisions are a streak only while no
+            # non-bookkeeping ActionEvent appears between the two PlanEvents in
+            # the persisted log; real work starts a fresh streak at 1. At >= the
+            # cap, feed the existing bookkeeping-stuck valve (emit the same
+            # `bookkeeping_only` warning + STUCK status the (c.3) valve emits) —
+            # do NOT invent a new halt path. Only in autonomous mode; interactive
+            # path is byte-identical.
+            events_with_new_plan = await self._loop._events()
+            prior_plan, productive_between = _prior_plan_and_productive_action_between(
+                events_with_new_plan, new_plan
+            )
+            if prior_plan is not None and _step_titles(prior_plan) == _step_titles(new_plan):
+                if productive_between:
+                    self._loop._identical_plan_revisions = 1
+                else:
+                    self._loop._identical_plan_revisions += 1
             else:
                 self._loop._identical_plan_revisions = 0
             if (
@@ -1926,10 +2021,48 @@ class MetaToolHandlers:
                     legacy_detail="bookkeeping_only",
                 )
                 return Disp.HALT
+            if (
+                self._loop._identical_plan_revisions
+                == _PROPOSE_PLAN_UPDATE_REPEAT_CAP - 1
+            ):
+                await self._loop._emit(
+                    MessageEvent(
+                        source=EventSource.ENVIRONMENT,
+                        message=LLMMessage(role="user", content=_IDENTICAL_PLAN_NUDGE_TEXT),
+                        meta={"diagnostic": _IDENTICAL_PLAN_NUDGE_DIAGNOSTIC},
+                    )
+                )
             self._loop.mode = self._loop._execution_mode
             await self._loop._emit(
                 StatusEvent(
                     status=ConversationStatus.RUNNING, detail="plan_approved"
+                )
+            )
+            # 2026-07-09 overnight-soak fix (steer scenario → identical-revision
+            # churn → bookkeeping_only STUCK): the auto-approval above was
+            # INVISIBLE to the model — a StatusEvent is not rendered into its
+            # transcript, so from the model's seat the proposal went unanswered
+            # and it re-proposed the same revision until the C8 cap halted the
+            # run. Acknowledge the approval IN-BAND with a directive naming the
+            # next step, so the re-propose motive never forms. Autonomous-only
+            # (interactive approval already lands as a user-visible turn).
+            _next_step = new_plan.steps[0].title if new_plan.steps else "the first step"
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            f"Plan revision {new_plan.revision} is APPROVED "
+                            "(auto-approved — no human gate in autonomous mode). Do "
+                            "NOT propose it again. Continue executing now — next "
+                            f"step: '{_next_step}'. Your next output must be a real "
+                            "tool call (file/shell/etc.), not another plan proposal."
+                            "\n</system-reminder>"
+                        ),
+                    ),
+                    meta={"diagnostic": "auto_approval_ack"},
                 )
             )
             # C1c: arm the DoD gate (write-once → a mid-run revision's re-arm is swallowed;

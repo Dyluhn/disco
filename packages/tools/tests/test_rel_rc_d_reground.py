@@ -1,13 +1,10 @@
 """[REL-RC-D] Anchored edits advance grounding to the post-edit bytes.
 
-Root cause fixed: on a successful mutation the read-before-write guard discarded the coarse
-read_since_write bit but left reads[path].sha at the PRE-edit value, so the model's OWN next
-same-file edit saw a stale sha and was refused as STALE_FILE_CONTEXT — misreporting a tracked,
-deterministic, host-validated edit as external drift. Back-to-back same-file edits then wedged the
-build loop into STUCK (the revise_thrice failure). Anchored edits (file_edit / file_str_replace /
-exact_replace) now re-ground to the just-written bytes (preserving prior grounding shape — never
-promoting a partial read to whole-file); line-based edits, full/blind writes, and external
-mutations still discard/force a fresh read.
+Root cause fixed: on a successful mutation the next same-file edit used to see stale
+pre-edit grounding and get refused as STALE_FILE_CONTEXT. Successful mutators now return
+a numbered current-region observation and ground that visible region at the post-edit sha.
+Follow-up edits anchored in the returned region can proceed without an intervening read;
+edits elsewhere still need fresh visible content.
 
 The fresh-read guard only engages for files > 1500 bytes (small files stay fully in context), so
 these fixtures use a >1500-byte file.
@@ -77,9 +74,8 @@ assert len(BIG_BYTES) > 1500  # guard is active only above this threshold
 
 
 @pytest.mark.asyncio
-async def test_back_to_back_anchored_edits_without_reread():
-    """THE fix: read → edit A ok → edit B ok on the SAME file with NO intervening read.
-    Before REL-RC-D the 2nd edit was refused STALE_FILE_CONTEXT and the loop wedged."""
+async def test_back_to_back_anchored_edits_using_returned_region_without_reread():
+    """read → edit A ok → edit B in A's returned region ok with NO intervening read."""
     sbx = _FakeSandbox({"index.html": BIG_BYTES})
     ctx = _ctx(sbx)
     assert (await FileReadTool().run(FileReadArgs(path="index.html"), ctx)).success
@@ -87,12 +83,18 @@ async def test_back_to_back_anchored_edits_without_reread():
         FileEditArgs(path="index.html", old="<h1>Acme Cloud</h1>", new="<h1>Acme Cloud Pro</h1>"), ctx
     )
     assert a.success, a.content
+    assert "applied — lines 1-12 now read:" in a.content
     b = await FileEditTool().run(
-        FileEditArgs(path="index.html", old="OLD FOOTER", new="NEW FOOTER"), ctx
+        FileEditArgs(
+            path="index.html",
+            old="<p>row 0: lorem ipsum dolor sit amet consectetur adipiscing</p>",
+            new="<p>row 0: updated</p>",
+        ),
+        ctx,
     )
     assert b.success, b.content
     assert b"Acme Cloud Pro" in sbx._fs["index.html"]
-    assert b"NEW FOOTER" in sbx._fs["index.html"]
+    assert b"row 0: updated" in sbx._fs["index.html"]
 
 
 @pytest.mark.asyncio
@@ -113,9 +115,8 @@ async def test_stale_old_text_still_fails_after_edit():
 
 
 @pytest.mark.asyncio
-async def test_full_file_write_still_ungrounds_and_requires_fresh_read():
-    """Class C is unchanged: a full/blind file_write still clears grounding, so a 2nd write with no
-    intervening read is refused. Re-grounding is ONLY for anchored edits, never full rewrites."""
+async def test_full_file_write_success_observation_grounds_followup_write():
+    """Spec F1: file_write success returns a head view and grounds the path."""
     sbx = _FakeSandbox({"index.html": BIG_BYTES})
     ctx = _ctx(sbx)
     await FileReadTool().run(FileReadArgs(path="index.html"), ctx)
@@ -126,8 +127,10 @@ async def test_full_file_write_still_ungrounds_and_requires_fresh_read():
     second = await FileWriteTool().run(
         FileWriteArgs(path="index.html", content=BIG.replace("OLD FOOTER", "W2 FOOTER")), ctx
     )
-    assert second.success is False
-    assert second.error == "read_before_write"
+    assert second.success is True, second.content
+    assert "applied — lines 1-40 now read:" in second.content
+    assert "[total lines: 44]" in second.content
+    assert b"W2 FOOTER" in sbx._fs["index.html"]
 
 
 @pytest.mark.asyncio
@@ -170,10 +173,8 @@ async def test_failed_edit_does_not_falsely_ground():
 
 
 @pytest.mark.asyncio
-async def test_line_based_edit_does_not_ride_edit_grounding():
-    """Codex code-gate catch: a LINE-BASED edit must NOT ride edit_grounded after an anchored edit.
-    An anchored edit can shift line numbers, so a line target could silently hit the wrong lines —
-    file_replace_lines / file_insert_lines require a genuine fresh read (anchored=False)."""
+async def test_line_based_edit_can_use_returned_numbered_region():
+    """A line edit anchored in the prior success observation can proceed without re-reading."""
     sbx = _FakeSandbox({"index.html": BIG_BYTES})
     ctx = _ctx(sbx)
     await FileReadTool().run(FileReadArgs(path="index.html"), ctx)
@@ -185,9 +186,10 @@ async def test_line_based_edit_does_not_ride_edit_grounding():
         ctx,
     )
     assert a.success, a.content
-    # A line-based edit with NO fresh read must be refused (edit_grounded doesn't count here).
+    assert "applied — lines 1-13 now read:" in a.content
+    # The returned view includes line 2, so a follow-up line edit there is grounded.
     rl = await FileReplaceLinesTool().run(
         FileReplaceLinesArgs(path="index.html", start_line=2, end_line=2, new_text="X"), ctx
     )
-    assert rl.success is False
-    assert "read" in (rl.content or "").lower()
+    assert rl.success is True, rl.content
+    assert b"\nX\n" in sbx._fs["index.html"]

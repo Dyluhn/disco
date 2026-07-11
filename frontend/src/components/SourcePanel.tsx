@@ -2,7 +2,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { Ban, CheckCircle2, FileX2, Filter, Lock, MinusCircle, RefreshCw, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { cn } from "@/lib/cn";
-import { STATUS_LABEL, cleanDomain, isFailedStatus, monogram } from "@/lib/sources";
+import { STATUS_LABEL, citationNumbers, cleanDomain, isFailedStatus, monogram } from "@/lib/sources";
 import type { ExtractStatus, GroundedAnswer, SearchHit, Verdict } from "@/types/grounded";
 
 const FAIL_ICON: Partial<Record<ExtractStatus, typeof Lock>> = {
@@ -81,6 +81,13 @@ export function SourcePanel({ answer, onReScope }: Props) {
     }
     return map;
   }, [answer]);
+
+  /** Source-identity numbers — the SAME map the inline chips use, so [n] here
+   *  always matches [n] in the prose regardless of this panel's verdict sort. */
+  const chipNumbers = useMemo(
+    () => (answer ? citationNumbers(answer) : new Map<string, number>()),
+    [answer],
+  );
 
   /** Sort cited passages: those backing unsupported/weak claims first. */
   const sortedCited = useMemo(() => {
@@ -181,14 +188,20 @@ export function SourcePanel({ answer, onReScope }: Props) {
 
         <Tabs.Content value="cited" className="min-h-0 flex-1 overflow-y-auto px-body">
           <ul className="flex flex-col">
-            {sortedCited.map((p, i) => {
+            {sortedCited.map((p) => {
               const v = passageVerdict.get(p.id);
               return (
                 <li
                   key={p.id}
                   className="flex items-start gap-inline border-b border-hairline py-inline last:border-0"
                 >
-                  <span className="mt-px font-ui text-[0.72rem] text-accent">[{i + 1}]</span>
+                  {/* The number is the SOURCE's identity (citationNumbers — same map
+                      the inline chips use), NOT this row's position: the verdict sort
+                      reorders rows, and numbering by position made [n] here disagree
+                      with the [n] chips in the prose (2026-07-09 off-by-one family). */}
+                  <span className="mt-px font-ui text-[0.72rem] text-accent">
+                    [{chipNumbers.get(p.id) ?? "·"}]
+                  </span>
                   {verdictIcon(v)}
                   <div className="min-w-0">
                     <a

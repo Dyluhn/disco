@@ -37,6 +37,7 @@ from ..events import (
     EventSource,
     LLMMessage,
     MessageEvent,
+    ObservationEvent,
     PlanEvent,
     PlanStep,
     StatusEvent,
@@ -337,6 +338,26 @@ def _planning_tool_refusal_message(
             "\nThe next turn will offer only `submit_plan` + `file_read`."
         )
     return f"<system-reminder>\n{detail}\n</system-reminder>"
+
+
+def _read_churn_nudge_message(path: str, count: int) -> str:
+    if count == 5:
+        return (
+            f"You have read {path} {count} times in small windows without changing "
+            "anything. Read it ONCE whole (omit offset/limit — files under the size "
+            "cap fit in a single read), then act."
+        )
+    if count == 10:
+        return (
+            f"{count} small reads of {path}, still no change. STOP paging through it. "
+            f"Your next action must be a whole-file read of {path}, an edit, or a "
+            "plain statement of what is blocking you."
+        )
+    return (
+        f"FINAL WARNING: {count} reads of {path} with no action. From the 20th read "
+        "on, further small reads of this file count as no-ops and will pause the "
+        "run. Act now."
+    )
 
 
 def _hint_text(text: str) -> str:
@@ -949,6 +970,25 @@ class AgentLoop:
 
     # ---- plan-mode helpers (Build) ------------------------------------------
 
+    def _effective_mode(self, events: list[Event]) -> OperatingMode:
+        return signals.effective_mode(
+            events,
+            execution=self._execution_mode,
+            default=self.mode,
+        )
+
+    def _reconcile_mode_from_events(self, events: list[Event]) -> OperatingMode:
+        mode = self._effective_mode(events)
+        if self.mode != mode:
+            _LOG.warning(
+                "Reconciling loop mode for %s from %s to %s using event-log markers",
+                self.conversation_id,
+                self.mode.value,
+                mode.value,
+            )
+            self.mode = mode
+        return mode
+
     def _readonly_tool_names(self) -> frozenset[str] | None:
         """Delegates to Driver.readonly_tool_names (used by the Observer F9 gate)."""
         return self._driver.readonly_tool_names()
@@ -1068,6 +1108,49 @@ class AgentLoop:
         and the planning-mode gate."""
         return await self._valve.post_noop_valve()
 
+    async def _maybe_apply_read_churn_valve(self, action: ActionEvent) -> Disp:
+        if self.mode == OperatingMode.PLANNING:
+            return Disp.FALLTHROUGH
+        if action.tool_call is None or action.tool_call.tool_name != "file_read":
+            return Disp.FALLTHROUGH
+        events = await self._events()
+        if not any(
+            isinstance(event, ObservationEvent)
+            and event.action_id == action.id
+            and event.tool_result.success
+            for event in events
+        ):
+            return Disp.FALLTHROUGH
+        state = signals.read_churn_state(events)
+        if state is None:
+            return Disp.FALLTHROUGH
+        if state.warning_count is not None:
+            await self._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=_read_churn_nudge_message(
+                            state.path, state.warning_count
+                        ),
+                    ),
+                    meta={
+                        "diagnostic": signals.READ_CHURN_NUDGE_DIAGNOSTIC,
+                        "path": state.path,
+                        "count": state.warning_count,
+                        "streak": state.warning_count,
+                    },
+                )
+            )
+            events = await self._events()
+        if state.invisible_noops <= 0:
+            return Disp.FALLTHROUGH
+        self._invisible_steps = max(self._invisible_steps, state.invisible_noops)
+        noops = signals.consecutive_noops(events) + self._invisible_steps
+        if await self._valve.actionless_valve(events, noops):
+            return Disp.HALT
+        return Disp.FALLTHROUGH
+
     async def _land_blocked(
         self,
         *,
@@ -1146,7 +1229,7 @@ class AgentLoop:
         #      before proposing (the Claude-Code-style "Phase 1: gather context").
         #   3. No tool call at all (a prose answer) → nudge back to planning.
         # The plan tool itself is NEVER executed.
-        if self.mode == OperatingMode.PLANNING:
+        if self._reconcile_mode_from_events(events) == OperatingMode.PLANNING:
             tc = step.tool_call
             if (
                 tc is not None
@@ -1427,6 +1510,19 @@ class AgentLoop:
 
     async def _gate_risk_confirm(self, action: ActionEvent) -> tuple[Disp, ActionEvent]:
         # (i) RISK GATE — assess, then maybe require confirmation (§5).
+        # GATE ORDER (appkit-lane live catch 2026-07-10): an action whose tool is
+        # NOT in the executor's callable set can never execute, so it must never
+        # park on a human confirmation — in an autonomous run nobody can answer
+        # and the run dies at the inactivity cap (a barred `file_edit` in strict
+        # AppKit hit BlastRadiusConfirm instead of the executor's unknown_tool
+        # refusal). Fall through so execute() emits the ONE canonical refusal.
+        _callable = getattr(self.executor, "callable_tool_names", None)
+        if callable(_callable):
+            try:
+                if action.tool_call.tool_name not in set(_callable()):
+                    return Disp.FALLTHROUGH, action
+            except Exception:  # noqa: BLE001 — introspection failure → normal gating
+                pass
         # Audit (security §7): when the analyzer exposes the detailed
         # assessment, stamp it into the action's meta so the security
         # posture (final risk, rationale, contributing analyzers, the
@@ -1559,27 +1655,10 @@ class AgentLoop:
             # FINISHED/STUCK/ERROR/AWAITING_USER_*/no new work → idle.
             if not self._has_unprocessed_user_message(await self._events()):
                 return state
-        # Restore execution mode after a server restart. `self.mode` is in-memory only;
-        # a fresh loop always starts in PLANNING mode regardless of what the event log
-        # says. Scan the event log to determine whether the current lifecycle is in
-        # execution mode (plan was approved and not subsequently re-entered planning).
-        # This fixes post-restart resumes: without it, finish triggers PLAN_NUDGE.
-        if self.mode == OperatingMode.PLANNING and self._execution_mode != OperatingMode.PLANNING:
-            _boot_events = await self._events()
-            _plan_approved_seq: int | None = None
-            _reenter_planning_seq: int | None = None
-            for _e in _boot_events:
-                if isinstance(_e, StatusEvent):
-                    if _e.detail == "plan_approved":
-                        _plan_approved_seq = _e.seq or 0
-                    elif _e.detail == "planning":  # request_plan re-enters planning mode
-                        _reenter_planning_seq = _e.seq or 0
-            # In execution mode if: plan approved AND not re-entered planning after that.
-            if _plan_approved_seq is not None and (
-                _reenter_planning_seq is None
-                or _plan_approved_seq > _reenter_planning_seq
-            ):
-                self.mode = self._execution_mode
+        # Restore/reconcile the in-memory mode from the event log. `self.mode`
+        # is only a cache; phase truth is the latest planning/plan_approved
+        # marker so preamble and re-kick paths cannot drift.
+        self._reconcile_mode_from_events(await self._events())
 
         # Bug 12 (§11.4) — FINISHED→followup path. A change/revision follow-up on
         # an approved/finished build re-enters PLANNING here (the planning gate
@@ -1636,6 +1715,7 @@ class AgentLoop:
             action_to_execute: ActionEvent | None = None
             async with self._lock:
                 events = await self._events()
+                self._reconcile_mode_from_events(events)
                 state = ConversationState.reconstruct(
                     self.conversation_id, events, max_iterations=self.max_iterations
                 )
@@ -1990,6 +2070,8 @@ class AgentLoop:
                 )
                 continue
             await self._execute_and_observe(action_to_execute)
+            if await self._maybe_apply_read_churn_valve(action_to_execute) is Disp.HALT:
+                return await self.get_state()
             # loop continues
 
     # _has_unprocessed_user_message delegates to signals (external callers + run()).
@@ -2010,6 +2092,7 @@ class AgentLoop:
                     meta={"steer": True} if steer else {},
                 )
             )
+            self._reconcile_mode_from_events(await self._events())
             if state.execution_status in (
                 ConversationStatus.FINISHED,
                 ConversationStatus.STUCK,
@@ -2036,9 +2119,12 @@ class AgentLoop:
                 and signals.is_revision_intent(text)
             ):
                 evs = await self._events()
-                if any(
-                    isinstance(e, StatusEvent) and e.detail == "plan_approved"
-                    for e in evs
+                if (
+                    not signals.current_blocked_question_landing(evs)
+                    and any(
+                        isinstance(e, StatusEvent) and e.detail == "plan_approved"
+                        for e in evs
+                    )
                 ):
                     await self._enter_revision_planning(text)
         return await self.get_state()
@@ -2452,6 +2538,7 @@ class AgentLoop:
         mode, with a fresh unprocessed user turn whose intent is a CHANGE
         (`signals.is_revision_intent`). A pure Q&A follow-up ("what font did you
         use?") is exempt — it is answered without a forced re-plan."""
+        self._reconcile_mode_from_events(events)
         # Already (re)planning → nothing to do (also guards against re-firing on
         # the same follow-up once we've emitted the planning marker below).
         if self.mode == OperatingMode.PLANNING:
@@ -2461,6 +2548,12 @@ class AgentLoop:
         if not any(
             isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
         ):
+            return False
+        # A reply to the shared blocked lander is the answer to the agent's
+        # pending question, not a host-side revision steer. Deliver it in the
+        # next model context and let the model call propose_plan_update if it
+        # decides the answer changes scope.
+        if signals.latest_user_answers_blocked_question(events):
             return False
         # PRIMARY (live WS/kernel steer): a durable, sequence-stable
         # `revision_steer_pending` marker the kernel ingress appended. Consumed

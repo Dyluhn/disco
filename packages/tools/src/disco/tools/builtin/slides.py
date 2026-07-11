@@ -42,11 +42,15 @@ class SlidesGenerateArgs(BaseModel):
     goal: str | None = Field(
         default=None,
         description=(
-            "Natural-language description of the desired slide deck (e.g. "
-            "'A 6-slide investor pitch for an EV battery startup'). "
-            "When provided, the C2 structured pipeline generates the deck "
-            "automatically via outline → fill → render stages. "
-            "Takes priority over ``markdown`` when both are supplied."
+            "REQUIRED for deck generation (unless you supply ``markdown``). The deck's "
+            "content AND intent, in natural language — e.g. 'A 7-slide technical brief "
+            "on post-training quantization for LLMs: executive summary, the methods "
+            "landscape, weight-only vs weight+activation, bit-width as the dominant "
+            "degradation driver, model-scale effects, a cross-source comparison, and "
+            "limitations'. The C2 pipeline builds a structured, themed, image-bearing "
+            "deck from this. This tool CANNOT see the conversation or any research "
+            "report — the content must be in ``goal`` (``theme``, ``slide_count``, and "
+            "``format`` carry no content). Takes priority over ``markdown``."
         ),
     )
     markdown: str = Field(
@@ -382,12 +386,54 @@ class SlidesTool:
     async def run(self, args: SlidesGenerateArgs, ctx: ToolContext) -> ToolOutcome:
         assert ctx.sandbox is not None  # sandbox tools always receive an instance
 
+        # Filename hygiene (gauntlet e-web 2026-07-07): the driver passed
+        # filename='>residential-…' and every artifact landed with a literal '>'
+        # prefix — shell-hostile and invalid on Windows. Strip OS/shell-hostile
+        # characters and stray whitespace; '.' and '/' are deliberately left
+        # alone so the sandbox jail still sees (and rejects) traversal attempts.
+        clean = re.sub(r'[<>:"|?*\\\x00-\x1f]', "", args.filename).strip().strip("-")
+        if clean != args.filename:
+            args = args.model_copy(update={"filename": clean})
+        if not clean:
+            return ToolOutcome(
+                success=False,
+                content="filename is empty after removing invalid characters "
+                "(<>:\"|?* and control chars). Provide a plain base name like 'my-deck'.",
+                error="invalid filename",
+            )
+
         fmt = args.format.lower()
         if fmt not in ("html", "pdf", "pptx"):
             return ToolOutcome(
                 success=False,
                 content=f"Unsupported format: {fmt!r}. Use 'html', 'pdf', or 'pptx'.",
                 error=f"Unsupported format: {fmt!r}.",
+            )
+
+        # NO-CONTENT GUARD (gauntlet root-cause 2026-07-07): the tool has TWO content
+        # sources — `goal` (→ C2 structured pipeline) and `markdown` (→ Marp path) —
+        # and it cannot see the conversation/report. A capable driver sometimes calls
+        # slides_generate with only theme/slide_count/format (deck INTENT) but omits
+        # `goal`; the old `use_c2 = bool(args.goal)` gate then silently fell through to
+        # the Marp path with EMPTY content → a 1-slide, zero-text deck reported as
+        # success (the media-only export-render heuristic passed it). Fail LOUDLY and
+        # actionably instead so the driver re-calls with `goal` populated (→ real deck),
+        # rather than shipping a blank deliverable. Covers mode="markdown" with empty
+        # markdown too — there is genuinely nothing to render either way.
+        if not (args.goal and args.goal.strip()) and not args.markdown.strip():
+            return ToolOutcome(
+                success=False,
+                content=(
+                    "slides_generate has no deck content to render. Provide `goal` — a "
+                    "natural-language description AND the source content for the deck "
+                    "(the C2 pipeline builds a structured, themed, image-bearing deck "
+                    "from it) — OR `markdown` (Marp source with '---' slide separators). "
+                    "You supplied neither, so there is nothing to turn into slides. This "
+                    "tool CANNOT see the conversation or the research report: you must "
+                    "pass the report's key content/instructions in `goal` (theme, "
+                    "slide_count, and format do not carry any content on their own)."
+                ),
+                error="slides_generate called with neither goal nor markdown content",
             )
 
         # ---- C2 deck pipeline (primary path when goal is supplied) ----
@@ -508,7 +554,7 @@ class SlidesTool:
         except ImageGenNotConfigured:
             backend = None
 
-        c1_deck, fallback_md, err, authored_sidecar = await generate_deck(
+        c1_deck, fallback_md, err, authored_sidecar, image_stats = await generate_deck(
             args.goal,
             args.filename,
             ctx,
@@ -520,7 +566,9 @@ class SlidesTool:
             # C2 succeeded — render via C3. authored_sidecar is the fresh editable
             # source (or None if the sidecar write failed) → gates the editor.
             return await self._render_c1_deck(
-                c1_deck, args, ctx, fmt, editable_source=authored_sidecar
+                c1_deck, args, ctx, fmt,
+                editable_source=authored_sidecar,
+                image_stats=image_stats,
             )
 
         # C2 failed → fall back to Marp/html fallback with the generated markdown.
@@ -573,13 +621,17 @@ class SlidesTool:
         fmt: str,
         *,
         editable_source: str | None = None,
+        image_stats=None,
     ) -> ToolOutcome:
         """Render a C1 Deck to the sandbox and return a ToolOutcome.
 
         ``editable_source`` is the ``{name}.authored.json`` path IFF this generation
         freshly wrote it (from generate_deck). It gates the in-app editor: a swallowed
         sidecar-write failure → None → no "Edit Slides" affordance, and never an
-        affordance pointing at a stale leftover sidecar (no false affordance)."""
+        affordance pointing at a stale leftover sidecar (no false affordance).
+        ``image_stats`` (ImageGenStats) carries the honest image outcome — its note
+        goes in the CONTENT (so the agent knows images failed / were unconfigured)
+        and its numbers in `structured.images`."""
         from disco.tools.builtin._pptx_render import convert_to_pdf, render_html, render_pptx
 
         if ctx.sandbox is None:
@@ -591,6 +643,20 @@ class SlidesTool:
         editable: dict[str, str] = (
             {"editable_source": editable_source} if editable_source else {}
         )
+        img_note = image_stats.note() if image_stats is not None else ""
+        img_structured: dict = (
+            {
+                "images": {
+                    "configured": image_stats.configured,
+                    "wanted": image_stats.wanted,
+                    "generated": image_stats.generated,
+                    "failed": len(image_stats.failed),
+                    "sample_error": image_stats.sample_error,
+                }
+            }
+            if image_stats is not None
+            else {}
+        )
 
         if fmt == "html":
             html_str = render_html(deck)
@@ -600,7 +666,7 @@ class SlidesTool:
                 content=(
                     f"Slide deck '{args.filename}' written to {out_filename}\n"
                     f"Format: HTML (C3 brand renderer)\n"
-                    f"Slides: {len(deck.slides)}"
+                    f"Slides: {len(deck.slides)}{img_note}"
                 ),
                 artifacts=[out_filename],
                 structured={
@@ -609,6 +675,7 @@ class SlidesTool:
                     "format": "html",
                     "slide_count": len(deck.slides),
                     "renderer": "c3-brand",
+                    **img_structured,
                     # A2.0/A2.2: editable_source (the AuthoredDeck sidecar) is present
                     # ONLY when the sidecar write actually succeeded — its presence is
                     # what gates the in-app deck editor tab.
@@ -644,7 +711,7 @@ class SlidesTool:
                 content=(
                     f"Slide deck '{args.filename}' written to {out_filename}\n"
                     f"Format: PPTX (C3 native editable — real text boxes)\n"
-                    f"Slides: {len(deck.slides)}{pdf_note}"
+                    f"Slides: {len(deck.slides)}{img_note}{pdf_note}"
                 ),
                 artifacts=artifacts,
                 structured={
@@ -653,6 +720,7 @@ class SlidesTool:
                     "format": "pptx",
                     "slide_count": len(deck.slides),
                     "renderer": "pptx-native",
+                    **img_structured,
                     # A2.0/A2.2: present only when the sidecar write actually succeeded.
                     **editable,
                     "slides": [{"type": s.type, "layout": s.layout} for s in deck.slides],
@@ -676,7 +744,7 @@ class SlidesTool:
                 content=(
                     f"Slide deck '{args.filename}' written to {out_filename}\n"
                     f"Format: PDF (via LibreOffice + C3 PPTX)\n"
-                    f"Slides: {len(deck.slides)}"
+                    f"Slides: {len(deck.slides)}{img_note}"
                 ),
                 artifacts=[out_filename, pptx_name],
                 structured={
@@ -685,6 +753,7 @@ class SlidesTool:
                     "format": "pdf",
                     "slide_count": len(deck.slides),
                     "renderer": "libreoffice",
+                    **img_structured,
                     # A2: a fresh sidecar makes even a pdf-format deck editable (the
                     # editor re-renders html/pptx; the pdf is flagged stale on save).
                     **editable,

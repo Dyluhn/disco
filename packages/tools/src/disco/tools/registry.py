@@ -69,23 +69,14 @@ AGENT_TOOLS = frozenset(
         "extract",
         "file_read",
         "file_write",
-        # CD-TOOLS-3 — guarded whole-file writer (shrink/governed/atomic); general writer, all tiers.
-        "safe_write_file",
         "file_append",
         "file_edit",
         # line-number-targeted edits — the reliable way to edit LARGE files (any model)
         "file_replace_lines",
         "file_insert_lines",
-        # W4 — anchored str-replace for capable models (anchored_edit capability).
-        # Callable by all agents (in allowed_tools) but WITHHELD from advertised_tools
-        # when model_policy.anchored_edit is False; see agent_scope() below.
-        "file_str_replace",
         # CD-TOOLS-2 — atomic exact-match batch replace; anchored-edit tier (withheld from the
         # weak advertised set via ModelExecutionPolicy.withheld_tools, callable by all).
         "exact_replace",
-        # H3 — regex fan-out refactor tool. Raw free-form agent/custom-build surface only;
-        # strict AppKit scope intentionally does not include it.
-        "find_and_edit",
         # CD-TOOLS-7 — buffered transactional batch of deterministic file transforms.
         "run_project_script",
         "file_list",
@@ -116,10 +107,9 @@ AGENT_TOOLS = frozenset(
         "server_status",
         # plan-mode meta tools: propose a plan (planning) + report capstones (execution).
         "submit_plan",
-        "plan_step",
-        # runthru-v2 (#3): declarative full-state progress snapshot. plan_step is now
-        # RETIRED from the advertised surface for ALL tiers (it caused plan-state drift);
-        # capable models report progress via this instead. Prompt-gated, never gates finish.
+        # runthru-v2 (#3): declarative full-state progress snapshot. The legacy
+        # plan_step tool stays registered for replay/back-compat but is not in
+        # the agent scope.
         "update_plan_progress",
         "think",  # NO-OP reasoning scratchpad — let a small model "say" things without side effects
         # CXT-2: durable .disco/context/* working memory (read any kind; write narrative kinds).
@@ -130,6 +120,10 @@ AGENT_TOOLS = frozenset(
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame
         "scaffold_starter",
+        # WO-TC2: trusted components — verified vendored security cores (free-form
+        # Build ONLY; strict AppKit / artifact / research scopes exclude the names).
+        "add_trusted_component",
+        "eject_trusted_component",
         # document/report: model authors parts; host assembles/stamps the export.
         "doc_set_section",
         "doc_export",
@@ -153,17 +147,16 @@ AGENT_TOOLS = frozenset(
 # W4: backward-compat constants kept for external imports (e.g. agent-server tests).
 # The new agent_scope() uses model_policy.withheld_tools instead of these directly.
 # Do NOT use these constants in new code — derive from ModelExecutionPolicy.withheld_tools.
-_ANCHORED_EDIT_TOOLS: frozenset[str] = frozenset({"file_str_replace"})
+_ANCHORED_EDIT_TOOLS: frozenset[str] = frozenset({"exact_replace"})
 _WEAK_TIER_ADVERTISED: frozenset[str] = AGENT_TOOLS - _ANCHORED_EDIT_TOOLS
 
 # C6: artifact_mode tool scope — a STRICT SUBSET of AGENT_TOOLS with NO shell/browser/
-# preview/plan-gate/code_exec/file_str_replace/delegate_explore. Includes line-edit tools
+# preview/plan-gate/code_exec/legacy anchored-edit/delegate_explore. Includes line-edit tools
 # (file_replace_lines / file_insert_lines) so artifacts remain editable post-creation.
 ARTIFACT_TOOLS: frozenset[str] = frozenset(
     {
         "file_read",
         "file_write",
-        "safe_write_file",  # CD-TOOLS-3 — guarded whole-file writer (artifacts stay safely writable)
         "run_project_script",  # CD-TOOLS-7 — transactional batch of file transforms
         "file_append",
         "file_edit",
@@ -199,7 +192,7 @@ def artifact_scope() -> ToolScope:
 
     ARTIFACT_TOOLS is a strict subset of AGENT_TOOLS: file writers + asset
     generators + search/extract + think. Excludes shell*, browser, preview_*,
-    server_status, submit_plan, plan_step, code_exec, file_str_replace,
+    server_status, submit_plan, plan_step, code_exec, legacy anchored-edit,
     delegate_explore. The INTERACTIVE/NeverConfirm loop is low-risk by design;
     the boundary is the intersection: artifact mode must NOT silently grant
     shell or browser access."""
@@ -221,10 +214,10 @@ def agent_scope(*, model_policy: ModelExecutionPolicy) -> ToolScope:
     allowed set — they must never see a narrower boundary than the security one.
 
     Tier / capability behaviour (driven entirely by the policy object):
-      • standard + anchored_edit=True  → advertised_tools=None (show all)
-      • standard + anchored_edit=False → file_str_replace withheld
-      • weak    + anchored_edit=True   → plan_step, update_plan_progress withheld
-      • weak    + anchored_edit=False  → all three withheld
+      • standard + anchored_edit=True  → all scoped tools advertised
+      • standard + anchored_edit=False → exact_replace withheld
+      • weak    + anchored_edit=True   → update_plan_progress withheld
+      • weak    + anchored_edit=False  → exact_replace and update_plan_progress withheld
     """
     withheld = model_policy.withheld_tools
     if not withheld:

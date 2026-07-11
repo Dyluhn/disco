@@ -25,6 +25,7 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     ObservationEvent,
+    SecurityRisk,
     SqliteEventStore,
     StatusEvent,
 )
@@ -39,9 +40,29 @@ from disco.core.llm import (
     StreamChunk,
     TokenUsage,
 )
-from disco.tools import ProcessSandboxService
+from disco.tools import ProcessSandboxService, ToolDef
+from pydantic import BaseModel
 
 CID = "c1"
+_PUBLISH_TOOL = "mcp__publish_srv__deploy_site"
+
+
+class _NoArgs(BaseModel):
+    pass
+
+
+class _PublishMcpClient:
+    def __init__(self) -> None:
+        self.calls = 0
+        self._url = "https://mcp.example.test"
+        self.allowed_hosts: tuple[str, ...] = ()
+
+    async def call_tool(self, tool: str, arguments: dict) -> dict:
+        self.calls += 1
+        return {
+            "content": [{"type": "text", "text": f"published via {tool}"}],
+            "isError": False,
+        }
 
 
 class _ScriptedProvider:
@@ -106,12 +127,14 @@ def _finish(summary: str = "done") -> ProposedToolCall:
 
 
 def _plan_step_done(idx: int) -> ProposedToolCall:
-    """Mark a plan step done — required by the plan-completeness FINISHED gate.
+    """Mark a plan step done via the current progress tool.
+
     Without this, the loop refuses to land in FINISHED (plan has incomplete steps)
     and falls back to STUCK. The scripted scenarios that should end FINISHED need
     to walk the plan to completion before declaring done."""
     return ProposedToolCall(
-        tool_name="plan_step", arguments={"index": idx, "state": "done"}
+        tool_name="update_plan_progress",
+        arguments={"steps": [{"index": idx, "state": "done"}]},
     )
 
 
@@ -129,7 +152,22 @@ def _runtime(store: SqliteEventStore, steps) -> ConversationRuntime:
         default_model="m",
     )
     router = DefaultLLMRouter(cfg, {"fake": _ScriptedProvider(steps)})
-    return ConversationRuntime(store, router=router, sandbox_service=ProcessSandboxService())
+    runtime = ConversationRuntime(store, router=router, sandbox_service=ProcessSandboxService())
+    # Re-aim the publish-gate integration at a REGISTERED host tool. Unknown or
+    # out-of-scope names intentionally bypass confirmation since 09a1f127 and
+    # go straight to the canonical refusal; using one here would test obsolete
+    # gate order instead of confirmation semantics.
+    if any(tc.tool_name == _PUBLISH_TOOL for _, tool_calls in steps for tc in tool_calls):
+        runtime._mcp_http_tools[_PUBLISH_TOOL] = ToolDef(
+            name=_PUBLISH_TOOL,
+            description="Publish a test site through an approved MCP server",
+            args_model=_NoArgs,
+            base_risk=SecurityRisk.HIGH,
+            runs_in="in_process",
+            read_only=False,
+        )
+        runtime._mcp_http_clients["publish_srv"] = _PublishMcpClient()
+    return runtime
 
 
 def _user(content: str) -> MessageEvent:
@@ -162,20 +200,23 @@ _RISKY = [
     ("done", [_finish()]),
 ]
 
-# Publish-class lifecycle: the `deploy_site` tool name trips BlastRadiusConfirm's
-# publish guard (substring match, fires BEFORE scope is consulted), so the gate
-# pauses even though the tool isn't registered. This keeps the confirm/reject flow
-# under real-composition test now that sandboxed shell no longer gates.
+# Publish-class lifecycle: a registered MCP host tool trips both the configured
+# HIGH risk gate and BlastRadiusConfirm's publish-name guard.
 _PUBLISH = [
     ("here's the plan", [_plan(["deploy the site"])]),
-    ("deploying", [ProposedToolCall(tool_name="deploy_site", arguments={})]),
+    ("deploying", [ProposedToolCall(tool_name=_PUBLISH_TOOL, arguments={})]),
     # [REL-RC-J] a genuinely SUCCESSFUL productive action: the finish gate now counts
     # outcomes (successful observations), not attempts — without this, a script whose
     # deploy is rejected/failed has done no real work and FINISHED is correctly refused.
-    ("noting outcome", [ProposedToolCall(
-        tool_name="file_write",
-        arguments={"path": "publish-note.txt", "content": "deploy attempted"},
-    )]),
+    (
+        "noting outcome",
+        [
+            ProposedToolCall(
+                tool_name="file_write",
+                arguments={"path": "publish-note.txt", "content": "deploy attempted"},
+            )
+        ],
+    ),
     ("step 1 complete", [_plan_step_done(1)]),
     ("done", [_finish()]),
 ]
@@ -259,15 +300,12 @@ async def test_sandboxed_risky_action_auto_approves():
     # never paused for per-action confirmation, anywhere in the run
     assert state.execution_status == ConversationStatus.FINISHED
     assert not any(
-        isinstance(e, StatusEvent)
-        and e.status == ConversationStatus.WAITING_FOR_CONFIRMATION
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.WAITING_FOR_CONFIRMATION
         for e in events
     )
     # the risky shell action executed (observation exists)...
     shell_observations = [
-        e
-        for e in events
-        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
+        e for e in events if isinstance(e, ObservationEvent) and e.tool_result.tool_name == "shell"
     ]
     assert len(shell_observations) == 1
     # ...and was assessed + stamped, not silently waved through
@@ -284,9 +322,7 @@ async def test_sandboxed_risky_action_auto_approves():
 
 async def test_publish_action_pauses_and_confirm_executes_exactly_it():
     """The publish guard still BITES on the composed surface, and confirm executes
-    exactly the pending action. `deploy_site` isn't a registered tool, so its
-    execution is observable as the executor's unknown-tool failure — proof the
-    confirm actually dispatched it (reject, below, leaves no such trace)."""
+    exactly the pending registered host action once (reject leaves no call)."""
     store = SqliteEventStore(":memory:")
     runtime = await _build_convo(store, _PUBLISH)
     await _run_to_rest(runtime)
@@ -301,7 +337,7 @@ async def test_publish_action_pauses_and_confirm_executes_exactly_it():
         for e in pre_events
         if isinstance(e, ActionEvent)
         and e.tool_call is not None
-        and e.tool_call.tool_name == "deploy_site"
+        and e.tool_call.tool_name == _PUBLISH_TOOL
     )
     assert pending.meta.get("auto_approved") is None
 
@@ -309,14 +345,14 @@ async def test_publish_action_pauses_and_confirm_executes_exactly_it():
     await _await_task(runtime)
 
     events = await store.get_events(CID)
-    # the confirmed action was dispatched to the executor: unknown-tool failure
+    # The confirmed action was dispatched exactly once through the MCP client.
     executions = [
         e
         for e in events
-        if isinstance(e, AgentErrorEvent) and "unknown or out-of-scope tool" in e.error
+        if isinstance(e, ObservationEvent) and e.tool_result.tool_name == _PUBLISH_TOOL
     ]
-    assert len(executions) == 1  # exactly the gated action ran, once
-    assert "deploy_site" in executions[0].error
+    assert len(executions) == 1
+    assert runtime._mcp_http_clients["publish_srv"].calls == 1
     assert (await store.get_state(CID)).execution_status == ConversationStatus.FINISHED
 
 
@@ -333,21 +369,15 @@ async def test_reject_denies_without_executing():
         for e in pre_events
         if isinstance(e, ActionEvent)
         and e.tool_call is not None
-        and e.tool_call.tool_name == "deploy_site"
+        and e.tool_call.tool_name == _PUBLISH_TOOL
     )
 
     await runtime.reject(CID)  # deny, resume without executing
     await _await_task(runtime)
 
     events = await store.get_events(CID)
-    # The deploy action must NEVER have reached the executor: no unknown-tool
-    # failure anywhere (that error is what its execution looks like — see the
-    # confirm test). The script's follow-on plan_step(1, done) may still run as
-    # the loop resumes; that's expected — the test guards the gate semantic.
-    assert not any(
-        isinstance(e, AgentErrorEvent) and "unknown or out-of-scope tool" in e.error
-        for e in events
-    )
+    # The deploy action must NEVER have reached the registered MCP client.
+    assert runtime._mcp_http_clients["publish_srv"].calls == 0
     rejection = next(e for e in events if isinstance(e, AgentErrorEvent))
     # Rejection is framed as an implicit system-reminder, not a user-tone error.
     assert "<system-reminder>" in rejection.error
@@ -466,7 +496,7 @@ async def test_execution_gate_refuses_finish_without_productive_action():
         for e in events
         if isinstance(e, ActionEvent)
         and e.tool_call is not None
-        and e.tool_call.tool_name not in ("submit_plan", "plan_step")
+        and e.tool_call.tool_name not in ("submit_plan", "update_plan_progress")
     ]
     assert len(productive) >= 1  # the gate forced at least one real action
 
@@ -481,9 +511,9 @@ async def test_execution_gate_refuses_finish_without_productive_action():
     assert len(reminders) >= 1  # the gate fired at least once
 
     # NO ErrorEvent was emitted — "don't error out, send implicit reminders"
-    assert not any(
-        isinstance(e, ErrorEvent) for e in events
-    ), "the gate must not error out; it nudges and re-enters"
+    assert not any(isinstance(e, ErrorEvent) for e in events), (
+        "the gate must not error out; it nudges and re-enters"
+    )
 
 
 async def test_request_plan_after_finish_reopens_plan_mode_with_a_new_revision():
@@ -580,9 +610,7 @@ async def test_kill_switch_revokes_caps_tears_down_sandbox_and_records_stop():
     assert executor._sandbox._closed is True  # the sandbox session torn down
     # a terminal stop is recorded so subscribers (the UI) see it
     events = await store.get_events(CID)
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "killed" for e in events
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "killed" for e in events)
     # and the executor refuses further work after the kill
     from disco.core import ToolCall
 
@@ -590,11 +618,11 @@ async def test_kill_switch_revokes_caps_tears_down_sandbox_and_records_stop():
     assert res.success is False and res.structured["kind"] == "sandbox_error"
 
 
-# ---- W4 (§10.8): capability-gated file_str_replace at the build-loop compose --
+# ---- W4 (§10.8): capability-gated exact_replace at the build-loop compose ----
 #
-# _compose_build_loop passes the BUILD LOOP's driver caps to agent_scope(model_caps),
-# so file_str_replace (the anchored-edit tool) is ADVERTISED only to a driver whose
-# ModelEntry declares ANCHORED_EDIT; weak drivers still don't see it (but it stays
+# _compose_build_loop passes the BUILD LOOP's driver caps to agent_scope(model_policy),
+# so exact_replace (the anchored-edit tool) is ADVERTISED only to a driver whose
+# ModelEntry declares ANCHORED_EDIT; non-anchored drivers still don't see it (but it stays
 # callable by qualified name). Caps are resolved from the persisted config store the
 # same way production does — routing is pinned by the injected scripted router.
 
@@ -637,19 +665,19 @@ async def _compose_and_get_executor(runtime: ConversationRuntime, store):
     return runtime._executors[CID]
 
 
-async def test_build_loop_advertises_file_str_replace_to_anchored_edit_driver(tmp_path):
-    """A driver whose ModelEntry declares ANCHORED_EDIT gets file_str_replace in the
+async def test_build_loop_advertises_exact_replace_to_anchored_edit_driver(tmp_path):
+    """A driver whose ModelEntry declares ANCHORED_EDIT gets exact_replace in the
     executor's ADVERTISED set (the capable tier)."""
     store = SqliteEventStore(":memory:")
     runtime = _caps_runtime(store, anchored=True, tmp_path=tmp_path)
     executor = await _compose_and_get_executor(runtime, store)
 
     advertised = {t.name for t in executor.available_tools()}
-    assert "file_str_replace" in advertised
+    assert "exact_replace" in advertised
 
 
-async def test_build_loop_withholds_file_str_replace_from_weak_driver(tmp_path):
-    """A driver WITHOUT ANCHORED_EDIT never sees file_str_replace advertised (weak/
+async def test_build_loop_withholds_exact_replace_from_non_anchored_driver(tmp_path):
+    """A driver WITHOUT ANCHORED_EDIT never sees exact_replace advertised (weak/
     default tier) — but it stays callable by qualified name (advertising is gated,
     allowed_tools is not)."""
     store = SqliteEventStore(":memory:")
@@ -657,5 +685,5 @@ async def test_build_loop_withholds_file_str_replace_from_weak_driver(tmp_path):
     executor = await _compose_and_get_executor(runtime, store)
 
     advertised = {t.name for t in executor.available_tools()}
-    assert "file_str_replace" not in advertised
-    assert "file_str_replace" in executor._scope.allowed_tools
+    assert "exact_replace" not in advertised
+    assert "exact_replace" in executor._scope.allowed_tools

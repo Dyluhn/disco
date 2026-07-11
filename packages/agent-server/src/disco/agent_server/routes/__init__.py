@@ -21,6 +21,7 @@ from .preview_edit import make_preview_edit_router
 from .probes import make_probes_router
 from .projects import make_projects_router
 from .report import make_report_router
+from .sandbox import make_sandbox_router
 from .schedules import make_schedules_router
 from .sessions import make_sessions_router
 from .share import make_share_router
@@ -46,6 +47,7 @@ __all__ = [
     "make_probes_router",
     "make_projects_router",
     "make_report_router",
+    "make_sandbox_router",
     "make_schedules_router",
     "make_sessions_router",
     "make_share_router",

@@ -47,6 +47,7 @@ def _gateway_auth_token(sandbox_id: str) -> str:
     key = master.encode() if master else _DEV_GATEWAY_SECRET
     return hmac.new(key, f"kernel-gateway:{sandbox_id}".encode(), hashlib.sha256).hexdigest()
 
+
 # C15: idle-cull knob. Default 300s (5 min) — long enough that an agent thinking
 # between tool calls doesn't trigger churn, short enough to free a forgotten
 # kernel in a quiet conversation. Set to 0 to disable culling entirely.
@@ -66,13 +67,77 @@ def _default_idle_timeout_s() -> float:
     except ValueError:
         _LOG.warning(
             "%s=%r is not a float; using default %.0fs",
-            _IDLE_TIMEOUT_ENV, raw, _DEFAULT_IDLE_TIMEOUT_S,
+            _IDLE_TIMEOUT_ENV,
+            raw,
+            _DEFAULT_IDLE_TIMEOUT_S,
         )
         return _DEFAULT_IDLE_TIMEOUT_S
     return max(0.0, v)
 
+
 # ANSI escape sequence regex for stripping colors from tracebacks
-_ANSI_ESCAPE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+_ANSI_ESCAPE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_KERNEL_STREAM_HEAD = 16 * 1024
+_KERNEL_STREAM_TAIL = 48 * 1024
+_KERNEL_STREAM_CAP = _KERNEL_STREAM_HEAD + _KERNEL_STREAM_TAIL
+_KERNEL_IMAGE_MAX_BYTES = 8 * 1024 * 1024
+_KERNEL_WS_MAX_FRAME_BYTES = 1024 * 1024
+
+
+class _BoundedTextCapture:
+    """List-compatible bounded accumulator for streamed kernel text."""
+
+    def __init__(self) -> None:
+        self.total = 0
+        self._small = ""
+        self._head = ""
+        self._tail = ""
+
+    def append(self, value: object) -> None:
+        text = str(value or "")
+        self.total += len(text)
+        if len(self._small) <= _KERNEL_STREAM_CAP:
+            room = _KERNEL_STREAM_CAP + 1 - len(self._small)
+            self._small += text[:room]
+        if len(self._head) < _KERNEL_STREAM_HEAD:
+            self._head += text[: _KERNEL_STREAM_HEAD - len(self._head)]
+        if len(text) >= _KERNEL_STREAM_TAIL:
+            self._tail = text[-_KERNEL_STREAM_TAIL:]
+        else:
+            self._tail = (self._tail + text)[-_KERNEL_STREAM_TAIL:]
+
+    def render(self) -> str:
+        if self.total <= _KERNEL_STREAM_CAP:
+            return self._small[: self.total]
+        dropped = max(0, self.total - len(self._head) - len(self._tail))
+        return (
+            self._head + f"\n[disco: kernel output truncated; {self.total} chars total, "
+            f"{dropped} omitted]\n" + self._tail
+        )
+
+    def __iter__(self):
+        yield self.render()
+
+
+def _cap_kernel_scalar(value: object) -> str | None:
+    if value is None:
+        return None
+    capture = _BoundedTextCapture()
+    capture.append(value)
+    return capture.render()
+
+
+def _cap_kernel_traceback(values: object) -> str:
+    capture = _BoundedTextCapture()
+    if not isinstance(values, (list, tuple)):
+        capture.append(_ANSI_ESCAPE.sub("", str(values or "")))
+        return capture.render()
+    for index, value in enumerate(values):
+        if index:
+            capture.append("\n")
+        capture.append(_ANSI_ESCAPE.sub("", str(value or "")))
+    return capture.render()
+
 
 @dataclass
 class KernelResult:
@@ -99,6 +164,7 @@ class KernelResult:
             parts.append(f"plot saved: {img}")
         return "\n".join(parts)
 
+
 class KernelSession:
     """One persistent IPython kernel per conversation. State lives in kernel RAM."""
 
@@ -121,6 +187,7 @@ class KernelSession:
     async def shutdown(self) -> None:
         """Cleanly shutdown the kernel."""
         raise NotImplementedError
+
 
 class ProcessKernel(KernelSession):
     """Transport for the 'process' backend: runs a local kernel via jupyter_client."""
@@ -156,10 +223,7 @@ class ProcessKernel(KernelSession):
         await self._kc.wait_for_ready(timeout=60)
 
         # Setup memory limit: 4GiB as required by BP-08
-        setup_cell = (
-            "import resource; "
-            "resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
-        )
+        setup_cell = "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
         await self.execute(setup_cell, timeout_s=10)
 
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
@@ -169,13 +233,13 @@ class ProcessKernel(KernelSession):
         kc = self._kc
 
         msg_id = kc.execute(code)
-        
-        stdout = []
-        stderr = []
+
+        stdout = _BoundedTextCapture()
+        stderr = _BoundedTextCapture()
         result_repr = None
         error_traceback = None
         images = []
-        
+
         try:
             while True:
                 try:
@@ -194,29 +258,39 @@ class ProcessKernel(KernelSession):
                             msg = await kc.get_iopub_msg(timeout=0.1)
                         except TimeoutError:
                             continue
-                        
+
                         if msg.get("parent_header", {}).get("msg_id") != msg_id:
                             continue
-                        if msg.get("header", {}).get("msg_type") == "status" and \
-                           msg.get("content", {}).get("execution_state") == "idle":
+                        if (
+                            msg.get("header", {}).get("msg_type") == "status"
+                            and msg.get("content", {}).get("execution_state") == "idle"
+                        ):
                             idle = True
                             break
-                    
+
                     if not idle:
                         _LOG.warning("Kernel failed to idle after interrupt, restarting...")
                         await self.restart()
                         return KernelResult(
-                            ok=False, stdout="".join(stdout), stderr="".join(stderr),
+                            ok=False,
+                            stdout="".join(stdout),
+                            stderr="".join(stderr),
                             error_traceback="Kernel timed out and was restarted",
-                            timed_out=True, restarted=True)
-                    
-                    return KernelResult(ok=False, stdout="".join(stdout), stderr="".join(stderr),
-                                       error_traceback="KeyboardInterrupt: execution timed out",
-                                       timed_out=True)
+                            timed_out=True,
+                            restarted=True,
+                        )
+
+                    return KernelResult(
+                        ok=False,
+                        stdout="".join(stdout),
+                        stderr="".join(stderr),
+                        error_traceback="KeyboardInterrupt: execution timed out",
+                        timed_out=True,
+                    )
 
                 content = msg.get("content", {})
                 msg_type = msg.get("header", {}).get("msg_type")
-                
+
                 if msg.get("parent_header", {}).get("msg_id") != msg_id:
                     continue
 
@@ -226,7 +300,7 @@ class ProcessKernel(KernelSession):
                     elif content.get("name") == "stderr":
                         stderr.append(content.get("text", ""))
                 elif msg_type == "execute_result":
-                    result_repr = content.get("data", {}).get("text/plain")
+                    result_repr = _cap_kernel_scalar(content.get("data", {}).get("text/plain"))
                 elif msg_type == "display_data":
                     data = content.get("data", {})
                     if "image/png" in data:
@@ -234,12 +308,14 @@ class ProcessKernel(KernelSession):
                         img_path = f".pmx/plots/{self._seq:04d}.png"
                         full_path = self._workspace / img_path
                         full_path.parent.mkdir(parents=True, exist_ok=True)
-                        with open(full_path, "wb") as f:
-                            f.write(base64.b64decode(data["image/png"]))
-                        images.append(img_path)
+                        encoded = data["image/png"]
+                        if len(encoded) <= (_KERNEL_IMAGE_MAX_BYTES * 4 // 3) + 8:
+                            with open(full_path, "wb") as f:
+                                f.write(base64.b64decode(encoded))
+                            images.append(img_path)
                 elif msg_type == "error":
                     traceback = content.get("traceback", [])
-                    error_traceback = _ANSI_ESCAPE.sub('', "\n".join(traceback))
+                    error_traceback = _cap_kernel_traceback(traceback)
                 elif msg_type == "status" and content.get("execution_state") == "idle":
                     # Check if we've received the execute_reply
                     # We might need to skip stale replies from previous interrupted executions
@@ -254,7 +330,7 @@ class ProcessKernel(KernelSession):
                                     stderr="".join(stderr),
                                     result_repr=result_repr,
                                     error_traceback=error_traceback,
-                                    images=images
+                                    images=images,
                                 )
                                 return await self._apply_discipline(res)
                             else:
@@ -270,14 +346,15 @@ class ProcessKernel(KernelSession):
                             stderr="".join(stderr),
                             result_repr=result_repr,
                             error_traceback=error_traceback,
-                            images=images
+                            images=images,
                         )
                         return await self._apply_discipline(res)
 
         except Exception as e:
             _LOG.exception("Kernel execution failed")
-            return KernelResult(ok=False, stdout="".join(stdout), stderr="".join(stderr),
-                               error_traceback=str(e))
+            return KernelResult(
+                ok=False, stdout="".join(stdout), stderr="".join(stderr), error_traceback=str(e)
+            )
 
     async def _apply_discipline(self, res: KernelResult) -> KernelResult:
         """B2 kernel output discipline: truncate stdout/repr if > 2000 chars."""
@@ -291,12 +368,19 @@ class ProcessKernel(KernelSession):
                 rel_path = f".outputs/{filename}"
                 full_path = self._workspace / rel_path
                 full_path.parent.mkdir(parents=True, exist_ok=True)
-                
+
                 with open(full_path, "w", encoding="utf-8") as f:
                     f.write(val)
-                
+
                 head = val[:500]
-                truncated = f"{head}\n[full output: /workspace/{rel_path}, {len(val)} bytes]"
+                stored_kind = (
+                    "bounded output projection"
+                    if "[disco: kernel output truncated;" in val
+                    else "full output"
+                )
+                truncated = (
+                    f"{head}\n[{stored_kind}: /workspace/{rel_path}, {len(val)} chars stored]"
+                )
                 setattr(res, field_name, truncated)
         return res
 
@@ -313,8 +397,7 @@ class ProcessKernel(KernelSession):
             await self._kc.wait_for_ready(timeout=60)
             # Re-setup memory limit
             setup_cell = (
-                "import resource; "
-                "resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
+                "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
             )
             await self.execute(setup_cell, timeout_s=10)
 
@@ -323,6 +406,7 @@ class ProcessKernel(KernelSession):
             await self._km.shutdown_kernel()
             self._km = None
             self._kc = None
+
 
 class GatewayKernel(KernelSession):
     """Transport for container backends: reaches jupyter_kernel_gateway via WebSockets."""
@@ -351,22 +435,24 @@ class GatewayKernel(KernelSession):
         """Start the gateway lazily in tmux and wait for ready."""
         # Check if already running (port 8899)
         from ._container import INTERNAL_PORTS
-        port = next(iter(INTERNAL_PORTS)) # 8899
-        
+
+        port = next(iter(INTERNAL_PORTS))  # 8899
+
         # Resolve host mapping
         mapping = None
         if hasattr(self._sandbox, "internal_port_mapping"):
             mapping = self._sandbox.internal_port_mapping(port)
-        
+
         if not mapping:
             # Not a container or not published? For process backend it shouldn't reach here.
             # But just in case, if it's local, we might want localhost:8899
             mapping = ("localhost", port)
 
         self._url = f"http://{mapping[0]}:{mapping[1]}"
-        
+
         # Try to reach it
         import httpx
+
         try:
             async with httpx.AsyncClient() as client:
                 res = await client.get(f"{self._url}/api", timeout=1.0, headers=self._auth_headers)
@@ -394,7 +480,7 @@ class GatewayKernel(KernelSession):
             f"--ip 0.0.0.0 --port {port}"
         )
         await self._sessions.exec("__kernel", cmd, None)
-        
+
         # Poll /api until ready. The gateway start is CPU-bound; on a saturated
         # box (local-LLM inference + the build agent competing for cores) it can
         # take well over 30s, so an autonomous build would forfeit on a
@@ -408,7 +494,9 @@ class GatewayKernel(KernelSession):
         async with httpx.AsyncClient() as client:
             for _ in range(max(1, budget_s)):
                 try:
-                    res = await client.get(f"{self._url}/api", timeout=1.0, headers=self._auth_headers)
+                    res = await client.get(
+                        f"{self._url}/api", timeout=1.0, headers=self._auth_headers
+                    )
                     if res.status_code == 200:
                         return self._url
                     await asyncio.sleep(1.0)  # up but not 200 yet — wait, don't tight-loop
@@ -423,6 +511,7 @@ class GatewayKernel(KernelSession):
     async def start(self) -> None:
         url = await self._ensure_gateway()
         import httpx
+
         async with httpx.AsyncClient() as client:
             res = await client.post(f"{url}/api/kernels", headers=self._auth_headers)
             res.raise_for_status()
@@ -430,14 +519,16 @@ class GatewayKernel(KernelSession):
 
         # Connect WS
         import websockets
+
         ws_url = url.replace("http://", "ws://") + f"/api/kernels/{self._kernel_id}/channels"
-        self._ws = await websockets.connect(self._ws_with_token(ws_url))
-        
-        # Setup memory limit
-        setup_cell = (
-            "import resource; "
-            "resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
+        self._ws = await websockets.connect(
+            self._ws_with_token(ws_url),
+            max_size=_KERNEL_WS_MAX_FRAME_BYTES,
+            max_queue=16,
         )
+
+        # Setup memory limit
+        setup_cell = "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
         await self.execute(setup_cell, timeout_s=10)
 
     async def execute(self, code: str, *, timeout_s: int) -> KernelResult:
@@ -468,11 +559,11 @@ class GatewayKernel(KernelSession):
             },
             "channel": "shell",
         }
-        
+
         await ws.send(json.dumps(msg))
 
-        stdout = []
-        stderr = []
+        stdout = _BoundedTextCapture()
+        stderr = _BoundedTextCapture()
         result_repr = None
         error_traceback = None
         images = []
@@ -500,18 +591,22 @@ class GatewayKernel(KernelSession):
                                 if is_status and msg["content"]["execution_state"] == "idle":
                                     return KernelResult(
                                         ok=False,
-                                        stdout="".join(stdout), stderr="".join(stderr),
-                                        error_traceback=
-                                        "KeyboardInterrupt: execution timed out",
-                                        timed_out=True)
+                                        stdout="".join(stdout),
+                                        stderr="".join(stderr),
+                                        error_traceback="KeyboardInterrupt: execution timed out",
+                                        timed_out=True,
+                                    )
                     except TimeoutError:
                         _LOG.warning("Interrupt timed out, restarting...")
                         await self.restart()
                         return KernelResult(
-                            ok=False, stdout="".join(stdout), stderr="".join(stderr),
-                            error_traceback=
-                            "KeyboardInterrupt: execution timed out, state lost",
-                            timed_out=True, restarted=True)
+                            ok=False,
+                            stdout="".join(stdout),
+                            stderr="".join(stderr),
+                            error_traceback="KeyboardInterrupt: execution timed out, state lost",
+                            timed_out=True,
+                            restarted=True,
+                        )
 
                 msg_type = msg.get("header", {}).get("msg_type")
                 if msg.get("parent_header", {}).get("msg_id") != msg_id:
@@ -524,19 +619,21 @@ class GatewayKernel(KernelSession):
                     elif content.get("name") == "stderr":
                         stderr.append(content.get("text", ""))
                 elif msg_type == "execute_result":
-                    result_repr = content.get("data", {}).get("text/plain")
+                    result_repr = _cap_kernel_scalar(content.get("data", {}).get("text/plain"))
                 elif msg_type == "display_data":
                     data = content.get("data", {})
                     if "image/png" in data:
                         self._seq += 1
                         img_path = f".pmx/plots/{self._seq:04d}.png"
                         # Since this is a container, we use the sandbox file API to write
-                        png = base64.b64decode(data["image/png"])
-                        await self._sandbox.write_file(img_path, png)
-                        images.append(img_path)
+                        encoded = data["image/png"]
+                        if len(encoded) <= (_KERNEL_IMAGE_MAX_BYTES * 4 // 3) + 8:
+                            png = base64.b64decode(encoded)
+                            await self._sandbox.write_file(img_path, png)
+                            images.append(img_path)
                 elif msg_type == "error":
                     traceback = content.get("traceback", [])
-                    error_traceback = _ANSI_ESCAPE.sub('', "\n".join(traceback))
+                    error_traceback = _cap_kernel_traceback(traceback)
                 elif msg_type == "execute_reply":
                     ok = content.get("status") == "ok"
                     # Wait for idle status after reply
@@ -548,14 +645,15 @@ class GatewayKernel(KernelSession):
                         stderr="".join(stderr),
                         result_repr=result_repr,
                         error_traceback=error_traceback,
-                        images=images
+                        images=images,
                     )
                     return await self._apply_discipline(res)
 
         except Exception as e:
             _LOG.exception("Kernel execution failed")
-            return KernelResult(ok=False, stdout="".join(stdout), stderr="".join(stderr),
-                               error_traceback=str(e))
+            return KernelResult(
+                ok=False, stdout="".join(stdout), stderr="".join(stderr), error_traceback=str(e)
+            )
 
     async def _apply_discipline(self, res: KernelResult) -> KernelResult:
         """B2 kernel output discipline: truncate stdout/repr if > 2000 chars."""
@@ -566,18 +664,26 @@ class GatewayKernel(KernelSession):
                 ts = int(time.time())
                 filename = f"{ts}-{self._seq}-out.txt"
                 rel_path = f".outputs/{filename}"
-                
+
                 # Write full content via sandbox API
                 await self._sandbox.write_file(rel_path, val.encode("utf-8"))
-                
+
                 head = val[:500]
-                truncated = f"{head}\n[full output: /workspace/{rel_path}, {len(val)} bytes]"
+                stored_kind = (
+                    "bounded output projection"
+                    if "[disco: kernel output truncated;" in val
+                    else "full output"
+                )
+                truncated = (
+                    f"{head}\n[{stored_kind}: /workspace/{rel_path}, {len(val)} chars stored]"
+                )
                 setattr(res, field_name, truncated)
         return res
 
     async def interrupt(self) -> None:
         if self._url and self._kernel_id:
             import httpx
+
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"{self._url}/api/kernels/{self._kernel_id}/interrupt",
@@ -587,31 +693,37 @@ class GatewayKernel(KernelSession):
     async def restart(self) -> None:
         if self._url and self._kernel_id:
             import httpx
+
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"{self._url}/api/kernels/{self._kernel_id}/restart",
                     headers=self._auth_headers,
                 )
-            
+
             if self._ws:
                 await self._ws.close()
-            
+
             # Reconnect WS
             import websockets
+
             ws_base = self._url.replace("http://", "ws://")
             ws_url = f"{ws_base}/api/kernels/{self._kernel_id}/channels"
-            self._ws = await websockets.connect(self._ws_with_token(ws_url))
-            
+            self._ws = await websockets.connect(
+                self._ws_with_token(ws_url),
+                max_size=_KERNEL_WS_MAX_FRAME_BYTES,
+                max_queue=16,
+            )
+
             # Re-setup memory limit
             setup_cell = (
-                "import resource; "
-                "resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
+                "import resource; resource.setrlimit(resource.RLIMIT_AS, (4 << 30, 4 << 30))"
             )
             await self.execute(setup_cell, timeout_s=10)
 
     async def shutdown(self) -> None:
         if self._url and self._kernel_id:
             import httpx
+
             async with httpx.AsyncClient() as client:
                 await client.delete(
                     f"{self._url}/api/kernels/{self._kernel_id}", headers=self._auth_headers
@@ -708,7 +820,8 @@ class ManagedKernel(KernelSession):
                 self.cull_count += 1
                 _LOG.info(
                     "kernel: idle cull (idle_for=%.1fs > threshold=%.1fs); spawning fresh",
-                    idle_for, self._idle_timeout_s,
+                    idle_for,
+                    self._idle_timeout_s,
                 )
                 self._inner = self._factory()
                 await self._inner.start()

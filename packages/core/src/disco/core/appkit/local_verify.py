@@ -95,12 +95,26 @@ def _connect(schema_sql: str) -> sqlite3.Connection:
     return conn
 
 
-def _table_name(conn: sqlite3.Connection) -> str | None:
-    row = conn.execute(
+def _table_name(conn: sqlite3.Connection, lead: Entity | None = None) -> str | None:
+    """The LEAD table to probe. Prefer the generator's lead-entity table name when
+    the resolved lead is known — the F3.1 form primitive may add sibling
+    submissions tables to schema.sql, and the alphabetically-first table is then
+    not necessarily the lead's. A single-table (pre-F3.1) schema keeps its exact
+    old behavior via the first-table fallback."""
+    rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' "
-        "AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 1"
-    ).fetchone()
-    return row[0] if row else None
+        "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+    ).fetchall()
+    names = [row[0] for row in rows]
+    if not names:
+        return None
+    if lead is not None:
+        from .generator import _table_name as _lead_table_name
+
+        expected = _lead_table_name(lead)
+        if expected in names:
+            return expected
+    return names[0]
 
 
 def _representative_value(field_name: str, field_type: str) -> str:
@@ -122,7 +136,7 @@ def check_schema_sql(schema_sql: str, lead: Entity) -> CheckResult:
     except sqlite3.Error as exc:
         return CheckResult("schema_sql_valid", False, f"schema.sql is not valid SQL: {exc}")
     try:
-        table = _table_name(conn)
+        table = _table_name(conn, lead)
         if table is None:
             return CheckResult("schema_sql_valid", False, "schema.sql created no table.")
         cols = [f.name for f in lead.fields]
@@ -204,16 +218,23 @@ def _parse_schema_sql_columns(schema_sql: str) -> list[tuple[str, bool]] | None:
 
 
 def _parse_drizzle_schema_columns(schema_ts: str) -> list[tuple[str, bool]] | None:
-    if re.search(r"\bexport\s+const\s+leads\s*=\s*sqliteTable\s*\(", schema_ts) is None:
+    """Columns of the LEADS Drizzle table only. Scoped to the `export const leads =
+    sqliteTable(...)` block (not the whole file) because the F3.1 form primitive may
+    append sibling form-table exports; a pre-F3.1 schema.ts contains only the leads
+    table, so its parse — and the verdict — is unchanged."""
+    m = re.search(r"\bexport\s+const\s+leads\s*=\s*sqliteTable\s*\(", schema_ts)
+    if m is None:
         return None
+    end = schema_ts.find("});", m.end())
+    block = schema_ts[m.end() : end if end != -1 else len(schema_ts)]
     cols: list[tuple[str, bool]] = []
-    for m in re.finditer(
+    for cm in re.finditer(
         r'^\s*(?:"[^"]+"|[A-Za-z_$][\w$]*)\s*:\s*'
         r'(?:text|integer|real)\(\s*"([^"]+)"\s*\)([^\n]*)',
-        schema_ts,
+        block,
         re.MULTILINE,
     ):
-        cols.append((m.group(1), ".notNull()" in m.group(2)))
+        cols.append((cm.group(1), ".notNull()" in cm.group(2)))
     return cols
 
 
@@ -319,7 +340,7 @@ def local_api_roundtrip(
     except sqlite3.Error as exc:
         return CheckResult("local_api_roundtrip", False, f"schema.sql is not valid SQL: {exc}")
     try:
-        table = _table_name(conn)
+        table = _table_name(conn, lead)
         if table is None:
             return CheckResult("local_api_roundtrip", False, "schema.sql created no table.")
         cols = [f.name for f in lead.fields]

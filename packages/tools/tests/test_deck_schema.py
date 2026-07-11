@@ -814,6 +814,41 @@ def test_archetype_html_has_distinctive_layout_structures():
     assert html_str.count('class="slide-two-by-two-cell"') == 4
 
 
+def test_two_by_two_axis_labels_only_when_authored() -> None:
+    """No-false-affordances (gauntlet e-news 2026-07-07): a 4-cell two_by_two must
+    NOT get invented 'Higher impact/certainty' axis labels — the renderer was
+    fabricating an analytical framing the quadrants never plotted. Axis labels
+    render ONLY when the model authored them (6 body lines: x, y, 4 cells)."""
+    from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+    from disco.tools.builtin._pptx_render import render_html, render_pptx
+
+    def _deck(body: list[str]) -> AuthoredDeck:
+        return AuthoredDeck(
+            title="T", theme="disco-light",
+            slides=[AuthoredSlide(type="bullets", archetype="two_by_two",
+                                  title="Decision Map", body=body)],
+        )
+
+    four = _deck(["Fast wins", "Strategic bets", "Maintenance", "Avoid"])
+    html_4 = render_html(lower_deck(four))
+    assert "Higher impact" not in html_4 and "Higher certainty" not in html_4
+    assert html_4.count('class="slide-two-by-two-cell"') == 4
+
+    six = _deck(["Effort", "Value", "Fast wins", "Strategic bets", "Maintenance", "Avoid"])
+    html_6 = render_html(lower_deck(six))
+    assert "Effort" in html_6 and "Value" in html_6  # authored axes DO render
+
+    # PPTX path: no invented axis text on the 4-cell slide.
+    import io
+
+    from pptx import Presentation
+    prs = Presentation(io.BytesIO(render_pptx(lower_deck(four))))
+    all_text = " ".join(
+        s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame
+    )
+    assert "Higher impact" not in all_text and "Higher certainty" not in all_text
+
+
 def test_lower_deck_theme_override_rethemes_without_mutating_authored() -> None:
     """The slide-deck template selector path: theme_override re-themes at render
     time, the authored deck's own theme is untouched, and an unknown id raises."""
@@ -849,3 +884,45 @@ def test_lower_deck_brand_override_uses_direction_tokens() -> None:
     assert deck.theme == theme
     assert deck.theme.accent == "#c23616"
     assert authored.theme == "disco-light"
+
+
+def test_empty_image_slot_renders_art_fallback_not_dead_box() -> None:
+    """Gauntlet 2026-07-07: when image generation fails/is unconfigured, image
+    slots must render the THEMED ART fallback — inline SVG in HTML, native
+    vector shapes in PPTX — never the dead '[image]' placeholder box."""
+    import io
+
+    from disco.tools.builtin._deck_schema import AuthoredDeck, AuthoredSlide, lower_deck
+    from disco.tools.builtin._pptx_render import render_html, render_pptx
+    from pptx import Presentation
+
+    authored = AuthoredDeck(
+        title="T", theme="disco-light",
+        slides=[
+            AuthoredSlide(
+                type="image_right", archetype="bullets", title="With image",
+                body=["point one"],
+                image_prompt="art; subject: thing; slot: side; no words",
+            )
+        ],
+    )
+    deck = lower_deck(authored)  # NO image_assets → empty slot
+
+    html_str = render_html(deck)
+    assert "[image]" not in html_str
+    assert "<svg" in html_str  # the themed art fallback
+
+    prs = Presentation(io.BytesIO(render_pptx(deck)))
+    all_text = " ".join(
+        s.text_frame.text for s in prs.slides[0].shapes if s.has_text_frame
+    )
+    assert "[image]" not in all_text
+    # The art fallback draws multiple EMPTY autoshapes (base field + accents) —
+    # python-pptx autoshapes all carry a text_frame, so count empty-text shapes:
+    # baseline layout has 1 (the accent bar); the art adds at least 3 more.
+    empty_shapes = [
+        s
+        for s in prs.slides[0].shapes
+        if s.has_text_frame and not s.text_frame.text.strip()
+    ]
+    assert len(empty_shapes) >= 4, f"art fallback shapes missing: {len(empty_shapes)}"

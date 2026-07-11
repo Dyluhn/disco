@@ -19,7 +19,12 @@ from disco.core.llm.errors import (
     is_context_window_exceeded,
 )
 from disco.core.llm.openai_provider import OpenAIProvider
-from disco.core.llm.types import CapabilityProfile, CompletionRequest, ModelRole
+from disco.core.llm.types import (
+    EMPTY_REASONING_ONLY_METADATA_KEY,
+    CapabilityProfile,
+    CompletionRequest,
+    ModelRole,
+)
 
 
 def _req(text: str = "hi") -> CompletionRequest:
@@ -179,6 +184,67 @@ def _stream_provider(content: bytes) -> OpenAIProvider:
         return httpx.Response(200, content=content, headers={"content-type": "text/event-stream"})
 
     return _provider(handler)
+
+
+async def test_streaming_empty_reasoning_only_response_is_flagged():
+    content = _sse(
+        {"choices": [{"delta": {"reasoning_content": "thinking with no answer"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    )
+
+    _, final, _ = await _collect(_stream_provider(content))
+
+    assert final is not None
+    assert final.response_metadata[EMPTY_REASONING_ONLY_METADATA_KEY] == {
+        "finish_reason": "stop",
+        "content_len": 0,
+        "reasoning_len": len("thinking with no answer"),
+        "tool_call_count": 0,
+    }
+
+
+async def test_streaming_blank_stop_response_is_flagged():
+    content = _sse({"choices": [{"delta": {}, "finish_reason": "stop"}]})
+
+    _, final, _ = await _collect(_stream_provider(content))
+
+    assert final is not None
+    assert final.response_metadata[EMPTY_REASONING_ONLY_METADATA_KEY] == {
+        "finish_reason": "stop",
+        "content_len": 0,
+        "reasoning_len": 0,
+        "tool_call_count": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        _sse(
+            {"choices": [{"delta": {"content": "visible"}}]},
+            {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        ),
+        _sse(
+            {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
+            {"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "c1", "type": "function",
+                 "function": {"name": "shell", "arguments": '{"cmd": "ls"}'}}
+            ]}}]},
+            {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+        ),
+        _sse(
+            {"choices": [{"delta": {"reasoning_content": "thinking"}}]},
+            {"choices": [{"delta": {}, "finish_reason": "length"}]},
+        ),
+        _sse({"choices": [{"delta": {}, "finish_reason": "length"}]}),
+    ],
+)
+async def test_streaming_empty_reasoning_only_neighbors_are_not_flagged(content: bytes):
+    _, final, _ = await _collect(_stream_provider(content))
+
+    assert final is not None
+    assert EMPTY_REASONING_ONLY_METADATA_KEY not in final.response_metadata
 
 
 async def test_streaming_tool_args_accumulate_across_many_fragments():

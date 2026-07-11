@@ -2,7 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearOpenRouterKey,
   createModel,
+  createProvider,
   deleteModel,
+  deleteProvider,
+  disableProviderModel,
+  enableProviderModel,
   getAssignments,
   getDataSourcesConfig,
   getEncodersConfig,
@@ -16,7 +20,11 @@ import {
   getSandboxHealth,
   listModels,
   listOpenRouterModels,
+  listProviderModels,
+  listProviderPresets,
+  listProviders,
   setOpenRouterKey,
+  updateProvider,
   updateAssignments,
   updateDataSourcesConfig,
   updateEncodersConfig,
@@ -42,6 +50,13 @@ import type {
   ModelUpsert,
   OpenRouterKeyStatus,
   OpenRouterModel,
+  ProviderCatalogueModel,
+  ProviderCreate,
+  ProviderEnableBody,
+  ProviderInfo,
+  ProviderMutationResult,
+  ProviderPatch,
+  ProviderPreset,
   RoleFallbackConfig,
 } from "@/types/models";
 import type { SandboxConfig, SandboxHealth } from "@/types/sandbox";
@@ -254,6 +269,89 @@ export function useClearOpenRouterKey() {
   return useMutation({
     mutationFn: () => clearOpenRouterKey(),
     onSuccess: (status) => qc.setQueryData(OR_KEY_KEY, status),
+  });
+}
+
+// ---- generic providers -----------------------------------------------------
+
+const PROVIDERS_KEY = ["providers"] as const;
+const PROVIDER_PRESETS_KEY = ["provider-presets"] as const;
+const PROVIDER_MODELS_KEY = ["provider-models"] as const;
+
+export function useProviderPresets() {
+  return useQuery<ProviderPreset[]>({
+    queryKey: PROVIDER_PRESETS_KEY,
+    queryFn: listProviderPresets,
+    staleTime: Infinity,
+  });
+}
+
+export function useProviders() {
+  return useQuery<ProviderInfo[]>({ queryKey: PROVIDERS_KEY, queryFn: listProviders });
+}
+
+export function useCreateProvider() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ProviderCreate) => createProvider(body),
+    onSuccess: (result: ProviderMutationResult) => {
+      qc.setQueryData<ProviderInfo[]>(PROVIDERS_KEY, (current = []) => {
+        const without = current.filter((p) => p.id !== result.provider.id);
+        return [...without, result.provider];
+      });
+    },
+  });
+}
+
+export function useUpdateProvider() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: ProviderPatch }) =>
+      updateProvider(id, patch),
+    onSuccess: (result) => {
+      qc.setQueryData<ProviderInfo[]>(PROVIDERS_KEY, (current = []) =>
+        current.map((p) => (p.id === result.provider.id ? result.provider : p)),
+      );
+      qc.invalidateQueries({ queryKey: [...PROVIDER_MODELS_KEY, result.provider.id] });
+    },
+  });
+}
+
+export function useDeleteProvider() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => deleteProvider(id),
+    onSuccess: (_result, id) => {
+      qc.setQueryData<ProviderInfo[]>(PROVIDERS_KEY, (current = []) =>
+        current.filter((p) => p.id !== id),
+      );
+      qc.removeQueries({ queryKey: [...PROVIDER_MODELS_KEY, id] });
+    },
+  });
+}
+
+export function useProviderModels(providerId: string | null, enabled: boolean) {
+  return useQuery<ProviderCatalogueModel[]>({
+    queryKey: providerId ? [...PROVIDER_MODELS_KEY, providerId] : PROVIDER_MODELS_KEY,
+    queryFn: () => listProviderModels(providerId ?? ""),
+    enabled: enabled && !!providerId,
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+export function useEnableProviderModel(providerId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ProviderEnableBody) => enableProviderModel(providerId, body),
+    onSuccess: (models) => qc.setQueryData(MODELS_KEY, models),
+  });
+}
+
+export function useDisableProviderModel(providerId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (catalogueId: string) => disableProviderModel(providerId, catalogueId),
+    onSuccess: (models) => qc.setQueryData(MODELS_KEY, models),
   });
 }
 

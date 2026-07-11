@@ -67,16 +67,28 @@ async def test_router_exhausts_transient_and_raises():
     assert provider.calls == _MAX_ATTEMPTS  # tried exactly the cap, no more
 
 
-async def test_router_auth_error_is_terminal_no_retry():
-    """A terminal error (bad key) propagates on the FIRST call — retrying a 401
-    would just burn attempts. `calls == 1` proves no retry."""
-    provider = FaultyProvider(errors=[LLMAuthError("bad key")])
+async def test_router_auth_error_retries_once_then_succeeds():
+    """A single auth race (for example a just-rotated token) gets one retry."""
+    provider = FaultyProvider(errors=[LLMAuthError("stale token")], text="recovered")
+    router, _sink = build_faulty_router(provider)
+
+    response = await router.complete(_req())
+
+    assert response.text == "recovered"
+    assert provider.calls == 2
+
+
+async def test_router_repeated_auth_error_is_terminal_after_one_retry():
+    """Persistent bad credentials stop after the one bounded auth retry."""
+    provider = FaultyProvider(
+        errors=[LLMAuthError("bad key"), LLMAuthError("bad key")]
+    )
     router, _sink = build_faulty_router(provider)
 
     with pytest.raises(LLMAuthError):
         await router.complete(_req())
 
-    assert provider.calls == 1
+    assert provider.calls == 2
 
 
 async def test_router_content_filter_is_terminal_no_retry():

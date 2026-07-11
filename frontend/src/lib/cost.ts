@@ -1,5 +1,5 @@
 import type { DriverModel } from "@/types/agent";
-import { isFree, isSubscription, type ModelInfo, type TokenUsage } from "@/types/models";
+import { isFree, isPricingUnknown, isSubscription, type ModelInfo, type TokenUsage } from "@/types/models";
 
 /**
  * Cost legibility: every place a model is chosen shows its spend. Free → "Free";
@@ -8,6 +8,7 @@ import { isFree, isSubscription, type ModelInfo, type TokenUsage } from "@/types
  */
 export function costLabel(m: ModelInfo): string {
   if (isSubscription(m)) return "Subscription";
+  if (isPricingUnknown(m)) return "Pricing unknown";
   if (isFree(m)) return "Free";
   return `$${m.price_in_per_m} / $${m.price_out_per_m} / Mtok`;
 }
@@ -15,6 +16,7 @@ export function costLabel(m: ModelInfo): string {
 /** A one-word cost tag for very tight spots (the pill face). */
 export function costTag(m: ModelInfo): string {
   if (isSubscription(m)) return "Subscription";
+  if (isPricingUnknown(m)) return "Unknown";
   return isFree(m) ? "Free" : `$${m.price_in_per_m}/Mtok`;
 }
 
@@ -36,7 +38,9 @@ export function driverCostTag(m: DriverModel): string {
 export function calculateUsageCost(m: ModelInfo, usage: TokenUsage): number {
   // Free AND subscription models have no per-token bill (W-05): a subscription is a
   // flat plan fee, so there is no usage-derived USD cost to meter.
-  if (isFree(m) || isSubscription(m)) return 0;
+  // Unknown pricing: no rates exist to meter against — 0, and the cost surfaces
+  // label the model "pricing unknown" rather than implying a measured $0.
+  if (isFree(m) || isSubscription(m) || isPricingUnknown(m)) return 0;
   // If the backend already calculated cost_usd (v1.2 router does this for OpenRouter),
   // use it as the source of truth; otherwise calculate from tokens.
   if (usage.cost_usd && usage.cost_usd > 0) return usage.cost_usd;

@@ -76,7 +76,13 @@ export function ModelLeaderPill({ value, onChange }: Props) {
           ) : (
             <Globe className="size-3.5 shrink-0 text-accent" aria-hidden />
           )}
-          <span className="truncate">{effective?.label ?? "Default model"}</span>
+          {/* Fresh install honesty: an EMPTY catalogue means there is no default to
+              fall back to — say "Configure model" (mirrors BuildModelPicker) instead
+              of implying a working default that doesn't exist. */}
+          <span className="truncate">
+            {effective?.label ??
+              ((models?.length ?? 0) === 0 ? "Configure model" : "Default model")}
+          </span>
           {effective && (
             <span className="shrink-0 text-text-faint">· {costTag(effective)}</span>
           )}

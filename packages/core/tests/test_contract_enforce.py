@@ -110,7 +110,14 @@ def test_custom_contract_permits_broad_repair() -> None:
     assert c is not None
     s = compile_tool_scopes(c)
     assert decide_tool_in_scope(s, Phase.REPAIR, "file_write").allowed is True
-    assert decide_tool_in_scope(s, Phase.EDIT, "file_write").allowed is False  # edit ≠ repair
+    # CONTRACT-ACTIVATE repin (2026-07-10): CUSTOM (the every-unmapped-build
+    # fallback) now carries the working set in EDIT too; the remaining real
+    # denial classes are cross-kind mutators and the read-only VERIFY phase.
+    assert decide_tool_in_scope(s, Phase.EDIT, "file_write").allowed is True
+    # is_mutating mirrors the real dispatch boundary (read_only metadata);
+    # without it the name-list fallback treats unknown tools as ungoverned.
+    assert decide_tool_in_scope(s, Phase.EDIT, "doc_set_section", is_mutating=True).allowed is False
+    assert decide_tool_in_scope(s, Phase.VERIFY, "file_write").allowed is False
 
 
 def test_guard_reflects_live_phase() -> None:

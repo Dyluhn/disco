@@ -15,7 +15,13 @@ Locks the headless-stall fixes found by review:
 from __future__ import annotations
 
 import pytest
-from disco.core import ConversationStatus, SqliteEventStore, StatusEvent
+from disco.core import (
+    ConversationStatus,
+    EventSource,
+    MessageEvent,
+    SqliteEventStore,
+    StatusEvent,
+)
 from disco.core.llm import OperatingMode
 from loop_fakes import (
     ScriptedAgent,
@@ -107,24 +113,24 @@ def _identical_steps_script():
     """Three propose_plan_update calls in autonomous mode, each with steps
     BYTE-IDENTICAL to the immediately-prior plan (only the summary changes).
     A weak model in autonomous mode can hammer this loop forever hoping a
-    human will approve — the loop must bound it (C8) by feeding the
+    human will approve — after one real action opens the revision affordance,
+    the loop must bound the workless revision streak (C8) by feeding the
     existing bookkeeping-stuck valve when the streak hits the cap (3)."""
     return ScriptedAgent(
         [
             action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
             action_step("shell", {"command": "echo one"}),
             # 3x propose_plan_update with identical step TITLES, varying summary
-            # (the bug ignores summary — only step bytes matter).
+            # and no real work between them. The bug ignores summary — only step
+            # bytes matter.
             action_step(
                 "propose_plan_update",
                 {"summary": "p2", "steps": [{"title": "1"}]},
             ),
-            action_step("shell", {"command": "echo two"}),
             action_step(
                 "propose_plan_update",
                 {"summary": "p3", "steps": [{"title": "1"}]},
             ),
-            action_step("shell", {"command": "echo three"}),
             action_step(
                 "propose_plan_update",
                 {"summary": "p4", "steps": [{"title": "1"}]},
@@ -225,6 +231,14 @@ async def test_autonomous_propose_plan_update_halts_on_repeat_identical_steps():
     # the explanation) — headless has nobody to answer an open question.
     assert state.execution_status == ConversationStatus.STUCK
     assert_blocked_question_landing(events, legacy_detail="bookkeeping_only", flavor="terminal")
+    nudges = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == "identical_plan_nudge"
+    ]
+    assert len(nudges) == 1
     # The AWAITING_PLAN_APPROVAL gate was never reached — autonomous was
     # respected for the first revisions, then the cap fired.
     assert not _awaiting_plan(events), (
@@ -303,3 +317,49 @@ async def test_autonomous_propose_plan_update_changed_steps_do_not_trip():
         "changing a step must reset the streak — bookkeeping_only STUCK "
         "should NOT have fired"
     )
+
+
+@pytest.mark.asyncio
+async def test_autonomous_auto_approval_is_acknowledged_in_band():
+    """2026-07-09 overnight-soak fix: the auto-approval of a plan revision was
+    only a StatusEvent — invisible to the model — so it re-proposed the same
+    revision until the C8 cap STUCK the run (steer scenario, wave 2). The
+    approval must now land IN-BAND as an environment message naming the next
+    step, so the re-propose motive never forms."""
+    from disco.core import SqliteEventStore as Store
+
+    script = ScriptedAgent(
+        [
+            action_step("submit_plan", {"summary": "p", "steps": [{"title": "build the page"}]}),
+            action_step("shell", {"command": "echo one"}),
+            # ONE revision with CHANGED steps (the normal, healthy steer path).
+            action_step(
+                "propose_plan_update",
+                {"summary": "p2", "steps": [{"title": "build the page"}, {"title": "add contact"}]},
+            ),
+            action_step("shell", {"command": "echo two"}),
+            finish_step("done"),
+        ]
+    )
+    store = Store(":memory:")
+    loop, store = build_loop(script, store=store)
+    loop.mode = OperatingMode.PLANNING
+    loop._planning_tools = frozenset(["file_read"])
+    loop._autonomous = True
+
+    await loop.send_message("go")
+    await loop.run()
+
+    events = await store.get_events(CID)
+    acks = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == "auto_approval_ack"
+    ]
+    assert len(acks) == 1, "the auto-approved revision must be acknowledged in-band"
+    body = acks[0].message.content
+    assert "APPROVED" in body
+    assert "build the page" in body  # names the next step
+    assert "not another plan proposal" in body

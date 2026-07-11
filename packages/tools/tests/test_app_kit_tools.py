@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from disco.core.appkit import APPSPEC_RELPATH, DESIGNSPEC_RELPATH
 from disco.tools.anatomy import Capability, ToolContext
 from disco.tools.builtin.app_kit import (
@@ -123,8 +122,12 @@ async def test_app_create_rejects_invalid_app_spec():
     out = await AppCreateTool().run(
         AppCreateArgs(
             recipe_id="editorial-ledger",
-            app_spec={"schema_version": 1, "app_kind": "x", "name": "n",
-                      "pages": [{"id": "p", "route": "no-slash", "title": "t"}]},
+            app_spec={
+                "schema_version": 1,
+                "app_kind": "x",
+                "name": "n",
+                "pages": [{"id": "p", "route": "no-slash", "title": "t"}],
+            },
         ),
         _ctx(sbx),
     )
@@ -137,9 +140,7 @@ def test_app_create_advertises_typed_app_spec_schema():
     app_spec_schema = _non_null_branch(schema["properties"]["app_spec"])
 
     assert app_spec_schema["additionalProperties"] is False
-    assert {"schema_version", "app_kind", "name", "pages"}.issubset(
-        app_spec_schema["properties"]
-    )
+    assert {"schema_version", "app_kind", "name", "pages"}.issubset(app_spec_schema["properties"])
     page_schema = app_spec_schema["properties"]["pages"]["items"]
     section_schema = page_schema["properties"]["sections"]["items"]
     assert {"id", "kind", "variant_id", "content"}.issubset(section_schema["properties"])
@@ -237,6 +238,7 @@ def test_app_update_content_advertises_typed_items_array_schema():
 
     assert update_schema["additionalProperties"] is False
     assert _schema_allows_string_array(update_schema["properties"]["items"])
+    assert "success_message" in update_schema["properties"]
 
 
 async def test_app_update_content_touches_only_content_and_spec():
@@ -259,9 +261,10 @@ async def test_app_update_content_touches_only_content_and_spec():
         "src/generated/manifest.ts",
     }
     # the hero COMPONENT is byte-identical (it reads CONTENT by id, not embedded copy)
-    assert sbx._fs["src/components/HomeHeroSection.tsx"] == before[
-        "src/components/HomeHeroSection.tsx"
-    ]
+    assert (
+        sbx._fs["src/components/HomeHeroSection.tsx"]
+        == before["src/components/HomeHeroSection.tsx"]
+    )
     # the new copy is in content.ts
     assert "A brand-new headline" in sbx._fs["src/generated/content.ts"].decode("utf-8")
 
@@ -329,8 +332,8 @@ async def test_app_update_content_refuses_empty_updates():
     assert not out.success
     assert out.error == "app_update_content_refused"
     assert (
-        out.content
-        == "no updates provided — set at least one of heading/subheading/body/cta_label/items"
+        out.content == "no updates provided — set at least one of "
+        "heading/subheading/body/cta_label/items/success_message"
     )
 
 
@@ -570,8 +573,9 @@ async def test_app_snapshot_version_same_second_never_overwrites(monkeypatch):
     assert json.loads(sbx._fs[first_rel].decode("utf-8"))["label"] == "one"
     assert json.loads(sbx._fs[second_rel].decode("utf-8"))["label"] == "two"
     # the disambiguated id shares the base and carries a deterministic collision suffix
-    assert first.structured["version"] == "20260623T120000Z-" + (
-        first.structured["spec_digest"].split(":", 1)[-1][:12]
+    assert (
+        first.structured["version"]
+        == "20260623T120000Z-" + (first.structured["spec_digest"].split(":", 1)[-1][:12])
     )
     assert second.structured["version"] == first.structured["version"] + "-2"
 

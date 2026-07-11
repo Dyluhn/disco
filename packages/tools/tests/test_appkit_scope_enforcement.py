@@ -54,7 +54,7 @@ class _FakeMcpTool:
         return ToolOutcome(success=True, content="ok")
 
 _STANDARD = ModelExecutionPolicy.standard()
-_RAW_TOOLS = ("file_write", "shell", "code_exec", "file_str_replace", "browser")
+_RAW_TOOLS = ("file_write", "shell", "code_exec", "exact_replace", "browser")
 # AGENT_TOOLS intersected with what is actually REGISTERED — callable_tool_names
 # is registry ∩ allowed_tools, and a few AGENT_TOOLS names (deploy_preview) are
 # deferred / unregistered, so the normal Build callable set is this intersection.

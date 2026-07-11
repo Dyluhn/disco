@@ -45,9 +45,7 @@ def _podman_svc() -> tuple[PodmanSandboxService, FakePodmanClient, FakeCli]:
     fs: dict[str, bytes] = {}
     client = FakePodmanClient(has_image=True, fs=fs)
     cli = FakeCli(fs)
-    svc = PodmanSandboxService(
-        default_podman_config(), client=client, cli_runner=cli
-    )
+    svc = PodmanSandboxService(default_podman_config(), client=client, cli_runner=cli)
     return svc, client, cli
 
 
@@ -126,14 +124,14 @@ async def test_filtered_podman_spec_never_relaxes_to_open_bridge():
     )
     sandbox = client.created[-1]
     # The relaxation surface is binary: filtered -> proxied (pinned to the internal
-    # net via `networks`), open -> bare bridge (network_mode bridge, NO `networks`).
+    # net via `networks`); the legacy NETWORK grant uses the same safe shape.
     # A filtered spec must be PINNED to the internal net — never the bare open bridge.
     kw = sandbox.create_kwargs
     sb_networks = kw.get("networks") or {}
     assert sb_networks and all(n.startswith("disco-egr-") for n in sb_networks), (
         f"filtered must be pinned to the internal egress net, got networks={sb_networks!r}"
     )
-    # NOT the open branch: open is network_mode=bridge with NO `networks` pin.
+    # It is pinned to the internal network, never a bare bridge.
     assert not (kw.get("network_mode") == "bridge" and not sb_networks), (
         "filtered must NOT be the bare open bridge"
     )
@@ -202,20 +200,20 @@ async def test_filtered_gvisor_spec_unchanged_no_regression(tmp_path):
     assert sidecar.removed and net.removed
 
 
-async def test_sealed_and_open_gvisor_paths_unchanged_no_regression(tmp_path):
-    """E8 must not change the non-filtered paths. The default spec stays
-    `network_mode="none"`; an explicit NETWORK capability stays `bridge`."""
+async def test_sealed_and_open_gvisor_paths_are_isolated(tmp_path):
+    """Sealed has no network; explicit raw egress gets a per-instance bridge."""
     svc, client = _gvisor_svc(tmp_path)
     # Default (sealed) — unchanged.
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     assert client.last.run_kwargs["network_mode"] == "none"
-    # Explicit NETWORK capability (open) — unchanged.
+    # Legacy NETWORK capability is public-only through an internal proxy boundary.
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})),
         owner_id="o",
         conversation_id="c",
     )
-    assert client.last.run_kwargs["network_mode"] == "bridge"
+    assert client.last.run_kwargs["network"].startswith("disco-egr-")
+    assert client.networks.created[-1].attrs.get("internal") is True
 
 
 # ---------------------------------------------------------------------------
@@ -266,10 +264,7 @@ async def test_filtered_local_spec_yields_proxied_network_not_none():
     assert sidecar.removed and net.removed
 
 
-async def test_sealed_and_open_local_paths_unchanged_no_regression():
-    """The local tier's sealed / open paths stay exactly as before (the existing
-    `test_sealed_default_open_when_granted` covers this, but we re-assert here
-    so the E8 test file is the single regression hub for the local wiring)."""
+async def test_sealed_and_open_local_paths_are_isolated():
     svc, client = _local_svc()
     await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
     assert client.last.run_kwargs["network_mode"] == "none"
@@ -278,7 +273,8 @@ async def test_sealed_and_open_local_paths_unchanged_no_regression():
         owner_id="o",
         conversation_id="c",
     )
-    assert client.last.run_kwargs["network_mode"] == "bridge"
+    assert client.last.run_kwargs["network"].startswith("disco-egr-")
+    assert client.networks.created[-1].attrs.get("internal") is True
 
 
 # ---------------------------------------------------------------------------

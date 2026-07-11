@@ -15,7 +15,11 @@ from disco.core.auth import (
     AuthSession,
     SessionSigner,
     allowed_frontend_origins,
+    localhost_auto_pair_allowed,
     origin_allowed,
+    origin_permitted,
+    pairing_token,
+    request_traversed_proxy,
 )
 from disco.core.env import disco_env
 from disco.core.store.sqlite import DEFAULT_OWNER_ID, SqliteEventStore
@@ -26,8 +30,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 _LOG = logging.getLogger(__name__)
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _CID_RE = re.compile(r"/(conv_[A-Za-z0-9_-]+)(?:/|$)")
-_PAIRING_TOKEN = secrets.token_urlsafe(32)
-_PAIRING_TOKEN_CONSUMED = False
+# The admin pairing token is DERIVED LIVE from the shared session secret (see
+# disco.core.auth.pairing_token) at each use — identical across the app- and
+# agent-server, and stable across restarts, so ONE token pairs both origins. Not
+# consumed — the secret is the root of trust, so the operator can always re-pair a
+# fresh browser. Computed live (not cached at import) so it always reflects the
+# current secret, with no import-order fragility.
 _ADMIN_PREFIXES = (
     "/api/models",
     "/api/openrouter",
@@ -117,16 +125,38 @@ def set_session_cookie(response: Response, token: str, session: AuthSession) -> 
 
 
 def _pairing_token_ok(presented: str | None) -> bool:
-    return bool(
-        presented
-        and not _PAIRING_TOKEN_CONSUMED
-        and secrets.compare_digest(presented, _PAIRING_TOKEN)
-    )
+    # Constant-time compare against the derived token. Re-usable by design (the
+    # secret is the root of trust); the operator can re-pair a new browser.
+    return bool(presented and secrets.compare_digest(presented, pairing_token()))
 
 
-def _consume_pairing_token() -> None:
-    global _PAIRING_TOKEN_CONSUMED
-    _PAIRING_TOKEN_CONSUMED = True
+def _public_ui_url() -> str:
+    explicit = (disco_env("PUBLIC_UI_URL") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    port = (disco_env("UI_PORT", "8088") or "8088").strip() or "8088"
+    bind = (disco_env("BIND", "127.0.0.1") or "127.0.0.1").strip()
+    host = "localhost" if bind in {"", "0.0.0.0", "::"} or bind.startswith("127.") else bind
+    return f"http://{host}:{port}"
+
+
+def _print_boot_banner() -> None:
+    ui_url = _public_ui_url()
+    lines = [
+        "",
+        "================ Disco self-host boot ================",
+        f"UI: {ui_url}",
+        "First-run admin pairing:",
+        f"  Open {ui_url}",
+        "  If the browser asks for a pairing token, paste this token:",
+        f"  {pairing_token()}",
+        "After pairing, configure a driver model in Settings -> Models & Providers.",
+        "Proof step: docker compose exec agent-server disco-verify --quick",
+        "======================================================",
+        "",
+    ]
+    print("\n".join(lines), flush=True)
+    _LOG.info("Disco self-host UI: %s", ui_url)
 
 
 def _require_loopback_allowed_origin(request: Request) -> None:
@@ -157,7 +187,8 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
         if _is_public_http(path, method):
             return await call_next(request)
         origin = request.headers.get("origin")
-        if origin and not origin_allowed(origin):
+        # allowlist OR same-host (the single-front-door deploy: Origin == Host).
+        if origin and not origin_permitted(origin, request.headers.get("host")):
             return Response("forbidden origin", status_code=403)
         session = self._authenticate_request(request)
         if session is None:
@@ -206,18 +237,45 @@ class AppAuthMiddleware(BaseHTTPMiddleware):
 def make_auth_router() -> APIRouter:
     router = APIRouter()
     signer = SessionSigner()
-    _LOG.info("Disco one-time app-server pairing token: %s", _PAIRING_TOKEN)
+    _print_boot_banner()
+    _LOG.info("Disco pairing token (derived, shared across servers): %s", pairing_token())
 
     @router.post("/api/auth/mint")
     async def mint_session(body: MintSessionBody, request: Request, response: Response) -> dict:
-        _require_loopback_allowed_origin(request)
+        # Origin must always be allowed (CORS-listed frontend). Loopback is required
+        # ONLY for the tokenless paths: possession of the pairing token IS the
+        # operator proof — it is printed only in the server's own logs and exists
+        # precisely for the browser that is NOT on localhost (LAN/tailnet self-host).
+        # The old unconditional loopback gate made remote pairing impossible even
+        # WITH the token (2026-07-09 remote fresh-install bug). A tokenless client
+        # gets pairing_required (prompt the user for the token) unless it's a
+        # loopback dev client with auto-pair on. The token-FETCH route below stays
+        # loopback-only so a remote client can never read the token off the server.
+        # Same-host origins (the front-door deploy) are permitted for the TOKEN
+        # path; the tokenless auto-pair shortcut keeps the STRICT allowlist so a
+        # DNS-rebound page (Origin == rebound Host) can never mint without the token.
+        origin = request.headers.get("origin")
+        if not origin_permitted(origin, request.headers.get("host")):
+            raise HTTPException(status_code=403, detail={"reason": "origin_not_allowed"})
         auto_pair = _auto_pair_enabled()
         token_ok = _pairing_token_ok(body.pairing_token)
-        if not (auto_pair or token_ok):
-            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
+        if not token_ok:
+            if _is_loopback_client(request) and auto_pair and origin_allowed(origin):
+                pass  # host-process dev convenience (unforgeable loopback TCP peer)
+            elif localhost_auto_pair_allowed(
+                origin,
+                request.headers.get("host"),
+                via_proxy=request_traversed_proxy(request.headers),
+            ):
+                # Loopback-BOUND front door (compose default): the ports are
+                # kernel-unreachable from other machines, and the page asserts a
+                # localhost origin == this app's own Host → the operator's own
+                # machine. Zero-friction first run; DISCO_BIND=0.0.0.0 (or a proxy
+                # in front, which adds a forwarding header) disables it.
+                pass
+            else:
+                raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
         cookie, session = signer.mint(owner_id=DEFAULT_OWNER_ID, is_admin=True)
-        if token_ok and not auto_pair:
-            _consume_pairing_token()
         set_session_cookie(response, cookie, session)
         return {
             "ok": True,
@@ -227,11 +285,12 @@ def make_auth_router() -> APIRouter:
         }
 
     @router.get("/api/auth/pairing-token")
-    async def pairing_token(request: Request) -> dict:
+    async def pairing_token_route(request: Request) -> dict:
+        # Loopback-only convenience: hand the token to a same-host browser so a
+        # localhost dev never has to copy it. A remote browser is refused here and
+        # must paste the token (from the server logs) into the pairing prompt.
         _require_loopback_pairing_channel(request)
-        if _PAIRING_TOKEN_CONSUMED:
-            raise HTTPException(status_code=401, detail={"reason": "pairing_required"})
-        return {"pairing_token": _PAIRING_TOKEN}
+        return {"pairing_token": pairing_token()}
 
     @router.get("/api/auth/session")
     async def auth_session(request: Request) -> dict:

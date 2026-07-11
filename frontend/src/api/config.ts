@@ -159,12 +159,21 @@ export async function approveMcpServer(
   await fixtureDelay();
   const idx = fixtureMcp.findIndex((c) => c.id === name);
   if (idx === -1) throw new Error(`unknown server ${name}`);
-  const updated = {
-    ...fixtureMcp[idx],
-    description_hash: body.description_hash,
-    approved_at: new Date().toISOString(),
-    status: "connected" as const,
-  };
+  const updated: McpConnection =
+    body.approval_kind === "config"
+      ? {
+          ...fixtureMcp[idx],
+          config_hash: body.config_hash,
+          new_config_hash: undefined,
+          status: "approval_required",
+        }
+      : {
+          ...fixtureMcp[idx],
+          description_hash: body.description_hash,
+          new_description_hash: undefined,
+          approved_at: new Date().toISOString(),
+          status: "connected",
+        };
   fixtureMcp[idx] = updated;
   return updated;
 }

@@ -153,19 +153,22 @@ async def test_flag_on_would_deny_file_write_in_edit_but_does_not_block(
         first = await executor.execute(
             _call("file_write", path="index.html", content="<h1>one</h1>")
         )
+        # CONTRACT-ACTIVATE repin (2026-07-10): the CUSTOM escape hatch now
+        # carries the full working set, so a second file_write in EDIT is
+        # legitimately ALLOWED. The would-deny case that remains real under
+        # CUSTOM is a CROSS-KIND mutator (deck/doc/app_* tools stay excluded).
         second = await executor.execute(
-            _call("file_write", path="other.html", content="<h1>two</h1>")
+            _call("doc_set_section", section="intro", title="Two", body="two")
         )
 
     assert first.success is True
-    assert second.success is True
     denies = [
         r for r in caplog.records if getattr(r, "event", "") == "toolscope_audit_would_deny"
     ]
     assert len(denies) == 1
     assert getattr(denies[0], "conversation") == cid
     assert getattr(denies[0], "phase") == "edit"
-    assert getattr(denies[0], "tool") == "file_write"
+    assert getattr(denies[0], "tool") == "doc_set_section"
     assert "out of contract scope" in getattr(denies[0], "reason")
 
 
@@ -188,7 +191,7 @@ async def test_terminal_summary_emitted(
         on_tool_success=on_success,
     )
     await executor.execute(_call("file_write", path="index.html", content="one"))
-    await executor.execute(_call("file_write", path="other.html", content="two"))
+    await executor.execute(_call("doc_set_section", section="intro", title="Two", body="two"))
 
     class _DoneLoop:
         async def run(self):

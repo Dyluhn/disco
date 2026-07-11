@@ -30,7 +30,7 @@ export interface SkillPatch {
   surfaces?: string[];
 }
 
-export type McpStatus = "connected" | "disconnected" | "error";
+export type McpStatus = "connected" | "disconnected" | "error" | "approval_required";
 
 export interface McpConnection {
   id: string;
@@ -48,6 +48,8 @@ export interface McpConnection {
   // server is in sync (no drift) or has never been approved (first
   // connect) — the UI must not show a diff in that case.
   new_description_hash?: string;
+  config_hash?: string;
+  new_config_hash?: string;
   approved_at?: string;  // ISO-8601
   enabled?: boolean;
 }
@@ -62,5 +64,7 @@ export interface McpServerConfig {
 }
 
 export interface McpServerApprove {
-  description_hash: string;
+  approval_kind: "config" | "tools";
+  config_hash?: string;
+  description_hash?: string;
 }

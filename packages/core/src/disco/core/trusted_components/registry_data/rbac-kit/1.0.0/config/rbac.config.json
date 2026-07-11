@@ -1,0 +1,6 @@
+{
+  "roleRoutes": {
+    "/admin*": "admin"
+  },
+  "devSeedRoleUsers": null
+}

@@ -45,15 +45,31 @@ class FakeContainer:
         self.exec_calls.append(cmd)
         if detach:
             return _Exec(0, (b"", b"") if demux else b"")
-        if cmd[0] == "cat":
+        if cmd[0] == "python3" and "DISCO_READ_" in cmd[2]:
+            path = cmd[3].rstrip("/") + "/" + cmd[4]
+            code, out, err = (
+                (0, self.fs[path], b"")
+                if path in self.fs
+                else (44, b"", b"DISCO_READ_MISSING:no file")
+            )
+        elif cmd[0] == "cat":
             path = cmd[-1]
             code, out, err = (0, self.fs[path], b"") if path in self.fs else (1, b"", b"no file")
         elif cmd[0] == "ls":
             prefix = cmd[-1].rstrip("/") + "/"
-            names = sorted({p[len(prefix):].split("/")[0] for p in self.fs if p.startswith(prefix)})
+            names = sorted(
+                {p[len(prefix) :].split("/")[0] for p in self.fs if p.startswith(prefix)}
+            )
             code, out, err = 0, ("\n".join(names) + "\n").encode() if names else b"", b""
         elif cmd[0] == "mkdir":
             code, out, err = 0, b"", b""
+        elif cmd[0] == "stat":
+            path = cmd[-1]
+            code, out, err = (
+                (0, f"{len(self.fs[path])}\n".encode(), b"")
+                if path in self.fs
+                else (1, b"", b"no file")
+            )
         elif self.exec_results:
             code, out, err = self.exec_results.pop(0)
         else:
@@ -96,9 +112,9 @@ class _Volumes:
         self.created: list[str] = []
         self.objects: dict[str, FakeVolume] = {}
 
-    def create(self, name, labels=None):
+    def create(self, name, labels=None, **options):
         self.created.append(name)
-        vol = FakeVolume(name, labels or {})
+        vol = FakeVolume(name, labels or {}, options)
         self.objects[name] = vol
         return vol
 
@@ -114,10 +130,11 @@ class _Volumes:
 
 
 class FakeVolume:
-    def __init__(self, name: str, labels: dict[str, str]) -> None:
+    def __init__(self, name: str, labels: dict[str, str], options: dict) -> None:
         self.name = name
         self.id = "vol-" + name
         self.labels = labels
+        self.options = options
         self.removed = False
         self.remove_kwargs: dict | None = None
 
@@ -201,17 +218,19 @@ async def test_create_exec_close_named_volume_on_local_socket():
     (vol,) = client.volumes.created
     assert kw["volumes"][vol] == {"bind": "/workspace", "mode": "rw"}
     assert vol.startswith("disco-ws-")
-    # session: multiple execs into the SAME container, timeout-wrapped
+    # session: multiple execs into the SAME container, boundary-bounded
     r1 = await inst.exec_shell("echo hi", timeout_s=10)
     await inst.exec_shell("echo bye", timeout_s=10)
     assert r1.exit_code == 0 and r1.stdout == "ok\n" and r1.timed_out is False
     assert len(client.last.exec_calls) == 2
-    assert client.last.exec_calls[0][:1] == ["timeout"]
+    assert client.last.exec_calls[0][0:2] == ["python3", "-c"]
+    assert "echo hi" in client.last.exec_calls[0]
     await inst.destroy()
     assert client.last.stopped and client.last.removed
     assert client.last.remove_kwargs == {"force": True, "v": True}
     assert client.volumes.objects[vol].removed is True
     assert client.volumes.objects[vol].labels == {"disco.conversation_id": "c"}
+    assert "size=4096m" in client.volumes.objects[vol].options["driver_opts"]["o"]
     with pytest.raises(SandboxError):
         await inst.exec_shell("echo", timeout_s=5)
 
@@ -232,7 +251,8 @@ async def test_sealed_default_open_when_granted():
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
     )
-    assert client.last.run_kwargs["network_mode"] == "bridge"
+    assert client.last.run_kwargs["network"].startswith("disco-egr-")
+    assert client.networks.created[-1].attrs.get("internal") is True
 
 
 async def test_limits_and_no_env_leak_in_create(monkeypatch):

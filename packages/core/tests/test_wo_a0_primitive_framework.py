@@ -70,7 +70,13 @@ def test_existing_primitive_carries_wo_a0_defaults(prim_id: str) -> None:
     assert prim.tier == "fillable"
     assert prim.host_contract == ()
     assert prim.spec_schema is None
-    assert prim.verify is None
+    # WO-A3 wired the base primitives' verify hooks: lead_gen/directory carry the
+    # pure ports of their tool check bundles; records stays None ON PURPOSE (its
+    # apps keep falling through to the lead-gen bundle via the dispatch fallback).
+    if prim_id == RECORDS_PRIMITIVE_ID:
+        assert prim.verify is None
+    else:
+        assert prim.verify is not None
     assert prim.apply_spec is None  # WO-A1 default: base scaffolds are not addable
 
 
@@ -135,7 +141,7 @@ def test_primitive_verify_result_constructs_and_is_frozen() -> None:
 
 
 def test_hello_primitive_registered() -> None:
-    from disco.core.appkit.hello_primitive import HelloSpec, apply_hello_spec
+    from disco.core.appkit.hello_primitive import HelloSpec, apply_hello_spec, hello_verify
 
     prim = get_primitive(HELLO_PRIMITIVE_ID)
     assert prim is not None
@@ -145,7 +151,8 @@ def test_hello_primitive_registered() -> None:
     # WO-A1 made hello ADDABLE: it declares the fill-and-validate pair.
     assert prim.spec_schema is HelloSpec
     assert prim.apply_spec is apply_hello_spec
-    assert prim.verify is None
+    # WO-A3 gave hello a REAL verify hook (the framework proof).
+    assert prim.verify is hello_verify
 
 
 def test_hello_primitive_generates_index_html_with_app_name() -> None:

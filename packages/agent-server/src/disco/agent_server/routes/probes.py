@@ -36,8 +36,12 @@ class ProbeResult(BaseModel):
 
 
 class McpTestBody(BaseModel):
-    """Which MCP server to handshake. ``name`` resolves a configured server from
-    the shared config; ``url``/``transport`` allow testing an ad-hoc/unsaved one."""
+    """Which saved MCP server to handshake.
+
+    Legacy ``url``/``transport`` fields remain parseable for old clients, but
+    W4 deliberately refuses ad-hoc probes: connecting is itself a host/network
+    side effect and may only use the exact operator-approved saved config.
+    """
 
     name: str | None = None
     url: str | None = None
@@ -73,8 +77,7 @@ def _mcp_origin_approved(url: str, name: str, refs: tuple[str, ...]) -> bool:
     store = ConfigStore()
     purpose = f"mcp:{name}"
     return all(
-        store.origin_approved(url, purpose, ref)
-        and secret_ref_allowed_for_origin(ref, url)
+        store.origin_approved(url, purpose, ref) and secret_ref_allowed_for_origin(ref, url)
         for ref in refs
     )
 
@@ -175,9 +178,7 @@ async def _test_tts_probe() -> ProbeResult:
             provider=provider,
         )
     except Exception as exc:  # noqa: BLE001 — surface anything else honestly
-        return ProbeResult(
-            ok=False, status="error", detail=f"TTS failed: {exc}", provider=provider
-        )
+        return ProbeResult(ok=False, status="error", detail=f"TTS failed: {exc}", provider=provider)
     n = int(getattr(audio, "size", 0)) or (len(audio) if audio is not None else 0)
     if n <= 0:
         return ProbeResult(
@@ -195,7 +196,7 @@ async def _test_tts_probe() -> ProbeResult:
     )
 
 
-def make_probes_router() -> APIRouter:
+def make_probes_router(store: Any | None = None) -> APIRouter:
     router = APIRouter()
 
     @router.post("/api/tts/test")
@@ -271,21 +272,39 @@ def make_probes_router() -> APIRouter:
         srv = servers.get(body.name) if body.name else None
         if srv is not None:
             name = body.name or "probe"
-            transport = body.transport or srv.get("transport") or "streamable_http"
-            url = body.url or srv.get("url") or ""
+            # Never let request fields override the config whose fingerprint
+            # was approved. Otherwise a caller could approve one transport/URL
+            # and probe a different executable or endpoint under its authority.
+            transport = srv.get("transport") or "streamable_http"
+            url = srv.get("url") or ""
             command = srv.get("command")
             secret_refs = _mcp_secret_refs(srv)
         elif body.url:
-            name = "probe"
-            transport = body.transport or "streamable_http"
-            url = body.url
-            command = None
-            secret_refs = ("",)
+            return ProbeResult(
+                ok=False,
+                status="misconfigured",
+                detail=(
+                    "Save and operator-approve the MCP server configuration before testing it."
+                ),
+            )
         else:
             return ProbeResult(
                 ok=False,
                 status="misconfigured",
                 detail="No MCP server to test — provide a saved server name or a URL.",
+            )
+
+        from disco.tools.mcp.approval import compute_config_hash
+        from disco.tools.mcp.migrations import get_mcp_config_approval
+
+        conn = getattr(store, "_conn", None)
+        approval = get_mcp_config_approval(conn, name) if conn is not None else None
+        current_config_hash = compute_config_hash({"name": name, **srv})
+        if approval is None or approval["config_hash"] != current_config_hash:
+            return ProbeResult(
+                ok=False,
+                status="misconfigured",
+                detail="Approve the current MCP server configuration before testing it.",
             )
 
         client: object | None = None

@@ -54,7 +54,11 @@ async def test_soft_condense_appends_tombstone_and_continues():
 
 async def test_thought_only_step_records_agent_message_and_continues():
     agent = ScriptedAgent(
-        [AgentStep(thought="just thinking out loud", tool_call=None, finished=False), finish_step()]
+        [
+            AgentStep(thought="let me think first", tool_call=None, finished=False),
+            AgentStep(thought="just thinking out loud", tool_call=None, finished=False),
+            finish_step(),
+        ]
     )
     loop, store = build_loop(agent)
     await loop.send_message("go")

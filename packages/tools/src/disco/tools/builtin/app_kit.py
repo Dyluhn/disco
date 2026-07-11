@@ -63,6 +63,7 @@ from disco.core.appkit import (
     tree_digest,
     tree_file_hashes,
 )
+from disco.core.appkit.recipes import RECIPES
 from disco.core.appkit.spec import AppSpec, DesignSpec, Section, SectionContent
 from pydantic import (
     BaseModel,
@@ -147,9 +148,7 @@ async def _read_spec_bytes(ctx: ToolContext, relpath: str) -> bytes | None:
 async def _load_app_spec(ctx: ToolContext) -> AppSpec:
     data = await _read_spec_bytes(ctx, APPSPEC_RELPATH)
     if data is None:
-        raise _AppKitError(
-            f"no {APPSPEC_RELPATH} in the workspace — run app_create first."
-        )
+        raise _AppKitError(f"no {APPSPEC_RELPATH} in the workspace — run app_create first.")
     try:
         return load_app_spec_from_bytes(data)
     except Exception as exc:  # noqa: BLE001
@@ -159,9 +158,7 @@ async def _load_app_spec(ctx: ToolContext) -> AppSpec:
 async def _load_design_spec(ctx: ToolContext) -> DesignSpec:
     data = await _read_spec_bytes(ctx, DESIGNSPEC_RELPATH)
     if data is None:
-        raise _AppKitError(
-            f"no {DESIGNSPEC_RELPATH} in the workspace — run app_create first."
-        )
+        raise _AppKitError(f"no {DESIGNSPEC_RELPATH} in the workspace — run app_create first.")
     try:
         return load_design_spec_from_bytes(data)
     except Exception as exc:  # noqa: BLE001
@@ -210,9 +207,7 @@ async def _save_app_spec(ctx: ToolContext, spec: AppSpec) -> None:
 
 async def _save_design_spec(ctx: ToolContext, spec: DesignSpec) -> None:
     assert ctx.sandbox is not None
-    await ctx.sandbox.write_file(
-        DESIGNSPEC_RELPATH, serialize_design_spec(spec).encode("utf-8")
-    )
+    await ctx.sandbox.write_file(DESIGNSPEC_RELPATH, serialize_design_spec(spec).encode("utf-8"))
 
 
 def _validate_variant(section: Section) -> None:
@@ -225,8 +220,7 @@ def _validate_variant(section: Section) -> None:
         raise _AppKitError(f"unknown section variant_id: {section.variant_id!r}")
     if variant.kind != section.kind:
         raise _AppKitError(
-            f"variant {section.variant_id!r} is a {variant.kind!r} layout, "
-            f"not {section.kind!r}"
+            f"variant {section.variant_id!r} is a {variant.kind!r} layout, not {section.kind!r}"
         )
 
 
@@ -249,7 +243,13 @@ def _safe_load_app_kind(spec_bytes: bytes) -> str | None:
 
 class AppCreateArgs(BaseModel):
     recipe_id: str = Field(
-        description="The SiteRecipe id to derive the DesignSpec from (e.g. 'editorial-ledger')."
+        # Catalog-in-schema (same doctrine as scaffold_starter, proven live 2026-07-10):
+        # the model must see the FULL valid vocabulary before its first call — the
+        # appkit-lane trace showed a hallucinated id costing a whole round-trip.
+        description=(
+            "The SiteRecipe id to derive the DesignSpec from. Valid ids (complete "
+            "catalog): " + ", ".join(f"'{r.id}'" for r in RECIPES) + "."
+        )
     )
     primitive_id: str = Field(
         default=LEAD_GEN_PRIMITIVE_ID,
@@ -267,8 +267,18 @@ class AppCreateArgs(BaseModel):
     )
     app_spec: SkipValidation[AppSpec] | None = Field(
         default=None,
-        description="Optional explicit AppSpec (JSON). When omitted, a sensible default "
-        "AppSpec for the chosen primitive is derived from the brief + recipe.",
+        description="Optional explicit AppSpec (JSON). PREFER OMITTING THIS: the "
+        "derived default spec is valid BY CONSTRUCTION — scaffold with just "
+        "recipe_id + primitive_id + brief, then shape it with app_add_section / "
+        "app_update_content / app_add_primitive (each validates one small change "
+        "with an actionable error). A hand-written full spec must satisfy ~40 "
+        "validation rules and is the slow path. If you DO pass one — RULES "
+        "(violations are refused): app_kind must be one of 'lead_gen' | "
+        "'directory' | 'records' (there is no other kind — model your app onto the "
+        "closest one); entity field names must be snake_case identifiers and must "
+        "NOT use reserved names like 'id' or 'created_at' (implicit columns); pages "
+        "carry sections (each with id/kind/content) — a page has NO direct 'content' "
+        "key of its own; a 'records' spec needs at least one NON-form entity.",
     )
     overwrite: bool = Field(
         default=False,
@@ -498,6 +508,7 @@ class ContentUpdate(BaseModel):
     body: str | None = None
     cta_label: str | None = None
     items: list[str] | None = None
+    success_message: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -520,8 +531,8 @@ class AppUpdateContentArgs(BaseModel):
     page_id: str = Field(description="The page that holds the section.")
     section_id: str = Field(description="The section whose content to patch.")
     updates: ContentUpdate = Field(
-        description="Content slots to set/merge: heading, subheading, body, cta_label, items "
-        "(a list of strings). Unknown keys are rejected."
+        description="Content slots to set/merge: heading, subheading, body, cta_label, "
+        "items (a list of strings), success_message. Unknown keys are rejected."
     )
 
 
@@ -533,11 +544,11 @@ class AppUpdateContentTool:
     definition = ToolDef(
         name="app_update_content",
         description=(
-            "Patch a section's content (heading/subheading/body/cta_label/items) in the "
-            "current app's spec. Updates are merged onto the existing content and validated "
-            "(bounded length, no unknown keys). Re-saves .disco/appspec.json and regenerates "
-            "only the touched files (content.ts + manifest). Content lives in the spec, never "
-            "hand-edited in the generated tree."
+            "Patch a section's content (heading/subheading/body/cta_label/items/"
+            "success_message) in the current app's spec. Updates are merged onto the "
+            "existing content and validated (bounded length, no unknown keys). Re-saves "
+            ".disco/appspec.json and regenerates only the touched files. Content lives in "
+            "the spec, never hand-edited in the generated tree."
         ),
         args_model=AppUpdateContentArgs,
         needs=_FS,
@@ -555,18 +566,14 @@ class AppUpdateContentTool:
             page = next((p for p in data["pages"] if p["id"] == args.page_id), None)
             if page is None:
                 raise _AppKitError(f"no page with id {args.page_id!r}")
-            sec = next(
-                (s for s in page["sections"] if s["id"] == args.section_id), None
-            )
+            sec = next((s for s in page["sections"] if s["id"] == args.section_id), None)
             if sec is None:
-                raise _AppKitError(
-                    f"no section {args.section_id!r} on page {args.page_id!r}"
-                )
+                raise _AppKitError(f"no section {args.section_id!r} on page {args.page_id!r}")
             updates = args.updates.model_dump(mode="json", exclude_unset=True)
             if not updates:
                 raise _AppKitError(
                     "no updates provided — set at least one of "
-                    "heading/subheading/body/cta_label/items"
+                    "heading/subheading/body/cta_label/items/success_message"
                 )
             existing = sec.get("content") or {}
             merged = {**existing, **updates}
@@ -583,7 +590,9 @@ class AppUpdateContentTool:
                     f"values — nothing changed. Current content: "
                     f"{_json.dumps(existing, ensure_ascii=False)[:600]}. Send a "
                     "DIFFERENT value for a slot (heading/subheading/body/cta_label/"
-                    "items) or target another section."
+                    "items/success_message) or target another section — or, if this is "
+                    "already the state you wanted, the content is COMPLETE: move on to "
+                    "the next step (verify/finish) instead of retrying this edit."
                 )
             try:
                 # Validate the bounded content in isolation for a precise error.
@@ -610,9 +619,7 @@ class AppUpdateContentTool:
                 artifacts=sorted({*touched, APPSPEC_RELPATH}),
             )
         except _AppKitError as exc:
-            return ToolOutcome(
-                success=False, content=str(exc), error="app_update_content_refused"
-            )
+            return ToolOutcome(success=False, content=str(exc), error="app_update_content_refused")
 
 
 # ---- app_set_design -----------------------------------------------------------
@@ -660,9 +667,7 @@ class AppSetDesignTool:
         assert ctx.sandbox is not None
         try:
             if (args.recipe_id is None) == (args.design_spec is None):
-                raise _AppKitError(
-                    "provide exactly one of recipe_id (P0) or design_spec (P1)."
-                )
+                raise _AppKitError("provide exactly one of recipe_id (P0) or design_spec (P1).")
             app = await _load_app_spec(ctx)
 
             recipe = None
@@ -703,7 +708,9 @@ class AppSetDesignTool:
                 # to an unchanged app regenerates an identical tree — refuse loudly
                 # instead of reporting a hollow success the model will retry.
                 raise _AppKitError(
-                    "no-op: this design produced an identical generated tree — the "
+                    "no-op: this design produced an identical generated tree — the app "
+                    "ALREADY uses this design; if that is what you wanted, it is "
+                    "COMPLETE (move on to verify/finish). Otherwise the "
                     "app already uses it. Pick a different recipe_id/design_spec or "
                     "change sections first."
                 )
@@ -715,9 +722,7 @@ class AppSetDesignTool:
             label = f"recipe '{recipe.id}'" if recipe is not None else "a custom DesignSpec"
             return ToolOutcome(
                 success=True,
-                content=(
-                    f"app_set_design: applied {label} — updated {len(touched)} file(s)."
-                ),
+                content=(f"app_set_design: applied {label} — updated {len(touched)} file(s)."),
                 structured={"files_written": touched, "specs": specs},
                 artifacts=sorted({*touched, *specs}),
             )
@@ -745,9 +750,7 @@ async def _read_disk_text(ctx: ToolContext, relpath: str) -> str | None:
         return None
 
 
-def _compute_drift(
-    tree: dict[str, str], on_disk: dict[str, str | None]
-) -> dict[str, Any]:
+def _compute_drift(tree: dict[str, str], on_disk: dict[str, str | None]) -> dict[str, Any]:
     """Compare the spec-regenerated tree against what's actually on disk.
 
     `modified` = a generated file whose on-disk bytes differ; `missing` = a
@@ -959,9 +962,7 @@ class AppAddPrimitiveTool:
             try:
                 new_app = prim.apply_spec(app, validated)
             except Exception as exc:  # noqa: BLE001
-                raise _AppKitError(
-                    f"applying the {prim.id!r} spec failed: {exc}"
-                ) from exc
+                raise _AppKitError(f"applying the {prim.id!r} spec failed: {exc}") from exc
             if new_app.model_dump(mode="json") == app.model_dump(mode="json"):
                 # Same RC-M rule as the sibling tools: a no-op must refuse loudly,
                 # never report a hollow success the model will retry into the breaker.
@@ -1009,9 +1010,7 @@ class AppAddPrimitiveTool:
                 artifacts=sorted({*touched, APPSPEC_RELPATH, record_relpath}),
             )
         except _AppKitError as exc:
-            return ToolOutcome(
-                success=False, content=str(exc), error="app_add_primitive_refused"
-            )
+            return ToolOutcome(success=False, content=str(exc), error="app_add_primitive_refused")
 
 
 APPKIT_V2_TOOLS: tuple[type, ...] = (

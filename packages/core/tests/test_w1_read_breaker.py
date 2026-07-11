@@ -313,3 +313,113 @@ def test_repeated_plan_step_does_not_fire_pattern1():
         "repeated plan_step must not fire is_stuck "
         "(managed by dedicated bookkeeping halt, not stuck detector)"
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. 2026-07-09 deck-run autopsy — the slideshow-paging false positive
+# ---------------------------------------------------------------------------
+#
+# conv_b3d0be38 (Latest US-Iran Conflict Slides): the agent verified its own
+# 9-slide deck by clicking the Next button — the SAME tool call each time
+# (`browser click button:nth-child(2)`), but every observation showed the deck
+# ADVANCING (2/9 → 3/9 → …). _pure_repeat collapsed the stream to actions-only,
+# so the interleaved fresh observations were invisible and it hard-blocked the
+# run at slide 6/9 as "pure_repeat". Interleaved repeats are pattern 1's
+# jurisdiction (it requires the OBSERVATION to repeat too); _pure_repeat only
+# owns back-to-back bursts with no observation in between.
+
+
+def _slide_obs(slide: int, shot: int, page_text: str | None = None):
+    """A browser observation shaped like the captured trace: page text with a
+    slide counter + the volatile per-action screenshot path."""
+    text = page_text if page_text is not None else f"US MILITARY ACTION\n{slide} / 9"
+    return observation(
+        tool="browser",
+        content=(
+            f"URL: http://localhost:3000/deck.html\nTEXT:\n{text}\n"
+            f"screenshot: .pmx/screenshots/{shot:04d}-click.png"
+        ),
+    )
+
+
+def _click():
+    return action(
+        thought="", tool="browser", args={"action": "click", "selector": "button:nth-child(2)"}
+    )
+
+
+def test_progressing_click_loop_is_not_stuck():
+    """Identical 'click Next' actions whose observations CHANGE (the slide
+    counter advances) are progress, not a loop — neither pattern 1 (obs differ)
+    nor _pure_repeat (observations interleave every action) may fire."""
+    d = StuckDetector()
+    events = [user_msg("verify the deck")]
+    for i in range(6):
+        events += [_click(), _slide_obs(slide=2 + i, shot=3 + i)]
+    assert d._pure_repeat(events) is False, (
+        "_pure_repeat must not fire across interleaved observations "
+        "(that is pattern 1's jurisdiction, which requires the obs to repeat)"
+    )
+    assert d.is_stuck(events) is False, (
+        "paging through a slideshow (identical click, ADVANCING slide counter) "
+        "is progress — the 2026-07-09 deck run must not be killed as stuck"
+    )
+
+
+def test_dead_click_loop_still_fires_despite_screenshot_counter():
+    """The flip side: a genuinely DEAD button (page text identical every time,
+    only the volatile screenshot counter changes) must still be stuck — pattern
+    1 now normalizes the screenshot path, so it owns the case _pure_repeat
+    previously (accidentally) caught."""
+    d = StuckDetector()
+    events = [user_msg("verify the deck")]
+    for i in range(4):  # threshold=4
+        events += [_click(), _slide_obs(slide=9, shot=10 + i, page_text="END 9 / 9")]
+    assert d._repeated_action_observation(events) is True, (
+        "identical page text with only the screenshot counter varying must "
+        "compare EQUAL (volatile-content normalization) and fire pattern 1"
+    )
+    assert d.is_stuck(events) is True
+
+
+def test_pure_repeat_run_broken_by_any_observation():
+    """A burst of identical actions that eventually gets an observation is not
+    a pure repeat — only the trailing UNANSWERED burst counts."""
+    d = StuckDetector()
+    events = [user_msg("go")]
+    # 3 unanswered clicks, then an observation, then 3 more unanswered clicks:
+    # neither burst reaches threshold=4, and they must NOT be merged across
+    # the observation.
+    events += [_click(), _click(), _click(), _slide_obs(slide=2, shot=1)]
+    events += [_click(), _click(), _click()]
+    assert d._pure_repeat(events) is False, (
+        "an intervening observation must break the pure-repeat run "
+        "(the model demonstrably waited and the world answered)"
+    )
+
+
+def test_page_text_screenshot_paths_are_not_normalized():
+    """codex four-fix defect #3: normalization is END-anchored — the browser tool
+    appends its screenshot line AFTER the content fence (always last), while page
+    TEXT lives inside the fence. A page whose own copy shows a changing
+    'screenshot: /assets/screenshots/frame-N.png' line is genuinely CHANGING
+    content and must NOT be flattened into a false repeat."""
+    d = StuckDetector()
+    events = [user_msg("click through the gallery")]
+    for i in range(4):
+        page_text = f"Gallery\nscreenshot: /assets/screenshots/frame-{i:03d}.png\nnext"
+        events += [
+            _click(),
+            observation(
+                tool="browser",
+                # page text INSIDE the fence (mid-content), volatile tool line at END
+                content=(
+                    f"TEXT:\n{page_text}\n[END]\n"
+                    f"screenshot: .pmx/screenshots/{20 + i:04d}-click.png"
+                ),
+            ),
+        ]
+    assert d.is_stuck(events) is False, (
+        "changing PAGE content mentioning screenshot paths must not be "
+        "normalized into a false pattern-1 repeat (end-anchored volatiles only)"
+    )

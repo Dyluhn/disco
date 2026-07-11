@@ -131,8 +131,9 @@ describe("ImageGenSection — A3 image-gen provider settings", () => {
       ),
     );
     render(createElement(ImageGenSection), { wrapper: makeWrapper() });
-    // The warning is a role="status" element with the distinct "until then" phrasing.
-    const warning = await screen.findByRole("status");
+    // The warning carries the distinct "until then" phrasing; the test button may
+    // also render a status when the agent server is offline.
+    const warning = await screen.findByText(/until then.*not configured/i);
     expect(warning).toHaveTextContent(/until then.*not configured/i);
   });
 });

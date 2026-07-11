@@ -45,10 +45,7 @@ def _submit_plan() -> AgentStep:
 
 
 def _tool_specs(*names: str) -> list[ToolSpec]:
-    return [
-        ToolSpec(name=name, description=name, parameters_schema={})
-        for name in names
-    ]
+    return [ToolSpec(name=name, description=name, parameters_schema={}) for name in names]
 
 
 def _env_messages(events: list[Any]) -> list[str]:
@@ -133,12 +130,15 @@ async def _append_success(store: Any, tool_name: str, args: dict[str, Any] | Non
 
 
 @pytest.mark.asyncio
-async def test_dawdle_after_two_actionless_pauses_synthesizes_finish() -> None:
-    executor = FakeExecutor(tools=_tool_specs("submit_plan", "shell", "file_read", "browser"))
+async def test_dawdle_after_two_actionless_pauses_synthesizes_finish(tmp_path: Path) -> None:
+    executor = _FSExecutor(tmp_path)
     agent = ScriptedAgent(
         [
             _submit_plan(),
-            action_step("shell", {"command": "echo built"}),
+            action_step(
+                "file_write",
+                {"path": "artifact.txt", "content": "built"},
+            ),
             _noop("The work is complete."),
             _noop("Everything is ready."),
             _noop("All done."),
@@ -154,7 +154,9 @@ async def test_dawdle_after_two_actionless_pauses_synthesizes_finish() -> None:
     await _approve(loop)
 
     state = await loop.run()
-    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse landing
+    assert (
+        state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    )  # terminal-collapse landing
 
     loop.agent = ScriptedAgent(
         [
@@ -166,7 +168,9 @@ async def test_dawdle_after_two_actionless_pauses_synthesizes_finish() -> None:
         ]
     )
     state = await loop.resume()
-    assert state.execution_status == ConversationStatus.AWAITING_USER_QUESTION  # terminal-collapse landing
+    assert (
+        state.execution_status == ConversationStatus.AWAITING_USER_QUESTION
+    )  # terminal-collapse landing
 
     pre_finish_events = await store.get_events(CID)
     assert signals.actionless_pause_count_current_execution_segment(pre_finish_events) == 2
@@ -181,8 +185,7 @@ async def test_dawdle_after_two_actionless_pauses_synthesizes_finish() -> None:
     assert must_not_call.calls == 0
     assert any("REL-RC-P SYNTHETIC FINISH" in m for m in _env_messages(events))
     assert any(
-        isinstance(e, StatusEvent)
-        and e.detail == signals.SYNTHETIC_FINISH_ATTEMPT_DETAIL
+        isinstance(e, StatusEvent) and e.detail == signals.SYNTHETIC_FINISH_ATTEMPT_DETAIL
         for e in events
     )
     assert any(
@@ -248,8 +251,7 @@ async def test_synthetic_finish_refusal_continues_with_dictated_content_blocker(
     assert any("REL-RC-P SYNTHETIC FINISH" in m for m in env)
     assert any("quoted user literal is missing" in m and "Get Started" in m for m in env)
     assert not any(
-        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED
-        for e in events
+        isinstance(e, StatusEvent) and e.status == ConversationStatus.FINISHED for e in events
     )
 
 
@@ -261,7 +263,9 @@ async def test_planning_mode_never_synthesizes_finish() -> None:
         mode=OperatingMode.PLANNING,
         planning_tools=frozenset({"file_read"}),
     )
-    await store.append(CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")))
+    await store.append(
+        CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go"))
+    )
     await store.append(CID, PlanEvent(summary="p", steps=[{"title": "one"}], revision=1))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     await _append_success(store, "shell", {"command": "echo built"})
@@ -293,7 +297,9 @@ async def test_no_productive_work_never_synthesizes_finish() -> None:
         mode=OperatingMode.PLANNING,
         planning_tools=frozenset({"file_read"}),
     )
-    await store.append(CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")))
+    await store.append(
+        CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go"))
+    )
     await store.append(CID, PlanEvent(summary="p", steps=[{"title": "one"}], revision=1))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     await _append_success(store, "file_read", {"path": "notes.txt"})
@@ -302,9 +308,7 @@ async def test_no_productive_work_never_synthesizes_finish() -> None:
     await _append_success(store, "file_read", {"path": "notes.txt"})
     await store.append(CID, StatusEvent(status=ConversationStatus.PAUSED, detail="actionless"))
 
-    assert not signals.should_synthesize_finish_after_actionless_pauses(
-        await store.get_events(CID)
-    )
+    assert not signals.should_synthesize_finish_after_actionless_pauses(await store.get_events(CID))
 
     state = await loop.resume()
     events = await store.get_events(CID)
@@ -321,7 +325,9 @@ async def test_actionless_pause_counter_survives_simulated_resume() -> None:
         mode=OperatingMode.PLANNING,
         planning_tools=frozenset({"file_read"}),
     )
-    await store.append(CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")))
+    await store.append(
+        CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go"))
+    )
     await store.append(CID, PlanEvent(summary="p", steps=[{"title": "one"}], revision=1))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     await _append_success(store, "shell", {"command": "echo built"})
@@ -366,7 +372,9 @@ async def test_synthetic_finish_is_replay_derived_after_rebuild() -> None:
         mode=OperatingMode.PLANNING,
         planning_tools=frozenset({"file_read"}),
     )
-    await store.append(CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go")))
+    await store.append(
+        CID, MessageEvent(source=EventSource.USER, message=LLMMessage(role="user", content="go"))
+    )
     await store.append(CID, PlanEvent(summary="p", steps=[{"title": "one"}], revision=1))
     await store.append(CID, StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
     await _append_success(store, "shell", {"command": "echo built"})

@@ -291,14 +291,13 @@ def test_no_directional_words_in_recovery_markers():
     assert _DIRECTIONAL.search(superseded) is None, superseded
     assert "in this prompt" in superseded
 
-    # CW P1-a/P1-c — `_snip_args` itself renders the assist-ON / pre-CW-3 DIRECTIONAL
-    # marker ("below"); the assist-OFF retarget output is the NEUTRAL, directional-word-
-    # free, non-dangling marker (it claims only re-issue / file_read recovery — never a
-    # workspace-block pointer, since an elided arg value is not in the block).
+    # Elided args render as the canonical DISCO-ELIDED sentinel; retargeting a
+    # count-bearing marker keeps it directional-word-free and non-dangling.
     from disco.core.events import retarget_elided_arg_markers
 
     raw = _snip_args({"content": "x" * 4_000})["content"]
-    assert "below" in raw  # the un-retargeted assist-ON marker IS directional
+    assert raw.startswith("[[DISCO-ELIDED:")
+    assert _DIRECTIONAL.search(raw) is None, raw
     msg = LLMMessage(
         role="assistant",
         content="",
@@ -312,4 +311,5 @@ def test_no_directional_words_in_recovery_markers():
     snipped = out[0].tool_calls[0]["arguments"]["content"]
     assert _DIRECTIONAL.search(snipped) is None, snipped
     assert "CURRENT WORKSPACE block" not in snipped  # neutral — no dangling block claim
-    assert "do not copy or re-send" in snipped
+    assert snipped.startswith("[[DISCO-ELIDED:")
+    assert "history display only" in snipped

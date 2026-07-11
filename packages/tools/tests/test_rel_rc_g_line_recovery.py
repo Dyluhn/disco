@@ -89,8 +89,8 @@ assert len(LARGE_BYTES) > 64 * 1024
 
 
 @pytest.mark.asyncio
-async def test_stale_line_refusal_delivers_numbered_content_and_retry_succeeds():
-    """read -> line edit -> stale second line edit -> refusal content -> corrected retry succeeds."""
+async def test_outside_success_view_refusal_delivers_numbered_content_and_retry_succeeds():
+    """read -> line edit -> outside-view line edit -> refusal content -> corrected retry succeeds."""
     sbx = _FakeSandbox({"index.html": BIG_BYTES})
     ctx = _ctx(sbx)
 
@@ -105,11 +105,10 @@ async def test_stale_line_refusal_delivers_numbered_content_and_retry_succeeds()
         ctx,
     )
     assert first.success, first.content
-    assert "Updated content for index.html" in first.content
-    assert "Line numbers may have shifted" in first.content
+    assert "applied — lines 1-13 now read:" in first.content
     assert "\t<h2>Cloud</h2>" in first.content
 
-    stale = await FileReplaceLinesTool().run(
+    outside_view = await FileReplaceLinesTool().run(
         FileReplaceLinesArgs(
             path="index.html",
             start_line=43,
@@ -118,12 +117,12 @@ async def test_stale_line_refusal_delivers_numbered_content_and_retry_succeeds()
         ),
         ctx,
     )
-    assert stale.success is False
-    assert stale.error == "STALE_FILE_CONTEXT"
-    assert "Fresh full current file for index.html" in stale.content
-    assert "Line numbers may have shifted" in stale.content
-    assert "\t<footer>OLD FOOTER</footer>" in stale.content
-    assert (stale.structured or {})["delivered_read"]["full"] is True
+    assert outside_view.success is False
+    assert outside_view.error == "FRESH_READ_REQUIRED"
+    assert "Fresh full current file for index.html" in outside_view.content
+    assert "Line numbers may have shifted" in outside_view.content
+    assert "\t<footer>OLD FOOTER</footer>" in outside_view.content
+    assert (outside_view.structured or {})["delivered_read"]["full"] is True
 
     retry = await FileReplaceLinesTool().run(
         FileReplaceLinesArgs(
@@ -158,15 +157,15 @@ async def test_same_line_count_replace_advances_grounding_for_consecutive_line_e
     second = await FileReplaceLinesTool().run(
         FileReplaceLinesArgs(
             path="index.html",
-            start_line=43,
-            end_line=43,
-            new_text="<footer>NEW FOOTER</footer>",
+            start_line=3,
+            end_line=3,
+            new_text="<p>row 1: updated</p>",
         ),
         ctx,
     )
     assert second.success, second.content
     assert b"Acme Cloud Pro" in sbx._fs["index.html"]
-    assert b"NEW FOOTER" in sbx._fs["index.html"]
+    assert b"row 1: updated" in sbx._fs["index.html"]
 
 
 @pytest.mark.asyncio
@@ -302,6 +301,5 @@ async def test_insert_success_observation_includes_updated_numbered_window():
         ctx,
     )
     assert inserted.success, inserted.content
-    assert "Updated content for index.html" in inserted.content
-    assert "Line numbers may have shifted" in inserted.content
+    assert "applied — lines 1-13 now read:" in inserted.content
     assert "\t<section>Pricing</section>" in inserted.content

@@ -8,7 +8,9 @@ and RoutingDecision always emitted (RT4).
 from __future__ import annotations
 
 import inspect
+import logging
 
+import httpx
 import pytest
 from disco.core import LLMMessage
 from disco.core.llm import (
@@ -17,13 +19,17 @@ from disco.core.llm import (
     CompletionRequest,
     DefaultLLMRouter,
     Difficulty,
+    LLMAuthError,
     LLMContentFiltered,
+    LLMContextWindowExceeded,
     ModelEntry,
     ModelRole,
     NoEligibleModel,
     Requirement,
     RouterConfig,
 )
+from disco.core.llm import routing as routing_module
+from disco.core.llm.openai_provider import OpenAIProvider
 from llm_fakes import FakeModelProvider, build_router
 
 MSGS = [LLMMessage(role="user", content="do the thing")]
@@ -32,6 +38,64 @@ MSGS = [LLMMessage(role="user", content="do the thing")]
 def _req(role=ModelRole.AGENT_DRIVER, **profile_kwargs) -> CompletionRequest:
     return CompletionRequest(
         profile=CapabilityProfile(role=role, **profile_kwargs), messages=list(MSGS)
+    )
+
+
+def _http_router(
+    handler,
+) -> tuple[DefaultLLMRouter, list[httpx.Request]]:
+    seen: list[httpx.Request] = []
+
+    def wrapped(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    config = RouterConfig(
+        models={
+            "remote": ModelEntry(
+                model_id="remote-model",
+                provider="fake",
+                context_window=8192,
+                capabilities=frozenset({Requirement.TOOL_CALLING}),
+            )
+        },
+        default_model="remote",
+    )
+    provider = OpenAIProvider(
+        "http://fake/v1",
+        name="fake",
+        transport=httpx.MockTransport(wrapped),
+    )
+    return DefaultLLMRouter(config, {"fake": provider}), seen
+
+
+def _ok_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "model": "remote-model",
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+        },
+    )
+
+
+def _auth_response(message: str = "intermittent auth rejection") -> httpx.Response:
+    return httpx.Response(
+        403,
+        json={"error": {"message": message, "type": "authentication_error"}},
+    )
+
+
+def _context_response() -> httpx.Response:
+    return httpx.Response(
+        400,
+        json={
+            "error": {
+                "message": "request exceeds the available context size",
+                "type": "exceed_context_size_error",
+            }
+        },
     )
 
 
@@ -123,6 +187,50 @@ async def test_provider_rejection_surfaces_with_real_content():
     with pytest.raises(LLMContentFiltered) as excinfo:
         await router.complete(_req(requirements=frozenset({Requirement.VISION})))
     assert str(excinfo.value) == real_reason  # the real reason reaches the caller
+
+
+async def test_auth_error_retries_once_then_succeeds(caplog, monkeypatch):
+    monkeypatch.setattr(routing_module, "_AUTH_RETRY_DELAY_S", 0)
+    responses = [_auth_response(), _ok_response()]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)
+
+    router, seen = _http_router(handler)
+    with caplog.at_level(logging.WARNING, logger="disco.core.llm.routing"):
+        resp = await router.complete(_req())
+
+    assert resp.text == "ok"
+    assert len(seen) == 2
+    retry_logs = [
+        record
+        for record in caplog.records
+        if "transient auth failure, retrying once" in record.getMessage()
+    ]
+    assert len(retry_logs) == 1
+
+
+async def test_auth_error_second_consecutive_failure_is_terminal(monkeypatch):
+    monkeypatch.setattr(routing_module, "_AUTH_RETRY_DELAY_S", 0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _auth_response("still rejected")
+
+    router, seen = _http_router(handler)
+    with pytest.raises(LLMAuthError) as excinfo:
+        await router.complete(_req())
+
+    assert len(seen) == 2
+    assert str(excinfo.value) == "provider fake returned HTTP 403 type=authentication_error"
+
+
+async def test_context_window_error_does_not_auth_retry():
+    router, seen = _http_router(lambda request: _context_response())
+
+    with pytest.raises(LLMContextWindowExceeded):
+        await router.complete(_req())
+
+    assert len(seen) == 1
 
 
 async def test_vision_request_succeeds_when_a_vision_model_is_assigned():

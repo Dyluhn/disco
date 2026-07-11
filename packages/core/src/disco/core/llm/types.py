@@ -17,6 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..events import LLMMessage  # the wire-level message shape (event contract)
 
+EMPTY_REASONING_ONLY_METADATA_KEY = "empty_reasoning_only"
+
 # ---- capability vocabulary --------------------------------------------------
 
 
@@ -211,6 +213,7 @@ class CompletionResponse(BaseModel):
     model_used: str  # concrete model id actually used [VERIFY-valued]
     request_id: str | None = None
     routing: RoutingDecision | None = None
+    response_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class StreamChunk(BaseModel):

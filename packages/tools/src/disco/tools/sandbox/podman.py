@@ -37,6 +37,7 @@ import io
 import logging
 import pathlib
 import posixpath
+import shlex
 import subprocess
 import tarfile
 import time
@@ -49,17 +50,27 @@ from . import inbound_forward as _inbound_forward_mod
 from ._container import (
     EGRESS_PROXY_PORT,
     PUBLISHED_PORTS,
+    SANDBOX_READ_TIMEOUT_S,
     TIMEOUT_EXIT_CODES,
     ContainerInstance,
-    bounded_sidecar_cap,
-    egress_mode,
-    format_allow,
-    proxy_env,
-    proxy_run_argv,
-    resolve_bounds,
+    SshLoopbackTunnelManager,
     _create_named_volume,
     _remove_container,
     _remove_volume,
+    bounded_exec_argv,
+    bounded_read_argv,
+    bounded_read_result,
+    bounded_sidecar_cap,
+    collect_host_deny_ips,
+    discover_remote_host_ips,
+    egress_mode,
+    format_allow,
+    loopback_port_bindings,
+    nofile_ulimits,
+    proxy_env,
+    proxy_readiness_argv,
+    proxy_run_argv,
+    resolve_bounds,
 )
 from .base import (
     ExecResult,
@@ -142,6 +153,7 @@ class PodmanSandboxInstance(ContainerInstance):
         preview_host: str = "localhost",
         reload_timeout_s: float = 0.5,
         workspace_volume: Any | None = None,
+        loopback_tunnel: SshLoopbackTunnelManager | None = None,
     ) -> None:
         super().__init__(
             id=id,
@@ -155,6 +167,7 @@ class PodmanSandboxInstance(ContainerInstance):
             preview_host=preview_host,
             reload_timeout_s=reload_timeout_s,
             workspace_volume=workspace_volume,
+            loopback_tunnel=loopback_tunnel,
         )
         self._cli_url = cli_url
         self._name = container_name
@@ -194,7 +207,11 @@ class PodmanSandboxInstance(ContainerInstance):
             try:
                 rc, out, _e = self._runner(
                     [
-                        "podman", "--url", self._cli_url, "inspect", "--format",
+                        "podman",
+                        "--url",
+                        self._cli_url,
+                        "inspect",
+                        "--format",
                         "status={{.State.Status}} OOMKilled={{.State.OOMKilled}} "
                         "exit={{.State.ExitCode}} reason={{.State.Error}}",
                         self._name,
@@ -206,7 +223,7 @@ class PodmanSandboxInstance(ContainerInstance):
                     status = ""
                     for tok in text.split():
                         if tok.startswith("status="):
-                            status = tok[len("status="):]
+                            status = tok[len("status=") :]
                             break
                     return status, (text or "state-empty")
                 # rc != 0 → the inspect command itself failed (not a container verdict).
@@ -242,14 +259,17 @@ class PodmanSandboxInstance(ContainerInstance):
         if status in ("running", "stopping", "removing", "paused"):
             _LOG.info(
                 "sandbox container %s: transient podman exec error, container %s (%s): %s",
-                self._name, status or "alive", reason, msg.strip(),
+                self._name,
+                status or "alive",
+                reason,
+                msg.strip(),
             )
-            raise SandboxError(
-                f"transient sandbox exec error in {self._name}: {msg.strip()}"
-            )
+            raise SandboxError(f"transient sandbox exec error in {self._name}: {msg.strip()}")
         _LOG.warning(
             "sandbox container %s died mid-session (%s): %s",
-            self._name, reason, msg.strip(),
+            self._name,
+            reason,
+            msg.strip(),
         )
         raise SandboxUnavailableError(
             f"sandbox container died mid-session ({reason}): {msg.strip()}"
@@ -260,7 +280,7 @@ class PodmanSandboxInstance(ContainerInstance):
         (`timeout` coreutil) with an outer subprocess backstop; a killed command is
         reported with `timed_out=True`, partial output preserved."""
         self._alive()
-        argv = ["timeout", "-k", "5", str(timeout_s), "sh", "-c", cmd]
+        argv = bounded_exec_argv(cmd, timeout_s)
         rc, out, err = await asyncio.to_thread(self._exec, argv, timeout_s + 15)
         self._raise_if_dead(rc, err)
         return ExecResult(
@@ -273,11 +293,14 @@ class PodmanSandboxInstance(ContainerInstance):
     async def read_file(self, path: str) -> bytes:
         self._alive()
         target = await asyncio.to_thread(self._resolve_guest_path, path)  # lexical+symlink (P2)
-        rc, out, err = await asyncio.to_thread(self._exec, ["cat", "--", target], 60)
-        if rc != 0:
-            self._raise_if_dead(rc, err)
-            raise_read_error(path, err)  # W1: missing file → typed FileNotFoundError
-        return out
+        relpath = posixpath.relpath(target, self._ws)
+        rc, out, err = await asyncio.to_thread(
+            self._exec,
+            bounded_read_argv(self._ws, relpath),
+            SANDBOX_READ_TIMEOUT_S,
+        )
+        self._raise_if_dead(rc, err)
+        return bounded_read_result(path, rc, out, err)
 
     async def file_exists(self, path: str) -> bool:
         """[B4] Existence check via the CLI native remote (`test -f` in-container),
@@ -289,7 +312,11 @@ class PodmanSandboxInstance(ContainerInstance):
             target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
         except SandboxError:
             return False
-        rc, _out, err = await asyncio.to_thread(self._exec, ["test", "-f", target], 30)
+        rc, _out, err = await asyncio.to_thread(
+            self._exec,
+            ["sh", "-c", 'test -f "$1" && test ! -L "$1"', "disco", target],
+            30,
+        )
         if rc != 0:
             self._raise_if_dead(rc, err)
         return rc == 0
@@ -437,6 +464,16 @@ class PodmanSandboxService:
         sidecar_cpu = bounded_sidecar_cap("cpu", self._cfg.sidecar_cpu)
         sidecar_memory_mb = int(bounded_sidecar_cap("memory_mb", self._cfg.sidecar_memory_mb))
         sidecar_pids_limit = int(bounded_sidecar_cap("pids", self._cfg.sidecar_pids_limit))
+        deny_ips = collect_host_deny_ips(
+            self._cfg.host_ip_blocklist,
+            self._cfg.preview_host or _preview_host(self._cli_url),
+            include_local_interfaces=not self._cli_url.startswith("ssh://"),
+            additional_host_ips=(
+                discover_remote_host_ips(self._cli_url)
+                if self._cli_url.startswith("ssh://") and self._injected_client is None
+                else frozenset()
+            ),
+        )
         # [P1 leak-guard] Setup runs BEFORE the guarded sandbox create in `_start_container`,
         # so a partial failure here (connect/start/proxy inject) would otherwise strand the
         # internal network + proxy sidecar. Own the cleanup: any exception after either
@@ -472,7 +509,7 @@ class PodmanSandboxService:
                 # podman equivalent is `network_mode="bridge"` (verified live — a bare
                 # create defaults to pasta, which an internal net cannot attach to).
                 network_mode="bridge",
-                ports={f"{p}/tcp": None for p in sorted(PUBLISHED_PORTS)},  # FIX6: preview publish
+                ports=loopback_port_bindings(podman=True),
                 # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
                 # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
                 # podman caps cpu via quota/period (mirrors the sandbox create path).
@@ -480,6 +517,13 @@ class PodmanSandboxService:
                 cpu_quota=int(sidecar_cpu * _CPU_PERIOD),
                 cpu_period=_CPU_PERIOD,
                 pids_limit=sidecar_pids_limit,
+                ulimits=nofile_ulimits(self._cfg),
+                cap_drop=["ALL"],
+                no_new_privileges=True,
+                sysctls={
+                    "net.ipv4.ip_forward": "0",
+                    "net.ipv6.conf.all.forwarding": "0",
+                },
                 detach=True,
                 name=net_name,
                 labels=labels,
@@ -509,12 +553,24 @@ class PodmanSandboxService:
             if not sidecar.put_archive("/", buf.getvalue()):
                 raise SandboxUnavailableError("failed to inject egress proxy script into sidecar")
             allow = format_allow(spec.egress_allow)
-            argv = proxy_run_argv(allow, EGRESS_PROXY_PORT)
+            argv = proxy_run_argv(
+                allow,
+                EGRESS_PROXY_PORT,
+                public_only=egress_mode(spec) == "public",
+                deny_ips=deny_ips,
+            )
             self._sidecar_cli_run(
                 sidecar.name,
-                ["sh", "-c", f"{' '.join(argv)} >/var/log/egress.log 2>&1 &"],
+                ["sh", "-c", f"{shlex.join(argv)} >/var/log/egress.log 2>&1 &"],
                 10,
             )
+            ready_rc, _ready_out, _ready_err = self._sidecar_cli_run(
+                sidecar.name, proxy_readiness_argv(EGRESS_PROXY_PORT), 10
+            )
+            if ready_rc != 0:
+                raise SandboxUnavailableError(
+                    "egress policy proxy failed its readiness check; refusing sandbox start"
+                )
             # (3) read the sidecar's IP on the internal net; the sandbox proxies by IP.
             try:
                 sidecar.reload()
@@ -609,21 +665,20 @@ class PodmanSandboxService:
         # cpu/mem/pids but never loosen them above the configured max nor disable the pids
         # cap (pids=0 → default, never "unlimited"). Enforced by the user@ systemd manager
         # via the socket (same path as mem/cpu). See resolve_bounds.
-        cpu, mem_mb, pids = resolve_bounds(spec, self._cfg)
+        cpu, mem_mb, pids, disk_mb = resolve_bounds(spec, self._cfg)
         vol_name = f"{self._cfg.workspace_volume_prefix}-{instance_id}"
         name = f"{SBX_NAME_PREFIX}{instance_id}"
 
-        # Per-mode network config — mirror gVisor's three-way posture. A filtered
-        # box (E8) gets a PROXIED network (allowlist sidecar on an internal no-NAT
-        # net), NEVER the old fail-safe seal. Only an explicit NETWORK capability
-        # ("open") gets raw bridge; default remains deny-all.
+        # Per-mode network config — mirror gVisor's three-way posture. Filtered
+        # and public boxes get a policy sidecar on an internal no-NAT network;
+        # no model-shaped spec reaches a raw bridge.
         mode = egress_mode(spec)
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
         egress_net_name = ""
-        if mode == "filtered":
+        if mode in {"filtered", "public"}:
             egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
                 client, spec, instance_id, conversation_id
             )
@@ -636,14 +691,19 @@ class PodmanSandboxService:
             # It declares the namespace TYPE only — `networks` still pins the box to
             # the single internal net (no default bridge attached → no egress).
             net_kwargs = {"network_mode": "bridge", "networks": {net_name: {}}}
-        elif mode == "open":
-            net_kwargs = {"network_mode": "bridge"}  # explicit raw egress
         else:  # sealed
             net_kwargs = {"network_mode": "none"}
 
         volume = None
+        container = None
         try:
-            volume = _create_named_volume(client.volumes, name=vol_name, labels=labels)
+            volume = _create_named_volume(
+                client.volumes,
+                name=vol_name,
+                labels=labels,
+                disk_mb=disk_mb,
+                workspace_uid=self._cfg.workspace_uid,
+            )
             container = client.containers.create(
                 image=self._cfg.image,
                 command=["sleep", "infinity"],  # keepalive
@@ -651,6 +711,7 @@ class PodmanSandboxService:
                 cpu_quota=int(cpu * _CPU_PERIOD),
                 cpu_period=_CPU_PERIOD,
                 pids_limit=pids,  # EPIC H: cgroup pids.max — fork-bomb / host-PID guard
+                ulimits=nofile_ulimits(self._cfg),
                 **net_kwargs,
                 volumes={vol_name: {"bind": self._cfg.container_workspace, "mode": "rw"}},
                 # NO host env leaks in. For a filtered box the proxy routing vars
@@ -666,25 +727,28 @@ class PodmanSandboxService:
             # [FIX6 parity] sandbox is up + on the internal net — launch the inbound
             # preview forwarder on the SIDECAR (host:PORT -> sandbox_ip:PORT).
             # Best-effort: never raises, so it can't leak the just-started box.
-            if mode == "filtered" and egress_sidecar is not None:
+            if mode in {"filtered", "public"} and egress_sidecar is not None:
                 self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
             return container, name, egress_network, egress_sidecar, volume
-        except SandboxUnavailableError:
-            raise
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
             from podman.errors import ImageNotFound
 
+            if container is None:
+                with contextlib.suppress(Exception):
+                    container = client.containers.get(name)
+            with contextlib.suppress(Exception):
+                _remove_container(container)
+            # Don't leak the egress aux if the sandbox itself failed to start
+            # (E8: the parent class's teardown walks these refs).
+            self._best_effort_cleanup(egress_network=egress_network, egress_sidecar=egress_sidecar)
+            with contextlib.suppress(Exception):
+                _remove_volume(volume)
+            if isinstance(exc, SandboxUnavailableError):
+                raise
             if isinstance(exc, ImageNotFound):
                 raise SandboxUnavailableError(
                     f"sandbox image {self._cfg.image!r} not found"
                 ) from exc
-            # Don't leak the egress aux if the sandbox itself failed to start
-            # (E8: the parent class's teardown walks these refs).
-            self._best_effort_cleanup(
-                egress_network=egress_network, egress_sidecar=egress_sidecar
-            )
-            with contextlib.suppress(Exception):
-                _remove_volume(volume)
             raise SandboxUnavailableError(f"container failed to start: {exc}") from exc
 
     async def create(
@@ -713,6 +777,11 @@ class PodmanSandboxService:
             # Wedge-guard timeout (Dispo #25, E5 wiring) — untouched in E8.
             reload_timeout_s=self._cfg.reload_timeout_s,
             workspace_volume=workspace_volume,
+            loopback_tunnel=(
+                SshLoopbackTunnelManager(self._cli_url)
+                if self._cli_url.startswith("ssh://") and self._injected_client is None
+                else None
+            ),
         )
         # E8: attach the filtered-egress aux so the inherited ContainerInstance
         # teardown tears down the proxy sidecar + internal network. For sealed /
@@ -732,6 +801,7 @@ class PodmanSandboxService:
         ``SandboxUnavailableError`` NAMING the URL + reason on failure ("Podman
         unreachable at <url>: …"); returns None on success. Runs in a thread so the
         blocking SSH/socket call can't block the event loop."""
+
         def _probe() -> None:
             self._client()  # PodmanClient(...).ping(), typed "Podman unreachable at <url>: …"
 
@@ -744,6 +814,7 @@ class PodmanSandboxService:
         unlabeled pmx-sbx-* container predates the label scheme and cannot be
         correlated to any conversation — unreachable garbage by construction,
         reaped on sight."""
+
         def _list() -> list[str]:
             try:
                 client = self._client()
@@ -770,10 +841,12 @@ class PodmanSandboxService:
                 return result
             except Exception:  # noqa: BLE001 — Podman unreachable: non-fatal
                 return []
+
         return await asyncio.to_thread(_list)
 
     async def destroy_by_conversation(self, conversation_id: str) -> None:
         """Destroy all disco-sbx-*/pmx-sbx-* containers labelled with this conversation_id."""
+
         def _destroy() -> None:
             try:
                 client = self._client()
@@ -793,7 +866,7 @@ class PodmanSandboxService:
                         for prefix in SBX_NAME_PREFIXES:
                             if name.startswith(prefix):
                                 workspace_volume_names.add(
-                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix):]}"
+                                    f"{self._cfg.workspace_volume_prefix}-{name[len(prefix) :]}"
                                 )
                                 break
                         try:
@@ -812,9 +885,7 @@ class PodmanSandboxService:
                 # containers above are already removed, so the network is detachable.
                 seen_nets: set[str] = set()
                 for key in LABEL_CONV_KEYS:
-                    for net in client.networks.list(
-                        filters={"label": f"{key}={conversation_id}"}
-                    ):
+                    for net in client.networks.list(filters={"label": f"{key}={conversation_id}"}):
                         if net.id in seen_nets:
                             continue
                         seen_nets.add(net.id)
@@ -831,9 +902,7 @@ class PodmanSandboxService:
                     seen_vols: set[str] = set()
                     for key in LABEL_CONV_KEYS:
                         try:
-                            candidates = volumes.list(
-                                filters={"label": f"{key}={conversation_id}"}
-                            )
+                            candidates = volumes.list(filters={"label": f"{key}={conversation_id}"})
                         except Exception:  # noqa: BLE001 — client lacks volume listing
                             continue
                         for vol in candidates:
@@ -859,4 +928,5 @@ class PodmanSandboxService:
                             pass
             except Exception:  # noqa: BLE001 — best-effort
                 pass
+
         await asyncio.to_thread(_destroy)

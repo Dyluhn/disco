@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import logging
 
+from disco.core.auth import allowed_frontend_origins
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import StorageStatus
 from disco.tools.workflow_seed import seed_builtin_workflows
@@ -43,6 +44,7 @@ from .routes import (
     make_probes_router,
     make_projects_router,
     make_report_router,
+    make_sandbox_router,
     make_schedules_router,
     make_sessions_router,
     make_share_router,
@@ -54,7 +56,6 @@ from .routes import (
 )
 from .routes._common import _sanitize_name, make_preview_upstream_resolver
 from .runtime import ConversationRuntime
-from disco.core.auth import allowed_frontend_origins
 
 # `_sanitize_name` is re-exported here for tests that import it from this module
 # (test_upload.py) — its definition now lives in routes/_common.py.
@@ -85,6 +86,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     """Build the FastAPI app over a given store. The store is injected so tests
     drive it headlessly. `runtime` runs the agent loop with real inference (Stage
     2); pass None in tests that only exercise the wire layer (the loop won't run)."""
+
     @contextlib.asynccontextmanager
     async def lifespan(_app: FastAPI):
         # On startup, start the MCP pool (RP-05) and reconcile orphaned RUNNING
@@ -101,6 +103,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
                 # D1: _start_mcp_pool handles ApprovalRequired internally;
                 # unexpected errors are logged but must not block boot.
                 import logging
+
                 _LOG = logging.getLogger(__name__)
                 _LOG.warning("MCP pool startup failed", exc_info=True)
             with contextlib.suppress(Exception):  # never block boot on reconciliation
@@ -125,9 +128,7 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
             with contextlib.suppress(Exception):
                 await runtime._close_mcp_pool()
 
-    app = FastAPI(
-        title="disco agent-server", version="0.1.0", lifespan=lifespan
-    )
+    app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
     app.add_middleware(AgentAuthMiddleware, store=store)
     app.add_middleware(
         CORSMiddleware,
@@ -175,7 +176,10 @@ def create_app(store: SqliteEventStore, *, runtime: ConversationRuntime | None =
     app.include_router(make_report_router(store, runtime))
     app.include_router(make_share_router(store, runtime))
     app.include_router(make_debug_router(store, runtime))
-    app.include_router(make_probes_router())
+    app.include_router(make_probes_router(store))
+    # Sandbox reachability (health banner + Settings "Test connection") — probed
+    # HERE because the agent-server owns the sandbox environment, not the app-server.
+    app.include_router(make_sandbox_router(runtime))
     # EPIC O — owner-only Cloudflare deploy API (real deploy is HARD-GATED +
     # dry-run by default; the mutation path sits OUTSIDE the LLM tool loop).
     app.include_router(make_cloudflare_router(store, runtime))

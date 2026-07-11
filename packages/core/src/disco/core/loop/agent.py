@@ -45,6 +45,7 @@ from ..llm import (
     OverflowSignal,
     Requirement,
 )
+from ..llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
 from ..obs import log_span
 from ..think import strip_think_spans
 from ..view import View
@@ -263,6 +264,9 @@ class RouterAgent:
             span["cached_tokens"] = resp.usage.cached_tokens
             span["finish"] = str(resp.finish_reason)
 
+        empty_reasoning_diagnostic = getattr(resp, "response_metadata", {}).get(
+            EMPTY_REASONING_ONLY_METADATA_KEY
+        )
         if resp.tool_calls:
             # One-action-per-iteration: take the FIRST proposed call (§3).
             # W-32 (secondary): when the model BATCHES a `finish` ALONGSIDE a real
@@ -280,6 +284,7 @@ class RouterAgent:
                 finished=False,
                 requested_verification=_requested_verification,
                 llm_response_id=resp.request_id,
+                empty_reasoning_diagnostic=empty_reasoning_diagnostic,
             )
         # No tool call → a tool-less PROSE turn. Completion semantics are owned
         # by the AGENT (Research↔Build isolation), not derived from the per-step
@@ -318,6 +323,7 @@ class RouterAgent:
             finished=self._prose_finishes and not truncated,
             truncated=truncated,
             llm_response_id=resp.request_id,
+            empty_reasoning_diagnostic=empty_reasoning_diagnostic,
         )
 
 

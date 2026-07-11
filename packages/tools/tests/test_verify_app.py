@@ -588,3 +588,54 @@ def test_tool_definition_registered_low_risk():
     assert d.name == "verify_web_app"
     assert d.base_risk == SecurityRisk.LOW
     assert d.runs_in == "sandbox"
+
+
+class _FsSandbox:
+    """A minimal bytes fs sandbox for the eject-banner path (read/write/exists)."""
+
+    def __init__(self):
+        self.fs: dict[str, bytes] = {}
+
+    async def file_exists(self, path):
+        return path in self.fs
+
+    async def read_file(self, path):
+        return self.fs[path]
+
+    async def write_file(self, path, data):
+        self.fs[path] = data
+
+
+@pytest.mark.asyncio
+async def test_eject_banner_reasserted_and_idempotent():
+    """The eject banner is (re)written for an ejected component whose GUIDE has
+    none, and a second pass never duplicates it. Regression: read_file returns
+    BYTES, so the presence check must be a bytes literal (a str-in-bytes check
+    would TypeError on the real sandbox)."""
+    from disco.core.trusted_components.lockfile import (
+        ComponentsLock,
+        EjectRecord,
+        InstalledComponent,
+    )
+    from disco.core.trusted_components.verify import install_path
+
+    sb = _FsSandbox()
+    guide_path = install_path("auth-kit", "GUIDE.md")
+    sb.fs[guide_path] = b"# auth-kit\n"  # pristine — banner was reverted away
+    lock = ComponentsLock()
+    lock.components["auth-kit"] = InstalledComponent(
+        version="1.0.0", installed_at="2026-07-10T00:00:00+00:00", ejected=True
+    )
+    lock.ejects.append(
+        EjectRecord(name="auth-kit", at="2026-07-10T00:00:00+00:00", reason="core-edit-detected")
+    )
+
+    tool = VerifyWebAppTool()
+    await tool._append_eject_banner(_ctx(sb), lock, "auth-kit")
+    assert b"**Ejected" in sb.fs[guide_path]
+    after_first = sb.fs[guide_path]
+
+    # Idempotent: a second call must NOT append a duplicate banner.
+    await tool._append_eject_banner(_ctx(sb), lock, "auth-kit")
+    assert sb.fs[guide_path] == after_first
+    assert sb.fs[guide_path].count(b"**Ejected") == 1

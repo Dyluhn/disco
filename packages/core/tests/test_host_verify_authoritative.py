@@ -422,16 +422,18 @@ def test_prompt_self_verify_mandate_softens_only_when_authoritative() -> None:
         mode=OperatingMode.LONG_HORIZON,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert "Before declaring a web build finished, do ONE verify-pass" in off
-    assert "The platform runs the host verifier at the finish gate" not in off
+    assert "Before declaring a web build finished, do ONE structured verify pass" in off
+    assert "with `verify_web_app` after `preview_start`" in off
+    assert "after handing it off with `serve(...)`" not in off
 
     on = DriverPrompts(host_verify_authoritative=True).system_prompt(
         model_family="gpt",
         mode=OperatingMode.LONG_HORIZON,
         role=ModelRole.AGENT_DRIVER,
     )
-    assert "Before declaring a web build finished, do ONE verify-pass" not in on
-    assert "The platform runs the host verifier at the finish gate" in on
+    assert "Before declaring a web build finished, do ONE structured verify pass" not in on
+    assert "with `verify_web_app` after handing it off with `serve(...)`" in on
+    assert "The platform also runs the host verifier at the finish gate" in on
 
     small = DriverPrompts(host_verify_authoritative=True).system_prompt(
         model_family="gpt",
@@ -440,4 +442,5 @@ def test_prompt_self_verify_mandate_softens_only_when_authoritative() -> None:
         assist=True,
     )
     assert "WEB BUILDS — before declaring finished, do ONE verify-pass" not in small
+    assert "WEB BUILDS — do ONE structured verify pass with `verify_web_app`" in small
     assert "will refuse finish with a concrete failure" in small

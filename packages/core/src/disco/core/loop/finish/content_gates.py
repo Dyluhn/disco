@@ -1,5 +1,6 @@
 """Definition-of-Done, dictated-content, and execution-nudge gates."""
 
+# ruff: noqa: F403,F405 -- mixin split intentionally shares the common import surface
 from __future__ import annotations
 
 from .common import *
@@ -8,10 +9,11 @@ from .common import (
     _DOD_REFUSAL_CAP,
     _EXECUTION_NUDGE,
     _EXECUTION_NUDGE_CAP,
-    _FinishGateProto,
-    _DoDWorkspaceUnavailable,
     _LOG,
+    _appkit_scope_active,
     _deliverable_event_paths,
+    _DoDWorkspaceUnavailable,
+    _FinishGateProto,
     _is_web_deliverable,
     _latest_plan_revision,
     _plan_file_exists_paths,
@@ -167,6 +169,9 @@ class _ContentGateMixin(_FinishGateProto):
 
         if not self._loop._planning_tools or self._loop.mode == OperatingMode.PLANNING:
             return True
+        if _appkit_scope_active(self._loop):
+            self._loop._dictated_content_refusals = 0
+            return True
         current_revision = _latest_plan_revision(events)
         if current_revision is None:
             return True
@@ -250,8 +255,8 @@ class _ContentGateMixin(_FinishGateProto):
              changed, control flow identical to pre-C1c).
           2. Build a DoDEvaluator. Factory-injected if the loop was
              constructed with one; otherwise build a default over the
-             executor's sandbox workspace_root (or skip the gate if the
-             sandbox doesn't expose a path — defensive, never a crash).
+             executor's sandbox evidence APIs. Missing evidence pauses
+             fail-closed rather than turning the requirement into a pass.
           3. Run the verdict against the spec.
           4. Verdict passed → True (the finish lands).
           5. Verdict failed → emit a MessageEvent carrying the SPECIFIC
@@ -277,95 +282,77 @@ class _ContentGateMixin(_FinishGateProto):
         # default builds a real DoDEvaluator over the executor's workspace.
         try:
             evaluator = await self.build_dod_evaluator()
-        except _DoDWorkspaceUnavailable:
-            # No workspace to grade against. This is a misconfiguration
-            # (the spec was set but the sandbox doesn't expose a path),
-            # not a predicate failure. We log and skip the gate rather
-            # than refusing forever — refusing without a reason would
-            # also be a silent failure mode. The audit trail will see the
-            # log line; the agent sees no gate, so the run can finish.
+        except _DoDWorkspaceUnavailable as exc:
+            # S-W5 D4: absence of the evidence surface cannot turn a committed
+            # acceptance bar into a pass. Pause visibly; an operator can repair
+            # the backend or begin a new conversation, but the model cannot earn
+            # FINISHED by making verification unavailable.
             _LOG.warning(
-                "DoD spec set for %s but no workspace_root available; "
-                "skipping C1c gate (refusing without evidence would be a "
-                "silent fail).",
+                "DoD spec set for %s but no workspace_root available; pausing fail-closed: %s",
                 self._loop.conversation_id,
+                exc,
             )
-            return True
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\nThe external Definition-of-Done "
+                            "could not be evaluated because its sandbox evidence surface "
+                            "is unavailable. The task is NOT complete and has been paused "
+                            "fail-closed; repair the sandbox or start a new conversation.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                )
+            )
+            self._loop._pause_requested.set()
+            return False
         verdict = await evaluator.evaluate(spec, conversation_id=self._loop.conversation_id)
         if verdict.passed:
             self._loop._dod_refusals = 0  # clean pass → reset the streak (mirror verify)
             return True
-        # INFRA-vs-TASK release (DoD v2.1): if EVERY unmet predicate is UNVERIFIABLE — the
-        # check could not be RUN (a hard-denied command, an unprobeable/not-yet-serving URL,
-        # egress denied) — do NOT block the finish on infra noise. Only a real TASK failure
-        # (a command that RAN and exited wrong; a server that SERVED the wrong status) is a
-        # genuine "not done". This is what lets `command`/`http_ok` predicates gate safely.
-        failed = [r for r in verdict.results if not r.passed]
-        task_failures = [r for r in failed if not getattr(r, "unverifiable", False)]
-        if not task_failures:
-            _LOG.info(
-                "DoD for %s: %d unmet predicate(s), ALL unverifiable (infra, not a task "
-                "verdict) — releasing the finish gate rather than blocking on a check that "
-                "could not run.",
-                self._loop.conversation_id,
-                len(failed),
-            )
-            if failed:
-                # HONEST-INCOMPLETE surface (the research's UNVERIFIED third state): we are
-                # allowing finish, but the run did NOT verify these acceptance checks. Record
-                # an ADVISORY note (visible, non-blocking, NOT a refusal) so the user/audit
-                # sees "finished, but couldn't confirm X" instead of a silent clean pass.
-                unverified = "\n".join(
-                    f"  - {r.predicate!r}\n      could not verify: {r.reason}" for r in failed
-                )
-                await self._loop._emit(
-                    MessageEvent(
-                        source=EventSource.ENVIRONMENT,
-                        message=LLMMessage(
-                            role="user",
-                            content=(
-                                f"<note>\nFinished, but {len(failed)} acceptance check(s) "
-                                "could NOT be verified (the check could not run — e.g. a "
-                                "denied command or a server that was not serving). These are "
-                                "NOT failures, but they were NOT confirmed either:\n\n"
-                                f"{unverified}\n</note>"
-                            ),
-                        ),
-                        meta={"advisory": "dod_unverified_at_finish"},
-                    )
-                )
-            self._loop._dod_refusals = 0
-            return True
-        # Cap the refusal streak (mirror _FINISH_VERIFY_CAP): after N consecutive
-        # DoD refusals, RELEASE the gate so an agent that cannot satisfy the
-        # external DoD is not trapped in an unbounded refuse-and-continue loop
-        # (that loop accumulates events without end — the OOM the uncapped first
-        # cut caused). The release is logged LOUDLY; the prior refusal events
-        # remain the visible audit trail of the unmet predicates.
+        # Bound the model retry loop without weakening the acceptance bar. Once
+        # the refusal budget is spent, PAUSE for the user; never auto-release to
+        # FINISHED. Unverifiable is still unmet—breaking the checker is not a pass.
         if self._loop._dod_refusals >= _DOD_REFUSAL_CAP:
             _LOG.warning(
-                "DoD for %s still unmet after %d refusals (cap %d) — releasing the "
-                "finish gate to avoid an unbounded refuse loop.",
+                "DoD for %s still unmet after %d refusals (cap %d) — pausing "
+                "fail-closed instead of auto-releasing.",
                 self._loop.conversation_id,
                 self._loop._dod_refusals,
                 _DOD_REFUSAL_CAP,
             )
-            return True
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\nThe external Definition-of-Done is "
+                            "still unmet after the bounded retry budget. The task is NOT "
+                            "complete. This run is pausing for explicit user review rather "
+                            "than silently marking incomplete work done.\n</system-reminder>"
+                        ),
+                    ),
+                    meta={"blocking": "dod_unmet"},
+                )
+            )
+            self._loop._pause_requested.set()
+            return False
         # Refuse + keep working. The agent sees the SPECIFIC unmet
         # predicates (named by `kind` + the frozen-predicate `repr`); the
         # audit sees the spec fingerprint + the per-predicate results.
         self._loop._dod_refusals += 1  # bounded by _DOD_REFUSAL_CAP (see above)
         unmet_lines: list[str] = []
         for result in verdict.results:
-            if result.passed or result.unverifiable:
-                # Skip passes AND unverifiable (infra) failures — name only the actionable
-                # TASK failures the agent can actually fix (we only reach here BECAUSE there
-                # is at least one). An infra failure named here would mislead the model into
-                # "fixing" something that simply could not be checked.
+            if result.passed:
                 continue
             # The frozen predicate's repr names kind + fields. Pair with
             # the verdict's reason (the human explanation).
-            unmet_lines.append(f"  - {result.predicate!r}\n      reason: {result.reason}")
+            label = "could not verify" if result.unverifiable else "reason"
+            unmet_lines.append(f"  - {result.predicate!r}\n      {label}: {result.reason}")
         unmet_block = "\n".join(unmet_lines) if unmet_lines else "  - (no per-predicate results)"
         await self._loop._emit(
             MessageEvent(
@@ -393,9 +380,9 @@ class _ContentGateMixin(_FinishGateProto):
         """Construct the DoDEvaluator. Two paths:
 
           * `_dod_evaluator_factory` is set (test seam): call it, ignore args.
-          * Otherwise: derive the workspace_root from the executor's sandbox
-            (the in-cluster `workspace_path`); if absent, raise
-            `_DoDWorkspaceUnavailable` and the gate degrades to "skip".
+          * Otherwise: use the sandbox's own file/command/HTTP surfaces. A host
+            workspace path is optional; container backends are graded inside
+            their namespace rather than silently skipping the gate.
 
         The factory is the dependency-injection point — tests close over
         a tmp_path + fake command_runner / http_probe and return a fully
@@ -422,11 +409,77 @@ class _ContentGateMixin(_FinishGateProto):
             return cast(DoDEvaluator, result)
         sbx = getattr(self._loop.executor, "sandbox", None)
         workspace = getattr(sbx, "workspace_path", None) if sbx is not None else None
-        if not workspace:
+        sandbox_evidence = sbx is not None and all(
+            hasattr(sbx, method) for method in ("file_exists", "exec_shell", "resolve_relpath")
+        )
+        if not workspace and not sandbox_evidence:
             raise _DoDWorkspaceUnavailable(
-                f"no sandbox.workspace_path on executor {type(self._loop.executor).__name__}"
+                f"no sandbox evidence API on executor {type(self._loop.executor).__name__}"
             )
         from pathlib import Path
+
+        file_checker = None
+        if (
+            sbx is not None
+            and hasattr(sbx, "file_exists")
+            and hasattr(sbx, "exec_shell")
+            and hasattr(sbx, "resolve_relpath")
+        ):
+            import shlex
+
+            from ...dod_evaluator import DoDPredicateResult
+
+            async def _in_sandbox_file_checker(
+                predicate: FileExistsPredicate,
+            ) -> DoDPredicateResult:
+                try:
+                    exists = await sbx.file_exists(predicate.path)
+                except Exception as exc:  # noqa: BLE001 — fail closed with evidence
+                    return DoDPredicateResult(
+                        predicate=predicate,
+                        passed=False,
+                        reason=f"sandbox file check failed: {type(exc).__name__}: {exc}",
+                        unverifiable=True,
+                        details={"kind": "file_exists", "path": predicate.path},
+                    )
+                if not exists:
+                    return DoDPredicateResult(
+                        predicate=predicate,
+                        passed=False,
+                        reason=f"file does not exist as a regular workspace file: {predicate.path}",
+                        details={"kind": "file_exists", "path": predicate.path},
+                    )
+                try:
+                    relpath = await sbx.resolve_relpath(predicate.path)
+                    res = await sbx.exec_shell(
+                        shlex.join(["sh", "-c", 'test -s "$1"', "disco", relpath]),
+                        timeout_s=5,
+                    )
+                except Exception as exc:  # noqa: BLE001 — fail closed with evidence
+                    return DoDPredicateResult(
+                        predicate=predicate,
+                        passed=False,
+                        reason=f"sandbox non-empty check failed: {type(exc).__name__}: {exc}",
+                        unverifiable=True,
+                        details={"kind": "file_exists", "path": predicate.path},
+                    )
+                passed = int(res.exit_code) == 0
+                return DoDPredicateResult(
+                    predicate=predicate,
+                    passed=passed,
+                    reason=(
+                        f"regular non-empty workspace file exists: {predicate.path}"
+                        if passed
+                        else f"workspace file is empty: {predicate.path}"
+                    ),
+                    details={
+                        "kind": "file_exists",
+                        "path": predicate.path,
+                        "exit_code": int(res.exit_code),
+                    },
+                )
+
+            file_checker = _in_sandbox_file_checker
 
         # An `http_ok` serve-check must probe from INSIDE the sandbox: a build's dev
         # server binds the SANDBOX's localhost, not the host's. The default host-side
@@ -438,13 +491,8 @@ class _ContentGateMixin(_FinishGateProto):
         if sbx is not None and hasattr(sbx, "exec_shell"):
             import shlex
 
-            async def _in_sandbox_http_probe(
-                url: str, expected_status: int
-            ) -> HttpProbeResult:
-                cmd = (
-                    "curl -s -o /dev/null -w '%{http_code}' --max-time 10 "
-                    + shlex.quote(url)
-                )
+            async def _in_sandbox_http_probe(url: str, expected_status: int) -> HttpProbeResult:
+                cmd = "curl -s -o /dev/null -w '%{http_code}' --max-time 10 " + shlex.quote(url)
                 try:
                     res = await sbx.exec_shell(cmd, timeout_s=15)
                 except Exception as exc:  # noqa: BLE001 — a probe failure is "not probed", never a crash
@@ -510,7 +558,10 @@ class _ContentGateMixin(_FinishGateProto):
             command_runner = _in_sandbox_command_runner
 
         return DoDEvaluator(
-            Path(workspace), command_runner=command_runner, http_probe=http_probe
+            Path(workspace) if workspace else Path("."),
+            command_runner=command_runner,
+            http_probe=http_probe,
+            file_checker=file_checker,
         )
 
     async def gate_execution_nudge(self, step: AgentStep, events: list[Event]) -> Disp:
@@ -525,6 +576,7 @@ class _ContentGateMixin(_FinishGateProto):
             self._loop._planning_tools  # plan-first lifecycle is configured
             and self._loop.mode != OperatingMode.PLANNING  # we're executing
             and not signals.productive_action_since_approval(events)
+            and not signals.finish_intent_replan_after_prior_productive_work(events)
         ):
             # W5 cap: after _EXECUTION_NUDGE_CAP nudges without productive
             # action, TERMINALIZE the run as a FAILURE — NOT a false FINISHED.
@@ -561,9 +613,7 @@ class _ContentGateMixin(_FinishGateProto):
                 await self._loop._emit(
                     MessageEvent(
                         source=EventSource.AGENT,
-                        message=LLMMessage(
-                            role="assistant", content=step.thought
-                        ),
+                        message=LLMMessage(role="assistant", content=step.thought),
                     )
                 )
             else:

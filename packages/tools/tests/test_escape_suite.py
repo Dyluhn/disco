@@ -45,6 +45,16 @@ class _FakeContainer:
         self.attrs: dict[str, Any] = {}
 
     def reload(self) -> None: ...
+
+    def start(self) -> None: ...
+
+    def stop(self, timeout=None) -> None: ...
+
+    def remove(self, **kwargs: Any) -> None: ...
+
+    def put_archive(self, path: str, data: bytes) -> bool:
+        return True
+
     def exec_run(self, *a: Any, **k: Any) -> Any:
         return (0, (b"", b""))
 
@@ -55,7 +65,27 @@ class _FakeImages:
 
 
 class _FakeVolumes:
-    def create(self, name: str) -> None: ...
+    def create(self, name: str, **kwargs: Any) -> None: ...
+
+
+class _FakeNetwork:
+    def __init__(self, name: str, **attrs: Any) -> None:
+        self.name = name
+        self.attrs = attrs
+
+    def connect(self, container: Any, aliases=None) -> None: ...
+
+    def remove(self) -> None: ...
+
+
+class _FakeNetworks:
+    def __init__(self) -> None:
+        self.created: list[_FakeNetwork] = []
+
+    def create(self, name: str, **kwargs: Any) -> _FakeNetwork:
+        network = _FakeNetwork(name, **kwargs)
+        self.created.append(network)
+        return network
 
 
 class _FakeDocker:
@@ -63,6 +93,7 @@ class _FakeDocker:
         self.containers = self
         self.images = _FakeImages()
         self.volumes = _FakeVolumes()
+        self.networks = _FakeNetworks()
         self.last: _FakeContainer | None = None
 
     def ping(self) -> bool:
@@ -212,7 +243,7 @@ class _SymlinkFakeContainer:
             if path == "/workspace":
                 real = "/workspace"
             elif path.startswith("/workspace/out"):
-                real = "/etc" + path[len("/workspace/out"):]  # the symlink target escapes
+                real = "/etc" + path[len("/workspace/out") :]  # the symlink target escapes
             else:
                 real = path
             return (0, (real.encode() + b"\n", b"")) if demux else (0, real.encode() + b"\n")
@@ -337,6 +368,7 @@ async def test_open_box_is_on_its_own_bridge_not_host_netns():
     await svc.create(
         SandboxSpec(permitted=frozenset({Capability.NETWORK})), owner_id="o", conversation_id="c"
     )
-    nm = client.last.run_kwargs.get("network_mode")
-    assert nm == "bridge"
-    assert nm != "host"
+    kw = client.last.run_kwargs
+    assert kw.get("network", "").startswith("disco-egr-")
+    assert client.networks.created[-1].attrs.get("internal") is True
+    assert kw.get("network_mode") != "host"

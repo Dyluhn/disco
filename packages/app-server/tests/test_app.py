@@ -20,6 +20,7 @@ from disco.core import (
     StatusEvent,
 )
 from disco.core.llm import ConfigStore, SecretBox, SecretStore
+from disco.tools.mcp.migrations import set_mcp_approval_pending
 from fastapi.testclient import TestClient
 
 
@@ -497,8 +498,19 @@ def test_mcp_approval_persists_via_production_default_wiring(store, tmp_path, mo
     )
     assert created.status_code == 201, created.text
 
+    config_hash = created.json()["new_config_hash"]
+    approved_config = client.post(
+        "/api/mcp/servers/prod/approve",
+        json={"approval_kind": "config", "config_hash": config_hash},
+    )
+    assert approved_config.status_code == 200, approved_config.text
+
     h = "a" * 64
-    approved = client.post("/api/mcp/servers/prod/approve", json={"description_hash": h})
+    set_mcp_approval_pending(store._conn, "prod", "", h)
+    approved = client.post(
+        "/api/mcp/servers/prod/approve",
+        json={"approval_kind": "tools", "description_hash": h},
+    )
     assert approved.status_code == 200, approved.text  # was a 500 before the fix
     assert approved.json()["description_hash"] == h
 

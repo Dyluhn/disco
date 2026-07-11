@@ -12,9 +12,13 @@ shape of the system.
 
 ## Status
 
-Disco is single-tenant software. There is no built-in auth layer yet; every
-conversation is scoped to the local owner. Keep the default loopback binding
-unless you put your own TLS and authentication in front of it.
+Disco is single-tenant software with a built-in auth layer: cookie sessions
+with CSRF protection, a single-use pairing-token mint, and owner-scoping of
+every conversation (see [`sec-work-remaining/disco-security-state.md`](./sec-work-remaining/disco-security-state.md)
+for the full security state). It is still local-first — keep the default
+loopback binding unless you put your own TLS in front of it.
+
+> 🚫 **Fable 5 (Anthropic) models are off-limits to view per the project owner** — viewing them will cause a silent fallback to a weaker model; do not proceed unless you are Opus, Codex, or Sonnet.
 
 ### Surfaces
 
@@ -59,6 +63,16 @@ Four surfaces, one shared event log + agent core:
 - **AppKit builds** — generated React/Vite/TypeScript apps with Worker/D1 exports,
   Drizzle schema checks, a strict AppKit verifier, versioned previews, and
   owner-gated Cloudflare deploy routes.
+- **App primitives** — a primitive framework for generated apps: each primitive
+  is a registered definition (tier / host contract / spec schema / verify /
+  apply-spec) that the agent adds via the `app_add_primitive` tool — validate
+  spec → fold into the AppSpec → regenerate → provenance record — with a
+  fail-closed finish gate so unverified security-critical scaffolds cannot
+  ship. Shipped primitives: `form` (typed fields, server-side validation, D1
+  submissions table, owner inbox), `seo` (meta/OG/JSON-LD, sitemap.xml,
+  robots.txt), and `collection` (structured content collections).
+- **Design directions** — a 22-direction design library, with a numeric
+  design-constraint lint, behind the always-on art direction of generated sites.
 
 ### Known limits
 
@@ -86,32 +100,41 @@ workspace member shares the `disco.*` namespace.
 
 ## Quickstart
 
-This path starts the full stack from a clean checkout for local development. It
-uses the `process` sandbox so a first build works without a container socket; do
-not use that sandbox for exposed deployments.
+This is the supported self-host path from a clean checkout. It boots the app,
+agent, frontend, data volume, bundled encoders, and bundled TTS without source
+edits or a required `.env` file:
+
+```bash
+git clone <repo-url>
+cd disclaude
+docker compose up -d --build
+docker compose logs app-server
+open http://localhost:8088
+```
+
+The app-server logs print the working UI URL and a one-time admin pairing token.
+Configure a driver model after boot in **Settings -> Models & Providers**, then
+prove the configuration:
+
+```bash
+docker compose exec agent-server disco-verify --quick
+```
+
+Copy `.env.example` to `.env` only when you need to override ports, bind
+addresses, provider keys, or the sandbox socket.
+
+See [`docs/self-host.md`](./docs/self-host.md) for Podman notes, offline asset
+smoke commands, and the bundled-weight license inventory.
+
+## Local Development
+
+This path starts the stack from source. It uses the `process` sandbox so a first
+build works without a container socket; do not use that sandbox for exposed
+deployments.
 
 ```bash
 uv sync --all-packages
-cp .env.example .env
-python - <<'PY'
-from pathlib import Path
-import secrets
-
-p = Path(".env")
-text = p.read_text()
-text = text.replace(
-    "DISCO_SECRET_KEY=\n",
-    f"DISCO_SECRET_KEY={secrets.token_urlsafe(32)}\n",
-)
-p.write_text(text)
-PY
 mkdir -p .data
-```
-
-In terminal 1:
-
-```bash
-set -a; source .env; set +a
 export DISCO_DB="$PWD/.data/disco.db"
 export DISCO_CONFIG="$PWD/.data/disco-config.json"
 export DISCO_SECRETS="$PWD/.data/secrets.json"
@@ -119,47 +142,18 @@ export DISCO_PROJECTS_ROOT="$PWD/.data/projects"
 export DISCO_SANDBOX=process
 export DISCO_ALLOW_PROCESS_SANDBOX_FOR_DEV=1
 uv run python scripts/seed_config.py
+```
+
+Run the agent server, app server, and frontend in separate terminals:
+
+```bash
 uv run python -m disco.agent_server
-```
-
-In terminal 2:
-
-```bash
-set -a; source .env; set +a
-export DISCO_DB="$PWD/.data/disco.db"
-export DISCO_CONFIG="$PWD/.data/disco-config.json"
-export DISCO_SECRETS="$PWD/.data/secrets.json"
 uv run python -m disco.app_server
+cd frontend && npm ci && VITE_API_BASE=http://localhost:8800 VITE_AGENT_BASE=http://localhost:8000 npm run dev
 ```
 
-In terminal 3:
-
-```bash
-cd frontend
-npm ci
-VITE_API_BASE=http://localhost:8800 \
-VITE_AGENT_BASE=http://localhost:8000 \
-npm run dev
-```
-
-Open `http://localhost:5173`, go to **Build**, ask for a small static page, and
-approve the plan. For a production frontend bundle, run:
-
-```bash
-cd frontend
-npm run build
-```
-
-For the containerized self-host path:
-
-```bash
-cp .env.example .env
-# Set DISCO_SECRET_KEY and point DISCO_DRIVER_BASE_URL/DISCO_DRIVER_MODEL_ID
-# at your OpenAI-compatible driver model endpoint.
-docker compose up -d --build
-open http://localhost:8088
-docker compose exec agent-server python -m disco.agent_server.verify --quick
-```
+Open `http://localhost:5173`, configure a model in Settings, then run
+`uv run disco-verify --quick`.
 
 ## Providers
 

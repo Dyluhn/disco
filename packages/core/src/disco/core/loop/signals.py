@@ -9,6 +9,7 @@ no instance state, no emission, and no I/O. They were `@staticmethod`s on
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ..think import strip_think_spans
@@ -35,7 +36,14 @@ if TYPE_CHECKING:
 # from "did the agent act?" accounting everywhere (valve taxonomy + the
 # actionless streak) so a model can't look productive by shuffling plan state.
 _BOOKKEEPING_TOOLS = frozenset(
-    {"submit_plan", "propose_plan_update", "plan_step", "update_plan_progress", "finish"}
+    {
+        "submit_plan",
+        "propose_plan_update",
+        "plan_step",
+        "update_plan_progress",
+        "finish",
+        "think",
+    }
 )
 
 # The tool names that don't count as "productive work" for the execution gate:
@@ -48,6 +56,7 @@ _BOOKKEEPING_TOOLS = frozenset(
 _NON_PRODUCTIVE_TOOLS = frozenset(
     {
         "submit_plan",
+        "think",
         "plan_step",
         "update_plan_progress",  # declarative progress snapshot — pure UI signal, no work
         "ask_user",
@@ -85,7 +94,55 @@ _NON_PRODUCTIVE_TOOLS = frozenset(
     }
 )
 
+_FINISH_INTENT_RE = re.compile(
+    r"\b(?:finish(?:ing)?|finali[sz]e|complete|completion|done|ship|handoff|"
+    r"hand[\s-]?off|deliver|submit(?: the)? final|final answer|ready for "
+    r"verification|call finish)\b",
+    re.IGNORECASE,
+)
+_ACTIONABLE_BUILD_VERB_RE = re.compile(
+    r"\b(?:add(?:s|ed|ing)?|create(?:s|d)?|creating|build(?:s|ing)?|built|"
+    r"implement(?:s|ed|ing)?|writ(?:e|es|ing)|wrote|design(?:s|ed|ing)?|"
+    r"styl(?:e|es|ed|ing)|mak(?:e|es|ing)|made|configure(?:s|d)?|configuring|"
+    r"config|install(?:s|ed|ing)?|includ(?:e|es|ed|ing)|insert(?:s|ed|ing)?|"
+    r"append(?:s|ed|ing)?|generat(?:e|es|ed|ing)|develop(?:s|ed|ing)?|"
+    r"scaffold(?:s|ed|ing)?|integrat(?:e|es|ed|ing)|updat(?:e|es|ed|ing)|"
+    r"fix(?:es|ed|ing)?|refactor(?:s|ed|ing)?|polish(?:es|ed|ing)?|setup|"
+    r"set[\s-]?up|wire[\s-]?up)\b",
+    re.IGNORECASE,
+)
+
 SYNTHETIC_FINISH_ATTEMPT_DETAIL = "synthetic_finish_attempted"
+PROSE_NOOP_REPAIR_DIAGNOSTIC = "prose_noop_repair"
+READ_CHURN_NUDGE_DIAGNOSTIC = "read_churn_nudge"
+
+_READ_CHURN_SMALL_LIMIT = 25
+_READ_CHURN_WARNING_COUNTS = frozenset({5, 10, 15})
+_READ_CHURN_LADDER_AT = 20
+_READ_LINES_HEADER_RE = re.compile(r"\[lines\s+(\d+)-(\d+)\s+of\s+(\d+)")
+_READ_CHURN_RESET_TOOLS = frozenset(
+    {
+        "file_write",
+        "file_edit",
+        "file_append",
+        "shell",
+        "shell_exec",
+        "run_project_script",
+        "browser",
+        "design_lint",
+        "update_plan_progress",
+        "submit_plan",
+        "finish",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ReadChurnState:
+    path: str
+    count: int
+    warning_count: int | None
+    invisible_noops: int
 
 
 def _event_seq(event: Event, fallback: int) -> int:
@@ -142,6 +199,69 @@ def productive_action_since_approval(events: list[Event]) -> bool:
             if e.id in successful_actions and e.tool_call.tool_name not in _NON_PRODUCTIVE_TOOLS:
                 return True
     return False
+
+
+def _plan_approval_seqs(events: list[Event]) -> list[int]:
+    return [
+        e.seq or 0
+        for e in events
+        if isinstance(e, StatusEvent) and e.detail == "plan_approved"
+    ]
+
+
+def _step_is_finish_intent(step: PlanStep) -> bool:
+    text = f"{step.title} {step.detail or ''}".strip()
+    if not text:
+        return False
+    if _ACTIONABLE_BUILD_VERB_RE.search(text):
+        return False
+    return _FINISH_INTENT_RE.search(text) is not None
+
+
+def finish_intent_replan_after_prior_productive_work(events: list[Event]) -> bool:
+    """True for a re-plan that only tells the model to finish after earlier work.
+
+    The execution nudge is anchored to the latest ``plan_approved`` marker. That
+    is correct for a fresh plan, but a re-plan whose only remaining step is
+    completion/handoff can otherwise erase the productive work that happened in
+    the prior approved segment and deadlock on "plan not executed yet". This
+    predicate is intentionally narrow: it requires a prior approval segment with
+    successful productive work, and the latest plan's unfinished steps must be
+    finish-intent only. A genuinely never-executed plan therefore still returns
+    False and lands in the existing ``approve_plan_no_execution`` cap path.
+    """
+
+    approvals = _plan_approval_seqs(events)
+    if len(approvals) < 2:
+        return False
+    previous_approval_seq = approvals[-2]
+    latest_approval_seq = approvals[-1]
+
+    successful_actions = _successful_action_ids(events)
+    prior_productive = False
+    for event in events:
+        seq = event.seq or 0
+        if seq <= previous_approval_seq or seq >= latest_approval_seq:
+            continue
+        if _is_successful_productive_action(event, successful_actions):
+            prior_productive = True
+            break
+    if not prior_productive:
+        return False
+
+    plan, states = effective_plan_progress(events)
+    if plan is None or not plan.steps:
+        return False
+    plan_seq = plan.seq or 0
+    if plan_seq > latest_approval_seq or plan_seq <= previous_approval_seq:
+        return False
+
+    remaining = [
+        step
+        for index, step in enumerate(plan.steps, start=1)
+        if states.get(index) != "done"
+    ]
+    return bool(remaining) and all(_step_is_finish_intent(step) for step in remaining)
 
 
 def _is_successful_productive_action(
@@ -492,6 +612,175 @@ def consecutive_noops(events: list[Event]) -> int:
     return count
 
 
+def prose_noop_repair_seen_current_execution_segment(events: list[Event]) -> bool:
+    """Has the one-shot execution prose repair already fired in this segment?
+
+    The repair marker is durable so retry bounds survive loop recreation. The
+    segment boundary mirrors the existing actionless runway boundaries that can
+    make a new execution attempt legitimate: a fresh user message, a resume
+    boundary, or a newly approved plan. Real actions do not clear this marker;
+    the nudge is a per-segment correction, not a per-streak correction.
+    """
+    for e in reversed(events):
+        if isinstance(e, MessageEvent):
+            if e.source == EventSource.USER:
+                break
+            if (
+                e.source == EventSource.ENVIRONMENT
+                and e.meta.get("diagnostic") == PROSE_NOOP_REPAIR_DIAGNOSTIC
+            ):
+                return True
+        if isinstance(e, StatusEvent):
+            if e.status == ConversationStatus.PAUSED:
+                break
+            if e.status == ConversationStatus.RUNNING and e.detail in (
+                "plan_approved",
+                "resumed",
+                "planning",
+            ):
+                break
+    return False
+
+
+def _read_churn_path(action: ActionEvent) -> str | None:
+    if action.tool_call is None or action.tool_call.tool_name != "file_read":
+        return None
+    path = action.tool_call.arguments.get("path")
+    return path if isinstance(path, str) and path else None
+
+
+def _read_churn_limit(action: ActionEvent) -> int | None:
+    if action.tool_call is None:
+        return None
+    value = action.tool_call.arguments.get("limit")
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) else None
+
+
+def _read_churn_successful_observations(events: list[Event]) -> dict[str, ObservationEvent]:
+    return {
+        event.action_id: event
+        for event in events
+        if isinstance(event, ObservationEvent) and event.tool_result.success
+    }
+
+
+def _file_read_covers_remainder(observation: ObservationEvent | None) -> bool:
+    if observation is None:
+        return False
+    match = _READ_LINES_HEADER_RE.search(observation.tool_result.content or "")
+    if match is None:
+        return False
+    _start, end, total = (int(group) for group in match.groups())
+    return end >= total
+
+
+def _is_whole_file_read(action: ActionEvent, observation: ObservationEvent | None) -> bool:
+    if action.tool_call is None or action.tool_call.tool_name != "file_read":
+        return False
+    # A no-limit read (including offset-to-EOF) is the model moving out of tiny
+    # paging. The tool result header lets range reads that reach EOF reset too.
+    return _read_churn_limit(action) is None or _file_read_covers_remainder(observation)
+
+
+def _is_small_file_read(action: ActionEvent, observation: ObservationEvent | None) -> bool:
+    if observation is None or action.tool_call is None:
+        return False
+    if action.tool_call.tool_name != "file_read":
+        return False
+    limit = _read_churn_limit(action)
+    return limit is not None and limit <= _READ_CHURN_SMALL_LIMIT
+
+
+def _is_read_churn_reset_action(action: ActionEvent) -> bool:
+    if action.tool_call is None:
+        return False
+    tool = action.tool_call.tool_name
+    return (
+        tool in _READ_CHURN_RESET_TOOLS
+        or tool.startswith("preview_")
+        or (tool.startswith("file_") and tool.endswith("_lines"))
+    )
+
+
+def read_churn_state(events: list[Event]) -> ReadChurnState | None:
+    """Current same-target tiny ``file_read`` streak in execution.
+
+    The scan is intentionally event-log-derived: diagnostics already emitted in
+    the current streak suppress duplicate warnings, while any reset action before
+    the streak makes old diagnostics irrelevant and re-arms the ladder.
+    """
+    successful = _read_churn_successful_observations(events)
+    diagnostics_seen: set[tuple[str, int]] = set()
+    target: str | None = None
+    count = 0
+
+    for event in reversed(events):
+        if isinstance(event, MessageEvent):
+            if event.source == EventSource.USER:
+                break
+            if event.source == EventSource.AGENT:
+                break
+            if (
+                event.source == EventSource.ENVIRONMENT
+                and event.meta.get("diagnostic") == READ_CHURN_NUDGE_DIAGNOSTIC
+            ):
+                path = event.meta.get("path")
+                n = event.meta.get("count", event.meta.get("streak"))
+                if isinstance(path, str) and isinstance(n, int):
+                    diagnostics_seen.add((path, n))
+            continue
+        if isinstance(event, StatusEvent):
+            if event.detail in ("plan_approved", "planning"):
+                break
+            continue
+        if isinstance(event, PlanEvent):
+            break
+        if isinstance(event, ObservationEvent | AgentErrorEvent):
+            continue
+        if not isinstance(event, ActionEvent):
+            continue
+
+        observation = successful.get(event.id)
+        path = _read_churn_path(event)
+        if target is None:
+            if path is None or not _is_small_file_read(event, observation):
+                if _is_read_churn_reset_action(event):
+                    break
+                continue
+            target = path
+            count = 1
+            continue
+
+        if path is not None:
+            if path != target:
+                break
+            if _is_whole_file_read(event, observation):
+                break
+            if _is_small_file_read(event, observation):
+                count += 1
+                continue
+            break
+        if _is_read_churn_reset_action(event):
+            break
+
+    if target is None or count == 0:
+        return None
+    warning_count = (
+        count
+        if count in _READ_CHURN_WARNING_COUNTS and (target, count) not in diagnostics_seen
+        else None
+    )
+    invisible_noops = max(0, count - (_READ_CHURN_LADDER_AT - 1))
+    return ReadChurnState(
+        path=target,
+        count=count,
+        warning_count=warning_count,
+        invisible_noops=invisible_noops,
+    )
+
+
 def auto_continue_attempts(events: list[Event]) -> int:
     """Count auto-continue events fired since the most recent USER message.
     The cap resets every time the user sends a fresh prompt — each new
@@ -587,6 +876,37 @@ def in_planning_for_revision(events: list[Event]) -> bool:
     return approved_seq is None or planning_seq > approved_seq
 
 
+def effective_mode(
+    events: list[Event],
+    *,
+    planning: OperatingMode = OperatingMode.PLANNING,
+    execution: OperatingMode = OperatingMode.LONG_HORIZON,
+    default: OperatingMode = OperatingMode.PLANNING,
+) -> OperatingMode:
+    """Return the event-log-derived operating mode for a plan-gated loop.
+
+    A ``plan_approved`` marker moves the loop into execution until a later
+    ``planning`` marker re-enters the plan gate. With no lifecycle marker, the
+    caller's default is used so non-plan surfaces can keep their configured mode
+    while build loops still default to PLANNING.
+    """
+    planning_seq: int | None = None
+    approved_seq: int | None = None
+    for event in events:
+        if isinstance(event, StatusEvent):
+            if event.detail == "planning":
+                planning_seq = event.seq or 0
+            elif event.detail == "plan_approved":
+                approved_seq = event.seq or 0
+    if approved_seq is not None and (
+        planning_seq is None or approved_seq > planning_seq
+    ):
+        return execution
+    if planning_seq is not None:
+        return planning
+    return default
+
+
 def revision_force_submit(events: list[Event]) -> bool:
     """True iff a REVISION re-plan has been ESCALATED to forced-submit and not yet
     satisfied. The engine emits a StatusEvent(detail="force_submit_plan") marker after
@@ -634,6 +954,48 @@ def pending_revision_steer(events: list[Event]) -> bool:
                 return False  # consumed by a (re-)plan since the marker
             if e.detail == "revision_steer_pending":
                 return True
+    return False
+
+
+def current_blocked_question_landing(events: list[Event]) -> bool:
+    """True iff the current user-question gate is a blocked landing.
+
+    Blocked landings preserve their legacy PAUSED/STUCK marker, then supersede it
+    with ``AWAITING_USER_QUESTION`` carrying ``meta.blocked_landing``. A user
+    answer appended after that status does not clear the gate; only a later
+    status transition does. Therefore the current gate is determined by the
+    latest StatusEvent, not by the latest event of any kind.
+    """
+    for e in reversed(events):
+        if isinstance(e, StatusEvent):
+            return (
+                e.status == ConversationStatus.AWAITING_USER_QUESTION
+                and (e.meta or {}).get("blocked_landing") is True
+            )
+    return False
+
+
+def latest_user_answers_blocked_question(events: list[Event]) -> bool:
+    """True iff the latest USER message is an answer to a blocked landing.
+
+    ``AgentLoop.run`` emits a bare RUNNING marker before its drive loop. After
+    that, ``current_blocked_question_landing`` is no longer true, but the latest
+    user message is still the answer to the blocked question. Look backward from
+    that user message to the preceding status gate so re-plan guards can keep
+    treating the text as answer-context until an agent action/message consumes it.
+    """
+    latest_user_index: int | None = None
+    for index, e in enumerate(events):
+        if isinstance(e, MessageEvent) and e.source == EventSource.USER:
+            latest_user_index = index
+    if latest_user_index is None:
+        return False
+    for e in reversed(events[:latest_user_index]):
+        if isinstance(e, StatusEvent):
+            return (
+                e.status == ConversationStatus.AWAITING_USER_QUESTION
+                and (e.meta or {}).get("blocked_landing") is True
+            )
     return False
 
 

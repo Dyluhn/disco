@@ -456,7 +456,7 @@ async def test_generate_deck_success(tmp_workspace):
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         # Outline call → valid; Fill call → valid
         mock_llm.side_effect = [outline_raw, full_raw]
-        deck, fallback_md, err, _ = await generate_deck(
+        deck, fallback_md, err, _, _ = await generate_deck(
             "EV battery startup pitch",
             "test-deck",
             ctx,
@@ -482,7 +482,7 @@ async def test_generate_deck_fill_failure_returns_fallback(tmp_workspace):
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         # Outline succeeds; fill fails twice
         mock_llm.side_effect = [outline_raw, "BAD JSON", "STILL BAD"]
-        deck, fallback_md, err, _ = await generate_deck(
+        deck, fallback_md, err, _, _ = await generate_deck(
             "EV battery startup pitch",
             "test-deck",
             ctx,
@@ -505,7 +505,7 @@ async def test_generate_deck_outline_failure_returns_fallback(tmp_workspace):
 
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.side_effect = ["BAD", "STILL BAD"]
-        deck, fallback_md, err, _ = await generate_deck(
+        deck, fallback_md, err, _, _ = await generate_deck(
             "test goal", "test-deck", ctx, mock_backend
         )
 
@@ -528,7 +528,7 @@ async def test_generate_deck_image_backend_called_for_image_prompts(tmp_workspac
 
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.side_effect = [outline_raw, full_raw]
-        deck, _, _, _ = await generate_deck(
+        deck, _, _, _, _ = await generate_deck(
             "EV battery startup pitch", "test-deck", ctx, mock_backend
         )
 
@@ -553,7 +553,7 @@ async def test_generate_deck_degrades_image_less_when_backend_none(tmp_workspace
 
     with patch("disco.tools.builtin._slides_pipeline._call_llm", new_callable=AsyncMock) as mock_llm:
         mock_llm.side_effect = [outline_raw, full_raw]
-        deck, fallback_md, err, _ = await generate_deck(
+        deck, fallback_md, err, _, _ = await generate_deck(
             "EV battery startup pitch",
             "test-deck",
             ctx,
@@ -592,7 +592,7 @@ async def test_stage_assets_invokes_backend_without_sandbox():
     backend = MagicMock()
     backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"0" * 16
 
-    assets = await _stage_assets(deck, ctx, backend, "visual")
+    assets, _stats = await _stage_assets(deck, ctx, backend, "visual")
 
     assert assets[0].startswith(b"\x89PNG")
     backend.generate.assert_called_once()
@@ -618,8 +618,8 @@ async def test_stage_assets_reuses_cached_prompt_hash(tmp_workspace):
     backend = MagicMock()
     backend.generate.return_value = b"\x89PNG\r\n\x1a\n" + b"0" * 16
 
-    first = await _stage_assets(deck, ctx, backend, "visual")
-    second = await _stage_assets(deck, ctx, backend, "visual")
+    first, _ = await _stage_assets(deck, ctx, backend, "visual")
+    second, _ = await _stage_assets(deck, ctx, backend, "visual")
 
     assert first == second
     backend.generate.assert_called_once()
@@ -1136,3 +1136,90 @@ def test_weak_system_lists_all_valid_themes():
     """_WEAK_SYSTEM mentions every one of the 8 valid theme values."""
     for theme in _VALID_THEMES:
         assert theme in _WEAK_SYSTEM, f"_WEAK_SYSTEM missing theme: {theme!r}"
+
+
+@pytest.mark.asyncio
+async def test_stage_assets_reports_failures_honestly():
+    """Gauntlet 2026-07-07 (flux mis-config): a configured-but-broken backend
+    failed EVERY slide image and the agent had no way to know — failures died
+    in a log warning. Stats must carry the failure count + first error, and
+    note() must say art fallback was used."""
+    ctx = ToolContext.model_construct(sandbox=None)
+    deck = AuthoredDeck(
+        title="Visual Deck",
+        slides=[
+            AuthoredSlide(
+                type="full_image", archetype="full_bleed_image", title="Hero",
+                body=[], image_prompt="art; subject: Hero; slot: cover; no words",
+            ),
+            AuthoredSlide(
+                type="bullets", archetype="bullets", title="Points", body=["a"],
+            ),
+        ],
+    )
+    backend = MagicMock()
+    backend.generate.side_effect = RuntimeError(
+        "openrouter-image image endpoint returned HTTP 404"
+    )
+
+    assets, stats = await _stage_assets(deck, ctx, backend, "v")
+
+    assert assets == {}
+    assert stats.configured is True
+    assert stats.wanted == 1 and stats.generated == 0 and stats.failed == [0]
+    assert "HTTP 404" in (stats.sample_error or "")
+    note = stats.note()
+    assert "FAILED" in note and "art fallback" in note and "Test" in note
+
+
+@pytest.mark.asyncio
+async def test_stage_assets_unconfigured_is_named_in_note():
+    """backend=None (not configured) with image slots must produce a note that
+    NAMES the unconfigured state — never a silent image-less deck."""
+    ctx = ToolContext.model_construct(sandbox=None)
+    deck = AuthoredDeck(
+        title="Visual Deck",
+        slides=[
+            AuthoredSlide(
+                type="full_image", archetype="full_bleed_image", title="Hero",
+                body=[], image_prompt="art; subject: Hero; slot: cover; no words",
+            )
+        ],
+    )
+
+    assets, stats = await _stage_assets(deck, ctx, None, "v")
+
+    assert assets == {}
+    assert stats.configured is False and stats.wanted == 1
+    assert "NOT configured" in stats.note()
+
+
+def test_tableless_thin_comparison_demoted_to_bullets():
+    """Gauntlet s-arxiv 2026-07-07: comparison_table with table=None and a
+    3-line body rendered as two column headers + one lonely bullet (mostly
+    empty). Such slides are demoted to bullets at prepare time; a REAL table
+    or a body thick enough for balanced columns stays a comparison."""
+    from disco.tools.builtin._slides_pipeline import _prepare_filled_deck
+
+    deck = AuthoredDeck(
+        title="T",
+        slides=[
+            AuthoredSlide(
+                type="comparison", archetype="comparison_table",
+                title="Thin", body=["a vs b", "c vs d", "e vs f"],
+            ),
+            AuthoredSlide(
+                type="comparison", archetype="comparison_table",
+                title="Rich body", body=["a", "b", "c", "d"],
+            ),
+            AuthoredSlide(
+                type="table", archetype="comparison_table", title="Real table",
+                body=[],
+                table={"headers": ["x", "y"], "rows": [["1", "2"]]},
+            ),
+        ],
+    )
+    out = _prepare_filled_deck(deck)
+    assert out.slides[0].archetype == "bullets"          # thin + tableless → demoted
+    assert out.slides[1].archetype == "comparison_table"  # 4+ body lines → kept
+    assert out.slides[2].archetype == "comparison_table"  # real table → kept
