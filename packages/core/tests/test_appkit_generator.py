@@ -1127,7 +1127,7 @@ def test_disco_client_shim_content_invariants(monkeypatch: pytest.MonkeyPatch):
     assert "busUrl.pathname" in shim
     assert "busUrl.origin" in shim
 
-    # ---- token validation: a2v0 Bearer format ----
+    # ---- token validation: current a4v1 + migrated a2v0 Bearer formats ----
     assert "TOKEN_RE" in shim
     assert "TOKEN_RE.test(token)" in shim
 
@@ -1294,7 +1294,7 @@ def test_disco_client_ts_executes_security_contract(
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 const { svc } = await import(pathToFileURL(process.argv[2]).href);
-const token = "a2v0.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+const token = "a4v1.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 const env = { DISCO_SVC_BUS: "https://bus.example", DISCO_SVC_TOKEN: token };
 let timeoutSeen = 0;
 globalThis.setTimeout = (_fn, ms) => { timeoutSeen = ms; return 1; };

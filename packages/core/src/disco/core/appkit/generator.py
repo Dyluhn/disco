@@ -1742,7 +1742,8 @@ def _emit_owner_guide_md(app: AppSpec, lead: Entity, db_name: str) -> str:
 # shim module is Disco-owned, never authored by the model. It reads the bus URL
 # and bearer token from Worker env bindings (DISCO_SVC_BUS / DISCO_SVC_TOKEN) —
 # both are host-injected at sandbox provision time, never generated or committed.
-# The shim validates bus (URL origin only, HTTPS or loopback HTTP), token (a2v0 Bearer
+# The shim validates bus (URL origin only, HTTPS or loopback HTTP), token (legacy a2v0
+# or current a4v1 Bearer
 # format), service name (dotted grammar with underscores, max 128 chars), request
 # payload (JSON object ≤ 64 KiB serialized), and response (stream-bounded to 256
 # KiB via reader chunks, Content-Type must be application/json, top-level JSON
@@ -1769,7 +1770,7 @@ def _emit_disco_client_ts() -> str:
         "   from src/ (the Vite browser bundle cannot receive env bindings). */\n"
         "\n"
         "const SERVICE_RE = /^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$/;\n"
-        "const TOKEN_RE = /^a2v0\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}$/;\n"
+        "const TOKEN_RE = /^(?:a2v0|a4v1)\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}$/;\n"
         f"const MAX_SERVICE_LEN = {_MAX_SERVICE_LEN};\n"
         f"const MAX_REQUEST_BYTES = {_MAX_REQUEST_BYTES};\n"
         f"const MAX_RESPONSE_BYTES = {_MAX_RESPONSE_BYTES};\n"

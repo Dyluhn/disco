@@ -115,7 +115,7 @@ interface StripeEnvelope {{
 function stripeBusBindingsValid(env: Env): boolean {{
   const token = env.DISCO_SVC_TOKEN;
   if (typeof token !== "string"
-      || !/^a2v0\.[A-Za-z0-9_-]{{22}}\.[A-Za-z0-9_-]{{43}}$/.test(token)) return false;
+      || !/^(?:a2v0|a4v1)\.[A-Za-z0-9_-]{{22}}\.[A-Za-z0-9_-]{{43}}$/.test(token)) return false;
   if (typeof env.DISCO_SVC_BUS !== "string") return false;
   let bus: URL;
   try {{ bus = new URL(env.DISCO_SVC_BUS); }} catch {{ return false; }}
