@@ -502,6 +502,49 @@ before the previous one's DoD is met and committed (the wave discipline).
 
 ---
 
+## 11. Implementation notes (v0.2 build, 2026-07-11 — deviations from the text above)
+
+Pinned while building WO-TC1..TC5 on `disclaude/trusted-components`; each is a
+deliberate decision, not drift:
+
+- **D12 — components are plain ESM JavaScript, configs are JSON.** The spec's
+  examples said `.ts` — TS would force a build step into every fixture, probe,
+  and soak run. JSON configs are parseable by python probes (the probe must
+  honor the WORKSPACE config, §7.2) and importable in node. Pilot runtime:
+  Node ≥ 22, `node:sqlite`, zero npm dependencies.
+- **D13 — probes are python3 STDLIB-ONLY and execute INSIDE the sandbox.**
+  Preview URLs are sandbox-local, so a host-side probe can't reach them. The
+  probe source is re-materialized from the HOST registry into
+  `.disco/tc-probe/<name>/probe.py` on every verify run — a workspace edit to
+  a stale copy can never change what runs (D3 preserved in spirit: the model
+  can read the probe, but "fixing the check" is impossible).
+- **D14 — the verify checks ride the `verify_web_app` W-45 verdict** (the fold
+  in `verify_app.py`), not a separate verifier: the finish gate already DRIVES
+  that tool at every finish attempt, so components are enforced with zero gate
+  plumbing. One gate change only: a successful `add_trusted_component` marks
+  the conversation as needing the verify path even without a web-deliverable
+  marker (`_tc_components_installed`).
+- **D15 — auto-eject persistence happens in the verify fold** (lockfile +
+  GUIDE banner, atomic writes), which makes `verify_web_app` no longer purely
+  read-only for component-carrying workspaces. Accepted: the write is the
+  honest relabel the spec demands recorded "so it never silently reverts".
+- **D16 — tool registration is gated on a non-empty registry** (adversarial
+  review: an installable-nothing tool is a false affordance). The seam
+  tripwire asserts registered ⇔ registry ships components.
+- **D17 — skipped probes block only on the probes-allowed path.** On the
+  `unverifiable` (browserless) verdict the integrity/deps checks still run
+  and still block; probes report skipped honestly without blocking (the
+  ROOT-3 browserless concession, applied consistently).
+- Adversarial-review hardening not in the original text: symlink rejection
+  everywhere in the registry read path; pins-script removal guard +
+  dir/manifest identity check; requirement grammar single-sourced; lockfile
+  schema validators; interrupted-eject banner repair (banner-before-flag +
+  idempotent `_ensure_banner`); install preflight requires the dependency's
+  FILES to exist, not just its lock entry.
+- Known accepted gap (recorded, not fixed): upgrading a component whose new
+  version REMOVES a core file leaves the old file orphaned in the workspace
+  (unpinned, unreferenced). Cleanup-on-upgrade is a follow-up.
+
 *Companion: `docs/trusted-components-design.md` (rationale, prior art, market
 evidence). This spec supersedes the design doc wherever they disagree on
 mechanics; the design doc remains authoritative on intent.*

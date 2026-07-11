@@ -120,6 +120,10 @@ AGENT_TOOLS = frozenset(
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame
         "scaffold_starter",
+        # WO-TC2: trusted components — verified vendored security cores (free-form
+        # Build ONLY; strict AppKit / artifact / research scopes exclude the names).
+        "add_trusted_component",
+        "eject_trusted_component",
         # document/report: model authors parts; host assembles/stamps the export.
         "doc_set_section",
         "doc_export",

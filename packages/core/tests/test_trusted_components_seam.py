@@ -15,11 +15,12 @@ def test_manifest_contract_parses_the_design_doc_example() -> None:
             "version": "1.0.0",
             "kind": "trusted_component",
             "summary": "Session auth: login/logout routes, middleware, session store.",
+            "when_to_use": "ANY app with accounts, logins, or per-user data.",
             "files": {
-                "core/auth.ts": "sha256:aaaa",
-                "core/middleware.ts": "sha256:bbbb",
-                "core/routes.ts": "sha256:cccc",
-                "core/schema.sql": "sha256:dddd",
+                "core/auth.ts": "sha256:" + "a" * 64,
+                "core/middleware.ts": "sha256:" + "b" * 64,
+                "core/routes.ts": "sha256:" + "c" * 64,
+                "core/schema.sql": "sha256:" + "d" * 64,
             },
             "config_surface": ["config/auth.config.ts"],
             "requires": ["database-kit>=1.0"],
@@ -32,12 +33,48 @@ def test_manifest_contract_parses_the_design_doc_example() -> None:
     assert m.name == "auth-kit" and m.requires == ["database-kit>=1.0"]
 
 
-def test_seam_is_fail_closed_nothing_advertises_it() -> None:
-    """No tool named anything trusted-component-ish exists in the default
-    registry — the tier CANNOT be reached by a model until v0.2 wires it
-    deliberately. If this fails, someone registered a tool without the
-    design doc's §4 verification checks: stop and read the doc."""
-    from disco.tools import build_default_registry
+def test_tools_advertised_only_in_freeform_scope() -> None:
+    """WO-TC2 INVERTED the original fail-closed tripwire: the tools are now
+    deliberately registered — but ONLY the free-form Build scope (AGENT_TOOLS)
+    may carry them (D8). Strict AppKit, artifact, and research scopes must
+    never see the names."""
+    import inspect
 
-    names = set(build_default_registry().names())
-    assert not any("trusted" in n or "component" in n for n in names), names
+    import disco.tools.appkit_scope as appkit_scope_mod
+    from disco.core.trusted_components.registry import TrustedComponentRegistry
+    from disco.tools import build_default_registry
+    from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, RESEARCH_TOOLS
+
+    tc_names = {"add_trusted_component", "eject_trusted_component"}
+    # Registration is gated on the registry actually shipping components — an
+    # installable-nothing tool is a false affordance. Present IFF non-empty.
+    ships_components = bool(TrustedComponentRegistry.default().names())
+    registered = tc_names <= set(build_default_registry().names())
+    assert registered == ships_components, (
+        f"tools registered={registered} but registry ships={ships_components}"
+    )
+    assert tc_names <= AGENT_TOOLS
+    assert tc_names.isdisjoint(RESEARCH_TOOLS)
+    assert tc_names.isdisjoint(ARTIFACT_TOOLS)
+    # The strict AppKit allowlists are explicit name sets — source-level guard
+    # that nobody quietly adds the names to a strict-mode phase set.
+    src = inspect.getsource(appkit_scope_mod)
+    assert "add_trusted_component" not in src and "eject_trusted_component" not in src
+
+
+def test_tc_tools_confined_to_the_plan_gated_build_scope() -> None:
+    """TC3-review MEDIUM (belt): the finish gate now forces verification the
+    instant trusted components are installed, independent of `_planning_tools`.
+    That structural fix removes the reliance on this invariant — but we STILL
+    pin it so the install tool cannot leak into a non-build scope (workflow,
+    artifact, research) where a finish would run with no plan-gate at all."""
+    from disco.tools import WORKFLOW_ROUTER_ALLOWED_TOOLS
+    from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, RESEARCH_TOOLS
+
+    tc_names = {"add_trusted_component", "eject_trusted_component"}
+    # Present ONLY in the plan-gated build scope (AGENT_TOOLS), which the runtime
+    # always pairs with a non-empty planning_tools set.
+    assert tc_names <= AGENT_TOOLS
+    assert tc_names.isdisjoint(WORKFLOW_ROUTER_ALLOWED_TOOLS)
+    assert tc_names.isdisjoint(ARTIFACT_TOOLS)
+    assert tc_names.isdisjoint(RESEARCH_TOOLS)

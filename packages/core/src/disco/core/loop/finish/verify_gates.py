@@ -42,6 +42,7 @@ from .common import (
     _real_web_failure_evidence,
     _safe_deliverable_file_path,
     _screenshot_from_verdict,
+    _tc_components_installed,
     _vision_mode,
 )
 
@@ -1518,10 +1519,18 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         is_appkit = verify_tool == "verify_appkit_app" or (
             getattr(self._loop.executor, "appkit_phase", None) is not None
         )
-        if (
-            self._loop._planning_tools
-            and self._loop.mode != OperatingMode.PLANNING
-            and (is_appkit or _is_web_deliverable(events))
+        # WO-TC3: a build that installed trusted components must pass through this
+        # gate even without a web-deliverable marker — the component integrity/deps/
+        # probe checks ride the verify_web_app verdict. This is kept OUT of the
+        # _planning_tools guard on purpose: verification is forced by the mere fact
+        # that components were installed, so the security property does not depend
+        # on the (currently true) invariant that the install tool only ever lives
+        # in a plan-gated scope. add_trusted_component can only fire in the build
+        # surface, so no non-build finish is affected in practice.
+        tc_installed = _tc_components_installed(events)
+        if self._loop.mode != OperatingMode.PLANNING and (
+            tc_installed
+            or (self._loop._planning_tools and (is_appkit or _is_web_deliverable(events)))
         ):
             # W-45: when the structured `verify_web_app` tool is in the execution
             # set (the build surface), consume its VERDICT as the primary check —
