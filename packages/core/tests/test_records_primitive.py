@@ -18,7 +18,7 @@ from disco.core.appkit import (
 )
 from disco.core.appkit.spec import AppSpec, Entity, EntityField
 
-_LEAD_GEN_ACME_DIGEST = "7f05d743fdb5fdeab275cb62a7a1bd8a7f15654d0b29349ebcb9a791e7f029c9"
+_LEAD_GEN_ACME_DIGEST = "89fd638c3e192926ea5cc27d3a4f8bd43ca25a8b0b69c924f7750a2e23f59d21"
 _RECORDS_WORKER_SCHEMA_DIGEST = (
     "88a20d2d82bcbbc5a32640d39b2496ad4ed013926096ca7b0f6b08622517af1d"
 )

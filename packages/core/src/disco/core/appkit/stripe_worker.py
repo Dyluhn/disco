@@ -465,6 +465,12 @@ async function stripeWebhook(request: Request, env: Env): Promise<Response> {{
     console.warn("stripe webhook rejected: signature invalid");
     return stripeJson({{ error: "invalid signature" }}, 400);
   }}
+  // Signature authentication proves Stripe sent the event, but not that this
+  // Worker still carries the current host-managed secret generation. Refuse
+  // side effects during a rotation mismatch; Stripe will retry after deploy.
+  if (!(await stripeHostReady(env))) {{
+    return stripeJson({{ error: "payments unavailable" }}, 503);
+  }}
   // Body becomes trusted JSON only after HMAC + freshness verification.
   const event = parseStripeEnvelope(body);
   if (event === null) return stripeJson({{ error: "invalid event" }}, 400);

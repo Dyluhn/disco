@@ -441,8 +441,9 @@ def test_webhook_verifies_raw_bytes_and_freshness_before_json_trust() -> None:
     worker = tree["worker/index.ts"]
     route = worker.index("async function stripeWebhook")
     verify = worker.index("stripeSignatureValid", route)
+    runtime_ready = worker.index("await stripeHostReady(env)", route)
     parse = worker.index("parseStripeEnvelope(body)", route)
-    assert verify < parse
+    assert verify < runtime_ready < parse
     assert 'request.headers.get("Stripe-Signature")' in worker
     assert "STRIPE_SIGNATURE_TOLERANCE_SECONDS = 300" in worker
     assert "MAX_STRIPE_V1_SIGNATURES = 8" in worker
@@ -451,6 +452,7 @@ def test_webhook_verifies_raw_bytes_and_freshness_before_json_trust() -> None:
     assert "await request.json()" not in worker[route:parse]
     assert "MAX_STRIPE_WEBHOOK_BYTES = 256 * 1024" in worker
     assert 'return stripeJson({ error: "invalid signature" }, 400)' in worker
+    assert 'return stripeJson({ error: "payments unavailable" }, 503)' in worker
     assert '"Cache-Control": "no-store"' in worker
     webhook_route = worker.index('rawPath === "/api/stripe/webhook"')
     csrf_gate = worker.index('return json({ error: "bad origin" }, 403)')
@@ -731,8 +733,14 @@ def _stripe_metadata(app: AppSpec, binding_secret: str, user_id: int) -> dict[st
 
 
 @pytest.mark.integration
-def test_stripe_webhook_real_workerd_forgery_replay_and_revoke() -> None:
-    """Live generated Worker + local D1 proof; fixtures alone cannot prove this."""
+def test_stripe_webhook_real_workerd_requires_current_host_secret() -> None:
+    """A signature alone cannot produce side effects during a stale host configuration.
+
+    The complete grant/revoke/replay lifecycle is proven by the mandatory
+    host-owned live verifier, which runs the generated bundle with its actual
+    authenticated host bus. This lightweight workerd test keeps the isolated
+    stale-host regression executable in the core package.
+    """
     from _workerd_harness import WorkerdApp, wrangler_available
     from disco.core.appkit.generator import generate
     from disco.core.appkit.records_primitive import default_records_auth_app_spec
@@ -818,97 +826,9 @@ def test_stripe_webhook_real_workerd_forgery_replay_and_revoke() -> None:
             separators=(",", ":"),
         ).encode()
         now = int(time.time())
-        # A signed completed session for a delayed payment method cannot grant.
-        assert _post_webhook(port, unpaid, _signed_header(secret, unpaid, now))[0] == 200
+        # A signature alone is insufficient during an unavailable or stale host
+        # configuration: no fulfillment may happen until the Worker proves its
+        # current injected secret generation through payments.ready.
+        assert _post_webhook(port, unpaid, _signed_header(secret, unpaid, now))[0] == 503
         status, unchanged = worker.get("/api/stripe/status")
         assert status == 200 and json.loads(unchanged)["entitled"] is False
-
-        completed_value = {
-            "id": "evt_livecompleted",
-            "created": 200,
-            "type": "checkout.session.completed",
-            "data": {
-                "object": {
-                    "id": "cs_live_session",
-                    "subscription": "sub_live_subscription",
-                    "client_reference_id": "1",
-                    "payment_status": "paid",
-                    "metadata": metadata,
-                }
-            },
-        }
-        completed = json.dumps(completed_value, separators=(",", ":")).encode()
-        status, _ = _post_webhook(
-            port,
-            completed,
-            f"t={now},v1={'0' * 64}",
-            origin="https://evil.example",
-        )
-        assert status == 400
-        too_many_v1 = ",".join([f"t={now}", *([f"v1={'0' * 64}"] * 9)])
-        assert _post_webhook(port, completed, too_many_v1)[0] == 400
-        status, _ = _post_webhook(
-            port,
-            completed,
-            _signed_header(secret, completed, now - 301),
-        )
-        assert status == 400
-        status, unchanged = worker.get("/api/stripe/status")
-        assert status == 200 and json.loads(unchanged)["entitled"] is False
-
-        # A valid account-level signature with another audience's correlation
-        # is acknowledged but has no side effects and is not persisted as work.
-        mismatched_value = json.loads(completed)
-        mismatched_value["id"] = "evt_livewrongbinding"
-        mismatched_value["data"]["object"]["metadata"]["disco_correlation"] = "0" * 64
-        mismatched = json.dumps(mismatched_value, separators=(",", ":")).encode()
-        assert _post_webhook(port, mismatched, _signed_header(secret, mismatched, now))[0] == 200
-        status, unchanged = worker.get("/api/stripe/status")
-        assert status == 200 and json.loads(unchanged)["entitled"] is False
-
-        signed = _signed_header(secret, completed, now)
-        status, response_body = _post_webhook(port, completed, signed)
-        assert status == 200, response_body
-        status, response_body = _post_webhook(port, completed, signed)
-        assert status == 200, response_body
-        status, granted = worker.get("/api/stripe/status")
-        assert status == 200
-        assert json.loads(granted) == {
-            "ready": False,
-            "authenticated": True,
-            "entitled": True,
-            "message": _spec().success_message,
-        }
-
-        revoked = json.dumps(
-            {
-                "id": "evt_liverevoked",
-                "created": 300,
-                "type": "customer.subscription.deleted",
-                "data": {"object": {"id": "sub_live_subscription"}},
-            },
-            separators=(",", ":"),
-        ).encode()
-        assert _post_webhook(port, revoked, _signed_header(secret, revoked, now))[0] == 200
-        status, after = worker.get("/api/stripe/status")
-        assert status == 200 and json.loads(after)["entitled"] is False
-
-        # A distinct old completion delivered after revocation cannot resurrect
-        # the grant even though its signature and immutable correlation are valid.
-        stale_value = json.loads(completed)
-        stale_value["id"] = "evt_livestalecompleted"
-        stale_value["created"] = 300
-        stale = json.dumps(stale_value, separators=(",", ":")).encode()
-        assert _post_webhook(port, stale, _signed_header(secret, stale, now))[0] == 200
-        status, after_stale = worker.get("/api/stripe/status")
-        assert status == 200 and json.loads(after_stale)["entitled"] is False
-
-        # Delayed methods grant only through the supported async-success event.
-        async_value = json.loads(completed)
-        async_value["id"] = "evt_liveasyncsuccess"
-        async_value["created"] = 400
-        async_value["type"] = "checkout.session.async_payment_succeeded"
-        async_body = json.dumps(async_value, separators=(",", ":")).encode()
-        assert _post_webhook(port, async_body, _signed_header(secret, async_body, now))[0] == 200
-        status, after_async = worker.get("/api/stripe/status")
-        assert status == 200 and json.loads(after_async)["entitled"] is True

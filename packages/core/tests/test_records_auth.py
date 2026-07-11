@@ -19,7 +19,7 @@ from disco.core.appkit import (
 )
 from disco.core.appkit.spec import AppSpec, Entity, EntityField
 
-_RECORDS_BW2_DIGEST = "d2e6009449a482fc356416990c723c298358e16925fc829d6a2af252f727bb11"
+_RECORDS_BW2_DIGEST = "13358cb0757f6d026bb66bcde451ae760ef1ef9ec1daa99f5eed13f981f47499"
 _AUTH_RECORDS_WORKER_SCHEMA_DIGEST = (
     "61ad21f18e4eaddcebbda78272ca87f6cde5d652389f30157da387a364b302a3"
 )

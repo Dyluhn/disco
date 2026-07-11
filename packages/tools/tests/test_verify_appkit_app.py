@@ -33,10 +33,10 @@ from disco.tools.anatomy import ToolContext, ToolOutcome
 from disco.tools.builtin import browser as browser_mod
 from disco.tools.builtin import preview as preview_mod
 from disco.tools.builtin.verify_appkit_app import (
+    _VITE_PREVIEW_COMMAND,
     VerifyAppKitAppArgs,
     VerifyAppKitAppTool,
     WorkerAuthVerdict,
-    _VITE_PREVIEW_COMMAND,
     _is_vite_app_tree,
     _served_preview_uses_built_bundle,
     inspect_lead_form,
@@ -429,7 +429,7 @@ async def test_vite_build_failure_fails_route_and_section_with_stderr(stub_brows
     assert checks["route_coverage"]["passed"] is False
     assert checks["section_coverage"]["passed"] is False
     assert "src/App.tsx: boom" in checks["route_coverage"]["evidence"]
-    assert "npm install --no-audit --no-fund" in sandbox.commands
+    assert "npm ci --no-audit --no-fund" in sandbox.commands
     assert "npm run build" in sandbox.commands
 
 
@@ -449,7 +449,7 @@ async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, s
 
     assert out.success and out.structured is not None
     assert out.structured["passed"] is True, out.structured["summary"]
-    assert "npm install --no-audit --no-fund" in sandbox.commands  # no lockfile in the fake tree -> install fallback
+    assert "npm ci --no-audit --no-fund" in sandbox.commands
     assert "npm run build" in sandbox.commands
     assert manager.starts == [
         {
@@ -465,6 +465,22 @@ async def test_vite_source_preview_builds_and_serves_compiled_app(monkeypatch, s
         or url.startswith("http://127.0.0.1:9134/")
         for url in stub_browser["urls"]
     )
+
+
+@pytest.mark.asyncio
+async def test_vite_build_refuses_a_tree_without_a_lockfile():
+    tree, _ = _build_tree()
+    tree.pop("package-lock.json")
+    sandbox = BuildTrackingSandbox(tree)
+
+    result = await VerifyAppKitAppTool()._ensure_vite_platform_build(
+        _ctx(sandbox), tree["package.json"].decode()
+    )
+
+    assert result.ok is False
+    assert "missing package-lock.json" in result.evidence
+    assert "npm ci --no-audit --no-fund" not in sandbox.commands
+    assert "npm install --no-audit --no-fund" not in sandbox.commands
 
 
 # ============================ FULL TOOL RUN ===================================

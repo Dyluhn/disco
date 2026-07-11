@@ -850,13 +850,19 @@ class VerifyAppKitAppTool:
         started = time.monotonic()
 
         if need_ci:
-            # `npm ci` REQUIRES package-lock.json; the generator emits package.json
-            # only (deterministic tree — a lockfile would pin the generate step to a
-            # registry snapshot). Live-caught 2026-07-03: ci without a lock is EUSAGE.
+            # The generator emits its reviewed package-lock.json with package.json.
+            # Never fall back to `npm install`: that would resolve mutable dependency
+            # ranges during verification and make the trusted bundle non-deterministic.
             has_lock = await self._sandbox_file_exists(ctx, "package-lock.json")
-            install_cmd = (
-                "npm ci --no-audit --no-fund" if has_lock else "npm install --no-audit --no-fund"
-            )
+            if not has_lock:
+                return _BuildResult(
+                    False,
+                    (
+                        "generated Vite tree is missing package-lock.json; "
+                        "refusing mutable npm install"
+                    ),
+                )
+            install_cmd = "npm ci --no-audit --no-fund"
             try:
                 ci = await ctx.sandbox.exec_shell(install_cmd, timeout_s=_VITE_BUILD_TIMEOUT_S)
             except Exception as exc:  # noqa: BLE001 — loud verdict evidence

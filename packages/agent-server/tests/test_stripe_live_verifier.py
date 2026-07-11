@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from disco.agent_server.stripe_live_verifier import (
@@ -144,6 +145,52 @@ def test_live_worker_refuses_a_tree_without_a_lockfile(tmp_path: Path) -> None:
     worker = _WorkerdApp(tree, {"ADMIN_TOKEN": "test"}, tmp_path, tmp_path / "ca.pem")
     with pytest.raises(StripeLiveVerifierError, match="package-lock"):
         worker.__enter__()
+
+
+def test_cleanup_revokes_and_removes_state_after_worker_shutdown_failure(tmp_path: Path) -> None:
+    class BrokenWorker:
+        def __exit__(self, *_args: object) -> None:
+            raise RuntimeError("worker stayed alive")
+
+    class TokenStore:
+        def __init__(self) -> None:
+            self.revoked = False
+            self.closed = False
+
+        def revoke(self, _selector: str) -> bool:
+            self.revoked = True
+            return True
+
+        def close(self) -> None:
+            self.closed = True
+
+    class Store:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    app, tree = _filled_tree()
+    run = _StripeVerifyRun(app, _design(), tree)
+    root = tmp_path / "private-run"
+    root.mkdir()
+    token_store = TokenStore()
+    config_store = Store()
+    event_store = Store()
+    run.tmp_root = root
+    run.worker = cast(Any, BrokenWorker())
+    run.token_store = cast(Any, token_store)
+    run.token_selector = "selector"
+    run.stripe_config_store = cast(Any, config_store)
+    run.event_store = cast(Any, event_store)
+
+    with pytest.raises(StripeLiveVerifierError, match="cleanup was incomplete"):
+        asyncio.run(run._cleanup())
+
+    assert token_store.revoked and token_store.closed
+    assert config_store.closed and event_store.closed
+    assert not root.exists()
 
 
 @pytest.mark.integration

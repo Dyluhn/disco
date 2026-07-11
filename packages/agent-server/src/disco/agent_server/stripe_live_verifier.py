@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 from types import TracebackType
-from typing import Any, TextIO, cast
+from typing import Any, Protocol, TextIO, cast
 
 import uvicorn
 from disco.core.appkit.primitives import PrimitiveVerifyResult, VerifyCheck
@@ -118,6 +118,27 @@ class _CookieJar:
                     self._cookies.pop(name, None)
                 else:
                     self._cookies[name] = morsel.value
+
+
+class _LiveWorker(Protocol):
+    """The real local Worker operations needed by the exploit checks."""
+
+    async def request_async(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
+        token: str | None = None,
+    ) -> tuple[int, str]: ...
+
+    async def post_json_async(
+        self, path: str, obj: Mapping[str, object], *, token: str | None = None
+    ) -> tuple[int, str]: ...
+
+    async def get_async(self, path: str, *, token: str | None = None) -> tuple[int, str]: ...
+
+    async def d1_count_async(self, table: str) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -346,15 +367,17 @@ class _WorkerdApp:
         exc: BaseException | None,
         tb: TracebackType | None,
     ) -> None:
-        self.kill()
-        if self._env_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(self._env_fd)
-            self._env_fd = None
-            self._env_path = None
-        if self._dev_log_handle is not None:
-            self._dev_log_handle.close()
-            self._dev_log_handle = None
+        try:
+            self.kill()
+        finally:
+            if self._env_fd is not None:
+                with contextlib.suppress(OSError):
+                    os.close(self._env_fd)
+                self._env_fd = None
+                self._env_path = None
+            if self._dev_log_handle is not None:
+                self._dev_log_handle.close()
+                self._dev_log_handle = None
 
     def boot(self, port: int) -> None:
         if self._proc is not None and self._proc.poll() is None:
@@ -613,12 +636,15 @@ class _MiniflareRuntimeProbe:
     request to the pre-bound FastAPI bus. No response is fabricated.
     """
 
-    def __init__(self, worker: _WorkerdApp, tmp_root: Path) -> None:
+    def __init__(self, worker: _WorkerdApp, tmp_root: Path, control_token: str) -> None:
         self._worker = worker
         self._tmp_root = tmp_root
+        self._control_token = control_token
         self._port: int | None = None
+        self._control_port: int | None = None
         self._proc: subprocess.Popen[str] | None = None
         self._script: Path | None = None
+        self._cookies = _CookieJar()
 
     def __enter__(self) -> _MiniflareRuntimeProbe:
         bundle = _bundle_entry(self._worker.bundle_dir)
@@ -627,9 +653,17 @@ class _MiniflareRuntimeProbe:
         if node is None:
             raise StripeLiveVerifierError("node executable is required for local workerd probe")
         self._port = _free_port()
+        self._control_port = _free_port()
         self._script = self._tmp_root / "runtime-probe.mjs"
         self._script.write_text(
-            _miniflare_probe_script(bundle, miniflare, self._port, self._worker.ca_cert),
+            _miniflare_probe_script(
+                bundle,
+                miniflare,
+                self._port,
+                self._control_port,
+                self._worker.app_dir / "schema.sql",
+                self._worker.ca_cert,
+            ),
             encoding="utf-8",
         )
         try:
@@ -653,9 +687,33 @@ class _MiniflareRuntimeProbe:
         if not readable:
             self.__exit__(None, None, None)
             raise StripeLiveVerifierError("local workerd runtime probe did not start")
-        if self._proc.stdout.readline().strip() != "READY":
+        first_line = self._proc.stdout.readline().strip()
+        if first_line != "READY":
+            # Node may leave its event loop alive after emitting an asynchronous
+            # startup exception.  Drain what has already been written before
+            # terminating it so this fail-closed verifier retains the actual
+            # runtime diagnostic rather than only its first stack-frame line.
+            lines = [first_line]
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([self._proc.stdout], [], [], 0.1)
+                if readable:
+                    line = self._proc.stdout.readline()
+                    if line:
+                        lines.append(line.strip())
+                        continue
+                if self._proc.poll() is not None:
+                    break
+            _terminate_process(self._proc)
+            try:
+                _stdout, _stderr = self._proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                _stdout = ""
             self.__exit__(None, None, None)
-            raise StripeLiveVerifierError("local workerd runtime probe did not become ready")
+            raise StripeLiveVerifierError(
+                "local workerd runtime probe did not become ready: "
+                + _cap_text("\n".join(lines) + "\n" + _stdout)
+            )
         return self
 
     def __exit__(
@@ -671,17 +729,97 @@ class _MiniflareRuntimeProbe:
     def payments_ready(self, admin_token: str) -> bool:
         if self._port is None:
             raise StripeLiveVerifierError("local workerd runtime probe has not been started")
+        try:
+            status, body = self.request(
+                "GET", "/api/stripe/runtime-probe", token=admin_token
+            )
+            return status == 200 and json.loads(body) == {"ready": True}
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
+            return False
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
+        token: str | None = None,
+    ) -> tuple[int, str]:
+        if self._port is None:
+            raise StripeLiveVerifierError("local workerd runtime probe has not been started")
+        req_headers = dict(headers or {})
+        if token is not None:
+            req_headers["Authorization"] = f"Bearer {token}"
+        cookie_header = self._cookies.header()
+        if cookie_header is not None and "Cookie" not in req_headers:
+            req_headers["Cookie"] = cookie_header
         req = urllib.request.Request(
-            f"http://127.0.0.1:{self._port}/api/stripe/runtime-probe",
-            headers={"Authorization": f"Bearer {admin_token}"},
+            f"http://127.0.0.1:{self._port}{path}",
+            data=body,
+            headers=req_headers,
+            method=method,
         )
         try:
             with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as response:
-                if response.status != 200:
-                    return False
-                return json.loads(response.read()) == {"ready": True}
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError):
-            return False
+                self._cookies.store(_set_cookie_headers(response.headers))
+                return response.status, response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            self._cookies.store(_set_cookie_headers(exc.headers))
+            return exc.code, exc.read().decode("utf-8", errors="replace")
+
+    def post_json(
+        self, path: str, obj: Mapping[str, object], *, token: str | None = None
+    ) -> tuple[int, str]:
+        return self.request(
+            "POST",
+            path,
+            json.dumps(obj, separators=(",", ":")).encode("utf-8"),
+            {"Content-Type": "application/json"},
+            token,
+        )
+
+    def get(self, path: str, *, token: str | None = None) -> tuple[int, str]:
+        return self.request("GET", path, token=token)
+
+    async def request_async(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None = None,
+        headers: Mapping[str, str] | None = None,
+        token: str | None = None,
+    ) -> tuple[int, str]:
+        return await asyncio.to_thread(self.request, method, path, body, headers, token)
+
+    async def post_json_async(
+        self, path: str, obj: Mapping[str, object], *, token: str | None = None
+    ) -> tuple[int, str]:
+        return await asyncio.to_thread(self.post_json, path, obj, token=token)
+
+    async def get_async(self, path: str, *, token: str | None = None) -> tuple[int, str]:
+        return await asyncio.to_thread(self.get, path, token=token)
+
+    def d1_count(self, table: str) -> int:
+        if table not in {"stripe_events", "stripe_fulfillments", "user_role_grants"}:
+            raise StripeLiveVerifierError("invalid local D1 table request")
+        if self._control_port is None:
+            raise StripeLiveVerifierError("local D1 control service has not been started")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{self._control_port}/count/{table}",
+            headers={"Authorization": f"Bearer {self._control_token}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as response:
+                payload = json.loads(response.read())
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as exc:
+            raise StripeLiveVerifierError("could not query local D1 state") from exc
+        count = payload.get("count") if isinstance(payload, dict) else None
+        if not isinstance(count, int):
+            raise StripeLiveVerifierError("local D1 count response was invalid")
+        return count
+
+    async def d1_count_async(self, table: str) -> int:
+        return await asyncio.to_thread(self.d1_count, table)
 
 
 def _parse_d1_count_json(stdout: str) -> int:
@@ -734,10 +872,18 @@ def _miniflare_entry(wrangler_bin: Path) -> Path:
     raise StripeLiveVerifierError("Wrangler's local workerd runtime is not available")
 
 
-def _miniflare_probe_script(bundle: Path, miniflare: Path, port: int, ca_cert: Path) -> str:
+def _miniflare_probe_script(
+    bundle: Path,
+    miniflare: Path,
+    port: int,
+    control_port: int,
+    schema: Path,
+    ca_cert: Path,
+) -> str:
     """Return a non-secret Node harness for the real Worker runtime probe."""
     return f"""import {{ Miniflare }} from {json.dumps(miniflare.as_uri())};
 import https from "node:https";
+import http from "node:http";
 import {{ readFileSync }} from "node:fs";
 const required = [
   "ADMIN_TOKEN", "DISCO_SVC_BUS", "DISCO_SVC_TOKEN", "STRIPE_WEBHOOK_SECRET",
@@ -806,8 +952,49 @@ const mf = new Miniflare({{
   }}],
 }});
 await mf.ready;
+const db = await mf.getD1Database("DB");
+const schema = readFileSync({json.dumps(str(schema))}, "utf8")
+  .split("\\n")
+  .filter((line) => !line.trimStart().startsWith("--"))
+  .join("\\n");
+// D1's Miniflare binding executes one statement per exec call.  The generated,
+// trusted schema contains no SQL string literals, so semicolons delimit its DDL
+// unambiguously once line comments have been removed above.
+for (const statement of schema.split(";")) {{
+  if (statement.trim()) {{
+    try {{
+      await db.prepare(statement).run();
+    }} catch (error) {{
+      const detail = JSON.stringify(statement);
+      throw new Error(
+        `generated D1 schema statement failed: ${{detail}}`,
+        {{ cause: error }},
+      );
+    }}
+  }}
+}}
+const controlToken = process.env.DISCO_LIVE_D1_CONTROL_TOKEN;
+const tables = new Set(["stripe_events", "stripe_fulfillments", "user_role_grants"]);
+const control = http.createServer(async (request, response) => {{
+  const table = request.url?.match(/^\\/count\\/([a-z_]+)$/)?.[1];
+  if (request.method !== "GET" || request.headers.authorization !== `Bearer ${{controlToken}}`
+      || table === undefined || !tables.has(table)) {{
+    response.writeHead(403).end();
+    return;
+  }}
+  try {{
+    const row = await db.prepare(`SELECT COUNT(*) AS c FROM ${{table}}`).first();
+    const count = typeof row?.c === "number" ? row.c : -1;
+    response.writeHead(200, {{ "Content-Type": "application/json" }});
+    response.end(JSON.stringify({{ count }}));
+  }} catch {{
+    response.writeHead(500).end();
+  }}
+}});
+await new Promise((resolve) => control.listen({control_port}, "127.0.0.1", resolve));
 console.log("READY");
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, async () => {{
+  await new Promise((resolve) => control.close(resolve));
   await mf.dispose();
   process.exit(0);
 }});
@@ -1236,7 +1423,7 @@ async def _check_price_injection_refused(bus: _HostBusServer, token: str) -> Ver
 
 
 async def _check_forged_signature_rejected(
-    worker: _WorkerdApp,
+    worker: _LiveWorker,
     webhook_secret: str,
     app_binding: str,
     plan_selector: str,
@@ -1296,7 +1483,7 @@ async def _check_forged_signature_rejected(
 
 
 async def _check_replay_deduped(
-    worker: _WorkerdApp,
+    worker: _LiveWorker,
     webhook_secret: str,
     app_binding: str,
     plan_selector: str,
@@ -1386,13 +1573,185 @@ async def _check_replay_deduped(
     )
 
 
+def _stripe_event_body(
+    event_id: str,
+    event_type: str,
+    created: int,
+    object_value: Mapping[str, object],
+) -> bytes:
+    """Encode one Stripe envelope without trusting a fixture or cassette."""
+    return json.dumps(
+        {
+            "id": event_id,
+            "created": created,
+            "type": event_type,
+            "data": {"object": dict(object_value)},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+async def _check_webhook_lifecycle(
+    worker: _LiveWorker,
+    webhook_secret: str,
+    app_binding: str,
+    plan_selector: str,
+    binding_secret: str,
+) -> VerifyCheck:
+    """Prove the live bundle cannot resurrect a revoked entitlement.
+
+    This deliberately retains the lifecycle proof that complements the five
+    mandatory exploit checks: an authentic but unpaid event is a no-op, an
+    unrelated correlation is a no-op, revocation wins a same-timestamp stale
+    completion, and an async-payment success can re-grant afterwards.
+    """
+    initial = (
+        await worker.d1_count_async("stripe_events"),
+        await worker.d1_count_async("stripe_fulfillments"),
+        await worker.d1_count_async("user_role_grants"),
+    )
+    now = int(time.time())
+    metadata = _stripe_metadata(app_binding, plan_selector, binding_secret, 1)
+
+    def checkout(
+        event_id: str,
+        created: int,
+        *,
+        event_type: str = "checkout.session.completed",
+        payment_status: str = "paid",
+        event_metadata: Mapping[str, str] = metadata,
+    ) -> bytes:
+        return _stripe_event_body(
+            event_id,
+            event_type,
+            created,
+            {
+                "id": "cs_live_session",
+                "subscription": "sub_live_subscription",
+                "client_reference_id": "1",
+                "payment_status": payment_status,
+                "metadata": dict(event_metadata),
+            },
+        )
+
+    async def deliver(body: bytes) -> int:
+        status, _ = await worker.request_async(
+            "POST",
+            "/api/stripe/webhook",
+            body=body,
+            headers={
+                "Content-Type": "application/json",
+                "Stripe-Signature": _signed_header(webhook_secret, body, now),
+            },
+        )
+        return status
+
+    async def entitled() -> bool:
+        status, body = await worker.get_async("/api/stripe/status")
+        if status != 200:
+            return False
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(payload, dict) and payload.get("entitled") is True
+
+    unpaid_status = await deliver(
+        checkout("evt_lifecycleunpaid", now + 10, payment_status="unpaid")
+    )
+    mismatched_status = await deliver(
+        checkout(
+            "evt_lifecyclemismatch",
+            now + 20,
+            event_metadata={
+                "disco_app_binding": app_binding,
+                "disco_plan_selector": plan_selector,
+                "disco_correlation": "0" * 64,
+            },
+        )
+    )
+    after_noops = (
+        await worker.d1_count_async("stripe_events"),
+        await worker.d1_count_async("stripe_fulfillments"),
+        await worker.d1_count_async("user_role_grants"),
+    )
+    paid_status = await deliver(checkout("evt_lifecyclepaid", now + 100))
+    after_paid = await entitled()
+
+    revoked_body = _stripe_event_body(
+        "evt_lifecyclerevoked",
+        "customer.subscription.deleted",
+        now + 200,
+        {"id": "sub_live_subscription"},
+    )
+    revoked_status = await deliver(revoked_body)
+    after_revoke = await entitled()
+
+    stale_status = await deliver(checkout("evt_lifecyclestale", now + 200))
+    after_stale = await entitled()
+    async_status = await deliver(
+        checkout(
+            "evt_lifecycleasyncsuccess",
+            now + 300,
+            event_type="checkout.session.async_payment_succeeded",
+        )
+    )
+    after_async = await entitled()
+    final = (
+        await worker.d1_count_async("stripe_events"),
+        await worker.d1_count_async("stripe_fulfillments"),
+        await worker.d1_count_async("user_role_grants"),
+    )
+    statuses = (
+        unpaid_status,
+        mismatched_status,
+        paid_status,
+        revoked_status,
+        stale_status,
+        async_status,
+    )
+    expected_final = (initial[0] + 4, initial[1], initial[2])
+    if (
+        unpaid_status == 200
+        and mismatched_status == 200
+        and after_noops == initial
+        and paid_status == 200
+        and after_paid
+        and revoked_status == 200
+        and not after_revoke
+        and stale_status == 200
+        and not after_stale
+        and async_status == 200
+        and after_async
+        and final == expected_final
+    ):
+        return _check_result(
+            "webhook_lifecycle",
+            True,
+            (
+                "unpaid/unrelated events were no-ops; revoke resisted stale completion; "
+                "async success re-granted"
+            ),
+        )
+    return _check_result(
+        "webhook_lifecycle",
+        False,
+        (
+            f"statuses={statuses}, "
+            f"entitled={(after_paid, after_revoke, after_stale, after_async)}, "
+            f"counts={(initial, after_noops, final)}, expected_final={expected_final}"
+        ),
+    )
+
+
 async def _check_secret_absence(
     tree: Mapping[str, str],
     worker: _WorkerdApp,
     exact_secrets: Sequence[str],
+    private_root: Path,
 ) -> VerifyCheck:
     """No Stripe secret value or secret-shaped pattern may leak to tree/bundle/logs/state."""
-    scan_paths: list[Path] = [worker.app_dir]
+    scan_paths: list[Path] = [worker.app_dir, private_root]
     if worker.bundle_dir is not None:
         scan_paths.append(worker.bundle_dir)
     if worker.dev_log_path is not None:
@@ -1440,6 +1799,7 @@ class _StripeVerifyRun:
         self.token: str | None = None
         self.token_selector: str | None = None
         self.admin_token: str = ""
+        self.d1_control_token: str = ""
         self.owner_id: str = "stripe-live-owner"
         self.conversation_id: str = "stripe-live-verify"
         self.audience: str = ""
@@ -1482,44 +1842,61 @@ class _StripeVerifyRun:
             self.worker.__enter__()
             try:
                 self.worker.boot(self.worker_port)
-                with _MiniflareRuntimeProbe(self.worker, self.tmp_root) as runtime_probe:
+                with _MiniflareRuntimeProbe(
+                    self.worker, self.tmp_root, self.d1_control_token
+                ) as runtime_probe:
                     runtime_ready = await asyncio.to_thread(
                         runtime_probe.payments_ready, self.admin_token
                     )
-                checks.append(
-                    await _check_forged_signature_rejected(
-                        self.worker,
+                    checks.append(
+                        await _check_forged_signature_rejected(
+                            runtime_probe,
+                            self.webhook_secret,
+                            stripe.app_binding,
+                            stripe.plan_selector,
+                            self.binding_secret,
+                        )
+                    )
+                    replay = await _check_replay_deduped(
+                        runtime_probe,
                         self.webhook_secret,
                         stripe.app_binding,
                         stripe.plan_selector,
                         self.binding_secret,
+                        self.admin_token,
                     )
-                )
-                replay = await _check_replay_deduped(
-                    self.worker,
-                    self.webhook_secret,
-                    stripe.app_binding,
-                    stripe.plan_selector,
-                    self.binding_secret,
-                    self.admin_token,
-                )
-                if not runtime_ready:
-                    replay = _check_result(
-                        "replay_deduped",
-                        False,
-                        "the deployed Worker bundle could not prove payments.ready through "
-                        "the authenticated loopback host bus",
+                    if not runtime_ready:
+                        replay = _check_result(
+                            "replay_deduped",
+                            False,
+                            "the deployed Worker bundle could not prove payments.ready through "
+                            "the authenticated loopback host bus",
+                        )
+                    checks.append(replay)
+                    if runtime_ready:
+                        lifecycle = await _check_webhook_lifecycle(
+                            runtime_probe,
+                            self.webhook_secret,
+                            stripe.app_binding,
+                            stripe.plan_selector,
+                            self.binding_secret,
+                        )
+                        if not lifecycle.passed:
+                            raise StripeLiveVerifierError(lifecycle.evidence)
+                    checks.append(
+                        await _check_secret_absence(
+                            self.tree, self.worker, self.exact_secrets, self.tmp_root
+                        )
                     )
-                checks.append(replay)
-                checks.append(
-                    await _check_secret_absence(
-                        self.tree, self.worker, self.exact_secrets
-                    )
-                )
             finally:
-                self.worker.kill()
-                self.worker.__exit__(None, None, None)
-                self.worker = None
+                try:
+                    self.worker.__exit__(None, None, None)
+                except Exception:
+                    # Keep the handle for _cleanup() to make a second process
+                    # group termination attempt before revoking credentials.
+                    raise
+                else:
+                    self.worker = None
         except StripeLiveVerifierError as exc:
             _LOG.warning("Stripe live verifier failed: %s", exc)
             checks.extend(
@@ -1558,6 +1935,7 @@ class _StripeVerifyRun:
         self.worker_port = _free_port()
         self.origin = f"http://127.0.0.1:{self.worker_port}"
         self.admin_token = "adm_" + _py_secrets.token_urlsafe(24)
+        self.d1_control_token = "d1ctl_" + _py_secrets.token_urlsafe(24)
 
     async def _configure_host_plane(self) -> VerifyCheck:
         assert self.secret_store is not None
@@ -1639,6 +2017,7 @@ class _StripeVerifyRun:
             self.binding_secret,
             self.token,
             self.admin_token,
+            self.d1_control_token,
             self.secret_store.signing_secret or "",
         ]
         return restricted_check
@@ -1653,30 +2032,44 @@ class _StripeVerifyRun:
             "DISCO_SVC_BUS": self.bus.origin,
             "DISCO_SVC_TOKEN": self.token,
             "ADMIN_TOKEN": self.admin_token,
+            "DISCO_LIVE_D1_CONTROL_TOKEN": self.d1_control_token,
         }
 
     async def _cleanup(self) -> None:
+        failures: list[str] = []
         if self.bus is not None:
-            await self.bus.__aexit__(None, None, None)
+            try:
+                await self.bus.__aexit__(None, None, None)
+            except Exception as exc:  # noqa: BLE001 - keep revocation and deletion running
+                failures.append(type(exc).__name__)
             self.bus = None
         if self.worker is not None:
-            self.worker.kill()
-            self.worker.__exit__(None, None, None)
+            try:
+                self.worker.__exit__(None, None, None)
+            except Exception as exc:  # noqa: BLE001 - continue the security cleanup
+                failures.append(type(exc).__name__)
             self.worker = None
         if self.token_store is not None and self.token_selector is not None:
             try:
                 self.token_store.revoke(self.token_selector)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - report after remaining cleanup
+                failures.append(type(exc).__name__)
         for store in (self.token_store, self.stripe_config_store, self.event_store):
             if store is not None:
                 try:
                     store.close()
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - report after remaining cleanup
+                    failures.append(type(exc).__name__)
         if self.tmp_root is not None:
-            shutil.rmtree(self.tmp_root, ignore_errors=True)
+            try:
+                shutil.rmtree(self.tmp_root)
+            except OSError as exc:
+                failures.append(type(exc).__name__)
             self.tmp_root = None
+        if failures:
+            raise StripeLiveVerifierError(
+                "live verifier cleanup was incomplete (" + ", ".join(sorted(set(failures))) + ")"
+            )
 
 
 _REQUIRED_CHECKS = (

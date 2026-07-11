@@ -279,16 +279,13 @@ def test_robots_allows_all_and_points_at_sitemap(prim_id: str) -> None:
 
 # ---- 6. the HARD constraint: seo=None trees are byte-identical to pre-F5.3 ---------
 
-# Tree-level sha256 fingerprints of the DEFAULT (seo=None) generated trees,
-# captured at base commit a619d8f8 BEFORE the F5.3 emitter edit. The F5.3
-# guarantee is that a None `AppSpec.seo` changes NOTHING — not one byte — so
-# these must keep matching. If an UNRELATED, deliberate emitter change lands,
-# re-capture with the same recipe/name and update (the fingerprint is
-# json.dumps of the per-file sha256 map, sort_keys=True, then sha256'd).
+# Tree-level sha256 fingerprints of the DEFAULT (seo=None) generated trees.
+# WO-F4.1 deliberately re-pinned Vite outputs after adding the reviewed lockfile;
+# within that baseline, `seo=None` must continue to add no SEO artifact or byte.
 _BASELINE_TREE_SHA256 = {
-    LEAD_GEN_PRIMITIVE_ID: "407b5177d29abebdb411256d3360b84a62b1923d3f7f8c6bbd82ee19a394854a",
+    LEAD_GEN_PRIMITIVE_ID: "e1f862734f1ac6b4dbd0e5b6df3bfdb2154ffa7ef5a5ee6d154e807e9967ec49",
     DIRECTORY_PRIMITIVE_ID: "1c1d3d177ea1c0eb1f51c87a50259eb16d9e64b601d3ff18106e00287eae5c93",
-    RECORDS_PRIMITIVE_ID: "12062f7176b486dc8fdde22c39dea5d090b85de8375578b110140b53a4999fed",
+    RECORDS_PRIMITIVE_ID: "e72679355eb29b9dc9a668f69a5065e82a8a0811d135f8d64f48241a69c1a38a",
     HELLO_PRIMITIVE_ID: "e8f75cbf9483e4f3b7b1af8e3b963d621e22394ac0a72a20f4428c633e0699db",
 }
 
