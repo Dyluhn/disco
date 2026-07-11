@@ -19,6 +19,7 @@ from typing import Any, Literal, Union, get_args, get_origin
 from uuid import uuid4
 
 from disco.core import ToolCall, ToolResult
+from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.contract import ContractScopeGuard
 from disco.core.events import find_elided_arg_markers
 from disco.core.llm import ModelExecutionPolicy, ToolSpec
@@ -246,9 +247,7 @@ def describe_validation_failure(
 
     reasons: list[str] = []
     if unknown:
-        reasons.append(
-            f"unexpected argument(s) {unknown} — not accepted by this tool"
-        )
+        reasons.append(f"unexpected argument(s) {unknown} — not accepted by this tool")
     for err in errors:
         loc = ".".join(str(p) for p in err.get("loc", ())) or "(root)"
         etype = err.get("type", "")
@@ -269,9 +268,7 @@ def describe_validation_failure(
     )
     if unknown:
         # spell out the likely fix so a weaker model can self-correct next turn
-        required_names = [
-            n for n, fi in args_model.model_fields.items() if fi.is_required()
-        ]
+        required_names = [n for n, fi in args_model.model_fields.items() if fi.is_required()]
         if required_names:
             msg += (
                 f" Re-call {tool_name!r} using the correct key(s) "
@@ -337,6 +334,7 @@ class DefaultToolExecutor:
         on_tool_success: Callable[[str], None] | None = None,
         starter_kit: str | None = None,
         workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+        primitive_live_verifier: PrimitiveLiveVerifier | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -354,6 +352,7 @@ class DefaultToolExecutor:
         # scaffold_starter materializes THIS build's starter. None ⇒ no contract starter.
         self._starter_kit = starter_kit
         self._workflow_events = workflow_events
+        self._primitive_live_verifier = primitive_live_verifier
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -618,7 +617,7 @@ class DefaultToolExecutor:
         sandbox = self._sandbox if tool_def.runs_in == "sandbox" else None
         in_sandbox = tool_def.runs_in == "sandbox"
         sessions = getattr(self._sandbox, "sessions", None) if in_sandbox else None
-        
+
         kernel = None
         if tool_def.runs_in == "sandbox" and self._sandbox is not None:
             # SandboxSession.kernel is a property whose getter is async — accessing
@@ -644,6 +643,7 @@ class DefaultToolExecutor:
             read_char_budget=self._read_char_budget,
             starter_kit=self._starter_kit,
             workflow_events=self._workflow_events,
+            primitive_live_verifier=self._primitive_live_verifier,
             scope_allowed_tools=self._scope.allowed_tools,
         )
 

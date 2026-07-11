@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, TypedDict, Unpack
 
+from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.contract import ContractScopeGuard
 from disco.core.llm import ModelExecutionPolicy
 
@@ -30,6 +31,7 @@ class ExecutorKwargs(TypedDict, total=False):
     on_tool_success: Callable[[str], None] | None
     starter_kit: str | None
     workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None
+    primitive_live_verifier: PrimitiveLiveVerifier | None
 
 
 class ScopedPhaseExecutor(DefaultToolExecutor):
