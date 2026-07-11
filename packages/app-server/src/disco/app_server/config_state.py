@@ -133,7 +133,6 @@ class ConfigState:
         # When None (tests without a DB), MCP config persists to ConfigStore only.
         self._db_conn = db_conn
         self._stripe_configs = stripe_configs
-        self._owns_stripe_configs = stripe_configs is None
         self._provider_config = ProviderConfigService(
             self._store,
             self._secrets,
@@ -325,7 +324,7 @@ class ConfigState:
     ) -> StripeAppConfig:
         """Owner-only settings seam; the key is write-only and separately encrypted."""
         if self._stripe_configs is None:
-            self._stripe_configs = StripeAppConfigStore()
+            raise RuntimeError("Stripe configuration store is not wired to shared host state")
         self._stripe_configs.validate_configuration(
             owner_id=owner_id,
             audience=audience,
@@ -350,12 +349,6 @@ class ConfigState:
             STRIPE_SECRET_REF,
         )
         return config
-
-    def close(self) -> None:
-        """Close host configuration resources owned by this state object."""
-        if self._owns_stripe_configs and self._stripe_configs is not None:
-            self._stripe_configs.close()
-            self._stripe_configs = None
 
     def _resolve_secret_value(self, name: str) -> str | None:
         from disco.core.llm.secret_refs import resolve_provider_secret
