@@ -1,10 +1,11 @@
-"""The AppKit `stripe` primitive — Epic F4.1's SEAM, not a payments integration.
+"""The AppKit ``stripe`` primitive — WO-F4.1's non-secret app contract.
 
 ⚠⚠ READ THIS BEFORE TOUCHING ANYTHING IN THIS MODULE ⚠⚠
 
-This is deliberately ONLY the honest, fail-closed seam around the eventual
-Stripe security work (plan §4 Epic F4.1, §7 template_only table). What lives
-here is the NON-SECRET surface and nothing else:
+This module owns the model-fillable, non-secret surface.  A records app carrying
+the folded ``StripeMeta`` is lowered by ``stripe_worker`` into Disco-owned
+checkout/webhook/entitlement code; operator prices and credentials never enter
+these models.
 
 * ``StripeSpec`` — the model-fillable declarative spec: DISPLAY strings (plan
   name, price display, features), the entitlement flag, the success message.
@@ -15,19 +16,14 @@ here is the NON-SECRET surface and nothing else:
   entitlement flag recorded in ``AppSpec.roles`` (the existing RBAC surface —
   the records vertical already lowers roles into per-entity read/write gates,
   so a role IS the clean existing place for an entitlement flag).
-* an emitted UI that renders in an explicit **"Payments setup pending"**
-  state — a DISABLED button + helper text, never a live-looking checkout
-  affordance. There is NO /api/checkout route, NO webhook route, NO secret
-  template anywhere in the emitted tree (env NAMES are documented in one
-  comment, values never).
+* a standalone Stripe primitive remains an explicit disabled/pending page.  The
+  only supported live composition is an auth-capable records app; every other
+  composition fails closed in the top-level generator.
 
-What is DEFERRED — the security fill, specified in
-``docs/wo-f41-stripe-security-spec.md`` and NOT to be written here by a
-feature session: host-side Checkout Session creation (the ``payments.checkout``
-host service over the WO-A2.2 bus, secret host-side, egress pinned to
-api.stripe.com), the emitted Worker webhook route with signature verification
-+ idempotency-in-one-transaction, the entitlement GRANT on verified
-fulfillment, and all secret custody.
+The host-side ``payments.checkout`` handler, secret custody, and the live
+adversarial verifier are separate WO-F4.1 slices.  Until that verifier lands,
+``tier="template_only"`` + ``verify=None`` intentionally keeps the finish gate
+closed even though the generated data plane exists.
 
 THE FAIL-CLOSED GATE IS INTENTIONAL. This primitive registers with
 ``tier="template_only"`` and ``verify=None``. Under WO-A3's rule
@@ -42,7 +38,9 @@ None only WITH the real harness from the security spec doc.
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -75,6 +73,21 @@ _MAX_FEATURES = 8
 _MAX_FEATURE_LEN = 120
 
 _FlagStr = Annotated[str, StringConstraints(min_length=1, max_length=64, pattern=_FLAG_PATTERN)]
+
+
+def _stripe_app_binding(app: AppSpec) -> str:
+    """Stable, public app identity used to bind Stripe webhook metadata.
+
+    It deliberately excludes mutable content and contains no credential.  The
+    per-deployment correlation secret supplies authenticity at runtime.
+    """
+    canonical = json.dumps(
+        {"app_kind": app.app_kind, "name": app.name},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return f"app_{hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:32]}"
 
 
 class StripeSpec(BaseModel):
@@ -163,15 +176,16 @@ def apply_stripe_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
       ``pricing.single-plan-emphasis``) on the first page — replaced in place on
       re-apply, never duplicated; a page is created if the app has none. The
       section content carries plan_name/price_display/features plus the
-      pending-state body. NO `cta_label` is set: the shared pricing emitter
-      renders no button, so the folded card can never show a live-looking
-      checkout affordance.
-    * the entitlement flag appended to ``AppSpec.roles`` (the existing RBAC
-      surface records already gates entities on). Recording the flag is all
-      that happens here — GRANTING it on payment is deferred security fill
-      (docs/wo-f41-stripe-security-spec.md)."""
+    pending-state body. No ``cta_label`` is model-controlled: the records
+      emitter replaces this section with the Disco-owned runtime-gated CTA.
+    * the entitlement flag appended to ``AppSpec.roles`` plus strict
+      ``AppSpec.stripe`` metadata consumed by the generated Worker."""
     if not isinstance(spec, StripeSpec):  # defensive: app_add_primitive validated it
         raise TypeError(f"apply_spec for {STRIPE_PRIMITIVE_ID!r} needs a StripeSpec")
+    if app.app_kind == "records" and not app.roles:
+        raise ValueError("Stripe requires a records app with an existing non-payment role")
+    if app.stripe is not None and app.stripe.entitlement_flag != spec.entitlement_flag:
+        raise ValueError("Stripe entitlement_flag cannot change after initial application")
     section: dict[str, object] = {
         "id": STRIPE_PRICING_SECTION_ID,
         "kind": "pricing",
@@ -200,9 +214,21 @@ def apply_stripe_spec(app: AppSpec, spec: BaseModel) -> AppSpec:
         pages = [{"id": "home", "route": "/", "title": "Home", "sections": [section]}]
     data["pages"] = pages
     roles = list(data.get("roles") or [])
+    if app.stripe is None and spec.entitlement_flag in roles:
+        raise ValueError("Stripe entitlement_flag must be a new, payment-managed role")
     if spec.entitlement_flag not in roles:
         roles.append(spec.entitlement_flag)
     data["roles"] = roles
+    data["stripe"] = {
+        "app_binding": (
+            app.stripe.app_binding if app.stripe is not None else _stripe_app_binding(app)
+        ),
+        # The selector is deliberately NOT a Stripe price id.  The host maps
+        # this stable, validated identifier to its operator-owned price config.
+        "plan_selector": spec.entitlement_flag,
+        "entitlement_flag": spec.entitlement_flag,
+        "success_message": spec.success_message,
+    }
     return AppSpec.model_validate(data)
 
 
@@ -302,9 +328,7 @@ def generate_stripe(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         else html.escape(f"{PAYMENTS_PENDING_LABEL} — {PAYMENTS_PENDING_HELPER}")
     )
     items = content.items if content else ()
-    features_html = "".join(
-        f"        <li>{html.escape(item)}</li>\n" for item in items
-    )
+    features_html = "".join(f"        <li>{html.escape(item)}</li>\n" for item in items)
     features_block = f"      <ul>\n{features_html}      </ul>\n" if features_html else ""
     return {
         "index.html": (
@@ -315,9 +339,7 @@ def generate_stripe(app: AppSpec, design: DesignSpec) -> dict[str, str]:
             '    <meta name="viewport" content="width=device-width, initial-scale=1" />\n'
             f"    <title>{title}</title>\n"
             "  </head>\n"
-            "  <body>\n"
-            + _ENV_NAME_DOC_COMMENT
-            + f"    <h1>{title}</h1>\n"
+            "  <body>\n" + _ENV_NAME_DOC_COMMENT + f"    <h1>{title}</h1>\n"
             '    <section class="pricing-card" data-payments-state="setup-pending">\n'
             f"      <h2>{heading}</h2>\n"
             f'      <p class="price">{price}</p>\n'
@@ -341,13 +363,12 @@ register_primitive(
         prepare_app_spec=prepare_stripe_app_spec,
         generate=generate_stripe,
         # template_only: the model's role is spec-only; every emitted byte is
-        # Disco-owned. The host_contract DECLARES the two runtime services the
-        # deferred fill will implement (they do not exist yet — declaring them
-        # here is the contract, not the wiring).
+        # Disco-owned. Webhook delivery is inbound and therefore is NOT a host
+        # capability; only outbound Checkout Session creation is declared.
         tier="template_only",
         host_contract=(
             HostService("payments.checkout"),
-            HostService("payments.webhook"),
+            HostService("payments.ready"),
         ),
         spec_schema=StripeSpec,
         # verify=None ON PURPOSE — the fail-closed gate. WO-A3's rule makes a
