@@ -239,6 +239,10 @@ class QuotaStore(Protocol):
         now: datetime | None = None,
     ) -> QuotaReservation: ...
 
+    def mark_dispatched(
+        self, *, owner_id: str, audience: str, reservation_id: str
+    ) -> QuotaReservation: ...
+
     def release(self, *, owner_id: str, audience: str, reservation_id: str) -> bool: ...
 
     def get_usage(
@@ -272,7 +276,8 @@ CREATE TABLE IF NOT EXISTS quota_reservations (
     service                TEXT NOT NULL,
     reservation_id         TEXT NOT NULL,
     state                  TEXT NOT NULL
-                           CHECK (state IN ('reserved', 'completed', 'abandoned', 'released')),
+                           CHECK (state IN
+                               ('reserved', 'dispatched', 'completed', 'abandoned', 'released')),
     estimated_input_tokens INTEGER NOT NULL CHECK (estimated_input_tokens >= 0),
     estimated_output_tokens INTEGER NOT NULL CHECK (estimated_output_tokens >= 0),
     actual_input_tokens    INTEGER,
@@ -521,6 +526,33 @@ class SqliteQuotaStore:
                 raise QuotaError("completed reservation was not readable")
             return result
 
+    def mark_dispatched(
+        self, *, owner_id: str, audience: str, reservation_id: str
+    ) -> QuotaReservation:
+        """Record that downstream execution may now incur token spend."""
+        owner, app = self._validate_app(owner_id, audience)
+        key = _identity("reservation id", reservation_id)
+        with self._write_transaction() as conn:
+            existing = self._find_reservation(conn, owner, app, key)
+            if existing is None:
+                raise ReservationNotFound("quota reservation not found")
+            if existing.state == "dispatched":
+                return existing
+            if existing.state != "reserved":
+                raise ReservationStateError("only a reserved request can be dispatched")
+            conn.execute(
+                """
+                UPDATE quota_reservations SET state = 'dispatched'
+                WHERE owner_id = ? AND audience = ? AND reservation_id = ?
+                  AND state = 'reserved'
+                """,
+                (owner, app, key),
+            )
+            result = self._find_reservation(conn, owner, app, key)
+            if result is None:  # pragma: no cover - SQLite contract guard
+                raise QuotaError("dispatched reservation was not readable")
+            return result
+
     def release(self, *, owner_id: str, audience: str, reservation_id: str) -> bool:
         """Release an unused reservation; repeated release is an idempotent no-op."""
         owner, app = self._validate_app(owner_id, audience)
@@ -530,7 +562,7 @@ class SqliteQuotaStore:
             existing = self._find_reservation(conn, owner, app, key)
             if existing is None:
                 raise ReservationNotFound("quota reservation not found")
-            if existing.state in {"completed", "abandoned"}:
+            if existing.state in {"dispatched", "completed", "abandoned"}:
                 raise ReservationStateError("settled usage cannot be released")
             if existing.state == "released":
                 return False
@@ -604,6 +636,31 @@ class SqliteQuotaStore:
               AND created_at_us <= ?
             """,
             (now_us, owner, app, cutoff_us),
+        )
+        conn.execute(
+            """
+            UPDATE quota_reservations
+            SET state = 'abandoned',
+                actual_input_tokens = estimated_input_tokens,
+                actual_output_tokens = estimated_output_tokens,
+                completed_at_us = ?
+            WHERE owner_id = ? AND audience = ? AND state = 'dispatched'
+              AND created_at_us <= ?
+            """,
+            (now_us, owner, app, cutoff_us),
+        )
+        retention_cutoff = now_us - MAX_WINDOW_SECONDS * 1_000_000
+        conn.execute(
+            """
+            DELETE FROM quota_reservations WHERE rowid IN (
+                SELECT rowid FROM quota_reservations
+                WHERE owner_id = ? AND audience = ?
+                  AND state IN ('completed', 'abandoned', 'released')
+                  AND created_at_us < ?
+                ORDER BY created_at_us LIMIT 1000
+            )
+            """,
+            (owner, app, retention_cutoff),
         )
 
     @contextlib.contextmanager
@@ -716,10 +773,10 @@ class SqliteQuotaStore:
         row = conn.execute(
             """
             SELECT COUNT(*) AS request_count,
-                   COALESCE(SUM(CASE WHEN state != 'reserved'
+                   COALESCE(SUM(CASE WHEN state NOT IN ('reserved', 'dispatched')
                        THEN actual_input_tokens ELSE estimated_input_tokens END), 0)
                        AS input_tokens,
-                   COALESCE(SUM(CASE WHEN state != 'reserved'
+                   COALESCE(SUM(CASE WHEN state NOT IN ('reserved', 'dispatched')
                        THEN actual_output_tokens ELSE estimated_output_tokens END), 0)
                        AS output_tokens
             FROM quota_reservations

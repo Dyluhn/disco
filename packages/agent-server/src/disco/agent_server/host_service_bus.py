@@ -198,6 +198,45 @@ def _audit(record: HostTokenRecord, service: str, outcome: str) -> None:
     )
 
 
+def _quota_denied_response(reason: str | None, retry_after: int | None) -> Response:
+    return JSONResponse(
+        status_code=429,
+        content={"error": "quota_exceeded", "limit": reason},
+        headers={
+            "Cache-Control": "no-store",
+            "Retry-After": str(retry_after or 1),
+        },
+    )
+
+
+def _charge_rejected_request(
+    quota_store: QuotaStore,
+    record: HostTokenRecord,
+    service: str,
+) -> Response | None:
+    """Rate-account authenticated traffic rejected before normal admission."""
+    try:
+        admission = quota_store.reserve(
+            owner_id=record.owner_id,
+            audience=record.audience,
+            service=service,
+            reservation_id="q_" + secrets.token_urlsafe(18),
+        )
+        if not admission.allowed or admission.reservation is None:
+            return _quota_denied_response(admission.reason, admission.retry_after_seconds)
+        quota_store.complete(
+            owner_id=record.owner_id,
+            audience=record.audience,
+            reservation_id=admission.reservation.reservation_id,
+            actual_input_tokens=0,
+            actual_output_tokens=0,
+        )
+    except (QuotaError, ValueError, OverflowError):
+        _LOG.warning("host service rejected-request accounting failed")
+        return _error_response(503, "quota_unavailable")
+    return None
+
+
 def _ai_chat_callback(
     runtime: ConversationRuntime, record: HostTokenRecord
 ) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
@@ -303,15 +342,24 @@ def make_host_service_bus_router(
         validated_service = _extract_service(request.scope.get("raw_path", b""))
         if validated_service is None:
             _audit(record, "invalid", "bad_service")
+            quota_error = _charge_rejected_request(quota_store, record, "bus.invalid")
+            if quota_error is not None:
+                return quota_error
             return _error_response(400, "bad_service")
         if validated_service not in record.allowed_services:
             _audit(record, validated_service, "service_not_allowed")
+            quota_error = _charge_rejected_request(quota_store, record, validated_service)
+            if quota_error is not None:
+                return quota_error
             return _error_response(403, "service_not_allowed")
 
         try:
             payload = await _read_capped_json_object(request)
         except _BusClientError as exc:
             _audit(record, validated_service, exc.reason)
+            quota_error = _charge_rejected_request(quota_store, record, validated_service)
+            if quota_error is not None:
+                return quota_error
             status = (
                 413
                 if exc.reason == "oversize_body"
@@ -324,6 +372,9 @@ def make_host_service_bus_router(
         definition = get_host_service(validated_service)
         if definition is None:
             _audit(record, validated_service, "unknown_service")
+            quota_error = _charge_rejected_request(quota_store, record, validated_service)
+            if quota_error is not None:
+                return quota_error
             return _error_response(404, "unknown_service")
         try:
             estimate = (
@@ -344,16 +395,8 @@ def make_host_service_bus_router(
             _LOG.warning("host service quota admission failed")
             return _error_response(503, "quota_unavailable")
         if not admission.allowed or admission.reservation is None:
-            retry_after = admission.retry_after_seconds or 1
             _audit(record, validated_service, "quota_exceeded")
-            return JSONResponse(
-                status_code=429,
-                content={"error": "quota_exceeded", "limit": admission.reason},
-                headers={
-                    "Cache-Control": "no-store",
-                    "Retry-After": str(retry_after),
-                },
-            )
+            return _quota_denied_response(admission.reason, admission.retry_after_seconds)
 
         reservation_id = admission.reservation.reservation_id
         settled = False
@@ -376,6 +419,17 @@ def make_host_service_bus_router(
             settled = True
             return True
 
+        try:
+            quota_store.mark_dispatched(
+                owner_id=record.owner_id,
+                audience=record.audience,
+                reservation_id=reservation_id,
+            )
+        except (QuotaError, ValueError, OverflowError):
+            _audit(record, validated_service, "quota_unavailable")
+            _LOG.warning("host service quota dispatch marker failed")
+            return _error_response(503, "quota_unavailable")
+
         ctx = context_factory(validated_service, record)
         try:
             result = await asyncio.wait_for(
@@ -387,7 +441,7 @@ def make_host_service_bus_router(
                 ),
             )
         except TimeoutError:
-            settle(HostServiceUsage())
+            settle(estimate)
             _audit(record, validated_service, "handler_timeout")
             _LOG.warning("host service request timed out")
             return _error_response(504, "handler_timeout")
@@ -396,10 +450,10 @@ def make_host_service_bus_router(
             _audit(record, validated_service, "payload_error")
             return _error_response(422, "payload_error")
         except asyncio.CancelledError:
-            settle(HostServiceUsage())
+            settle(estimate)
             raise
         except Exception:
-            settle(HostServiceUsage())
+            settle(estimate)
             _audit(record, validated_service, "handler_error")
             _LOG.warning("host service handler failed")
             return _error_response(500, "handler_error")

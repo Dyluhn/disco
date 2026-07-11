@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 from disco.agent_server import create_app
+from disco.agent_server.ai_chat_host_service import estimate_ai_chat_usage
 from disco.agent_server.host_token_store import HostTokenStore
 from disco.core import SqliteEventStore
 from disco.core.llm import CompletionResponse, TokenUsage
@@ -172,6 +173,23 @@ def test_ai_chat_requires_explicit_scope_and_binds_authenticated_conversation(a4
     assert context.conversation_id == "conv-authenticated"
 
 
+def test_authenticated_malformed_and_out_of_scope_flood_reaches_429(a4: Any) -> None:
+    a4.quotas.configure(
+        owner_id="owner-a",
+        audience="app-a",
+        limits=QuotaConfig(window_seconds=60, max_requests=2),
+    )
+    token = _principal(a4, "conv-a", "owner-a", "app-a", {"svc.ping"})
+    client = _client(a4)
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    assert client.post("/_disco/svc/svc.ping", content="{", headers=headers).status_code == 400
+    assert _call(client, token, _chat()).status_code == 403
+    denied = client.post("/_disco/svc/svc.ping", content="{", headers=headers)
+    assert denied.status_code == 429
+    assert denied.headers["retry-after"].isdigit()
+
+
 def test_estimate_is_reconciled_to_exact_actual_usage(a4: Any) -> None:
     token = _principal(a4, "conv-a", "owner-a", "app-a", {"ai.chat"})
     assert _call(_client(a4), token, _chat(max_tokens=2000)).status_code == 200
@@ -225,7 +243,12 @@ def test_handler_error_and_timeout_settle_zero_tokens(
     monkeypatch.setattr("disco.agent_server.host_service_bus.call_host_service", boom)
     assert _call(_client(a4), token, _chat()).status_code == 500
     first = a4.quotas.get_usage(owner_id="owner-a", audience="app-a")
-    assert (first.request_count, first.input_tokens, first.output_tokens) == (1, 0, 0)
+    estimate = estimate_ai_chat_usage(_chat())
+    assert (first.request_count, first.input_tokens, first.output_tokens) == (
+        1,
+        estimate.input_tokens,
+        estimate.output_tokens,
+    )
 
     async def slow(_service: str, _payload: object, _ctx: object) -> object:
         await asyncio.sleep(10)
@@ -235,7 +258,11 @@ def test_handler_error_and_timeout_settle_zero_tokens(
     monkeypatch.setattr("disco.agent_server.host_service_bus._HANDLER_TIMEOUT_S", 0.001)
     assert _call(_client(a4), token, _chat()).status_code == 504
     second = a4.quotas.get_usage(owner_id="owner-a", audience="app-a")
-    assert (second.request_count, second.input_tokens, second.output_tokens) == (2, 0, 0)
+    assert (second.request_count, second.input_tokens, second.output_tokens) == (
+        2,
+        estimate.input_tokens * 2,
+        estimate.output_tokens * 2,
+    )
 
 
 @pytest.mark.asyncio
@@ -275,4 +302,9 @@ async def test_cancelled_request_settles_zero_tokens(
             await task
 
     usage = a4.quotas.get_usage(owner_id="owner-a", audience="app-a")
-    assert (usage.request_count, usage.input_tokens, usage.output_tokens) == (1, 0, 0)
+    estimate = estimate_ai_chat_usage(_chat())
+    assert (usage.request_count, usage.input_tokens, usage.output_tokens) == (
+        1,
+        estimate.input_tokens,
+        estimate.output_tokens,
+    )

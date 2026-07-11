@@ -50,8 +50,16 @@ delivered and probed. Only `finish_rotation` revokes older credentials, in one
 transaction, after confirming that candidate is active for the target app. If
 delivery or probing fails, callers revoke only the candidate; the old credential
 remains usable. If finish fails, its transaction rolls back and no older token is
-partially revoked. Concurrent finishes serialize: one candidate wins and the
-other fails because it is no longer active.
+partially revoked. The finish transaction reads the candidate's exact owner,
+conversation, audience, and generation, then revokes only strictly lower
+generations in that exact identity tuple. Same-generation and newer candidates
+are preserved. Concurrent finishes serialize and deterministically converge on
+the highest generation that finishes: if the older finisher runs first, the
+newer finisher subsequently supersedes it; if the newer finisher runs first,
+the now-revoked older candidate fails closed. Thus an older, broader-scope
+candidate cannot revoke a newer narrowed-scope candidate or roll scope back.
+A newer candidate that fails its delivery probe is revoked by its selector only,
+leaving the proven older generation active.
 
 ## Residual risks
 

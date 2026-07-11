@@ -391,35 +391,64 @@ class HostTokenStore:
         *,
         keep_selector: str,
     ) -> int:
-        """Revoke older credentials only after the candidate is proven live."""
+        """Revoke strictly older generations after the candidate is proven live.
+
+        A lower-generation finisher can race a newer candidate, so selection by
+        identity alone is insufficient: it must never revoke the same or a
+        newer generation. Concurrent finishes therefore converge on the newest
+        candidate that successfully finishes, regardless of transaction order.
+        """
         with self._lock:
             conn = self._check_open()
             now = datetime.now(UTC).isoformat()
             conn.execute("BEGIN IMMEDIATE")
             try:
                 active = conn.execute(
-                    f"SELECT owner_id FROM {_TABLE_NAME} WHERE selector = ? "
-                    "AND conversation_id = ? AND audience = ? "
-                    "AND revoked_at IS NULL "
+                    f"SELECT owner_id, conversation_id, audience, generation "
+                    f"FROM {_TABLE_NAME} WHERE selector = ? AND revoked_at IS NULL "
                     "AND (expires_at IS NULL OR expires_at > ?)",
-                    (keep_selector, conversation_id, audience, now),
+                    (keep_selector, now),
                 ).fetchone()
                 if active is None:
                     raise ValueError("rotation candidate is not active for this app")
-                owner_id = str(active["owner_id"])
+                owner_value = active["owner_id"]
+                conversation_value = active["conversation_id"]
+                audience_value = active["audience"]
+                generation_value = active["generation"]
+                if (
+                    not isinstance(owner_value, str)
+                    or not isinstance(conversation_value, str)
+                    or not isinstance(audience_value, str)
+                    or not owner_value
+                    or not conversation_value
+                    or not audience_value
+                    or not isinstance(generation_value, int)
+                    or isinstance(generation_value, bool)
+                    or generation_value < 0
+                    or conversation_value != conversation_id
+                    or audience_value != audience
+                ):
+                    raise ValueError("rotation candidate is not active for this app")
                 cur = conn.execute(
                     f"UPDATE {_TABLE_NAME} SET revoked_at = ? "
                     "WHERE conversation_id = ? AND owner_id = ? AND audience = ? "
-                    "AND selector <> ? AND revoked_at IS NULL",
-                    (now, conversation_id, owner_id, audience, keep_selector),
+                    "AND generation < ? AND revoked_at IS NULL",
+                    (
+                        now,
+                        conversation_value,
+                        owner_value,
+                        audience_value,
+                        generation_value,
+                    ),
                 )
                 conn.commit()
                 _LOG.info(
                     "host credential rotation completed conversation=%s app=%s "
-                    "selector=%s revoked=%d",
+                    "selector=%s generation=%d revoked=%d",
                     conversation_id,
                     audience,
                     keep_selector,
+                    generation_value,
                     cur.rowcount,
                 )
                 return cur.rowcount

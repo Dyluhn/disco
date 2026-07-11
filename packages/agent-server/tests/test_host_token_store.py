@@ -266,6 +266,80 @@ def test_finish_rotation_does_not_revoke_other_owner(store):
     assert store.verify(owner_b) is not None
 
 
+def test_older_broad_finish_preserves_newer_narrow_candidate(store):
+    initial = store.mint(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
+    broad = store.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping", "payments.checkout"}),
+    )
+    narrow = store.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
+    broad_record = store.verify(broad)
+    narrow_record = store.verify(narrow)
+    assert broad_record is not None
+    assert narrow_record is not None
+
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=broad_record.selector) == 1
+    assert store.verify(initial) is None
+    assert store.verify(broad) is not None
+    assert store.verify(narrow) is not None
+    narrow_after_broad_finish = store.verify(narrow)
+    assert narrow_after_broad_finish is not None
+    assert narrow_after_broad_finish.allowed_services == frozenset({"svc.ping"})
+
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=narrow_record.selector) == 1
+    assert store.verify(broad) is None
+    assert store.verify(narrow) is not None
+
+
+def test_finish_rotation_preserves_same_generation_candidate(store):
+    first = store.mint("conv_1", "owner_a", "app:demo", generation=4)
+    peer = store.mint("conv_1", "owner_a", "app:demo", generation=4)
+    first_record = store.verify(first)
+    assert first_record is not None
+
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=first_record.selector) == 0
+    assert store.verify(first) is not None
+    assert store.verify(peer) is not None
+
+
+def test_failed_newer_candidate_can_be_revoked_without_losing_proven_older(store):
+    proven = store.mint(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
+    proven_record = store.verify(proven)
+    assert proven_record is not None
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=proven_record.selector) == 0
+
+    failed = store.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"payments.checkout"}),
+    )
+    failed_record = store.verify(failed)
+    assert failed_record is not None
+    assert store.revoke(failed_record.selector)
+    assert store.verify(failed) is None
+    proven_after_failure = store.verify(proven)
+    assert proven_after_failure is not None
+    assert proven_after_failure.allowed_services == frozenset({"svc.ping"})
+
+
 def test_unknown_selector_uses_digest_comparison(store, monkeypatch):
     calls = 0
     real_compare = secrets.compare_digest
@@ -301,12 +375,22 @@ def test_concurrent_rotations_allocate_distinct_increasing_generations(tmp_path)
     second.close()
 
 
-def test_concurrent_rotation_cannot_revoke_both_candidates(tmp_path):
+def test_concurrent_rotation_finish_deterministically_keeps_newest(tmp_path):
     path = tmp_path / "rotation.db"
     first = HostTokenStore(path)
     second = HostTokenStore(path)
-    token_a = first.mint("conv_1", "owner_a", "app:demo")
-    token_b = first.rotate("conv_1", "owner_a", "app:demo")
+    token_a = first.mint(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping", "payments.checkout"}),
+    )
+    token_b = first.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
     selector_a = first.verify(token_a).selector
     selector_b = first.verify(token_b).selector
     barrier = threading.Barrier(2)
@@ -328,7 +412,9 @@ def test_concurrent_rotation_cannot_revoke_both_candidates(tmp_path):
                 outcomes.append("lost")
     active = [record for record in first.list_for_conversation("conv_1") if record.is_active]
     assert len(active) == 1
-    assert outcomes.count("lost") == 1
+    assert active[0].selector == selector_b
+    assert active[0].allowed_services == frozenset({"svc.ping"})
+    assert outcomes in ([0, 1], ["lost", 1])
     first.close()
     second.close()
 

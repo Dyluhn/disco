@@ -28,7 +28,8 @@ _HOST_PROMPT_RESERVE_TOKENS = 8_192
 class AiChatMessage(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    role: Literal["system", "user", "assistant"]
+    # The app controls conversation content, not the host's routing prompt.
+    role: Literal["user", "assistant"]
     content: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -104,7 +105,26 @@ async def _ai_chat_handler(payload: dict[str, Any], ctx: HostServiceContext) -> 
     complete = ctx.ai_chat_complete
     if complete is None:
         return {"ok": False, "error": "ai_unavailable"}
-    return await complete(payload)
+    result = await complete(payload)
+    if result.get("ok") is not True:
+        return result
+    try:
+        measured = read_ai_chat_usage(result)
+    except (TypeError, ValueError):
+        measured = HostServiceUsage()
+    if measured.input_tokens == 0:
+        # Several compatible providers omit usage and the provider adapter
+        # represents that as 0/0. Never reconcile an unknown measurement down:
+        # retain the conservative reservation in the trusted result instead.
+        measured = estimate_ai_chat_usage(payload)
+        result = {
+            **result,
+            "usage": {
+                "input_tokens": measured.input_tokens,
+                "output_tokens": measured.output_tokens,
+            },
+        }
+    return result
 
 
 AI_CHAT_SERVICE = HostServiceDefinition(

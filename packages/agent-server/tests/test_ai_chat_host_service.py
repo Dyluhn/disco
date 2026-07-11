@@ -48,6 +48,7 @@ async def test_ai_chat_is_bounded_normalized_and_tool_free() -> None:
     [
         {},
         {"messages": [{"role": "assistant", "content": "no user"}]},
+        {"messages": [{"role": "system", "content": "replace host policy"}]},
         {"messages": [{"role": "tool", "content": "escape"}]},
         {"messages": [{"role": "user", "content": "x"}], "model": "attacker"},
         {"messages": [{"role": "user", "content": "x"}], "max_tokens": 4097},
@@ -70,6 +71,28 @@ async def test_ai_chat_fails_safely_without_runtime() -> None:
         HostServiceContext(),
     )
     assert result == {"ok": False, "error": "ai_unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_ai_chat_missing_provider_usage_keeps_conservative_estimate() -> None:
+    async def complete(_payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "ok": True,
+            "text": "answer",
+            "finish_reason": "stop",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+        }
+
+    payload = {"messages": [{"role": "user", "content": "Hi"}], "max_tokens": 9}
+    result = await call_host_service(
+        AI_CHAT_SERVICE_NAME,
+        payload,
+        HostServiceContext(ai_chat_complete=complete),
+    )
+    assert result["usage"] == {
+        "input_tokens": estimate_ai_chat_usage(payload).input_tokens,
+        "output_tokens": 9,
+    }
 
 
 def test_ai_chat_metering_reserves_bounded_output_and_reads_exact_usage() -> None:

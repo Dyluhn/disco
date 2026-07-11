@@ -241,6 +241,48 @@ def test_stale_reservation_is_abandoned_during_usage_sweep(tmp_path: Path) -> No
     assert reservation.actual_output_tokens == 0
 
 
+def test_stale_dispatched_reservation_retains_estimated_spend(tmp_path: Path) -> None:
+    store = _store(
+        tmp_path,
+        QuotaConfig(window_seconds=60, max_total_tokens=10),
+        reservation_ttl_seconds=5,
+    )
+    assert _reserve(store, "accepted", input_tokens=6, output_tokens=4).allowed
+    dispatched = store.mark_dispatched(
+        owner_id="owner-a", audience="app-a", reservation_id="accepted"
+    )
+    assert dispatched.state == "dispatched"
+    with pytest.raises(ReservationStateError, match="settled"):
+        store.release(owner_id="owner-a", audience="app-a", reservation_id="accepted")
+
+    usage = store.get_usage(
+        owner_id="owner-a", audience="app-a", now=NOW + timedelta(seconds=5)
+    )
+    assert (usage.request_count, usage.total_tokens) == (1, 10)
+    abandoned = store.get_reservation("owner-a", "app-a", "accepted")
+    assert abandoned is not None and abandoned.state == "abandoned"
+    assert (abandoned.actual_input_tokens, abandoned.actual_output_tokens) == (6, 4)
+
+
+def test_settled_rows_are_pruned_after_maximum_quota_window(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    assert _reserve(store, "old", now=NOW).allowed
+    store.complete(
+        owner_id="owner-a",
+        audience="app-a",
+        reservation_id="old",
+        actual_input_tokens=1,
+        actual_output_tokens=1,
+        now=NOW,
+    )
+    store.get_usage(
+        owner_id="owner-a",
+        audience="app-a",
+        now=NOW + timedelta(seconds=MAX_WINDOW_SECONDS + 1),
+    )
+    assert store.get_reservation("owner-a", "app-a", "old") is None
+
+
 def test_expiry_preserves_request_limit_while_releasing_tokens(tmp_path: Path) -> None:
     store = _store(
         tmp_path,
