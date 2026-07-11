@@ -73,6 +73,7 @@ from starlette.responses import Response
 from . import deploy as cf
 from .models import DeployPlan, DeployRefused, RefusalReason
 from .sandbox_build import build_backend_for_runtime
+from .stripe_deploy import StripeDeployContext, StripeDeployDependencies
 from .wrangler import (
     BuildBackend,
     CommandRunner,
@@ -457,6 +458,7 @@ def make_cloudflare_router(
     verifier: TokenVerifier | None = None,
     runner: CommandRunner | None = None,
     build_backend: BuildBackend | None = None,
+    stripe_dependencies: StripeDeployDependencies | None = None,
 ) -> APIRouter:
     """Owner Cloudflare-deploy endpoints. ``runner``/``verifier``/``build_backend``
     are injectable so tests drive fakes; in production they default to the REAL
@@ -472,9 +474,7 @@ def make_cloudflare_router(
     # P0-1: the untrusted `npm run build` runs in an isolating sandbox. Default to
     # the production sandbox backend built from the runtime; tests inject a fake.
     # A real deploy is REFUSED when no isolating backend is available.
-    deploy_build_backend: BuildBackend | None = build_backend or build_backend_for_runtime(
-        runtime
-    )
+    deploy_build_backend: BuildBackend | None = build_backend or build_backend_for_runtime(runtime)
     # SEC-25: per-conversation deploy lock. Two owner deploy requests for the SAME
     # conversation/workspace must NOT interleave (they'd race the build sync-back,
     # D1 provisioning, and wrangler.toml substitution). A conversation id is held
@@ -631,6 +631,7 @@ def make_cloudflare_router(
         _deploys_in_flight.add(cid)
         try:
             workspace = _resolve_workspace(cid)
+            owner_id = await store.conversation_owner_id(cid)
             admin_token = _secret_value(body.admin_token)
             _check_secret_len(admin_token, "admin_token")
             autonomous = body.autonomous or _server_autonomous()
@@ -644,6 +645,11 @@ def make_cloudflare_router(
                     runner=command_runner,
                     build_backend=deploy_build_backend,
                     admin_token=admin_token,
+                    stripe_context=(
+                        StripeDeployContext(stripe_dependencies, owner_id, cid)
+                        if stripe_dependencies is not None
+                        else None
+                    ),
                 )
             except DeployRefused as exc:
                 # CORR-25 — a deploy refused by a hard gate (a real, named

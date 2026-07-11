@@ -165,6 +165,9 @@ class RefusalReason(str, Enum):
     #: secret-scan gates carry this dedicated reason so the owner sees exactly which gate
     #: blocked them.
     PLAINTEXT_SECRET_REFUSED = "plaintext_secret_refused"
+    #: WO-F4.1: host-owned Stripe config, scoped secrets, the public A2 bus,
+    #: and deployed-token stores must all be present and mutually consistent.
+    STRIPE_RUNTIME_CONFIG = "stripe_runtime_config_refused"
 
 
 class DeployRefused(Exception):
