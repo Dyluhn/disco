@@ -168,6 +168,9 @@ class RefusalReason(str, Enum):
     #: WO-F4.1: host-owned Stripe config, scoped secrets, the public A2 bus,
     #: and deployed-token stores must all be present and mutually consistent.
     STRIPE_RUNTIME_CONFIG = "stripe_runtime_config_refused"
+    #: WO-F4.1: the deployed Stripe tree must pass the exact trusted projection
+    #: verifier, not an index-only or heuristic subset.
+    STRIPE_TRUSTED_TREE = "stripe_trusted_tree_refused"
 
 
 class DeployRefused(Exception):

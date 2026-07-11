@@ -52,7 +52,13 @@ from disco.core.appkit.local_verify import (
     cloudflare_export_ready,
     main_points_at_worker_entry,
 )
-from disco.core.appkit.spec import AppSpec, load_app_spec_from_bytes
+from disco.core.appkit.spec import (
+    AppSpec,
+    DesignSpec,
+    load_app_spec_from_bytes,
+    load_design_spec_from_bytes,
+)
+from disco.core.appkit.stripe_primitive import stripe_verify
 from disco.core.llm.secrets import SecretStore, WeakSecretError
 
 from ..redaction import redact_text
@@ -78,6 +84,14 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
     _fcntl = None  # type: ignore[assignment]
 
 _log = logging.getLogger(__name__)
+
+_HOST_TOKEN_LIFECYCLE_MUTATIONS = frozenset(
+    {
+        "host_token_candidate_minted",
+        "host_token_rotation_finished",
+        "host_token_candidate_revoked",
+    }
+)
 
 # ---- credential slots --------------------------------------------------------
 
@@ -854,24 +868,30 @@ def _stage_deploy_tree(workspace: Path) -> Path:
                 # tree we own (not a workspace path), so it needs no workspace guard.
                 data = read_workspace_file(src, workspace_root, text=False)
                 dest.write_bytes(data if data is not None else b"")
-        # SEC-4/BUILD-1: the canonical-worker gate (_assert_worker_is_canonical, run
-        # POST-build) regenerates worker/index.ts from THIS app's spec and requires the
-        # staged worker to match it. The spec lives under `.disco/` — pruned from the
-        # deploy walk above (it is internal, never published) — so stage it EXPLICITLY:
-        # a guarded read of the live spec, byte-copied into the IMMUTABLE staged tree.
-        # The canonical regeneration then runs against a FROZEN spec captured atomically
-        # with the rest of the tree (the sandbox build only syncs `dist` back, never
-        # `.disco/`), so it is TOCTOU-proof — a concurrent writer to the live workspace
-        # can't redirect what "canonical" means after staging. An escaping `.disco`/spec
-        # symlink fails closed in the guarded reader. A missing spec is simply not staged;
-        # the POST-build gate then refuses (fail closed) on the absent spec.
-        spec_src = workspace / _APPSPEC_RELPATH
-        if spec_src.exists():
-            spec_bytes = read_workspace_file(spec_src, workspace_root, text=False)
-            if spec_bytes is not None:
-                spec_dest = staged / _APPSPEC_RELPATH
-                spec_dest.parent.mkdir(parents=True, exist_ok=True)
-                spec_dest.write_bytes(spec_bytes)
+        # Trusted reconstruction inputs live under the otherwise-pruned `.disco`
+        # tree. Freeze them explicitly alongside the deploy bytes so pre/post-build
+        # verification cannot race a live AppSpec, DesignSpec, or Stripe provenance
+        # rewrite. Missing inputs remain absent and the trusted verifier fails closed.
+        trusted_inputs = (
+            _APPSPEC_RELPATH,
+            ".disco/designspec.json",
+            ".disco/primitives/stripe.json",
+        )
+        for relpath in trusted_inputs:
+            src = workspace / relpath
+            if not src.exists():
+                continue
+            st = src.lstat()
+            if not stat.S_ISREG(st.st_mode) or st.st_nlink > 1:
+                raise DeployRefused(
+                    RefusalReason.WORKSPACE_SYMLINK_ESCAPE,
+                    f"A trusted deployment input is not a single-link regular file: {relpath}.",
+                )
+            data = read_workspace_file(src, workspace_root, text=False)
+            if data is not None:
+                dest = staged / relpath
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
     except BaseException:
         shutil.rmtree(staged, ignore_errors=True)
         raise
@@ -1610,11 +1630,11 @@ def _assert_worker_auth_verified(workspace: Path) -> None:
             "No worker/index.ts in the staged deploy tree — cannot verify the admin-token "
             "auth gate. Refusing to deploy an unverified Worker (fail closed).",
         )
-    # Stripe is records-only; the legacy lead-specific inspector below cannot
-    # model that Worker. Its stronger equivalent is exact reconstruction from
-    # the trusted generator, repeated post-build to close the build TOCTOU.
+    # Stripe is records-only; invoke its authoritative trusted-tree verifier
+    # rather than the legacy lead-specific inspector. This exact check is
+    # repeated post-build to close the build TOCTOU.
     if _guarded_app_is_stripe(workspace):
-        _assert_worker_is_canonical(workspace)
+        _assert_stripe_trusted_tree(workspace)
         return
     try:
         from disco.core.appkit.spec import Entity
@@ -1707,6 +1727,53 @@ def _guarded_app_is_stripe(staged: Path) -> bool:
         return load_app_spec_from_bytes(spec_text).stripe is not None
     except Exception:
         return False
+
+
+def _load_guarded_design_spec(staged: Path) -> DesignSpec:
+    raw = read_workspace_file(staged / ".disco/designspec.json", staged.resolve())
+    if not (raw and raw.strip()):
+        raise DeployRefused(
+            RefusalReason.STRIPE_TRUSTED_TREE,
+            "Stripe deployment requires .disco/designspec.json for trusted reconstruction.",
+        )
+    try:
+        return load_design_spec_from_bytes(raw)
+    except Exception as exc:
+        raise DeployRefused(
+            RefusalReason.STRIPE_TRUSTED_TREE,
+            f"Could not validate the staged Stripe design spec ({exc}).",
+        ) from exc
+
+
+def _assert_stripe_trusted_tree(staged: Path) -> None:
+    """Run the exact core Stripe verifier over its on-disk trusted path set."""
+    app = _load_guarded_app_spec(staged)
+    if app.stripe is None:
+        return
+    design = _load_guarded_design_spec(staged)
+    try:
+        from disco.core.appkit.generator import generate
+
+        paths = set(generate(app, design))
+    except Exception as exc:
+        raise DeployRefused(
+            RefusalReason.STRIPE_TRUSTED_TREE,
+            f"Could not reconstruct the trusted Stripe deploy tree ({exc}).",
+        ) from exc
+    paths.update({".disco/appspec.json", ".disco/primitives/stripe.json"})
+    tree: dict[str, str] = {}
+    for relpath in sorted(paths):
+        text = read_workspace_file(staged / relpath, staged.resolve())
+        if text is not None:
+            tree[relpath] = text
+    result = stripe_verify(app, design, tree)
+    if result.ok:
+        return
+    failures = [f"{check.name}: {check.evidence}" for check in result.checks if not check.passed]
+    raise DeployRefused(
+        RefusalReason.STRIPE_TRUSTED_TREE,
+        "Stripe trusted-tree verification failed: " + "; ".join(failures),
+    )
 
 
 def _assert_worker_is_canonical(staged: Path) -> None:
@@ -2459,10 +2526,25 @@ class _DeploySecretWriter:
             self._mutations.append("secret_put")
         return result
 
+    def record_host_token_mutation(self, name: str) -> None:
+        if name not in _HOST_TOKEN_LIFECYCLE_MUTATIONS:
+            raise ValueError("invalid host-token lifecycle mutation name")
+        self._mutations.append(name)
+        _persist_record(
+            self._live_workspace,
+            self._record_rel,
+            self._plan,
+            status="in_progress",
+            mutations=self._mutations,
+            effective_digest=self.effective_digest,
+            store=self._store,
+        )
+
 
 def _recheck_stripe_after_build(lifecycle: StripeDeploymentLifecycle | None, staged: Path) -> None:
     if lifecycle is None:
         return
+    _assert_stripe_trusted_tree(staged)
     try:
         lifecycle.recheck_after_build(_load_guarded_app_spec(staged))
     except StripeDeployError as exc:
@@ -2483,15 +2565,24 @@ async def _activate_stripe_worker(
             admin_token=admin_token,
             fresh_worker=fresh_worker,
             put_secret=writer,
+            record_mutation=writer.record_host_token_mutation,
         )
     except StripeDeployError as exc:
-        await lifecycle.fail_closed(writer)
-        return exc
-    except Exception:
-        await lifecycle.fail_closed(writer)
+        if await lifecycle.fail_closed(writer):
+            return exc
         return StripeDeployError(
-            "stripe_runtime_activation",
-            "Stripe activation failed unexpectedly and was disabled",
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
+        )
+    except Exception:
+        if await lifecycle.fail_closed(writer):
+            return StripeDeployError(
+                "stripe_runtime_activation",
+                "Stripe activation failed unexpectedly and was disabled",
+            )
+        return StripeDeployError(
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
         )
     return None
 
@@ -2532,12 +2623,20 @@ async def _quiesce_stripe_worker(
     try:
         await lifecycle.quiesce_existing_worker(writer)
     except StripeDeployError as exc:
-        await lifecycle.fail_closed(writer)
-        return exc
-    except Exception:
-        await lifecycle.fail_closed(writer)
+        if await lifecycle.fail_closed(writer):
+            return exc
         return StripeDeployError(
-            "stripe_runtime_quiesce", "Stripe could not be disabled before deployment"
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
+        )
+    except Exception:
+        if await lifecycle.fail_closed(writer):
+            return StripeDeployError(
+                "stripe_runtime_quiesce", "Stripe could not be disabled before deployment"
+            )
+        return StripeDeployError(
+            "stripe_runtime_state_uncertain",
+            "Stripe activation state is uncertain; manual intervention is required.",
         )
     return None
 

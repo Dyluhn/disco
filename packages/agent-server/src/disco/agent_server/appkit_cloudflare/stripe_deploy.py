@@ -111,6 +111,11 @@ class HttpStripeWorkerProbe:
 
 
 SecretPut = Callable[[str, str], Awaitable[bool]]
+MutationRecord = Callable[[str], None]
+
+
+def _discard_mutation(_name: str) -> None:
+    return None
 
 
 def _canonical_https_origin(value: str, *, label: str) -> str:
@@ -208,6 +213,7 @@ class StripeDeploymentLifecycle:
         self._candidate_selector: str | None = None
         self._rotation_finished = False
         self._worker_active = False
+        self._record_mutation: MutationRecord = _discard_mutation
 
     @property
     def audience(self) -> str:
@@ -313,9 +319,11 @@ class StripeDeploymentLifecycle:
         admin_token: str,
         fresh_worker: bool,
         put_secret: SecretPut,
+        record_mutation: MutationRecord = _discard_mutation,
     ) -> None:
         """Install bindings, prove the active Worker, rotate, then enable last."""
         self._worker_active = True
+        self._record_mutation = record_mutation
         origin = self._deployed_origin(deployed_url)
         binding, webhook = self._secret_values()
         if fresh_worker and not await put_secret("STRIPE_RUNTIME_READY", "0"):
@@ -349,6 +357,7 @@ class StripeDeploymentLifecycle:
                 "stripe_token_rotation", "new Stripe host-service capability is not active"
             )
         self._candidate_selector = record.selector
+        self._record_mutation("host_token_candidate_minted")
         if not await put_secret("DISCO_SVC_TOKEN", candidate):
             raise StripeDeployError(
                 "wrangler secret put DISCO_SVC_TOKEN",
@@ -365,24 +374,30 @@ class StripeDeploymentLifecycle:
             keep_selector=record.selector,
         )
         self._rotation_finished = True
+        self._record_mutation("host_token_rotation_finished")
         if not await put_secret("STRIPE_RUNTIME_READY", "1"):
             raise StripeDeployError(
                 "wrangler secret put STRIPE_RUNTIME_READY",
                 "the verified Stripe Worker could not be enabled",
             )
 
-    async def fail_closed(self, put_secret: SecretPut) -> None:
-        """Best-effort disable; revoke only an uncommitted rotation candidate."""
+    async def fail_closed(self, put_secret: SecretPut) -> bool:
+        """Best-effort disable; return whether READY=0 was positively installed."""
+        ready_zero_confirmed = not self._worker_active
+        candidate_safe = True
         if self._worker_active:
             try:
-                await put_secret("STRIPE_RUNTIME_READY", "0")
+                ready_zero_confirmed = await put_secret("STRIPE_RUNTIME_READY", "0")
             except Exception:
-                pass
+                ready_zero_confirmed = False
         if self._candidate_selector is not None and not self._rotation_finished:
             try:
-                self._token_store.revoke(self._candidate_selector)
+                if self._token_store.revoke(self._candidate_selector):
+                    self._record_mutation("host_token_candidate_revoked")
+                candidate_safe = self._token_store.verify(self._candidate_selector) is None
             except Exception:
-                pass
+                candidate_safe = False
+        return ready_zero_confirmed and candidate_safe
 
 
 def stripe_lifecycle_for(
