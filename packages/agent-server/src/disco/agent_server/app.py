@@ -19,6 +19,7 @@ import contextlib
 import logging
 
 from disco.core.auth import allowed_frontend_origins
+from disco.core.origin_approvals import OriginApprovalStore
 from disco.core.quota import SqliteQuotaStore
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.stripe_host_service import StripeAppConfigStore
@@ -69,6 +70,17 @@ from .runtime import ConversationRuntime
 __all__ = ["_sanitize_name", "create_app"]
 
 _LOG = logging.getLogger(__name__)
+
+
+def _webhook_approvals(runtime: object | None) -> OriginApprovalStore | None:
+    """Extract real runtime approval wiring without assuming test doubles have it."""
+    config_store = getattr(runtime, "_config_store", None)
+    secret_store = getattr(runtime, "_secret_store", None)
+    approval_store = getattr(config_store, "approval_store", None)
+    if not callable(approval_store) or secret_store is None:
+        return None
+    result = approval_store(secret_store=secret_store)
+    return result if isinstance(result, OriginApprovalStore) else None
 
 
 def _seed_builtin_workflows_for_runtime(runtime: ConversationRuntime) -> None:
@@ -249,11 +261,7 @@ def create_app(
             webhook_dependencies=WebhookDeployDependencies(
                 token_store,
                 webhook_configs,
-                (
-                    runtime._config_store.approval_store(secret_store=runtime._secret_store)
-                    if runtime is not None
-                    else None
-                ),
+                _webhook_approvals(runtime),
             ),
         )
     )
