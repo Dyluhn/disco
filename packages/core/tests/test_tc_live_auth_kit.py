@@ -331,15 +331,22 @@ def test_auth_kit_probe_fails_when_the_seam_is_unguarded(tmp_path: Path) -> None
 
 
 def _raw_request(
-    port: int, method: str, path: str, *, body: bytes | None = None
+    port: int,
+    method: str,
+    path: str,
+    *,
+    body: bytes | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[int, bytes]:
     """Send `method path` with the path LITERAL — http.client does not
     canonicalize the request target, so a "//notes" reaches the server as-is
     (urllib would rewrite it). Returns (status, body)."""
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
     try:
-        headers = {"Content-Type": "application/json"} if body is not None else {}
-        conn.request(method, path, body=body, headers=headers)
+        hdrs = dict(headers or {})
+        if body is not None:
+            hdrs.setdefault("Content-Type", "application/json")
+        conn.request(method, path, body=body, headers=hdrs)
         resp = conn.getresponse()
         return resp.status, resp.read()
     finally:
@@ -372,6 +379,20 @@ def test_auth_kit_blocks_path_confusion_and_survives_malformed_input(tmp_path: P
         assert _raw_request(port, "GET", "/./notes")[0] == 401
         assert _raw_request(port, "GET", "/")[0] == 200  # process alive
 
+        # #1b — ENCODED dot-segments through the /__health/* wildcard (the S4
+        # re-review CRITICAL): "%2e%2e" must not read as public here while the
+        # wrapped handler's new URL() resolves it to /notes. Rejected (400),
+        # never 200. "/__health/db" is public in the shipped allowlist, so the
+        # climb target is a real protected route reached ONLY via the desync.
+        for climb in (
+            "/__health/%2e%2e/notes",
+            "/__health/%2E%2E/notes",
+            "/__health/x/%2e%2e/%2e%2e/notes",
+            "/__health%2f%2e%2e/notes",
+        ):
+            st, _b = _raw_request(port, "GET", climb)
+            assert st != 200, f"encoded-dot climb {climb!r} reached the handler -> {st}"
+
         # #2 — malformed credential TYPES must not crash the process.
         for hostile in (
             b'{"email":{"$ne":1},"password":"x"}',
@@ -399,5 +420,66 @@ def test_auth_kit_blocks_path_confusion_and_survives_malformed_input(tmp_path: P
             body=json.dumps(_TEST_DEV_USER).encode("utf-8"),
         )
         assert status == 200, f"legit login broke after hostile traffic -> {status}"
+    finally:
+        _kill(proc)
+
+
+def _raw_headers(port: int, method: str, path: str, *, body: bytes | None = None,
+                 headers: dict[str, str] | None = None) -> tuple[int, dict[str, str]]:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5.0)
+    try:
+        hdrs = dict(headers or {})
+        if body is not None:
+            hdrs.setdefault("Content-Type", "application/json")
+        conn.request(method, path, body=body, headers=hdrs)
+        resp = conn.getresponse()
+        out = {k.lower(): v for k, v in resp.getheaders()}
+        resp.read()
+        return resp.status, out
+    finally:
+        conn.close()
+
+
+def test_auth_kit_forged_xff_cannot_bypass_rate_limit_and_413_closes(tmp_path: Path) -> None:
+    """S4 re-review HIGH + MEDIUM-HIGH, proven live:
+
+    * A spoofed X-Forwarded-For must NOT mint a fresh rate-limit bucket per
+      request (trustProxy defaults off), so a burst of login attempts with
+      distinct forged XFF still trips the throttle (429).
+    * A 413 (oversized body) response carries Connection: close so the socket
+      is not left hung waiting for the undelivered remainder.
+    """
+    workspace = _write_workspace(
+        tmp_path,
+        _SERVER_JS_WRAPPED,
+        config_override={
+            "devSeedUser": _TEST_DEV_USER,
+            "loginRateLimit": {"windowMs": 60000, "max": 3},
+        },
+    )
+    proc, port = _boot_node_server(workspace)
+    try:
+        # 413 FIRST (before the small rate-limit window is exhausted): oversized
+        # body → 413 with Connection: close.
+        big = b'{"email":"' + b"a" * 200_000 + b'","password":"x"}'
+        st, hdrs = _raw_headers(port, "POST", "/auth/login", body=big)
+        assert st == 413, f"oversized body -> {st} (want 413)"
+        assert hdrs.get("connection", "").lower() == "close", (
+            f"413 did not close the connection; headers={hdrs}"
+        )
+
+        # Now the forged-XFF burst: distinct spoofed XFF per request must still
+        # be throttled (they all count against the real peer 127.0.0.1).
+        statuses = []
+        for i in range(8):
+            code, _ = _raw_request(
+                port,
+                "POST",
+                "/auth/login",
+                body=b'{"email":"nobody@x.test","password":"wrong"}',
+                headers={"X-Forwarded-For": f"10.0.0.{i}"},
+            )
+            statuses.append(code)
+        assert 429 in statuses, f"forged XFF bypassed the rate limit; statuses={statuses}"
     finally:
         _kill(proc)

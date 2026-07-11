@@ -59,6 +59,36 @@ function sendJson(res, status, body) {
   res.end(data);
 }
 
+// The body was capped mid-stream, so the socket still has an undelivered
+// remainder the client declared in Content-Length. Answering keep-alive would
+// leave the connection stuck (Node waits for the rest before the next request)
+// — a cheap socket-exhaustion primitive. Send 413 with Connection: close and
+// tear the socket down once the response has flushed.
+function refuseTooLarge(req, res) {
+  if (res.headersSent) {
+    try {
+      res.destroy();
+    } catch {
+      /* nothing left to do */
+    }
+    return;
+  }
+  const data = JSON.stringify({ error: "payload too large" });
+  res.writeHead(413, {
+    "Content-Type": "application/json",
+    "Content-Length": Buffer.byteLength(data),
+    Connection: "close",
+  });
+  res.end(data);
+  res.once("finish", () => {
+    try {
+      req.socket.destroy();
+    } catch {
+      /* already gone */
+    }
+  });
+}
+
 // Read the body with a hard byte cap — an unbounded Buffer.concat is a trivial
 // memory-exhaustion DoS on a route (login) that is public by necessity.
 function readBody(req, maxBytes) {
@@ -105,11 +135,14 @@ function splitTarget(rawUrl) {
 
 // One canonical form the guard AND the wrapped handler both see: forward slashes,
 // no empty / "." / ".." segments, exactly one leading slash. Returns null (=>
-// fail closed with 400) for a target carrying an encoded slash or backslash,
-// which exists only to smuggle a different path past the guard than the router
-// resolves.
+// fail closed with 400) for a target carrying an encoded slash, backslash, or
+// dot (%2f/%5c/%2e). WHATWG URL parsing (which a downstream router uses) decodes
+// %2e as a dot-segment and keeps %2f literal, so an un-decoded encoded form
+// would let the guard and the router disagree on the path — e.g. "/pub/%2e%2e/
+// admin" reads as public here but resolves to /admin downstream. Rejecting the
+// encodings outright closes that desync without guessing the router's decode.
 function canonicalize(pathPart) {
-  if (/%2f|%5c/i.test(pathPart)) return null;
+  if (/%2e|%2f|%5c/i.test(pathPart)) return null;
   const normalized = pathPart.replace(/\\/g, "/");
   const out = [];
   for (const seg of normalized.split("/")) {
@@ -136,23 +169,31 @@ function isPublic(pathname, allowlist) {
   return false;
 }
 
-function clientIp(req) {
-  const xff = req.headers["x-forwarded-for"];
-  if (typeof xff === "string" && xff.length) {
-    const first = xff.split(",")[0].trim();
-    if (first) return first;
+// The rate-limit key. X-Forwarded-For is CLIENT-CONTROLLED and only meaningful
+// behind a trusted reverse proxy, so it is honored ONLY when config.trustProxy
+// is set — otherwise a caller could mint a fresh limiter bucket per request by
+// spoofing the header and defeat the throttle entirely. Default: the real peer.
+function clientIp(req, config) {
+  if (config && config.trustProxy) {
+    const xff = req.headers["x-forwarded-for"];
+    if (typeof xff === "string" && xff.length) {
+      const first = xff.split(",")[0].trim();
+      if (first) return first;
+    }
   }
   return (req.socket && req.socket.remoteAddress) || "unknown";
 }
 
-// TLS-aware: Secure cookies only when the connection is actually HTTPS (direct
-// or via a trusted proxy's x-forwarded-proto), unless config forces it. This
-// keeps a local http dev preview working while shipping Secure in production.
+// TLS-aware: Secure cookies when the connection is actually HTTPS. A direct TLS
+// socket always counts; x-forwarded-proto is client-controlled so it is trusted
+// ONLY behind config.trustProxy. config.cookieSecure (boolean) forces either way.
 function isSecureRequest(req, config) {
   if (config && typeof config.cookieSecure === "boolean") return config.cookieSecure;
   if (req.socket && req.socket.encrypted) return true;
-  const xfp = req.headers["x-forwarded-proto"];
-  if (typeof xfp === "string" && xfp.split(",")[0].trim().toLowerCase() === "https") return true;
+  if (config && config.trustProxy) {
+    const xfp = req.headers["x-forwarded-proto"];
+    if (typeof xfp === "string" && xfp.split(",")[0].trim().toLowerCase() === "https") return true;
+  }
   return false;
 }
 
@@ -207,7 +248,7 @@ export function createAuthApp({ db, config, handler }) {
       const token = cookies[SESSION_COOKIE];
 
       if (req.method === "POST" && pathname === "/auth/login") {
-        if (!loginAllow(clientIp(req), Date.now())) {
+        if (!loginAllow(clientIp(req, config), Date.now())) {
           sendJson(res, 429, { error: "too many attempts" });
           return;
         }
@@ -216,7 +257,7 @@ export function createAuthApp({ db, config, handler }) {
           body = JSON.parse((await readBody(req, maxBodyBytes)) || "{}");
         } catch (err) {
           if (err instanceof BodyTooLarge) {
-            sendJson(res, 413, { error: "payload too large" });
+            refuseTooLarge(req, res);
             return;
           }
           sendJson(res, 401, { error: "invalid credentials" });

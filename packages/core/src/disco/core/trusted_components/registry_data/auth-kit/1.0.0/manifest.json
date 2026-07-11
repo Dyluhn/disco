@@ -6,7 +6,7 @@
   "when_to_use": "ANY app with accounts, logins, or per-user data.",
   "files": {
     "core/auth.js": "sha256:617536a8f0ce1828c0ee06abddada2d1c333767141303638542fe7a7edfa5035",
-    "core/middleware.js": "sha256:2a462d037b0876fc348a3d429607258663227b97a67c75bc1913c4462b76ab72",
+    "core/middleware.js": "sha256:ba7a96021e87c146d279625c9c8376980727e72cb932d82fb795edd8bf76832f",
     "core/schema.js": "sha256:6534dfb615d35bf7799033a02d6b67283b4c44fba8c5419c315512fc7c3d7d1a"
   },
   "config_surface": [

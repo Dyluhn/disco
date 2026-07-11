@@ -51,8 +51,14 @@ Only `config/auth.config.json`. The sanctioned customization surface:
 - `devSeedUser` — a local-dev/test account, or `null` (the default: no account).
 - `maxBodyBytes` — request-body cap on `/auth/login` (default 65536).
 - `loginRateLimit` — `{ windowMs, max }` per-IP login throttle (default 10/60s).
-- `cookieSecure` — omit for auto (Secure only over HTTPS/`x-forwarded-proto`),
-  or set `true`/`false` to force. Leave it omitted unless you have a reason.
+- `cookieSecure` — omit for auto (Secure over a direct TLS socket, or via
+  `x-forwarded-proto` only when `trustProxy` is on), or set `true`/`false` to
+  force. Leave it omitted unless you have a reason.
+- `trustProxy` — `false` by default. Turn it on ONLY when the app sits behind a
+  reverse proxy you control that sets `X-Forwarded-For`/`X-Forwarded-Proto`. Off,
+  those client-settable headers are ignored (the rate limiter keys on the real
+  socket peer and Secure is decided by the real transport) so a caller cannot
+  spoof them to dodge the login throttle.
 
 ## What you must not edit
 

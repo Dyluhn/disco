@@ -35,6 +35,28 @@ CONFIG_RELPATH = "src/trusted/auth-kit/config/auth.config.json"
 SHIPPED_DEFAULT_EMAIL = "dev@example.com"
 SHIPPED_DEFAULT_PASSWORD = "dev-password-123"
 
+# A live devSeedUser whose password is any of these guessable strings is treated
+# as a backdoor too — the shipped default is only ONE such credential, and a
+# renamed-but-still-weak dev account is just as exploitable.
+WEAK_SEED_PASSWORDS = frozenset(
+    {
+        SHIPPED_DEFAULT_PASSWORD,
+        "password",
+        "password123",
+        "admin",
+        "admin123",
+        "changeme",
+        "letmein",
+        "dev",
+        "devpassword",
+        "test",
+        "test123",
+        "123456",
+        "12345678",
+        "secret",
+    }
+)
+
 
 def _random_probe_path() -> str:
     suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=12))
@@ -151,27 +173,27 @@ def main() -> int:
         }
     )
 
-    # (d) no_default_backdoor — the shipped example credential must NOT be a live
-    # login. FAILS closed if a build left config.devSeedUser at the shipped
-    # default and it authenticates.
-    is_shipped_default = (
+    # (d) no_default_backdoor — a live devSeedUser with a guessable password (the
+    # shipped default OR any common weak password) must NOT authenticate. FAILS
+    # closed if such a seed exists and logs in.
+    weak_seed = (
         isinstance(dev_seed, dict)
-        and dev_seed.get("email") == SHIPPED_DEFAULT_EMAIL
-        and dev_seed.get("password") == SHIPPED_DEFAULT_PASSWORD
+        and isinstance(dev_seed.get("password"), str)
+        and dev_seed.get("password") in WEAK_SEED_PASSWORDS
     )
-    if is_shipped_default:
+    if weak_seed:
         status, _hd, _rd = _request(
             base_url,
             "/auth/login",
             method="POST",
-            body={"email": SHIPPED_DEFAULT_EMAIL, "password": SHIPPED_DEFAULT_PASSWORD},
+            body={"email": dev_seed.get("email"), "password": dev_seed.get("password")},
         )
         checks.append(
             {
                 "name": "no_default_backdoor",
                 "passed": status != 200,
                 "detail": (
-                    f"shipped-default dev credential login -> {status} "
+                    f"weak/known dev credential login -> {status} "
                     "(want != 200; remove/replace config.devSeedUser before shipping)"
                 ),
             }
@@ -181,7 +203,7 @@ def main() -> int:
             {
                 "name": "no_default_backdoor",
                 "passed": True,
-                "detail": "config.devSeedUser is not the shipped default credential",
+                "detail": "config.devSeedUser is not a known-weak credential",
             }
         )
 
