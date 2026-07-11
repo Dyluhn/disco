@@ -15,6 +15,7 @@ from __future__ import annotations
 from .archive import (
     SnapshotResult,
     aiter_zip_workspace,
+    is_runtime_secret_path,
     rehydrate_workspace,
     snapshot_workspace,
     zip_workspace,
@@ -37,6 +38,7 @@ __all__ = [
     "StorageStatus",
     "aiter_zip_workspace",
     "default_projects_root",
+    "is_runtime_secret_path",
     "rehydrate_workspace",
     "resolve_projects_root",
     "snapshot_workspace",

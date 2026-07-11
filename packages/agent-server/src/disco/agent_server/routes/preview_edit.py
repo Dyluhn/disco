@@ -48,7 +48,7 @@ import posixpath
 import secrets
 
 from disco.core.store.sqlite import SqliteEventStore
-from disco.tools.projects import StorageStatus
+from disco.tools.projects import StorageStatus, is_runtime_secret_path
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..oid_stamp import stamp_oids
@@ -70,6 +70,8 @@ def _read_workspace_file_safe(
     escapes). Tradeoff: a just-written file not yet snapshotted won't preview-edit —
     acceptable, since click-to-edit targets a BUILT static site.
     """
+    if is_runtime_secret_path(norm):
+        return None
     ps = runtime.project_store() if runtime is not None else None
     if ps is None or ps.status() != StorageStatus.OK:
         return None
@@ -84,6 +86,7 @@ def _read_workspace_file_safe(
         return resolved.read_bytes()
     except Exception:  # noqa: BLE001
         return None
+
 
 # Media types this route serves. HTML is stamped + script-injected; the sibling
 # asset types are served as-is so relative refs from the stamped page resolve
@@ -173,9 +176,7 @@ def make_preview_edit_router(
 
         stamped = stamp_oids(html, norm)
         nonce = secrets.token_urlsafe(16)
-        script_tag = (
-            f'<script nonce="{nonce}">\n{_load_selection_agent_script()}\n</script>'
-        )
+        script_tag = f'<script nonce="{nonce}">\n{_load_selection_agent_script()}\n</script>'
         # Inject before </body> (case-insensitive); fall back to appending so a
         # body-less fragment still gets the agent.
         lowered = stamped.lower()
