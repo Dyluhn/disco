@@ -21,7 +21,7 @@ from disco.core.appkit.spec import AppSpec, Entity, EntityField
 
 _RECORDS_BW2_DIGEST = "d2e6009449a482fc356416990c723c298358e16925fc829d6a2af252f727bb11"
 _AUTH_RECORDS_WORKER_SCHEMA_DIGEST = (
-    "b989c72e80629609bac03d9024f6544515a35762a294b6bdacdaedb100605e67"
+    "61ad21f18e4eaddcebbda78272ca87f6cde5d652389f30157da387a364b302a3"
 )
 
 
@@ -44,7 +44,10 @@ def _records_tree() -> dict[str, str]:
 
 def _auth_tree() -> dict[str, str]:
     recipe = _recipe()
-    return generate(default_records_auth_app_spec("Shift Calendar", recipe), recipe.to_design_spec())
+    return generate(
+        default_records_auth_app_spec("Shift Calendar", recipe),
+        recipe.to_design_spec(),
+    )
 
 
 def _digest(tree: dict[str, str]) -> str:
@@ -91,6 +94,7 @@ def test_auth_records_emits_auth_schema_worker_and_approval_rbac() -> None:
     assert 'rawPath === "/api/login"' in worker
     assert 'rawPath === "/api/logout"' in worker
     assert "function sameOriginOk(request: Request, url: URL)" in worker
+    assert "new URL(origin).origin === url.origin" in worker
     assert 'return json({ error: "bad origin" }, 403)' in worker
     assert "function requireJsonContentType(request: Request)" in worker
     assert 'return json({ error: "unsupported media type" }, 415)' in worker

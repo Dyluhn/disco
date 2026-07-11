@@ -3,15 +3,14 @@
 Covers, through the real tool interface against an in-memory sandbox, on a
 records app:
   * the happy fold path: spec validated, pricing section + entitlement role
-    folded into .disco/appspec.json, tree regenerated with the pending-state
-    copy visible, template_only tier note carried in the success message;
+    folded into .disco/appspec.json, tree regenerated with a runtime-gated
+    checkout surface, template_only tier note carried in the success message;
   * provenance: .disco/primitives/stripe.json records id/tier/spec;
   * an identical re-apply is a loud no-op refusal (never a hollow success);
   * an invalid spec (unknown key / bad flag slug) is refused WITH the expected
     schema carried (self-recovering);
-  * the regenerated tree contains NO live checkout surface: no payments-named
-    emitted file, no /api/checkout, no stripe.com URL, no secret-shaped string
-    (grep-the-tree absence checks);
+  * the regenerated tree contains the Disco-owned Worker webhook/checkout routes
+    but no secret-shaped string or browser-side host-service binding;
   * the fail-closed registration invariants the WO-A3 finish gate will key on
     (tier=='template_only' AND verify is None) — the gate itself is not in this
     base, so the invariants are asserted directly.
@@ -61,12 +60,18 @@ def _ctx(sbx: FakeSandboxInstance) -> ToolContext:
 
 
 async def _create_records_app(sbx: FakeSandboxInstance):
-    return await AppCreateTool().run(
-        AppCreateArgs(
-            recipe_id="editorial-ledger", primitive_id="records", brief="Shift Manager"
-        ),
+    result = await AppCreateTool().run(
+        AppCreateArgs(recipe_id="editorial-ledger", primitive_id="records", brief="Shift Manager"),
         _ctx(sbx),
     )
+    if result.success:
+        # Stripe composes only with an auth-capable records app.  The records
+        # default is deliberately public, so this fixture supplies its ordinary
+        # (non-payment) member role before applying the add-on.
+        app_data = json.loads(sbx._fs[APPSPEC_RELPATH])
+        app_data["roles"] = ["member"]
+        sbx._fs[APPSPEC_RELPATH] = json.dumps(app_data).encode()
+    return result
 
 
 async def _add_stripe(sbx: FakeSandboxInstance, spec: dict):
@@ -99,6 +104,10 @@ async def test_add_stripe_to_records_app_folds_section_role_and_provenance():
     # the AppSpec was re-saved with the folded pricing section + entitlement role
     app_data = json.loads(sbx._fs[APPSPEC_RELPATH])
     assert "pro_member" in app_data["roles"]
+    assert app_data["stripe"]["plan_selector"] == "pro_member"
+    assert app_data["stripe"]["entitlement_flag"] == "pro_member"
+    assert app_data["stripe"]["success_message"] == _SPEC["success_message"]
+    assert app_data["stripe"]["app_binding"].startswith("app_")
     stripe_sections = [
         s
         for page in app_data["pages"]
@@ -127,7 +136,7 @@ async def test_add_stripe_to_records_app_folds_section_role_and_provenance():
     assert record["spec"] == _SPEC
 
 
-async def test_regenerated_tree_has_no_live_checkout_surface():
+async def test_regenerated_tree_has_runtime_gated_checkout_without_secrets():
     sbx = FakeSandboxInstance()
     assert (await _create_records_app(sbx)).success is True
     assert (await _add_stripe(sbx, dict(_SPEC))).success is True
@@ -145,30 +154,30 @@ async def test_regenerated_tree_has_no_live_checkout_surface():
             assert lowered == _PROVENANCE_RELPATH or (
                 path.startswith("src/components/") and "pricing" in lowered
             ), f"unexpected payments-named path emitted: {path}"
-        for marker in (
-            "/api/checkout",
-            "api.stripe.com",
-            "checkout.stripe.com",
-            "js.stripe.com",
-            "sk_live",
-            "sk_test",
-            "whsec_",
-        ):
-            assert marker not in contents, f"live-checkout/secret marker {marker!r} in {path}"
+        for marker in ("sk_live", "sk_test", "whsec_"):
+            assert marker not in contents, f"secret-shaped marker {marker!r} in {path}"
 
-    # the stripe pricing component renders card copy only — no checkout affordance
+    # The browser sees only relative Worker routes.  Host-bus credentials remain
+    # Worker-only, and the CTA stays disabled until the runtime-ready probe passes.
     stripe_components = [
         contents
         for path, contents in tree.items()
-        if path.startswith("src/components/")
-        and 'data-appkit-section="stripe_pricing"' in contents
+        if path.startswith("src/components/") and 'data-appkit-section="stripe_pricing"' in contents
     ]
     assert len(stripe_components) == 1
     component = stripe_components[0]
     assert "ctaLabel" not in component
     assert "postJson" not in component
     assert "<form" not in component
-    assert "fetch(" not in component
+    assert 'fetch("/api/stripe/status"' in component
+    assert 'fetch("/api/stripe/checkout"' in component
+    assert "disabled={!ready || busy}" in component
+    assert "DISCO_SVC_" not in component
+    worker = tree["worker/index.ts"]
+    assert 'svc(env, "payments.checkout"' in worker
+    assert 'rawPath === "/api/stripe/webhook"' in worker
+    assert "STRIPE_WEBHOOK_SECRET?: string" in worker
+    assert "worker/disco-client.ts" in tree
 
 
 # ---- refusals ----------------------------------------------------------------------
@@ -223,7 +232,8 @@ async def test_registration_is_fail_closed_template_only_with_no_verify():
     assert prim is not None
     assert prim.tier == "template_only"
     assert prim.verify is None
+    # The webhook is an inbound Worker route, not an outbound host capability.
     assert tuple(hs.name for hs in prim.host_contract) == (
         "payments.checkout",
-        "payments.webhook",
+        "payments.ready",
     )

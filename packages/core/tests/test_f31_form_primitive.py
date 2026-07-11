@@ -92,7 +92,9 @@ _GOLDEN_HASHES = {
     "lead_gen": "297daf8bafc6cb952ba4293a5cd36fe7c24b54d10d7b401bffefacc7ef96dcc7",
     "directory": "300fb2487a86fee8f2d47ce8fc5a4426010e43584e565744f3b76813df75bebb",
     "records": "0ddf4d9874de4648ba7df7382b1ee71609f6ae771460b2a458f7093f246e05af",
-    "records_auth": "8c472bc9390eedac6befaa3e318559e279294e7e95e756c6e538207ce1f5c7f0",
+    # WO-F4.1 hardens the shared auth CSRF comparison from host-only to exact
+    # scheme+host+port origin equality; that intentional byte change is re-pinned.
+    "records_auth": "dbe3f6b0466aefcef5a71b74b6170d088fb2b349252c83dded2b515b9fef2acf",
     "hello": "8c1b9a6863df3dfefac330ec444327248ab8968d530c601b0f42ee9f4241a4f6",
     "legacy_lead_fallback": "d041ffa81c1d028f7db5766cf9394bcef3ee86ce925de38b19dee68692132a4c",
 }

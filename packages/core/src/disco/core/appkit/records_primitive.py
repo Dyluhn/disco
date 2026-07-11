@@ -217,6 +217,8 @@ def prepare_records_app_spec(app: AppSpec) -> AppSpec:
         raise ValueError("records primitive requires at least one entity")
     if app.roles:
         reserved_tables = {"users", "sessions"}
+        if app.stripe is not None:
+            reserved_tables.update({"user_role_grants", "stripe_events", "stripe_fulfillments"})
         for entity in app.entities:
             table = _records_table_name(entity)
             if table in reserved_tables:
@@ -224,6 +226,19 @@ def prepare_records_app_spec(app: AppSpec) -> AppSpec:
                     f"auth-enabled records app cannot declare entity table {table!r}; "
                     "it is reserved for auth infrastructure"
                 )
+    if app.stripe is not None:
+        if app.stripe.entitlement_flag not in app.roles:
+            raise ValueError("Stripe entitlement_flag must be declared in AppSpec.roles")
+        if not any(role != app.stripe.entitlement_flag for role in app.roles):
+            raise ValueError("Stripe requires at least one non-payment records role")
+        stripe_sections = tuple(
+            section
+            for page in app.pages
+            for section in page.sections
+            if section.id == "stripe_pricing"
+        )
+        if len(stripe_sections) != 1 or stripe_sections[0].kind != "pricing":
+            raise ValueError("Stripe records app requires one stripe_pricing section")
     return AppSpec.model_validate(app.model_dump(mode="json"))
 
 
@@ -631,19 +646,32 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
             *(_form_const_name(e) for e in form_entities),
         )
     )
+    stripe_enabled = app.stripe is not None
+    stripe_import = 'import { svc } from "./disco-client";\n' if stripe_enabled else ""
+    if stripe_enabled:
+        from .stripe_worker import emit_stripe_env_ts, emit_stripe_worker_ts
+
+        stripe_env = emit_stripe_env_ts()
+        stripe_worker = emit_stripe_worker_ts(app) + "\n"
+    else:
+        stripe_env = ""
+        stripe_worker = ""
+    base_roles = (
+        "const BASE_ROLES: string[] = ROLES.filter((role) => role !== STRIPE_ENTITLEMENT);\n"
+        if stripe_enabled
+        else ""
+    )
     return (
         "/* Auto-generated Cloudflare Worker (records primitive): session auth + RBAC.\n"
         "   When roles are declared, every entity read/write requires a valid per-user\n"
         "   session. Entity readRoles/writeRoles narrow access by user.role. */\n"
         'import { desc, eq } from "drizzle-orm";\n'
         'import { drizzle } from "drizzle-orm/d1";\n'
-        f'import {{ {imports} }} from "../src/db/schema";\n'
-        "\n"
+        f'import {{ {imports} }} from "../src/db/schema";\n' + stripe_import + "\n"
         "export interface Env {\n"
         "  DB: D1Database;\n"
         "  ASSETS: { fetch: (req: Request) => Promise<Response> };\n"
-        "  ADMIN_TOKEN?: string;\n"
-        "}\n\n"
+        "  ADMIN_TOKEN?: string;\n" + stripe_env + "}\n\n"
         "interface EntityMeta {\n"
         "  columns: string[];\n"
         "  required: string[];\n"
@@ -655,7 +683,8 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         + _emit_worker_meta(ordered, consts)
         + "\n};\n"
         f"const ROLES: string[] = {_ts(list(app.roles))};\n"
-        "const MAX_FIELD_LEN = 2000;\n"
+        + base_roles
+        + "const MAX_FIELD_LEN = 2000;\n"
         "const MAX_PASSWORD_LEN = 1024;\n"
         "const EMAIL_RE = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;\n\n"
         "function json(data: unknown, status = 200, headers: HeadersInit = {}): Response {\n"
@@ -668,17 +697,18 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         "  | { ok: false; error: string };\n\n"
         + _emit_validate_record_ts()
         + "\n"
-        + _emit_auth_validation_ts()
+        + _emit_auth_validation_ts(role_collection="BASE_ROLES" if stripe_enabled else "ROLES")
         + "\n"
         + _emit_auth_crypto_ts()
         + "\n"
-        + _emit_auth_session_ts()
+        + _emit_auth_session_ts(include_role_grants=stripe_enabled)
         + "\n"
         + _emit_auth_endpoints_ts()
         + "\n"
         + _emit_worker_handlers(ordered, consts, funcs)
         + "\n\n"
-        "interface RouteHandlers {\n"
+        + stripe_worker
+        + "interface RouteHandlers {\n"
         "  writeRoles: string[];\n"
         "  readRoles: string[];\n"
         "  post: (env: Env, body: unknown) => Promise<Response>;\n"
@@ -687,7 +717,7 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         "const ROUTES: Record<string, RouteHandlers> = {\n"
         + _emit_auth_route_table(ordered, funcs)
         + "\n};\n\n"
-        + _emit_auth_fetch_ts()
+        + _emit_auth_fetch_ts(include_stripe=stripe_enabled)
     )
 
 
@@ -772,7 +802,7 @@ def _emit_validate_record_ts() -> str:
     )
 
 
-def _emit_auth_validation_ts() -> str:
+def _emit_auth_validation_ts(*, role_collection: str = "ROLES") -> str:
     return (
         "type RegisterCheck =\n"
         "  | { ok: true; email: string; password: string; role: string }\n"
@@ -811,7 +841,7 @@ def _emit_auth_validation_ts() -> str:
         "  if (password.length > MAX_PASSWORD_LEN) {\n"
         '    return { ok: false, error: "password too long" };\n'
         "  }\n"
-        '  if (typeof role !== "string" || !ROLES.includes(role)) {\n'
+        f'  if (typeof role !== "string" || !{role_collection}.includes(role)) {{\n'
         '    return { ok: false, error: "invalid role" };\n'
         "  }\n"
         "  return { ok: true, email, password, role };\n"
@@ -910,14 +940,34 @@ def _emit_auth_crypto_ts() -> str:
     )
 
 
-def _emit_auth_session_ts() -> str:
+def _emit_auth_session_ts(*, include_role_grants: bool = False) -> str:
+    if include_role_grants:
+        session_role_field = "  roles: string[];\n"
+        role_check = (
+            "  if (roles.length > 0 && !roles.some((role) => session.roles.includes(role))) {\n"
+        )
+    else:
+        session_role_field = "  role: string;\n"
+        role_check = "  if (roles.length > 0 && !roles.includes(session.role)) {\n"
+    grant_lookup = (
+        "  const grants = await env.DB.prepare(\n"
+        '    "SELECT role FROM user_role_grants WHERE user_id = ? AND active = 1",\n'
+        "  ).bind(row.userId).all<{ role: string }>();\n"
+        "  const roles = [row.role, ...grants.results.map((grant) => grant.role)]\n"
+        "    .filter((role, index, all) => ROLES.includes(role) && all.indexOf(role) === index);\n"
+        "  if (roles.length === 0) return null;\n"
+        "  return { tokenHash, userId: row.userId, roles };\n"
+        if include_role_grants
+        else (
+            "  if (!ROLES.includes(row.role)) return null;\n"
+            "  return { tokenHash, userId: row.userId, role: row.role };\n"
+        )
+    )
     return (
         "const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;\n\n"
         "interface UserSession {\n"
         "  tokenHash: string;\n"
-        "  userId: number;\n"
-        "  role: string;\n"
-        "}\n\n"
+        "  userId: number;\n" + session_role_field + "}\n\n"
         "function nowIso(): string {\n"
         "  return new Date().toISOString();\n"
         "}\n\n"
@@ -971,15 +1021,12 @@ def _emit_auth_session_ts() -> str:
         "  if (row.expiresAt <= nowIso()) {\n"
         "    await db.delete(sessions).where(eq(sessions.token_hash, tokenHash)).run();\n"
         "    return null;\n"
-        "  }\n"
-        "  if (!ROLES.includes(row.role)) return null;\n"
-        "  return { tokenHash, userId: row.userId, role: row.role };\n"
-        "}\n\n"
+        "  }\n" + grant_lookup + "}\n\n"
         "function authorizeSession("
         "session: UserSession | null, roles: string[]): Response | null {\n"
         '  if (session === null) return json({ error: "unauthorized" }, 401);\n'
-        "  if (roles.length > 0 && !roles.includes(session.role)) {\n"
-        '    return json({ error: "forbidden" }, 403);\n'
+        + role_check
+        + '    return json({ error: "forbidden" }, 403);\n'
         "  }\n"
         "  return null;\n"
         "}\n"
@@ -1070,14 +1117,25 @@ def _emit_auth_endpoints_ts() -> str:
     )
 
 
-def _emit_auth_fetch_ts() -> str:
+def _emit_auth_fetch_ts(*, include_stripe: bool = False) -> str:
+    if include_stripe:
+        from .stripe_worker import (
+            emit_stripe_browser_routes_ts,
+            emit_stripe_webhook_route_ts,
+        )
+
+        stripe_webhook_route = emit_stripe_webhook_route_ts()
+        stripe_browser_routes = emit_stripe_browser_routes_ts()
+    else:
+        stripe_webhook_route = ""
+        stripe_browser_routes = ""
     return (
         "type JsonBody = { ok: true; body: unknown } | { ok: false; response: Response };\n\n"
         "function sameOriginOk(request: Request, url: URL): boolean {\n"
         '  const origin = request.headers.get("Origin");\n'
         "  if (origin === null) return true;\n"
         "  try {\n"
-        "    return new URL(origin).host === url.host;\n"
+        "    return new URL(origin).origin === url.origin;\n"
         "  } catch {\n"
         "    return false;\n"
         "  }\n"
@@ -1129,10 +1187,12 @@ def _emit_auth_fetch_ts() -> str:
         "    const rawPath = rawPathname(request.url, url.origin);\n"
         "    const decodedPath = decodedPathname(rawPath);\n"
         "    const apiPath = isApiPath(rawPath, url.pathname, decodedPath);\n"
-        '    if (request.method === "POST" && apiPath && !sameOriginOk(request, url)) {\n'
+        + stripe_webhook_route
+        + '    if (request.method === "POST" && apiPath && !sameOriginOk(request, url)) {\n'
         '      return json({ error: "bad origin" }, 403);\n'
         "    }\n"
-        '    if (rawPath === "/api/register" && request.method === "POST") {\n'
+        + stripe_browser_routes
+        + '    if (rawPath === "/api/register" && request.method === "POST") {\n'
         "      const contentTypeError = requireJsonContentType(request);\n"
         "      if (contentTypeError !== null) return contentTypeError;\n"
         "      const parsed = await readJsonBody(request);\n"
@@ -1350,6 +1410,9 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     db_name = _db_name(app, db_entity)
     names = _component_names(app)
     auth_enabled = bool(app.roles)
+    stripe_enabled = app.stripe is not None
+    if stripe_enabled and not auth_enabled:
+        raise ValueError("Stripe records apps require session auth")
     schema_sql = (
         _emit_records_auth_schema_sql(record_entities)
         if auth_enabled
@@ -1358,6 +1421,10 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     form_schema = emit_form_schema_sql(form_entities)
     if form_schema:
         schema_sql = "\n".join([schema_sql, form_schema])
+    if stripe_enabled:
+        from .stripe_worker import emit_stripe_schema_sql
+
+        schema_sql = "\n\n".join([schema_sql, emit_stripe_schema_sql()]) + "\n"
     worker_ts = (
         _emit_records_auth_worker_ts(records_app, form_entities)
         if auth_enabled
@@ -1374,6 +1441,10 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     form_drizzle = emit_form_drizzle_ts(form_entities)
     if form_drizzle:
         drizzle_ts = "\n".join([drizzle_ts, form_drizzle])
+    if stripe_enabled:
+        from .stripe_worker import emit_stripe_drizzle_ts
+
+        drizzle_ts = "\n\n".join([drizzle_ts, emit_stripe_drizzle_ts()]) + "\n"
     owner_guide = (
         _emit_records_auth_owner_guide_md(app, db_name)
         if auth_enabled
@@ -1426,9 +1497,14 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
                 comp, section, form_entity, post_path=form_routes[form_entity.id]
             )
         else:
-            files[f"src/components/{comp}.tsx"] = _emit_component(
-                comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
-            )
+            if stripe_enabled and section.id == "stripe_pricing":
+                from .stripe_worker import emit_stripe_pricing_component
+
+                files[f"src/components/{comp}.tsx"] = emit_stripe_pricing_component(comp, section)
+            else:
+                files[f"src/components/{comp}.tsx"] = _emit_component(
+                    comp, page, section, db_entity, f"/api/{_records_table_name(db_entity)}"
+                )
     # F5.3: {} when app.seo is None — the no-seo tree is byte-identical.
     files.update(emit_blog_files(app))
     files.update(_seo_files(app))

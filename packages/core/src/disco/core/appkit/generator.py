@@ -40,6 +40,7 @@ from . import semantic_metadata as _md
 from .primitives import (
     DIRECTORY_PRIMITIVE_ID,
     LEAD_GEN_PRIMITIVE_ID,
+    RECORDS_PRIMITIVE_ID,
     PrimitiveDefinition,
     register_primitive,
     resolve_primitive,
@@ -1988,8 +1989,10 @@ def generate(app_spec: AppSpec, design_spec: DesignSpec) -> dict[str, str]:
     extended with a ``worker/disco-client.ts`` shim and the Worker ``Env``
     interface is augmented — see ``_apply_host_services_shim``."""
     prim = resolve_primitive(app_spec.app_kind)
+    if app_spec.stripe is not None and app_spec.app_kind != RECORDS_PRIMITIVE_ID:
+        raise ValueError("Stripe can only be generated on the auth-capable records primitive")
     tree = prim.generate(app_spec, design_spec)
-    if prim.host_contract:
+    if prim.host_contract or app_spec.stripe is not None:
         _apply_host_services_shim(tree)
     return tree
 

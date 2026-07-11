@@ -161,6 +161,7 @@ _MAX_CTA_LABEL = 120
 _MAX_ITEM = 300
 _MAX_ITEMS = 24
 _MAX_SUCCESS_MESSAGE = 300
+_MAX_STRIPE_SUCCESS_MESSAGE = 200
 
 # ---- bounded free-form string aliases ----------------------------------------
 #
@@ -202,9 +203,7 @@ _HexStr = Annotated[str, StringConstraints(max_length=7)]  # "#rrggbb" — also 
 
 def _validate_hex(value: str, *, field: str) -> str:
     if not _HEX_RE.match(value):
-        raise ValueError(
-            f"{field} must be a hex color like '#1a2b3c' or '#abc', got {value!r}"
-        )
+        raise ValueError(f"{field} must be a hex color like '#1a2b3c' or '#abc', got {value!r}")
     return value
 
 
@@ -299,9 +298,7 @@ class Page(BaseModel):
 
     @model_validator(mode="after")
     def _section_ids_unique(self) -> Page:
-        _require_unique(
-            (s.id for s in self.sections), what=f"section id on page {self.id!r}"
-        )
+        _require_unique((s.id for s in self.sections), what=f"section id on page {self.id!r}")
         return self
 
 
@@ -378,16 +375,12 @@ class Entity(BaseModel):
     id: _IdStr
     name: _NameStr
     fields: tuple[EntityField, ...] = Field(default_factory=tuple, max_length=_MAX_FIELDS)
-    write_roles: tuple[_IdStr, ...] = Field(
-        default=(), exclude_if=lambda value: not value
-    )
+    write_roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
     read_roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def _field_names_unique(self) -> Entity:
-        _require_unique(
-            (f.name for f in self.fields), what=f"field name on entity {self.id!r}"
-        )
+        _require_unique((f.name for f in self.fields), what=f"field name on entity {self.id!r}")
         return self
 
     @field_validator("write_roles", "read_roles")
@@ -465,13 +458,9 @@ def validate_http_url(value: str, *, field: str) -> str:
     a relative path, `javascript:`/`data:` schemes, a host-less `https://` — while
     the emitters ALSO escape every URL they interpolate (belt-and-suspenders)."""
     if not (value.startswith("https://") or value.startswith("http://")):
-        raise ValueError(
-            f"{field} must start with 'https://' or 'http://', got {value!r}"
-        )
+        raise ValueError(f"{field} must start with 'https://' or 'http://', got {value!r}")
     if not urlparse(value).netloc:
-        raise ValueError(
-            f"{field} must have a host (e.g. 'https://example.com'), got {value!r}"
-        )
+        raise ValueError(f"{field} must have a host (e.g. 'https://example.com'), got {value!r}")
     return value
 
 
@@ -592,6 +581,8 @@ class BlogMeta(BaseModel):
     def _slugs_unique(self) -> BlogMeta:
         _require_unique((post.slug for post in self.posts), what="blog post slug")
         return self
+
+
 class AnalyticsMeta(BaseModel):
     """Resolved first-party analytics metadata folded into an app by the
     `analytics` primitive. Strictly additive: unset analytics is excluded from
@@ -614,6 +605,46 @@ class AnalyticsMeta(BaseModel):
         return stripped
 
 
+class StripeMeta(BaseModel):
+    """Resolved, non-secret Stripe configuration folded into an app.
+
+    The operator-owned price mapping and every Stripe credential intentionally
+    remain host-side.  ``plan_selector`` is only the stable lookup key the host
+    maps to a configured Stripe Price; it is never a price id or amount.
+    """
+
+    model_config = _STRICT
+
+    app_binding: _IdStr
+    plan_selector: _IdStr
+    entitlement_flag: _IdStr
+    success_message: str = Field(min_length=1, max_length=_MAX_STRIPE_SUCCESS_MESSAGE)
+
+    @field_validator("plan_selector", "entitlement_flag")
+    @classmethod
+    def _identifiers_are_safe(cls, value: str) -> str:
+        if not _IDENT_RE.match(value):
+            raise ValueError(
+                "Stripe identifiers must be snake_case identifiers "
+                f"(pattern {_IDENT_RE.pattern!r}), got {value!r}"
+            )
+        return value
+
+    @field_validator("app_binding")
+    @classmethod
+    def _app_binding_is_safe(cls, value: str) -> str:
+        if not re.fullmatch(r"app_[0-9a-f]{32}", value):
+            raise ValueError("Stripe app_binding must match 'app_' plus 32 lowercase hex digits")
+        return value
+
+    @field_validator("success_message")
+    @classmethod
+    def _success_message_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Stripe success_message must not be blank")
+        return value
+
+
 class AppSpec(BaseModel):
     """The app STRUCTURE the scaffold generator consumes.
 
@@ -631,9 +662,7 @@ class AppSpec(BaseModel):
     roles: tuple[_IdStr, ...] = Field(default=(), exclude_if=lambda value: not value)
     pages: tuple[Page, ...] = Field(default_factory=tuple, max_length=_MAX_PAGES)
     entities: tuple[Entity, ...] = Field(default_factory=tuple, max_length=_MAX_ENTITIES)
-    primary_actions: tuple[Action, ...] = Field(
-        default_factory=tuple, max_length=_MAX_ACTIONS
-    )
+    primary_actions: tuple[Action, ...] = Field(default_factory=tuple, max_length=_MAX_ACTIONS)
     # Epic F5.3 - resolved SEO metadata, folded in by the `seo` primitive.
     # `exclude_if` keeps a None out of every dump, so pre-F5.3 specs serialize
     # byte-identically (and the 256 KiB cap math is unchanged for them).
@@ -644,9 +673,10 @@ class AppSpec(BaseModel):
     blog: BlogMeta | None = Field(default=None, exclude_if=lambda value: value is None)
     # Epic 6.1 - resolved first-party analytics metadata, folded in by the
     # `analytics` primitive. Hidden when unset, matching the SEO additive pattern.
-    analytics: AnalyticsMeta | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
+    analytics: AnalyticsMeta | None = Field(default=None, exclude_if=lambda value: value is None)
+    # WO-F4.1 - non-secret Stripe data-plane metadata.  Absent metadata is
+    # excluded so every unrelated AppSpec and generated tree stays byte-stable.
+    stripe: StripeMeta | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @field_validator("roles")
     @classmethod
@@ -677,9 +707,7 @@ class AppSpec(BaseModel):
             refs = {f.references for f in entity.fields if f.references is not None}
             for ref in refs:
                 if ref not in entity_ids:
-                    raise ValueError(
-                        f"entity {entity.id!r} references unknown entity {ref!r}"
-                    )
+                    raise ValueError(f"entity {entity.id!r} references unknown entity {ref!r}")
             deps[entity.id] = set(refs)
 
         emitted: set[str] = set()
@@ -701,8 +729,7 @@ class AppSpec(BaseModel):
             for role in (*entity.write_roles, *entity.read_roles):
                 if not declared:
                     raise ValueError(
-                        f"entity {entity.id!r} declares role {role!r} but AppSpec.roles "
-                        "is empty"
+                        f"entity {entity.id!r} declares role {role!r} but AppSpec.roles is empty"
                     )
                 if role not in declared:
                     raise ValueError(
@@ -880,9 +907,7 @@ def _serialize[SpecT: BaseModel](model: BaseModel, *, expected: type[SpecT]) -> 
     # otherwise a wrong-typed instance (e.g. a DesignSpec handed to save_app_spec) would
     # validate against its own schema and land at the wrong path.
     validated = expected.model_validate(model.model_dump(mode="json"))
-    serialized = (
-        json.dumps(validated.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
-    )
+    serialized = json.dumps(validated.model_dump(mode="json"), indent=2, ensure_ascii=False) + "\n"
     # Symmetry with the loader's `_MAX_SPEC_BYTES` cap: refuse to EMIT a spec we could
     # never READ back. A spec can be schema-valid yet serialize huge (e.g. many long
     # string fields), which would then be rejected on load — a write/read asymmetry that
@@ -955,9 +980,7 @@ def load_app_spec(workspace_root: str | Path) -> AppSpec:
 
 def load_design_spec(workspace_root: str | Path) -> DesignSpec:
     """Read + schema-validate the DesignSpec from the workspace's `.disco/`."""
-    return DesignSpec.model_validate(
-        _load_json(designspec_path(workspace_root), kind="DesignSpec")
-    )
+    return DesignSpec.model_validate(_load_json(designspec_path(workspace_root), kind="DesignSpec"))
 
 
 def _parse_spec_bytes(data: bytes | str, *, kind: str) -> dict[str, object]:
