@@ -326,6 +326,7 @@ class StripeDeploymentLifecycle:
         fresh_worker: bool,
         put_secret: SecretPut,
         record_mutation: MutationRecord = _discard_mutation,
+        additional_services: frozenset[str] = frozenset(),
     ) -> None:
         """Install bindings, prove the active Worker, rotate, then enable last."""
         self._worker_active = True
@@ -354,7 +355,7 @@ class StripeDeploymentLifecycle:
             self._conversation_id,
             self._owner_id,
             self._audience,
-            allowed_services=_DEPLOYED_SERVICES,
+            allowed_services=_DEPLOYED_SERVICES | additional_services,
             allowed_origins=frozenset({origin}),
             kind="deployed",
         )

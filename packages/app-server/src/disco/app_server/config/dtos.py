@@ -203,6 +203,41 @@ class StripeConfigStatus(BaseModel):
     webhook_configured: bool
 
 
+class WebhookInboundConfigBody(BaseModel):
+    """Write-only inbound signature configuration for one generated app."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    signing_secret: SecretStr = Field(min_length=32, max_length=512)
+
+
+class WebhookInboundConfigStatus(BaseModel):
+    """Safe response: confirms readiness without returning secret material."""
+
+    audience: str
+    inbound_configured: bool
+
+
+class WebhookOutboundConfigBody(BaseModel):
+    """Write-only target and signature configuration for one outbound endpoint."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    target_url: str = Field(min_length=1, max_length=2048)
+    signing_secret: SecretStr = Field(min_length=32, max_length=512)
+    event_types: list[str] = Field(min_length=1, max_length=12)
+    enabled: bool
+
+
+class WebhookOutboundConfigStatus(BaseModel):
+    """Safe response: readiness only, never target or signing-secret input."""
+
+    audience: str
+    endpoint_id: str
+    enabled: bool
+    credential_configured: bool
+
+
 class ProbeResult(BaseModel):
     """The outcome of a live "test" probe (provider key / data source / TTS /
     image / MCP). A real network call decides this — never a fake green. An

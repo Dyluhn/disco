@@ -16,6 +16,7 @@ import contextlib
 from disco.core.auth import allowed_frontend_origins
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.stripe_host_service import StripeAppConfigStore
+from disco.core.webhook_host_service import WebhookAppConfigStore
 from fastapi import FastAPI, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
@@ -36,6 +37,7 @@ from .routes import (
     make_security_router,
     make_skills_router,
     make_stripe_router,
+    make_webhooks_router,
 )
 
 
@@ -50,10 +52,16 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     # project an approved/connected server. The store's _conn already carries the
     # mcp_approvals table (core SqliteEventStore schema).
     owned_stripe_configs: StripeAppConfigStore | None = None
+    owned_webhook_configs: WebhookAppConfigStore | None = None
     if config is None:
         event_db_path = getattr(store, "db_path", None) or ":memory:"
         owned_stripe_configs = StripeAppConfigStore(event_db_path)
-        state = ConfigState(db_conn=store._conn, stripe_configs=owned_stripe_configs)
+        owned_webhook_configs = WebhookAppConfigStore(event_db_path)
+        state = ConfigState(
+            db_conn=store._conn,
+            stripe_configs=owned_stripe_configs,
+            webhook_configs=owned_webhook_configs,
+        )
     else:
         state = config
 
@@ -64,15 +72,17 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
         finally:
             if owned_stripe_configs is not None:
                 owned_stripe_configs.close()
+            if owned_webhook_configs is not None:
+                owned_webhook_configs.close()
 
     app = FastAPI(title="disco app-server", version="0.1.0", lifespan=lifespan)
 
     @app.exception_handler(RequestValidationError)
-    async def redact_stripe_validation(
+    async def redact_secret_validation(
         request: Request,
         exc: RequestValidationError,
     ) -> Response:
-        if not request.url.path.startswith("/api/stripe/"):
+        if not request.url.path.startswith(("/api/stripe/", "/api/webhooks/")):
             return await request_validation_exception_handler(request, exc)
         # Pydantic's default 422 includes the rejected `input`, which would echo
         # a malformed/overlong credential. Preserve useful field diagnostics but
@@ -105,6 +115,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     app.include_router(make_secrets_router(state))
     app.include_router(make_security_router(state))
     app.include_router(make_stripe_router(state))
+    app.include_router(make_webhooks_router(state))
     app.include_router(make_skills_router(state))
     app.include_router(make_mcp_router(state))
     app.include_router(make_conversations_router(store))

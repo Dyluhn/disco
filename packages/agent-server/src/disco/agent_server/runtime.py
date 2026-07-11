@@ -165,7 +165,7 @@ from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
 from .space_store import JsonSpaceStore
-from .stripe_live_verifier import make_stripe_live_verifier
+from .security_live_verifier import make_security_live_verifier
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
@@ -1744,7 +1744,7 @@ class ConversationRuntime:
             # P7: the active contract's starter_kit for scaffold_starter.
             starter_kit=self._starter_kit_for(conversation_id),
             workflow_events=workflow_events if workflow_router_mode else None,
-            primitive_live_verifier=make_stripe_live_verifier(),
+            primitive_live_verifier=make_security_live_verifier(),
         )
 
     def _compose_build_loop(

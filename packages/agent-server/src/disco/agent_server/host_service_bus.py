@@ -21,6 +21,7 @@ from disco.core.stripe_host_service import (
     STRIPE_API_HOSTS,
     StripeAppConfigStore,
 )
+from disco.core.webhook_host_service import WEBHOOK_EMIT_SERVICE_NAME, WebhookAppConfigStore
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -39,10 +40,14 @@ _MAX_BODY_BYTES = 64 * 1024
 _MAX_RESPONSE_BYTES = 256 * 1024
 _HANDLER_TIMEOUT_S = 6.0
 _DOWNSTREAM_TIMEOUT_S = 5.0
-_SERVICE_ALLOW_HOSTS: Mapping[str, frozenset[str]] = {
+_SERVICE_ALLOW_HOSTS: Mapping[str, frozenset[str] | None] = {
     "svc.ping": frozenset(),
     PAYMENTS_CHECKOUT_SERVICE_NAME: STRIPE_API_HOSTS,
     PAYMENTS_READY_SERVICE_NAME: frozenset(),
+    # Target host is operator-configured and origin-approved. None means no
+    # additional static allowlist; guarded_request still enforces public IPs,
+    # connection-peer validation, and redirect revalidation unconditionally.
+    WEBHOOK_EMIT_SERVICE_NAME: None,
 }
 
 
@@ -186,6 +191,7 @@ def _audit(record: HostTokenRecord, service: str, outcome: str) -> None:
 def make_host_service_context_factory(
     runtime: ConversationRuntime | None,
     stripe_config_store: StripeAppConfigStore | None = None,
+    webhook_config_store: WebhookAppConfigStore | None = None,
 ) -> HostServiceContextFactory:
     """Construct handler context only from authenticated server-side state."""
 
@@ -202,6 +208,7 @@ def make_host_service_context_factory(
                 credential_generation=record.generation,
                 request_timeout_s=_DOWNSTREAM_TIMEOUT_S,
                 stripe_config_store=stripe_config_store,
+                webhook_config_store=webhook_config_store,
             )
         secret_store = runtime._secret_store
         approvals = runtime._config_store.approval_store(secret_store=secret_store)
@@ -218,6 +225,7 @@ def make_host_service_context_factory(
             credential_generation=record.generation,
             request_timeout_s=_DOWNSTREAM_TIMEOUT_S,
             stripe_config_store=stripe_config_store,
+            webhook_config_store=webhook_config_store,
         )
 
     return factory
@@ -228,8 +236,11 @@ def make_host_service_bus_router(
     runtime: ConversationRuntime | None,
     token_store: HostTokenStore,
     stripe_config_store: StripeAppConfigStore | None = None,
+    webhook_config_store: WebhookAppConfigStore | None = None,
 ) -> APIRouter:
-    context_factory = make_host_service_context_factory(runtime, stripe_config_store)
+    context_factory = make_host_service_context_factory(
+        runtime, stripe_config_store, webhook_config_store
+    )
     router = APIRouter()
 
     @router.post(_BUS_PATH_PREFIX + "{service:path}")

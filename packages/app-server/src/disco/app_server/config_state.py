@@ -27,6 +27,12 @@ from disco.core.stripe_host_service import (
     configure_stripe_webhook_secret,
     ensure_stripe_binding_secret,
 )
+from disco.core.webhook_host_service import (
+    WEBHOOK_PURPOSE,
+    WebhookAppConfigStore,
+    WebhookTargetConfig,
+    configure_webhook_inbound_secret,
+)
 
 if TYPE_CHECKING:
     # The shared mcp_approvals DB connection — a duck-typed sqlite3-like conn
@@ -120,6 +126,7 @@ class ConfigState:
         skills: SkillStore | None = None,
         db_conn: _ApprovalConn | None = None,
         stripe_configs: StripeAppConfigStore | None = None,
+        webhook_configs: WebhookAppConfigStore | None = None,
     ) -> None:
         if store is not None:
             self._store = store
@@ -135,6 +142,7 @@ class ConfigState:
         # When None (tests without a DB), MCP config persists to ConfigStore only.
         self._db_conn = db_conn
         self._stripe_configs = stripe_configs
+        self._webhook_configs = webhook_configs
         self._provider_config = ProviderConfigService(
             self._store,
             self._secrets,
@@ -368,6 +376,48 @@ class ConfigState:
             PAYMENTS_CHECKOUT_SERVICE_NAME,
             STRIPE_SECRET_REF,
         )
+        return config
+
+    def configure_webhook_inbound(
+        self,
+        *,
+        owner_id: str,
+        audience: str,
+        signing_secret: str,
+    ) -> None:
+        """Store an app-scoped inbound verifier secret without exposing it."""
+        configure_webhook_inbound_secret(
+            self._secrets,
+            owner_id,
+            audience,
+            signing_secret,
+        )
+
+    def configure_webhook_outbound(
+        self,
+        *,
+        owner_id: str,
+        audience: str,
+        endpoint_id: str,
+        target_url: str,
+        signing_secret: str,
+        event_types: frozenset[str],
+        enabled: bool,
+    ) -> WebhookTargetConfig:
+        """Store one owner/app-scoped outbound target and approve its exact origin."""
+        if self._webhook_configs is None:
+            raise RuntimeError("Webhook configuration store is not wired to shared host state")
+        config = self._webhook_configs.configure(
+            owner_id=owner_id,
+            audience=audience,
+            endpoint_id=endpoint_id,
+            target_url=target_url,
+            signing_secret=signing_secret,
+            event_types=event_types,
+            enabled=enabled,
+            secret_store=self._secrets,
+        )
+        self._approve_origin(config.target_url, WEBHOOK_PURPOSE, config.secret_ref)
         return config
 
     def _resolve_secret_value(self, name: str) -> str | None:

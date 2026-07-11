@@ -21,6 +21,7 @@ import logging
 from disco.core.auth import allowed_frontend_origins
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.stripe_host_service import StripeAppConfigStore
+from disco.core.webhook_host_service import WebhookAppConfigStore
 from disco.tools.projects import StorageStatus
 from disco.tools.workflow_seed import seed_builtin_workflows
 from fastapi import FastAPI
@@ -28,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .appkit_cloudflare import CloudflareDeployCorsMiddleware, make_cloudflare_router
 from .appkit_cloudflare.stripe_deploy import StripeDeployDependencies
+from .appkit_cloudflare.webhook_deploy import WebhookDeployDependencies
 from .auth import AgentAuthMiddleware, make_auth_router
 from .host_proxy import HostPreviewProxyMiddleware, make_preview_session_resolver
 from .host_service_bus import make_host_service_bus_router
@@ -92,6 +94,7 @@ def create_app(
     runtime: ConversationRuntime | None = None,
     host_token_store: HostTokenStore | None = None,
     stripe_config_store: StripeAppConfigStore | None = None,
+    webhook_config_store: WebhookAppConfigStore | None = None,
 ) -> FastAPI:
     """Build the FastAPI app over a given store. The store is injected so tests
     drive it headlessly. `runtime` runs the agent loop with real inference (Stage
@@ -105,6 +108,8 @@ def create_app(
     token_store = host_token_store or HostTokenStore(event_db_path)
     owns_stripe_config_store = stripe_config_store is None
     stripe_configs = stripe_config_store or StripeAppConfigStore(event_db_path)
+    owns_webhook_config_store = webhook_config_store is None
+    webhook_configs = webhook_config_store or WebhookAppConfigStore(event_db_path)
 
     @contextlib.asynccontextmanager
     async def _runtime_lifespan(_app: FastAPI):
@@ -157,10 +162,13 @@ def create_app(
                 token_store.close()
             if owns_stripe_config_store:
                 stripe_configs.close()
+            if owns_webhook_config_store:
+                webhook_configs.close()
 
     app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
     app.state.host_token_store = token_store
     app.state.stripe_config_store = stripe_configs
+    app.state.webhook_config_store = webhook_configs
     app.add_middleware(AgentAuthMiddleware, store=store)
     app.add_middleware(
         CORSMiddleware,
@@ -189,7 +197,13 @@ def create_app(
     # WO-A2.2: host-service bus. Included early so the literal `/_disco/svc/{service}`
     # route is matched before any catch-all `{path:path}` routers.
     app.include_router(
-        make_host_service_bus_router(store, runtime, token_store, stripe_configs)
+        make_host_service_bus_router(
+            store,
+            runtime,
+            token_store,
+            stripe_configs,
+            webhook_configs,
+        )
     )
     app.include_router(make_health_router(store, runtime))
     app.include_router(make_mcp_router(store, runtime))
@@ -224,6 +238,15 @@ def create_app(
             store,
             runtime,
             stripe_dependencies=StripeDeployDependencies(token_store, stripe_configs),
+            webhook_dependencies=WebhookDeployDependencies(
+                token_store,
+                webhook_configs,
+                (
+                    runtime._config_store.approval_store(secret_store=runtime._secret_store)
+                    if runtime is not None
+                    else None
+                ),
+            ),
         )
     )
 

@@ -74,6 +74,7 @@ from . import deploy as cf
 from .models import DeployPlan, DeployRefused, RefusalReason
 from .sandbox_build import build_backend_for_runtime
 from .stripe_deploy import StripeDeployContext, StripeDeployDependencies
+from .webhook_deploy import WebhookDeployContext, WebhookDeployDependencies
 from .wrangler import (
     BuildBackend,
     CommandRunner,
@@ -451,6 +452,18 @@ def _relative_record_path(record_path: str | None, workspace: Path) -> str | Non
         return Path(record_path).name
 
 
+def _stripe_deploy_context(
+    dependencies: StripeDeployDependencies | None, owner_id: str | None, cid: str
+) -> StripeDeployContext | None:
+    return StripeDeployContext(dependencies, owner_id, cid) if dependencies is not None else None
+
+
+def _webhook_deploy_context(
+    dependencies: WebhookDeployDependencies | None, owner_id: str | None, cid: str
+) -> WebhookDeployContext | None:
+    return WebhookDeployContext(dependencies, owner_id, cid) if dependencies is not None else None
+
+
 def make_cloudflare_router(
     store: SqliteEventStore,
     runtime: ConversationRuntime | None,
@@ -459,6 +472,7 @@ def make_cloudflare_router(
     runner: CommandRunner | None = None,
     build_backend: BuildBackend | None = None,
     stripe_dependencies: StripeDeployDependencies | None = None,
+    webhook_dependencies: WebhookDeployDependencies | None = None,
 ) -> APIRouter:
     """Owner Cloudflare-deploy endpoints. ``runner``/``verifier``/``build_backend``
     are injectable so tests drive fakes; in production they default to the REAL
@@ -645,11 +659,8 @@ def make_cloudflare_router(
                     runner=command_runner,
                     build_backend=deploy_build_backend,
                     admin_token=admin_token,
-                    stripe_context=(
-                        StripeDeployContext(stripe_dependencies, owner_id, cid)
-                        if stripe_dependencies is not None
-                        else None
-                    ),
+                    stripe_context=_stripe_deploy_context(stripe_dependencies, owner_id, cid),
+                    webhook_context=_webhook_deploy_context(webhook_dependencies, owner_id, cid),
                 )
             except DeployRefused as exc:
                 # CORR-25 — a deploy refused by a hard gate (a real, named

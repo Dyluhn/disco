@@ -219,6 +219,8 @@ def prepare_records_app_spec(app: AppSpec) -> AppSpec:
         reserved_tables = {"users", "sessions"}
         if app.stripe is not None:
             reserved_tables.update({"user_role_grants", "stripe_events", "stripe_fulfillments"})
+        if app.webhooks is not None:
+            reserved_tables.update({"webhook_events", "webhook_effects"})
         for entity in app.entities:
             table = _records_table_name(entity)
             if table in reserved_tables:
@@ -239,6 +241,18 @@ def prepare_records_app_spec(app: AppSpec) -> AppSpec:
         )
         if len(stripe_sections) != 1 or stripe_sections[0].kind != "pricing":
             raise ValueError("Stripe records app requires one stripe_pricing section")
+    if app.webhooks is not None:
+        if not app.roles:
+            raise ValueError("Webhook records apps require session auth")
+        section_ids = {
+            section.id
+            for page in app.pages
+            for section in page.sections
+            if section.id.startswith("webhook_")
+        }
+        expected_ids = {f"webhook_{endpoint.endpoint_id}" for endpoint in app.webhooks.endpoints}
+        if section_ids != expected_ids:
+            raise ValueError("Webhook metadata must exactly match the declared webhook sections")
     return AppSpec.model_validate(app.model_dump(mode="json"))
 
 
@@ -647,7 +661,12 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         )
     )
     stripe_enabled = app.stripe is not None
-    stripe_import = 'import { svc } from "./disco-client";\n' if stripe_enabled else ""
+    webhook_enabled = app.webhooks is not None
+    svc_import = (
+        'import { svc } from "./disco-client";\n'
+        if stripe_enabled or webhook_enabled
+        else ""
+    )
     if stripe_enabled:
         from .stripe_worker import emit_stripe_env_ts, emit_stripe_worker_ts
 
@@ -656,6 +675,14 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
     else:
         stripe_env = ""
         stripe_worker = ""
+    if webhook_enabled:
+        from .webhook_worker import emit_webhook_env_ts, emit_webhook_worker_ts
+
+        webhook_env = emit_webhook_env_ts()
+        webhook_worker = emit_webhook_worker_ts(app) + "\n"
+    else:
+        webhook_env = ""
+        webhook_worker = ""
     base_roles = (
         "const BASE_ROLES: string[] = ROLES.filter((role) => role !== STRIPE_ENTITLEMENT);\n"
         if stripe_enabled
@@ -667,11 +694,11 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         "   session. Entity readRoles/writeRoles narrow access by user.role. */\n"
         'import { desc, eq } from "drizzle-orm";\n'
         'import { drizzle } from "drizzle-orm/d1";\n'
-        f'import {{ {imports} }} from "../src/db/schema";\n' + stripe_import + "\n"
+        f'import {{ {imports} }} from "../src/db/schema";\n' + svc_import + "\n"
         "export interface Env {\n"
         "  DB: D1Database;\n"
         "  ASSETS: { fetch: (req: Request) => Promise<Response> };\n"
-        "  ADMIN_TOKEN?: string;\n" + stripe_env + "}\n\n"
+        "  ADMIN_TOKEN?: string;\n" + stripe_env + webhook_env + "}\n\n"
         "interface EntityMeta {\n"
         "  columns: string[];\n"
         "  required: string[];\n"
@@ -708,6 +735,7 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         + _emit_worker_handlers(ordered, consts, funcs)
         + "\n\n"
         + stripe_worker
+        + webhook_worker
         + "interface RouteHandlers {\n"
         "  writeRoles: string[];\n"
         "  readRoles: string[];\n"
@@ -717,7 +745,7 @@ def _emit_records_auth_worker_ts(app: AppSpec, form_entities: tuple[Entity, ...]
         "const ROUTES: Record<string, RouteHandlers> = {\n"
         + _emit_auth_route_table(ordered, funcs)
         + "\n};\n\n"
-        + _emit_auth_fetch_ts(include_stripe=stripe_enabled)
+        + _emit_auth_fetch_ts(include_stripe=stripe_enabled, webhook_app=app if webhook_enabled else None)
     )
 
 
@@ -1117,7 +1145,9 @@ def _emit_auth_endpoints_ts() -> str:
     )
 
 
-def _emit_auth_fetch_ts(*, include_stripe: bool = False) -> str:
+def _emit_auth_fetch_ts(
+    *, include_stripe: bool = False, webhook_app: AppSpec | None = None
+) -> str:
     if include_stripe:
         from .stripe_worker import (
             emit_stripe_browser_routes_ts,
@@ -1129,6 +1159,14 @@ def _emit_auth_fetch_ts(*, include_stripe: bool = False) -> str:
     else:
         stripe_webhook_route = ""
         stripe_browser_routes = ""
+    if webhook_app is not None:
+        from .webhook_worker import emit_webhook_inbound_route_ts, emit_webhook_outbound_routes_ts
+
+        webhook_inbound_routes = emit_webhook_inbound_route_ts(webhook_app)
+        webhook_outbound_routes = emit_webhook_outbound_routes_ts(webhook_app)
+    else:
+        webhook_inbound_routes = ""
+        webhook_outbound_routes = ""
     return (
         "type JsonBody = { ok: true; body: unknown } | { ok: false; response: Response };\n\n"
         "function sameOriginOk(request: Request, url: URL): boolean {\n"
@@ -1188,10 +1226,12 @@ def _emit_auth_fetch_ts(*, include_stripe: bool = False) -> str:
         "    const decodedPath = decodedPathname(rawPath);\n"
         "    const apiPath = isApiPath(rawPath, url.pathname, decodedPath);\n"
         + stripe_webhook_route
+        + webhook_inbound_routes
         + '    if (request.method === "POST" && apiPath && !sameOriginOk(request, url)) {\n'
         '      return json({ error: "bad origin" }, 403);\n'
         "    }\n"
         + stripe_browser_routes
+        + webhook_outbound_routes
         + '    if (rawPath === "/api/register" && request.method === "POST") {\n'
         "      const contentTypeError = requireJsonContentType(request);\n"
         "      if (contentTypeError !== null) return contentTypeError;\n"
@@ -1412,6 +1452,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     names = _component_names(app)
     auth_enabled = bool(app.roles)
     stripe_enabled = app.stripe is not None
+    webhook_enabled = app.webhooks is not None
     if stripe_enabled and not auth_enabled:
         raise ValueError("Stripe records apps require session auth")
     schema_sql = (
@@ -1426,6 +1467,10 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         from .stripe_worker import emit_stripe_schema_sql
 
         schema_sql = "\n\n".join([schema_sql, emit_stripe_schema_sql()]) + "\n"
+    if webhook_enabled:
+        from .webhook_worker import emit_webhook_schema_sql
+
+        schema_sql = "\n\n".join([schema_sql, emit_webhook_schema_sql()]) + "\n"
     worker_ts = (
         _emit_records_auth_worker_ts(records_app, form_entities)
         if auth_enabled
@@ -1446,6 +1491,10 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         from .stripe_worker import emit_stripe_drizzle_ts
 
         drizzle_ts = "\n\n".join([drizzle_ts, emit_stripe_drizzle_ts()]) + "\n"
+    if webhook_enabled:
+        from .webhook_worker import emit_webhook_drizzle_ts
+
+        drizzle_ts = "\n\n".join([drizzle_ts, emit_webhook_drizzle_ts()]) + "\n"
     owner_guide = (
         _emit_records_auth_owner_guide_md(app, db_name)
         if auth_enabled
