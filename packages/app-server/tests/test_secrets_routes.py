@@ -64,6 +64,10 @@ def test_openrouter_name_is_reserved(client):
     assert client.put("/api/secrets/openrouter", json={"value": "sk-or"}).status_code == 400
 
 
+def test_stripe_name_is_reserved_for_rk_only_configuration(client):
+    assert client.put("/api/secrets/stripe", json={"value": "sk-live"}).status_code == 400
+
+
 def test_openrouter_key_excluded_from_generic_list(client):
     # set the OpenRouter key via its dedicated route...
     client.put("/api/openrouter/key", json={"key": "sk-or-v1-KEY"})

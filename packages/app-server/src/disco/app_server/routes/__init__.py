@@ -18,6 +18,7 @@ from .providers import make_providers_router
 from .secrets import make_secrets_router
 from .security import make_security_router
 from .skills import make_skills_router
+from .stripe import make_stripe_router
 
 __all__ = [
     "make_config_router",
@@ -30,4 +31,5 @@ __all__ = [
     "make_secrets_router",
     "make_security_router",
     "make_skills_router",
+    "make_stripe_router",
 ]

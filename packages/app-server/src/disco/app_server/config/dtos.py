@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 
 class ModelDTO(BaseModel):
@@ -177,6 +177,28 @@ class OriginApprovalResultDTO(BaseModel):
     origin: str
     purpose: str
     secret_ref: str = ""
+
+
+class StripeConfigBody(BaseModel):
+    """Write-only owner configuration for one generated app's Stripe checkout."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    restricted_key: SecretStr = Field(min_length=1, max_length=256)
+    plan_selector: str = Field(min_length=1, max_length=64)
+    stripe_price_id: str = Field(min_length=1, max_length=206)
+    allowed_return_origins: list[str] = Field(min_length=1, max_length=16)
+    enabled: bool
+
+
+class StripeConfigStatus(BaseModel):
+    """Safe response: operational state only, never the restricted key."""
+
+    audience: str
+    plan_selector: str
+    allowed_return_origins: list[str]
+    enabled: bool
+    credential_configured: bool
 
 
 class ProbeResult(BaseModel):

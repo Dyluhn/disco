@@ -20,6 +20,7 @@ import logging
 
 from disco.core.auth import allowed_frontend_origins
 from disco.core.store.sqlite import SqliteEventStore
+from disco.core.stripe_host_service import StripeAppConfigStore
 from disco.tools.projects import StorageStatus
 from disco.tools.workflow_seed import seed_builtin_workflows
 from fastapi import FastAPI
@@ -89,6 +90,7 @@ def create_app(
     *,
     runtime: ConversationRuntime | None = None,
     host_token_store: HostTokenStore | None = None,
+    stripe_config_store: StripeAppConfigStore | None = None,
 ) -> FastAPI:
     """Build the FastAPI app over a given store. The store is injected so tests
     drive it headlessly. `runtime` runs the agent loop with real inference (Stage
@@ -98,7 +100,10 @@ def create_app(
     # the event-store DB path so tokens survive restarts; falls back to :memory:
     # for ephemeral wire tests.
     owns_token_store = host_token_store is None
-    token_store = host_token_store or HostTokenStore(store.db_path or ":memory:")
+    event_db_path = getattr(store, "db_path", None) or ":memory:"
+    token_store = host_token_store or HostTokenStore(event_db_path)
+    owns_stripe_config_store = stripe_config_store is None
+    stripe_configs = stripe_config_store or StripeAppConfigStore(event_db_path)
 
     @contextlib.asynccontextmanager
     async def _runtime_lifespan(_app: FastAPI):
@@ -149,9 +154,12 @@ def create_app(
         finally:
             if owns_token_store:
                 token_store.close()
+            if owns_stripe_config_store:
+                stripe_configs.close()
 
     app = FastAPI(title="disco agent-server", version="0.1.0", lifespan=lifespan)
     app.state.host_token_store = token_store
+    app.state.stripe_config_store = stripe_configs
     app.add_middleware(AgentAuthMiddleware, store=store)
     app.add_middleware(
         CORSMiddleware,
@@ -179,7 +187,9 @@ def create_app(
     app.include_router(make_auth_router())
     # WO-A2.2: host-service bus. Included early so the literal `/_disco/svc/{service}`
     # route is matched before any catch-all `{path:path}` routers.
-    app.include_router(make_host_service_bus_router(store, runtime, token_store))
+    app.include_router(
+        make_host_service_bus_router(store, runtime, token_store, stripe_configs)
+    )
     app.include_router(make_health_router(store, runtime))
     app.include_router(make_mcp_router(store, runtime))
     app.include_router(make_conversations_router(store, runtime, token_store))

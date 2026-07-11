@@ -11,10 +11,16 @@ cookie) so the dev frontend on another origin can call it.
 
 from __future__ import annotations
 
+import contextlib
+
 from disco.core.auth import allowed_frontend_origins
 from disco.core.store.sqlite import SqliteEventStore
-from fastapi import FastAPI
+from disco.core.stripe_host_service import StripeAppConfigStore
+from fastapi import FastAPI, Request, Response
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .auth import AppAuthMiddleware, make_auth_router
 from .config_state import ConfigState
@@ -29,13 +35,13 @@ from .routes import (
     make_secrets_router,
     make_security_router,
     make_skills_router,
+    make_stripe_router,
 )
 
 
 def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> FastAPI:
     """Build the app-server over a shared store. The store is injected so tests
     drive it headlessly and so it shares conversations with the agent-server."""
-    app = FastAPI(title="disco app-server", version="0.1.0")
     # Default-construct ConfigState wired to the SHARED store connection so MCP
     # approvals persist to the mcp_approvals table in the deployed app — not only
     # when a test injects an explicit ConfigState. `__main__.create_app(store)`
@@ -43,7 +49,43 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     # 500s ("no DB connection for approval persistence") and GET /api/mcp can never
     # project an approved/connected server. The store's _conn already carries the
     # mcp_approvals table (core SqliteEventStore schema).
-    state = config or ConfigState(db_conn=store._conn)
+    owned_stripe_configs: StripeAppConfigStore | None = None
+    if config is None:
+        event_db_path = getattr(store, "db_path", None) or ":memory:"
+        owned_stripe_configs = StripeAppConfigStore(event_db_path)
+        state = ConfigState(db_conn=store._conn, stripe_configs=owned_stripe_configs)
+    else:
+        state = config
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        try:
+            yield
+        finally:
+            if owned_stripe_configs is not None:
+                owned_stripe_configs.close()
+
+    app = FastAPI(title="disco app-server", version="0.1.0", lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def redact_stripe_validation(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> Response:
+        if not request.url.path.startswith("/api/stripe/"):
+            return await request_validation_exception_handler(request, exc)
+        # Pydantic's default 422 includes the rejected `input`, which would echo
+        # a malformed/overlong credential. Preserve useful field diagnostics but
+        # remove both input and validator context from this write-only surface.
+        details = [
+            {
+                "type": error.get("type", "value_error"),
+                "loc": error.get("loc", ()),
+                "msg": error.get("msg", "invalid value"),
+            }
+            for error in exc.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": details})
 
     app.add_middleware(AppAuthMiddleware, store=store)
     app.add_middleware(
@@ -62,6 +104,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     app.include_router(make_providers_router(state))
     app.include_router(make_secrets_router(state))
     app.include_router(make_security_router(state))
+    app.include_router(make_stripe_router(state))
     app.include_router(make_skills_router(state))
     app.include_router(make_mcp_router(state))
     app.include_router(make_conversations_router(store))

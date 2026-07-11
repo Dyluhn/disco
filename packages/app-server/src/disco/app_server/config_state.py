@@ -17,6 +17,14 @@ from typing import TYPE_CHECKING, Any
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from disco.core.llm.config import McpSettings, ProviderSettings
+from disco.core.stripe_host_service import (
+    PAYMENTS_CHECKOUT_SERVICE_NAME,
+    STRIPE_API_URL,
+    STRIPE_SECRET_REF,
+    StripeAppConfig,
+    StripeAppConfigStore,
+    configure_stripe_restricted_key,
+)
 
 if TYPE_CHECKING:
     # The shared mcp_approvals DB connection — a duck-typed sqlite3-like conn
@@ -109,6 +117,7 @@ class ConfigState:
         secrets: SecretStore | None = None,
         skills: SkillStore | None = None,
         db_conn: _ApprovalConn | None = None,
+        stripe_configs: StripeAppConfigStore | None = None,
     ) -> None:
         if store is not None:
             self._store = store
@@ -123,6 +132,8 @@ class ConfigState:
         # DB connection for mcp_approvals table (shared with agent-server).
         # When None (tests without a DB), MCP config persists to ConfigStore only.
         self._db_conn = db_conn
+        self._stripe_configs = stripe_configs
+        self._owns_stripe_configs = stripe_configs is None
         self._provider_config = ProviderConfigService(
             self._store,
             self._secrets,
@@ -249,14 +260,14 @@ class ConfigState:
     # "openrouter" is reserved for the dedicated route/UI above; the generic
     # surface neither lists nor accepts it (avoids two UIs fighting over one slot).
 
-    _RESERVED_SECRET = "openrouter"
+    _RESERVED_SECRETS = frozenset({"openrouter", STRIPE_SECRET_REF})
 
     def list_secrets(self) -> SecretsListDTO:
-        names = [n for n in self._secrets.secret_names() if n != self._RESERVED_SECRET]
+        names = [n for n in self._secrets.secret_names() if n not in self._RESERVED_SECRETS]
         # The SPECIFIC stored keys that can't be decrypted (named, so the UI can
         # say which to fix) — generic, not the OpenRouter-only `locked` property.
         locked_names = [
-            n for n in self._secrets.undecryptable_names() if n != self._RESERVED_SECRET
+            n for n in self._secrets.undecryptable_names() if n not in self._RESERVED_SECRETS
         ]
         return SecretsListDTO(
             names=sorted(names),
@@ -280,8 +291,9 @@ class ConfigState:
         name = name.strip()
         from disco.core.llm.secret_refs import is_control_secret_ref
 
-        if name == self._RESERVED_SECRET:
-            raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
+        if name in self._RESERVED_SECRETS:
+            route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
+            raise ValueError(f"use the dedicated {route} route for the {name} credential")
         if is_control_secret_ref(name):
             raise ValueError(f"{name} is an internal control secret and cannot be a provider ref")
         if not value.strip():
@@ -294,10 +306,56 @@ class ConfigState:
 
     def clear_secret(self, name: str) -> SecretStatus:
         name = name.strip()
-        if name == self._RESERVED_SECRET:
-            raise ValueError("use the dedicated /api/openrouter/key route for the OpenRouter key")
+        if name in self._RESERVED_SECRETS:
+            route = "/api/openrouter/key" if name == "openrouter" else "/api/stripe/config/{app}"
+            raise ValueError(f"use the dedicated {route} route for the {name} credential")
         self._secrets.clear_secret(name)
         return self.secret_status(name)
+
+    def configure_stripe_app(
+        self,
+        *,
+        owner_id: str,
+        audience: str,
+        restricted_key: str,
+        plan_selector: str,
+        stripe_price_id: str,
+        allowed_return_origins: frozenset[str],
+        enabled: bool,
+    ) -> StripeAppConfig:
+        """Owner-only settings seam; the key is write-only and separately encrypted."""
+        if self._stripe_configs is None:
+            self._stripe_configs = StripeAppConfigStore()
+        self._stripe_configs.validate_configuration(
+            owner_id=owner_id,
+            audience=audience,
+            plan_selector=plan_selector,
+            stripe_price_id=stripe_price_id,
+            allowed_return_origins=allowed_return_origins,
+            enabled=enabled,
+        )
+        configure_stripe_restricted_key(self._secrets, restricted_key)
+        config = self._stripe_configs.configure(
+            owner_id=owner_id,
+            audience=audience,
+            plan_selector=plan_selector,
+            stripe_price_id=stripe_price_id,
+            allowed_return_origins=allowed_return_origins,
+            enabled=enabled,
+            secret_store=self._secrets,
+        )
+        self._approve_origin(
+            STRIPE_API_URL,
+            PAYMENTS_CHECKOUT_SERVICE_NAME,
+            STRIPE_SECRET_REF,
+        )
+        return config
+
+    def close(self) -> None:
+        """Close host configuration resources owned by this state object."""
+        if self._owns_stripe_configs and self._stripe_configs is not None:
+            self._stripe_configs.close()
+            self._stripe_configs = None
 
     def _resolve_secret_value(self, name: str) -> str | None:
         from disco.core.llm.secret_refs import resolve_provider_secret
