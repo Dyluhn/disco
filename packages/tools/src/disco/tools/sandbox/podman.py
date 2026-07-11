@@ -45,6 +45,7 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from . import capability_relay as _capability_relay_mod
 from . import egress_proxy as _egress_proxy_mod
 from . import inbound_forward as _inbound_forward_mod
 from ._container import (
@@ -71,6 +72,7 @@ from ._container import (
     proxy_readiness_argv,
     proxy_run_argv,
     resolve_bounds,
+    sealed,
 )
 from .base import (
     ExecResult,
@@ -79,6 +81,13 @@ from .base import (
     SandboxSpec,
     SandboxUnavailableError,
     raise_read_error,
+)
+from .capability_relay import (
+    HOST_SERVICE_RELAY_PORT,
+    RelayConfigurationError,
+    parse_upstream,
+    relay_readiness_argv,
+    relay_run_argv,
 )
 from .config import SandboxConfig, default_podman_config
 from .naming import (
@@ -509,7 +518,7 @@ class PodmanSandboxService:
                 # podman equivalent is `network_mode="bridge"` (verified live — a bare
                 # create defaults to pasta, which an internal net cannot attach to).
                 network_mode="bridge",
-                ports=loopback_port_bindings(podman=True),
+                ports=None if sealed(spec) else loopback_port_bindings(podman=True),
                 # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
                 # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
                 # podman caps cpu via quota/period (mirrors the sandbox create path).
@@ -553,11 +562,17 @@ class PodmanSandboxService:
             if not sidecar.put_archive("/", buf.getvalue()):
                 raise SandboxUnavailableError("failed to inject egress proxy script into sidecar")
             allow = format_allow(spec.egress_allow)
+            deny_hosts = (
+                frozenset({parse_upstream(self._cfg.host_service_upstream).host})
+                if spec.host_services
+                else frozenset()
+            )
             argv = proxy_run_argv(
                 allow,
                 EGRESS_PROXY_PORT,
                 public_only=egress_mode(spec) == "public",
                 deny_ips=deny_ips,
+                deny_hosts=deny_hosts,
             )
             self._sidecar_cli_run(
                 sidecar.name,
@@ -580,11 +595,43 @@ class PodmanSandboxService:
                 proxy_ip = ""
             proxy_ip = proxy_ip or net_name  # fall back to the name (harmless for fake/test)
             env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
-            return network, sidecar, env, net_name
+            relay_url = self._launch_capability_relay(sidecar, proxy_ip, spec)
+            return network, sidecar, env, net_name, relay_url
         except Exception:
             # Partial setup must not leak: tear down whatever already exists, then re-raise.
             self._best_effort_cleanup(egress_network=network, egress_sidecar=sidecar)
             raise
+
+    def _launch_capability_relay(
+        self, sidecar: Any, sidecar_ip: str, spec: SandboxSpec
+    ) -> str | None:
+        """Launch the strict host-service relay; failure aborts sandbox creation."""
+        if not spec.host_services:
+            return None
+        script = pathlib.Path(_capability_relay_mod.__file__).read_bytes()
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            info = tarfile.TarInfo(name="capability_relay.py")
+            info.size = len(script)
+            info.mtime = int(time.time())
+            tar.addfile(info, io.BytesIO(script))
+        if not sidecar.put_archive("/", buf.getvalue()):
+            raise SandboxUnavailableError("failed to inject host-service capability relay")
+        authority = f"{sidecar_ip}:{HOST_SERVICE_RELAY_PORT}"
+        argv = relay_run_argv(self._cfg.host_service_upstream, authority)
+        self._sidecar_cli_run(
+            sidecar.name,
+            ["sh", "-c", f"{shlex.join(argv)} >/dev/null 2>&1 &"],
+            10,
+        )
+        ready_rc, _out, _err = self._sidecar_cli_run(
+            sidecar.name, relay_readiness_argv(sidecar_ip), 10
+        )
+        if ready_rc != 0:
+            raise SandboxUnavailableError(
+                "host-service capability relay failed readiness; refusing sandbox start"
+            )
+        return f"http://{authority}"
 
     def _launch_inbound_forwarder(self, sidecar: Any, container: Any, net_name: str) -> None:
         """[FIX6 parity — port of `gvisor._launch_inbound_forwarder`] Make a FILTERED
@@ -641,7 +688,7 @@ class PodmanSandboxService:
 
     def _start_container(
         self, spec: SandboxSpec, instance_id: str, conversation_id: str = ""
-    ) -> tuple[Any, str, Any, Any, Any]:
+    ) -> tuple[Any, str, Any, Any, Any, str | None]:
         """The blocking Podman work for `create`, in a thread. Image-by-load (never
         pull); limits via the socket; typed errors on failure. Returns
         (container, name, egress_network, egress_sidecar, workspace_volume) —
@@ -673,15 +720,30 @@ class PodmanSandboxService:
         # and public boxes get a policy sidecar on an internal no-NAT network;
         # no model-shaped spec reaches a raw bridge.
         mode = egress_mode(spec)
+        if spec.host_services:
+            try:
+                relay_upstream = parse_upstream(self._cfg.host_service_upstream)
+            except RelayConfigurationError as exc:
+                raise SandboxUnavailableError(str(exc)) from exc
+            if relay_upstream.scheme != "https":
+                raise SandboxUnavailableError(
+                    "container host-service relay requires a reachable HTTPS upstream; "
+                    "sidecar loopback is not the agent-server host"
+                )
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
         net_kwargs: dict[str, Any] = {}
         environment: dict[str, str] = {}
         egress_network = egress_sidecar = None
         egress_net_name = ""
-        if mode in {"filtered", "public"}:
-            egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
-                client, spec, instance_id, conversation_id
-            )
+        host_service_relay_url = None
+        if mode in {"filtered", "public"} or spec.host_services:
+            (
+                egress_network,
+                egress_sidecar,
+                environment,
+                net_name,
+                host_service_relay_url,
+            ) = self._setup_filtered_egress(client, spec, instance_id, conversation_id)
             egress_net_name = net_name
             # podman-py's `containers.create` attaches user-defined networks via
             # `networks={name: per-net-config}`; the sandbox's ONLY interface
@@ -729,7 +791,14 @@ class PodmanSandboxService:
             # Best-effort: never raises, so it can't leak the just-started box.
             if mode in {"filtered", "public"} and egress_sidecar is not None:
                 self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
-            return container, name, egress_network, egress_sidecar, volume
+            return (
+                container,
+                name,
+                egress_network,
+                egress_sidecar,
+                volume,
+                host_service_relay_url,
+            )
         except Exception as exc:  # noqa: BLE001 — start failure, real cause preserved
             from podman.errors import ImageNotFound
 
@@ -755,9 +824,14 @@ class PodmanSandboxService:
         self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
     ) -> SandboxInstance:
         instance_id = f"sbx_{uuid.uuid4().hex}"
-        container, name, egress_network, egress_sidecar, workspace_volume = await asyncio.to_thread(
-            self._start_container, spec, instance_id, conversation_id
-        )
+        (
+            container,
+            name,
+            egress_network,
+            egress_sidecar,
+            workspace_volume,
+            host_service_relay_url,
+        ) = await asyncio.to_thread(self._start_container, spec, instance_id, conversation_id)
         instance = PodmanSandboxInstance(
             id=instance_id,
             owner_id=owner_id,
@@ -789,6 +863,7 @@ class PodmanSandboxService:
         # no-op.
         instance._egress_network = egress_network
         instance._egress_sidecar = egress_sidecar
+        instance._host_service_relay_url = host_service_relay_url
         self._instances[instance_id] = instance
         return instance
 

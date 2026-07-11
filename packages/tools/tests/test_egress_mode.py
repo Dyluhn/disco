@@ -47,3 +47,8 @@ def test_proxy_run_argv_carries_the_allowlist():
     assert argv[0] == "python3" and argv[1].endswith("egress_proxy.py")
     assert "--allow" in argv and "api.github.com,.pypi.org" in argv
     assert str(EGRESS_PROXY_PORT) in argv
+
+
+def test_proxy_run_argv_carries_exact_denied_hosts():
+    argv = proxy_run_argv("", public_only=True, deny_hosts=frozenset({"bus.example.com"}))
+    assert argv[argv.index("--deny-host") + 1] == "bus.example.com"

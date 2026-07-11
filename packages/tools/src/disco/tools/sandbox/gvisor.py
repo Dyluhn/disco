@@ -23,6 +23,7 @@ import shlex
 import uuid
 from typing import Any
 
+from . import capability_relay as _capability_relay_mod
 from . import egress_proxy as _egress_proxy_mod
 from . import inbound_forward as _inbound_forward_mod
 from ._container import (
@@ -47,6 +48,13 @@ from ._container import (
     sealed,
 )
 from .base import SandboxInstance, SandboxSpec, SandboxUnavailableError
+from .capability_relay import (
+    HOST_SERVICE_RELAY_PORT,
+    RelayConfigurationError,
+    parse_upstream,
+    relay_readiness_argv,
+    relay_run_argv,
+)
 from .config import SandboxConfig, default_sandbox_config
 from .isolation import IsolationProfile, isolation_for
 from .naming import (
@@ -347,7 +355,7 @@ class GvisorSandboxService:
                 command=["sh", "-c", "exec sleep infinity"],
                 runtime=self._cfg.runtime,
                 network="bridge",  # the route to the internet (the proxy's upstream)
-                ports=loopback_port_bindings(),
+                ports=None if sealed(spec) else loopback_port_bindings(),
                 # EPIC H (P1): bound the sidecar on CPU + PIDs too, not just memory — a wedged
                 # or compromised proxy must not be able to burn host CPU or fork-bomb host PIDs.
                 mem_limit=f"{sidecar_memory_mb}m",
@@ -378,11 +386,17 @@ class GvisorSandboxService:
             script = pathlib.Path(_egress_proxy_mod.__file__).read_bytes()
             _put_file(sidecar, "/", "egress_proxy.py", script)
             allow = format_allow(spec.egress_allow)
+            deny_hosts = (
+                frozenset({parse_upstream(self._cfg.host_service_upstream).host})
+                if spec.host_services
+                else frozenset()
+            )
             argv = proxy_run_argv(
                 allow,
                 EGRESS_PROXY_PORT,
                 public_only=egress_mode(spec) == "public",
                 deny_ips=deny_ips,
+                deny_hosts=deny_hosts,
             )
             sidecar.exec_run(
                 ["sh", "-c", f"{shlex.join(argv)} >/var/log/egress.log 2>&1 &"], detach=True
@@ -401,12 +415,35 @@ class GvisorSandboxService:
                 .get("IPAddress", "")
             ) or net_name  # fall back to the name (harmless for the fake/test path)
             env = proxy_env(proxy_ip, EGRESS_PROXY_PORT)
-            return network, sidecar, env, net_name
+            relay_url = self._launch_capability_relay(sidecar, proxy_ip, spec)
+            return network, sidecar, env, net_name, relay_url
         except Exception:
             # Partial setup must not leak: tear down whatever already exists, then re-raise
             # so the caller surfaces the original failure.
             self._best_effort_cleanup(network, sidecar)
             raise
+
+    def _launch_capability_relay(
+        self, sidecar: Any, sidecar_ip: str, spec: SandboxSpec
+    ) -> str | None:
+        """Launch the capability-only listener on the existing dual-homed sidecar.
+
+        The relay script owns the strict route/framing policy and one fixed upstream.
+        Any inject, launch, or readiness failure aborts provisioning (fail closed).
+        """
+        if not spec.host_services:
+            return None
+        script = pathlib.Path(_capability_relay_mod.__file__).read_bytes()
+        _put_file(sidecar, "/", "capability_relay.py", script)
+        authority = f"{sidecar_ip}:{HOST_SERVICE_RELAY_PORT}"
+        argv = relay_run_argv(self._cfg.host_service_upstream, authority)
+        sidecar.exec_run(["sh", "-c", f"{shlex.join(argv)} >/dev/null 2>&1 &"], detach=True)
+        ready = sidecar.exec_run(relay_readiness_argv(sidecar_ip), demux=True)
+        if ready[0] != 0:
+            raise SandboxUnavailableError(
+                "host-service capability relay failed readiness; refusing sandbox start"
+            )
+        return f"http://{authority}"
 
     def _launch_inbound_forwarder(self, sidecar: Any, container: Any, net_name: str) -> None:
         """[FIX6 — live-proven on real gVisor/runsc] Make a FILTERED box's preview
@@ -487,6 +524,16 @@ class GvisorSandboxService:
         # "unlimited"); above-max is clamped down, negatives rejected. See resolve_bounds.
         cpu, mem_mb, pids, disk_mb = resolve_bounds(spec, self._cfg)
         mode = egress_mode(spec)
+        if spec.host_services:
+            try:
+                relay_upstream = parse_upstream(self._cfg.host_service_upstream)
+            except RelayConfigurationError as exc:
+                raise SandboxUnavailableError(str(exc)) from exc
+            if relay_upstream.scheme != "https":
+                raise SandboxUnavailableError(
+                    "container host-service relay requires a reachable HTTPS upstream; "
+                    "sidecar loopback is not the agent-server host"
+                )
         # Publish the curated port set (Docker can't add mappings to a running
         # container, so the set is declared here), and only when network is
         # granted — a sealed box has no port to reach.
@@ -499,10 +546,15 @@ class GvisorSandboxService:
         egress_network = egress_sidecar = None
         egress_net_name = ""
         labels = {LABEL_CONV: conversation_id} if conversation_id else {}
-        if mode in {"filtered", "public"}:
-            egress_network, egress_sidecar, environment, net_name = self._setup_filtered_egress(
-                client, spec, instance_id, conversation_id
-            )
+        host_service_relay_url = None
+        if mode in {"filtered", "public"} or spec.host_services:
+            (
+                egress_network,
+                egress_sidecar,
+                environment,
+                net_name,
+                host_service_relay_url,
+            ) = self._setup_filtered_egress(client, spec, instance_id, conversation_id)
             egress_net_name = net_name
             net_kwargs = {"network": net_name}  # internal no-NAT net; proxy is the only route
             # The sandbox itself publishes NOTHING (it's on an internal no-NAT net and
@@ -561,7 +613,7 @@ class GvisorSandboxService:
         # raises, so it can't leak the just-started box.
         if mode in {"filtered", "public"} and egress_sidecar is not None:
             self._launch_inbound_forwarder(egress_sidecar, container, egress_net_name)
-        return container, egress_network, egress_sidecar, volume
+        return container, egress_network, egress_sidecar, volume, host_service_relay_url
 
     @staticmethod
     def _best_effort_cleanup(network: Any, sidecar: Any) -> None:
@@ -584,11 +636,20 @@ class GvisorSandboxService:
         started = await asyncio.to_thread(
             self._start_container, spec, instance_id, host_workspace, conversation_id
         )
+        host_service_relay_url = None
         if len(started) == 3:
             container, egress_network, egress_sidecar = started
             workspace_volume = None
-        else:
+        elif len(started) == 4:
             container, egress_network, egress_sidecar, workspace_volume = started
+        else:
+            (
+                container,
+                egress_network,
+                egress_sidecar,
+                workspace_volume,
+                host_service_relay_url,
+            ) = started
         instance = self._instance_cls(
             id=instance_id,
             owner_id=owner_id,
@@ -615,6 +676,7 @@ class GvisorSandboxService:
         # Attach the filtered-egress aux so destroy() tears down the proxy + network.
         instance._egress_network = egress_network
         instance._egress_sidecar = egress_sidecar
+        instance._host_service_relay_url = host_service_relay_url
         self._instances[instance_id] = instance
         return instance
 
