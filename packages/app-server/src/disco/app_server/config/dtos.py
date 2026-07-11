@@ -9,9 +9,11 @@ layer consumes (they mirror the frontend's `src/types/models.ts` +
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from disco.core.quota import MAX_REQUEST_LIMIT, MAX_TOKEN_LIMIT, MAX_WINDOW_SECONDS
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 
 class ModelDTO(BaseModel):
@@ -201,6 +203,66 @@ class StripeConfigStatus(BaseModel):
     enabled: bool
     credential_configured: bool
     webhook_configured: bool
+
+
+class QuotaLimitsDTO(BaseModel):
+    """Bounded request/token limits for one fixed accounting window."""
+
+    window_seconds: int
+    max_requests: int | None = None
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    max_total_tokens: int | None = None
+
+
+class QuotaConfigBody(BaseModel):
+    """Strict replacement body for an app aggregate or exact-service quota."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    window_seconds: int = Field(ge=1, le=MAX_WINDOW_SECONDS)
+    max_requests: int | None = Field(default=None, ge=1, le=MAX_REQUEST_LIMIT)
+    max_input_tokens: int | None = Field(default=None, ge=1, le=MAX_TOKEN_LIMIT)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=MAX_TOKEN_LIMIT)
+    max_total_tokens: int | None = Field(default=None, ge=1, le=MAX_TOKEN_LIMIT)
+
+    @model_validator(mode="after")
+    def require_a_limit(self) -> QuotaConfigBody:
+        if all(
+            value is None
+            for value in (
+                self.max_requests,
+                self.max_input_tokens,
+                self.max_output_tokens,
+                self.max_total_tokens,
+            )
+        ):
+            raise ValueError("at least one quota limit is required")
+        return self
+
+
+class QuotaConfigStatus(BaseModel):
+    """Safe stored/effective quota view; contains no credential material."""
+
+    audience: str
+    service: str | None
+    source: Literal["configured", "inherited", "default"]
+    limits: QuotaLimitsDTO
+    updated_at: datetime | None = None
+
+
+class QuotaUsageDTO(BaseModel):
+    request_count: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    window_start: datetime
+    window_end: datetime
+
+
+class QuotaStatusDTO(BaseModel):
+    config: QuotaConfigStatus
+    usage: QuotaUsageDTO
 
 
 class ProbeResult(BaseModel):

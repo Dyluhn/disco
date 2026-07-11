@@ -15,6 +15,7 @@ from .mcp import make_mcp_router
 from .models import make_models_router
 from .openrouter import make_openrouter_router
 from .providers import make_providers_router
+from .quota import make_quota_router
 from .secrets import make_secrets_router
 from .security import make_security_router
 from .skills import make_skills_router
@@ -28,6 +29,7 @@ __all__ = [
     "make_models_router",
     "make_openrouter_router",
     "make_providers_router",
+    "make_quota_router",
     "make_secrets_router",
     "make_security_router",
     "make_skills_router",
