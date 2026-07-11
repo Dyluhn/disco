@@ -147,9 +147,7 @@ async def test_update_plan_progress_well_formed_steps_succeeds():
     """The corrected shape the actionable error points at actually validates +
     runs — proving the hint enables real recovery (not just a nicer rejection)."""
     ex = _executor()
-    res = await ex.execute(
-        call("update_plan_progress", steps=[{"index": 1, "state": "done"}])
-    )
+    res = await ex.execute(call("update_plan_progress", steps=[{"index": 1, "state": "done"}]))
     assert res.success is True
     assert "1/1 done" in res.content
 
@@ -439,6 +437,8 @@ def test_tool_context_has_no_secret_field():
         "starter_kit",
         # WF-3: event-log callback for workflow phase transitions; no credential payload.
         "workflow_events",
+        # Host-owned callable only; captures secrets outside ToolContext.
+        "primitive_live_verifier",
         # Current scope names, for recovery text only.
         "scope_allowed_tools",
     }

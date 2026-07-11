@@ -121,14 +121,21 @@ def test_registered_through_generator_force_import() -> None:
 
 
 def test_fail_closed_registration_invariants() -> None:
-    """WO-A3's rule keys on tier=='template_only' AND verify is None ⇒ a
-    stripe-bearing app CANNOT pass the finish gate. These two facts are the
-    seam's whole safety story — if either assertion ever fails, someone tried
-    to work around the gate (see the module docstring: forbidden)."""
+    """Stripe stays template-only and requires both its pure checker and a
+    host-owned live verifier id; neither is optional."""
     prim = get_primitive(STRIPE_PRIMITIVE_ID)
     assert prim is not None
     assert prim.tier == "template_only"
-    assert prim.verify is None  # ON PURPOSE — never a passing stub
+    assert prim.verify is not None
+    assert prim.live_verify_id == "stripe.security.v1"
+    assert prim.security_metadata_field == "stripe"
+    assert prim.live_verify_checks == (
+        "forged_signature_rejected",
+        "replay_deduped",
+        "secret_absence",
+        "restricted_key_only",
+        "price_injection_refused",
+    )
     # Webhooks are inbound Worker routes, never a host-service capability.
     assert prim.host_contract == (
         HostService("payments.checkout"),
