@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import secrets
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,7 @@ def _parts(token: str) -> tuple[str, str, str]:
 def test_mint_returns_opaque_split_token(store):
     token = store.mint("conv_1", "owner_a", "app:demo")
     prefix, selector, verifier = _parts(token)
-    assert prefix == "a2v0"
+    assert prefix == "a4v1"
     assert selector
     assert verifier
     # Verifier is 32 random bytes encoded urlsafe-base64 (43 chars).
@@ -47,6 +48,7 @@ def test_verify_valid_token(store):
     assert record.conversation_id == "conv_1"
     assert record.owner_id == "owner_a"
     assert record.audience == "app:demo"
+    assert record.version == 1
     assert record.is_active is True
 
 
@@ -113,6 +115,7 @@ def test_rotation_keeps_old_until_candidate_is_confirmed(store):
     assert new != old
     assert store.verify(old) is not None
     assert store.verify(new) is not None
+    assert store.verify(new).generation == 1
     new_selector = store.verify(new).selector
     assert store.finish_rotation("conv_1", "app:demo", keep_selector=new_selector) == 1
     assert store.verify(old) is None
@@ -130,6 +133,53 @@ def test_restart_durability(tmp_path):
     assert record is not None
     assert record.conversation_id == "conv_1"
     store2.close()
+
+
+def test_schema_migration_accepts_persisted_active_a2v0_token(tmp_path):
+    path = tmp_path / "legacy.db"
+    selector = "A" * 22
+    verifier = "B" * 43
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE host_service_tokens (
+            selector TEXT PRIMARY KEY, verifier_digest BLOB NOT NULL,
+            conversation_id TEXT NOT NULL, owner_id TEXT NOT NULL, audience TEXT NOT NULL,
+            allowed_services TEXT NOT NULL, allowed_origins TEXT NOT NULL, kind TEXT NOT NULL,
+            generation INTEGER NOT NULL, created_at TEXT NOT NULL, expires_at TEXT, revoked_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO host_service_tokens VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+        (
+            selector,
+            HostTokenStore._digest(verifier),
+            "conv_1",
+            "owner_a",
+            "app:demo",
+            '["svc.ping"]',
+            "[]",
+            "deployed",
+            7,
+            "2026-07-11T00:00:00+00:00",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    with HostTokenStore(path) as migrated:
+        record = migrated.verify(f"a2v0.{selector}.{verifier}")
+        assert record is not None
+        assert record.version == 0
+        assert record.generation == 7
+        assert migrated.mint("conv_1", "owner_a", "app:new").startswith("a4v1.")
+
+
+def test_wire_version_must_match_persisted_version(store):
+    token = store.mint("conv_1", "owner_a", "app:demo")
+    _prefix, selector, verifier = _parts(token)
+    assert store.verify(f"a2v0.{selector}.{verifier}") is None
 
 
 def test_no_plaintext_verifier_in_database(store):
@@ -195,12 +245,152 @@ def test_mint_rejects_invalid_service_scope(store):
         )
 
 
-def test_concurrent_rotation_cannot_revoke_both_candidates(tmp_path):
+def test_rotation_generation_is_automatic_monotonic_and_owner_scoped(store):
+    initial = store.mint("conv_1", "owner_a", "app:demo", generation=40)
+    rotated = store.rotate("conv_1", "owner_a", "app:demo")
+    assert store.verify(initial).generation == 40
+    assert store.verify(rotated).generation == 41
+    next_rotated = store.rotate("conv_1", "owner_a", "app:demo")
+    assert store.verify(next_rotated).generation == 42
+    other_owner = store.rotate("conv_1", "owner_b", "app:demo")
+    assert store.verify(other_owner).generation == 0
+
+
+def test_finish_rotation_does_not_revoke_other_owner(store):
+    owner_a_old = store.mint("conv_1", "owner_a", "app:demo")
+    owner_b = store.mint("conv_1", "owner_b", "app:demo")
+    owner_a_new = store.rotate("conv_1", "owner_a", "app:demo")
+    selector = store.verify(owner_a_new).selector
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=selector) == 1
+    assert store.verify(owner_a_old) is None
+    assert store.verify(owner_b) is not None
+
+
+def test_older_broad_finish_preserves_newer_narrow_candidate(store):
+    initial = store.mint(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
+    broad = store.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping", "payments.checkout"}),
+    )
+    narrow = store.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
+    broad_record = store.verify(broad)
+    narrow_record = store.verify(narrow)
+    assert broad_record is not None
+    assert narrow_record is not None
+
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=broad_record.selector) == 1
+    assert store.verify(initial) is None
+    assert store.verify(broad) is not None
+    assert store.verify(narrow) is not None
+    narrow_after_broad_finish = store.verify(narrow)
+    assert narrow_after_broad_finish is not None
+    assert narrow_after_broad_finish.allowed_services == frozenset({"svc.ping"})
+
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=narrow_record.selector) == 1
+    assert store.verify(broad) is None
+    assert store.verify(narrow) is not None
+
+
+def test_finish_rotation_preserves_same_generation_candidate(store):
+    first = store.mint("conv_1", "owner_a", "app:demo", generation=4)
+    peer = store.mint("conv_1", "owner_a", "app:demo", generation=4)
+    first_record = store.verify(first)
+    assert first_record is not None
+
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=first_record.selector) == 0
+    assert store.verify(first) is not None
+    assert store.verify(peer) is not None
+
+
+def test_failed_newer_candidate_can_be_revoked_without_losing_proven_older(store):
+    proven = store.mint(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
+    proven_record = store.verify(proven)
+    assert proven_record is not None
+    assert store.finish_rotation("conv_1", "app:demo", keep_selector=proven_record.selector) == 0
+
+    failed = store.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"payments.checkout"}),
+    )
+    failed_record = store.verify(failed)
+    assert failed_record is not None
+    assert store.revoke(failed_record.selector)
+    assert store.verify(failed) is None
+    proven_after_failure = store.verify(proven)
+    assert proven_after_failure is not None
+    assert proven_after_failure.allowed_services == frozenset({"svc.ping"})
+
+
+def test_unknown_selector_uses_digest_comparison(store, monkeypatch):
+    calls = 0
+    real_compare = secrets.compare_digest
+
+    def observed_compare(left, right):
+        nonlocal calls
+        calls += 1
+        return real_compare(left, right)
+
+    monkeypatch.setattr("secrets.compare_digest", observed_compare)
+    unknown = "a4v1.AAAAAAAAAAAAAAAAAAAAAA.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+    assert store.verify(unknown) is None
+    assert calls == 1
+
+
+def test_concurrent_rotations_allocate_distinct_increasing_generations(tmp_path):
+    path = tmp_path / "generation.db"
+    first = HostTokenStore(path)
+    second = HostTokenStore(path)
+    first.mint("conv_1", "owner_a", "app:demo")
+    barrier = threading.Barrier(2)
+
+    def rotate(store):
+        barrier.wait()
+        token = store.rotate("conv_1", "owner_a", "app:demo")
+        return store.verify(token).generation
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(rotate, first), pool.submit(rotate, second)]
+        generations = sorted(future.result() for future in futures)
+    assert generations == [1, 2]
+    first.close()
+    second.close()
+
+
+def test_concurrent_rotation_finish_deterministically_keeps_newest(tmp_path):
     path = tmp_path / "rotation.db"
     first = HostTokenStore(path)
     second = HostTokenStore(path)
-    token_a = first.mint("conv_1", "owner_a", "app:demo")
-    token_b = first.rotate("conv_1", "owner_a", "app:demo")
+    token_a = first.mint(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping", "payments.checkout"}),
+    )
+    token_b = first.rotate(
+        "conv_1",
+        "owner_a",
+        "app:demo",
+        allowed_services=frozenset({"svc.ping"}),
+    )
     selector_a = first.verify(token_a).selector
     selector_b = first.verify(token_b).selector
     barrier = threading.Barrier(2)
@@ -222,7 +412,9 @@ def test_concurrent_rotation_cannot_revoke_both_candidates(tmp_path):
                 outcomes.append("lost")
     active = [record for record in first.list_for_conversation("conv_1") if record.is_active]
     assert len(active) == 1
-    assert outcomes.count("lost") == 1
+    assert active[0].selector == selector_b
+    assert active[0].allowed_services == frozenset({"svc.ping"})
+    assert outcomes in ([0, 1], ["lost", 1])
     first.close()
     second.close()
 

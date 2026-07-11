@@ -49,6 +49,7 @@ from disco.core.appkit.primitives import PrimitiveVerifyResult, VerifyCheck
 from disco.core.appkit.spec import AppSpec, DesignSpec
 from disco.core.llm.config_store import ConfigStore
 from disco.core.llm.secrets import SecretBox, SecretStore
+from disco.core.quota import SqliteQuotaStore
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.stripe_host_service import (
     PAYMENTS_CHECKOUT_SERVICE_NAME,
@@ -173,6 +174,7 @@ class _HostBusServer:
         self._secret_store = secret_store
         self._config_store = config_store
         self._token_store = token_store
+        self._quota_store = SqliteQuotaStore()
         self._stripe_config_store = stripe_config_store
         self._port = port
         self._cert_path = cert_path
@@ -192,6 +194,7 @@ class _HostBusServer:
                 self._store,
                 cast(Any, _FakeRuntime(self._secret_store, self._config_store, self._store)),
                 self._token_store,
+                self._quota_store,
                 self._stripe_config_store,
             )
         )
@@ -222,6 +225,7 @@ class _HostBusServer:
                     await asyncio.wait_for(self._task, timeout=_KILL_TIMEOUT_S)
                 self._task = None
             self._server = None
+        self._quota_store.close()
 
     async def _wait_ready(self) -> None:
         deadline = time.monotonic() + _BOOT_TIMEOUT_S

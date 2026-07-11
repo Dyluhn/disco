@@ -42,6 +42,7 @@ _ADMIN_PREFIXES = (
     "/api/secrets",
     "/api/security",
     "/api/stripe",
+    "/api/quota",
     "/api/webhooks",
     "/api/skills",
     "/api/mcp",

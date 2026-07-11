@@ -1,12 +1,13 @@
 """Durable, scoped bearer credentials for the WO-A2.2 host-service bus.
 
-Tokens have one exact wire shape::
+New tokens have one exact wire shape::
 
-    a2v0.<22-char selector>.<43-char verifier>
+    a4v1.<22-char selector>.<43-char verifier>
 
 Only a SHA-256 digest of the verifier is persisted. Records are operational
 state, not conversation events, and contain the trusted principal and complete
-capability scope used by the bus.
+capability scope used by the bus. Persisted A2 ``a2v0`` records remain usable
+during migration; the store never mints new v0 credentials.
 """
 
 from __future__ import annotations
@@ -29,10 +30,14 @@ from urllib.parse import urlsplit
 from disco.core.host_egress import origin_for_url
 from disco.core.host_services import valid_host_service_name
 
-_TOKEN_PREFIX = "a2v0"
+_TOKEN_PREFIX = "a4v1"
+_TOKEN_VERSION = 1
+_LEGACY_TOKEN_PREFIX = "a2v0"
+_LEGACY_TOKEN_VERSION = 0
 _SELECTOR_BYTES = 16
 _VERIFIER_BYTES = 32
-_TOKEN_RE = re.compile(r"^a2v0\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$")
+_TOKEN_RE = re.compile(r"^(a2v0|a4v1)\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$")
+_SELECTOR_RE = re.compile(r"^[A-Za-z0-9_-]{22}$")
 _DUMMY_DIGEST = b"\x00" * hashlib.sha256().digest_size
 _TABLE_NAME = "host_service_tokens"
 _TOKEN_KINDS = frozenset({"preview", "deployed", "probe"})
@@ -87,6 +92,7 @@ class HostTokenRecord:
     """A durable credential record. It deliberately contains no verifier."""
 
     selector: str
+    version: int
     conversation_id: str
     owner_id: str
     audience: str
@@ -127,6 +133,7 @@ class HostTokenStore:
                 f"""
                 CREATE TABLE IF NOT EXISTS {_TABLE_NAME} (
                     selector          TEXT PRIMARY KEY,
+                    version           INTEGER NOT NULL DEFAULT 0,
                     verifier_digest   BLOB NOT NULL,
                     conversation_id   TEXT NOT NULL,
                     owner_id          TEXT NOT NULL,
@@ -141,6 +148,16 @@ class HostTokenStore:
                 )
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in conn.execute(f"PRAGMA table_info({_TABLE_NAME})").fetchall()
+            }
+            if "version" not in columns:
+                # Every record predating this column was minted by A2 as a2v0.
+                conn.execute(
+                    f"ALTER TABLE {_TABLE_NAME} "
+                    f"ADD COLUMN version INTEGER NOT NULL DEFAULT {_LEGACY_TOKEN_VERSION}"
+                )
             conn.execute(
                 f"CREATE INDEX IF NOT EXISTS idx_host_tokens_conv "
                 f"ON {_TABLE_NAME} (conversation_id)"
@@ -201,13 +218,14 @@ class HostTokenStore:
                     conn.execute(
                         f"""
                         INSERT INTO {_TABLE_NAME}
-                        (selector, verifier_digest, conversation_id, owner_id, audience,
+                        (selector, version, verifier_digest, conversation_id, owner_id, audience,
                          allowed_services, allowed_origins, kind, generation,
                          created_at, expires_at, revoked_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                         """,
                         (
                             selector,
+                            _TOKEN_VERSION,
                             digest,
                             conversation_id,
                             owner_id,
@@ -239,29 +257,59 @@ class HostTokenStore:
         """Return an active record, or None for every auth failure."""
         with self._lock:
             self._check_open()
-        parsed = self._parse(token)
+        parsed = self._parse_versioned(token)
         if parsed is None:
             return None
-        selector, verifier = parsed
+        version, selector, verifier = parsed
         with self._lock:
             conn = self._check_open()
             row = conn.execute(
                 f"SELECT * FROM {_TABLE_NAME} WHERE selector = ?",
                 (selector,),
             ).fetchone()
-        expected = bytes(row["verifier_digest"]) if row is not None else _DUMMY_DIGEST
+        expected = _DUMMY_DIGEST
+        stored_version: int | None = None
+        row_header_valid = row is not None
+        if row is not None:
+            try:
+                raw_digest = row["verifier_digest"]
+                raw_version = row["version"]
+                if not isinstance(raw_digest, bytes) or len(raw_digest) != len(_DUMMY_DIGEST):
+                    raise HostTokenError("invalid verifier digest in host token store")
+                if not isinstance(raw_version, int) or isinstance(raw_version, bool):
+                    raise HostTokenError("invalid credential version in host token store")
+                expected = raw_digest
+                stored_version = raw_version
+            except (HostTokenError, IndexError, KeyError, TypeError, ValueError, OverflowError):
+                row_header_valid = False
         matched = secrets.compare_digest(self._digest(verifier), expected)
-        if not matched or row is None:
+        if not matched or row is None or not row_header_valid or stored_version != version:
             return None
-        record = self._record_from_row(dict(row))
-        return record if record.is_active else None
+        try:
+            record = self._record_from_row(dict(row), expected_selector=selector)
+            return record if record.is_active else None
+        except (HostTokenError, KeyError, TypeError, ValueError, OverflowError):
+            # Persisted auth state is untrusted at this boundary. Corruption or
+            # an incompatible row must fail like every other credential, never
+            # escape into the bus as a 500 or disclose which field was invalid.
+            _LOG.warning("malformed persisted host credential selector=%s", selector)
+            return None
 
     @staticmethod
-    def _parse(token: str) -> tuple[str, str] | None:
+    def _parse_versioned(token: str) -> tuple[int, str, str] | None:
         match = _TOKEN_RE.fullmatch(token)
         if match is None:
             return None
-        return match.group(1), match.group(2)
+        version = (
+            _LEGACY_TOKEN_VERSION if match.group(1) == _LEGACY_TOKEN_PREFIX else _TOKEN_VERSION
+        )
+        return version, match.group(2), match.group(3)
+
+    @staticmethod
+    def _parse(token: str) -> tuple[str, str] | None:
+        """Compatibility parser for the existing Stripe live verifier."""
+        parsed = HostTokenStore._parse_versioned(token)
+        return (parsed[1], parsed[2]) if parsed is not None else None
 
     def revoke(self, selector: str) -> bool:
         with self._lock:
@@ -302,7 +350,6 @@ class HostTokenStore:
         allowed_services: frozenset[str] = frozenset({"svc.ping"}),
         allowed_origins: frozenset[str] | None = None,
         kind: TokenKind = "preview",
-        generation: int = 0,
         expires_in: timedelta | None = None,
     ) -> str:
         """Mint a candidate while every working credential remains valid.
@@ -310,16 +357,32 @@ class HostTokenStore:
         After delivery is verified, the caller invokes finish_rotation. A
         failed delivery revokes only the candidate and preserves the old token.
         """
-        return self.mint(
-            conversation_id,
-            owner_id,
-            audience,
-            allowed_services=allowed_services,
-            allowed_origins=allowed_origins,
-            kind=kind,
-            generation=generation,
-            expires_in=expires_in,
-        )
+        with self._lock:
+            conn = self._check_open()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    f"SELECT MAX(generation) AS generation FROM {_TABLE_NAME} "
+                    "WHERE conversation_id = ? AND owner_id = ? AND audience = ?",
+                    (conversation_id, owner_id, audience),
+                ).fetchone()
+                generation = int(row["generation"]) + 1 if row["generation"] is not None else 0
+                # mint uses this same connection and commits only after its
+                # INSERT, completing this allocation+insert transaction.
+                token = self.mint(
+                    conversation_id,
+                    owner_id,
+                    audience,
+                    allowed_services=allowed_services,
+                    allowed_origins=allowed_origins,
+                    kind=kind,
+                    generation=generation,
+                    expires_in=expires_in,
+                )
+                return token
+            except Exception:
+                conn.rollback()
+                raise
 
     def finish_rotation(
         self,
@@ -328,34 +391,64 @@ class HostTokenStore:
         *,
         keep_selector: str,
     ) -> int:
-        """Revoke older credentials only after the candidate is proven live."""
+        """Revoke strictly older generations after the candidate is proven live.
+
+        A lower-generation finisher can race a newer candidate, so selection by
+        identity alone is insufficient: it must never revoke the same or a
+        newer generation. Concurrent finishes therefore converge on the newest
+        candidate that successfully finishes, regardless of transaction order.
+        """
         with self._lock:
             conn = self._check_open()
             now = datetime.now(UTC).isoformat()
             conn.execute("BEGIN IMMEDIATE")
             try:
                 active = conn.execute(
-                    f"SELECT 1 FROM {_TABLE_NAME} WHERE selector = ? "
-                    "AND conversation_id = ? AND audience = ? "
-                    "AND revoked_at IS NULL "
+                    f"SELECT owner_id, conversation_id, audience, generation "
+                    f"FROM {_TABLE_NAME} WHERE selector = ? AND revoked_at IS NULL "
                     "AND (expires_at IS NULL OR expires_at > ?)",
-                    (keep_selector, conversation_id, audience, now),
+                    (keep_selector, now),
                 ).fetchone()
                 if active is None:
                     raise ValueError("rotation candidate is not active for this app")
+                owner_value = active["owner_id"]
+                conversation_value = active["conversation_id"]
+                audience_value = active["audience"]
+                generation_value = active["generation"]
+                if (
+                    not isinstance(owner_value, str)
+                    or not isinstance(conversation_value, str)
+                    or not isinstance(audience_value, str)
+                    or not owner_value
+                    or not conversation_value
+                    or not audience_value
+                    or not isinstance(generation_value, int)
+                    or isinstance(generation_value, bool)
+                    or generation_value < 0
+                    or conversation_value != conversation_id
+                    or audience_value != audience
+                ):
+                    raise ValueError("rotation candidate is not active for this app")
                 cur = conn.execute(
                     f"UPDATE {_TABLE_NAME} SET revoked_at = ? "
-                    "WHERE conversation_id = ? AND audience = ? "
-                    "AND selector <> ? AND revoked_at IS NULL",
-                    (now, conversation_id, audience, keep_selector),
+                    "WHERE conversation_id = ? AND owner_id = ? AND audience = ? "
+                    "AND generation < ? AND revoked_at IS NULL",
+                    (
+                        now,
+                        conversation_value,
+                        owner_value,
+                        audience_value,
+                        generation_value,
+                    ),
                 )
                 conn.commit()
                 _LOG.info(
                     "host credential rotation completed conversation=%s app=%s "
-                    "selector=%s revoked=%d",
+                    "selector=%s generation=%d revoked=%d",
                     conversation_id,
                     audience,
                     keep_selector,
+                    generation_value,
                     cur.rowcount,
                 )
                 return cur.rowcount
@@ -373,23 +466,90 @@ class HostTokenStore:
         return [self._record_from_row(dict(row)) for row in rows]
 
     @staticmethod
-    def _record_from_row(row: dict[str, Any]) -> HostTokenRecord:
+    def _record_from_row(
+        row: dict[str, Any], *, expected_selector: str | None = None
+    ) -> HostTokenRecord:
+        selector = row["selector"]
+        if (
+            not isinstance(selector, str)
+            or _SELECTOR_RE.fullmatch(selector) is None
+            or (expected_selector is not None and selector != expected_selector)
+        ):
+            raise HostTokenError("invalid selector in host token store")
+        identity: dict[str, str] = {}
+        for field in ("conversation_id", "owner_id", "audience"):
+            value = row[field]
+            if not isinstance(value, str) or not value:
+                raise HostTokenError("invalid credential identity in host token store")
+            identity[field] = value
         kind = str(row["kind"])
         if kind not in _TOKEN_KINDS:
             raise HostTokenError("invalid credential kind in host token store")
+        version_value = row["version"]
+        if not isinstance(version_value, int) or isinstance(version_value, bool):
+            raise HostTokenError("invalid credential version in host token store")
+        version = version_value
+        if version not in {_LEGACY_TOKEN_VERSION, _TOKEN_VERSION}:
+            raise HostTokenError("invalid credential version in host token store")
+        generation_value = row["generation"]
+        if (
+            not isinstance(generation_value, int)
+            or isinstance(generation_value, bool)
+            or generation_value < 0
+        ):
+            raise HostTokenError("invalid credential generation in host token store")
+        services_value = json.loads(row["allowed_services"])
+        if (
+            not isinstance(services_value, list)
+            or not services_value
+            or any(not isinstance(value, str) for value in services_value)
+        ):
+            raise HostTokenError("invalid service scope in host token store")
+        services = frozenset(services_value)
+        if len(services) != len(services_value) or any(
+            not valid_host_service_name(service) for service in services
+        ):
+            raise HostTokenError("invalid service scope in host token store")
+        origins_value = json.loads(row["allowed_origins"])
+        if not isinstance(origins_value, list) or any(
+            not isinstance(value, str) for value in origins_value
+        ):
+            raise HostTokenError("invalid origin scope in host token store")
+        origins = frozenset(origins_value)
+        try:
+            canonical_origins = _canonical_origins(origins)
+        except ValueError as exc:
+            raise HostTokenError("invalid origin scope in host token store") from exc
+        if len(origins) != len(origins_value) or canonical_origins != origins:
+            raise HostTokenError("invalid origin scope in host token store")
+        created_at = HostTokenStore._stored_datetime(row["created_at"], required=True)
+        expires_at = HostTokenStore._stored_datetime(row["expires_at"], required=False)
+        revoked_at = HostTokenStore._stored_datetime(row["revoked_at"], required=False)
         return HostTokenRecord(
-            selector=str(row["selector"]),
-            conversation_id=str(row["conversation_id"]),
-            owner_id=str(row["owner_id"]),
-            audience=str(row["audience"]),
-            allowed_services=frozenset(json.loads(row["allowed_services"])),
-            allowed_origins=frozenset(json.loads(row["allowed_origins"])),
+            selector=selector,
+            version=version,
+            conversation_id=identity["conversation_id"],
+            owner_id=identity["owner_id"],
+            audience=identity["audience"],
+            allowed_services=services,
+            allowed_origins=origins,
             kind=cast(TokenKind, kind),
-            generation=int(row["generation"]),
-            created_at=datetime.fromisoformat(row["created_at"]),
-            expires_at=(datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None),
-            revoked_at=(datetime.fromisoformat(row["revoked_at"]) if row["revoked_at"] else None),
+            generation=generation_value,
+            created_at=cast(datetime, created_at),
+            expires_at=expires_at,
+            revoked_at=revoked_at,
         )
+
+    @staticmethod
+    def _stored_datetime(value: object, *, required: bool) -> datetime | None:
+        if value is None and not required:
+            return None
+        if not isinstance(value, str) or not value:
+            raise HostTokenError("invalid credential timestamp in host token store")
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise HostTokenError("credential timestamp must be timezone-aware")
+        return parsed
 
     def _check_open(self) -> sqlite3.Connection:
         if self._conn is None:

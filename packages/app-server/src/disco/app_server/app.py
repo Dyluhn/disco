@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 
 from disco.core.auth import allowed_frontend_origins
+from disco.core.quota import SqliteQuotaStore
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.stripe_host_service import StripeAppConfigStore
 from disco.core.webhook_host_service import WebhookAppConfigStore
@@ -33,6 +34,7 @@ from .routes import (
     make_models_router,
     make_openrouter_router,
     make_providers_router,
+    make_quota_router,
     make_secrets_router,
     make_security_router,
     make_skills_router,
@@ -53,14 +55,17 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     # mcp_approvals table (core SqliteEventStore schema).
     owned_stripe_configs: StripeAppConfigStore | None = None
     owned_webhook_configs: WebhookAppConfigStore | None = None
+    owned_quota_store: SqliteQuotaStore | None = None
     if config is None:
         event_db_path = getattr(store, "db_path", None) or ":memory:"
         owned_stripe_configs = StripeAppConfigStore(event_db_path)
         owned_webhook_configs = WebhookAppConfigStore(event_db_path)
+        owned_quota_store = SqliteQuotaStore(event_db_path)
         state = ConfigState(
             db_conn=store._conn,
             stripe_configs=owned_stripe_configs,
             webhook_configs=owned_webhook_configs,
+            quota_store=owned_quota_store,
         )
     else:
         state = config
@@ -74,6 +79,8 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
                 owned_stripe_configs.close()
             if owned_webhook_configs is not None:
                 owned_webhook_configs.close()
+            if owned_quota_store is not None:
+                owned_quota_store.close()
 
     app = FastAPI(title="disco app-server", version="0.1.0", lifespan=lifespan)
 
@@ -115,6 +122,7 @@ def create_app(store: SqliteEventStore, config: ConfigState | None = None) -> Fa
     app.include_router(make_secrets_router(state))
     app.include_router(make_security_router(state))
     app.include_router(make_stripe_router(state))
+    app.include_router(make_quota_router(state))
     app.include_router(make_webhooks_router(state))
     app.include_router(make_skills_router(state))
     app.include_router(make_mcp_router(state))

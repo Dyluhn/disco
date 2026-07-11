@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from disco.core import SkillStore
 from disco.core.llm import ConfigStore, ModelRole, RouterConfig, SecretStore
 from disco.core.llm.config import McpSettings, ProviderSettings
+from disco.core.quota import SqliteQuotaStore
 from disco.core.stripe_host_service import (
     PAYMENTS_CHECKOUT_SERVICE_NAME,
     STRIPE_API_URL,
@@ -126,6 +127,7 @@ class ConfigState:
         skills: SkillStore | None = None,
         db_conn: _ApprovalConn | None = None,
         stripe_configs: StripeAppConfigStore | None = None,
+        quota_store: SqliteQuotaStore | None = None,
         webhook_configs: WebhookAppConfigStore | None = None,
     ) -> None:
         if store is not None:
@@ -142,6 +144,7 @@ class ConfigState:
         # When None (tests without a DB), MCP config persists to ConfigStore only.
         self._db_conn = db_conn
         self._stripe_configs = stripe_configs
+        self._quota_store = quota_store
         self._webhook_configs = webhook_configs
         self._provider_config = ProviderConfigService(
             self._store,
@@ -1024,3 +1027,10 @@ class ConfigState:
 
     def mcp_approval_diff(self, name: str, new_hash: str) -> dict | None:
         return self._mcp_service.mcp_approval_diff(name, new_hash)
+
+
+def app_quota_store(state: ConfigState) -> SqliteQuotaStore:
+    """Return the shared quota service or fail closed when host wiring is absent."""
+    if state._quota_store is None:
+        raise RuntimeError("quota store is not wired to shared host state")
+    return state._quota_store
