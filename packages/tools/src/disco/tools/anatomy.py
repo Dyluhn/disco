@@ -22,6 +22,7 @@ from enum import Enum
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from disco.core import SecurityRisk
+from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.llm import ToolSpec
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -76,6 +77,10 @@ class ToolContext(BaseModel):
     # callback is optional so standalone tool tests and non-workflow executors keep
     # byte-identical behavior.
     workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
+    # Host-owned adversarial primitive verification.  The callback receives only
+    # declarative specs + on-disk text; any credentials remain captured inside the
+    # host closure.  None is the safe default: security primitives fail closed.
+    primitive_live_verifier: PrimitiveLiveVerifier | None = None
     # Names callable in the current executor scope. Guards use this only for
     # recovery text, never for authorization; None preserves standalone tool tests
     # that call Tool.run directly without an executor.
@@ -142,13 +147,15 @@ class ToolDef(BaseModel):
 
 def _inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
     """Dereference $defs/$ref so every nested object's fields appear INLINE in the parameters
-    schema the model sees. Pydantic renders a nested-model arg (e.g. `operations: list[RunScriptOp]`)
-    as ``{"$ref": "#/$defs/RunScriptOp"}`` with the actual fields hidden under ``$defs``. Open-weight
+    schema the model sees. Pydantic renders a nested-model arg (e.g.
+    `operations: list[RunScriptOp]`) as ``{"$ref": "#/$defs/RunScriptOp"}`` with the
+    actual fields hidden under ``$defs``. Open-weight
     function-calling models frequently CANNOT resolve a ``$ref`` to the item's fields and emit empty
     placeholders — LIVE-PROVEN: MiniMax-M3 emitted ``operations=["",""]`` / ``edits=[""]`` for the
     ``$ref``'d shape, and correct nested objects the instant the schema was inlined. Inlining the
-    refs (the fields land directly in ``items``) is the single root-cause fix for EVERY ``list[Model]``
-    / nested-model tool argument; it produces standard, more verbose JSON Schema that every provider
+    refs (the fields land directly in ``items``) is the single root-cause fix for
+    EVERY ``list[Model]`` / nested-model tool argument; it produces standard, more
+    verbose JSON Schema that every provider
     accepts. Cycle-safe: a model that (transitively) references itself leaves a bare
     ``{"type": "object"}`` at the recursion point rather than expanding forever."""
     defs = schema.get("$defs")

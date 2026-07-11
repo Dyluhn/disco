@@ -36,7 +36,7 @@ populated by the time anything calls `generate` / the tools resolve a primitive.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -44,7 +44,8 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from .recipes import SiteRecipe
-    from .spec import AppSpec, DesignSpec
+
+from .spec import AppSpec, DesignSpec
 
 # Canonical primitive ids — matched against `AppSpec.app_kind` (and accepted as
 # `app_create(primitive_id=…)`). Kept as constants so the generator, the tools, and
@@ -91,6 +92,12 @@ class PrimitiveVerifyResult:
     checks: tuple[VerifyCheck, ...] = ()
 
 
+PrimitiveLiveVerifier = Callable[
+    [str, AppSpec, DesignSpec, Mapping[str, str]],
+    Awaitable[PrimitiveVerifyResult],
+]
+
+
 @dataclass(frozen=True)
 class PrimitiveDefinition:
     """One AppKit primitive: its id/aliases + the three pure spec→spec / spec→tree
@@ -131,6 +138,18 @@ class PrimitiveDefinition:
         | None
     ) = None
     apply_spec: Callable[[AppSpec, BaseModel], AppSpec] | None = None
+    # Security-classed primitives split verification in two. ``verify`` remains
+    # the deterministic, secret-free source/tree verifier. ``live_verify_id``
+    # names the host-owned adversarial runner that must ALSO pass before the
+    # workspace can ship.  The callback itself is deliberately not stored in the
+    # core registry: tools receives it through ToolContext from the host runtime.
+    live_verify_id: str | None = None
+    # Exact live exploit legs required from the host runner. A partial or renamed
+    # result is unknown wiring, not evidence that the security contract passed.
+    live_verify_checks: tuple[str, ...] = ()
+    # The optional AppSpec metadata field whose presence makes this primitive a
+    # mandatory security gate even if its mutable provenance file was deleted.
+    security_metadata_field: str | None = None
 
 
 # The registry, populated by `generator.py` at import time. Keyed by canonical id;
@@ -143,6 +162,28 @@ def register_primitive(defn: PrimitiveDefinition) -> None:
     """Register a primitive (idempotent for the SAME definition object). A second,
     DIFFERENT definition for an already-claimed id/alias is a hard error — a
     duplicate is a bug, never a silent shadow."""
+    if (defn.live_verify_id is None) != (defn.security_metadata_field is None):
+        raise ValueError(
+            f"primitive {defn.id!r} must declare live_verify_id and "
+            "security_metadata_field together"
+        )
+    if defn.live_verify_id is not None and not defn.live_verify_id.strip():
+        raise ValueError(f"primitive {defn.id!r} has an empty live_verify_id")
+    if defn.live_verify_id is not None and (
+        not defn.live_verify_checks
+        or any(not name.strip() for name in defn.live_verify_checks)
+        or len(set(defn.live_verify_checks)) != len(defn.live_verify_checks)
+    ):
+        raise ValueError(f"primitive {defn.id!r} must declare unique non-empty live_verify_checks")
+    if defn.live_verify_id is None and defn.live_verify_checks:
+        raise ValueError(
+            f"primitive {defn.id!r} declares live_verify_checks without live_verify_id"
+        )
+    if defn.security_metadata_field is not None and not defn.security_metadata_field.isidentifier():
+        raise ValueError(
+            f"primitive {defn.id!r} has invalid security metadata field "
+            f"{defn.security_metadata_field!r}"
+        )
     if defn.id in _REGISTRY and _REGISTRY[defn.id] is not defn:
         raise ValueError(f"duplicate primitive id: {defn.id!r}")
     for alias in defn.aliases:
@@ -188,6 +229,25 @@ def primitive_ids() -> frozenset[str]:
     return frozenset(_REGISTRY)
 
 
+def required_security_primitives(app: AppSpec | None) -> tuple[PrimitiveDefinition, ...]:
+    """Return security primitives implied by the authoritative AppSpec.
+
+    Provenance under ``.disco/primitives`` is useful cross-checking input, but it
+    is workspace data and can be deleted by generated/model-authored code.  A
+    security gate therefore derives mandatory membership from strict AppSpec
+    metadata registered on the primitive definition.  Registry corruption is a
+    hard error; callers turn it into a fail-closed verdict.
+    """
+    if app is None:
+        return ()
+    required: list[PrimitiveDefinition] = []
+    for defn in sorted(_REGISTRY.values(), key=lambda item: item.id):
+        field_name = defn.security_metadata_field
+        if field_name is not None and getattr(app, field_name, None) is not None:
+            required.append(defn)
+    return tuple(required)
+
+
 __all__ = [
     "ANALYTICS_PRIMITIVE_ID",
     "COLLECTION_PRIMITIVE_ID",
@@ -201,10 +261,12 @@ __all__ = [
     "SEO_PRIMITIVE_ID",
     "HostService",
     "PrimitiveDefinition",
+    "PrimitiveLiveVerifier",
     "PrimitiveVerifyResult",
     "VerifyCheck",
     "get_primitive",
     "primitive_ids",
     "register_primitive",
+    "required_security_primitives",
     "resolve_primitive",
 ]
