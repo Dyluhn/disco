@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import timedelta
 from typing import Any
 
@@ -217,6 +218,82 @@ def test_bus_refuses_service_outside_credential_scope(store, token_store):
     response = _bus(_make_client(store, token_store), "svc.unknown", token, {})
     assert response.status_code == 403
     assert response.json() == {"error": "service_not_allowed"}
+
+
+def test_bus_context_cannot_broaden_app_service_or_origin_scope(store, token_store):
+    class _EmptyPayload(BaseModel):
+        pass
+
+    async def _scope(payload, ctx):
+        del payload
+        return {
+            "app_id": ctx.app_id,
+            "services": sorted(ctx.allowed_services),
+            "origins": sorted(ctx.allowed_origins),
+        }
+
+    register_host_service(
+        HostServiceDefinition(
+            name="svc.scope",
+            handler=_scope,
+            description="scope proof",
+            payload_schema=_EmptyPayload,
+        )
+    )
+    _create_conversation(store, "conv_1")
+    token_a = token_store.mint(
+        "conv_1",
+        "owner_a",
+        "app:a",
+        allowed_services=frozenset({"svc.scope"}),
+        allowed_origins=frozenset({"https://a.example"}),
+    )
+    client = _make_client(store, token_store)
+    response = _bus(client, "svc.scope", token_a, {})
+    assert response.status_code == 200
+    assert response.json() == {
+        "app_id": "app:a",
+        "services": ["svc.scope"],
+        "origins": ["https://a.example"],
+    }
+    assert _bus(client, "svc.ping", token_a, {}).status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("allowed_services", '["Svc-Ping"]'),
+        ("allowed_origins", '["https://a.example/path"]'),
+        ("version", 99),
+        ("verifier_digest", b"short"),
+        ("created_at", "2026-07-11T00:00:00"),
+        ("owner_id", ""),
+        ("generation", -1),
+    ],
+)
+def test_bus_malformed_persisted_credential_fails_auth(
+    store, token_store, column, value
+):
+    _create_conversation(store, "conv_1")
+    token = token_store.mint(
+        "conv_1",
+        "owner_a",
+        "app:a",
+        allowed_services=frozenset({"svc.ping"}),
+        allowed_origins=frozenset({"https://a.example"}),
+    )
+    selector = token.split(".")[1]
+    conn = sqlite3.connect(token_store.db_path)
+    conn.execute(
+        f"UPDATE host_service_tokens SET {column} = ? WHERE selector = ?",
+        (value, selector),
+    )
+    conn.commit()
+    conn.close()
+
+    response = _bus(_make_client(store, token_store), "svc.ping", token, {})
+    assert response.status_code == 401
+    assert response.json() == {"error": "auth_required"}
 
 
 def test_bus_payload_validation_error(store, token_store):
