@@ -428,8 +428,7 @@ def make_conversations_router(
         """The KILL SWITCH (BoD §13.6): halt a running agent, tear down its sandbox,
         revoke its capabilities. Always-available; the UI (Prompt 4) wires a button."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
-        if host_token_store is not None:
-            host_token_store.revoke_for_conversation(conversation_id)
+        _revoke_host_tokens(host_token_store, conversation_id)
         sandbox_ids = runtime.sandbox_instance_ids(conversation_id) if runtime is not None else []
         if runtime is not None:
             await runtime.kill(conversation_id)
@@ -524,14 +523,18 @@ def make_conversations_router(
         owner-scoped DB delete is the authority on whether the row is actually removed."""
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         owner_id = current_owner_id(request)
-        if host_token_store is not None:
-            host_token_store.revoke_for_conversation(conversation_id)
+        _revoke_host_tokens(host_token_store, conversation_id)
         if runtime is not None:
             await runtime.forget_conversation(conversation_id)
         deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
         return {"id": conversation_id, "deleted": deleted}
 
     return router
+
+
+def _revoke_host_tokens(token_store: HostTokenStore | None, conversation_id: str) -> None:
+    if token_store is not None:
+        token_store.revoke_for_conversation(conversation_id)
 
 
 def make_conversation_library_router(
