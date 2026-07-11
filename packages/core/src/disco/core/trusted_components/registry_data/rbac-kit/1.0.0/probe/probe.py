@@ -73,7 +73,9 @@ def _extract_session_cookie(set_cookie_header: str) -> str | None:
     return f"tc_session={value.strip()}"
 
 
-def _login(base_url: str, email: str, password: str) -> str | None:
+def _login(base_url: str, email: object, password: object) -> str | None:
+    if not isinstance(email, str) or not isinstance(password, str):
+        return None
     status, hdrs, _raw = _request(
         base_url, "/auth/login", method="POST", body={"email": email, "password": password}
     )

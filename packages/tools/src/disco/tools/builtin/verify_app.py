@@ -356,8 +356,16 @@ class VerifyWebAppTool:
             from .files import _atomic_write
 
             await _atomic_write(sandbox, LOCKFILE_RELPATH, dump_lock(result.lock))
-            for name in result.newly_ejected:
-                await self._append_eject_banner(ctx, result.lock, name)
+        # Re-assert the eject banner for EVERY ejected component (idempotent), not
+        # only the newly-ejected ones. A banner removed by a revert-from-source or
+        # a failed reinstall would otherwise never come back — leaving an ejected
+        # component's GUIDE looking trusted, a false affordance. _append_eject_banner
+        # is a no-op when the banner is already present.
+        banner_lock = result.lock if result.lock is not None else lock
+        if banner_lock is not None:
+            for nm, entry in banner_lock.components.items():
+                if entry.ejected:
+                    await self._append_eject_banner(ctx, banner_lock, nm)
 
         checks_out.extend(
             {"name": c.name, "status": c.status, "evidence": c.evidence}
@@ -438,6 +446,8 @@ class VerifyWebAppTool:
         if record is None or not await sandbox.file_exists(guide_path):
             return
         guide = await sandbox.read_file(guide_path)
+        if b"**Ejected" in guide:
+            return  # idempotent — the banner is already present
         banner = (
             f"\n\n---\n\n> ⚠ **Ejected {record.at}** ({record.reason}) — this copy "
             f"diverged from the registry and is now custom code you own. Upgrades and "

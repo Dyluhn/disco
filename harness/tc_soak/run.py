@@ -180,8 +180,13 @@ async def _verify(state: SoakState) -> Any:
         from disco.core.trusted_components.lockfile import dump_lock
 
         state.sandbox.fs[LOCKFILE_RELPATH] = dump_lock(result.lock)
-        for name in result.newly_ejected:
-            gp = install_path(name, "GUIDE.md")
+    # Mirror the product fold: re-assert the banner for EVERY ejected component
+    # (idempotent), not just newly-ejected — a banner lost to a revert-from-source
+    # must be restored on verify.
+    banner_lock = result.lock if result.lock is not None else lock
+    for _nm, _entry in banner_lock.components.items():
+        if _entry.ejected:
+            gp = install_path(_nm, "GUIDE.md")
             if gp in state.sandbox.fs and b"**Ejected" not in state.sandbox.fs[gp]:
                 state.sandbox.fs[gp] += b"\n> \xe2\x9a\xa0 **Ejected (soak auto)**\n"
     return result
@@ -267,6 +272,12 @@ async def cycle(state: SoakState, i: int) -> None:
                 state.sandbox.fs[install_path(name, rel)] = data
             out = await add_tool.run(AddTrustedComponentArgs(name=name), state.ctx)
             state.last_tool_refused = not out.success
+            # Reverting from source overwrote the GUIDE (banner gone). If the
+            # reinstall refused (e.g. missing dep), the component is still ejected
+            # — the real finish-gate verify re-asserts the banner, so converge the
+            # same way here instead of leaving a transient banner-less eject.
+            if not out.success and not state.lock_corrupted:
+                await _verify(state)
 
     # repair corruption occasionally so the soak doesn't wedge forever —
     # deleting the lockfile is the documented recovery and LEGITIMATELY resets
