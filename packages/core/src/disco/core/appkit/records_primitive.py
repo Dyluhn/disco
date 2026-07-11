@@ -1398,6 +1398,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
         _emit_main_tsx,
         _emit_manifest_ts,
         _emit_package_json,
+        _emit_package_lock_json,
         _emit_styles_css,
         _emit_submit_hook_ts,
         _emit_tsconfig,
@@ -1458,6 +1459,7 @@ def generate_records(app: AppSpec, design: DesignSpec) -> dict[str, str]:
     files: dict[str, str] = {
         "index.html": _emit_index_html(app, design),
         "package.json": _emit_package_json(app, db_name),
+        "package-lock.json": _emit_package_lock_json(app),
         "drizzle.config.ts": _emit_drizzle_config_ts(),
         "tsconfig.json": _emit_tsconfig(),
         "vite.config.ts": _emit_vite_config(),

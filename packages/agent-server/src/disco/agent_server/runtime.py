@@ -165,6 +165,7 @@ from .schedule_service import ScheduleService
 from .sessions_service import SessionsService
 from .share_service import ShareService
 from .space_store import JsonSpaceStore
+from .stripe_live_verifier import make_stripe_live_verifier
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
@@ -1708,6 +1709,44 @@ class ConversationRuntime:
         (empty list if none were ingested, e.g. non-text uploads only)."""
         return list(self._upload_passages.get(conversation_id, []))
 
+    def _build_common_exec_kwargs(
+        self,
+        session: SandboxSession,
+        broker: CapabilityBroker,
+        conversation_id: str,
+        model_policy: ModelExecutionPolicy,
+        read_char_budget: int,
+        scope_guard: Any,
+        on_tool_success: Any,
+        workflow_router_mode: bool,
+        workflow_events: Any,
+    ) -> dict[str, Any]:
+        return dict(
+            # SandboxSession is a drop-in SandboxInstance (it implements the
+            # protocol at runtime); the `id` attribute differs only in being a
+            # property rather than a plain attribute, which trips the
+            # type-checker's invariance check on a protocol field. Cast to
+            # the protocol type so the type checker is happy without
+            # touching runtime behavior.
+            sandbox=cast(SandboxInstance, session),
+            broker=broker,
+            conversation_id=conversation_id,
+            model_policy=model_policy,
+            # ROOT-5: the conversation's effective (override-aware) driver endpoint, so
+            # LLM-using tools (slides_generate) author with the model the user picked.
+            driver_llm=self._effective_driver_endpoint(conversation_id),
+            # CW-6: capability-derived file_read page budget (see above).
+            read_char_budget=read_char_budget,
+            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only;
+            # optional observe-only audit on normal/AppKit builds).
+            scope_guard=scope_guard,
+            on_tool_success=on_tool_success,
+            # P7: the active contract's starter_kit for scaffold_starter.
+            starter_kit=self._starter_kit_for(conversation_id),
+            workflow_events=workflow_events if workflow_router_mode else None,
+            primitive_live_verifier=make_stripe_live_verifier(),
+        )
+
     def _compose_build_loop(
         self,
         conversation_id: str,
@@ -1823,29 +1862,16 @@ class ConversationRuntime:
                 payload=payload,
             )
 
-        _common_exec_kwargs: dict[str, Any] = dict(
-            # SandboxSession is a drop-in SandboxInstance (it implements the
-            # protocol at runtime); the `id` attribute differs only in being a
-            # property rather than a plain attribute, which trips the
-            # type-checker's invariance check on a protocol field. Cast to
-            # the protocol type so the type checker is happy without
-            # touching runtime behavior.
-            sandbox=cast(SandboxInstance, session),
-            broker=broker,
-            conversation_id=conversation_id,
-            model_policy=model_policy,
-            # ROOT-5: the conversation's effective (override-aware) driver endpoint, so
-            # LLM-using tools (slides_generate) author with the model the user picked.
-            driver_llm=self._effective_driver_endpoint(conversation_id),
-            # CW-6: capability-derived file_read page budget (see above).
-            read_char_budget=_read_char_budget,
-            # CONTRACT-ACTIVATE: per-phase contract enforcement (artifact mode only;
-            # optional observe-only audit on normal/AppKit builds).
-            scope_guard=_scope_guard,
-            on_tool_success=_on_tool_success,
-            # P7: the active contract's starter_kit for scaffold_starter.
-            starter_kit=self._starter_kit_for(conversation_id),
-            workflow_events=_workflow_events if _workflow_router_mode else None,
+        _common_exec_kwargs = self._build_common_exec_kwargs(
+            session,
+            broker,
+            conversation_id,
+            model_policy,
+            _read_char_budget,
+            _scope_guard,
+            _on_tool_success,
+            _workflow_router_mode,
+            _workflow_events,
         )
         executor: DefaultToolExecutor
         if _appkit_mode:
