@@ -68,9 +68,12 @@ _SKIP_REASON = _skip_reason()
 pytestmark = pytest.mark.skipif(_SKIP_REASON is not None, reason=str(_SKIP_REASON))
 
 
+# The app handler routes CASE-INSENSITIVELY (lower-casing the path), exactly like
+# Express's default router — this is the condition under which a case-sensitive
+# role guard would be bypassable by "/ADMIN". The guard must gate it anyway.
 _APP_HANDLER_JS = """\
 function appHandler(req, res) {
-  const pathname = new URL(req.url, "http://localhost").pathname;
+  const pathname = new URL(req.url, "http://localhost").pathname.toLowerCase();
   if (pathname === "/") {
     res.writeHead(200, { "Content-Type": "text/plain" });
     res.end("home");

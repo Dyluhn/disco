@@ -46,8 +46,11 @@ function parseCookies(header) {
 
 // Same canonicalization auth-kit's guard uses (mirrored deliberately, so rbac is
 // self-contained and never trusts an upstream to have normalized the target):
-// strip query/fragment, reject encoded slash/backslash, collapse //, \\, and
-// resolve . / .. so a crafted target cannot dodge a roleRoutes match.
+// strip query/fragment, reject encoded slash/backslash/dot, collapse //, \\, and
+// resolve . / .. so a crafted target cannot dodge a roleRoutes match. The
+// encoded-dot (%2e) rejection matters here too: WHATWG resolves "%2e%2e" as a
+// dot-segment, so "/admin/%2e%2e/x" must not read as a non-/admin route to the
+// guard while resolving inside /admin downstream.
 function canonicalPath(rawUrl) {
   const raw = typeof rawUrl === "string" && rawUrl.length ? rawUrl : "/";
   let end = raw.length;
@@ -56,7 +59,7 @@ function canonicalPath(rawUrl) {
   const h = raw.indexOf("#");
   if (h !== -1 && h < end) end = h;
   const pathPart = raw.slice(0, end);
-  if (/%2f|%5c/i.test(pathPart)) return null;
+  if (/%2e|%2f|%5c/i.test(pathPart)) return null;
   const normalized = pathPart.replace(/\\/g, "/");
   const out = [];
   for (const seg of normalized.split("/")) {
@@ -70,16 +73,42 @@ function canonicalPath(rawUrl) {
   return `/${out.join("/")}`;
 }
 
+// Normalize a path for role-route MATCHING ONLY (never for serving). A role
+// gate must match GENEROUSLY: a downstream router may route case-insensitively
+// (Express does by default), strip matrix params (";x"), or percent-decode —
+// any of which would let a crafted target dodge the gate while still resolving
+// to the protected handler. So we lower-case, drop per-segment matrix params,
+// and percent-decode before matching. Over-matching a route the router treats
+// differently only ADDS a role check (fails closed) — the safe direction for a
+// gate, and the opposite of auth-kit's publicAllowlist, which must match
+// strictly (there a loose match would wrongly make a route public).
+function normalizeForMatch(path) {
+  let p = path;
+  try {
+    const decoded = decodeURIComponent(p);
+    if (!/[\u0000-\u001f]/.test(decoded)) p = decoded;
+  } catch {
+    // malformed percent-encoding: match on the raw form (still fails closed)
+  }
+  return p
+    .toLowerCase()
+    .split("/")
+    .map((seg) => seg.split(";")[0])
+    .join("/");
+}
+
 // First matching roleRoutes entry wins. Keys are exact paths or "prefix*"
 // wildcards (same grammar as auth-kit's publicAllowlist). Value is the role
-// name required for that route.
+// name required for that route. Matching is normalized (see normalizeForMatch).
 function requiredRoleFor(pathname, roleRoutes) {
   if (!roleRoutes || typeof roleRoutes !== "object") return null;
+  const p = normalizeForMatch(pathname);
   for (const [pattern, role] of Object.entries(roleRoutes)) {
     if (typeof pattern !== "string" || typeof role !== "string") continue;
-    if (pattern.endsWith("*")) {
-      if (pathname.startsWith(pattern.slice(0, -1))) return role;
-    } else if (pathname === pattern) {
+    const pat = normalizeForMatch(pattern);
+    if (pat.endsWith("*")) {
+      if (p.startsWith(pat.slice(0, -1))) return role;
+    } else if (p === pat) {
       return role;
     }
   }

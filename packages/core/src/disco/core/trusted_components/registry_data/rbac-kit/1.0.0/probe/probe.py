@@ -150,15 +150,20 @@ def main() -> int:
         status_forged, _hf, _rf = _request(
             base_url, route, cookie=member_cookie, extra_headers=forged
         )
+        # Case variation: a case-insensitive downstream router (Express default)
+        # must not let an upper-cased route dodge the gate.
+        status_case, _hu, _ru = _request(base_url, route.upper(), cookie=member_cookie)
         checks.append(
             {
                 "name": "member_forbidden",
                 "passed": (member_cookie is not None)
                 and status_plain == 403
-                and status_forged == 403,
+                and status_forged == 403
+                and status_case == 403,
                 "detail": (
                     f"member GET {route} -> {status_plain}; "
-                    f"with forged {list(forged)} -> {status_forged} (want 403/403); "
+                    f"forged {list(forged)} -> {status_forged}; "
+                    f"case {route.upper()} -> {status_case} (want 403/403/403); "
                     f"logged_in={member_cookie is not None}"
                 ),
             }

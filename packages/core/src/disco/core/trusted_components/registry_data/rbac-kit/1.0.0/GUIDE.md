@@ -50,7 +50,10 @@ Only `config/rbac.config.json`:
 
 - `roleRoutes` — a map of route → required role. Keys are exact paths or
   `prefix*` wildcards (e.g. `"/admin*": "admin"`). A request to a matched route
-  must carry a session whose user holds that role.
+  must carry a session whose user holds that role. Matching is normalized to be
+  robust against a case-insensitive or matrix-param-stripping downstream router
+  (it lower-cases, drops `;`-params, and percent-decodes before matching), so
+  `/ADMIN`, `/admin;x`, and `/%61dmin` are all gated the same as `/admin`.
 - `devSeedRoleUsers` — a list of `{ email, password, roles: [...] }` seeded as
   real auth users with those roles, or `null` (the default: no accounts). For
   local dev/testing only — remove before shipping.

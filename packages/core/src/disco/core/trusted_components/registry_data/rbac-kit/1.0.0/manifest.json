@@ -5,7 +5,7 @@
   "summary": "Role-based access control: role tables, assignment, and a server-side route role guard.",
   "when_to_use": "Apps with admin/member/tiered access where routes must be gated by a server-side role.",
   "files": {
-    "core/guard.js": "sha256:d7b02e12a8431d60cb997fa7c5e4751c61548aa0476b86295cfbf5e4ddd2c3bb",
+    "core/guard.js": "sha256:ef96a6bf2dc026f4e8e15e7cdea5354d2f6bd8b4b132f26acdd234ea282e90fa",
     "core/roles.js": "sha256:08c9ea0957457c970e6b0b2d7b52f8d75fbf1470c529bb4e85d76c2adca57cbc",
     "core/schema.js": "sha256:01ed7801a6a60cf197ef005350d48658fe7ec9a71f39d7f4c72c4d286bde7ce6"
   },
