@@ -32,7 +32,7 @@ import os
 import socket
 import urllib.parse
 from collections.abc import Callable, Iterable
-from typing import Any
+from typing import Any, cast
 
 __all__ = ["host_allowed", "make_predicate", "AllowlistProxy", "main"]
 
@@ -141,7 +141,7 @@ class AllowlistProxy:
         unique: list[tuple[int, str]] = []
         seen: set[str] = set()
         for family, value in targets:
-            ip = _canonical_ip(value)
+            ip = _canonical_ip(cast(str, value))
             if isinstance(ip, ipaddress.IPv4Address):
                 family = socket.AF_INET
             if str(ip) in seen:
