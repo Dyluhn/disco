@@ -29,7 +29,7 @@ import { publishRunStatus } from "@/lib/runStatusBridge";
 import { ChevronDown, Download, Loader2 } from "lucide-react";
 import { prependElementMention } from "@/lib/elementMention";
 import type { ElementMentionPayload } from "@/lib/elementMention";
-import { useDownloadProject, useExportManifest } from "@/hooks/useProjects";
+import { useDownloadProject, useExportManifest, useProjectRelease } from "@/hooks/useProjects";
 import { ActivityFeed } from "@/components/build/ActivityFeed";
 import { AgentStageCard } from "@/components/build/AgentStageCard";
 import { useVerboseAgentChat } from "@/lib/useVerboseAgentChat";
@@ -43,6 +43,7 @@ import { AgentCanvas } from "@/components/build/AgentCanvas";
 import { ConnectionsStrip } from "@/components/build/ConnectionsStrip";
 import { PlanPanel } from "@/components/build/PlanPanel";
 import { DeliverablePanel } from "@/components/build/DeliverablePanel";
+import { SelfHostPanel } from "@/components/build/SelfHostPanel";
 import { ElementMentionChip } from "@/components/build/ElementMentionChip";
 import { SuggestionChips } from "@/components/SuggestionChips";
 import { SteerInput } from "@/components/build/SteerInput";
@@ -124,6 +125,11 @@ export function BuildSurface({
   }, [b.cid]);
   const download = useDownloadProject();
   const exportManifest = useExportManifest();
+  // WO-9: the release verdict drives the capability-only Self-host panel in the
+  // finished-handoff region. Gated on FINISHED (like the DeliverablePanel) so the
+  // fetch only fires once a persisted snapshot exists to assess; the panel renders
+  // purely from this data, so Build and Agent get the IDENTICAL UI by construction.
+  const release = useProjectRelease(b.status === "FINISHED" ? (b.cid ?? null) : null);
   // RP-06 replay: when not live (RUNNING), allow stepping through event history.
   const isReplaying = b.started && b.status !== "RUNNING";
   const replay = useReplay(b.events, !isReplaying);
@@ -419,13 +425,13 @@ export function BuildSurface({
                   type="button"
                   onClick={() => b.cid && download.mutate(b.cid)}
                   disabled={download.isPending}
-                  aria-label="Download the project as a zip"
+                  aria-label="Download source"
                   data-disco-control="build.export-zip"
-                  title="Download a zip of the project files"
+                  title="Download the project source (.zip)"
                   className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:text-text disabled:opacity-40"
                 >
                   <Download className="size-3.5" aria-hidden />
-                  {download.isPending ? "Preparing…" : "Export"}
+                  {download.isPending ? "Preparing…" : "Download source"}
                 </button>
                 {download.error && (
                   <span role="alert" className="font-ui text-[0.7rem] text-unsupported">
@@ -600,6 +606,16 @@ export function BuildSurface({
             onDownload={() => b.cid && download.mutate(b.cid)}
             onExportManifest={() => b.cid && exportManifest.mutate(b.cid)}
           />
+          {/* WO-9: capability-driven Self-host handoff — renders from the release
+              verdict ALONE (no mode/framing knowledge), so Build and Agent surfaces
+              inherit an identical panel. Shown alongside the DeliverablePanel once
+              the run is finished and the verdict has resolved. */}
+          {b.status === "FINISHED" && release.data && (
+            <SelfHostPanel
+              release={release.data}
+              onDownload={() => b.cid && download.mutate(b.cid)}
+            />
+          )}
           {b.pendingAction && (
             <ConfirmationPanel action={b.pendingAction} onApprove={b.confirm} onReject={b.reject} />
           )}

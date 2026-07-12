@@ -13,6 +13,7 @@ import {
   Download,
   FolderGit2,
   Search,
+  Server,
   Settings as SettingsIcon,
   Trash2,
 } from "lucide-react";
@@ -20,7 +21,12 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { formatDate } from "@/lib/date";
-import { useDeleteProject, useDownloadProject, useProjects } from "@/hooks/useProjects";
+import {
+  useDeleteProject,
+  useDownloadProject,
+  useProjectRelease,
+  useProjects,
+} from "@/hooks/useProjects";
 import type { Project, ProjectStorageStatus } from "@/types/project";
 
 function SkeletonRows() {
@@ -88,6 +94,13 @@ function EmptyProjects() {
 function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => void }) {
   const navigate = useNavigate();
   const download = useDownloadProject();
+  // WO-9: the release verdict drives a per-row self-host affordance. It is a
+  // non-interactive status badge (never a dead button) shown ONLY when the project
+  // is genuinely self-hostable — the honest "open this to get the run command"
+  // signal, capability-driven exactly like the SelfHostPanel in the finished-run
+  // handoff. `files_missing` projects have no workspace to assess, so skip the query.
+  const release = useProjectRelease(project.files_missing ? null : project.id);
+  const selfHostable = release.data?.self_host === true;
   return (
     <li className="flex items-center justify-between gap-section border-b border-hairline py-inline last:border-b-0">
       <button
@@ -107,6 +120,16 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
             <span className="flex shrink-0 items-center gap-hair rounded-full border border-unsupported/60 px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-unsupported">
               <AlertCircle className="size-3" aria-hidden />
               files missing
+            </span>
+          )}
+          {selfHostable && (
+            <span
+              data-self-host="ready"
+              title="Self-hostable — open to see the run command and required environment variables"
+              className="flex shrink-0 items-center gap-hair rounded-full border border-accent/50 px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-accent"
+            >
+              <Server className="size-3" aria-hidden />
+              self-host
             </span>
           )}
         </div>
@@ -131,8 +154,8 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
           data-zip-disabled={project.files_missing || download.isPending}
           onClick={() => download.mutate(project.id)}
           disabled={project.files_missing || download.isPending}
-          aria-label={`Download project: ${project.title}`}
-          title={project.files_missing ? "Files missing — nothing to download" : "Download a zip"}
+          aria-label={`Download source: ${project.title}`}
+          title={project.files_missing ? "Files missing — nothing to download" : "Download source"}
           className="grid size-8 place-items-center rounded-control border border-hairline text-text-faint transition-colors hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Download className="size-4" aria-hidden />

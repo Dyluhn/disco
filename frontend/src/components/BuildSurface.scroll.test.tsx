@@ -31,6 +31,7 @@ vi.mock("@/hooks/useProjects", () => ({
   useDownloadProject: () => ({ mutate: vi.fn(), isPending: false, error: null }),
   useExportManifest: () => ({ mutate: vi.fn() }),
   useProjectManifest: () => ({ data: { files: [] } }),
+  useProjectRelease: () => ({ data: undefined }),
 }));
 vi.mock("@/api/client", async (orig) => ({
   ...(await orig<typeof import("@/api/client")>()),
@@ -180,6 +181,15 @@ describe("W-40: gate scroll target — plan gate pulls to TOP, others to BOTTOM"
     rerenderSurface(<BuildSurface />);
 
     expect(scrollTo).toHaveBeenCalledWith({ top: 1234, behavior: "smooth" });
+  });
+});
+
+describe("WO-9: the workspace-zip action is labelled 'Download source'", () => {
+  it("renders a 'Download source' button (not 'Export') in the resumed header", () => {
+    buildState = baseBuild({ cid: "cid-9", resumed: true, status: "FINISHED" });
+    renderSurface(<BuildSurface resumeCid="cid-9" />);
+    expect(screen.getByRole("button", { name: "Download source" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^export$/i })).not.toBeInTheDocument();
   });
 });
 

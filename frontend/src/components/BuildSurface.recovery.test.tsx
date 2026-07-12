@@ -31,6 +31,7 @@ vi.mock("@/hooks/useProjects", () => ({
   useDownloadProject: () => ({ mutate: vi.fn(), isPending: false, error: null }),
   useExportManifest: () => ({ mutate: vi.fn() }),
   useProjectManifest: () => ({ data: { files: [] } }),
+  useProjectRelease: () => ({ data: undefined }),
 }));
 // agentLive() TRUE so the surface's /state fetch (which carries the stored title)
 // actually runs; agentHttpBase() empty so the URL is relative and intercepted by
