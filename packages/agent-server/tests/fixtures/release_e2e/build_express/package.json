@@ -1,0 +1,13 @@
+{
+  "name": "build-express",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Free-form Build fixture — a minimal Express web app (no lockfile, npm install path).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

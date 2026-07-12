@@ -1,0 +1,10 @@
+{
+  "name": "imported-node",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Imported fixture — a plain Node http server shipped with a lockfile (npm ci path).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  }
+}
