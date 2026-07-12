@@ -136,6 +136,47 @@ async def test_workspace_roundtrip(tmp_path: Path) -> None:
     assert rows[0].files_missing is False
 
 
+def test_imported_provenance_is_recorded_and_survives_resnapshot(tmp_path: Path) -> None:
+    """The `imported` release-provenance bit is durable: set once at import time, it
+    is PRESERVED across later re-snapshots (which rewrite the manifest without it) —
+    a re-snapshot that dropped it would silently demote an imported project's release
+    assessment from needs_review back to not_web."""
+    store = ProjectStore(str(tmp_path))
+    cid = "conv_imported"
+    workspace = store.path_for(cid)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "README.md").write_text("imported")
+
+    # import-time write records the provenance.
+    store.write_manifest(
+        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+        imported=True,
+    )
+    assert store.get(cid).imported is True
+    assert store.list_projects()[0].imported is True
+
+    # a re-snapshot (no `imported` arg) MUST preserve it, not reset it to False.
+    store.write_manifest(
+        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+    )
+    assert store.get(cid).imported is True
+
+    # an explicit False clears it; a fresh (never-imported) project defaults False.
+    store.write_manifest(
+        cid, title="t", owner_id="local", created_at=None, file_count=1, total_bytes=8,
+        imported=False,
+    )
+    assert store.get(cid).imported is False
+
+    fresh = "conv_fresh"
+    (store.path_for(fresh)).mkdir(parents=True, exist_ok=True)
+    (store.path_for(fresh) / "a").write_text("x")
+    store.write_manifest(
+        fresh, title=None, owner_id="local", created_at=None, file_count=1, total_bytes=1,
+    )
+    assert store.get(fresh).imported is False
+
+
 def test_runtime_secret_path_classifier_keeps_only_explicit_templates() -> None:
     for path in (
         ".env",

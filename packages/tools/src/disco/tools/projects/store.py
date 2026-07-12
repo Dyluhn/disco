@@ -143,6 +143,12 @@ class ProjectRecord:
     total_bytes: int
     files_missing: bool  # True iff manifest exists but workspace/ is gone or empty
     legacy_unclaimed_owner: bool = False
+    # Release provenance: True iff this project's workspace was SEEDED by a code
+    # import (`/api/projects/import`), not built from scratch here. An imported tree
+    # whose stack the detector can't recognize fails closed to `needs_review` rather
+    # than `not_web` (WO-3 rung 4). Durable: preserved across re-snapshots. Distinct
+    # from `conversation.origin="imported"`, which marks a READ-ONLY shared bundle.
+    imported: bool = False
 
 
 @dataclass(frozen=True)
@@ -576,6 +582,7 @@ class ProjectStore:
                     total_bytes=int(data.get("total_bytes") or 0),
                     files_missing=files_missing,
                     legacy_unclaimed_owner=legacy_unclaimed,
+                    imported=bool(data.get("imported")),
                 )
             )
         # Newest last-snapshot first; entries with no timestamp sort last.
@@ -608,7 +615,21 @@ class ProjectStore:
             total_bytes=int(data.get("total_bytes") or 0),
             files_missing=files_missing,
             legacy_unclaimed_owner=legacy_unclaimed,
+            imported=bool(data.get("imported")),
         )
+
+    def _existing_imported(self, conversation_id: str) -> bool:
+        """The `imported` flag currently recorded in the on-disk manifest (False if
+        the manifest is absent, unreadable, or predates the field). Used to PRESERVE
+        import provenance across re-snapshots, which rewrite the manifest."""
+        manifest = self.manifest_for(conversation_id)
+        if not manifest.is_file():
+            return False
+        try:
+            data = json.loads(manifest.read_text())
+        except (OSError, json.JSONDecodeError):
+            return False
+        return bool(data.get("imported"))
 
     def write_manifest(
         self,
@@ -619,12 +640,21 @@ class ProjectStore:
         created_at: str | None,
         file_count: int,
         total_bytes: int,
+        imported: bool | None = None,
     ) -> Path:
         """Write the manifest after a snapshot. Atomic via tmp + rename so a
         crash mid-write never leaves the file half-written. Returns the manifest
-        path."""
+        path.
+
+        `imported` records release provenance (see `ProjectRecord.imported`). It is
+        sticky: pass `True` at IMPORT time; leave it `None` on every later re-snapshot
+        so the recorded value is preserved (a re-snapshot that silently dropped it
+        would demote an imported project back to `not_web`). Pass `False` only to
+        explicitly clear it."""
         manifest = self.manifest_for(conversation_id)
         manifest.parent.mkdir(parents=True, exist_ok=True)
+        if imported is None:
+            imported = self._existing_imported(conversation_id)
         payload: dict[str, Any] = {
             "conversation_id": conversation_id,
             "title": title,
@@ -633,6 +663,7 @@ class ProjectStore:
             "last_snapshot_at": _now_iso(),
             "file_count": file_count,
             "total_bytes": total_bytes,
+            "imported": imported,
         }
         tmp = manifest.with_suffix(manifest.suffix + ".tmp")
         tmp.write_text(json.dumps(payload, indent=2))

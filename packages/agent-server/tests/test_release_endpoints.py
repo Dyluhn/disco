@@ -29,8 +29,15 @@ import pytest
 from disco.agent_server import ConversationRuntime, create_app
 from disco.core import SqliteEventStore
 from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
-from disco.core.release.spec import ReleaseIntent
+from disco.core.release.spec import (
+    LocalResourceProfile,
+    ReleaseIntent,
+    ResourceDecl,
+    ResourceKind,
+    ResourceProfiles,
+)
 from disco.tools.projects import ProjectStore
+from disco.tools.projects.store import tree_digest as compute_tree_digest
 from fastapi.testclient import TestClient
 
 _SENTINEL = b"PLANTED-731-hunter2"
@@ -121,6 +128,7 @@ def _seed(
     owner_id: str = "local",
     title: str | None = None,
     intent: ReleaseIntent | None = None,
+    imported: bool = False,
 ) -> None:
     workspace = ps.path_for(cid)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -137,6 +145,7 @@ def _seed(
         created_at="2026-06-06T00:00:00Z",
         file_count=len(files),
         total_bytes=total,
+        imported=imported,
     )
     if intent is not None:
         ps.write_release_intent(cid, intent)
@@ -397,3 +406,118 @@ def test_release_is_idempotent_and_spawns_no_subprocess(store, tmp_path, monkeyp
 def test_release_endpoint_is_documented():
     doc = (Path(__file__).resolve().parents[3] / "api-endpoints.md").read_text()
     assert "/api/projects/{id}/release" in doc
+
+
+# ---- audit #7a: an imported project with an unknown stack -> needs_review ------
+
+# A workspace with NO recognizable stack and NO container manifest: no server
+# package.json, no python web framework, no index.html, no Dockerfile. Fresh, this
+# is `not_web`; IMPORTED, the same tree must fail closed to `needs_review` naming
+# every repairable release-contract field (WO-3 rung 4 / WO-7 intent).
+_UNKNOWN_FILES: dict[str, bytes] = {
+    "README.md": b"# imported project\n\nsource brought in from elsewhere.\n",
+    "src/lib.rs": b"pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+}
+
+
+def test_imported_unknown_stack_is_needs_review(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_imported", _UNKNOWN_FILES, imported=True)
+
+    body = client.get("/api/projects/conv_imported/release").json()
+    assert body["assessment"] == "needs_review"
+    assert body["self_host"] is False
+    assert body["ingress"] is None
+    assert body["spec_digest"] is None
+    # the full repairable diagnostic — the imported path names build_cmd too (the
+    # container-review path does NOT), so this proves the imported rung, not rung 2.
+    named = {b["field"] for b in body["blockers"] if b["field"]}
+    assert {"build_cmd", "start_cmd", "port_env", "health_path", "required_env"} <= named
+
+
+def test_non_imported_unknown_stack_stays_not_web(store, tmp_path, monkeypatch):
+    """The other branch of #7a: a NON-imported unknown workspace keeps its existing
+    `not_web` verdict — the fix must not regress fresh projects into review."""
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_fresh", _UNKNOWN_FILES, imported=False)
+
+    body = client.get("/api/projects/conv_fresh/release").json()
+    assert body["assessment"] == "not_web"
+    assert body["self_host"] is False
+
+
+# ---- audit #7b: version_seq + tree_digest must describe the SAME tree ----------
+
+
+def test_version_seq_and_tree_digest_describe_the_same_tree(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_ver", _NODE_FILES, intent=_NODE_INTENT)
+    # Commit the seeded tree as version 1, then DIVERGE the live workspace from it.
+    v1 = ps.cut_version("conv_ver", trigger="test")
+    assert v1 is not None and v1.seq == 1
+    (ps.path_for("conv_ver") / "server.js").write_bytes(b"// changed\n" + _NODE_FILES["server.js"])
+
+    body = client.get("/api/projects/conv_ver/release").json()
+    saved = {v.seq: v.tree_digest for v in ps.list_versions("conv_ver")}
+    vs, td = body["version_seq"], body["tree_digest"]
+
+    # The pair must be internally consistent: if version_seq names a REAL saved
+    # version, tree_digest must be THAT version's digest — never a mixed pair.
+    assert vs not in saved or td == saved[vs], (vs, td, saved)
+    # Concretely, the buggy mix (v1's seq paired with the divergent live digest)
+    # must NOT be returned.
+    assert not (vs == v1.seq and td != v1.tree_digest)
+    # And tree_digest genuinely describes the tree that was assessed (the live one).
+    assert td == compute_tree_digest(ps.path_for("conv_ver"))
+
+
+def test_version_seq_and_tree_digest_report_matching_saved_version(store, tmp_path, monkeypatch):
+    """When the live tree EQUALS its latest saved version, the endpoint reports that
+    version's own (seq, tree_digest) pair — both fields, one source."""
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_ver2", _NODE_FILES, intent=_NODE_INTENT)
+    v1 = ps.cut_version("conv_ver2", trigger="test")
+    assert v1 is not None
+
+    body = client.get("/api/projects/conv_ver2/release").json()
+    assert body["version_seq"] == v1.seq
+    assert body["tree_digest"] == v1.tree_digest
+
+
+# ---- audit #7c: a mismatched-consumer intent must not 500 ----------------------
+
+# A SCHEMA-VALID ReleaseIntent whose sqlite resource names a consumer service that
+# the generated release does not define ("worker" — the ingress is always "web").
+# `ReleaseSpec`'s referential-integrity validator rejects this at spec assembly;
+# the endpoint must catch it and fail closed, never surface an uncaught 500.
+_MISMATCHED_CONSUMER_INTENT = ReleaseIntent(
+    start_cmd=("node", "server.js"),
+    resources=(
+        ResourceDecl(
+            id="db",
+            kind=ResourceKind.sqlite,
+            persistent_path="/data/app.db",
+            profiles=ResourceProfiles(
+                local=LocalResourceProfile(url="file:/data/app.db", volume="app-data")
+            ),
+            consumers=("worker",),
+        ),
+    ),
+)
+
+
+def test_mismatched_resource_consumer_does_not_500(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_badspec", _NODE_FILES, intent=_MISMATCHED_CONSUMER_INTENT)
+
+    res = client.get("/api/projects/conv_badspec/release")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # Fails CLOSED to review with a typed blocker — not a candidate, not a 500.
+    assert body["assessment"] == "needs_review"
+    assert body["self_host"] is False
+    assert body["spec_digest"] is None
+    codes = {b["code"] for b in body["blockers"]}
+    assert "release_spec_invalid" in codes
+    # the blocker text must not echo any secret-shaped VALUE (names/ids only).
+    assert _SENTINEL not in res.content

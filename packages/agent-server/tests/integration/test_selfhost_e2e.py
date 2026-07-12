@@ -189,6 +189,7 @@ def _seed_files(
     files: dict[str, bytes],
     *,
     owner_id: str = "local",
+    imported: bool = False,
 ) -> Path:
     workspace = ps.path_for(cid)
     workspace.mkdir(parents=True, exist_ok=True)
@@ -205,6 +206,7 @@ def _seed_files(
         created_at="2026-07-12T00:00:00Z",
         file_count=len(files),
         total_bytes=total,
+        imported=imported,
     )
     store.create_conversation(cid, owner_id=owner_id, title=None, surface="build")
     return workspace
@@ -295,6 +297,56 @@ def test_unknown_stack_without_intent_is_needs_review_and_plain_downloadable(
     dl = client.get("/api/projects/conv_opaque/download")
     assert dl.status_code == 200
     assert set(_namelist(dl.content)) == set(_OPAQUE_FILES)
+
+
+# A genuinely imported, non-container, UNRECOGNIZED workspace: no server
+# package.json, no python web framework, no index.html, and — crucially, unlike the
+# `_OPAQUE_FILES` Dockerfile fixture above — NO container manifest. Its needs_review
+# verdict can ONLY come from the imported provenance rung (WO-3 rung 4), so it
+# exercises the real imported-unknown path the Dockerfile fixture bypassed (#8a).
+_IMPORTED_UNKNOWN_FILES = {
+    "README.md": b"# imported service\n\nbrought in from an external repo.\n",
+    "Makefile": b"build:\n\tgo build ./...\n",
+    "cmd/app/main.go": b"package main\n\nfunc main() {}\n",
+}
+
+
+def test_imported_unknown_stack_without_intent_is_needs_review_and_plain_downloadable(
+    store, tmp_path, monkeypatch
+):
+    """WO-10 #8a: drive the REAL imported-unknown path (no container manifest). A
+    genuinely imported project with no typed intent and no recognizable stack must
+    fail closed to needs_review with the full repairable diagnostic, and stay plain-
+    downloadable."""
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed_files(ps, store, "conv_imported", dict(_IMPORTED_UNKNOWN_FILES), imported=True)
+
+    body = client.get("/api/projects/conv_imported/release").json()
+    assert set(body.keys()) == _RESPONSE_KEYS
+    assert body["assessment"] == "needs_review"
+    assert body["self_host"] is False
+    assert body["ingress"] is None
+    assert body["spec_digest"] is None
+    # the imported rung names build_cmd too (the container-review rung does NOT), so
+    # this asserts the genuine imported path, not the Dockerfile-driven one.
+    named = {b["field"] for b in body["blockers"] if b["field"]}
+    assert {"build_cmd", "start_cmd", "port_env", "health_path", "required_env"} <= named
+
+    # still downloadable — byte-for-byte the plain source (no overlay affordance).
+    dl = client.get("/api/projects/conv_imported/download")
+    assert dl.status_code == 200
+    assert set(_namelist(dl.content)) == set(_IMPORTED_UNKNOWN_FILES)
+
+
+def test_imported_project_with_recognized_stack_stays_candidate(store, tmp_path, monkeypatch):
+    """The imported bit must not OVER-fire: an imported project whose stack IS
+    recognized still assesses candidate — imported only rescues the UNKNOWN case."""
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed_files(ps, store, "conv_imported_node", _fixture_files("imported_node"), imported=True)
+
+    body = client.get("/api/projects/conv_imported_node/release").json()
+    assert body["assessment"] == "candidate"
+    assert body["self_host"] is True
 
 
 def test_docs_only_is_not_web_with_honest_reason_and_plain_downloadable(

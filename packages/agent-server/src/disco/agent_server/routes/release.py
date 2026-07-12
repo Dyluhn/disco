@@ -49,7 +49,7 @@ from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import ProjectRecord, ProjectStore, StorageError, is_runtime_secret_path
 from disco.tools.projects.store import tree_digest as compute_tree_digest
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ..runtime import ConversationRuntime
 from .projects import _resolve_project_for_read
@@ -192,35 +192,64 @@ def assess_release(
     project_name: str,
     version_seq: int,
     tree_digest: str,
+    imported: bool = False,
 ) -> AssessedRelease:
     """Assess a workspace's release readiness — PURE and deterministic.
 
-    Reads ONLY the immutable file view + the typed intent: runs `detect_release`,
-    and (for a `candidate` with a valid spec) `validate_release` + the WO-4 overlay
-    emission. Returns the JSON verdict and the (possibly empty) overlay to inject.
-    No process, no container, no network, no clock, no randomness — the same inputs
-    return an EQUAL result every time.
+    Reads ONLY the immutable file view + the typed intent + the `imported`
+    provenance bit: runs `detect_release`, and (for a `candidate` with a valid spec)
+    `validate_release` + the WO-4 overlay emission. Returns the JSON verdict and the
+    (possibly empty) overlay to inject. No process, no container, no network, no
+    clock, no randomness — the same inputs return an EQUAL result every time.
+
+    `imported=True` (a project whose workspace was seeded by a code import) makes an
+    UNRECOGNIZED stack fail closed to `needs_review` rather than `not_web` (WO-3 rung
+    4): an imported tree we can't shape still needs an owner declaration.
     """
-    detection = detect_release(files, intent=intent, provenance=Provenance(imported=False))
+    detection = detect_release(files, intent=intent, provenance=Provenance(imported=imported))
     ingress = detection.ingress
 
+    assessment = detection.assessment
     spec: ReleaseSpec | None = None
     ingress_info: _IngressInfo | None = None
     digest: str | None = None
+    spec_error: str | None = None
     if ingress is not None:
-        spec = _build_spec(
-            detection, name=project_name, version_seq=version_seq, tree_digest=tree_digest
-        )
-        digest = spec_digest(spec)
-        ingress_info = _IngressInfo(
-            service=ingress.id, port=ingress.port_env, health_path=ingress.health_path
-        )
+        try:
+            spec = _build_spec(
+                detection, name=project_name, version_seq=version_seq, tree_digest=tree_digest
+            )
+        except ValidationError as exc:
+            # A SCHEMA-valid intent can still describe an INCONSISTENT release — e.g. a
+            # resource naming a consumer service the release does not define — which
+            # only trips the ReleaseSpec cross-field validators at assembly. That is a
+            # repairable owner problem, not a server fault: fail closed to needs_review
+            # with a typed blocker rather than letting a 500 escape. The spec models set
+            # `hide_input_in_errors`, so the message names FIELDS/ids only — never a
+            # secret VALUE — and it is length-clamped defensively.
+            assessment = ReleaseAssessment.needs_review
+            spec_error = _clamp(str(exc), _REASON_MAX)
+        else:
+            digest = spec_digest(spec)
+            ingress_info = _IngressInfo(
+                service=ingress.id, port=ingress.port_env, health_path=ingress.health_path
+            )
 
     blockers: list[_ResponseBlocker] = []
     overlay_files: dict[str, str] = {}
     self_host = False
 
-    if detection.assessment is ReleaseAssessment.candidate and spec is not None:
+    if spec_error is not None:
+        blockers.append(
+            _ResponseBlocker(
+                code="release_spec_invalid",
+                message=(
+                    "the declared release intent could not be assembled into a valid "
+                    f"release spec and needs owner review: {spec_error}"
+                ),
+            )
+        )
+    elif assessment is ReleaseAssessment.candidate and spec is not None:
         validation = validate_release(spec, files)
         if validation.ok:
             self_host = True
@@ -264,7 +293,7 @@ def assess_release(
     ]
 
     response = ReleaseResponse(
-        assessment=detection.assessment.value,
+        assessment=assessment.value,
         reasons=list(detection.reasons),
         blockers=blockers,
         required_env=required_env,
@@ -278,6 +307,29 @@ def assess_release(
     return AssessedRelease(response=response, overlay_files=overlay_files)
 
 
+def _source_binding(ps: ProjectStore, conversation_id: str, workspace: Path) -> tuple[int, str]:
+    """The (version_seq, tree_digest) pair that pins the assessment to ONE tree — the
+    LIVE workspace being assessed — so the two fields can never disagree.
+
+    `tree_digest` is always the live workspace's digest (the tree whose files are
+    assessed). For `version_seq`: if the live tree exactly matches a committed
+    version, that version's seq is reported (they describe the identical tree); if it
+    matches none — uncommitted edits, or no versions yet — the seq it WOULD receive on
+    the next cut (`max existing + 1`, i.e. `1` when there are none) is reported. Either
+    way the returned pair describes the same tree, never a saved version's seq paired
+    with a different tree's digest."""
+    digest = compute_tree_digest(workspace)
+    try:
+        versions = ps.list_versions(conversation_id)  # newest first
+    except StorageError:
+        return 1, digest
+    for record in versions:  # newest first — report the most recent EXACT match
+        if record.tree_digest == digest:
+            return record.seq, digest
+    next_seq = max((record.seq for record in versions), default=0) + 1
+    return next_seq, digest
+
+
 def assess_project(
     ps: ProjectStore, record: ProjectRecord, workspace: Path, conversation_id: str
 ) -> AssessedRelease:
@@ -289,15 +341,15 @@ def assess_project(
     for path in ps.iter_workspace(conversation_id):
         files[path.relative_to(workspace).as_posix()] = path.read_bytes()
     intent = ps.read_release_intent(conversation_id)
-    try:
-        versions = ps.list_versions(conversation_id)
-        version_seq = versions[0].seq if versions else 1
-    except StorageError:
-        version_seq = 1
-    digest = compute_tree_digest(workspace)
+    version_seq, digest = _source_binding(ps, conversation_id, workspace)
     name = record.title or conversation_id
     return assess_release(
-        files, intent=intent, project_name=name, version_seq=version_seq, tree_digest=digest
+        files,
+        intent=intent,
+        project_name=name,
+        version_seq=version_seq,
+        tree_digest=digest,
+        imported=record.imported,
     )
 
 

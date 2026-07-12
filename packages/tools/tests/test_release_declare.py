@@ -314,7 +314,7 @@ async def test_tool_rejects_env_assignment_in_build_argv(
 
 def test_shell_string_command_is_structurally_rejected() -> None:
     # a shell STRING (not an argv list) cannot even be expressed in the schema.
-    # model_validate takes Any, so this probe stays type-clean (no `# type: ignore`).
+    # model_validate takes Any, so this probe stays type-clean (no suppression comment).
     with pytest.raises(ValidationError):
         ReleaseDeclareArgs.model_validate({"start_cmd": "npm run start"})
 

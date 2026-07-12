@@ -456,6 +456,10 @@ async def _handle_import_project(
         created_at=created_at,
         file_count=stats.files,
         total_bytes=stats.bytes,
+        # Record import provenance durably: an imported project whose stack the
+        # detector can't recognize must assess `needs_review`, not `not_web` (WO-3
+        # rung 4). `write_manifest` preserves this across later re-snapshots.
+        imported=True,
     )
     with contextlib.suppress(Exception):
         ps.cut_version(conversation_id, trigger="import")
