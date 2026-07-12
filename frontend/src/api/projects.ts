@@ -30,6 +30,7 @@ import type {
   ProjectStorageConfig,
   ProjectStorageSaveInput,
 } from "@/types/project";
+import type { ReleaseResponse } from "@/types/release";
 
 // ---- fixture state (offline mode) ------------------------------------------
 // A small in-memory mirror so the Projects UI renders + tests run without a
@@ -76,6 +77,91 @@ const fixtureProjects: Project[] = [
     files_missing: true,
   },
 ];
+
+// ---- release assessment fixtures (offline mode) ----------------------------
+// One release verdict per demo project, mirroring the WO-7 `/release` wire shape
+// EXACTLY (the same key set for every assessment: non-applicable fields are
+// `null`/empty, never absent). Covers the three Track-1 assessments so the UI +
+// tests exercise all of them with no live backend: `candidate` (self-hostable),
+// `needs_review` (ambiguous topology), `not_web` (no web entrypoint). `required_env`
+// entries carry NAMES only — never a `value` (secret hygiene).
+
+const RELEASE_COMMAND = "docker compose up -d --build";
+
+const fixtureReleases: Record<string, ReleaseResponse> = {
+  // A self-hostable Node web app: validation passed, so `self_host` is true and
+  // the download would carry the generated overlay.
+  conv_demo_snake: {
+    assessment: "candidate",
+    reasons: ["A Node web server binding $PORT was detected (server.js)."],
+    blockers: [],
+    required_env: [
+      { name: "PORT", scope: "runtime", required: true, secret: false },
+      { name: "SESSION_SECRET", scope: "runtime", required: true, secret: true },
+    ],
+    command: RELEASE_COMMAND,
+    ingress: { service: "web", port: "PORT", health_path: "/healthz" },
+    self_host: true,
+    spec_digest: "sha256:demo-candidate-0001",
+    version_seq: 3,
+    tree_digest: "sha256:tree-snake-0001",
+  },
+  // Ambiguous: more than one plausible entrypoint, so no single ingress resolved.
+  // The unresolved release field is reported as a repairable blocker; `ingress`
+  // and `spec_digest` are null (no topology bound yet).
+  conv_demo_landing: {
+    assessment: "needs_review",
+    reasons: ["Multiple candidate entrypoints were found; the public ingress is ambiguous."],
+    blockers: [
+      {
+        code: "release_field_unresolved",
+        field: "ingress",
+        message: "no single web entrypoint could be resolved — declare which service is public.",
+        path: null,
+      },
+    ],
+    required_env: [{ name: "API_BASE_URL", scope: "build", required: false, secret: false }],
+    command: RELEASE_COMMAND,
+    ingress: null,
+    self_host: false,
+    spec_digest: null,
+    version_seq: 5,
+    tree_digest: "sha256:tree-landing-0002",
+  },
+  // Not a web app at all (static docs / script bundle): no ingress, no env, and
+  // self-host is off — the Download stays the plain filtered zip (no overlay).
+  conv_demo_orphan: {
+    assessment: "not_web",
+    reasons: ["No web server entrypoint was detected; this looks like a static bundle."],
+    blockers: [],
+    required_env: [],
+    command: RELEASE_COMMAND,
+    ingress: null,
+    self_host: false,
+    spec_digest: null,
+    version_seq: 1,
+    tree_digest: "sha256:tree-orphan-0003",
+  },
+};
+
+/** The offline release verdict for `cid`. Unknown projects get the stable
+ * `not_web` shape (same key set, empty topology) — never a missing/partial body. */
+function fixtureRelease(cid: string): ReleaseResponse {
+  const known = fixtureReleases[cid];
+  if (known) return { ...known };
+  return {
+    assessment: "not_web",
+    reasons: ["No web server entrypoint was detected."],
+    blockers: [],
+    required_env: [],
+    command: RELEASE_COMMAND,
+    ingress: null,
+    self_host: false,
+    spec_digest: null,
+    version_seq: 1,
+    tree_digest: `sha256:tree-${cid}`,
+  };
+}
 
 // ---- projects list / download / delete (AGENT server) ----------------------
 
@@ -166,6 +252,19 @@ export async function getProjectManifest(cid: string): Promise<ProjectManifest> 
     };
   }
   return agentGet<ProjectManifest>(`/api/projects/${encodeURIComponent(cid)}/manifest`);
+}
+
+/** Assess whether a project's committed workspace can be self-hosted (WO-7).
+ * Live: `GET /api/projects/{cid}/release` on the AGENT server (the runtime owns
+ * the workspace + release intent). Offline: the in-repo fixture verdict, so the
+ * capabilities UI renders + tests run with no backend. NAMES only — never secret
+ * values (the response type has no `value` field). */
+export async function getProjectRelease(cid: string): Promise<ReleaseResponse> {
+  if (!agentLive()) {
+    await fixtureDelay();
+    return fixtureRelease(cid);
+  }
+  return agentGet<ReleaseResponse>(`/api/projects/${encodeURIComponent(cid)}/release`);
 }
 
 export async function deleteProject(cid: string): Promise<{ id: string }> {
