@@ -349,6 +349,13 @@ def _spec_from_secret_tree() -> ReleaseSpec:
     pipeline does: detect the service, then bind the source + secret env NAME. The
     secret VALUE in the tree's `.env` never enters the spec (it records NAMES)."""
     tree = _load_tree(SECRET_TREE)
+    # Plant the secret IN-MEMORY. The `.env` that would hold it on disk is
+    # gitignored (`.gitignore` — `.env`), so it is never committed: reading it
+    # from disk makes this proof pass only in a worktree that happens to have an
+    # untracked `.env` and ERROR on a fresh checkout / CI. Injecting it here keeps
+    # the test self-contained — the committed fixture ships only non-secret
+    # sources (package.json, package-lock.json, server.js).
+    tree[".env"] = f"OPENAI_API_KEY={SENTINEL}\n"
     # Sanity: the planted secret really is in the tree we build from.
     assert any(SENTINEL in content for content in tree.values())
     result = detect_release(dict(tree), intent=None, provenance=Provenance())
