@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import uuid
 import zipfile
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
@@ -18,6 +19,8 @@ from disco.core import DeliverableEvent, EventSource, LLMMessage, MessageEvent
 from disco.core.auth import AuthSession
 from disco.core.store.sqlite import SqliteEventStore, install_owner_id
 from disco.tools.projects import (
+    ProjectRecord,
+    ProjectStore,
     StorageStatus,
     aiter_zip_workspace,
     is_runtime_secret_path,
@@ -474,6 +477,81 @@ async def _handle_import_project(
     }
 
 
+async def _resolve_project_for_read(
+    request: Request,
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,
+    conversation_id: str,
+) -> tuple[ProjectStore, ProjectRecord, Path]:
+    """The shared owner-scoped read preamble for the download + release endpoints.
+
+    Mirrors the download endpoint's original checks in the SAME order, so both
+    endpoints report identical auth/error semantics: 404 ``storage_unavailable``
+    (storage unconfigured / invalid), 404 ``project_not_found`` (no manifest), 403
+    ``project_forbidden`` (owned by another session), 404 ``files_missing`` (the
+    workspace tree is gone). Returns the store, the record, and the workspace dir
+    on success."""
+    conversation_id = await require_owned_conversation(request, store, conversation_id)
+    ps = runtime.project_store() if runtime is not None else None
+    if ps is None or ps.status() != StorageStatus.OK:
+        raise HTTPException(status_code=404, detail={"reason": "storage_unavailable"})
+    record = ps.get(conversation_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
+    if (
+        _project_owner_for_session(
+            record.owner_id,
+            current_session(request),
+            legacy_unclaimed_owner=record.legacy_unclaimed_owner,
+        )
+        is None
+    ):
+        raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
+    if record.files_missing:
+        raise HTTPException(status_code=404, detail={"reason": "files_missing"})
+    workspace = ps.path_for(conversation_id)
+    return ps, record, workspace
+
+
+def _zip_workspace_with_overlay(src: Path, overlay: dict[str, str]) -> Iterator[bytes]:
+    """Stream a zip of the workspace tree PLUS the generated self-host overlay.
+
+    The workspace portion is emitted identically to ``zip_workspace`` (same sorted
+    order, same ZIP_DEFLATED, same runtime-secret exclusion), so a candidate
+    download's SOURCE bytes are unchanged from the plain zip and only the overlay
+    files are added. A workspace file always wins a path collision (the overlay
+    entry is skipped), and a runtime-secret path is never emitted from the overlay
+    — defense in depth over the caller's already-filtered map."""
+    if not src.exists() or not src.is_dir():
+        raise FileNotFoundError(f"workspace directory not found: {src}")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        workspace_rels: set[str] = set()
+        for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
+            rel = path.relative_to(src).as_posix()
+            if is_runtime_secret_path(rel):
+                continue
+            zf.write(path, arcname=rel)
+            workspace_rels.add(rel)
+        for rel in sorted(overlay):
+            if rel in workspace_rels or is_runtime_secret_path(rel):
+                continue
+            zf.writestr(rel, overlay[rel].encode("utf-8"))
+    buf.seek(0)
+    chunk = 64 * 1024
+    while True:
+        block = buf.read(chunk)
+        if not block:
+            break
+        yield block
+
+
+async def _aiter_zip_with_overlay(src: Path, overlay: dict[str, str]) -> AsyncIterator[bytes]:
+    """Async wrapper over ``_zip_workspace_with_overlay`` for StreamingResponse."""
+    for block in _zip_workspace_with_overlay(src, overlay):
+        yield block
+
+
 def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
@@ -528,34 +606,37 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
     async def download_project(conversation_id: str, request: Request) -> StreamingResponse:
         """Stream a zip of the project's workspace. 404 with a specific reason
         when the storage is unconfigured / the project is unknown / the files
-        have been deleted under the manifest."""
-        conversation_id = await require_owned_conversation(request, store, conversation_id)
-        ps = runtime.project_store() if runtime is not None else None
-        if ps is None or ps.status() != StorageStatus.OK:
-            raise HTTPException(
-                status_code=404,
-                detail={"reason": "storage_unavailable"},
-            )
-        record = ps.get(conversation_id)
-        if record is None:
-            raise HTTPException(status_code=404, detail={"reason": "project_not_found"})
-        if (
-            _project_owner_for_session(
-                record.owner_id,
-                current_session(request),
-                legacy_unclaimed_owner=record.legacy_unclaimed_owner,
-            )
-            is None
-        ):
-            raise HTTPException(status_code=403, detail={"reason": "project_forbidden"})
-        if record.files_missing:
-            raise HTTPException(status_code=404, detail={"reason": "files_missing"})
-        workspace = ps.path_for(conversation_id)
+        have been deleted under the manifest.
+
+        WO-7 upgrade: when the project assesses ``candidate`` and validation passes,
+        the zip ADDITIONALLY carries the generated self-host overlay (``compose.yaml``,
+        ``Dockerfile``(s), ``.dockerignore``, ``.env.example``, ``SELFHOST.md``,
+        ``release.json``). A workspace file wins any path collision. For every other
+        project the zip is byte-for-byte the plain filtered workspace zip — no
+        overlay, no false affordance. The assessment is best-effort: any failure
+        falls back to the plain zip so it can never break a download."""
+        ps, record, workspace = await _resolve_project_for_read(
+            request, store, runtime, conversation_id
+        )
+        overlay_files: dict[str, str] = {}
+        try:
+            from .release import assess_project
+
+            overlay_files = assess_project(
+                ps, record, workspace, record.conversation_id
+            ).overlay_files
+        except Exception:  # assessment must never break the plain download
+            overlay_files = {}
         headers = {
-            "Content-Disposition": (f'attachment; filename="{conversation_id}.zip"'),
+            "Content-Disposition": (f'attachment; filename="{record.conversation_id}.zip"'),
         }
+        body = (
+            _aiter_zip_with_overlay(workspace, overlay_files)
+            if overlay_files
+            else aiter_zip_workspace(workspace)
+        )
         return StreamingResponse(
-            aiter_zip_workspace(workspace),
+            body,
             media_type="application/zip",
             headers=headers,
         )

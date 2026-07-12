@@ -1,0 +1,399 @@
+"""WO-7 — agent-server release API + upgraded Download source.
+
+Headless tests over the ASGI app (Starlette TestClient) with a runtime that has
+no real sandbox. Every fixture workspace is built in a `tmp_path` at test time —
+NO committed `.env`/`*.db` on disk — so the tree is clean and the planted secret
+lives only in memory→tmp, never in the repo.
+
+Proves each WO-7 acceptance criterion:
+1. `/release` on four shapes (node candidate / opaque-stack needs_review / docs-only
+   not_web / AppKit candidate) returns the SAME response schema (identical key set).
+2. a candidate download carries the self-host overlay; a not_web download is
+   byte-equivalent in file-set to the plain filtered zip.
+3. a planted `.env`/`.dev.vars` sentinel never reaches the zip or the `/release` JSON.
+4. auth mirrors `download_project` (403 project_forbidden / 404 project_not_found /
+   404 storage_unavailable).
+5. no mode-branching (a `surface` grep over the module is empty).
+6. `/release` is idempotent and spawns NO subprocess.
+7. (doc grep lives in the api-endpoints.md check below.)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import zipfile
+from pathlib import Path
+
+import pytest
+from disco.agent_server import ConversationRuntime, create_app
+from disco.core import SqliteEventStore
+from disco.core.llm import ConfigStore, ProjectStorageSettings, RouterConfig
+from disco.core.release.spec import ReleaseIntent
+from disco.tools.projects import ProjectStore
+from fastapi.testclient import TestClient
+
+_SENTINEL = b"PLANTED-731-hunter2"
+
+_RESPONSE_KEYS = {
+    "assessment",
+    "reasons",
+    "blockers",
+    "required_env",
+    "command",
+    "ingress",
+    "self_host",
+    "spec_digest",
+    "version_seq",
+    "tree_digest",
+}
+
+# ---- fixture workspaces (built in-memory / tmp — never committed) --------------
+
+_APPKIT_FILES: dict[str, bytes] = {
+    ".disco/appspec.json": b'{"name":"appkit-todo","version":1,"entities":[]}',
+    "wrangler.toml": (
+        b'name = "appkit-todo"\nmain = "worker/index.ts"\n'
+        b'compatibility_date = "2024-05-01"\n\n[[d1_databases]]\n'
+        b'binding = "DB"\ndatabase_name = "appkit-todo"\n'
+        b'database_id = "00000000-0000-0000-0000-000000000000"\n'
+    ),
+    "worker/index.ts": b"export default { async fetch() { return new Response('ok'); } };\n",
+    "schema.sql": b"create table if not exists todo (id integer primary key);\n",
+    "package.json": b'{"name":"appkit-todo","scripts":{"dev":"wrangler dev"}}',
+    ".dev.vars.example": b"",
+}
+
+_NODE_FILES: dict[str, bytes] = {
+    "server.js": b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n",
+    "package.json": b'{"name":"svc","scripts":{"start":"node server.js"}}',
+}
+
+_DOCS_FILES: dict[str, bytes] = {
+    "README.md": b"# Research Notes\n\nNo application here \xe2\x80\x94 a document workspace.\n",
+    "LICENSE": b"MIT\n",
+    "notes/todo.md": b"- read more\n",
+}
+
+# An opaque container manifest we cannot statically verify -> needs_review with
+# repairable, field-naming blockers (the honest "unknown/opaque stack" path).
+_OPAQUE_FILES: dict[str, bytes] = {
+    "Dockerfile": b"FROM scratch\n",
+    "main.go": b"package main\nfunc main() {}\n",
+}
+
+_NODE_INTENT = ReleaseIntent(
+    start_cmd=("node", "server.js"),
+    required_env=("API_BASE_URL", "SESSION_SECRET"),
+)
+
+
+# ---- harness ------------------------------------------------------------------
+
+
+@pytest.fixture
+def store() -> SqliteEventStore:
+    return SqliteEventStore(":memory:")
+
+
+def _runtime(
+    store: SqliteEventStore, monkeypatch: pytest.MonkeyPatch, *, root: str | None
+) -> ConversationRuntime:
+    cfg = RouterConfig.model_validate(
+        {
+            "models": {"m": {"model_id": "m", "provider": "fake", "context_window": 8192}},
+            "default_model": "m",
+        }
+    )
+    cfg_store = ConfigStore(path=Path("/dev/null"))
+    if root is not None:
+        cfg = cfg.model_copy(update={"projects": ProjectStorageSettings(projects_root=root)})
+    monkeypatch.setattr(cfg_store, "load", lambda: cfg)
+    return ConversationRuntime(store, config=cfg, config_store=cfg_store)
+
+
+def _seed(
+    ps: ProjectStore,
+    store: SqliteEventStore,
+    cid: str,
+    files: dict[str, bytes],
+    *,
+    owner_id: str = "local",
+    title: str | None = None,
+    intent: ReleaseIntent | None = None,
+) -> None:
+    workspace = ps.path_for(cid)
+    workspace.mkdir(parents=True, exist_ok=True)
+    total = 0
+    for rel, data in files.items():
+        dest = workspace / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        total += len(data)
+    ps.write_manifest(
+        cid,
+        title=title,
+        owner_id=owner_id,
+        created_at="2026-06-06T00:00:00Z",
+        file_count=len(files),
+        total_bytes=total,
+    )
+    if intent is not None:
+        ps.write_release_intent(cid, intent)
+    store.create_conversation(cid, owner_id=owner_id, title=title, surface="build")
+
+
+def _client_for(
+    store: SqliteEventStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, ProjectStore]:
+    runtime = _runtime(store, monkeypatch, root=str(tmp_path))
+    client = TestClient(create_app(store, runtime=runtime))
+    return client, ProjectStore(str(tmp_path))
+
+
+def _namelist(content: bytes) -> list[str]:
+    with zipfile.ZipFile(io.BytesIO(content)) as zf:
+        return sorted(zf.namelist())
+
+
+# ---- criterion 1: identical response schema across all four assessments -------
+
+
+def test_release_schema_identical_key_set_across_assessments(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_node", _NODE_FILES, intent=_NODE_INTENT)
+    _seed(ps, store, "conv_opaque", _OPAQUE_FILES)
+    _seed(ps, store, "conv_docs", _DOCS_FILES)
+    _seed(ps, store, "conv_appkit", _APPKIT_FILES)
+
+    bodies = {}
+    for cid in ("conv_node", "conv_opaque", "conv_docs", "conv_appkit"):
+        res = client.get(f"/api/projects/{cid}/release")
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert set(body.keys()) == _RESPONSE_KEYS, cid
+        assert body["command"] == "docker compose up -d --build"
+        bodies[cid] = body
+
+    # (a) conventional node app
+    node = bodies["conv_node"]
+    assert node["assessment"] == "candidate"
+    assert node["self_host"] is True
+    assert {e["name"] for e in node["required_env"]} == {"API_BASE_URL", "SESSION_SECRET"}
+    assert node["ingress"] == {"service": "web", "port": "PORT", "health_path": None}
+    assert node["spec_digest"] and node["spec_digest"].startswith("sha256:")
+
+    # (b) opaque/unknown stack -> needs_review with repairable field-naming blockers
+    opaque = bodies["conv_opaque"]
+    assert opaque["assessment"] == "needs_review"
+    assert opaque["self_host"] is False
+    assert opaque["ingress"] is None
+    named_fields = {b["field"] for b in opaque["blockers"] if b["field"]}
+    assert {"start_cmd", "port_env", "health_path", "required_env"} <= named_fields
+
+    # (c) docs-only -> not_web with an honest reason
+    docs = bodies["conv_docs"]
+    assert docs["assessment"] == "not_web"
+    assert docs["self_host"] is False
+    assert docs["ingress"] is None
+    assert docs["spec_digest"] is None
+    assert any("no HTTP entrypoint" in r for r in docs["reasons"])
+
+    # (d) AppKit-shaped -> candidate with strategy evidence
+    appkit = bodies["conv_appkit"]
+    assert appkit["assessment"] == "candidate"
+    assert appkit["self_host"] is True
+    joined = " ".join(appkit["reasons"])
+    assert "dev_server" in joined and "workerd" in joined
+    assert any(e["name"] == "ADMIN_TOKEN" and e["secret"] for e in appkit["required_env"])
+
+
+# ---- criterion 2: candidate download carries overlay; not_web is plain ---------
+
+
+def test_download_candidate_zip_contains_source_plus_overlay(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_node", _NODE_FILES, intent=_NODE_INTENT)
+
+    res = client.get("/api/projects/conv_node/download")
+    assert res.status_code == 200
+    assert res.headers["content-type"] == "application/zip"
+    names = _namelist(res.content)
+    assert {
+        "server.js",
+        "package.json",
+        "compose.yaml",
+        "Dockerfile",
+        ".dockerignore",
+        ".env.example",
+        "SELFHOST.md",
+        "release.json",
+    } <= set(names)
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        # source bytes unchanged; overlay is real generated content
+        assert zf.read("server.js") == _NODE_FILES["server.js"]
+        assert b"docker compose up -d --build" in zf.read("SELFHOST.md")
+        assert b"API_BASE_URL" in zf.read(".env.example")
+        assert _SENTINEL not in zf.read("release.json")
+
+
+def test_download_appkit_candidate_carries_dev_server_overlay(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_appkit", _APPKIT_FILES)
+
+    res = client.get("/api/projects/conv_appkit/download")
+    assert res.status_code == 200
+    names = set(_namelist(res.content))
+    assert {"compose.yaml", "Dockerfile", ".env.example", "SELFHOST.md", "release.json"} <= names
+    # the four AppKit contract files are still present (source preserved)
+    assert {".disco/appspec.json", "wrangler.toml", "worker/index.ts", "schema.sql"} <= names
+
+
+def test_download_not_web_is_byte_equivalent_to_plain_filtered_zip(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_docs", _DOCS_FILES)
+
+    res = client.get("/api/projects/conv_docs/download")
+    assert res.status_code == 200
+    # Exactly the workspace file-set — NO overlay files added.
+    assert _namelist(res.content) == ["LICENSE", "README.md", "notes/todo.md"]
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        assert zf.read("README.md") == _DOCS_FILES["README.md"]
+
+
+def test_download_candidate_but_no_overlay_keys_leak_into_not_web(store, tmp_path, monkeypatch):
+    """A not_web download must not gain a single overlay path (no false affordance)."""
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_docs", _DOCS_FILES)
+    names = set(_namelist(client.get("/api/projects/conv_docs/download").content))
+    overlay_names = {
+        "compose.yaml",
+        "Dockerfile",
+        ".dockerignore",
+        ".env.example",
+        "SELFHOST.md",
+        "release.json",
+    }
+    assert not (overlay_names & names)
+
+
+# ---- criterion 2 collision rule: workspace file wins, suppression is a blocker --
+
+
+def test_overlay_collision_workspace_file_wins_and_is_reported(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    files = dict(_NODE_FILES)
+    files[".env.example"] = b"FOO=workspace-owned\n"
+    _seed(ps, store, "conv_collide", files, intent=_NODE_INTENT)
+
+    # /release reports the suppression as a blocker naming the colliding path.
+    body = client.get("/api/projects/conv_collide/release").json()
+    assert body["assessment"] == "candidate"
+    suppressed = [
+        b for b in body["blockers"] if b["code"] == "overlay_suppressed_by_workspace_file"
+    ]
+    assert [b["path"] for b in suppressed] == [".env.example"]
+
+    # download keeps the workspace .env.example (overlay one is dropped) and still
+    # adds the other overlay files.
+    res = client.get("/api/projects/conv_collide/download")
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        assert zf.read(".env.example") == b"FOO=workspace-owned\n"
+        assert {"compose.yaml", "Dockerfile", "SELFHOST.md", "release.json"} <= set(zf.namelist())
+
+
+# ---- criterion 3: a planted secret never reaches the zip or the /release JSON --
+
+
+def test_secret_never_leaks_into_zip_or_release_json(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    files = dict(_NODE_FILES)
+    files[".env"] = b"DATABASE_URL=postgres://u:PLANTED-731-hunter2@h/db\nSECRET=PLANTED-731-hunter2\n"
+    files[".dev.vars"] = b"ADMIN_TOKEN=PLANTED-731-hunter2\n"
+    _seed(ps, store, "conv_secret", files, intent=_NODE_INTENT)
+
+    # /release JSON bytes carry no sentinel.
+    rel = client.get("/api/projects/conv_secret/release")
+    assert rel.status_code == 200
+    assert _SENTINEL not in rel.content
+
+    # every zip entry's bytes carry no sentinel, and the secret files are absent.
+    res = client.get("/api/projects/conv_secret/download")
+    with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        names = set(zf.namelist())
+        assert ".env" not in names and ".dev.vars" not in names
+        for name in names:
+            assert _SENTINEL not in zf.read(name), name
+
+
+# ---- criterion 4: auth mirrors download_project exactly ------------------------
+
+
+def test_release_non_owner_is_forbidden(store, tmp_path, monkeypatch):
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_other", _NODE_FILES, owner_id="intruder", intent=_NODE_INTENT)
+    res = client.get("/api/projects/conv_other/release")
+    assert res.status_code == 403
+    assert res.json()["detail"]["reason"] == "project_forbidden"
+
+
+def test_release_unknown_project_is_not_found(store, tmp_path, monkeypatch):
+    client, _ps = _client_for(store, tmp_path, monkeypatch)
+    res = client.get("/api/projects/conv_missing/release")
+    assert res.status_code == 404
+    assert res.json()["detail"]["reason"] == "project_not_found"
+
+
+def test_release_storage_unavailable(store):
+    client = TestClient(create_app(store, runtime=None))
+    res = client.get("/api/projects/conv_any/release")
+    assert res.status_code == 404
+    assert res.json()["detail"]["reason"] == "storage_unavailable"
+
+
+# ---- criterion 5: no mode-branching (the acceptance grep, mirrored) ------------
+
+
+def test_release_module_has_no_surface_branching():
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "disco"
+        / "agent_server"
+        / "routes"
+        / "release.py"
+    ).read_text()
+    assert "surface" not in src
+    for banned in ("build_mode", "prompt"):
+        assert banned not in src
+
+
+# ---- criterion 6: idempotent + no subprocess -----------------------------------
+
+
+def test_release_is_idempotent_and_spawns_no_subprocess(store, tmp_path, monkeypatch):
+    calls: list[tuple] = []
+
+    async def _sentinel_exec(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("/release must not spawn a subprocess")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _sentinel_exec)
+
+    client, ps = _client_for(store, tmp_path, monkeypatch)
+    _seed(ps, store, "conv_node", _NODE_FILES, intent=_NODE_INTENT)
+
+    first = client.get("/api/projects/conv_node/release")
+    second = client.get("/api/projects/conv_node/release")
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json() == second.json()
+    assert first.json()["tree_digest"] == second.json()["tree_digest"]
+    assert calls == []
+
+
+# ---- criterion 7: the endpoint is documented -----------------------------------
+
+
+def test_release_endpoint_is_documented():
+    doc = (Path(__file__).resolve().parents[3] / "api-endpoints.md").read_text()
+    assert "/api/projects/{id}/release" in doc

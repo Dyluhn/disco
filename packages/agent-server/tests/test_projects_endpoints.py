@@ -196,7 +196,16 @@ def test_download_and_manifest_exclude_legacy_runtime_secret_files(store, tmp_pa
     download = client.get(f"/api/projects/{cid}/download")
     assert download.status_code == 200
     with zipfile.ZipFile(io.BytesIO(download.content)) as zf:
-        assert sorted(zf.namelist()) == [".dev.vars.example", "index.html"]
+        names = set(zf.namelist())
+        # Secret hygiene (the point of this test): the runtime-secret file is
+        # excluded; the template + source survive. (WO-7: a root index.html is a
+        # static release candidate, so the download also carries the generated
+        # self-host overlay — hence a membership check, not exact equality.)
+        assert ".dev.vars" not in names
+        assert {".dev.vars.example", "index.html"} <= names
+        # The real secret VALUE never appears in ANY zip entry (incl. the overlay).
+        for name in names:
+            assert b"whsec_real" not in zf.read(name)
 
     manifest = client.get(f"/api/projects/{cid}/manifest")
     assert manifest.status_code == 200
