@@ -141,6 +141,22 @@ _CONTAINER_NAMES = frozenset(
 # The four AppKit contract files whose joint presence is the AppKit shape.
 _APPKIT_FILES = (".disco/appspec.json", "wrangler.toml", "worker/index.ts", "schema.sql")
 
+# Substrings that mark an env-var NAME as secret-shaped (matched case-insensitively
+# against the UPPERCASE name). Classification fails CLOSED toward `secret`: a
+# false positive merely guards a public var, whereas a false negative would embed a
+# real secret's name as `public`. Provider-neutral — no vendor names.
+_SECRET_NAME_MARKERS = (
+    "SECRET",
+    "TOKEN",
+    "PASSWORD",
+    "PASSWD",
+    "CREDENTIAL",
+    "PRIVATE",
+    "APIKEY",
+    "KEY",
+    "AUTH",
+)
+
 # argv[0] interpreter tokens that reveal a declared process's runtime.
 _NODE_TOKENS = frozenset({"node", "npm", "npx", "pnpm", "yarn", "bun"})
 _PY_TOKENS = frozenset(
@@ -381,10 +397,18 @@ def _static_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
         return None
     pkg = _root_package_json(files)
     if _script(pkg, "build") is not None:
+        # A build-requiring static bundle MUST install its dependencies before the
+        # build runs, or the emitted image builds against an empty node_modules.
+        # Attach the install command (npm ci when a lockfile is present, else npm
+        # install) so deps install BEFORE the build in the emitted Dockerfile.
+        lockfile, manager, install = _node_install(files)
         return ReleaseService(
             id=_INGRESS_ID,
             role=ServiceRole.ingress,
             runtime=RuntimeStrategy.static,
+            package_manager=manager,
+            lockfile=lockfile,
+            install_cmd=install,
             build_cmd=("npm", "run", "build"),
             output_dir="dist",
             port_env="PORT",
@@ -398,8 +422,37 @@ def _static_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
     )
 
 
-def _detect_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
-    return _node_service(files) or _python_service(files) or _static_service(files)
+def _runtime_conflict_result(node: ReleaseService, python: ReleaseService) -> DetectionResult:
+    """Fail closed when TWO different runtime detectors match the same tree.
+
+    A project that carries BOTH a node server start-script AND a python
+    web-framework entrypoint declares two competing runtimes; short-circuiting to
+    one silently discards the other. Return `needs_review` naming BOTH pieces of
+    evidence so an owner declares which runtime releases the app."""
+    node_evidence = "node runtime evidence: package.json declares a server 'start' script"
+    python_evidence = (
+        "python runtime evidence: a python manifest with a web-framework "
+        "(fastapi/flask) entrypoint"
+    )
+    return DetectionResult(
+        assessment=ReleaseAssessment.needs_review,
+        evidence=(node_evidence, python_evidence),
+        reasons=(
+            "two different runtime stacks were detected — a node server start "
+            "script AND a python web-framework entrypoint; this conflicting "
+            "evidence cannot be reconciled automatically, so an owner must declare "
+            "which runtime releases this app.",
+        ),
+        missing=(
+            MissingField(
+                field="runtime",
+                detail=(
+                    "conflicting node and python runtime evidence — declare which "
+                    "one releases the app"
+                ),
+            ),
+        ),
+    )
 
 
 def _detect_database(files: Mapping[str, str | bytes]) -> _DbFinding:
@@ -540,7 +593,38 @@ def _conflict_result(intent: ReleaseIntent, manifest: str) -> DetectionResult:
     )
 
 
+def _classify_secret(name: str) -> SecretClass:
+    """Classify a declared env-var NAME as `secret` or `public` by its shape.
+
+    A name carrying a secret-shaped marker (TOKEN / SECRET / KEY / PASSWORD /
+    CREDENTIAL / …) is treated as `secret` so the export guards it and never labels
+    it public. Fails CLOSED toward `secret`: over-classifying a public var is
+    harmless (it is still just guarded), while under-classifying a real secret is
+    the actual hazard."""
+    upper = name.upper()
+    if any(marker in upper for marker in _SECRET_NAME_MARKERS):
+        return SecretClass.secret
+    return SecretClass.public
+
+
 def _from_intent(intent: ReleaseIntent) -> DetectionResult:
+    # A release intent with NO start command cannot describe a runnable app: there is
+    # no process to launch. Rather than fabricate a runnable candidate (the emitter
+    # would default an empty start to `npm start`), fail closed to needs_review
+    # naming the missing start command. The port defaults to the $PORT contract and a
+    # health path is optional (consistent with detector-produced candidates), so a
+    # non-empty start_cmd is the honest minimum contract for a candidate.
+    if not intent.start_cmd:
+        return DetectionResult(
+            assessment=ReleaseAssessment.needs_review,
+            evidence=("typed release intent declared without a start command",),
+            reasons=(
+                "the declared release intent has no start command, so there is no "
+                "runnable process to release; declare at least a start command "
+                "before this app can be a release candidate.",
+            ),
+            missing=_missing_fields(("start_cmd",)),
+        )
     service = ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
@@ -551,7 +635,12 @@ def _from_intent(intent: ReleaseIntent) -> DetectionResult:
         health_path=intent.health_path,
     )
     env = tuple(
-        EnvVarDecl(name=name, scope=EnvScope.runtime, required=True)
+        EnvVarDecl(
+            name=name,
+            scope=EnvScope.runtime,
+            required=True,
+            secret=_classify_secret(name),
+        )
         for name in intent.required_env
     )
     return DetectionResult(
@@ -723,8 +812,15 @@ def detect_release(
     if manifest is not None:
         return _container_review(manifest)
 
-    # Rung 3 — deterministic detectors (with database handling).
-    service = _detect_service(files)
+    # Rung 3 — deterministic detectors (with database handling). When two DIFFERENT
+    # runtime detectors both match (a node server start-script AND a python
+    # web-framework entrypoint), that is genuinely conflicting evidence: fail closed
+    # to needs_review naming both. Single-runtime detection is unchanged.
+    node = _node_service(files)
+    python = _python_service(files)
+    if node is not None and python is not None:
+        return _runtime_conflict_result(node, python)
+    service = node or python or _static_service(files)
     if service is not None:
         return _detected_result(service, files)
 

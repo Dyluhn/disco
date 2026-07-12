@@ -271,6 +271,47 @@ async def test_rejected_value_never_reaches_the_sidecar_bytes(
     assert b"SECRET" not in raw
 
 
+@pytest.mark.asyncio
+async def test_tool_rejects_env_assignment_argv_and_persists_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # AUDIT #4a: an argv element shaped like `API_TOKEN=hunter2` smuggles a secret
+    # VALUE through a start-command token. It must be rejected with a typed error and
+    # NOTHING may persist; the rejection must not echo the smuggled value.
+    store = _redirect_store_root(tmp_path, monkeypatch)
+    cid = "conv-argv-smuggle"
+    sbx, _ = _process_backend_sandbox(tmp_path)
+    out = await ReleaseDeclareTool().run(
+        ReleaseDeclareArgs(start_cmd=["API_TOKEN=hunter2", "node", "server.js"]),
+        _ctx(sbx, cid),
+    )
+    assert not out.success
+    assert out.error == "invalid_release_intent"
+    assert "hunter2" not in out.content
+    assert store.read_release_intent(cid) is None
+    assert not store.release_intent_for(cid).exists()
+
+
+@pytest.mark.asyncio
+async def test_tool_rejects_env_assignment_in_build_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the same rejection applies to the build argv, not just start.
+    store = _redirect_store_root(tmp_path, monkeypatch)
+    cid = "conv-argv-build"
+    sbx, _ = _process_backend_sandbox(tmp_path)
+    out = await ReleaseDeclareTool().run(
+        ReleaseDeclareArgs(
+            start_cmd=["node", "server.js"], build_cmd=["SECRET_KEY=xyz", "npm", "run", "build"]
+        ),
+        _ctx(sbx, cid),
+    )
+    assert not out.success
+    assert out.error == "invalid_release_intent"
+    assert "xyz" not in out.content
+    assert not store.release_intent_for(cid).exists()
+
+
 def test_shell_string_command_is_structurally_rejected() -> None:
     # a shell STRING (not an argv list) cannot even be expressed in the schema.
     # model_validate takes Any, so this probe stays type-clean (no `# type: ignore`).

@@ -572,6 +572,234 @@ def test_build_scope_env_becomes_build_args():
     assert "NPM_TOKEN" not in env
 
 
+import os as _os
+
+_DETECT_FIXTURES = Path(__file__).parent / "fixtures" / "release_detect"
+
+
+def _load_detect_fixture(name: str) -> dict[str, bytes]:
+    root = _DETECT_FIXTURES / name
+    files: dict[str, bytes] = {}
+    for dirpath, _dirs, filenames in _os.walk(root):
+        for filename in filenames:
+            full = Path(dirpath) / filename
+            files[full.relative_to(root).as_posix()] = full.read_bytes()
+    return files
+
+
+def _run_lines(dockerfile: str) -> list[str]:
+    return [line for line in dockerfile.splitlines() if line.startswith("RUN ")]
+
+
+# ---- AUDIT #2: a static/vite build bundle must install deps BEFORE building -----
+
+
+def test_vite_static_bundle_dockerfile_installs_before_building() -> None:
+    # End-to-end: detect the vite-with-build fixture, stitch a ReleaseSpec, emit the
+    # bundle, and assert the Dockerfile installs dependencies BEFORE running the
+    # build. On the unfixed code detection attaches no install command, so the
+    # emitted Dockerfile runs `npm run build` against an empty node_modules.
+    files = _load_detect_fixture("vite-spa")
+    result = detect_release(files, intent=None, provenance=Provenance())
+    ingress = result.ingress
+    assert ingress is not None and ingress.runtime is RuntimeStrategy.static
+    spec = ReleaseSpec(
+        kind="static",
+        name="Vite SPA",
+        version_seq=1,
+        tree_digest=_DIGEST,
+        services=(ingress,),
+        provenance=_prov(),
+    )
+    dockerfile = emit_local_compose(spec)[DOCKERFILE_PATH]
+    runs = _run_lines(dockerfile)
+    # there is an install step and a build step, and install comes first.
+    install_idx = next(i for i, line in enumerate(runs) if "install" in line or '"ci"' in line)
+    build_idx = next(i for i, line in enumerate(runs) if "build" in line)
+    assert install_idx < build_idx, dockerfile
+    assert '"npm", "ci"' in dockerfile or '"npm", "install"' in dockerfile
+
+
+def test_static_build_without_install_cmd_still_installs_in_dockerfile() -> None:
+    # Guard the emitter itself: any build-requiring service (even a hand/intent spec
+    # that omitted install_cmd) must still get an install step before the build so
+    # the emitted image is buildable.
+    spec = ReleaseSpec(
+        kind="static",
+        name="Buildless Install",
+        version_seq=1,
+        tree_digest=_DIGEST,
+        services=(
+            ReleaseService(
+                id="web",
+                role=ServiceRole.ingress,
+                runtime=RuntimeStrategy.static,
+                build_cmd=("npm", "run", "build"),
+                output_dir="dist",
+                port_env="PORT",
+                health_path="/",
+            ),
+        ),
+        provenance=_prov(),
+    )
+    dockerfile = emit_local_compose(spec)[DOCKERFILE_PATH]
+    runs = _run_lines(dockerfile)
+    install_idx = next(i for i, line in enumerate(runs) if "install" in line or '"ci"' in line)
+    build_idx = next(i for i, line in enumerate(runs) if "build" in line)
+    assert install_idx < build_idx, dockerfile
+
+
+# ---- AUDIT #5: generic depends_on emitted + unique volume per persistent path ----
+
+
+def _depends_spec() -> ReleaseSpec:
+    return ReleaseSpec(
+        kind="web",
+        name="Acme Depends App",
+        version_seq=1,
+        tree_digest=_DIGEST,
+        services=(
+            ReleaseService(
+                id="web",
+                role=ServiceRole.ingress,
+                runtime=RuntimeStrategy.node,
+                install_cmd=("npm", "ci"),
+                start_cmd=("npm", "start"),
+                port_env="PORT",
+                health_path="/healthz",
+                depends_on=("api",),
+            ),
+            ReleaseService(
+                id="api",
+                role=ServiceRole.backend,
+                runtime=RuntimeStrategy.python,
+                install_cmd=("pip", "install", "-r", "requirements.txt"),
+                start_cmd=("python", "api.py"),
+                port_env="PORT",
+            ),
+        ),
+        provenance=_prov(),
+    )
+
+
+def test_generic_depends_on_relationship_is_emitted() -> None:
+    doc = _compose_doc(_depends_spec())
+    web = _service_block(doc, "web")
+    depends_on = web["depends_on"]
+    assert isinstance(depends_on, dict)
+    # the declared web -> api relationship must be emitted (not silently dropped).
+    assert "api" in depends_on
+    assert isinstance(depends_on["api"], dict)
+    assert depends_on["api"]["condition"] in (
+        "service_started",
+        "service_healthy",
+        "service_completed_successfully",
+    )
+
+
+def test_generic_depends_on_coexists_with_migrate_ordering() -> None:
+    # web depends on both the one-shot migrate service AND the declared api service.
+    spec = ReleaseSpec(
+        kind="web",
+        name="Acme Depends+Migrate",
+        version_seq=1,
+        tree_digest=_DIGEST,
+        services=(
+            ReleaseService(
+                id="web",
+                role=ServiceRole.ingress,
+                runtime=RuntimeStrategy.node,
+                install_cmd=("npm", "ci"),
+                start_cmd=("npm", "start"),
+                port_env="PORT",
+                health_path="/healthz",
+                depends_on=("api",),
+            ),
+            ReleaseService(
+                id="api",
+                role=ServiceRole.backend,
+                runtime=RuntimeStrategy.python,
+                install_cmd=("pip", "install", "-r", "requirements.txt"),
+                start_cmd=("python", "api.py"),
+                port_env="PORT",
+            ),
+        ),
+        env=(
+            EnvVarDecl(name="DATABASE_URL", scope=EnvScope.runtime, required=True, binding="db"),
+        ),
+        resources=(_sqlite_resource(("npm", "run", "migrate")),),
+        provenance=_prov(),
+    )
+    doc = _compose_doc(spec)
+    web = _service_block(doc, "web")
+    depends_on = web["depends_on"]
+    assert isinstance(depends_on, dict)
+    assert "api" in depends_on
+    assert "migrate" in depends_on
+    assert depends_on["migrate"]["condition"] == "service_completed_successfully"
+
+
+def _two_persistent_paths_spec() -> ReleaseSpec:
+    # Two DISTINCT persistent paths that (illegally) declare the SAME volume name.
+    shared = "shared-vol"
+    return ReleaseSpec(
+        kind="web",
+        name="Acme Two Volumes",
+        version_seq=1,
+        tree_digest=_DIGEST,
+        services=(
+            ReleaseService(
+                id="web",
+                role=ServiceRole.ingress,
+                runtime=RuntimeStrategy.node,
+                install_cmd=("npm", "ci"),
+                start_cmd=("npm", "start"),
+                port_env="PORT",
+                health_path="/healthz",
+            ),
+        ),
+        resources=(
+            ResourceDecl(
+                id="primary",
+                kind=ResourceKind.sqlite,
+                persistent_path="/data/app.db",
+                profiles=ResourceProfiles(
+                    local=LocalResourceProfile(url="file:/data/app.db", volume=shared)
+                ),
+                consumers=("web",),
+            ),
+            ResourceDecl(
+                id="cache",
+                kind=ResourceKind.sqlite,
+                persistent_path="/var/cache/cache.db",
+                profiles=ResourceProfiles(
+                    local=LocalResourceProfile(url="file:/var/cache/cache.db", volume=shared)
+                ),
+                consumers=("web",),
+            ),
+        ),
+        provenance=_prov(),
+    )
+
+
+def test_two_persistent_paths_get_unique_volume_names() -> None:
+    spec = _two_persistent_paths_spec()
+    doc = _compose_doc(spec)
+    volumes = doc["volumes"]
+    assert isinstance(volumes, dict)
+    # two distinct persistent paths -> two distinct named volumes (not one reused).
+    assert len(volumes) == 2, volumes
+    web = _service_block(doc, "web")
+    mounts = web["volumes"]
+    assert isinstance(mounts, list)
+    mount_names = {str(m).split(":", 1)[0] for m in mounts}
+    assert len(mount_names) == 2, mounts
+    # every mount references a declared volume, and the two mount dirs differ.
+    assert mount_names <= set(volumes)
+    mount_dirs = {str(m).split(":", 1)[1] for m in mounts}
+    assert len(mount_dirs) == 2, mounts
+
+
 @pytest.mark.integration
 def test_docker_compose_config_accepts_bundle(tmp_path):
     """[LIVE] Real `docker compose config` validation — DEFERRED to a docker host.

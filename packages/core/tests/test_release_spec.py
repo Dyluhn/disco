@@ -262,6 +262,31 @@ def test_commands_are_argv_lists_not_shell_strings() -> None:
         )
 
 
+def test_argv_element_shaped_like_an_env_assignment_is_rejected() -> None:
+    # AUDIT #4a: an argv element like `API_TOKEN=hunter2` smuggles a secret VALUE
+    # through a command token. It must be rejected across install/build/migrate/start
+    # argvs (ReleaseService) and the intent's build/start argvs (ReleaseIntent).
+    for field in ("install_cmd", "build_cmd", "migrate_cmd", "start_cmd"):
+        with pytest.raises(ValidationError, match="env assignment"):
+            ReleaseService(
+                id="web",
+                role=ServiceRole.ingress,
+                runtime=RuntimeStrategy.node,
+                **{field: ("API_TOKEN=hunter2", "node", "server.js")},
+            )
+    for field in ("build_cmd", "start_cmd"):
+        with pytest.raises(ValidationError, match="env assignment"):
+            ReleaseIntent(**{field: ("SECRET=abc", "node", "server.js")})
+    # a legitimate flag with an '=' (not an UPPERCASE env-name shape) is still fine.
+    ok = ReleaseService(
+        id="web",
+        role=ServiceRole.ingress,
+        runtime=RuntimeStrategy.node,
+        start_cmd=("node", "--max-old-space-size=512", "server.js"),
+    )
+    assert ok.start_cmd == ("node", "--max-old-space-size=512", "server.js")
+
+
 def test_duplicate_service_ids_rejected() -> None:
     dup = _ingress_service().model_copy(update={"role": ServiceRole.backend})
     with pytest.raises(ValidationError, match="duplicate service id"):

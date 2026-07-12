@@ -78,6 +78,7 @@ _EXPECTED: dict[
     ),
     "existing-dockerfile": (ReleaseAssessment.needs_review, None, False, ()),
     "unknown-stack": (ReleaseAssessment.needs_review, None, False, ()),
+    "node-and-fastapi": (ReleaseAssessment.needs_review, None, False, ()),
     "non-web-doc": (ReleaseAssessment.not_web, None, False, ()),
     "native-sqlite": (
         ReleaseAssessment.candidate,
@@ -209,3 +210,110 @@ def test_detection_is_deterministic_on_intent_path() -> None:
     first = detect_release(files, intent=intent, provenance=Provenance(imported=True))
     second = detect_release(files, intent=intent, provenance=Provenance(imported=True))
     assert first == second
+
+
+# ---- AUDIT #2: a static/vite build candidate must be BUILDABLE (install cmd) ----
+
+
+def test_vite_static_build_candidate_gets_an_install_command() -> None:
+    # The vite-spa fixture is a static bundle WITH a `build` script and a
+    # package-lock.json. A build-requiring candidate that emits `npm run build`
+    # with NO install command produces an unbuildable image; detection must attach
+    # the install command (npm ci, since a lockfile is present) so deps install
+    # BEFORE the build.
+    files = _load_fixture("vite-spa")
+    result = detect_release(files, intent=None, provenance=Provenance())
+
+    assert result.assessment is ReleaseAssessment.candidate
+    ingress = result.ingress
+    assert ingress is not None
+    assert ingress.runtime is RuntimeStrategy.static
+    assert ingress.build_cmd == ("npm", "run", "build")
+    # the defect: install_cmd is empty, so the build runs without dependencies.
+    assert ingress.install_cmd == ("npm", "ci")
+    assert ingress.lockfile == "package-lock.json"
+
+
+# ---- AUDIT #3: conflicting runtime evidence must fail closed to needs_review ----
+
+
+def test_node_and_fastapi_conflict_is_needs_review_with_both_evidences() -> None:
+    # A project with BOTH a node server start-script AND a python web-framework
+    # entrypoint declares two different runtimes. Short-circuiting to node hides the
+    # conflict; detection must fail closed to needs_review naming BOTH evidences.
+    files = _load_fixture("node-and-fastapi")
+    result = detect_release(files, intent=None, provenance=Provenance())
+
+    assert result.assessment is ReleaseAssessment.needs_review
+    assert result.ingress is None
+    joined = " ".join(result.evidence).lower()
+    assert "node" in joined
+    assert "python" in joined or "fastapi" in joined
+    # a genuinely conflicting pair, not a single guessed runtime.
+    assert any("node" in signal.lower() for signal in result.evidence)
+    assert any(
+        ("python" in signal.lower() or "fastapi" in signal.lower())
+        for signal in result.evidence
+    )
+
+
+def test_single_runtime_detection_is_unchanged_by_conflict_handling() -> None:
+    # A node-only project (no python manifest) stays a node candidate; a
+    # python-only project stays a python candidate — conflict handling must not
+    # regress single-runtime detection.
+    node = detect_release(
+        _load_fixture("express-node"), intent=None, provenance=Provenance()
+    )
+    assert node.assessment is ReleaseAssessment.candidate
+    assert node.ingress is not None and node.ingress.runtime is RuntimeStrategy.node
+    python = detect_release(_load_fixture("fastapi"), intent=None, provenance=Provenance())
+    assert python.assessment is ReleaseAssessment.candidate
+    assert python.ingress is not None and python.ingress.runtime is RuntimeStrategy.python
+
+
+# ---- AUDIT #4b: an empty intent must NOT become a fabricated npm-start candidate -
+
+
+def test_empty_intent_is_needs_review_not_a_fabricated_candidate() -> None:
+    # An intent with no start command cannot describe a runnable app. It must NOT
+    # silently become a `candidate` that defaults to `npm start`; it fails closed to
+    # needs_review naming the missing start command.
+    result = detect_release({}, intent=ReleaseIntent(), provenance=Provenance())
+
+    assert result.assessment is ReleaseAssessment.needs_review
+    assert result.ingress is None
+    named = {field.field for field in result.missing}
+    assert "start_cmd" in named
+
+
+def test_intent_with_only_a_start_command_is_still_a_candidate() -> None:
+    # The minimum contract is a start command (port defaults to the $PORT contract,
+    # health is optional — consistent with detector-produced candidates).
+    result = detect_release(
+        {}, intent=ReleaseIntent(start_cmd=("node", "server.js")), provenance=Provenance()
+    )
+    assert result.assessment is ReleaseAssessment.candidate
+    assert result.ingress is not None
+    assert result.ingress.start_cmd == ("node", "server.js")
+
+
+# ---- AUDIT #4c: secret-shaped required env must be classified secret ------------
+
+
+def test_secret_shaped_required_env_is_classified_secret() -> None:
+    from disco.core.release.spec import SecretClass
+
+    intent = ReleaseIntent(
+        start_cmd=("node", "server.js"),
+        required_env=("STRIPE_API_KEY", "SESSION_SECRET", "DB_PASSWORD", "APP_NAME"),
+    )
+    result = detect_release({}, intent=intent, provenance=Provenance())
+    by_name = {var.name: var for var in result.env}
+
+    assert by_name["STRIPE_API_KEY"].secret is SecretClass.secret
+    assert by_name["SESSION_SECRET"].secret is SecretClass.secret
+    assert by_name["DB_PASSWORD"].secret is SecretClass.secret
+    # a non-secret-shaped name stays public.
+    assert by_name["APP_NAME"].secret is SecretClass.public
+    # all remain required.
+    assert all(var.required for var in result.env)

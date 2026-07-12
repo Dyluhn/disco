@@ -272,11 +272,34 @@ def _mount_dir(resource: ResourceDecl) -> str:
     return path[:slash]
 
 
-def _resource_mounts(spec: ReleaseSpec) -> list[str]:
-    """`<volume>:<dir>` mount entries, one per resource, in spec order."""
+def _resource_volume_names(spec: ReleaseSpec) -> dict[str, str]:
+    """Map each resource id to a UNIQUE compose volume name.
+
+    A named volume per distinct persistent path is load-bearing: two resources that
+    (legally, per the schema) declare the SAME `local.volume` name would otherwise
+    collapse to one volume mounted at two locations and silently clobber each other's
+    state. On a collision the declared name is disambiguated deterministically by
+    suffixing, so distinct persistent paths always get distinct volumes."""
+    assigned: dict[str, str] = {}
+    used: set[str] = set()
+    for resource in spec.resources:
+        base = resource.profiles.local.volume
+        name = base
+        suffix = 2
+        while name in used:
+            name = f"{base}-{suffix}"
+            suffix += 1
+        used.add(name)
+        assigned[resource.id] = name
+    return assigned
+
+
+def _resource_mounts(spec: ReleaseSpec, volume_names: dict[str, str]) -> list[str]:
+    """`<volume>:<dir>` mount entries, one per resource, in spec order (each resource
+    using its UNIQUE assigned volume name)."""
     mounts: list[str] = []
     for resource in spec.resources:
-        mounts.append(f"{resource.profiles.local.volume}:{_mount_dir(resource)}")
+        mounts.append(f"{volume_names[resource.id]}:{_mount_dir(resource)}")
     return mounts
 
 
@@ -412,8 +435,17 @@ def _service_block(
         "restart": "unless-stopped",
     }
 
+    # Every declared dependency is emitted: the one-shot migrate ordering (on the
+    # ingress) AND every generic `depends_on` relationship the service declares. A
+    # generic dependency uses `service_started` (start-order only — the dependency is
+    # a long-running service, not a one-shot to wait on for completion).
+    depends: dict[str, _Yaml] = {}
     if is_ingress and migrate_name is not None:
-        block["depends_on"] = {migrate_name: {"condition": "service_completed_successfully"}}
+        depends[migrate_name] = {"condition": "service_completed_successfully"}
+    for dep in service.depends_on:
+        depends[dep] = {"condition": "service_started"}
+    if depends:
+        block["depends_on"] = {name: depends[name] for name in sorted(depends)}
 
     environment: dict[str, _Yaml] = {service.port_env: str(_CONTAINER_PORT)}
     for name, value in _scope_env(spec, EnvScope.runtime).items():
@@ -475,7 +507,8 @@ def _compose_document(spec: ReleaseSpec) -> dict[str, _Yaml]:
     ingress = _ingress_service(spec)
     services = list(spec.services)
     multi = len(services) > 1
-    mounts = _resource_mounts(spec)
+    volume_names = _resource_volume_names(spec)
+    mounts = _resource_mounts(spec, volume_names)
 
     migrate_argv = _migrate_argv(spec, ingress)
     migrate_name = _migrate_service_name(spec) if migrate_argv else None
@@ -498,7 +531,7 @@ def _compose_document(spec: ReleaseSpec) -> dict[str, _Yaml]:
     if spec.resources:
         volumes: dict[str, _Yaml] = {}
         for resource in spec.resources:
-            volumes[resource.profiles.local.volume] = {}
+            volumes[volume_names[resource.id]] = {}
         document["volumes"] = volumes
     return document
 
@@ -506,11 +539,32 @@ def _compose_document(spec: ReleaseSpec) -> dict[str, _Yaml]:
 # ---- Dockerfile emission ------------------------------------------------------
 
 
+def _effective_install_cmd(service: ReleaseService) -> tuple[str, ...]:
+    """The install command to emit before a build. A build-requiring service MUST
+    install its dependencies first, or the image builds against no dependencies. If
+    the spec supplied an explicit `install_cmd`, use it; otherwise, when the service
+    declares a `build_cmd` but no install, derive a conservative default from the
+    runtime (npm ci when a lockfile is declared, else npm install; pip for python)
+    so any build-requiring bundle is buildable. A service with neither an install
+    nor a build gets no install line."""
+    if service.install_cmd:
+        return service.install_cmd
+    if not service.build_cmd:
+        return ()
+    if service.runtime is RuntimeStrategy.python:
+        return ("pip", "install", ".")
+    # node / static build toolchains are npm-based in this adapter.
+    if service.lockfile:
+        return ("npm", "ci")
+    return ("npm", "install")
+
+
 def _node_dockerfile(service: ReleaseService) -> str:
     lines = [_DOCKERFILE_HEADER.rstrip("\n"), f"FROM {_NODE_IMAGE}", "WORKDIR /app"]
     lines.append(_copy_line(service.root, "./"))
-    if service.install_cmd:
-        lines.append(_run_line(service.install_cmd))
+    install = _effective_install_cmd(service)
+    if install:
+        lines.append(_run_line(install))
     if service.build_cmd:
         lines.append(_run_line(service.build_cmd))
     lines.append("ENV NODE_ENV=production")
@@ -524,8 +578,9 @@ def _python_dockerfile(service: ReleaseService) -> str:
     lines = [_DOCKERFILE_HEADER.rstrip("\n"), f"FROM {_PYTHON_IMAGE}", "WORKDIR /app"]
     lines.append("ENV PYTHONUNBUFFERED=1")
     lines.append(_copy_line(service.root, "./"))
-    if service.install_cmd:
-        lines.append(_run_line(service.install_cmd))
+    install = _effective_install_cmd(service)
+    if install:
+        lines.append(_run_line(install))
     if service.build_cmd:
         lines.append(_run_line(service.build_cmd))
     lines.append(f"EXPOSE {_CONTAINER_PORT}")
@@ -560,8 +615,9 @@ def _static_dockerfile(service: ReleaseService) -> str:
         lines.append(f"FROM {_NODE_IMAGE} AS build")
         lines.append("WORKDIR /app")
         lines.append(_copy_line(service.root, "./"))
-        if service.install_cmd:
-            lines.append(_run_line(service.install_cmd))
+        install = _effective_install_cmd(service)
+        if install:
+            lines.append(_run_line(install))
         lines.append(_run_line(service.build_cmd))
         lines.append(f"FROM {_STATIC_IMAGE}")
         lines.append("WORKDIR /site")
@@ -713,8 +769,9 @@ def _selfhost_doc(spec: ReleaseSpec) -> str:
     lines.append("## Persistent data")
     lines.append("")
     if spec.resources:
+        volume_names = _resource_volume_names(spec)
         for resource in spec.resources:
-            volume = resource.profiles.local.volume
+            volume = volume_names[resource.id]
             lines.append(
                 f"- `{resource.kind.value}` — named volume `{volume}` mounted at "
                 f"`{_mount_dir(resource)}`."

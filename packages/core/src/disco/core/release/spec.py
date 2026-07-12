@@ -62,7 +62,13 @@ from pydantic import (
 # broken command past the cross-field validators and on to serialization. A
 # validated ReleaseSpec is therefore immutable end to end — see the AppKit spec
 # (`disco.core.appkit.spec`) this deliberately mirrors.
-_STRICT = ConfigDict(extra="forbid", frozen=True)
+#
+# `hide_input_in_errors=True` keeps pydantic from appending `input_value=...` to a
+# validation error message. These models are NAMES-ONLY value guards: a rejected
+# argv token (`API_TOKEN=hunter2`) or env NAME could itself carry a secret VALUE,
+# so the raw error must never echo the offending input — a `str(ValidationError)`
+# names the FIELD, never the value.
+_STRICT = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
 # An environment variable NAME: UPPERCASE env-var style. A leading letter or
 # underscore, then letters / digits / underscores. This rejects the exact classes
@@ -79,6 +85,14 @@ _ID_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 # A local volume name (compose/docker style): starts alphanumeric, then a small
 # safe charset.
 _VOLUME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
+
+# An argv element shaped like an inline env assignment (`NAME=...`): an UPPERCASE
+# env-var name immediately followed by `=`. Such a token is the classic
+# `VAR=value command` shell smuggle — a way to slip a secret VALUE through a
+# command list — so it is rejected from every argv (install/build/migrate/start).
+# A legitimate flag like `--max-old-space-size=512` does NOT match (it does not
+# start with an uppercase env-name), nor does `${PORT}` (starts with `$`).
+_ENV_ASSIGN_RE = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 
 # `tree_digest` mirrors `VersionRecord.tree_digest`, which the project store emits
 # as a BARE lowercase sha256 hexdigest (64 hex chars, no algorithm prefix). Pin
@@ -145,10 +159,19 @@ def _validate_id(value: str, *, field: str) -> str:
 
 def _validate_argv(value: tuple[str, ...], *, field: str) -> tuple[str, ...]:
     # An argv-list is a real exec vector (`["node", "server.js"]`), NOT a shell
-    # string — no element may be empty/blank (which would exec an empty arg).
+    # string — no element may be empty/blank (which would exec an empty arg), and no
+    # element may be shaped like an inline env assignment (`NAME=value`), which would
+    # smuggle a secret VALUE through a command token. The env-assignment message
+    # NEVER echoes the offending token (it could carry the secret value).
     for index, arg in enumerate(value):
         if not arg.strip():
             raise ValueError(f"{field} argv element {index} must be a non-empty token, got {arg!r}")
+        if _ENV_ASSIGN_RE.match(arg):
+            raise ValueError(
+                f"{field} argv element {index} looks like an inline env assignment "
+                "(NAME=...), which could smuggle a secret VALUE through a command token; "
+                "declare env vars by NAME only, never as an argv element"
+            )
     return value
 
 
