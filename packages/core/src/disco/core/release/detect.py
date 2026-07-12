@@ -74,6 +74,7 @@ from disco.core.release.spec import (
     ResourceKind,
     ResourceProfiles,
     RuntimeStrategy,
+    SecretClass,
     ServiceRole,
 )
 
@@ -82,9 +83,6 @@ from disco.core.release.spec import (
 # is a trustworthy determinism check.
 _STRICT = ConfigDict(extra="forbid", frozen=True)
 
-_DETECTOR = "release-detect"
-_DETECTOR_VERSION = "1"
-
 # The single ingress service id every derived topology uses, and the sqlite
 # resource id / local binding the ladder emits for a recognized sqlite database.
 _INGRESS_ID = "web"
@@ -92,6 +90,26 @@ _DB_ID = "db"
 _SQLITE_URL = "file:/data/app.db"
 _SQLITE_PATH = "/data/app.db"
 _SQLITE_VOLUME = "app-data"
+
+# The AppKit dev_server (workerd `wrangler dev`) interim local-run profile. Its
+# persistent D1/SQLite state lives under `/data/state` (the dir `wrangler dev
+# --persist-to` writes), reached through a named volume mounted at `/data`. This
+# is DISTINCT from the generic `/data/app.db` sqlite profile above: an AppKit app
+# is served by the workerd dev runtime, not a bespoke process reading a file DB.
+_APPKIT_STATE_PATH = "/data/state"
+_APPKIT_STATE_URL = "file:/data/state"
+_APPKIT_STATE_VOLUME = "app-state"
+# AppKit's admin read-back secret NAME (fail-closed auth gate in worker/index.ts);
+# used when the app's `.dev.vars.example` template is absent from the tree.
+_APPKIT_DEFAULT_SECRET = "ADMIN_TOKEN"
+# A safe fallback D1 database name if wrangler.toml declares none.
+_APPKIT_DEFAULT_DB = "appkit"
+
+# The wrangler.toml D1 `database_name = "..."` line, and a `NAME=` declaration in
+# an AppKit `.dev.vars.example` secret template.
+_WRANGLER_DB_NAME_RE = re.compile(r'(?m)^\s*database_name\s*=\s*"([^"]+)"')
+_DEV_VARS_NAME_RE = re.compile(r"(?m)^\s*([A-Z_][A-Z0-9_]*)\s*=")
+_DEV_VARS_EXAMPLE = ".dev.vars.example"
 
 # The release-contract fields a typed `ReleaseIntent` supplies. A `needs_review`
 # diagnostic names whichever of these it could not establish from the contents —
@@ -440,6 +458,48 @@ def _sqlite_resource(consumer_id: str) -> ResourceDecl:
     )
 
 
+def _appkit_db_name(files: Mapping[str, str | bytes]) -> str:
+    """The D1 `database_name` declared in `wrangler.toml` (the name `wrangler d1
+    execute` targets), or a safe fallback if none is declared. Read from the
+    IMMUTABLE contents so the derived migrate command targets the app's real DB."""
+    for path in files:
+        if _norm(path) == "wrangler.toml":
+            match = _WRANGLER_DB_NAME_RE.search(_as_text(files[path]))
+            if match is not None and match.group(1).strip():
+                return match.group(1).strip()
+    return _APPKIT_DEFAULT_DB
+
+
+def _appkit_secret_names(files: Mapping[str, str | bytes]) -> tuple[str, ...]:
+    """The secret env-var NAMES an AppKit app reads locally, taken from its
+    `.dev.vars.example` template (NAMES only — the template's placeholder VALUES
+    never enter the spec). Falls back to AppKit's `ADMIN_TOKEN` admin-gate secret
+    when the template is absent (e.g. a minimal contract-only tree)."""
+    for path in files:
+        if _norm(path) == _DEV_VARS_EXAMPLE:
+            names = tuple(dict.fromkeys(_DEV_VARS_NAME_RE.findall(_as_text(files[path]))))
+            if names:
+                return names
+    return (_APPKIT_DEFAULT_SECRET,)
+
+
+def _appkit_sqlite_resource(db_name: str) -> ResourceDecl:
+    """The AppKit persistent-state resource: a sqlite-class resource whose data
+    lives under `/data/state` (where `wrangler dev --persist-to` writes its local
+    D1). Its `migrate_cmd` is the `wrangler d1 execute` argv that applies
+    `schema.sql` to that local DB; the local-run adapter appends the persist dir."""
+    return ResourceDecl(
+        id=_DB_ID,
+        kind=ResourceKind.sqlite,
+        persistent_path=_APPKIT_STATE_PATH,
+        profiles=ResourceProfiles(
+            local=LocalResourceProfile(url=_APPKIT_STATE_URL, volume=_APPKIT_STATE_VOLUME)
+        ),
+        consumers=(_INGRESS_ID,),
+        migrate_cmd=("npx", "wrangler", "d1", "execute", db_name, "--local", "--file=./schema.sql"),
+    )
+
+
 def _runtime_from_argv(argv: tuple[str, ...]) -> RuntimeStrategy:
     """Infer a declared process's runtime from its start argv's interpreter token;
     an unrecognized/absent interpreter falls back to `node`, the conservative base
@@ -448,7 +508,9 @@ def _runtime_from_argv(argv: tuple[str, ...]) -> RuntimeStrategy:
         head = argv[0].rsplit("/", 1)[-1].lower()
         if head in _NODE_TOKENS:
             return RuntimeStrategy.node
-        if head in _PY_TOKENS:
+        # `startswith("python")` maps versioned interpreters (`python3.12`,
+        # `python3.13`) to python too, not just the bare `python`/`python3` tokens.
+        if head.startswith("python") or head in _PY_TOKENS:
             return RuntimeStrategy.python
     return RuntimeStrategy.node
 
@@ -505,22 +567,35 @@ def _from_intent(intent: ReleaseIntent) -> DetectionResult:
     )
 
 
-def _appkit_result() -> DetectionResult:
+def _appkit_result(files: Mapping[str, str | bytes]) -> DetectionResult:
     service = ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
         runtime=RuntimeStrategy.dev_server,
-        start_cmd=("npm", "run", "dev"),
+        start_cmd=("npm", "run", "cf:dev"),
         port_env="PORT",
+        health_path="/",
     )
+    env = tuple(
+        EnvVarDecl(
+            name=name,
+            scope=EnvScope.runtime,
+            required=True,
+            secret=SecretClass.secret,
+        )
+        for name in _appkit_secret_names(files)
+    )
+    resource = _appkit_sqlite_resource(_appkit_db_name(files))
     return DetectionResult(
         assessment=ReleaseAssessment.candidate,
         services=(service,),
-        resources=(_sqlite_resource(_INGRESS_ID),),
+        resources=(resource,),
+        env=env,
         evidence=tuple(f"AppKit contract file: {name}" for name in _APPKIT_FILES),
         reasons=(
-            "AppKit contract files present; a single dev_server ingress with a "
-            "sqlite-class resource.",
+            "AppKit contract files present; a single dev_server ingress on the "
+            "workerd dev runtime with a sqlite-class resource persisted at "
+            f"{_APPKIT_STATE_PATH}.",
         ),
     )
 
@@ -642,7 +717,7 @@ def detect_release(
 
     # Rung 1 — the AppKit contract shape.
     if _is_appkit(files):
-        return _appkit_result()
+        return _appkit_result(files)
 
     # Rung 2 — an existing container manifest, no intent: needs owner review.
     if manifest is not None:
