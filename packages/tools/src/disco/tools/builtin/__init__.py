@@ -41,6 +41,7 @@ from .preview import (
     PreviewStatusTool,
     PreviewStopTool,
 )
+from .release_declare import ReleaseDeclareTool
 from .retrieval import ExtractTool, SearchTool
 from .run_script import RunProjectScriptTool
 from .scaffold_starter import ScaffoldStarterTool
@@ -90,6 +91,7 @@ __all__ = [
     "PreviewStatusTool",
     "PreviewLogsTool",
     "PreviewStopTool",
+    "ReleaseDeclareTool",
     "SearchTool",
     "ServerStatusTool",
     "SheetsTool",
@@ -178,6 +180,10 @@ def build_default_registry() -> ToolRegistry:
             if cls().definition.name != "app_snapshot_version"
         ),
         ScaffoldStarterTool(),  # P7: materialize the contract's host-owned starter frame
+        # WO-5: record the TYPED, NAMES-ONLY runtime release intent as a host-owned
+        # `release-intent.json` sidecar (a candidate detection input, not a verdict).
+        # Free-form Build/Agent scope only; the strict AppKit allowlist excludes it.
+        ReleaseDeclareTool(),
         # WO-TC2: the trusted-components tier — verified vendored security cores.
         # Free-form Build scope only (AGENT_TOOLS); strict AppKit/artifact/research
         # scopes never include the names. Registered ONLY when the registry ships

@@ -46,6 +46,8 @@ from pathlib import Path
 from typing import Any
 
 from disco.core.owners import install_owner_id
+from disco.core.release.spec import ReleaseIntent
+from pydantic import ValidationError
 
 from .archive import is_runtime_secret_path
 
@@ -53,6 +55,10 @@ from .archive import is_runtime_secret_path
 # here so the agent-server doesn't depend on string literals scattered around.
 _MANIFEST = "manifest.json"
 _WORKSPACE = "workspace"
+# WO-5: the host-owned typed release-intent sidecar. Lives NEXT TO manifest.json
+# (i.e. in `<root>/<cid>/`), OUTSIDE the `workspace/` tree — a workspace file can
+# HINT at release shape but can never self-assert this host-owned record.
+_RELEASE_INTENT = "release-intent.json"
 _VERSIONS = "versions"
 _VERSIONS_INDEX = "versions.json"
 _VERSION_METADATA = "version.json"
@@ -632,6 +638,44 @@ class ProjectStore:
         tmp.write_text(json.dumps(payload, indent=2))
         tmp.replace(manifest)  # atomic on POSIX; close-enough elsewhere
         return manifest
+
+    def release_intent_for(self, conversation_id: str) -> Path:
+        """The host-owned `release-intent.json` sidecar path for a project — NEXT
+        TO manifest.json (in `<root>/<cid>/`), OUTSIDE the `workspace/` tree. Same
+        poisoned-id guard as `manifest_for` / `path_for`."""
+        return self._project_dir(conversation_id) / _RELEASE_INTENT
+
+    def write_release_intent(self, conversation_id: str, intent: ReleaseIntent) -> Path:
+        """Persist the TYPED release intent as a host-owned sidecar next to
+        manifest.json (OUTSIDE the workspace/ tree), ATOMICALLY via tmp + replace —
+        the identical discipline `_write_json_atomic` uses for the manifest and
+        version records, so a crash mid-write never leaves a half-written file and a
+        re-declare overwrites in one atomic swap.
+
+        The record is a CANDIDATE input to release DETECTION, never a verification /
+        assessment claim, and it is value-free BY CONSTRUCTION: `ReleaseIntent`
+        carries env-var NAMES only, so no secret value is ever written here. Returns
+        the sidecar path."""
+        path = self.release_intent_for(conversation_id)
+        _write_json_atomic(path, intent.model_dump(mode="json"))
+        return path
+
+    def read_release_intent(self, conversation_id: str) -> ReleaseIntent | None:
+        """Read + schema-validate the host-owned release-intent sidecar. Returns
+        None when no intent has been declared (the sidecar is absent). Raises
+        StorageError on a corrupt / unreadable / schema-invalid sidecar — never
+        silently reports 'no intent' for a broken file."""
+        path = self.release_intent_for(conversation_id)
+        if not path.is_file():
+            return None
+        try:
+            raw = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise StorageError(f"release intent unreadable: {exc}") from exc
+        try:
+            return ReleaseIntent.model_validate(raw)
+        except ValidationError as exc:
+            raise StorageError(f"release intent invalid: {exc}") from exc
 
     def delete(self, conversation_id: str) -> bool:
         """Remove a project's manifest + workspace. The conversation events in

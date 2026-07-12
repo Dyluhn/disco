@@ -120,6 +120,11 @@ AGENT_TOOLS = frozenset(
         "app_snapshot_version",
         # P7: materialize the contract's host-owned starter frame
         "scaffold_starter",
+        # WO-5: release_declare — record the TYPED, NAMES-ONLY runtime release intent
+        # as a host-owned `release-intent.json` sidecar (a CANDIDATE input to release
+        # detection, never a verification claim). Free-form Build/Agent scope ONLY;
+        # the strict AppKit allowlist (appkit_scope.py) deliberately excludes it.
+        "release_declare",
         # WO-TC2: trusted components — verified vendored security cores (free-form
         # Build ONLY; strict AppKit / artifact / research scopes exclude the names).
         "add_trusted_component",
