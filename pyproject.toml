@@ -67,6 +67,12 @@ markers = [
     # explicitly selected (`-m sandbox_integration`); never in the default suite / CI
     # (jail safety + it needs a container runtime + the sandbox image).
     "sandbox_integration",
+    # WO-C0 (Export Track-1 Closeout): the FROZEN, non-bypass acceptance lane. Its
+    # focused suite is selected with `-m "export_track1_closeout and not integration"`
+    # (the live Docker proof adds `and integration`). Registered here so the closeout
+    # tests are never a typo'd/unknown marker silently deselected. See
+    # docs/export-track1-closeout-work-orders.md §3.2/§4.
+    "export_track1_closeout",
 ]
 # EPIC H (P2): DESELECT the live sandbox-isolation escape suite by default (jail safety —
 # it spins real containers). A CLI `-m sandbox_integration` overrides this ini expression

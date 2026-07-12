@@ -1,0 +1,101 @@
+name: export-track1-closeout
+
+# The FROZEN, non-bypass acceptance gate for the Export Track-1 Closeout campaign
+# (WO-C0, plan §1 / §3). This workflow is REQUIRED and has NO advisory /
+# continue-on-error / skip path — a red harness turns the check red. Evidence is
+# uploaded on success AND failure so a reviewer can inspect the machine-readable
+# manifest for the exact candidate SHA (plan §1.4). Exit code is truth.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# One acceptance run per ref; never cancel a run mid-way (evidence must complete).
+concurrency:
+  group: export-track1-closeout-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  closeout-acceptance:
+    name: closeout acceptance (verifier — required, non-advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Evidence lives OUTSIDE the checkout (plan §1.4); the verifier refuses an
+      # in-checkout path. RUNNER_TEMP is a sibling of the workspace.
+      EVIDENCE_DIR: ${{ runner.temp }}/closeout-evidence
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the verifier records the exact candidate SHA
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync Python deps
+        run: uv sync --all-packages
+
+      - name: Acceptance manifest is byte-fresh (frozen-file tamper check)
+        run: uv run python scripts/gen_closeout_acceptance_manifest.py --check
+
+      - name: Run the closeout verifier (non-live + focused closeout lanes)
+        run: >-
+          uv run python scripts/verify_export_track1_closeout.py
+          --all --evidence-dir "$EVIDENCE_DIR"
+
+      - name: Upload evidence (success AND failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: closeout-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/closeout-evidence
+          if-no-files-found: error
+
+  closeout-live:
+    name: closeout live Docker lane (self-hosted, required)
+    # The live proof is a FINAL closeout requirement (plan §1.3 / §3.4): a real
+    # Docker Engine + Compose v2 on a self-hosted runner. It is NOT advisory and
+    # has NO skip path — the live test FAILS (never skips) without an engine.
+    runs-on: [self-hosted, docker, export-track1-closeout]
+    timeout-minutes: 45
+    env:
+      EVIDENCE_DIR: ${{ runner.temp }}/closeout-evidence-live
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python
+        run: uv python install 3.13
+
+      - name: Sync Python deps
+        run: uv sync --all-packages
+
+      - name: Docker + Compose are present (evidence)
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          docker version | tee "$EVIDENCE_DIR/docker-versions.txt"
+          docker compose version | tee -a "$EVIDENCE_DIR/docker-versions.txt"
+
+      - name: Live Docker closeout lane
+        run: >-
+          uv run pytest
+          packages/agent-server/tests/integration/test_export_track1_closeout_live.py
+          -o addopts='' -m "export_track1_closeout and integration" -ra
+          --junitxml="$EVIDENCE_DIR/pytest-live.xml"
+
+      - name: Upload live evidence (success AND failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: closeout-evidence-live-${{ github.sha }}
+          path: ${{ runner.temp }}/closeout-evidence-live
+          if-no-files-found: error

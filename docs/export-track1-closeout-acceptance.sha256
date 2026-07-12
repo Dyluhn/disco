@@ -1,0 +1,53 @@
+{
+  "schema": "export-track1-closeout-acceptance/v1",
+  "note": "SCAFFOLD \u2014 hashes every frozen acceptance file in plan \u00a71.1 EXCEPT this manifest. Finalized when the C1\u2013C7 red-test matrices are complete; a reviewer then creates the protected tag over this file.",
+  "acceptance_tag": "export-track1-closeout-acceptance-v1",
+  "baseline_sha": "2ec1ceba08e90bd1f45a19075d76975d44e90b7c",
+  "seed": {
+    "env": "CLOSEOUT_SEED",
+    "default": "export-track1-closeout-v1"
+  },
+  "manifest_excludes_self": "docs/export-track1-closeout-acceptance.sha256",
+  "files": {
+    ".github/workflows/export-track1-closeout.yml": "90e7e3d26040d7cdacb5762f709cf9c7d9673d412f863a1b468f79c2ab5089ac",
+    "docs/export-track1-closeout-work-orders.md": "2e40892c663ce10f2a856d48890f32ecc494336814c4956a517d8ba811283032",
+    "frontend/src/test/export-track1-closeout/c3-candidate-copy.test.tsx": "5a1bbcff56e098512a5a83c1c3dc4baa07033e799b8667f476e1a16f03b005de",
+    "packages/agent-server/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
+    "packages/agent-server/tests/export_track1_closeout/test_c2_release_source_binding.py": "ca63c379b9cbb547382530a854635b21b94aa4130e5ce8c28db9054a127e3b97",
+    "packages/agent-server/tests/fixtures/export_track1_closeout/README.md": "1b6b49f6d890511ece5cb957902151b65ba5eae94b418174f694f79903386876",
+    "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "b155f11d88157e27e683ace792b82a292fb14f80ce796557a5b9a5d24001a290",
+    "packages/core/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
+    "packages/tools/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
+    "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py": "5ce28d18804eb32923a94b460e98fc6b97b9723b56f7b0bc21a40deeb7bd7964",
+    "scripts/gen_closeout_acceptance_manifest.py": "bae5e1335484cf7952b6eb2e1c03e5c8e805391524e55314c242e4531ae97171",
+    "scripts/verify_export_track1_closeout.py": "f747fbed85e3393783673d353918e0849e5789793cf4d2a6f10d88dd2e036461"
+  },
+  "missing_frozen_paths": [
+    "frontend/e2e/export-track1-closeout.spec.ts",
+    "frontend/e2e/export-track1-closeout.spec.ts-snapshots"
+  ],
+  "python_closeout_inventory": [
+    "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py::test_release_declare_writes_under_configured_custom_root",
+    "packages/agent-server/tests/export_track1_closeout/test_c2_release_source_binding.py::test_release_never_returns_a_speculative_version_seq"
+  ],
+  "red_tests": [
+    {
+      "work_order": "C1",
+      "node_id": "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py::test_release_declare_writes_under_configured_custom_root",
+      "boundary": "real DefaultToolExecutor via ConversationRuntime.execute_pi_tool",
+      "expected_failure": "release_declare writes the sidecar under the DISCO_DATA_DIR default root (ProjectStore('')) instead of the configured custom projects root"
+    },
+    {
+      "work_order": "C2",
+      "node_id": "packages/agent-server/tests/export_track1_closeout/test_c2_release_source_binding.py::test_release_never_returns_a_speculative_version_seq",
+      "boundary": "real FastAPI GET /api/projects/{cid}/release router",
+      "expected_failure": "route returns a speculative version_seq (max+1) that names no VersionRecord when the live tree diverges from the committed version"
+    },
+    {
+      "work_order": "C3",
+      "node_id": "frontend/src/test/export-track1-closeout/c3-candidate-copy.test.tsx::renders 'Bundle available' + 'Not runtime-verified' and no case-insensitive 'ready'",
+      "boundary": "SelfHostPanel rendered through the real useProjectRelease hook",
+      "expected_failure": "candidate panel renders 'Ready to self-host' instead of the exact strings 'Bundle available' and 'Not runtime-verified' (DOM still contains 'ready')"
+    }
+  ]
+}
