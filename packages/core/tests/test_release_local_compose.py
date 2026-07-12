@@ -325,6 +325,18 @@ def test_env_example_is_secret_free():
         assert line.endswith("="), f"unexpected value-bearing line in .env.example: {line!r}"
 
 
+def test_env_example_host_port_default_reflects_published_8080():
+    # node/python/static publish 127.0.0.1:${HOST_PORT:-8080}:8080, so the
+    # `.env.example` HOST_PORT default must stay 8080 (the dev_server case, which
+    # publishes 8787, is proven in test_release_appkit_local.py).
+    for builder in (node_spec, python_spec, static_spec):
+        env_example = emit_local_compose(builder())[ENV_EXAMPLE_PATH]
+        lines = env_example.splitlines()
+        assert "# HOST_PORT — host port to publish the app on (optional; default 8080)." in lines
+        assert "# HOST_PORT=8080" in lines
+        assert "8787" not in env_example
+
+
 @pytest.mark.parametrize(("label", "builder", "base", "_has_df"), _GOLDEN_CASES)
 def test_release_json_round_trips_to_equal_spec(label, builder, base, _has_df):
     spec = builder()

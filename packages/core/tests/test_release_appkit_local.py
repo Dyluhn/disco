@@ -45,6 +45,7 @@ from disco.core.release.detect import DetectionResult, Provenance, detect_releas
 from disco.core.release.local_compose import (
     COMPOSE_PATH,
     DOCKERFILE_PATH,
+    DOCKERIGNORE_PATH,
     ENV_EXAMPLE_PATH,
     RELEASE_JSON_PATH,
     SELFHOST_DOC_PATH,
@@ -297,12 +298,41 @@ def test_bundle_has_no_dev_vars_file() -> None:
 
 def test_overlay_references_dev_vars_exactly_once_in_entrypoint() -> None:
     overlay = emit_local_compose(_appkit_spec())
-    total = sum(content.count(".dev.vars") for content in overlay.values())
-    assert total == 1, {path: content.count(".dev.vars") for path, content in overlay.items()}
-    # and that single reference is the entrypoint heredoc inside the Dockerfile.
+    # The Dockerfile entrypoint heredoc is the ONLY place that WRITES the secret
+    # file — exactly one reference, and it is the redirect target.
     dockerfile = overlay[DOCKERFILE_PATH]
     assert dockerfile.count(".dev.vars") == 1
     assert "> /app/.dev.vars" in dockerfile
+    # Every OTHER overlay reference to `.dev.vars` is a defensive EXCLUSION, never a
+    # write: only the `.dockerignore` may mention it (defence-in-depth — keeps a
+    # stray host `.dev.vars` secret out of the build context).
+    for path, content in overlay.items():
+        if path in (DOCKERFILE_PATH, DOCKERIGNORE_PATH):
+            continue
+        assert ".dev.vars" not in content, path
+
+
+def test_dockerignore_excludes_stray_dev_vars_secret() -> None:
+    # Defence-in-depth: a real host `.dev.vars` (or a `.dev.vars.<env>` variant) —
+    # if the owner ran `wrangler dev` before building — can never enter an image
+    # layer. The committed `.dev.vars.example` placeholder stays included, mirroring
+    # the `.env` / `!.env.example` treatment already in the list.
+    dockerignore = emit_local_compose(_appkit_spec())[DOCKERIGNORE_PATH]
+    entries = dockerignore.splitlines()
+    assert ".dev.vars" in entries
+    assert ".dev.vars.*" in entries
+    assert "!.dev.vars.example" in entries
+
+
+def test_dev_server_env_example_declares_wrangler_dev_host_port() -> None:
+    # The AppKit dev_server publishes 127.0.0.1:${HOST_PORT:-8787}:8787, so its
+    # `.env.example` HOST_PORT default must read 8787 — not the generic 8080.
+    env_example = emit_local_compose(_appkit_spec())[ENV_EXAMPLE_PATH]
+    lines = env_example.splitlines()
+    assert "# HOST_PORT — host port to publish the app on (optional; default 8787)." in lines
+    assert "# HOST_PORT=8787" in lines
+    assert "# HOST_PORT=8080" not in lines
+    assert "default 8080" not in env_example
 
 
 def test_selfhost_doc_states_interim_and_v2() -> None:
