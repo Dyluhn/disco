@@ -297,6 +297,8 @@ def _seed(
     if intent is not None:
         ps.write_release_intent(cid, intent)
     store.create_conversation(cid, owner_id=owner_id, title=title, surface="build")
+    cut = ps.cut_version(cid, trigger="closeout")
+    assert cut is not None and cut.seq == 1, "precondition: a real version 1 was committed"
 
 
 def _cid(make_name: object, prefix: str) -> str:
