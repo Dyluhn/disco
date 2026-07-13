@@ -1,4 +1,4 @@
-"""WO-5 tests — `release_declare` host tool + host-owned typed release-intent record.
+"""WO-5 / WO-C1 tests — `release_declare` host tool + host-owned typed release-intent record.
 
 Proves each acceptance criterion:
 
@@ -12,6 +12,16 @@ Proves each acceptance criterion:
    text never echoes the value.
 4. The tool is in the free-form agent/build scope and NOT in the strict AppKit allowlist.
 5. Re-declaring overwrites ATOMICALLY via the store's tmp-file + replace helper.
+
+WO-C1: `release_declare` is now an `in_process` HOST tool. It NEVER derives a host
+path itself (no `ProjectStore("")` fallback and no sandbox scratch guess); it persists
+ONLY through the narrow host-owned intent-writer capability the runtime injects into
+`ToolContext`. Absent that capability it fails closed with a typed error and persists
+nothing, and its success output carries env NAMES + structural metadata only (no argv,
+no sidecar path). The end-to-end resolution of the ACTIVE configured store (custom
+root, root-changed, fail-closed matrix) is proven by the frozen closeout matrix
+`export_track1_closeout/test_c1_intent_store_custom_root.py`; these unit tests cover
+the tool's own contract at the `Tool.run` boundary.
 """
 
 from __future__ import annotations
@@ -41,6 +51,7 @@ from disco.tools.builtin import build_default_registry
 from disco.tools.builtin.release_declare import ReleaseDeclareArgs, ReleaseDeclareTool
 from disco.tools.projects import ProjectStore
 from disco.tools.registry import AGENT_TOOLS, ARTIFACT_TOOLS, RESEARCH_TOOLS, agent_scope
+from disco.tools.release_intent import ReleaseIntentWriter
 from disco.tools.secrets import CapabilityBroker
 from pydantic import ValidationError
 
@@ -85,7 +96,20 @@ def _redirect_store_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Pro
     return ProjectStore("")
 
 
-def _ctx(sbx: object, cid: str) -> ToolContext:
+def _host_writer(store: ProjectStore) -> ReleaseIntentWriter:
+    """A minimal host-owned intent writer that persists under a FIXED ProjectStore —
+    the runtime-side capability release_declare now writes through (WO-C1). The real
+    runtime closure additionally resolves the ACTIVE configured store and fail-closes
+    on invalid root / owner mismatch (proven by the frozen closeout matrix); here we
+    only need a store-bound writer to exercise the tool's own persist path."""
+
+    async def _write(conversation_id: str, owner_id: str, intent: ReleaseIntent) -> None:
+        store.write_release_intent(conversation_id, intent)
+
+    return _write
+
+
+def _ctx(sbx: object, cid: str, *, writer: ReleaseIntentWriter | None = None) -> ToolContext:
     return ToolContext(
         sandbox=sbx,
         workspace_path=".",
@@ -93,6 +117,7 @@ def _ctx(sbx: object, cid: str) -> ToolContext:
         capabilities=CapabilityBroker().grant(frozenset()),
         owner_id="owner",
         conversation_id=cid,
+        release_intent_writer=writer,
     )
 
 
@@ -145,22 +170,24 @@ def test_read_release_intent_returns_none_when_absent(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_writes_to_store_default_root_process_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("backend", ["process", "container"])
+async def test_tool_persists_through_injected_writer_regardless_of_sandbox(
+    backend: str, tmp_path: Path
 ) -> None:
-    """PROCESS (dev) backend — the ONLY backend with a non-None ``workspace_path``,
-    a private ``<mkdtemp>/sbx_XXXX`` scratch path. The sidecar MUST land at the
-    STORE's resolved location for the cid (NEXT TO where ``manifest.json`` goes) and
-    be readable back through that SAME store — NEVER at the mkdtemp-parent-derived
-    ``<tmp>/<cid>/`` location the old ``parent.parent`` guess produced.
+    """WO-C1 — the in_process host tool persists ONLY through the INJECTED host-owned
+    intent writer, so the sidecar lands in the WRITER's store and reads back equal.
 
-    REGRESSION GUARD: against the old code this fails three ways — the reported
-    ``sidecar_path`` differs from the store's path, ``read_release_intent`` returns
-    None (the file was written to the wrong root), and the old ``<mkdtemp>/<cid>``
-    litter file exists."""
-    store = _redirect_store_root(tmp_path, monkeypatch)
-    cid = "conv-proc"
-    sbx, mkdtemp_parent = _process_backend_sandbox(tmp_path)
+    It never reads ``workspace_path``, so the sandbox backend shape is irrelevant:
+    the PROCESS backend (a private ``<mkdtemp>/sbx_XXXX`` scratch path) and the
+    CONTAINER backend (``workspace_path is None``) both produce the identical result.
+    (The old code guessed the root from ``workspace_path.parent.parent`` on the
+    process backend — the WO-C1 bug this removes.)"""
+    store = ProjectStore(str(tmp_path / "root"))
+    cid = f"conv-{backend}"
+    if backend == "process":
+        sbx: object = _process_backend_sandbox(tmp_path)[0]
+    else:
+        sbx = _BackendSandbox(None)  # container backend: no host FS handle
     out = await ReleaseDeclareTool().run(
         ReleaseDeclareArgs(
             start_cmd=["node", "server.js"],
@@ -169,7 +196,7 @@ async def test_tool_writes_to_store_default_root_process_backend(
             health_path="/healthz",
             required_env=["DATABASE_URL", "STRIPE_API_KEY"],
         ),
-        _ctx(sbx, cid),
+        _ctx(sbx, cid, writer=_host_writer(store)),
     )
     assert out.success, out.content
     # criterion 3: names-only + candidate-not-verdict framing surfaced to the model
@@ -177,45 +204,32 @@ async def test_tool_writes_to_store_default_root_process_backend(
     assert "candidate input to release detection" in out.content.lower()
     assert out.structured is not None
     assert out.structured["is_verification_claim"] is False
-    # written where the STORE resolves this cid — right next to manifest.json ...
-    expected = store.release_intent_for(cid)
-    assert Path(out.structured["sidecar_path"]) == expected
-    assert expected == store.manifest_for(cid).parent / "release-intent.json"
-    # ... and readable back through the SAME store the runtime uses (discoverable)
+    # WO-C1 crit 8: env NAMES + structural metadata only — no argv, no sidecar path
+    assert "sidecar_path" not in out.structured
+    assert "start_cmd" not in out.structured and "build_cmd" not in out.structured
+    assert out.structured["required_env"] == ["DATABASE_URL", "STRIPE_API_KEY"]
+    assert out.structured["port_env"] == "PORT"
+    # persisted through the WRITER's store and readable back through it
     got = store.read_release_intent(cid)
     assert got is not None
     assert got.start_cmd == ("node", "server.js")
     assert got.required_env == ("DATABASE_URL", "STRIPE_API_KEY")
     assert got.port_env == "PORT"
     assert got.health_path == "/healthz"
-    # the OLD bug: the sidecar must NEVER land under the mkdtemp scratch parent
-    # (nor anywhere derived from it), and must leave no /tmp-style litter there.
-    assert not (mkdtemp_parent / cid / "release-intent.json").exists()
-    assert mkdtemp_parent not in expected.parents
 
 
 @pytest.mark.asyncio
-async def test_tool_writes_to_store_default_root_container_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CONTAINER backend (gvisor [config default] / local / podman): the host path
-    is hidden, so ``workspace_path`` is None. Resolution uses the store default root
-    and the sidecar is discoverable there — next to where manifest.json goes."""
-    store = _redirect_store_root(tmp_path, monkeypatch)
-    cid = "conv-container"
-    sbx = _BackendSandbox(None)  # container backend: no host FS handle
+async def test_tool_fails_closed_without_host_writer() -> None:
+    """WO-C1 — with NO host-owned intent writer in context (a standalone executor, or
+    any run the runtime did not wire), the tool fails closed with a typed error and
+    persists nothing: it has no fallback store and never derives a host path itself."""
     out = await ReleaseDeclareTool().run(
         ReleaseDeclareArgs(start_cmd=["node", "server.js"], required_env=["DATABASE_URL"]),
-        _ctx(sbx, cid),
+        _ctx(_BackendSandbox(None), "conv-nocap"),  # writer defaults to None
     )
-    assert out.success, out.content
-    assert out.structured is not None
-    expected = store.release_intent_for(cid)
-    assert Path(out.structured["sidecar_path"]) == expected
-    assert expected == store.manifest_for(cid).parent / "release-intent.json"
-    got = store.read_release_intent(cid)
-    assert got is not None
-    assert got.start_cmd == ("node", "server.js")
+    assert not out.success
+    assert out.error == "intent_writer_unavailable"
+    assert out.structured is None
 
 
 # --- criterion 2 + 3: rejections persist nothing and never leak a value ------------
@@ -251,7 +265,7 @@ async def test_rejected_value_never_reaches_the_sidecar_bytes(
     cid = "conv-bytes"
     sbx, _ = _process_backend_sandbox(tmp_path)
     tool = ReleaseDeclareTool()
-    ctx = _ctx(sbx, cid)
+    ctx = _ctx(sbx, cid, writer=_host_writer(store))
     # a valid declaration writes the sidecar (at the store's resolved location)
     ok = await tool.run(
         ReleaseDeclareArgs(start_cmd=["node", "server.js"], required_env=["DATABASE_URL"]), ctx
@@ -262,7 +276,8 @@ async def test_rejected_value_never_reaches_the_sidecar_bytes(
     # a value-bearing attempt is rejected...
     sentinel = "leakedvalue_ABC123"
     bad = await tool.run(
-        ReleaseDeclareArgs(start_cmd=["node", "server.js"], required_env=[f"SECRET={sentinel}"]), ctx
+        ReleaseDeclareArgs(start_cmd=["node", "server.js"], required_env=[f"SECRET={sentinel}"]),
+        ctx,
     )
     assert not bad.success
     # ...and no planted value (or its smuggled name) ever landed on disk
@@ -354,7 +369,9 @@ async def test_malformed_env_name_is_rejected(
 def test_redeclare_overwrites_and_leaves_no_temp_litter(tmp_path: Path) -> None:
     store = ProjectStore(str(tmp_path))
     cid = "conv-overwrite"
-    store.write_release_intent(cid, ReleaseIntent(start_cmd=("node", "a.js"), required_env=("FOO",)))
+    store.write_release_intent(
+        cid, ReleaseIntent(start_cmd=("node", "a.js"), required_env=("FOO",))
+    )
     second = ReleaseIntent(start_cmd=("python", "b.py"), required_env=("BAR",))
     store.write_release_intent(cid, second)
     assert store.read_release_intent(cid) == second
@@ -388,7 +405,9 @@ def test_registered_in_agent_build_scope_not_appkit() -> None:
     assert "release_declare" in build_default_registry().names()
     # ... and in the free-form Build/Agent security allowlist
     assert "release_declare" in AGENT_TOOLS
-    assert "release_declare" in agent_scope(model_policy=ModelExecutionPolicy.standard()).allowed_tools
+    assert (
+        "release_declare" in agent_scope(model_policy=ModelExecutionPolicy.standard()).allowed_tools
+    )
     # NOT in the strict AppKit allowlist — for ANY loop_mode / phase / autonomous combo
     for loop_mode in [None, *list(OperatingMode)]:
         for phase in AppKitPhase:

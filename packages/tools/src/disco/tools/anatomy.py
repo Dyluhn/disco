@@ -26,6 +26,8 @@ from disco.core.appkit.primitives import PrimitiveLiveVerifier
 from disco.core.llm import ToolSpec
 from pydantic import BaseModel, ConfigDict, Field
 
+from .release_intent import ReleaseIntentWriter
+
 
 class Capability(str, Enum):
     """Execution-environment capabilities a tool requires (distinct from the
@@ -85,6 +87,14 @@ class ToolContext(BaseModel):
     # recovery text, never for authorization; None preserves standalone tool tests
     # that call Tool.run directly without an executor.
     scope_allowed_tools: frozenset[str] | None = None
+    # WO-C1: the NARROW host-owned release-intent writer. The runtime injects a
+    # closure that resolves the ACTIVE configured ProjectStore at INVOCATION time and
+    # persists ONE conversation's typed intent under it (fail-closed on invalid root /
+    # owner mismatch / persistence failure). release_declare (an in_process host tool)
+    # writes host state ONLY through this handle — it receives no raw root and has no
+    # fallback store. None is the safe default: without the capability the tool fails
+    # closed and can persist nothing (standalone executors carry no host writer).
+    release_intent_writer: ReleaseIntentWriter | None = None
 
 
 class ToolOutcome(BaseModel):

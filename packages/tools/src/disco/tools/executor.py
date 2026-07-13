@@ -28,6 +28,7 @@ from pydantic import BaseModel, ValidationError
 from .anatomy import ToolContext, ToolDef, ToolExecutionError
 from .builtin.files import clear_conversation_read_state, mark_read
 from .registry import ToolRegistry, ToolScope
+from .release_intent import ReleaseIntentWriter
 from .sandbox.base import SandboxError, SandboxInstance
 from .secrets import CapabilityBroker, CapabilityDenied
 
@@ -335,6 +336,7 @@ class DefaultToolExecutor:
         starter_kit: str | None = None,
         workflow_events: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
         primitive_live_verifier: PrimitiveLiveVerifier | None = None,
+        release_intent_writer: ReleaseIntentWriter | None = None,
     ) -> None:
         self._registry = registry
         self._scope = scope
@@ -353,6 +355,10 @@ class DefaultToolExecutor:
         self._starter_kit = starter_kit
         self._workflow_events = workflow_events
         self._primitive_live_verifier = primitive_live_verifier
+        # WO-C1: the host-owned release-intent writer stamped onto every ToolContext
+        # so release_declare (in_process) persists under the ACTIVE configured store.
+        # None ⇒ no host writer wired (standalone executor) ⇒ the tool fails closed.
+        self._release_intent_writer = release_intent_writer
         # ROOT-5: the conversation's effective (override-aware) driver endpoint,
         # stamped onto every ToolContext for LLM-using tools (slides_generate).
         self._driver_llm = driver_llm
@@ -645,6 +651,7 @@ class DefaultToolExecutor:
             workflow_events=self._workflow_events,
             primitive_live_verifier=self._primitive_live_verifier,
             scope_allowed_tools=self._scope.allowed_tools,
+            release_intent_writer=self._release_intent_writer,
         )
 
     def _fail(

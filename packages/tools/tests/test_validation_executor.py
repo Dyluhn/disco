@@ -441,4 +441,8 @@ def test_tool_context_has_no_secret_field():
         "primitive_live_verifier",
         # Current scope names, for recovery text only.
         "scope_allowed_tools",
+        # WO-C1: host-owned release-intent writer callable. Carries NO secret — the
+        # runtime closure captures the store/config, and the tool passes only the
+        # conversation id, owner id, and the NAMES-only ReleaseIntent (no values).
+        "release_intent_writer",
     }

@@ -105,6 +105,7 @@ from disco.core.loop import (
     signals,
 )
 from disco.core.loop.context_budget import derive_context_caps  # noqa: E402
+from disco.core.release.spec import ReleaseIntent
 from disco.core.security import RuleBasedAnalyzer
 from disco.core.store.sqlite import SqliteEventStore
 from disco.core.workflow import ScheduleSpec, WorkflowRun, compile_workflow_scope
@@ -145,6 +146,7 @@ from disco.tools.projects import (
     rehydrate_workspace,
     snapshot_workspace,
 )
+from disco.tools.release_intent import ReleaseIntentWriteError
 from disco.tools.sandbox import (
     SandboxInstance,
     SandboxUnavailableError,
@@ -162,10 +164,10 @@ from .resume_service import ResumeService
 from .runtime_model_probe import _do_live_model_probe, _model_label
 from .runtime_settings import RuntimeSettings
 from .schedule_service import ScheduleService
+from .security_live_verifier import make_security_live_verifier
 from .sessions_service import SessionsService
 from .share_service import ShareService
 from .space_store import JsonSpaceStore
-from .security_live_verifier import make_security_live_verifier
 from .suggestion_service import SuggestionService
 from .title_service import TitleService
 from .verify.host import HostWebAppVerifier
@@ -1745,6 +1747,10 @@ class ConversationRuntime:
             starter_kit=self._starter_kit_for(conversation_id),
             workflow_events=workflow_events if workflow_router_mode else None,
             primitive_live_verifier=make_security_live_verifier(),
+            # WO-C1: the host-owned intent writer, resolved against the ACTIVE config
+            # at invocation time (see _write_release_intent). release_declare persists
+            # its sidecar ONLY through this handle — never a fallback store.
+            release_intent_writer=self._write_release_intent,
         )
 
     def _compose_build_loop(
@@ -3507,6 +3513,44 @@ class ConversationRuntime:
         ``store.status()`` at the use site."""
         root = self._config_store.load().projects.projects_root
         return ProjectStore(root)
+
+    async def _write_release_intent(
+        self, conversation_id: str, owner_id: str, intent: ReleaseIntent
+    ) -> None:
+        """WO-C1: the NARROW host-owned intent-writer capability injected into every
+        build executor's ToolContext.
+
+        Resolves the ACTIVE configured ProjectStore at INVOCATION time (via
+        ``_project_store_now``, which re-reads settings each call) — so a custom
+        ``projects_root``, even one changed AFTER the executor was built, owns where
+        the sidecar lands, and the tool never sees a raw root or a fallback store.
+        Fails closed with a typed :class:`ReleaseIntentWriteError` (persisting ZERO
+        bytes) when the configured root is missing/unwritable/not-a-directory, when the
+        caller does not own the target conversation, or when the atomic write fails.
+        The error messages are root/path/secret-free by construction."""
+        project_store = self._project_store_now()
+        status = project_store.status()
+        if status is not StorageStatus.OK:
+            raise ReleaseIntentWriteError(
+                "invalid_projects_root",
+                "the configured projects root is not a writable directory, so the "
+                f"release intent was not recorded (root status: {status.value}).",
+            )
+        conversation_owner = self._store.conversation_owner_id_sync(conversation_id)
+        if conversation_owner is not None and conversation_owner != owner_id:
+            raise ReleaseIntentWriteError(
+                "owner_conversation_mismatch",
+                "cannot record release intent for a conversation owned by a "
+                "different owner; nothing was persisted.",
+            )
+        try:
+            project_store.write_release_intent(conversation_id, intent)
+        except (StorageError, OSError) as exc:
+            raise ReleaseIntentWriteError(
+                "release_intent_persist_failed",
+                "failed to persist the release intent under the configured projects "
+                "root; nothing was persisted.",
+            ) from exc
 
     async def _maybe_rehydrate(self, conversation_id: str) -> None:
         return await self._lifecycle._maybe_rehydrate(conversation_id)
