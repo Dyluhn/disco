@@ -38,6 +38,7 @@ from disco.core.release.detect import DetectionResult, Provenance, detect_releas
 from disco.core.release.local_compose import emit_local_compose
 from disco.core.release.spec import (
     DetectorProvenance,
+    IntentUpgradeError,
     ReleaseAssessment,
     ReleaseIntent,
     ReleaseSpec,
@@ -324,6 +325,40 @@ def assess_release(
     return AssessedRelease(response=response, overlay_files=overlay_files)
 
 
+def _intent_upgrade_required(version_seq: int, tree_digest: str, detail: str) -> AssessedRelease:
+    """A `needs_review` assessment for a persisted intent sidecar whose schema this
+    build cannot read without guessing (a NEWER version, or an un-upgradeable v1 shape
+    carrying a field the current schema forbids). Reports the EXACT typed
+    `intent_upgrade_required` blocker (§8.11) with `self_host:false` and NO overlay — a
+    handled version gate, never a 500 and never a silent reinterpretation. The message
+    is defensively clamped; a `ReleaseIntent` is NAMES-ONLY so it can carry no secret
+    value."""
+    blocker = _ResponseBlocker(
+        code="intent_upgrade_required",
+        message=(
+            "the persisted release intent declares a schema version this build cannot "
+            f"read without guessing and must be upgraded before release: {detail}"
+        ),
+        field="schema_version",
+    )
+    response = ReleaseResponse(
+        assessment=ReleaseAssessment.needs_review.value,
+        reasons=[
+            "the persisted release-intent sidecar declares an unsupported schema "
+            "version; it must be upgraded before this app can be assessed for release.",
+        ],
+        blockers=[blocker],
+        required_env=[],
+        command=_RELEASE_COMMAND,
+        ingress=None,
+        self_host=False,
+        spec_digest=None,
+        version_seq=version_seq,
+        tree_digest=tree_digest,
+    )
+    return AssessedRelease(response=response, overlay_files={})
+
+
 def _source_binding(ps: ProjectStore, conversation_id: str, workspace: Path) -> tuple[int, str]:
     """The (version_seq, tree_digest) pair that pins the assessment to ONE tree — the
     LIVE workspace being assessed — so the two fields can never disagree.
@@ -352,13 +387,19 @@ def assess_project(
 ) -> AssessedRelease:
     """Read a project's committed workspace + host-owned intent sidecar and assess
     it. Reads the tree through `iter_workspace`, so runtime-secret files are already
-    excluded from every downstream input. Raises `StorageError` on a corrupt intent
-    sidecar (an honest failure, never a silent 'no intent')."""
+    excluded from every downstream input. A version-gate refusal on the intent sidecar
+    (a NEWER schema, or an un-upgradeable v1 shape) is reported as a `needs_review`
+    with the typed `intent_upgrade_required` blocker (§8.11), NOT a 500. Raises
+    `StorageError` on a genuinely corrupt intent sidecar (an honest failure, never a
+    silent 'no intent')."""
     files: dict[str, bytes] = {}
     for path in ps.iter_workspace(conversation_id):
         files[path.relative_to(workspace).as_posix()] = path.read_bytes()
-    intent = ps.read_release_intent(conversation_id)
     version_seq, digest = _source_binding(ps, conversation_id, workspace)
+    try:
+        intent = ps.read_release_intent(conversation_id)
+    except IntentUpgradeError as exc:
+        return _intent_upgrade_required(version_seq, digest, _clamp(str(exc), _REASON_MAX))
     name = record.title or conversation_id
     return assess_release(
         files,

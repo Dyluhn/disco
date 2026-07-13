@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from disco.core.owners import install_owner_id
-from disco.core.release.spec import ReleaseIntent, parse_release_intent
+from disco.core.release.spec import IntentUpgradeError, ReleaseIntent, parse_release_intent
 from pydantic import ValidationError
 
 from .archive import is_runtime_secret_path
@@ -695,9 +695,13 @@ class ProjectStore:
         """Read + version-gate the host-owned release-intent sidecar (§8.11). Returns
         None when no intent has been declared (the sidecar is absent). A persisted v1
         (or legacy, version-less) shape is deterministically MIGRATED to the current
-        schema by `parse_release_intent`; a NEWER version, or a corrupt / unreadable /
-        schema-invalid sidecar, raises StorageError — never silently reports 'no
-        intent' for a broken file, and never reinterprets an older shape in place."""
+        schema by `parse_release_intent`. A version-gate refusal — a NEWER schema, or a
+        v1 shape carrying a field the current schema forbids (an upgrade this build
+        cannot perform without guessing) — propagates as `IntentUpgradeError` so the
+        caller can surface the exact `intent_upgrade_required` blocker (§8.11); a
+        genuinely corrupt / unreadable / malformed sidecar raises StorageError. Never
+        silently reports 'no intent' for a broken file, and never reinterprets an older
+        shape in place."""
         path = self.release_intent_for(conversation_id)
         if not path.is_file():
             return None
@@ -707,6 +711,11 @@ class ProjectStore:
             raise StorageError(f"release intent unreadable: {exc}") from exc
         try:
             return parse_release_intent(raw)
+        except IntentUpgradeError:
+            # A version-gate refusal is NOT a corrupt sidecar: let it propagate distinctly
+            # so the release route surfaces `intent_upgrade_required` (needs_review) rather
+            # than collapsing it into a StorageError / HTTP 500 (§8.11).
+            raise
         except (ValidationError, ValueError) as exc:
             raise StorageError(f"release intent invalid: {exc}") from exc
 

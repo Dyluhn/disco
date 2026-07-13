@@ -282,6 +282,24 @@ _NODE_LOCKFILES = ("pnpm-lock.yaml", "yarn.lock", "package-lock.json")
 _NPMRC_ENV_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 _NPMRC_NAME = ".npmrc"
 
+# ROOT lockfiles/manifests each naming a package manager the neutral base images do
+# NOT provision. The node base runs npm (`package-lock.json` -> `npm ci`, or a bare
+# `npm install`); the python base runs pip (`requirements.txt` / a plain `pyproject`).
+# A lockfile naming bun / pnpm / yarn (node) or poetry / uv (python) is NOT silently
+# mapped onto npm/pip (§8.8: "Merely mapping them to Node/Python is FAILURE") — its
+# mere presence fails detection closed with `toolchain_unsupported`. The LIVE
+# install/pin proof is a separate lane; here the STATIC contract is reject-not-map.
+_UNSUPPORTED_NODE_PM: dict[str, str] = {
+    "bun.lock": "bun",
+    "bun.lockb": "bun",
+    "pnpm-lock.yaml": "pnpm",
+    "yarn.lock": "yarn",
+}
+_UNSUPPORTED_PY_PM: dict[str, str] = {
+    "poetry.lock": "poetry",
+    "uv.lock": "uv",
+}
+
 
 # ---- result models ------------------------------------------------------------
 
@@ -647,6 +665,69 @@ def _secret_build_blocker(files: Mapping[str, str | bytes]) -> _DetectBlocker | 
     return None
 
 
+def _secret_build_env_blocker(files: Mapping[str, str | bytes]) -> _DetectBlocker | None:
+    """A `secret_build_env_unsupported` fail-closed outcome when a SOURCE-DISCOVERED
+    build-scope env var is secret-classed — e.g. a Vite client bundle reading
+    `import.meta.env.VITE_API_TOKEN` (a secret-shaped name). Such a value would be
+    baked into the PUBLIC build output, and a secret-free self-host bundle cannot
+    supply a build-time secret, so it fails closed EXACTLY like a secret `.npmrc`
+    reference (§8.4) — never folded into a plain build arg while shipping a
+    self-hostable candidate. This closes the discovery-source gap: the contract is the
+    same whether the secret build var comes from an `.npmrc` OR from application
+    source. `None` when every discovered build var is public. Deterministic: the first
+    secret build var in sorted order (via `_build_env_decls`) names the blocker."""
+    for decl in _build_env_decls(files):
+        if decl.secret is SecretClass.secret:
+            return _DetectBlocker(
+                code="secret_build_env_unsupported",
+                message=(
+                    f"the client build reads a secret-shaped build variable {decl.name!r} "
+                    "from application source; it would be baked into the public build "
+                    "output, and a secret-free self-host bundle cannot supply a build-time "
+                    "secret (a plain build arg would leak it), so this build is not "
+                    "supported. Rename it to a non-secret public build var, or remove the "
+                    "build-time secret dependency."
+                ),
+                field="build_env",
+                evidence=(
+                    f"build-secret evidence: source-discovered secret build var {decl.name!r}",
+                ),
+            )
+    return None
+
+
+def _unsupported_pm_blocker(
+    files: Mapping[str, str | bytes], table: Mapping[str, str]
+) -> _DetectBlocker | None:
+    """A `toolchain_unsupported` fail-closed outcome when the ROOT declares a
+    package-manager lockfile naming a toolchain the neutral base image does NOT
+    provision (bun/pnpm/yarn for node, poetry/uv for python — `table` selects which).
+    The lockfile is NOT silently mapped onto npm/pip (§8.8); its presence rejects the
+    release with the exact typed code so the defect is diagnosable. `None` when no such
+    lockfile is present. Deterministic: the first matching lockfile in sorted order
+    names the blocker."""
+    roots = {_norm(p) for p in files if "/" not in _norm(p)}
+    for lockfile in sorted(table):
+        if lockfile in roots:
+            manager = table[lockfile]
+            return _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    f"the project declares a {lockfile!r} lockfile, which indicates the "
+                    f"{manager!r} package manager; that toolchain is NOT provisioned in "
+                    "the neutral base image and the detector will NOT silently map it "
+                    "onto npm/pip. Vendor the toolchain explicitly, or use npm "
+                    "(package-lock.json) / pip (requirements.txt)."
+                ),
+                field="package_manager",
+                evidence=(
+                    f"toolchain evidence: {lockfile} indicates unsupported package "
+                    f"manager {manager!r} (not on the base image)",
+                ),
+            )
+    return None
+
+
 def _node_detect(
     files: Mapping[str, str | bytes],
 ) -> ReleaseService | _DetectBlocker | None:
@@ -701,17 +782,27 @@ def _node_detect(
             field="port_env",
             evidence=("node port evidence: no process.env.PORT read (literal port only)",),
         )
-    # A package-manager disagreement or a build-time secret is unreleasable — fail
-    # closed BEFORE emitting a candidate whose install step is ambiguous or cannot
-    # authenticate (§8.9 / §8.4).
+    # A package-manager disagreement, an unsupported toolchain, or a build-time secret
+    # is unreleasable — fail closed BEFORE emitting a candidate whose install step is
+    # ambiguous, cannot run on the base image, or cannot authenticate (§8.9 / §8.8 /
+    # §8.4).
     conflict = _lockfile_conflict(files)
     if conflict is not None:
         return conflict
+    toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
+    if toolchain is not None:
+        return toolchain
     build_secret = _secret_build_blocker(files)
     if build_secret is not None:
         return build_secret
 
     build_cmd = ("npm", "run", "build") if _script(pkg, "build") is not None else ()
+    # A build step that reads a SOURCE-DISCOVERED secret build var fails closed like an
+    # `.npmrc` build secret (§8.4) — a secret build var must never fold into build.args.
+    if build_cmd:
+        source_secret = _secret_build_env_blocker(files)
+        if source_secret is not None:
+            return source_secret
     lockfile, manager, install = _node_install(files)
     return ReleaseService(
         id=_INGRESS_ID,
@@ -776,6 +867,11 @@ def _python_detect(
             field="start_cmd",
             evidence=("python entrypoint evidence: no root `app = FastAPI(...)` module",),
         )
+    # A poetry/uv lockfile names a toolchain the neutral python base image does NOT
+    # provision; fail closed rather than silently mapping it onto `pip install` (§8.8).
+    toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_PY_PM)
+    if toolchain is not None:
+        return toolchain
     install: tuple[str, ...] = (
         ("pip", "install", "-r", "requirements.txt")
         if "requirements.txt" in tree
@@ -846,13 +942,22 @@ def _static_detect(
                 ),
             )
         # A build-requiring static bundle installs with a package manager too, so the
-        # same package-manager disagreement / build-secret guards apply (§8.9 / §8.4).
+        # same disagreement / unsupported-toolchain / build-secret guards apply (§8.9 /
+        # §8.8 / §8.4).
         conflict = _lockfile_conflict(files)
         if conflict is not None:
             return conflict
+        toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
+        if toolchain is not None:
+            return toolchain
         build_secret = _secret_build_blocker(files)
         if build_secret is not None:
             return build_secret
+        # A SOURCE-DISCOVERED secret build var (a secret-shaped `import.meta.env.VITE_*`)
+        # fails closed like an `.npmrc` build secret — never folded into build.args (§8.4).
+        source_secret = _secret_build_env_blocker(files)
+        if source_secret is not None:
+            return source_secret
         # A build-requiring static bundle MUST install its dependencies before the
         # build runs, or the emitted image builds against an empty node_modules.
         lockfile, manager, install = _node_install(files)

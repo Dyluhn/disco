@@ -790,3 +790,278 @@ def test_release_json_serialize_roundtrip_is_byte_identical(
         "release.json is not serialize/parse/serialize byte-identical — the canonical "
         "form drifted under an idempotent round-trip (plan §8.11)."
     )
+
+
+# ===========================================================================
+# §8.11 (closeout finding C) — the EXACT upgrade blocker is surfaced (not a 500, not a
+# generic ValidationError) for a sidecar this build cannot read WITHOUT GUESSING: a
+# schema version NEWER than supported, OR an un-upgradeable v1 shape (a v2-forbidden
+# field). A version-gate refusal stays distinct from a genuinely malformed sidecar
+# (which is honestly still a 500). Route-level companion to the tool-boundary
+# schema_version assertion in tools' test_c4_intent_contract.py.
+# ===========================================================================
+
+# A sidecar declaring a schema version NEWER than this build supports (v2): unreadable
+# without an upgrade, so it must be `intent_upgrade_required` (needs_review) — never
+# reinterpreted as v2, never a 500.
+_NEWER_THAN_V2_SIDECAR: dict[str, object] = {
+    "schema_version": 99,
+    "start_cmd": ["node", "server.js"],
+    "port_env": "PORT",
+    "required_env": ["SESSION_SECRET"],
+    "resources": [],
+}
+# An UNUPGRADEABLE v1 sidecar: a well-formed legacy shape carrying a field the v2 schema
+# FORBIDS (`extra=forbid`). The v1->v2 adapter cannot map it without guessing, so it must
+# be `intent_upgrade_required` — NOT a generic ValidationError / 500, and NOT silently
+# reinterpreted by dropping the unknown field.
+_UNUPGRADEABLE_V1_SIDECAR: dict[str, object] = {
+    "schema_version": 1,
+    "start_cmd": ["node", "server.js"],
+    "port_env": "PORT",
+    "required_env": ["SESSION_SECRET"],
+    # A field the v2 ReleaseIntent schema does not define — a v1-era shape v2 forbids.
+    "deploy_target": "legacy-cloud",
+}
+
+
+def test_newer_than_v2_intent_sidecar_is_upgrade_required_not_crash(
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C4 §8.11 (newer-than-v2 sidecar) — RED on tip e9c9b939 (HTTP 500).
+
+    A host-owned intent sidecar declaring ``schema_version`` NEWER than v2 makes
+    ``parse_release_intent`` raise ``IntentUpgradeError``; on the tip
+    ``read_release_intent`` collapses that ``ValueError`` subclass into a
+    ``StorageError`` (its ``except (ValidationError, ValueError)`` catches it), so
+    ``GET /release`` returns HTTP 500. §8.11 requires it be reported as
+    ``needs_review`` with the typed ``intent_upgrade_required`` blocker
+    (``self_host:false``, no overlay) — a handled version gate, never a crash."""
+    cid = _cid(closeout_name, "conv_c4newer")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    # Seed WITHOUT an intent, then write the raw newer-than-v2 sidecar as host state
+    # OUTSIDE the workspace tree (never a mocked reader).
+    _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), _NODE_FOR_LEGACY_SIDECAR)
+    ps.release_intent_for(cid).write_text(json.dumps(_NEWER_THAN_V2_SIDECAR), encoding="utf-8")
+
+    res = client.get(f"/api/projects/{cid}/release")
+    assert res.status_code == 200, (
+        "a newer-than-v2 intent sidecar crashed the release read instead of being "
+        f"reported as {_INTENT_UPGRADE_BLOCKER!r}: GET /release returned "
+        f"{res.status_code} ({res.text[:200]!r}). WO-C4 §8.11 requires a version-gate "
+        "refusal to be a handled needs_review, never a 500."
+    )
+    body = res.json()
+    assert isinstance(body, dict)
+    assert body["assessment"] == "needs_review", (
+        f"a newer-than-v2 sidecar must be needs_review, got {body['assessment']!r}."
+    )
+    assert body["self_host"] is False and body["spec_digest"] is None
+    assert _INTENT_UPGRADE_BLOCKER in _blocker_codes(body), (
+        f"expected the exact typed blocker {_INTENT_UPGRADE_BLOCKER!r}, saw "
+        f"{sorted(_blocker_codes(body))}."
+    )
+    assert _overlay_present(_overlay_texts(client, cid)) == frozenset(), (
+        "a version-gate refusal must ship NO self-host overlay"
+    )
+
+
+def test_unupgradeable_v1_intent_sidecar_is_upgrade_required_not_validation_error(
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C4 §8.11 (unupgradeable v1 sidecar) — RED on tip e9c9b939 (HTTP 500).
+
+    A v1 sidecar carrying a field the v2 schema FORBIDS is well-formed but cannot be
+    migrated without guessing. On the tip the v1->v2 adapter drops the version tag and
+    revalidates, tripping a generic ``extra_forbidden`` ``ValidationError`` that
+    ``read_release_intent`` collapses into a ``StorageError`` -> HTTP 500 — the exact
+    upgrade blocker is never surfaced. §8.11: "If v1 sidecars cannot be upgraded without
+    guessing, they return ``needs_review`` with ``intent_upgrade_required``; they are
+    not silently reinterpreted." The fix must report that typed blocker
+    (``needs_review``, ``self_host:false``) rather than crash or silently drop the
+    unknown field. (A genuinely MALFORMED sidecar stays an honest StorageError/500 —
+    the distinction is preserved.)"""
+    cid = _cid(closeout_name, "conv_c4v1bad")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), _NODE_FOR_LEGACY_SIDECAR)
+    ps.release_intent_for(cid).write_text(
+        json.dumps(_UNUPGRADEABLE_V1_SIDECAR), encoding="utf-8"
+    )
+
+    res = client.get(f"/api/projects/{cid}/release")
+    assert res.status_code == 200, (
+        "an unupgradeable v1 intent sidecar crashed the release read instead of being "
+        f"reported as {_INTENT_UPGRADE_BLOCKER!r}: GET /release returned "
+        f"{res.status_code} ({res.text[:200]!r}). WO-C4 §8.11 requires an un-upgradeable "
+        "v1 shape to be a handled needs_review with the exact upgrade blocker, never a "
+        "generic ValidationError / 500."
+    )
+    body = res.json()
+    assert isinstance(body, dict)
+    assert body["assessment"] == "needs_review", (
+        f"an unupgradeable v1 sidecar must be needs_review, got {body['assessment']!r}."
+    )
+    assert body["self_host"] is False and body["spec_digest"] is None
+    assert _INTENT_UPGRADE_BLOCKER in _blocker_codes(body), (
+        f"expected the exact typed blocker {_INTENT_UPGRADE_BLOCKER!r} for an "
+        f"unupgradeable v1 sidecar, saw {sorted(_blocker_codes(body))}."
+    )
+    assert _overlay_present(_overlay_texts(client, cid)) == frozenset(), (
+        "a version-gate refusal must ship NO self-host overlay"
+    )
+
+
+# ===========================================================================
+# §8.4 (closeout finding A) — a SOURCE-DISCOVERED secret-classed build var must fail
+# closed exactly like the `.npmrc` case, never fold into plain build.args while
+# shipping a self-hostable candidate. "A plain ARG for a secret-classed build variable
+# is a FAILURE" applies regardless of discovery source (`.npmrc` OR source-discovered).
+# ===========================================================================
+
+# A Vite bundle whose CLIENT source reads a SECRET-shaped build var discovered from
+# SOURCE (not from an `.npmrc`): `import.meta.env.VITE_API_TOKEN`. `VITE_API_TOKEN` is
+# secret-shaped (the `TOKEN` marker) and build-scoped, so `_build_env_decls` classifies
+# it `secret=True`. It must fail closed like the `.npmrc` secret build var (§8.4) — it
+# must NOT be folded into compose `build.args` as `${VITE_API_TOKEN:?...}` on a
+# self-hostable candidate.
+_VITE_SOURCE_SECRET_BUILD_ENV: dict[str, bytes] = {
+    "index.html": (
+        b'<!doctype html><html><body><script type="module" src="/src/main.js"></script>'
+        b"</body></html>\n"
+    ),
+    "package.json": b'{"name":"spa","scripts":{"build":"vite build"}}',
+    "package-lock.json": b'{"lockfileVersion":3,"name":"spa"}',
+    "vite.config.js": b"export default { build: { outDir: 'dist' } };\n",
+    "src/main.js": b"document.body.append(import.meta.env.VITE_API_TOKEN);\n",
+}
+_SOURCE_SECRET_BUILD_VAR = "VITE_API_TOKEN"
+
+
+def test_source_discovered_secret_build_var_fails_closed(
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C4 §8.4 (source-discovered secret build var) — RED on tip e9c9b939.
+
+    A Vite client bundle reads ``import.meta.env.VITE_API_TOKEN`` — a SECRET-shaped
+    build var discovered from SOURCE, not from an ``.npmrc``. ``_build_env_decls``
+    classifies it ``secret=True`` yet the tip takes NEITHER the fail-closed nor the
+    secret-mount branch: it folds the var into compose ``build.args`` as
+    ``${VITE_API_TOKEN:?...}`` (while ``_build_arg_names`` filters the Dockerfile
+    ``ARG`` to public-only) and ships an ``assessment=candidate``, ``self_host:true``
+    verdict with NO blocker. §8.4: "A plain ARG for a secret-classed build variable is
+    a FAILURE." — the same holds for a plain ``build.args`` entry. The fix must fail
+    closed with ``secret_build_env_unsupported`` (``needs_review``, ``self_host:false``,
+    no overlay), regardless of discovery source."""
+    cid = _cid(closeout_name, "conv_c4ssb")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), _VITE_SOURCE_SECRET_BUILD_ENV)
+
+    body = _release(client, cid)
+    assert isinstance(body, dict)
+    codes = _blocker_codes(body)
+    texts = _overlay_texts(client, cid)
+    compose = texts.get(COMPOSE_PATH, "")
+
+    failed_closed = (
+        _SECRET_BUILD_BLOCKER in codes
+        and body["assessment"] == "needs_review"
+        and body["self_host"] is False
+        and _overlay_present(texts) == frozenset()
+    )
+    # The precise leak this test pins: a self-hostable candidate whose emitted compose
+    # carries the secret build var as a plain `build.args` entry.
+    leaked_into_build_args = body["self_host"] is True and _SOURCE_SECRET_BUILD_VAR in compose
+    assert failed_closed, (
+        f"a source-discovered secret build var ({_SOURCE_SECRET_BUILD_VAR}) must fail "
+        f"closed with {_SECRET_BUILD_BLOCKER!r} (needs_review, self_host:false, no "
+        f"overlay); got assessment={body['assessment']!r}, self_host={body['self_host']!r}, "
+        f"blockers={sorted(codes)}, leaked_into_build_args={leaked_into_build_args}."
+    )
+
+
+# ===========================================================================
+# §8.8 (closeout finding E) — package-manager lowering must REJECT an unsupported
+# toolchain (bun/pnpm/yarn — and poetry/uv for python) with `toolchain_unsupported`,
+# never silently map it to npm/pip. "Merely mapping them to Node/Python is FAILURE."
+# The LIVE install/pin proof stays deferred to the C8 lane; here we pin the STATIC
+# reject-instead-of-map contract only.
+# ===========================================================================
+
+_TOOLCHAIN_UNSUPPORTED_BLOCKER = "toolchain_unsupported"
+
+# ROOT lockfiles each naming a package manager the neutral base image does NOT
+# provision. Pre-fix the lockfile-driven lowering silently maps `bun.lockb` → `npm
+# install`, and emits `pnpm`/`yarn` install commands the image never provisions (no
+# `corepack enable`) — shipping a self-hostable candidate either way. Each single
+# unsupported lockfile (with NO competing lockfile, so it is NOT the §8.9
+# package_manager_conflict case) must instead fail closed with `toolchain_unsupported`.
+_UNSUPPORTED_PM_LOCKFILES: dict[str, bytes] = {
+    "bun.lockb": b"bun-lockfile-v1\n",
+    "pnpm-lock.yaml": b"lockfileVersion: '9.0'\n",
+    "yarn.lock": b"# yarn lockfile v1\n",
+}
+
+
+def _node_with_lockfile(lockfile: str, content: bytes) -> dict[str, bytes]:
+    """A minimal node service (binds `$PORT`, no undeclared env) carrying exactly one
+    package-manager lockfile — so the ONLY release-blocking signal is that lockfile's
+    toolchain."""
+    return {
+        "package.json": b'{"name":"svc","scripts":{"start":"node server.js"}}',
+        lockfile: content,
+        "server.js": (
+            b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"
+        ),
+    }
+
+
+@pytest.mark.parametrize("lockfile", sorted(_UNSUPPORTED_PM_LOCKFILES))
+def test_unsupported_package_manager_lockfile_fails_closed(
+    lockfile: str,
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C4 §8.8 (unsupported package-manager lowering) — RED on tip e9c9b939.
+
+    A node service whose ROOT lockfile names a package manager the neutral base image
+    does not provision (``bun.lockb`` / ``pnpm-lock.yaml`` / ``yarn.lock``) is, on the
+    tip, SILENTLY LOWERED: ``bun.lockb`` maps to ``npm install`` and pnpm/yarn emit an
+    install command the image never provisions — either way shipping an
+    ``assessment=candidate``, ``self_host:true`` verdict. §8.8: "Bun, Poetry, uv, pnpm,
+    and Yarn are either installed/pinned and live-tested or rejected with
+    ``toolchain_unsupported``. Merely mapping them to Node/Python is FAILURE." The fix
+    must fail closed with ``toolchain_unsupported`` (``needs_review``,
+    ``self_host:false``, no overlay). (The LIVE install/pin proof is the C8 lane; this
+    pins only the STATIC reject-instead-of-map contract.)"""
+    cid = _cid(closeout_name, "conv_c4pm")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    files = _node_with_lockfile(lockfile, _UNSUPPORTED_PM_LOCKFILES[lockfile])
+    _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), files)
+
+    body = _release(client, cid)
+    assert isinstance(body, dict)
+
+    assert body["assessment"] == "needs_review", (
+        f"a {lockfile} project names an unsupported package manager and must fail closed "
+        f"to needs_review; the lockfile-driven lowering silently mapped it and returned "
+        f"{body['assessment']!r}."
+    )
+    assert body["self_host"] is False and body["spec_digest"] is None
+    assert _overlay_present(_overlay_texts(client, cid)) == frozenset(), (
+        f"a fail-closed {lockfile} project must ship NO self-host overlay"
+    )
+    assert _TOOLCHAIN_UNSUPPORTED_BLOCKER in _blocker_codes(body), (
+        f"expected the exact typed blocker {_TOOLCHAIN_UNSUPPORTED_BLOCKER!r} for a "
+        f"{lockfile} project, saw {sorted(_blocker_codes(body))}."
+    )

@@ -49,6 +49,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -606,8 +607,10 @@ def parse_release_intent(raw: object) -> ReleaseIntent:
     * a NEWER ``schema_version`` (one this build does not know) is REJECTED with
       `IntentUpgradeError` rather than mis-read as v2.
 
-    Raises `IntentUpgradeError` for an unreadable/newer version and `ValueError` /
-    pydantic `ValidationError` for a malformed payload."""
+    Raises `IntentUpgradeError` for a version-gate refusal (a NEWER schema, or a v1
+    shape carrying a field the current schema forbids — an upgrade this build cannot
+    perform without guessing) and `ValueError` / pydantic `ValidationError` for a
+    genuinely malformed payload."""
     if not isinstance(raw, dict):
         raise ValueError(f"release intent must be a JSON object, got {type(raw).__name__}")
     version_obj: object = raw.get("schema_version", 1)
@@ -622,11 +625,26 @@ def parse_release_intent(raw: object) -> ReleaseIntent:
     if version_obj == RELEASE_INTENT_SCHEMA_VERSION:
         return ReleaseIntent.model_validate(raw)
     # v1 / legacy: migrate deterministically — drop the version tag; the pre-WO-C4
-    # fields are a strict subset of v2, so the new fields default. Any field a v1
-    # sidecar carries that v2 does not (a removed field) trips `extra=forbid` and
-    # is rejected, never guessed at.
+    # fields are a strict subset of v2, so the new fields default.
     migrated = {key: value for key, value in raw.items() if key != "schema_version"}
-    return ReleaseIntent.model_validate(migrated)
+    try:
+        return ReleaseIntent.model_validate(migrated)
+    except ValidationError as exc:
+        # A well-formed legacy shape whose ONLY defect is a field the current schema
+        # FORBIDS (`extra_forbidden`) cannot be upgraded without guessing what that
+        # removed field meant — that is a version-gate refusal (`intent_upgrade_required`,
+        # §8.11), NOT a generic malformed sidecar, and NOT a field to silently drop. A
+        # payload carrying any OTHER validation error (a bad env name, a wrong type) is
+        # genuinely malformed and is re-raised as the `ValidationError` it is.
+        errors = exc.errors()
+        if errors and all(err.get("type") == "extra_forbidden" for err in errors):
+            raise IntentUpgradeError(
+                "release intent declares a legacy (v1) shape carrying field(s) the "
+                f"current schema (v{RELEASE_INTENT_SCHEMA_VERSION}) does not define; it "
+                "cannot be upgraded without guessing and must not be silently "
+                "reinterpreted."
+            ) from exc
+        raise
 
 
 # ---- the release spec ---------------------------------------------------------
