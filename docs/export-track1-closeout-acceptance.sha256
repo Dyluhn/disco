@@ -35,8 +35,8 @@
     "packages/core/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/tools/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
     "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py": "0aa05166c3af801774f78f154cb1e34a6522b937c9f12329cfba473ad31f6976",
-    "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "94072b7a51a1fcbad3912f33c71551340f2be56cc3fe311d3da8774bfbc1422e",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "9bebfbeeec6cb8431075e9fe0af40133cfc44401b675051482d8620858f97f8e",
+    "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "dc5a7cf56a61e6653f4e600cd67387fce50ae4711e3f4ecd4a962d4c3f5075f7",
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "scripts/gen_closeout_acceptance_manifest.py": "84b0004cb8fca23d523ff6d70f554997a1f0ed58270fb6b9bd8b3204fe6e2f41",
     "scripts/verify_export_track1_closeout.py": "8ebeb5ba27f112e30db21217dd7081f3c00ae317d9f070e97e12fc23545568e8"
   },

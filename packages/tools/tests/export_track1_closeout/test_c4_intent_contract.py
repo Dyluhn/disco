@@ -28,17 +28,83 @@ field, so the sidecar the tool persists carries no such key — the shape is unv
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 import pytest
-from disco.core import ToolCall
-from disco.tools.builtin import build_default_registry
-from disco.tools.executor import DefaultToolExecutor
+from disco.agent_server import ConversationRuntime
+from disco.core import SqliteEventStore, ToolCall
+from disco.core.llm import (
+    ConfigStore,
+    DefaultLLMRouter,
+    ModelEntry,
+    ProjectStorageSettings,
+    RouterConfig,
+)
+from disco.tools import ProcessSandboxService
 from disco.tools.projects import ProjectStore
-from disco.tools.registry import ToolScope
 
 pytestmark = pytest.mark.export_track1_closeout
+
+
+# ---- real-runtime harness (drives release_declare through the REAL runtime tool
+# path exactly like WO-C1's tests; the ONLY seams are the DISCO_DATA_DIR env var and
+# the ConfigStore.load config loader — the same injection the settings PUT performs) --
+
+
+class _NeverCalledProvider:
+    """A model double that fails LOUD if invoked. ``execute_pi_tool`` runs ONE tool
+    call directly against the conversation's executor and never drives a model turn,
+    so a correct run never touches this — but if the plumbing changed to call the
+    model, the test fails honestly instead of hanging on a real network."""
+
+    name = "fake"
+
+    async def complete(self, req: Any, *, model: Any) -> Any:  # pragma: no cover
+        raise AssertionError("release_declare execution must not call the model")
+
+    async def stream_complete(
+        self, req: Any, *, model: Any
+    ) -> AsyncIterator[Any]:  # pragma: no cover
+        raise AssertionError("release_declare execution must not call the model")
+        yield  # unreachable; makes this an async generator
+
+    def supports(self, requirement: Any, *, model: Any) -> bool:
+        return True
+
+
+def _base_cfg() -> RouterConfig:
+    return RouterConfig(
+        models={"m": ModelEntry(model_id="m", provider="fake", context_window=8192)},
+        default_model="m",
+    )
+
+
+def _runtime(
+    monkeypatch: pytest.MonkeyPatch, *, data_dir: Path
+) -> tuple[ConversationRuntime, SqliteEventStore]:
+    """A real runtime whose ACTIVE configured projects root is the DEFAULT
+    (``DISCO_DATA_DIR``-derived) root pointed at ``data_dir`` — set through
+    ``ConfigStore.load`` exactly as the settings PUT does. ``release_declare`` persists
+    via the host-owned intent writer post-C1 and via the ``ProjectStore('')`` fallback
+    on baseline, so a valid declaration writes its sidecar under ``data_dir`` in BOTH,
+    which ``ProjectStore('').release_intent_for(cid)`` then reads back as raw bytes."""
+    store = SqliteEventStore(":memory:")
+    router = DefaultLLMRouter(_base_cfg(), {"fake": _NeverCalledProvider()})
+    cfg_store = ConfigStore(path=Path("/dev/null"))
+    monkeypatch.setenv("DISCO_DATA_DIR", str(data_dir))
+    configured = _base_cfg().model_copy(
+        update={"projects": ProjectStorageSettings(projects_root="")}
+    )
+    monkeypatch.setattr(cfg_store, "load", lambda: configured)
+    runtime = ConversationRuntime(
+        store,
+        router=router,
+        config_store=cfg_store,
+        sandbox_service=ProcessSandboxService(),
+    )
+    return runtime, store
 
 
 @pytest.mark.asyncio
@@ -61,20 +127,17 @@ async def test_persisted_intent_sidecar_carries_schema_version(
     assert callable(make_name)
     cid = f"conv_{str(make_name('c4ver')).replace('-', '_')}"
     data_dir = tmp_path / "data dir"
-    monkeypatch.setenv("DISCO_DATA_DIR", str(data_dir))
 
-    executor = DefaultToolExecutor(
-        build_default_registry(),
-        ToolScope(allowed_tools=frozenset({"release_declare"})),
-        owner_id="local",
-        conversation_id=cid,
-    )
-    result = await executor.execute(
+    runtime, store = _runtime(monkeypatch, data_dir=data_dir)
+    store.create_conversation(cid, owner_id="local")
+    runtime.set_surface(cid, "build")
+    result = await runtime.execute_pi_tool(
+        cid,
         ToolCall(
             tool_name="release_declare",
             arguments={"start_cmd": ["node", "server.js"], "required_env": ["SESSION_SECRET"]},
             call_id="closeout-c4-ver",
-        )
+        ),
     )
     assert result.success, (
         f"precondition: a valid declaration must persist a sidecar to inspect "
