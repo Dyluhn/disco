@@ -21,10 +21,13 @@ from disco.core.store.sqlite import SqliteEventStore, install_owner_id
 from disco.tools.projects import (
     ProjectRecord,
     ProjectStore,
+    StorageError,
     StorageStatus,
     aiter_zip_workspace,
     is_runtime_secret_path,
 )
+from disco.tools.projects.store import VersionRecord
+from disco.tools.projects.store import tree_digest as compute_tree_digest
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
@@ -556,6 +559,186 @@ async def _aiter_zip_with_overlay(src: Path, overlay: dict[str, str]) -> AsyncIt
         yield block
 
 
+# ---- bound (source-locked) self-host download (WO-C2) -------------------------
+#
+# The self-host action downloads with an IMMUTABLE binding
+# `/download?version_seq=N&spec_digest=D`. BOTH values are enforced server-side: the
+# zip is built from the exact committed version N's IMMUTABLE stored workspace
+# (never the mutable live mirror), re-hash-verified against its `VersionRecord`
+# digest, and its assessed `spec_digest` must equal D. A mismatch emits NO bytes
+# and never silently falls back to an unbound/plain zip.
+
+# The zip epoch (DOS zero-date) — a FIXED per-entry timestamp so two bound
+# downloads of the same immutable version are byte-identical (the version bytes do
+# not change, and no wall-clock time leaks into the archive metadata).
+_ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
+
+
+class _BoundReject(Exception):
+    """A bound download that fails its binding — surfaced as a documented status
+    (403 handled by the read preamble; 409/410 here) that emits no zip bytes."""
+
+    def __init__(self, status_code: int, reason: str, message: str = "") -> None:
+        super().__init__(message or reason)
+        self.status_code = status_code
+        self.reason = reason
+        self.message = message or reason
+
+
+def _deterministic_zip(files: dict[str, bytes]) -> bytes:
+    """A fully deterministic zip of ``{rel: bytes}`` — sorted entry order, fixed
+    per-entry timestamp, fixed mode, DEFLATE — so identical inputs produce
+    byte-identical output. Built entirely in-memory (bounded by the snapshot caps)."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for rel in sorted(files):
+            info = zipfile.ZipInfo(filename=rel, date_time=_ZIP_EPOCH)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, files[rel])
+    return buf.getvalue()
+
+
+def _version_source_files(root: Path) -> dict[str, bytes]:
+    """The immutable file view of a committed version's stored workspace — the exact
+    set ``store.tree_digest`` hashes (symlinks + runtime-secret paths excluded)."""
+    files: dict[str, bytes] = {}
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
+        rel = path.relative_to(root).as_posix()
+        if is_runtime_secret_path(rel):
+            continue
+        files[rel] = path.read_bytes()
+    return files
+
+
+def _build_bound_download_zip(
+    ps: ProjectStore,
+    record: ProjectRecord,
+    conversation_id: str,
+    version_seq: int,
+    spec_digest_value: str,
+) -> bytes:
+    """Build the source-locked self-host zip for one committed version, enforcing the
+    `version_seq` + `spec_digest` binding. Runs entirely off the event loop (called
+    via ``asyncio.to_thread``). Raises ``_BoundReject`` (409/410, no bytes) when the
+    version does not exist here, its stored bytes fail integrity, it is not a
+    self-host candidate, or its assessed `spec_digest` does not equal the bound
+    value. The zip source is version N's IMMUTABLE stored workspace — never the
+    mutable live mirror — so a concurrent live edit / N+1 cut can never leak a mixed
+    tree into a completed download."""
+    from .release import assess_version
+
+    try:
+        version_ws = ps.version_workspace_path(conversation_id, version_seq)
+    except StorageError as exc:
+        # Unknown sequence, another conversation's sequence, or a missing workspace:
+        # the bound version is not available here.
+        raise _BoundReject(410, "version_not_found", str(exc)) from exc
+    version_record: VersionRecord | None = next(
+        (v for v in ps.list_versions(conversation_id) if v.seq == version_seq), None
+    )
+    if version_record is None:
+        raise _BoundReject(410, "version_not_found", f"no committed version {version_seq}")
+
+    # Re-hash the stored version workspace and require it to equal its recorded
+    # digest before a single byte is emitted (never serve a corrupt source).
+    if compute_tree_digest(version_ws) != version_record.tree_digest:
+        raise _BoundReject(
+            409, "source_integrity_failed", "version bytes no longer match the recorded digest"
+        )
+
+    assessed = assess_version(ps, record, conversation_id, version_record, version_ws)
+    response = assessed.response
+    if not response.self_host or response.spec_digest is None:
+        raise _BoundReject(
+            409, "not_self_hostable", "the bound version is not a self-host candidate"
+        )
+    if response.spec_digest != spec_digest_value:
+        raise _BoundReject(
+            409, "spec_digest_mismatch", "spec_digest does not match the bound version"
+        )
+
+    combined = _version_source_files(version_ws)
+    for rel, text in assessed.overlay_files.items():
+        # A workspace file always wins a collision (the overlay entry was already
+        # dropped upstream); never emit a runtime-secret path.
+        if rel not in combined and not is_runtime_secret_path(rel):
+            combined[rel] = text.encode("utf-8")
+    return _deterministic_zip(combined)
+
+
+async def _aiter_bytes(payload: bytes) -> AsyncIterator[bytes]:
+    chunk = 64 * 1024
+    for start in range(0, len(payload), chunk):
+        yield payload[start : start + chunk]
+
+
+async def _download_response(
+    ps: ProjectStore,
+    record: ProjectRecord,
+    workspace: Path,
+    version_seq: int | None,
+    spec_digest: str | None,
+) -> StreamingResponse:
+    """Build the download response for an already owner-scoped project.
+
+    DEFAULT (no binding query): the filtered workspace zip, plus the WO-4 self-host
+    overlay when the project is a COMMITTED candidate (best-effort — a failed
+    assessment falls back to the plain zip, never breaking the download).
+
+    BOUND self-host (``version_seq`` + ``spec_digest``, WO-C2): the immutable
+    committed version, hash-verified, with BOTH values enforced server-side; a
+    mismatch emits NO bytes (409/410) and never falls back to a plain zip."""
+    headers = {"Content-Disposition": f'attachment; filename="{record.conversation_id}.zip"'}
+    if version_seq is not None or spec_digest is not None:
+        if version_seq is None or spec_digest is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "incomplete_binding",
+                    "message": "a bound download requires BOTH version_seq and spec_digest",
+                },
+            )
+        try:
+            # Integrity-verify + zip-build off the event loop; a bound download
+            # streams the IMMUTABLE version workspace, never the mutable mirror.
+            payload = await asyncio.to_thread(
+                _build_bound_download_zip,
+                ps,
+                record,
+                record.conversation_id,
+                version_seq,
+                spec_digest,
+            )
+        except _BoundReject as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={"reason": exc.reason, "message": exc.message},
+            ) from exc
+        return StreamingResponse(
+            _aiter_bytes(payload), media_type="application/zip", headers=headers
+        )
+
+    overlay_files: dict[str, str] = {}
+    try:
+        from .release import assess_project
+
+        # The overlay comes from the source-bound assessment (the committed version
+        # matching the live tree) — empty unless it is a candidate, so a diverged /
+        # unsnapshotted tree never gets a false self-host bundle.
+        overlay_files = (
+            await asyncio.to_thread(assess_project, ps, record, workspace, record.conversation_id)
+        ).overlay_files
+    except Exception:  # assessment must never break the plain download
+        overlay_files = {}
+    body = (
+        _aiter_zip_with_overlay(workspace, overlay_files)
+        if overlay_files
+        else aiter_zip_workspace(workspace)
+    )
+    return StreamingResponse(body, media_type="application/zip", headers=headers)
+
+
 def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime | None) -> APIRouter:
     router = APIRouter()
 
@@ -607,43 +790,21 @@ def make_projects_router(store: SqliteEventStore, runtime: ConversationRuntime |
         )
 
     @router.get("/api/projects/{conversation_id}/download")
-    async def download_project(conversation_id: str, request: Request) -> StreamingResponse:
-        """Stream a zip of the project's workspace. 404 with a specific reason
-        when the storage is unconfigured / the project is unknown / the files
-        have been deleted under the manifest.
-
-        WO-7 upgrade: when the project assesses ``candidate`` and validation passes,
-        the zip ADDITIONALLY carries the generated self-host overlay (``compose.yaml``,
-        ``Dockerfile``(s), ``.dockerignore``, ``.env.example``, ``SELFHOST.md``,
-        ``release.json``). A workspace file wins any path collision. For every other
-        project the zip is byte-for-byte the plain filtered workspace zip — no
-        overlay, no false affordance. The assessment is best-effort: any failure
-        falls back to the plain zip so it can never break a download."""
+    async def download_project(
+        conversation_id: str,
+        request: Request,
+        version_seq: int | None = Query(default=None),
+        spec_digest: str | None = Query(default=None),
+    ) -> StreamingResponse:
+        """Stream a zip of the project's workspace (owner-scoped; 404 storage /
+        project / files_missing, 403 ``project_forbidden``). A DEFAULT download is
+        the filtered workspace zip (plus the WO-4 overlay for a committed candidate);
+        a BOUND ``?version_seq=N&spec_digest=D`` download is the immutable, hash-
+        verified version N with both values enforced server-side (WO-C2)."""
         ps, record, workspace = await _resolve_project_for_read(
             request, store, runtime, conversation_id
         )
-        overlay_files: dict[str, str] = {}
-        try:
-            from .release import assess_project
-
-            overlay_files = assess_project(
-                ps, record, workspace, record.conversation_id
-            ).overlay_files
-        except Exception:  # assessment must never break the plain download
-            overlay_files = {}
-        headers = {
-            "Content-Disposition": (f'attachment; filename="{record.conversation_id}.zip"'),
-        }
-        body = (
-            _aiter_zip_with_overlay(workspace, overlay_files)
-            if overlay_files
-            else aiter_zip_workspace(workspace)
-        )
-        return StreamingResponse(
-            body,
-            media_type="application/zip",
-            headers=headers,
-        )
+        return await _download_response(ps, record, workspace, version_seq, spec_digest)
 
     @router.get("/api/projects/{conversation_id}/manifest")
     async def project_manifest(conversation_id: str, request: Request) -> dict:

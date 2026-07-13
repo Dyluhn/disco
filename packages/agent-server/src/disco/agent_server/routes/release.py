@@ -8,13 +8,16 @@ computed ON REQUEST — nothing runs at finish time, and NOTHING here spawns a
 process, touches a container engine, or reaches the network. Detection,
 validation, and overlay emission are pure functions over the immutable contents.
 
-The same pure assessment (`assess_project`) powers the upgraded Download: when a
-project assesses `candidate` AND validation passes, the streamed zip additionally
-carries the WO-4 self-host overlay (`compose.yaml`, `Dockerfile`(s),
-`.dockerignore`, `.env.example`, `SELFHOST.md`, `release.json`). A workspace file
-always wins a path collision — the overlay entry is dropped and reported as a
-blocker on `/release` (never a false affordance: a non-`candidate` project's
-download is byte-for-byte the plain filtered zip, no overlay).
+The assessment is IMMUTABLY source-bound (WO-C2): it reads a real committed
+version workspace (hash-verified against its `VersionRecord` digest), never the
+mutable live mirror, and a tree that matches no committed version fails closed
+with a `source_not_snapshotted` blocker rather than inventing a sequence. The same
+per-version assessment (`assess_version`) powers the bound self-host Download
+(`/download?version_seq=N&spec_digest=D`): when a version assesses `candidate` AND
+validation passes, the streamed zip additionally carries the WO-4 self-host overlay
+(`compose.yaml`, `Dockerfile`(s), `.dockerignore`, `.env.example`, `SELFHOST.md`,
+`release.json`). A workspace file always wins a path collision — the overlay entry
+is dropped and reported as a blocker on `/release` (never a false affordance).
 
 Secret hygiene is inherited, not re-invented: the workspace view is read through
 the store's `iter_workspace`, which already excludes every runtime-secret path
@@ -30,6 +33,7 @@ the committed contents + the typed intent, nothing else.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +51,7 @@ from disco.core.release.spec import (
 from disco.core.release.validate import validate_release
 from disco.core.store.sqlite import SqliteEventStore
 from disco.tools.projects import ProjectRecord, ProjectStore, StorageError, is_runtime_secret_path
+from disco.tools.projects.store import VersionRecord
 from disco.tools.projects.store import tree_digest as compute_tree_digest
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -126,8 +131,12 @@ class ReleaseResponse(BaseModel):
     ingress: _IngressInfo | None
     self_host: bool
     spec_digest: str | None
-    version_seq: int
-    tree_digest: str
+    # Source binding — mirrors `store.VersionRecord`. NULLABLE: null when no exact
+    # committed source can be named (a workspace never snapshotted). Whenever these
+    # are non-null they ALWAYS resolve to a real `VersionRecord`; a hypothetical
+    # next sequence is never fabricated (locked semantics §2 #4).
+    version_seq: int | None
+    tree_digest: str | None
 
 
 @dataclass(frozen=True)
@@ -185,14 +194,68 @@ def _build_spec(
 # ---- the pure assessment ------------------------------------------------------
 
 
+def _required_env_view(detection: DetectionResult) -> list[_ResponseEnv]:
+    return [
+        _ResponseEnv(
+            name=var.name,
+            scope=var.scope.value,
+            required=var.required,
+            secret=var.secret is SecretClass.secret,
+        )
+        for var in detection.env
+    ]
+
+
+def _fail_closed_assessment(
+    detection: DetectionResult,
+    *,
+    version_seq: int | None,
+    tree_digest: str | None,
+    source_blocker: _ResponseBlocker | None,
+) -> AssessedRelease:
+    """The verdict when the assessed tree is NOT a verified committed version.
+
+    No self-host bundle is ever offered here (`self_host=False`, empty overlay,
+    `spec_digest=None`). A statically plausible web app is DOWNGRADED from
+    `candidate` to `needs_review`, and `source_blocker` (the unsnapshotted-drift or
+    integrity diagnostic) explains why it cannot be self-hosted. A tree that is not
+    a web app keeps its honest `not_web` / `needs_review` verdict and its repairable
+    field diagnostics — snapshotting would not change that. The source fields carry
+    whatever real record could be named (or null), never a fabricated sequence."""
+    if detection.assessment is ReleaseAssessment.candidate:
+        assessment = ReleaseAssessment.needs_review
+        blockers = [source_blocker] if source_blocker is not None else []
+    else:
+        assessment = detection.assessment
+        blockers = [
+            _ResponseBlocker(code="release_field_unresolved", field=item.field, message=item.detail)
+            for item in detection.missing
+        ]
+    response = ReleaseResponse(
+        assessment=assessment.value,
+        reasons=list(detection.reasons),
+        blockers=blockers,
+        required_env=_required_env_view(detection),
+        command=_RELEASE_COMMAND,
+        ingress=None,
+        self_host=False,
+        spec_digest=None,
+        version_seq=version_seq,
+        tree_digest=tree_digest,
+    )
+    return AssessedRelease(response=response, overlay_files={})
+
+
 def assess_release(
     files: Mapping[str, bytes],
     *,
     intent: ReleaseIntent | None,
     project_name: str,
-    version_seq: int,
-    tree_digest: str,
+    version_seq: int | None,
+    tree_digest: str | None,
+    source_snapshotted: bool,
     imported: bool = False,
+    source_blocker: _ResponseBlocker | None = None,
 ) -> AssessedRelease:
     """Assess a workspace's release readiness — PURE and deterministic.
 
@@ -202,13 +265,30 @@ def assess_release(
     (possibly empty) overlay to inject. No process, no container, no network, no
     clock, no randomness — the same inputs return an EQUAL result every time.
 
+    `source_snapshotted` is the fail-closed gate: only a tree that is a VERIFIED
+    committed version (its stored workspace re-hashes to its recorded digest, and its
+    digest equals the live tree) may become a self-host `candidate`. When it is
+    False, `_fail_closed_assessment` is returned instead — no bundle, and a
+    would-be candidate is downgraded to `needs_review` with `source_blocker`.
+
     `imported=True` (a project whose workspace was seeded by a code import) makes an
     UNRECOGNIZED stack fail closed to `needs_review` rather than `not_web` (WO-3 rung
     4): an imported tree we can't shape still needs an owner declaration.
     """
     detection = detect_release(files, intent=intent, provenance=Provenance(imported=imported))
-    ingress = detection.ingress
 
+    if not source_snapshotted:
+        return _fail_closed_assessment(
+            detection,
+            version_seq=version_seq,
+            tree_digest=tree_digest,
+            source_blocker=source_blocker,
+        )
+    # A verified committed source: `version_seq` / `tree_digest` are guaranteed to
+    # name that real record, so the spec can be pinned to it.
+    assert version_seq is not None and tree_digest is not None
+
+    ingress = detection.ingress
     assessment = detection.assessment
     spec: ReleaseSpec | None = None
     ingress_info: _IngressInfo | None = None
@@ -273,7 +353,9 @@ def assess_release(
                     overlay_files[path] = overlay[path]
         else:
             blockers.extend(
-                _ResponseBlocker(code=blocker.code.value, message=blocker.message, path=blocker.path)
+                _ResponseBlocker(
+                    code=blocker.code.value, message=blocker.message, path=blocker.path
+                )
                 for blocker in validation.blockers
             )
     else:
@@ -282,21 +364,11 @@ def assess_release(
             for item in detection.missing
         )
 
-    required_env = [
-        _ResponseEnv(
-            name=var.name,
-            scope=var.scope.value,
-            required=var.required,
-            secret=var.secret is SecretClass.secret,
-        )
-        for var in detection.env
-    ]
-
     response = ReleaseResponse(
         assessment=assessment.value,
         reasons=list(detection.reasons),
         blockers=blockers,
-        required_env=required_env,
+        required_env=_required_env_view(detection),
         command=_RELEASE_COMMAND,
         ingress=ingress_info,
         self_host=self_host,
@@ -307,49 +379,155 @@ def assess_release(
     return AssessedRelease(response=response, overlay_files=overlay_files)
 
 
-def _source_binding(ps: ProjectStore, conversation_id: str, workspace: Path) -> tuple[int, str]:
-    """The (version_seq, tree_digest) pair that pins the assessment to ONE tree — the
-    LIVE workspace being assessed — so the two fields can never disagree.
+def _read_tree(root: Path) -> dict[str, bytes]:
+    """The immutable file view of a workspace directory: sorted workspace-relative
+    POSIX path → bytes, with symlinks and runtime-secret paths excluded — the exact
+    file set `store.tree_digest` hashes, so the read tree's digest equals the
+    matching `VersionRecord.tree_digest`."""
+    files: dict[str, bytes] = {}
+    for path in sorted(p for p in root.rglob("*") if p.is_file() and not p.is_symlink()):
+        rel = path.relative_to(root).as_posix()
+        if is_runtime_secret_path(rel):
+            continue
+        files[rel] = path.read_bytes()
+    return files
 
-    `tree_digest` is always the live workspace's digest (the tree whose files are
-    assessed). For `version_seq`: if the live tree exactly matches a committed
-    version, that version's seq is reported (they describe the identical tree); if it
-    matches none — uncommitted edits, or no versions yet — the seq it WOULD receive on
-    the next cut (`max existing + 1`, i.e. `1` when there are none) is reported. Either
-    way the returned pair describes the same tree, never a saved version's seq paired
-    with a different tree's digest."""
-    digest = compute_tree_digest(workspace)
+
+def _integrity_blocker(detail: str) -> _ResponseBlocker:
+    return _ResponseBlocker(
+        code="source_integrity_failed",
+        message=(
+            "the committed version workspace could not be verified against its "
+            f"recorded digest ({detail}); its source integrity is untrustworthy."
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class _ResolvedSource:
+    """Which immutable committed version an assessment binds to.
+
+    `verified` + `workspace` are set ONLY when the live tree exactly matches a
+    committed version whose STORED workspace re-hashes to its recorded digest — the
+    sole path that may yield a self-host candidate, and the tree the assessment then
+    reads from (never the mutable live mirror). Otherwise the tree is not a
+    trustworthy snapshot: `blocker` explains why (unsnapshotted drift / integrity),
+    and `version_seq` / `tree_digest` name the newest REAL record if one exists (or
+    are null when none does) — never a fabricated `max+1` sequence."""
+
+    verified: VersionRecord | None
+    workspace: Path | None
+    version_seq: int | None
+    tree_digest: str | None
+    blocker: _ResponseBlocker | None
+
+
+def _resolve_source(ps: ProjectStore, conversation_id: str, workspace: Path) -> _ResolvedSource:
+    """Bind the live workspace to an immutable committed version, hash-verifying it.
+
+    The live tree is hashed and matched against the committed versions (newest
+    match wins). A match's stored workspace is re-hashed and required to equal its
+    recorded digest before it is trusted (a tampered/corrupt version fails closed
+    with a source-integrity blocker). With no exact match the current tree was never
+    snapshotted: fail closed with `source_not_snapshotted`, naming the newest real
+    record's `(seq, digest)` if one exists, else null — the route never invents a
+    sequence for a tree that was never committed."""
+    live_digest = compute_tree_digest(workspace)
     try:
         versions = ps.list_versions(conversation_id)  # newest first
     except StorageError:
-        return 1, digest
-    for record in versions:  # newest first — report the most recent EXACT match
-        if record.tree_digest == digest:
-            return record.seq, digest
-    next_seq = max((record.seq for record in versions), default=0) + 1
-    return next_seq, digest
+        versions = []
+
+    exact = next((record for record in versions if record.tree_digest == live_digest), None)
+    if exact is not None:
+        try:
+            version_ws = ps.version_workspace_path(conversation_id, exact.seq)
+            rehashed = compute_tree_digest(version_ws)
+        except StorageError:
+            return _ResolvedSource(
+                None,
+                None,
+                exact.seq,
+                exact.tree_digest,
+                _integrity_blocker("missing or unreadable"),
+            )
+        if rehashed != exact.tree_digest:
+            return _ResolvedSource(
+                None,
+                None,
+                exact.seq,
+                exact.tree_digest,
+                _integrity_blocker("stored bytes no longer match"),
+            )
+        return _ResolvedSource(exact, version_ws, exact.seq, exact.tree_digest, None)
+
+    not_snapshotted = _ResponseBlocker(
+        code="source_not_snapshotted",
+        message=(
+            "the current workspace has not been captured as a committed version, so "
+            "it cannot be pinned to an immutable source; commit a version first."
+        ),
+    )
+    newest = versions[0] if versions else None
+    if newest is not None:
+        return _ResolvedSource(None, None, newest.seq, newest.tree_digest, not_snapshotted)
+    return _ResolvedSource(None, None, None, None, not_snapshotted)
+
+
+def assess_version(
+    ps: ProjectStore,
+    record: ProjectRecord,
+    conversation_id: str,
+    version_record: VersionRecord,
+    version_workspace: Path,
+) -> AssessedRelease:
+    """Assess ONE named committed version (its immutable stored workspace), pinned to
+    that version's `(seq, tree_digest)`. The download binding uses this to assess the
+    exact requested version — independent of the mutable live mirror."""
+    intent = ps.read_release_intent(conversation_id)
+    files = _read_tree(version_workspace)
+    return assess_release(
+        files,
+        intent=intent,
+        project_name=record.title or conversation_id,
+        version_seq=version_record.seq,
+        tree_digest=version_record.tree_digest,
+        source_snapshotted=True,
+        imported=record.imported,
+    )
 
 
 def assess_project(
     ps: ProjectStore, record: ProjectRecord, workspace: Path, conversation_id: str
 ) -> AssessedRelease:
-    """Read a project's committed workspace + host-owned intent sidecar and assess
-    it. Reads the tree through `iter_workspace`, so runtime-secret files are already
-    excluded from every downstream input. Raises `StorageError` on a corrupt intent
-    sidecar (an honest failure, never a silent 'no intent')."""
-    files: dict[str, bytes] = {}
-    for path in ps.iter_workspace(conversation_id):
-        files[path.relative_to(workspace).as_posix()] = path.read_bytes()
+    """Read a project's host-owned intent sidecar and assess its source-bound release
+    readiness. The tree assessed is the VERIFIED committed version that matches the
+    live workspace (read from the immutable version store, not the mutable mirror);
+    when the live tree matches no committed version the assessment fails closed. Raises
+    `StorageError` on a corrupt intent sidecar (an honest failure, never a silent
+    'no intent')."""
     intent = ps.read_release_intent(conversation_id)
-    version_seq, digest = _source_binding(ps, conversation_id, workspace)
     name = record.title or conversation_id
+    source = _resolve_source(ps, conversation_id, workspace)
+    if source.verified is not None and source.workspace is not None:
+        return assess_release(
+            _read_tree(source.workspace),
+            intent=intent,
+            project_name=name,
+            version_seq=source.version_seq,
+            tree_digest=source.tree_digest,
+            source_snapshotted=True,
+            imported=record.imported,
+        )
     return assess_release(
-        files,
+        _read_tree(workspace),
         intent=intent,
         project_name=name,
-        version_seq=version_seq,
-        tree_digest=digest,
+        version_seq=source.version_seq,
+        tree_digest=source.tree_digest,
+        source_snapshotted=False,
         imported=record.imported,
+        source_blocker=source.blocker,
     )
 
 
@@ -370,7 +548,11 @@ def make_release_router(store: SqliteEventStore, runtime: ConversationRuntime | 
             request, store, runtime, conversation_id
         )
         try:
-            assessed = assess_project(ps, record, workspace, record.conversation_id)
+            # Offload the workspace read + hash-verify (potentially many MB) to a
+            # worker thread so it never blocks the async event loop (WO-C2 §6.11).
+            assessed = await asyncio.to_thread(
+                assess_project, ps, record, workspace, record.conversation_id
+            )
         except StorageError as exc:
             raise HTTPException(
                 status_code=500,
@@ -386,5 +568,6 @@ __all__ = [
     "ReleaseResponse",
     "assess_project",
     "assess_release",
+    "assess_version",
     "make_release_router",
 ]

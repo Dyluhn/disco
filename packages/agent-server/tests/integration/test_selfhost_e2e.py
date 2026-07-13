@@ -224,6 +224,8 @@ def test_release_schema_and_action_set_identical_across_four_fixtures(store, tmp
     client, ps = _client_for(store, tmp_path, monkeypatch)
     for name in _FIXTURES:
         _seed_files(ps, store, _cid(name), _fixture_files(name))
+        # WO-C2: a self-host candidate must bind to a committed version.
+        ps.cut_version(_cid(name), trigger="test")
 
     bodies: dict[str, dict[str, object]] = {}
     for name in _FIXTURES:
@@ -257,6 +259,7 @@ def test_download_bundle_carries_source_plus_full_overlay(store, tmp_path, monke
     for name in _FIXTURES:
         files = _fixture_files(name)
         _seed_files(ps, store, _cid(name), files)
+        ps.cut_version(_cid(name), trigger="test")  # WO-C2: bind the candidate to a version
         res = client.get(f"/api/projects/{_cid(name)}/download")
         assert res.status_code == 200, name
         assert res.headers["content-type"] == "application/zip"
@@ -343,6 +346,7 @@ def test_imported_project_with_recognized_stack_stays_candidate(store, tmp_path,
     recognized still assesses candidate — imported only rescues the UNKNOWN case."""
     client, ps = _client_for(store, tmp_path, monkeypatch)
     _seed_files(ps, store, "conv_imported_node", _fixture_files("imported_node"), imported=True)
+    ps.cut_version("conv_imported_node", trigger="test")  # WO-C2: bind to a committed version
 
     body = client.get("/api/projects/conv_imported_node/release").json()
     assert body["assessment"] == "candidate"
@@ -410,6 +414,7 @@ def test_emitted_compose_parses_and_has_ingress_structure_for_each_fixture(
     client, ps = _client_for(store, tmp_path, monkeypatch)
     for name in _FIXTURES:
         _seed_files(ps, store, _cid(name), _fixture_files(name))
+        ps.cut_version(_cid(name), trigger="test")  # WO-C2: bind the candidate to a version
 
     for name in _FIXTURES:
         dl = client.get(f"/api/projects/{_cid(name)}/download")

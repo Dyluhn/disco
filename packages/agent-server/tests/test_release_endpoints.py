@@ -174,6 +174,10 @@ def test_release_schema_identical_key_set_across_assessments(store, tmp_path, mo
     _seed(ps, store, "conv_opaque", _OPAQUE_FILES)
     _seed(ps, store, "conv_docs", _DOCS_FILES)
     _seed(ps, store, "conv_appkit", _APPKIT_FILES)
+    # WO-C2: only a committed version that matches the live tree can be a self-host
+    # candidate; commit the two candidate shapes so they bind to a real source.
+    ps.cut_version("conv_node", trigger="test")
+    ps.cut_version("conv_appkit", trigger="test")
 
     bodies = {}
     for cid in ("conv_node", "conv_opaque", "conv_docs", "conv_appkit"):
@@ -223,8 +227,14 @@ def test_release_schema_identical_key_set_across_assessments(store, tmp_path, mo
 def test_download_candidate_zip_contains_source_plus_overlay(store, tmp_path, monkeypatch):
     client, ps = _client_for(store, tmp_path, monkeypatch)
     _seed(ps, store, "conv_node", _NODE_FILES, intent=_NODE_INTENT)
+    ps.cut_version("conv_node", trigger="test")
 
-    res = client.get("/api/projects/conv_node/download")
+    # WO-C2: the self-host bundle is a BOUND download of the committed version.
+    body = client.get("/api/projects/conv_node/release").json()
+    res = client.get(
+        f"/api/projects/conv_node/download?version_seq={body['version_seq']}"
+        f"&spec_digest={body['spec_digest']}"
+    )
     assert res.status_code == 200
     assert res.headers["content-type"] == "application/zip"
     names = _namelist(res.content)
@@ -249,8 +259,13 @@ def test_download_candidate_zip_contains_source_plus_overlay(store, tmp_path, mo
 def test_download_appkit_candidate_carries_dev_server_overlay(store, tmp_path, monkeypatch):
     client, ps = _client_for(store, tmp_path, monkeypatch)
     _seed(ps, store, "conv_appkit", _APPKIT_FILES)
+    ps.cut_version("conv_appkit", trigger="test")
 
-    res = client.get("/api/projects/conv_appkit/download")
+    body = client.get("/api/projects/conv_appkit/release").json()
+    res = client.get(
+        f"/api/projects/conv_appkit/download?version_seq={body['version_seq']}"
+        f"&spec_digest={body['spec_digest']}"
+    )
     assert res.status_code == 200
     names = set(_namelist(res.content))
     assert {"compose.yaml", "Dockerfile", ".env.example", "SELFHOST.md", "release.json"} <= names
@@ -294,6 +309,7 @@ def test_overlay_collision_workspace_file_wins_and_is_reported(store, tmp_path, 
     files = dict(_NODE_FILES)
     files[".env.example"] = b"FOO=workspace-owned\n"
     _seed(ps, store, "conv_collide", files, intent=_NODE_INTENT)
+    ps.cut_version("conv_collide", trigger="test")
 
     # /release reports the suppression as a blocker naming the colliding path.
     body = client.get("/api/projects/conv_collide/release").json()
@@ -303,9 +319,12 @@ def test_overlay_collision_workspace_file_wins_and_is_reported(store, tmp_path, 
     ]
     assert [b["path"] for b in suppressed] == [".env.example"]
 
-    # download keeps the workspace .env.example (overlay one is dropped) and still
-    # adds the other overlay files.
-    res = client.get("/api/projects/conv_collide/download")
+    # the BOUND download keeps the workspace .env.example (overlay one is dropped)
+    # and still adds the other overlay files.
+    res = client.get(
+        f"/api/projects/conv_collide/download?version_seq={body['version_seq']}"
+        f"&spec_digest={body['spec_digest']}"
+    )
     with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
         assert zf.read(".env.example") == b"FOO=workspace-owned\n"
         assert {"compose.yaml", "Dockerfile", "SELFHOST.md", "release.json"} <= set(zf.namelist())
@@ -450,6 +469,13 @@ def test_non_imported_unknown_stack_stays_not_web(store, tmp_path, monkeypatch):
 
 
 def test_version_seq_and_tree_digest_describe_the_same_tree(store, tmp_path, monkeypatch):
+    """WO-C2: divergent live bytes over a committed v1 fail closed to a REAL source.
+
+    The source binding never fabricates a `max+1` sequence and never pairs a real
+    seq with the divergent LIVE digest. With v1 committed and the live tree diverged,
+    `/release` fails closed (`needs_review` + `source_not_snapshotted`) and its
+    `(version_seq, tree_digest)` name v1 exactly — the newest real record — not the
+    unsnapshotted live tree."""
     client, ps = _client_for(store, tmp_path, monkeypatch)
     _seed(ps, store, "conv_ver", _NODE_FILES, intent=_NODE_INTENT)
     # Commit the seeded tree as version 1, then DIVERGE the live workspace from it.
@@ -461,14 +487,14 @@ def test_version_seq_and_tree_digest_describe_the_same_tree(store, tmp_path, mon
     saved = {v.seq: v.tree_digest for v in ps.list_versions("conv_ver")}
     vs, td = body["version_seq"], body["tree_digest"]
 
-    # The pair must be internally consistent: if version_seq names a REAL saved
-    # version, tree_digest must be THAT version's digest — never a mixed pair.
-    assert vs not in saved or td == saved[vs], (vs, td, saved)
-    # Concretely, the buggy mix (v1's seq paired with the divergent live digest)
-    # must NOT be returned.
-    assert not (vs == v1.seq and td != v1.tree_digest)
-    # And tree_digest genuinely describes the tree that was assessed (the live one).
-    assert td == compute_tree_digest(ps.path_for("conv_ver"))
+    # A non-null source field ALWAYS resolves to a real record whose digest it names.
+    assert vs in saved and td == saved[vs], (vs, td, saved)
+    # The unsnapshotted, divergent live tree is NEVER named as the source.
+    assert td != compute_tree_digest(ps.path_for("conv_ver"))
+    # Fail closed: no speculative version 2, no self-host offer.
+    assert vs == v1.seq and td == v1.tree_digest
+    assert body["assessment"] == "needs_review" and body["self_host"] is False
+    assert "source_not_snapshotted" in {b["code"] for b in body["blockers"]}
 
 
 def test_version_seq_and_tree_digest_report_matching_saved_version(store, tmp_path, monkeypatch):
@@ -509,6 +535,9 @@ _MISMATCHED_CONSUMER_INTENT = ReleaseIntent(
 def test_mismatched_resource_consumer_does_not_500(store, tmp_path, monkeypatch):
     client, ps = _client_for(store, tmp_path, monkeypatch)
     _seed(ps, store, "conv_badspec", _NODE_FILES, intent=_MISMATCHED_CONSUMER_INTENT)
+    # WO-C2: commit the tree so the assessment binds to a real version and the spec
+    # is actually assembled (where the referential-integrity error trips).
+    ps.cut_version("conv_badspec", trigger="test")
 
     res = client.get("/api/projects/conv_badspec/release")
     assert res.status_code == 200, res.text
