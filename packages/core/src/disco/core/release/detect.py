@@ -61,6 +61,7 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import NamedTuple
 
+from disco.core.release.command_grammar import check_declaration_argv
 from disco.core.release.spec import (
     EnvScope,
     EnvVarDecl,
@@ -1515,6 +1516,48 @@ def _toolchain_blocker(
     return None
 
 
+def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
+    """A `toolchain_unsupported` fail-closed outcome when a DECLARED start/build command
+    does not parse through the runtime grammar (WO-C5 #2 F1).
+
+    The `release_declare` TOOL already gates every declaration through
+    `check_declaration_argv`, but a raw `release-intent.json` reaches emission via this
+    path without the tool. This applies the SAME grammar here — authoritative and
+    independent of the declaration source, mirroring the build-secret gate C4 added at
+    `validate_release` — so a secret CLI form (`--token VALUE` / `--password VALUE` /
+    URL userinfo) or any unsupported executable / unknown flag fails closed to
+    needs_review and is NEVER lowered into the emitted Dockerfile CMD + release.json.
+    The message is value-free: it names the field, never the offending argv (which can
+    carry the secret). Only the runtime start/build argv are gated — a `migrate_cmd`
+    legitimately heads with a non-runtime migration tool (alembic / wrangler) and is
+    out of this grammar's scope.
+
+    INHERENT ACCEPTED LIMIT: a BARE POSITIONAL secret (`node server.js MYSECRET`) is
+    indistinguishable from a benign positional operand, so it is accepted here exactly
+    as the tool accepts it — declaring a secret as a positional value is a caller error
+    the representation cannot detect, and is out of the secret-CLI-form charter."""
+    declared = frozenset(intent.required_env) | {intent.port_env}
+    for field, argv in (("start_cmd", intent.start_cmd), ("build_cmd", intent.build_cmd)):
+        try:
+            check_declaration_argv(argv, declared_names=declared, field=field)
+        except ValueError:
+            return _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    f"the declared {field} does not parse through the runtime command "
+                    "grammar: an accepted command heads with a supported runtime and uses "
+                    "known flags only, and a flag value must be a whole ${NAME} reference "
+                    "to a declared env var — an unsupported executable, an unknown flag, "
+                    "or an inline literal secret value (e.g. '--token VALUE') is rejected "
+                    "so it is never lowered into the exported bundle. Reference secrets by "
+                    "declared env NAME, never inline."
+                ),
+                field=field,
+                evidence=(f"command-grammar evidence: {field} rejected by the runtime grammar",),
+            )
+    return None
+
+
 def _classify_secret(name: str) -> SecretClass:
     """Classify a declared env-var NAME as `secret` or `public` by its shape.
 
@@ -1552,6 +1595,12 @@ def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> Det
     toolchain = _toolchain_blocker(intent, files)
     if toolchain is not None:
         return _fail_closed(toolchain)
+    # WO-C5 #2 F1: the declared start/build argv must parse through the SAME runtime
+    # command grammar the release_declare tool enforces, so a raw sidecar cannot bake a
+    # secret CLI value (or an unsupported/opaque command) into the emitted bundle.
+    grammar = _command_grammar_blocker(intent)
+    if grammar is not None:
+        return _fail_closed(grammar)
     # A declared CONVENTIONAL health probe (`/healthz`, `/health`, …) must correspond
     # to a real route WHEN the workspace ships a concrete node/python service we can
     # scan: claiming a standard probe the source never registers is a broken contract.

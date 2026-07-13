@@ -104,6 +104,23 @@ def whole_env_ref(token: str) -> str | None:
     return match.group(1) if match else None
 
 
+def flag_env_ref(token: str) -> tuple[str, str] | None:
+    """For a ``--flag=${NAME}`` / ``--flag=$NAME`` single token — a flag prefix and a
+    WHOLE env-reference value (the ``=``-joined form of ``--flag ${NAME}``, the
+    sanctioned ``--token=${API_TOKEN}`` shape) — the ``(flag_prefix, NAME)`` pair where
+    ``flag_prefix`` INCLUDES the trailing ``=``; else ``None``. The emitter uses it to
+    EXPAND such a token (``'--flag='"${NAME}"``) instead of rendering it as an inert
+    literal, so a `--flag=${NAME}` command never resolves broken (no accept-but-break).
+    A non-reference value (``--x=${A}extra`` / ``--x=$(cmd)``) yields ``None`` — those
+    are already rejected by ``check_token_hygiene``."""
+    if token.startswith("-") and "=" in token:
+        flag, _, value = token.partition("=")
+        name = whole_env_ref(value)
+        if _ARGV_LITERAL_RE.match(flag) and name is not None:
+            return (flag + "=", name)
+    return None
+
+
 def check_token_hygiene(token: str, *, field: str) -> None:
     """Validate ONE argv token as a safe exec-vector element. Raises ``ValueError``
     (value-free) if the token is anything other than a whole env reference or a plain
@@ -184,8 +201,17 @@ def check_workspace_rel_path(value: str, *, field: str) -> None:
             "digits and '._/-' only (no whitespace, control characters, or shell "
             "metacharacters that could add a Dockerfile line)"
         )
-    if ".." in value.split("/"):
-        raise ValueError(f"{field} must not contain a '..' path segment")
+    for segment in value.split("/"):
+        if segment == "..":
+            raise ValueError(f"{field} must not contain a '..' path segment")
+        # A segment beginning with '-' would emit a `COPY -flag/ ...` line whose leading
+        # token the Dockerfile parser reads as a COPY FLAG (a malformed instruction that
+        # fails the build); reject it so a `root`/`output_dir` cannot spell a COPY flag.
+        if segment.startswith("-"):
+            raise ValueError(
+                f"{field} must not contain a path segment beginning with '-' "
+                "(it would be parsed as a Dockerfile COPY flag)"
+            )
 
 
 def check_persistent_path(value: str, *, field: str) -> None:
@@ -456,5 +482,6 @@ __all__ = [
     "check_sqlite_local_url",
     "check_token_hygiene",
     "check_workspace_rel_path",
+    "flag_env_ref",
     "whole_env_ref",
 ]
