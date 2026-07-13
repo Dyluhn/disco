@@ -802,12 +802,14 @@ def _has_authoritative_npm_signal(files: Mapping[str, str | bytes], pkg: object)
     """Whether the tree carries an AUTHORITATIVE declaration that npm — the ONE node
     manager the neutral base image provisions — builds the app: a committed ROOT
     `package-lock.json`, OR a corepack `packageManager:"npm@…"` field. When the owner has
-    authoritatively named npm, a co-present STRAY non-npm config marker (a leftover
-    `.yarnrc` / `pnpm-workspace.yaml` / `bunfig.toml` from a yarn/pnpm/bun→npm migration)
-    or a non-npm script head is a migration remnant, not a live toolchain declaration —
-    npm wins (closeout #1). A committed non-npm LOCKFILE is a STRONGER signal already
-    rejected upstream (`_lockfile_conflict` / `_unsupported_pm_blocker`) before this runs,
-    so this precedence never masks a real committed-lockfile disagreement."""
+    authoritatively named npm, a co-present STRAY PASSIVE config marker (a leftover
+    `.yarnrc` / `pnpm-workspace.yaml` / `bunfig.toml` from a yarn/pnpm/bun→npm migration) is
+    a migration remnant, not a live toolchain declaration — npm wins over it (closeout #1).
+    This override is SCOPED to passive markers: it does NOT reach an ACTIVE launcher in a
+    script head (closeout #2c), which is runtime-authoritative and rejects regardless. A
+    committed non-npm LOCKFILE is a STRONGER signal already rejected upstream
+    (`_lockfile_conflict` / `_unsupported_pm_blocker`) before this runs, so this precedence
+    never masks a real committed-lockfile disagreement."""
     roots = {_norm(p) for p in files if "/" not in _norm(p)}
     if "package-lock.json" in roots:
         return True
@@ -826,22 +828,23 @@ def _unsupported_node_pm_declaration(
        MOST authoritative statement of which manager builds the app; mapping it onto npm
        is exactly the §8.8 failure, so it rejects even if a (stale) `package-lock.json` is
        also present.
-    2. AUTHORITATIVE-NPM PRECEDENCE (closeout #1): otherwise, when the owner has
-       authoritatively named npm — a committed `package-lock.json` OR `packageManager:
-       "npm@…"` — a co-present STRAY non-npm workspace/config marker or non-npm script
-       head is a migration remnant, so npm WINS and the project stays a candidate.
-    3. an unambiguous non-npm workspace/config marker at the ROOT (`pnpm-workspace.yaml`,
-       `.yarnrc(.yml)`, `bunfig.toml`);
-    4. a `start`/`build`/`prebuild`/`postbuild` script whose interpreter head is a
-       bun/pnpm/yarn launcher FAMILY — the bare manager OR its `x`-suffixed runner
-       (`bunx`, `pnpx`) (closeout #2).
+    2. a PASSIVE non-npm workspace/config MARKER at the ROOT (`pnpm-workspace.yaml`,
+       `.yarnrc(.yml)`, `bunfig.toml`) — UNLESS an authoritative npm signal is present (a
+       committed `package-lock.json` OR `packageManager:"npm@…"`), in which case the marker
+       is treated as a migration leftover and npm WINS (closeout #1): the project stays a
+       candidate.
+    3. an ACTIVE launcher in a `start`/`build`/`prebuild`/`postbuild` script HEAD whose
+       interpreter is a bun/pnpm/yarn launcher FAMILY — the bare manager OR its
+       `x`-suffixed runner (`bunx`, `pnpx`) (closeout #2). This is RUNTIME-authoritative
+       and rejects UNCONDITIONALLY — even beside an authoritative npm signal (closeout
+       #2c): a script that literally invokes bun/pnpm/yarn genuinely needs that runtime, so
+       silently lowering it to `npm start` would ship a broken bundle.
 
     npm never trips this (a `package-lock.json`, `packageManager:"npm@…"`, a
     `node`/`npm`/`npx` script head, or no PM signal at all), so a plain npm project —
-    including one carrying a stray non-npm marker or launcher head alongside an
-    authoritative npm signal — is never mis-flagged. `None` when no unsupported
-    declaration wins. Keyed on ROOT markers only (a nested `.yarnrc` in a vendored dep
-    never triggers it)."""
+    including one carrying a stray PASSIVE marker alongside an authoritative npm signal — is
+    never mis-flagged. `None` when no unsupported declaration wins. Keyed on ROOT markers
+    only (a nested `.yarnrc` in a vendored dep never triggers it)."""
     manager = _package_manager_field(pkg)
     if manager is not None and manager in _UNSUPPORTED_NODE_PM_NAMES:
         return _node_toolchain_blocker(
@@ -850,20 +853,25 @@ def _unsupported_node_pm_declaration(
             f"toolchain evidence: packageManager field names unsupported manager {manager!r} "
             "(no lockfile required)",
         )
-    # closeout #1: an authoritative npm signal beats any co-present STRAY marker / launcher
-    # head below — the base image runs npm, so a leftover non-npm config is not a reject.
-    if _has_authoritative_npm_signal(files, pkg):
-        return None
-    roots = {_norm(p) for p in files if "/" not in _norm(p)}
-    for marker in sorted(_NODE_WORKSPACE_MARKERS):
-        if marker in roots:
-            mgr = _NODE_WORKSPACE_MARKERS[marker]
-            return _node_toolchain_blocker(
-                mgr,
-                f"the project declares a {marker!r} workspace/config marker",
-                f"toolchain evidence: {marker} indicates unsupported manager {mgr!r} "
-                "(no lockfile required)",
-            )
+    # closeout #1: an authoritative npm signal overrides a co-present STRAY PASSIVE config
+    # marker (a migration leftover) — the base image runs npm, so a leftover non-npm config
+    # file is not a reject. Scoped to the MARKER loop only: it does NOT reach the ACTIVE
+    # launcher script head below (closeout #2c).
+    if not _has_authoritative_npm_signal(files, pkg):
+        roots = {_norm(p) for p in files if "/" not in _norm(p)}
+        for marker in sorted(_NODE_WORKSPACE_MARKERS):
+            if marker in roots:
+                mgr = _NODE_WORKSPACE_MARKERS[marker]
+                return _node_toolchain_blocker(
+                    mgr,
+                    f"the project declares a {marker!r} workspace/config marker",
+                    f"toolchain evidence: {marker} indicates unsupported manager {mgr!r} "
+                    "(no lockfile required)",
+                )
+    # closeout #2c: an ACTIVE launcher in a script head is RUNTIME-authoritative and rejects
+    # UNCONDITIONALLY — even beside a committed `package-lock.json` / `packageManager:"npm@…"`.
+    # The app literally invokes bun/pnpm/yarn, so lowering it to `npm start` would ship a
+    # broken bundle; an npm lockfile does not override a live launcher.
     for script_name in _TOOLCHAIN_SCRIPT_KEYS:
         script = _script(pkg, script_name)
         if script is None:

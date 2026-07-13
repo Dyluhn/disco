@@ -8,11 +8,21 @@ lives at; no route, no seam, no monkeypatch).
 
 FINDING #1 (over-rejection / FALSE BLOCK). When an AUTHORITATIVE npm signal is present — a
 committed root ``package-lock.json`` OR a corepack ``packageManager:"npm@…"`` field — a
-co-present STRAY non-npm marker (a leftover ``.yarnrc`` / ``pnpm-workspace.yaml`` /
-``bunfig.toml`` from a yarn/pnpm/bun→npm migration) or a non-npm script head must NOT
-reject the release: npm is the manager the neutral base image runs, so it WINS and the
-project stays a ``candidate``. Pre-fix a single stray marker/head flipped an otherwise
-plain npm project to ``toolchain_unsupported`` — a false block of a legitimate self-host.
+co-present STRAY PASSIVE config marker (a leftover ``.yarnrc`` / ``pnpm-workspace.yaml`` /
+``bunfig.toml`` from a yarn/pnpm/bun→npm migration) must NOT reject the release: npm is the
+manager the neutral base image runs, so it WINS and the project stays a ``candidate``.
+Pre-fix a single stray marker flipped an otherwise plain npm project to
+``toolchain_unsupported`` — a false block of a legitimate self-host. (Closeout #2c: an
+ACTIVE launcher in a script HEAD is the EXCEPTION — the npm signal does NOT override it,
+because the app literally invokes that runtime; see finding #2c.)
+
+FINDING #2c (silent-broken-bundle / MUST NOT over-relax finding #1). An authoritative npm
+signal overrides only PASSIVE markers, NEVER an ACTIVE launcher in a
+``start``/``build``/``prebuild``/``postbuild`` script head. A script that literally runs
+``bunx``/``bun``/``pnpm``/``pnpx``/``yarn`` genuinely needs that runtime; silently lowering
+it to ``npm start`` beside a stale ``package-lock.json`` would ship a broken bundle
+(crit-8). The script-head-family loop therefore runs UNCONDITIONALLY — an active launcher
+head is runtime-authoritative and rejects ``toolchain_unsupported`` even with a lockfile.
 
 FINDING #2 (under-rejection). The script-head check was exact-match on {bun,pnpm,yarn} over
 only ``start``/``build``, so an ``x``-suffixed launcher head (``"start":"bunx vite"``,
@@ -21,17 +31,24 @@ fix matches launcher FAMILIES (``bun``/``bunx`` → bun, ``pnpm``/``pnpx`` → p
 yarn) and also inspects ``prebuild``/``postbuild`` — only when there is NO authoritative
 npm signal (finding #1 precedence still holds).
 
-RED vs GREEN on tip ``300d7ec6`` (BEFORE the fix):
-  * RED (finding #1) — ``package-lock.json`` + ``.yarnrc`` and ``packageManager:"npm@10"``
-    + ``pnpm-workspace.yaml`` are WRONGLY rejected ``toolchain_unsupported`` (the stray
-    marker wins over the authoritative npm signal). The fix makes them ``candidate``.
-  * RED (finding #2) — ``"start":"bunx vite"`` and a ``pnpx`` head with NO npm signal are
-    WRONGLY classified ``candidate`` (the ``x``-launcher head is not caught). The fix
-    rejects them ``toolchain_unsupported``.
+RED vs GREEN (BEFORE each fix):
+  * RED (finding #1, tip 300d7ec6) — ``package-lock.json`` + ``.yarnrc`` and
+    ``packageManager:"npm@10"`` + ``pnpm-workspace.yaml`` are WRONGLY rejected
+    ``toolchain_unsupported`` (the stray MARKER wins over the authoritative npm signal).
+    The fix makes them ``candidate``.
+  * RED (finding #2, tip 300d7ec6) — ``"start":"bunx vite"`` and a ``pnpx`` head with NO
+    npm signal are WRONGLY classified ``candidate`` (the ``x``-launcher head is not
+    caught). The fix rejects them ``toolchain_unsupported``.
+  * RED (closeout #2c, tip 48133f0f) — ``package-lock.json`` + ``"start":"bunx vite"`` (an
+    ACTIVE launcher head beside an authoritative npm signal) was WRONGLY a ``candidate``:
+    the initial finding-#1 fix over-broadly let the npm signal override script heads too.
+    #2c makes the active launcher head runtime-authoritative — it rejects
+    ``toolchain_unsupported`` even with a lockfile, while the PASSIVE marker cases above
+    still stay ``candidate``.
   * GREEN preservation — a plain pnpm/yarn/bun declaration with NO npm signal STILL fails
-    closed; a plain npm project (with or without an authoritative-npm-overridden stray
-    marker) STILL a candidate; a NON-npm ``packageManager`` field STILL rejects even
-    beside a (stale) ``package-lock.json``.
+    closed; a plain npm project (incl. one with an authoritative-npm-overridden stray
+    PASSIVE marker) STILL a candidate; a NON-npm ``packageManager`` field STILL rejects
+    even beside a (stale) ``package-lock.json``.
 
 Randomized (plan §4 crit 8): the ``package.json`` ``"name"`` is drawn from the seeded
 ``closeout_name`` factory. The detector classifies on scripts / ``packageManager`` /
@@ -155,19 +172,38 @@ def test_npm_package_manager_field_beats_stray_marker(
     _assert_candidate(_detect(files))
 
 
-@pytest.mark.parametrize("head", ["bunx vite", "pnpx dev", "yarn start"])
-def test_authoritative_npm_beats_a_stray_script_head(head: str, closeout_name: object) -> None:
-    """RED on 300d7ec6 (finding #1). A committed ``package-lock.json`` also overrides a
-    non-npm ``start`` script head (a leftover launcher line) — the marker/script-head
-    rejection is skipped whenever npm is authoritatively declared. Pins that finding #1
-    covers script heads, not only config markers."""
+@pytest.mark.parametrize(
+    ("script_key", "script"),
+    [
+        ("start", "bunx vite"),
+        ("start", "pnpx dev"),
+        ("start", "yarn start"),
+        ("build", "pnpm build"),
+        ("build", "bunx --bun vite build"),
+        ("prebuild", "pnpx codegen"),
+    ],
+)
+def test_active_launcher_head_rejects_even_with_authoritative_npm(
+    script_key: str, script: str, closeout_name: object
+) -> None:
+    """RED on 48133f0f (closeout #2c). An ACTIVE launcher in a ``start``/``build``/
+    ``prebuild``/``postbuild`` script head is RUNTIME-authoritative: the app literally
+    invokes bun/pnpm/yarn, so a committed ``package-lock.json`` does NOT rescue it —
+    silently lowering it to ``npm start`` would ship a broken bundle (crit-8). It must fail
+    closed to ``toolchain_unsupported`` even with an authoritative npm signal present.
+    Contrast a PASSIVE config marker beside the same npm signal, which stays a candidate
+    (``test_committed_package_lock_beats_stray_marker``). Pre-#2c the finding-#1 guard
+    skipped the script-head loop whenever npm was authoritative, so these were a false
+    ``candidate``; #2c runs the script-head loop unconditionally."""
     assert callable(closeout_name)
+    scripts = {"start": "node server.js"}
+    scripts[script_key] = script  # may overwrite start with the launcher head under test
     files = {
-        "package.json": _package_json(str(closeout_name("svc")), {"start": head}, None),
+        "package.json": _package_json(str(closeout_name("svc")), scripts, None),
         "package-lock.json": _PACKAGE_LOCK,
         "server.js": _SERVER_JS,
     }
-    _assert_candidate(_detect(files))
+    _assert_toolchain_unsupported(_detect(files))
 
 
 # ---- FINDING #2: launcher-family script heads + prebuild/postbuild, no npm signal ----
