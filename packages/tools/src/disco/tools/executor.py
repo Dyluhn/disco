@@ -536,7 +536,12 @@ class DefaultToolExecutor:
         try:
             args = tool.definition.args_model.model_validate(arguments)
         except ValidationError as e:
-            errors = [dict(err) for err in e.errors()]  # ErrorDetails -> plain dict
+            # ErrorDetails -> plain dict, MINUS the raw `input` value. `hide_input_in_errors`
+            # only affects `str(e)`; `.errors()` still carries the rejected input, which a
+            # value-guard (e.g. a release argv/URL/path token) could make a secret. The
+            # surfaced `validation_errors`/`content` must never echo a rejected value
+            # (WO-C5 crit 3), and no consumer reads the input back, so it is dropped here.
+            errors = [{k: v for k, v in err.items() if k != "input"} for err in e.errors()]
             return self._fail(
                 call,
                 "invalid_arguments",

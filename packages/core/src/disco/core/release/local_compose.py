@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 
+from disco.core.release.command_grammar import whole_env_ref
 from disco.core.release.spec import (
     EnvScope,
     EnvVarDecl,
@@ -216,28 +217,39 @@ def _required_guard(name: str) -> str:
     return f"${{{name}:?Set {name} — see .env.example}}"
 
 
-def _shell_join(argv: tuple[str, ...]) -> str:
-    """Join an argv into a `sh -c` string. Tokens carrying a `$` are passed
-    THROUGH verbatim so a `${PORT}` reference still expands; other tokens are
-    minimally quoted only when they contain whitespace/quotes."""
+def _shell_quote_literal(token: str) -> str:
+    """POSIX single-quote a literal so EVERY character in it is inert to the shell
+    (no metacharacter, `$`, quote, or space is ever interpreted). A single quote
+    inside the token is closed, escaped, and reopened (`'\\''`)."""
+    return "'" + token.replace("'", "'\\''") + "'"
+
+
+def _shell_expand(argv: tuple[str, ...]) -> str:
+    """Render an argv as a `sh -c` program body that is SAFE BY CONSTRUCTION (WO-C5
+    §9.10). A token is expandable ONLY if it is an ENTIRE validated env reference
+    (`whole_env_ref`) — rendered as a double-quoted `"${NAME}"` so the variable
+    resolves; EVERY other token is single-quoted as an inert literal. There is no
+    `if "$" in token: paste it unquoted` path: a `$` can survive into the shell source
+    solely as a whole validated reference, never as a substitution/partial
+    interpolation pasted verbatim."""
     parts: list[str] = []
     for token in argv:
-        if "$" in token:
-            parts.append(token)
-        elif token == "" or any(ch in token for ch in " \t\n'\"\\"):
-            parts.append("'" + token.replace("'", "'\\''") + "'")
+        name = whole_env_ref(token)
+        if name is not None:
+            parts.append(f'"${{{name}}}"')
         else:
-            parts.append(token)
+            parts.append(_shell_quote_literal(token))
     return " ".join(parts)
 
 
 def _exec_or_shell(argv: tuple[str, ...]) -> list[str]:
-    """A container command as an exec array. If any token needs shell expansion
-    (`$`), wrap in `sh -c 'exec ...'` so the variable resolves; otherwise keep the
-    exec form so no shell is involved."""
-    if any("$" in token for token in argv):
-        return ["sh", "-c", "exec " + _shell_join(argv)]
-    return list(argv)
+    """A container command as an exec array. When NO token is a whole env reference,
+    keep the pure exec form (no shell involved). When a token IS a whole reference,
+    wrap in `sh -c 'exec ...'` whose body is built by `_shell_expand` — literals
+    single-quoted, only the validated whole reference expanded."""
+    if not any(whole_env_ref(token) is not None for token in argv):
+        return list(argv)
+    return ["sh", "-c", "exec " + _shell_expand(argv)]
 
 
 def _run_line(argv: tuple[str, ...]) -> str:
@@ -1068,6 +1080,20 @@ def _emit_dev_server_overlay(spec: ReleaseSpec, ingress: ReleaseService) -> dict
 # ---- the public entrypoints ---------------------------------------------------
 
 
+def _revalidated(spec: ReleaseSpec) -> ReleaseSpec:
+    """Re-run the full `ReleaseSpec` schema validation before emission (WO-C5).
+
+    A `ReleaseSpec` can be built through a NON-validating path — pydantic's
+    `model_copy(update=...)` or `model_construct(...)` — that skips the field and
+    cross-field validators (the same path `serialize_release_spec`'s docstring says
+    must be judged honestly). Re-validating the dumped spec re-applies every guard
+    (safe `root`/`output_dir` paths, argv token hygiene, the restricted health-path
+    grammar, resource url safety), so a smuggled injection is rejected here — BEFORE
+    any Dockerfile / compose byte is produced — rather than lowered into the overlay.
+    A genuinely-valid spec round-trips unchanged."""
+    return ReleaseSpec.model_validate(spec.model_dump(mode="json"))
+
+
 def emit_local_compose(spec: ReleaseSpec) -> dict[str, str]:
     """Lower a `ReleaseSpec` into the complete, secret-free self-host overlay:
     `{path: content}`.
@@ -1082,7 +1108,13 @@ def emit_local_compose(spec: ReleaseSpec) -> dict[str, str]:
     (`_emit_dev_server_overlay`): `wrangler dev` on the workerd dev runtime with a
     persistent, volume-backed local D1 and a secret-writing container entrypoint.
 
-    Raises `ValueError` if the spec has no ingress service."""
+    Raises `ValueError`/`ValidationError` if the spec has no ingress service OR if the
+    spec is not schema-valid (WO-C5: emission RE-VALIDATES first, so a spec built
+    through a non-construction path — `model_copy(update=...)` / `model_construct(...)`
+    — that smuggled a malicious `root` / `output_dir` / command / health path past the
+    field validators is REJECTED before ANY byte is emitted; validation fails BEFORE
+    emission)."""
+    spec = _revalidated(spec)
     ingress = _ingress_service(spec)
     if ingress.runtime is RuntimeStrategy.dev_server:
         return _emit_dev_server_overlay(spec, ingress)

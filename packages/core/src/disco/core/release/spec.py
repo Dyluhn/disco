@@ -44,6 +44,13 @@ from collections.abc import Iterable
 from enum import Enum
 from typing import Annotated
 
+from disco.core.release.command_grammar import (
+    check_health_path,
+    check_persistent_path,
+    check_sqlite_local_url,
+    check_token_hygiene,
+    check_workspace_rel_path,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -86,14 +93,6 @@ _ID_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 # A local volume name (compose/docker style): starts alphanumeric, then a small
 # safe charset.
 _VOLUME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
-
-# An argv element shaped like an inline env assignment (`NAME=...`): an UPPERCASE
-# env-var name immediately followed by `=`. Such a token is the classic
-# `VAR=value command` shell smuggle — a way to slip a secret VALUE through a
-# command list — so it is rejected from every argv (install/build/migrate/start).
-# A legitimate flag like `--max-old-space-size=512` does NOT match (it does not
-# start with an uppercase env-name), nor does `${PORT}` (starts with `$`).
-_ENV_ASSIGN_RE = re.compile(r"^[A-Z_][A-Z0-9_]*=")
 
 # `tree_digest` mirrors `VersionRecord.tree_digest`, which the project store emits
 # as a BARE lowercase sha256 hexdigest (64 hex chars, no algorithm prefix). Pin
@@ -159,20 +158,19 @@ def _validate_id(value: str, *, field: str) -> str:
 
 
 def _validate_argv(value: tuple[str, ...], *, field: str) -> tuple[str, ...]:
-    # An argv-list is a real exec vector (`["node", "server.js"]`), NOT a shell
-    # string — no element may be empty/blank (which would exec an empty arg), and no
-    # element may be shaped like an inline env assignment (`NAME=value`), which would
-    # smuggle a secret VALUE through a command token. The env-assignment message
-    # NEVER echoes the offending token (it could carry the secret value).
+    # An argv-list is a real exec vector (`["node", "server.js"]`), NOT a shell string.
+    # Each element must be a non-empty token (an empty token would exec an empty arg)
+    # AND must pass token hygiene (WO-C5): the ONLY expandable form is an ENTIRE typed
+    # env reference (`${NAME}`); a `$` outside a whole reference, command substitution,
+    # backticks, separators, redirections, quotes, backslashes, control characters, NUL,
+    # Unicode separators, an inline `NAME=value` assignment, or URL userinfo are all
+    # rejected — so a token can never smuggle a separator, substitution, partial
+    # interpolation, or inline credential. Every message is value-free (it could carry
+    # a secret), so a `str(ValidationError)` names the FIELD/rule, never the input.
     for index, arg in enumerate(value):
         if not arg.strip():
-            raise ValueError(f"{field} argv element {index} must be a non-empty token, got {arg!r}")
-        if _ENV_ASSIGN_RE.match(arg):
-            raise ValueError(
-                f"{field} argv element {index} looks like an inline env assignment "
-                "(NAME=...), which could smuggle a secret VALUE through a command token; "
-                "declare env vars by NAME only, never as an argv element"
-            )
+            raise ValueError(f"{field} argv element {index} must be a non-empty token")
+        check_token_hygiene(arg, field=f"{field} argv element {index}")
     return value
 
 
@@ -334,14 +332,22 @@ class ReleaseService(BaseModel):
     @field_validator("root")
     @classmethod
     def _root_is_safe(cls, value: str) -> str:
-        return _reject_traversal(value, field="ReleaseService root")
+        # WO-C5: a workspace-relative POSIX path in a closed safe charset — no absolute
+        # path, traversal, control char, or metacharacter — so a `root` can never emit
+        # an absolute/traversing `COPY` source or split a `COPY` line into a new
+        # `RUN`/`ADD`/`COPY --from` Dockerfile instruction.
+        check_workspace_rel_path(value, field="ReleaseService root")
+        return value
 
     @field_validator("lockfile", "output_dir")
     @classmethod
     def _optional_path_is_safe(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return _reject_traversal(value, field="ReleaseService path")
+        # WO-C5: same workspace-relative POSIX guard as `root` — a static `output_dir`
+        # can never split the two-stage `COPY --from=build /app/<output_dir>/` line.
+        check_workspace_rel_path(value, field="ReleaseService path")
+        return value
 
     @field_validator("install_cmd", "build_cmd", "migrate_cmd", "start_cmd")
     @classmethod
@@ -358,9 +364,9 @@ class ReleaseService(BaseModel):
     def _health_path_is_valid(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if not value.startswith("/"):
-            raise ValueError(f"ReleaseService health_path must start with '/', got {value!r}")
-        return _reject_traversal(value, field="ReleaseService health_path")
+        # WO-C5: a restricted HTTP-path grammar (data, not source) — see check_health_path.
+        check_health_path(value, field="ReleaseService health_path")
+        return value
 
     @field_validator("depends_on")
     @classmethod
@@ -447,9 +453,10 @@ class ResourceDecl(BaseModel):
     @field_validator("persistent_path")
     @classmethod
     def _persistent_path_is_safe(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("ResourceDecl persistent_path must be non-empty")
-        return _reject_traversal(value, field="ResourceDecl persistent_path")
+        # WO-C5: a mount/volume path in a closed safe charset — no NUL, traversal,
+        # control character, or shell metacharacter.
+        check_persistent_path(value, field="ResourceDecl persistent_path")
+        return value
 
     @field_validator("consumers")
     @classmethod
@@ -463,6 +470,21 @@ class ResourceDecl(BaseModel):
     @classmethod
     def _migrate_cmd_is_argv(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         return _validate_argv(value, field="ResourceDecl migrate_cmd")
+
+    @model_validator(mode="after")
+    def _local_url_is_safe(self) -> ResourceDecl:
+        # WO-C5 §9.8: a sqlite resource's LOCAL url must be a credential-free `file:`
+        # URL with an absolute POSIX path CONSISTENT with `persistent_path`. Any
+        # authority/userinfo, query, fragment, non-`file` scheme, relative path, or
+        # persistent-path mismatch is rejected. Cross-field (url ⊕ persistent_path), so
+        # it is a model validator, and value-free so a rejected url never leaks.
+        if self.kind is ResourceKind.sqlite:
+            check_sqlite_local_url(
+                self.profiles.local.url,
+                self.persistent_path,
+                field="ResourceDecl local url",
+            )
+        return self
 
 
 # ---- detector provenance ------------------------------------------------------
@@ -575,9 +597,9 @@ class ReleaseIntent(BaseModel):
     def _health_path_is_valid(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if not value.startswith("/"):
-            raise ValueError(f"ReleaseIntent health_path must start with '/', got {value!r}")
-        return _reject_traversal(value, field="ReleaseIntent health_path")
+        # WO-C5: a restricted HTTP-path grammar (data, not source) — see check_health_path.
+        check_health_path(value, field="ReleaseIntent health_path")
+        return value
 
     @field_validator("required_env")
     @classmethod
