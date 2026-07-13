@@ -16,8 +16,11 @@ immutability, `tree_digest` shape mirroring `store.VersionRecord`).
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from disco.core.release import (
+    RELEASE_SPEC_SCHEMA_VERSION,
     CloudResourceProfile,
     DetectorProvenance,
     EnvScope,
@@ -372,3 +375,88 @@ def test_secret_env_records_name_only() -> None:
     assert "value" not in dumped
     assert dumped["name"] == "SESSION_SECRET"
     assert dumped["secret"] == SecretClass.secret
+
+
+# ---- WO-C7: per-env consumer topology + the schema-version bump / v1 read policy ---
+
+
+def _worker_service() -> ReleaseService:
+    return ReleaseService(
+        id="worker",
+        role=ServiceRole.worker,
+        runtime=RuntimeStrategy.node,
+        start_cmd=("node", "worker.js"),
+    )
+
+
+def test_schema_version_bumped_to_v2_for_env_consumer_topology() -> None:
+    # WO-C7 criterion 11: adding the per-env `consumers` topology bumps the release
+    # schema version. A freshly-built spec self-identifies as v2.
+    assert RELEASE_SPEC_SCHEMA_VERSION == 2
+    assert _valid_spec().schema_version == 2
+
+
+def test_env_consumers_scope_is_optional_and_omitted_when_absent() -> None:
+    # A var that declares no consumer scope serializes to the v1 shape (no `consumers`
+    # key) — the field is absent, not an empty list — so a v1 reader is undisturbed.
+    plain = EnvVarDecl(name="FEATURE_FLAG", scope=EnvScope.runtime)
+    assert plain.consumers is None
+    assert "consumers" not in plain.model_dump()
+    scoped = EnvVarDecl(name="SESSION_SECRET", scope=EnvScope.runtime, consumers=("web",))
+    assert scoped.model_dump()["consumers"] == ("web",)
+
+
+def test_v1_single_service_unbound_env_reads_under_sole_ingress_default() -> None:
+    # The explicit v1 read policy: a persisted v1 spec (schema_version=1) carries no
+    # per-env consumers; a SINGLE-service spec's unbound, consumer-less var reads
+    # under the documented sole-ingress default and is ACCEPTED — a genuine v1 spec
+    # (always single-service) still loads.
+    payload = _valid_spec().model_dump(mode="json")
+    payload["schema_version"] = 1
+    payload["env"] = [{"name": "FEATURE_FLAG", "scope": "runtime"}]
+    payload["resources"] = []
+    spec = ReleaseSpec.model_validate(payload)
+    assert spec.schema_version == 1
+    assert {var.name for var in spec.env} == {"FEATURE_FLAG"}
+
+
+def test_v1_multi_service_unbound_env_is_rejected_not_treated_as_global() -> None:
+    # WO-C7 criterion 11: silently treating a MISSING consumer list as global in a
+    # multi-service v1 spec is FORBIDDEN. A v1 (schema_version=1) multi-service spec
+    # whose unbound var declares no consumers is REJECTED — never fanned out.
+    payload = _valid_spec().model_dump(mode="json")
+    payload["schema_version"] = 1
+    payload["services"] = [
+        _ingress_service().model_dump(mode="json"),
+        _worker_service().model_dump(mode="json"),
+    ]
+    payload["env"] = [{"name": "FEATURE_FLAG", "scope": "runtime"}]
+    payload["resources"] = []
+    with pytest.raises(ValidationError, match="implicit fan-out is forbidden"):
+        ReleaseSpec.model_validate(payload)
+
+
+def test_load_release_spec_rejects_newer_schema_version() -> None:
+    # The version gate: a payload declaring a schema_version NEWER than this build
+    # supports is refused rather than mis-read under the older schema.
+    payload = _valid_spec().model_dump(mode="json")
+    payload["schema_version"] = RELEASE_SPEC_SCHEMA_VERSION + 1
+    with pytest.raises(ValueError, match="newer than this build supports"):
+        load_release_spec(json.dumps(payload))
+
+
+def test_release_spec_round_trips_a_v2_env_consumer_scope() -> None:
+    # A spec carrying a per-env consumer scope survives serialize -> load unchanged.
+    scoped = _valid_spec(
+        env=(
+            EnvVarDecl(
+                name="SESSION_SECRET",
+                scope=EnvScope.runtime,
+                secret=SecretClass.secret,
+                consumers=("web",),
+            ),
+        ),
+    )
+    reloaded = load_release_spec(serialize_release_spec(scoped))
+    assert reloaded == scoped
+    assert reloaded.env[0].consumers == ("web",)

@@ -67,6 +67,7 @@ from disco.core.release.spec import (
     RuntimeStrategy,
     SecretClass,
     ServiceRole,
+    local_mount_target,
     serialize_release_spec,
 )
 from pydantic import BaseModel, ConfigDict
@@ -283,32 +284,33 @@ def _copy_line(root: str, dest: str) -> str:
 # ---- resource / env lowering --------------------------------------------------
 
 
-def _strip_file_scheme(url: str) -> str:
-    return url[len("file:") :] if url.startswith("file:") else url
-
-
 def _mount_dir(resource: ResourceDecl) -> str:
     """The directory a resource's named volume mounts at — the parent dir of its
-    persistent path (a SQLite `file:/data/app.db` → `/data`)."""
-    path = _strip_file_scheme(resource.profiles.local.url) or resource.persistent_path
-    path = path.rstrip("/")
-    slash = path.rfind("/")
-    if slash <= 0:
-        return "/data"
-    return path[:slash]
+    persistent path (a SQLite `file:/data/app.db` → `/data`). Delegates to the
+    SHARED `spec.local_mount_target` so the emitter and the schema's
+    duplicate-mount-target validator can never disagree (WO-C7)."""
+    return local_mount_target(resource)
 
 
 def _resource_volume_names(spec: ReleaseSpec) -> dict[str, str]:
-    """Map each resource id to a UNIQUE compose volume name.
+    """Map each resource id to a UNIQUE compose volume name, ORDER-INDEPENDENTLY
+    (WO-C7 §11.9).
 
     A named volume per distinct persistent path is load-bearing: two resources that
     (legally, per the schema) declare the SAME `local.volume` name would otherwise
     collapse to one volume mounted at two locations and silently clobber each other's
     state. On a collision the declared name is disambiguated deterministically by
-    suffixing, so distinct persistent paths always get distinct volumes."""
+    suffixing.
+
+    The assignment is a pure function of the resource SET, not its declaration
+    order: resources are processed in `persistent_path` order (a total order — the
+    schema rejects duplicate persistent paths), so a given persistent path always
+    receives the SAME volume identity regardless of the order the resources were
+    declared in. A deployed service therefore never binds to a different volume just
+    because the spec listed its resources in another order."""
     assigned: dict[str, str] = {}
     used: set[str] = set()
-    for resource in spec.resources:
+    for resource in sorted(spec.resources, key=lambda r: r.persistent_path):
         base = resource.profiles.local.volume
         name = base
         suffix = 2
@@ -320,13 +322,29 @@ def _resource_volume_names(spec: ReleaseSpec) -> dict[str, str]:
     return assigned
 
 
-def _resource_mounts(spec: ReleaseSpec, volume_names: dict[str, str]) -> list[str]:
-    """`<volume>:<dir>` mount entries, one per resource, in spec order (each resource
-    using its UNIQUE assigned volume name)."""
-    mounts: list[str] = []
+def _resource_consumers(spec: ReleaseSpec, resource_id: str) -> tuple[str, ...]:
+    """The consumer service ids of a resource (referential integrity guaranteed by
+    the `ReleaseSpec` validators). Empty tuple if the id is unknown (unreachable via
+    a validated spec)."""
     for resource in spec.resources:
-        mounts.append(f"{volume_names[resource.id]}:{_mount_dir(resource)}")
-    return mounts
+        if resource.id == resource_id:
+            return resource.consumers
+    return ()
+
+
+def _service_mounts(
+    spec: ReleaseSpec, service_id: str, volume_names: dict[str, str]
+) -> list[str]:
+    """The `<volume>:<dir>` mount entries for ONE service — ONLY the resources that
+    declare it a consumer (WO-C7 §11.1/§11.2). Sorted by mount target (a total order
+    — the schema rejects duplicate targets) for a deterministic, order-independent
+    emission."""
+    entries: list[tuple[str, str]] = []
+    for resource in spec.resources:
+        if service_id in resource.consumers:
+            entries.append((local_mount_target(resource), volume_names[resource.id]))
+    entries.sort()
+    return [f"{volume}:{target}" for target, volume in entries]
 
 
 def _bound_literal(spec: ReleaseSpec, binding: str) -> str:
@@ -340,20 +358,48 @@ def _bound_literal(spec: ReleaseSpec, binding: str) -> str:
     return ""
 
 
-def _scope_env(spec: ReleaseSpec, scope: EnvScope) -> dict[str, str]:
-    """The env map for a scope: resource-bound vars as literal values, required
-    vars as `${VAR:?...}` guards, optional vars as bare `${VAR}`. Sorted by NAME
-    for a deterministic emission."""
+def _resolved_runtime_value(spec: ReleaseSpec, var: EnvVarDecl) -> str:
+    """The value a runtime env var resolves to in a service `environment`: a
+    resource-bound var as its literal local URL, a required host var as a
+    `${VAR:?...}` guard, an optional host var as a bare `${VAR}`."""
+    if var.binding is not None:
+        return _bound_literal(spec, var.binding)
+    if var.required:
+        return _required_guard(var.name)
+    return f"${{{var.name}}}"
+
+
+def _env_reaches_service(
+    spec: ReleaseSpec, var: EnvVarDecl, service: ReleaseService, *, single_service: bool
+) -> bool:
+    """Whether a RUNTIME env var is injected into `service` under the WO-C7 consumer
+    topology:
+
+    * a BOUND var reaches exactly the CONSUMERS of the resource it binds;
+    * an unbound var with an explicit `consumers` scope reaches exactly those services;
+    * an unbound var with NO declared consumers reaches the sole service of a
+      SINGLE-service spec (the documented default) and NO service otherwise — a
+      multi-service spec with such a var is rejected at validation, so this never
+      fans out.
+    """
+    if var.binding is not None:
+        return service.id in _resource_consumers(spec, var.binding)
+    if var.consumers is not None:
+        return service.id in var.consumers
+    return single_service
+
+
+def _service_runtime_env(spec: ReleaseSpec, service: ReleaseService) -> dict[str, str]:
+    """The RUNTIME env map for ONE service — only the vars the consumer topology
+    routes to it (WO-C7). Sorted by NAME for a deterministic emission."""
+    single_service = len(spec.services) == 1
     values: dict[str, str] = {}
     for var in spec.env:
-        if var.scope is not scope:
+        if var.scope is not EnvScope.runtime:
             continue
-        if var.binding is not None:
-            values[var.name] = _bound_literal(spec, var.binding)
-        elif var.required:
-            values[var.name] = _required_guard(var.name)
-        else:
-            values[var.name] = f"${{{var.name}}}"
+        if not _env_reaches_service(spec, var, service, single_service=single_service):
+            continue
+        values[var.name] = _resolved_runtime_value(spec, var)
     return {name: values[name] for name in sorted(values)}
 
 
@@ -387,12 +433,22 @@ def _build_arg_names(spec: ReleaseSpec) -> list[str]:
     )
 
 
-def _migrate_env(spec: ReleaseSpec) -> dict[str, str]:
-    """The one-shot migrate service reads only the resource-bound values (the DB
-    URL) it needs to apply schema — never a host secret guard."""
+def _migrate_env(
+    spec: ReleaseSpec, ingress: ReleaseService, migrated: ResourceDecl | None
+) -> dict[str, str]:
+    """The env the one-shot migrate service reads: ONLY the resource-bound value(s)
+    (the DB URL) of the resource it migrates — never a host secret guard, and never
+    an UNRELATED resource's binding (WO-C7 §11.3). A SERVICE-level ingress migration
+    (`migrated is None`) reads the bound values of the resources the ingress
+    consumes. Sorted by NAME for a deterministic emission."""
     values: dict[str, str] = {}
     for var in spec.env:
-        if var.scope is EnvScope.runtime and var.binding is not None:
+        if var.scope is not EnvScope.runtime or var.binding is None:
+            continue
+        if migrated is not None:
+            if var.binding == migrated.id:
+                values[var.name] = _bound_literal(spec, var.binding)
+        elif ingress.id in _resource_consumers(spec, var.binding):
             values[var.name] = _bound_literal(spec, var.binding)
     return {name: values[name] for name in sorted(values)}
 
@@ -400,16 +456,42 @@ def _migrate_env(spec: ReleaseSpec) -> dict[str, str]:
 # ---- migrate command discovery ------------------------------------------------
 
 
-def _migrate_argv(spec: ReleaseSpec, ingress: ReleaseService) -> tuple[str, ...]:
-    """The migrate command for the one-shot service, or `()` if none is declared.
-    Precedence: an explicit service `migrate_cmd`, else the first resource that
-    declares one."""
+def _migrate_source(
+    spec: ReleaseSpec, ingress: ReleaseService
+) -> tuple[tuple[str, ...], ResourceDecl | None]:
+    """The migrate command for the one-shot service AND the specific resource it
+    migrates, or `((), None)` if none is declared.
+
+    Precedence: an explicit INGRESS `migrate_cmd` is a SERVICE-level migration not
+    tied to a single resource (`resource=None`); otherwise the migration belongs to
+    the resource that declares a `migrate_cmd`. Among such resources the one with the
+    smallest `persistent_path` is chosen, so the pick is ORDER-INDEPENDENT (WO-C7
+    §11.9) — normally there is exactly one migrate-bearing resource."""
+    # O2 (carried, out of C7 scope — baseline behavior, no isolation impact): a
+    # NON-ingress service's own `migrate_cmd` is intentionally IGNORED here; only the
+    # ingress-level command and resource-level commands drive the one-shot migrate
+    # service. A worker that declares its own migrate step is not wired a migration.
     if ingress.migrate_cmd:
-        return ingress.migrate_cmd
-    for resource in spec.resources:
+        return ingress.migrate_cmd, None
+    for resource in sorted(spec.resources, key=lambda r: r.persistent_path):
         if resource.migrate_cmd:
-            return resource.migrate_cmd
-    return ()
+            return resource.migrate_cmd, resource
+    return (), None
+
+
+def _migrate_mounts(
+    spec: ReleaseSpec,
+    ingress: ReleaseService,
+    migrated: ResourceDecl | None,
+    volume_names: dict[str, str],
+) -> list[str]:
+    """The mounts for the one-shot migrate service — ONLY the resource it migrates
+    (WO-C7 §11.3), never an unrelated resource. A SERVICE-level ingress migration
+    (`migrated is None`) mounts the resources the INGRESS consumes (it runs as the
+    ingress image and legitimately owns that state)."""
+    if migrated is not None:
+        return [f"{volume_names[migrated.id]}:{local_mount_target(migrated)}"]
+    return _service_mounts(spec, ingress.id, volume_names)
 
 
 def _migrate_service_name(spec: ReleaseSpec) -> str:
@@ -483,7 +565,7 @@ def _service_block(
     *,
     multi: bool,
     migrate_name: str | None,
-    mounts: list[str],
+    volume_names: dict[str, str],
 ) -> dict[str, _Yaml]:
     is_ingress = service.role is ServiceRole.ingress
     block: dict[str, _Yaml] = {
@@ -503,8 +585,11 @@ def _service_block(
     if depends:
         block["depends_on"] = {name: depends[name] for name in sorted(depends)}
 
+    # WO-C7: inject ONLY the runtime env the consumer topology routes to THIS service
+    # (a bound var reaches its resource's consumers; an unbound var reaches its
+    # declared consumers, or the sole ingress of a single-service spec).
     environment: dict[str, _Yaml] = {service.port_env: str(_CONTAINER_PORT)}
-    for name, value in _scope_env(spec, EnvScope.runtime).items():
+    for name, value in _service_runtime_env(spec, service).items():
         environment[name] = value
     block["environment"] = {name: environment[name] for name in sorted(environment)}
 
@@ -522,8 +607,10 @@ def _service_block(
     if is_ingress:
         block["ports"] = [f"127.0.0.1:${{{_HOST_PORT_VAR}:-{_CONTAINER_PORT}}}:{_CONTAINER_PORT}"]
 
+    # WO-C7: mount ONLY the resources that declare this service a consumer.
+    mounts = _service_mounts(spec, service.id, volume_names)
     if mounts:
-        block["volumes"] = list(mounts)
+        block["volumes"] = mounts
 
     if is_ingress or service.health_path is not None:
         block["healthcheck"] = _healthcheck_block(service)
@@ -566,30 +653,29 @@ def _compose_document(spec: ReleaseSpec) -> dict[str, _Yaml]:
     services = list(spec.services)
     multi = len(services) > 1
     volume_names = _resource_volume_names(spec)
-    mounts = _resource_mounts(spec, volume_names)
 
-    migrate_argv = _migrate_argv(spec, ingress)
+    migrate_argv, migrated_resource = _migrate_source(spec, ingress)
     migrate_name = _migrate_service_name(spec) if migrate_argv else None
 
     service_blocks: dict[str, _Yaml] = {}
     for service in sorted(services, key=lambda s: s.id):
         service_blocks[service.id] = _service_block(
-            spec, service, multi=multi, migrate_name=migrate_name, mounts=mounts
+            spec, service, multi=multi, migrate_name=migrate_name, volume_names=volume_names
         )
     if migrate_name is not None:
         service_blocks[migrate_name] = _migrate_block(
             ingress,
             multi=multi,
             argv=migrate_argv,
-            env=_migrate_env(spec),
-            mounts=mounts,
+            env=_migrate_env(spec, ingress, migrated_resource),
+            mounts=_migrate_mounts(spec, ingress, migrated_resource, volume_names),
         )
 
     document: dict[str, _Yaml] = {"services": service_blocks}
     if spec.resources:
-        volumes: dict[str, _Yaml] = {}
-        for resource in spec.resources:
-            volumes[volume_names[resource.id]] = {}
+        # Exactly one named volume per accepted resource persistent path (WO-C7
+        # §11.5), emitted in NAME order so the document is order-independent.
+        volumes: dict[str, _Yaml] = {name: {} for name in sorted(set(volume_names.values()))}
         document["volumes"] = volumes
     return document
 
@@ -1018,8 +1104,11 @@ def _dev_server_compose_document(spec: ReleaseSpec, ingress: ReleaseService) -> 
         "depends_on": {init_name: {"condition": "service_completed_successfully"}},
         "command": app_argv,
     }
+    # AppKit is single-service (the sole `web`/dev_server ingress), so the consumer
+    # topology routes every runtime env var to it exactly as before (WO-C7 keeps
+    # this byte-deterministic — criterion 10).
     environment: dict[str, _Yaml] = {}
-    for name, value in _scope_env(spec, EnvScope.runtime).items():
+    for name, value in _service_runtime_env(spec, ingress).items():
         environment[name] = value
     if environment:
         app_block["environment"] = {name: environment[name] for name in sorted(environment)}
