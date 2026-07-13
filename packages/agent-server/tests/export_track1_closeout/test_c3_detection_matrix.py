@@ -207,6 +207,24 @@ _NEG_RUNTIME_CONFLICT: dict[str, bytes] = {
     "requirements.txt": b"fastapi\n",
     "main.py": b"from fastapi import FastAPI\n\napp = FastAPI()\n",
 }
+# W1 (§7 crit 3) — an app-FACTORY FastAPI: the `app` object is a FUNCTION-LOCAL created
+# inside `create_app()`, NOT a module-scope attribute. There is no `main:app` at module
+# scope, so a detector that emits `uvicorn main:app` fabricates a non-existent entrypoint
+# and the bundle fails to boot. This must fail closed to `entrypoint_unresolved` (never
+# a fabricated module). RED on the intermediate fix (the `^\s*app` regex matched the
+# INDENTED factory-local `app`); GREEN once the app-scope regex is column-0-anchored.
+_NEG_FACTORY_FASTAPI: dict[str, bytes] = {
+    "requirements.txt": b"fastapi\nuvicorn\n",
+    "main.py": (
+        b"from fastapi import FastAPI\n\n\n"
+        b"def create_app() -> FastAPI:\n"
+        b"    app = FastAPI()\n\n"
+        b"    @app.get('/')\n"
+        b"    def root() -> dict[str, str]:\n"
+        b"        return {'status': 'ok'}\n\n"
+        b"    return app\n"
+    ),
+}
 
 # The two distinctive fragments of the detector's competing-runtime evidence
 # strings (`detect._runtime_conflict_result`). The API must surface BOTH so an
@@ -233,6 +251,67 @@ _NEGATIVE_MATRIX: list[tuple[str, dict[str, bytes], ReleaseIntent | None, str]] 
     ("build_unknown_outdir", _NEG_BUILD_UNKNOWN_OUTDIR, None, "output_dir_unresolved"),
     ("health_no_route", _NEG_HEALTH_FILES, _NEG_HEALTH_INTENT, "health_path_unresolved"),
     ("runtime_conflict", _NEG_RUNTIME_CONFLICT, None, "runtime_conflict"),
+    # W1 (§7 crit 3) — an app-factory FastAPI must not be fabricated into `main:app`.
+    ("fastapi_app_factory", _NEG_FACTORY_FASTAPI, None, "entrypoint_unresolved"),
+]
+
+# ---- W2 (§7 crit 4) — unsupported toolchain heads must NOT node-fall-back ----------
+# Each declares a start command whose interpreter is a REAL runtime the neutral base
+# images do not run (ruby / go / php / caddy / a bare relative executable). Detection
+# must fail closed to `toolchain_unsupported` — NEVER silently treat it as a Node
+# candidate (§15: "no support for a toolchain merely because its executable name can be
+# guessed"). A minimal source file accompanies each so the workspace is a real tree.
+# (fixture_id, start_argv, entry_file, entry_bytes)
+_UNSUPPORTED_TOOLCHAIN_MATRIX: list[tuple[str, tuple[str, ...], str, bytes]] = [
+    ("ruby", ("ruby", "app.rb"), "app.rb", b"require 'webrick'\nputs 'hi'\n"),
+    ("go", ("go", "run", "main.go"), "main.go", b"package main\nfunc main() {}\n"),
+    ("php", ("php", "-S", "0.0.0.0:8080", "index.php"), "index.php", b"<?php echo 'hi';\n"),
+    ("caddy", ("caddy", "run"), "Caddyfile", b':8080\nrespond "hi"\n'),
+    ("bare_executable", ("./server",), "server", b"#!/bin/sh\nexec ./app\n"),
+]
+
+# ---- W3/W4/W5 — a decoy inside a COMMENT must not satisfy the contract --------------
+# Each ships a workspace whose ONLY occurrence of the load-bearing literal (a Vite
+# `outDir`, a `process.env.PORT` bind, or a health route) lives inside a COMMENT, while
+# the real code is broken/absent. A lexical scan that reads comment text is fooled into
+# a false candidate; stripping comments before the literal check fails it closed.
+# (fixture_id, files, intent, expected_blocker_code)
+_COMMENT_DECOY_PORT: dict[str, bytes] = {
+    "package.json": b'{"name":"svc","scripts":{"start":"node server.js"}}',
+    "package-lock.json": b'{"lockfileVersion":3,"name":"svc"}',
+    # binds a LITERAL port; the only `process.env.PORT` is a decoy in the comment.
+    "server.js": (
+        b"// this server should read process.env.PORT (it does not)\n"
+        b"require('http').createServer((_q,r)=>r.end('ok')).listen(3000);\n"
+    ),
+}
+_COMMENT_DECOY_OUTDIR: dict[str, bytes] = {
+    "index.html": b"<!doctype html><html><body></body></html>\n",
+    "package.json": b'{"name":"spa","scripts":{"build":"vite build"}}',
+    "package-lock.json": b'{"lockfileVersion":3,"name":"spa"}',
+    # the real outDir is DYNAMIC; the only literal `outDir: 'dist'` is a decoy comment.
+    "vite.config.js": (
+        b"// outDir: 'dist'\nexport default { build: { outDir: process.env.OUT_DIR } };\n"
+    ),
+}
+_COMMENT_DECOY_HEALTH: dict[str, bytes] = {
+    "package.json": b'{"name":"svc","scripts":{"start":"node server.js"}}',
+    "package-lock.json": b'{"lockfileVersion":3,"name":"svc"}',
+    # a catch-all server with NO real route; the only `'/healthz'` is a decoy comment.
+    "server.js": (
+        b"// exposes '/healthz' for probes (it does not)\n"
+        b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"
+    ),
+}
+_COMMENT_DECOY_MATRIX: list[tuple[str, dict[str, bytes], ReleaseIntent | None, str]] = [
+    ("comment_decoy_port", _COMMENT_DECOY_PORT, None, "port_contract_unresolved"),
+    ("comment_decoy_outdir", _COMMENT_DECOY_OUTDIR, None, "output_dir_unresolved"),
+    (
+        "comment_decoy_health",
+        _COMMENT_DECOY_HEALTH,
+        ReleaseIntent(start_cmd=("node", "server.js"), health_path="/healthz"),
+        "health_path_unresolved",
+    ),
 ]
 
 # The whole matrix (positive + negative) for the typed-result determinism sweep.
@@ -642,6 +721,105 @@ def test_negative_matrix_fails_closed_with_exact_blocker(
             f"neither verbatim (looked for {_NODE_EVIDENCE_FRAGMENT!r} and "
             f"{_PY_EVIDENCE_FRAGMENT!r})."
         )
+
+
+# ===========================================================================
+# W2 (§7 crit 4 / §15) — an unsupported toolchain head must FAIL CLOSED to
+# `toolchain_unsupported`, never node-fall-back into a Node candidate. RED on the
+# intermediate fix (a blocklist let ruby/go/php/caddy/`./server` reach the node
+# fallback and become a self-hostable candidate); GREEN once toolchain resolution is
+# an ALLOWLIST of genuinely-supported heads.
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "fixture_id,start_argv,entry_file,entry_bytes",
+    _UNSUPPORTED_TOOLCHAIN_MATRIX,
+    ids=[row[0] for row in _UNSUPPORTED_TOOLCHAIN_MATRIX],
+)
+def test_unsupported_toolchain_head_fails_closed(
+    fixture_id: str,
+    start_argv: tuple[str, ...],
+    entry_file: str,
+    entry_bytes: bytes,
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C3 §7 crit 4 — a declared start on an unsupported runtime fails closed.
+
+    A typed intent whose start head is a real-but-unsupported runtime
+    (`ruby`/`go`/`php`/`caddy`/a bare `./server`) must return `needs_review`,
+    `self_host:false`, NO overlay, and the EXACT `toolchain_unsupported` code — the
+    detector must NEVER fall back to Node for an executable it merely recognizes by
+    name (§15)."""
+    cid = _cid(closeout_name, f"conv_c3tc{fixture_id[:4]}")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    intent = ReleaseIntent(start_cmd=start_argv)
+    _seed_project(
+        ps, _store, cid, _cid(closeout_name, "proj"), {entry_file: entry_bytes}, intent=intent
+    )
+
+    body = _release(client, cid)
+    assert isinstance(body, dict)
+    assert body["assessment"] == "needs_review", (
+        f"[{fixture_id}] an unsupported toolchain must fail closed; saw {body['assessment']!r} "
+        "(a Node fallback would over-accept it as a self-hostable candidate)."
+    )
+    assert body["self_host"] is False, f"[{fixture_id}] self_host must be False."
+    assert body["spec_digest"] is None, f"[{fixture_id}] no self-host spec_digest may bind."
+    assert _download_overlay(client, cid) == frozenset(), f"[{fixture_id}] no overlay may ship."
+    assert "toolchain_unsupported" in _blocker_codes(body), (
+        f"[{fixture_id}] expected the exact `toolchain_unsupported` code, saw "
+        f"{sorted(_blocker_codes(body))}."
+    )
+
+
+# ===========================================================================
+# W3/W4/W5 — a load-bearing literal that exists ONLY inside a comment must not
+# satisfy the contract. RED on the intermediate fix (the lexical scans read comment
+# text, so a decoy `// outDir: 'dist'` / `process.env.PORT` / `'/healthz'` produced a
+# false candidate); GREEN once comments are stripped before the literal checks.
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "fixture_id,files,intent,expected_code",
+    _COMMENT_DECOY_MATRIX,
+    ids=[row[0] for row in _COMMENT_DECOY_MATRIX],
+)
+def test_comment_decoy_does_not_satisfy_contract(
+    fixture_id: str,
+    files: dict[str, bytes],
+    intent: ReleaseIntent | None,
+    expected_code: str,
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C3 §7 (fail-closed literals) — a decoy inside a comment is not evidence.
+
+    A workspace whose ONLY `outDir` literal / `process.env.PORT` bind / health route
+    lives inside a COMMENT (with the real code broken or absent) must fail closed with
+    the exact blocker code — a lexical scan that trusts comment text would falsely
+    accept it as a self-hostable candidate."""
+    cid = _cid(closeout_name, f"conv_c3cd{fixture_id[-4:]}")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), files, intent=intent)
+
+    body = _release(client, cid)
+    assert isinstance(body, dict)
+    assert body["assessment"] == "needs_review", (
+        f"[{fixture_id}] a comment-only literal must fail closed; saw {body['assessment']!r}."
+    )
+    assert body["self_host"] is False, f"[{fixture_id}] self_host must be False."
+    assert _download_overlay(client, cid) == frozenset(), f"[{fixture_id}] no overlay may ship."
+    assert expected_code in _blocker_codes(body), (
+        f"[{fixture_id}] expected the exact {expected_code!r} code, saw "
+        f"{sorted(_blocker_codes(body))}."
+    )
 
 
 # ===========================================================================

@@ -163,11 +163,24 @@ _PY_TOKENS = frozenset(
     {"python", "python3", "uvicorn", "gunicorn", "hypercorn", "flask", "fastapi", "poetry", "uv"}
 )
 
-# Start-command heads NOT present on the neutral base images: an alternate JS
-# runtime (`bun`/`deno`) or a package-manager RUNNER the base lacks (`uv run`,
-# `poetry run`). A declared start through one of these fails closed to
-# `toolchain_unsupported` — the base cannot run it without the owner vendoring it.
-_UNSUPPORTED_TOOLCHAIN_HEADS = frozenset({"bun", "deno", "poetry", "uv"})
+# Genuinely-SUPPORTED start-command heads — an ALLOWLIST, not a blocklist. The
+# neutral base images run exactly these; a declared start whose head is NOT here fails
+# closed to `toolchain_unsupported` (§7 crit 4 / §15: NO node-fallback for an arbitrary
+# executable merely because its name can be guessed — ruby/go/php/caddy/`./server`/bun/
+# deno/uv/poetry are all rejected). Node base: the npm-family launchers. Python base: a
+# bare interpreter (matched by the `python` prefix, e.g. `python3.12`) plus the
+# ASGI/WSGI servers the image can install.
+_SUPPORTED_NODE_HEADS = frozenset({"node", "npm", "npx", "yarn", "pnpm"})
+_SUPPORTED_PY_SERVER_HEADS = frozenset({"uvicorn", "gunicorn", "hypercorn"})
+
+
+def _is_supported_toolchain_head(head: str) -> bool:
+    """Whether a start-command interpreter head is a runtime the base images run."""
+    return (
+        head in _SUPPORTED_NODE_HEADS
+        or head in _SUPPORTED_PY_SERVER_HEADS
+        or head.startswith("python")
+    )
 
 # Non-sqlite database url schemes — recognized ONLY to fail closed on them.
 _UNKNOWN_DB_SCHEMES = (
@@ -217,10 +230,14 @@ _JS_ROOT_ROUTE_RE = re.compile(r"""\.(?:get|use|all|route)\(\s*['"]/['"]""")
 _JS_CATCHALL_RE = re.compile(r"createServer\s*\(")
 _PY_ROOT_GET_RE = re.compile(r"""@\w+\.get\(\s*['"]/['"]""")
 
-# A module-level FastAPI (ASGI) app assignment in a root module — the only python
-# shape the detector can auto-start with `uvicorn <module>:app`. A Flask (WSGI) app
-# or a nested/absent entrypoint is NOT auto-startable and fails closed.
-_FASTAPI_APP_RE = re.compile(r"(?m)^\s*app\s*=\s*FastAPI\b")
+# A MODULE-SCOPE FastAPI (ASGI) app assignment in a root module — the only python
+# shape the detector can auto-start with `uvicorn <module>:app`. Anchored at column 0
+# (no leading indentation): an INDENTED `app = FastAPI()` is a function-local (an
+# app-factory like `def create_app(): app = FastAPI()`), which does NOT exist at module
+# scope — emitting `main:app` for it would fabricate a non-existent entrypoint. A Flask
+# (WSGI) app, an app-factory, or a nested/absent entrypoint is NOT auto-startable and
+# fails closed (`entrypoint_unresolved`), never a fabricated module.
+_FASTAPI_APP_RE = re.compile(r"(?m)^app\s*=\s*FastAPI\b")
 
 # CONVENTIONAL health-probe endpoints the detector "infers" — the well-known paths a
 # reader would ASSUME a service exposes. When an intent declares one of these AND the
@@ -385,6 +402,28 @@ def _file_text(files: Mapping[str, str | bytes], target: str) -> str | None:
     return None
 
 
+def _strip_comments(text: str) -> str:
+    """Best-effort removal of JS block/line comments (`/* */`, `//`) and Python line
+    comments (`#`) for the fail-open-prone LITERAL checks (the `$PORT` bind, the Vite
+    `outDir`, the health route). A decoy planted in a comment (`// outDir: 'dist'`,
+    `# process.env.PORT`, `// '/healthz'`) then no longer satisfies the contract.
+
+    Used ONLY for those literal scans — never for the database / framework / env-name
+    scans. Comment lexing is approximate (it does not track string context), but that
+    is safe HERE: a mistaken strip only removes a would-be literal, making the check
+    MORE conservative (fail-closed), never fail-open."""
+    without_block = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    lines: list[str] = []
+    for line in without_block.splitlines():
+        cut = len(line)
+        for marker in ("//", "#"):
+            idx = line.find(marker)
+            if idx != -1:
+                cut = min(cut, idx)
+        lines.append(line[:cut])
+    return "\n".join(lines)
+
+
 def _norm(path: str) -> str:
     """Normalize a workspace path: trim, drop a leading `./` and trailing `/`."""
     p = path.strip()
@@ -489,7 +528,8 @@ def _js_references_port(source: str, port_env: str) -> bool:
         r"process\.env(?:\." + re.escape(port_env) + r"\b"
         r"|\[\s*['\"]" + re.escape(port_env) + r"['\"]\s*\])"
     )
-    return pattern.search(source) is not None
+    # Strip comments first: a decoy `// … process.env.PORT` must not satisfy the bind.
+    return pattern.search(_strip_comments(source)) is not None
 
 
 def _js_serves_root(source: str) -> bool:
@@ -658,7 +698,9 @@ def _static_output_dir(files: Mapping[str, str | bytes], build_script: str) -> s
         return None  # unknown bundler — output dir not statically knowable
     for path in files:
         if _basename(path) in _VITE_CONFIG_NAMES:
-            text = _scan_text(files[path])
+            # Strip comments first: a decoy `// outDir: 'dist'` must not be read as a
+            # resolved output directory when the real config is dynamic/absent.
+            text = _strip_comments(_scan_text(files[path]))
             literal = _VITE_OUTDIR_LITERAL_RE.search(text)
             if literal is not None:
                 return literal.group(1)
@@ -777,7 +819,8 @@ def _health_route_present(files: Mapping[str, str | bytes], health_path: str) ->
         return True
     needles = (f'"{health_path}"', f"'{health_path}'")
     for path in sorted(files):
-        text = _scan_text(files[path])
+        # Strip comments first: a decoy `// '/healthz'` must not count as a real route.
+        text = _strip_comments(_scan_text(files[path]))
         if any(needle in text for needle in needles):
             return True
     return False
@@ -942,21 +985,23 @@ def _toolchain_blocker(
     intent: ReleaseIntent, files: Mapping[str, str | bytes]
 ) -> _DetectBlocker | None:
     """A `toolchain_unsupported` fail-closed outcome when the declared start command
-    cannot run on the neutral base image: an unsupported runner/runtime
-    (`bun`/`deno`/`uv run`/`poetry run`), or a python start executable that is a pip
+    cannot run on the neutral base image: a head that is NOT a supported toolchain
+    (anything outside the allowlist — ruby/go/php/caddy/`./server`/bun/deno/uv/poetry
+    all fail here, never a Node fallback), or a python start executable that is a pip
     package absent from the declared dependencies. `None` when the toolchain is
     supported."""
     head = intent.start_cmd[0].rsplit("/", 1)[-1].lower()
-    if head in _UNSUPPORTED_TOOLCHAIN_HEADS:
+    if not _is_supported_toolchain_head(head):
         return _DetectBlocker(
             code="toolchain_unsupported",
             message=(
-                f"the declared start command uses {head!r}, which is not available on "
-                "the neutral base image; choose a supported toolchain (node/npm or a "
-                "python interpreter) or vendor it explicitly."
+                f"the declared start command head {head!r} is not a supported toolchain "
+                "on the neutral base image; the detector will NOT guess a runtime from an "
+                "executable name. Declare a supported start (node/npm/npx/yarn/pnpm, or a "
+                "python interpreter / uvicorn / gunicorn), or vendor the runtime explicitly."
             ),
             field="start_cmd",
-            evidence=(f"toolchain evidence: unsupported start runner {head!r}",),
+            evidence=(f"toolchain evidence: unsupported start head {head!r} (not on allowlist)",),
         )
     if _runtime_from_argv(intent.start_cmd) is RuntimeStrategy.python and not head.startswith(
         "python"
