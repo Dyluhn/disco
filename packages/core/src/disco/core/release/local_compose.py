@@ -331,6 +331,19 @@ def _scope_env(spec: ReleaseSpec, scope: EnvScope) -> dict[str, str]:
     return {name: values[name] for name in sorted(values)}
 
 
+def _build_arg_names(spec: ReleaseSpec) -> list[str]:
+    """The build-scope PUBLIC env NAMES to declare as Dockerfile ``ARG``s (visible to
+    the install/build ``RUN``). A build-scope SECRET var never reaches emission — the
+    detector fails closed on a build-time secret (`secret_build_env_unsupported`) — so
+    a build ``ARG`` is ONLY ever a PUBLIC build var, never a secret smuggled into
+    image history via a plain ``ARG``. Sorted for a deterministic emission."""
+    return sorted(
+        var.name
+        for var in spec.env
+        if var.scope is EnvScope.build and var.secret is SecretClass.public
+    )
+
+
 def _migrate_env(spec: ReleaseSpec) -> dict[str, str]:
     """The one-shot migrate service reads only the resource-bound values (the DB
     URL) it needs to apply schema — never a host secret guard."""
@@ -454,15 +467,16 @@ def _service_block(
 
     build_args = _scope_env(spec, EnvScope.build)
     if build_args:
-        # Fold build-scope env into build.args (still guarded/bare by rule).
+        # Fold build-scope env into build.args (still guarded/bare by rule). The
+        # matching Dockerfile `ARG`s (`_arg_lines`) declare only the PUBLIC build vars
+        # so a secret is never emitted as a plain build ARG (§8.4) — a build-scope
+        # SECRET var never reaches emission anyway (the detector fails it closed).
         build = block["build"]
         assert isinstance(build, dict)
         build["args"] = {name: build_args[name] for name in sorted(build_args)}
 
     if is_ingress:
-        block["ports"] = [
-            f"127.0.0.1:${{{_HOST_PORT_VAR}:-{_CONTAINER_PORT}}}:{_CONTAINER_PORT}"
-        ]
+        block["ports"] = [f"127.0.0.1:${{{_HOST_PORT_VAR}:-{_CONTAINER_PORT}}}:{_CONTAINER_PORT}"]
 
     if mounts:
         block["volumes"] = list(mounts)
@@ -559,8 +573,18 @@ def _effective_install_cmd(service: ReleaseService) -> tuple[str, ...]:
     return ("npm", "install")
 
 
-def _node_dockerfile(service: ReleaseService) -> str:
+def _arg_lines(spec: ReleaseSpec) -> list[str]:
+    """`ARG <NAME>` declarations for every build-scope PUBLIC env var, placed after
+    `WORKDIR` so the build var is visible to the subsequent install/build `RUN`
+    steps. Emitted as a bare `ARG` (no default) — the value flows in from the Compose
+    `build.args` guard, never persisted with `ENV`, so it is absent from the final
+    runtime environment."""
+    return [f"ARG {name}" for name in _build_arg_names(spec)]
+
+
+def _node_dockerfile(spec: ReleaseSpec, service: ReleaseService) -> str:
     lines = [_DOCKERFILE_HEADER.rstrip("\n"), f"FROM {_NODE_IMAGE}", "WORKDIR /app"]
+    lines.extend(_arg_lines(spec))
     lines.append(_copy_line(service.root, "./"))
     install = _effective_install_cmd(service)
     if install:
@@ -574,9 +598,10 @@ def _node_dockerfile(service: ReleaseService) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _python_dockerfile(service: ReleaseService) -> str:
+def _python_dockerfile(spec: ReleaseSpec, service: ReleaseService) -> str:
     lines = [_DOCKERFILE_HEADER.rstrip("\n"), f"FROM {_PYTHON_IMAGE}", "WORKDIR /app"]
     lines.append("ENV PYTHONUNBUFFERED=1")
+    lines.extend(_arg_lines(spec))
     lines.append(_copy_line(service.root, "./"))
     install = _effective_install_cmd(service)
     if install:
@@ -606,7 +631,7 @@ def _static_src(root: str, output_dir: str | None) -> str:
     return "./" if not parts else "/".join(parts) + "/"
 
 
-def _static_dockerfile(service: ReleaseService) -> str:
+def _static_dockerfile(spec: ReleaseSpec, service: ReleaseService) -> str:
     lines = [_DOCKERFILE_HEADER.rstrip("\n")]
     out_token = _dir_token(service.output_dir)
     if service.build_cmd:
@@ -614,6 +639,7 @@ def _static_dockerfile(service: ReleaseService) -> str:
         # image so the shipped image carries no build toolchain.
         lines.append(f"FROM {_NODE_IMAGE} AS build")
         lines.append("WORKDIR /app")
+        lines.extend(_arg_lines(spec))
         lines.append(_copy_line(service.root, "./"))
         install = _effective_install_cmd(service)
         if install:
@@ -638,15 +664,15 @@ def _static_dockerfile(service: ReleaseService) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _dockerfile_for(service: ReleaseService) -> str | None:
+def _dockerfile_for(spec: ReleaseSpec, service: ReleaseService) -> str | None:
     """The Dockerfile text for a service, or `None` for a `container` service
     (which ships its own Dockerfile — we reference, never emit/overwrite it)."""
     if service.runtime is RuntimeStrategy.node:
-        return _node_dockerfile(service)
+        return _node_dockerfile(spec, service)
     if service.runtime is RuntimeStrategy.python:
-        return _python_dockerfile(service)
+        return _python_dockerfile(spec, service)
     if service.runtime is RuntimeStrategy.static:
-        return _static_dockerfile(service)
+        return _static_dockerfile(spec, service)
     if service.runtime is RuntimeStrategy.container:
         return None
     # `dev_server` (AppKit) is handled BEFORE this generic loop, by
@@ -785,9 +811,7 @@ def _selfhost_doc(spec: ReleaseSpec) -> str:
     lines.append("")
     lines.append("## Contract")
     lines.append("")
-    lines.append(
-        "`release.json` is the canonical release spec this bundle was generated from"
-    )
+    lines.append("`release.json` is the canonical release spec this bundle was generated from")
     lines.append("— the runtime contract. Regenerate the bundle if you edit it.")
     return "\n".join(lines) + "\n"
 
@@ -940,9 +964,7 @@ def _dev_server_compose_document(spec: ReleaseSpec, ingress: ReleaseService) -> 
         environment[name] = value
     if environment:
         app_block["environment"] = {name: environment[name] for name in sorted(environment)}
-    app_block["ports"] = [
-        f"127.0.0.1:${{{_HOST_PORT_VAR}:-{_DEV_SERVER_PORT}}}:{_DEV_SERVER_PORT}"
-    ]
+    app_block["ports"] = [f"127.0.0.1:${{{_HOST_PORT_VAR}:-{_DEV_SERVER_PORT}}}:{_DEV_SERVER_PORT}"]
     app_block["volumes"] = [mount]
     app_block["healthcheck"] = _dev_server_healthcheck(ingress)
 
@@ -1005,9 +1027,7 @@ def _dev_server_selfhost_doc(spec: ReleaseSpec) -> str:
     lines.append("")
     lines.append("## Contract")
     lines.append("")
-    lines.append(
-        "`release.json` is the canonical release spec this bundle was generated from"
-    )
+    lines.append("`release.json` is the canonical release spec this bundle was generated from")
     lines.append("— the runtime contract. Regenerate the bundle if you edit it.")
     return "\n".join(lines) + "\n"
 
@@ -1056,7 +1076,7 @@ def emit_local_compose(spec: ReleaseSpec) -> dict[str, str]:
     overlay[COMPOSE_PATH] = _emit_yaml(_compose_document(spec))
 
     for service in services:
-        dockerfile = _dockerfile_for(service)
+        dockerfile = _dockerfile_for(spec, service)
         if dockerfile is None:
             continue  # container service ships its own Dockerfile
         if multi:

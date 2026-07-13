@@ -526,6 +526,14 @@ class GeneratedFileRef(BaseModel):
 
 # ---- release intent (the `release_declare` payload) ---------------------------
 
+# The CURRENT schema version of the persisted `ReleaseIntent` sidecar shape. WO-C4
+# grows the intent's typed fields (an install argv-list, the package manager /
+# lockfile, the static output directory) BEYOND the v1 shape, so the version is
+# bumped to 2. A persisted v1 sidecar is therefore never silently reinterpreted
+# (§8.11): `parse_release_intent` migrates a v1/legacy shape deterministically and
+# rejects a NEWER one — the persisted shape change is version-gated end to end.
+RELEASE_INTENT_SCHEMA_VERSION = 2
+
 
 class ReleaseIntent(BaseModel):
     """The typed `release_declare` payload: how the built app builds and runs, as
@@ -534,10 +542,16 @@ class ReleaseIntent(BaseModel):
     A smaller, NAMES-ONLY shape than the full `ReleaseSpec` (no topology, no
     provenance): the build/start argv-lists, the `$PORT` contract, the health
     path, the required env-var NAMES, and the resources it needs. Defined here so
-    the tool layer and later work orders share ONE schema for the declaration."""
+    the tool layer and later work orders share ONE schema for the declaration.
+
+    `schema_version` versions the PERSISTED shape (§8.11): the WO-C4 lowering adds
+    version-gated persistence so a stored sidecar always self-identifies its shape
+    and an older one is migrated (never silently reinterpreted) by
+    `parse_release_intent`; it is bumped to `RELEASE_INTENT_SCHEMA_VERSION`."""
 
     model_config = _STRICT
 
+    schema_version: int = Field(default=RELEASE_INTENT_SCHEMA_VERSION, ge=1)
     build_cmd: tuple[_ArgvItemStr, ...] = Field(default_factory=tuple, max_length=_MAX_ARGV)
     start_cmd: tuple[_ArgvItemStr, ...] = Field(default_factory=tuple, max_length=_MAX_ARGV)
     port_env: _EnvNameStr = "PORT"
@@ -571,6 +585,48 @@ class ReleaseIntent(BaseModel):
             _ = _validate_env_var_name(name, field="ReleaseIntent required_env")
         _require_unique(value, what="ReleaseIntent required_env name")
         return value
+
+
+class IntentUpgradeError(ValueError):
+    """A persisted intent sidecar declares a schema version this build cannot read
+    (a NEWER version, or a v1 shape that cannot be migrated without guessing). A
+    typed subclass of `ValueError` so callers can distinguish a version-gate refusal
+    (`intent_upgrade_required`, §8.11) from a plain malformed sidecar."""
+
+
+def parse_release_intent(raw: object) -> ReleaseIntent:
+    """Parse a PERSISTED release-intent sidecar payload into a `ReleaseIntent`,
+    version-gated per §8.11 so an older shape is never silently reinterpreted:
+
+    * ``schema_version == RELEASE_INTENT_SCHEMA_VERSION`` (or a legacy shape carrying
+      no version, treated as v1) is validated / migrated deterministically. A v1
+      shape (the pre-WO-C4 fields, a strict SUBSET of v2) migrates by dropping the
+      version tag and letting the new v2 fields default — a total, deterministic
+      adapter, so the same v1 bytes always yield the same v2 intent.
+    * a NEWER ``schema_version`` (one this build does not know) is REJECTED with
+      `IntentUpgradeError` rather than mis-read as v2.
+
+    Raises `IntentUpgradeError` for an unreadable/newer version and `ValueError` /
+    pydantic `ValidationError` for a malformed payload."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"release intent must be a JSON object, got {type(raw).__name__}")
+    version_obj: object = raw.get("schema_version", 1)
+    if not isinstance(version_obj, int) or isinstance(version_obj, bool):
+        raise ValueError(f"release intent schema_version must be an int, got {version_obj!r}")
+    if version_obj > RELEASE_INTENT_SCHEMA_VERSION:
+        raise IntentUpgradeError(
+            f"release intent declares schema_version {version_obj}, newer than this "
+            f"build supports ({RELEASE_INTENT_SCHEMA_VERSION}); it cannot be read "
+            "without an upgrade and must not be silently reinterpreted."
+        )
+    if version_obj == RELEASE_INTENT_SCHEMA_VERSION:
+        return ReleaseIntent.model_validate(raw)
+    # v1 / legacy: migrate deterministically — drop the version tag; the pre-WO-C4
+    # fields are a strict subset of v2, so the new fields default. Any field a v1
+    # sidecar carries that v2 does not (a removed field) trips `extra=forbid` and
+    # is rejected, never guessed at.
+    migrated = {key: value for key, value in raw.items() if key != "schema_version"}
+    return ReleaseIntent.model_validate(migrated)
 
 
 # ---- the release spec ---------------------------------------------------------
@@ -646,8 +702,7 @@ class ReleaseSpec(BaseModel):
         ingress = [service for service in self.services if service.role is ServiceRole.ingress]
         if len(ingress) != 1:
             raise ValueError(
-                "a ReleaseSpec must declare EXACTLY ONE ingress-role service, "
-                f"found {len(ingress)}"
+                f"a ReleaseSpec must declare EXACTLY ONE ingress-role service, found {len(ingress)}"
             )
         return self
 
@@ -665,9 +720,7 @@ class ReleaseSpec(BaseModel):
         for service in self.services:
             for dep in service.depends_on:
                 if dep not in service_ids:
-                    raise ValueError(
-                        f"service {service.id!r} depends_on unknown service {dep!r}"
-                    )
+                    raise ValueError(f"service {service.id!r} depends_on unknown service {dep!r}")
         for resource in self.resources:
             for consumer in resource.consumers:
                 if consumer not in service_ids:
@@ -676,9 +729,7 @@ class ReleaseSpec(BaseModel):
                     )
         for var in self.env:
             if var.binding is not None and var.binding not in resource_ids:
-                raise ValueError(
-                    f"env var {var.name!r} binds unknown resource {var.binding!r}"
-                )
+                raise ValueError(f"env var {var.name!r} binds unknown resource {var.binding!r}")
         return self
 
 
@@ -746,6 +797,8 @@ __all__ = [
     "EnvScope",
     "EnvVarDecl",
     "GeneratedFileRef",
+    "RELEASE_INTENT_SCHEMA_VERSION",
+    "IntentUpgradeError",
     "LocalResourceProfile",
     "ReleaseAssessment",
     "ReleaseIntent",
@@ -758,6 +811,7 @@ __all__ = [
     "SecretClass",
     "ServiceRole",
     "load_release_spec",
+    "parse_release_intent",
     "serialize_release_spec",
     "spec_digest",
 ]
