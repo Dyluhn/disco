@@ -306,8 +306,11 @@ class EnvVarDecl(BaseModel):
     # (plan §11.8/§11.11). `None` means "no explicit scope declared": a BOUND var
     # (`binding` set) derives its consumers from the resource it binds; an UNBOUND
     # var defaults to the sole ingress in a SINGLE-service spec and is REJECTED in a
-    # multi-service spec (implicit fan-out is forbidden). An empty tuple is a
-    # distinct, explicit "no consumer" that the cross-field validators reject. The
+    # multi-service spec (implicit fan-out is forbidden). An empty tuple `[]` is a
+    # DISTINCT, EXPLICIT empty scope that the cross-field validators REJECT
+    # fail-closed (a declared scope must name >=1 service): it is never read as
+    # "reaches every service" — it would reach NONE and silently drop a required
+    # var, so it is refused rather than lowered into a broken bundle. The
     # field is ABSENT from a v1 sidecar (added in v2) — `exclude_if=None` keeps a
     # var that declares no scope serializing to the v1 shape, and a v1 payload
     # lacking the key parses as `None` (the documented v1 read policy).
@@ -548,6 +551,11 @@ def local_mount_target(resource: ResourceDecl) -> str:
     path = _strip_file_scheme(resource.profiles.local.url) or resource.persistent_path
     path = path.rstrip("/")
     slash = path.rfind("/")
+    # O1 (carried, out of C7 scope — a C8 live-persistence concern): a ROOT-level
+    # path like `/app.db` falls back to `/data`, which does not actually cover it, so
+    # its data would not persist. Low reachability — the detector only ever emits
+    # `/data/app.db` / `/data/state`, and the duplicate-mount-target validator still
+    # prevents any two-resource clobber even if a root-level path were hand-declared.
     if slash <= 0:
         return "/data"
     return path[:slash]
@@ -863,8 +871,19 @@ class ReleaseSpec(BaseModel):
         for var in self.env:
             if var.binding is not None and var.binding not in resource_ids:
                 raise ValueError(f"env var {var.name!r} binds unknown resource {var.binding!r}")
-            # WO-C7: a declared per-env consumer scope must reference real services.
+            # WO-C7: a DECLARED per-env consumer scope must name at least one real
+            # service. `None` (no scope) is handled elsewhere (sole-ingress default /
+            # implicit-fan-out rejection); an EXPLICIT empty tuple `[]` is a distinct,
+            # fail-closed error — it is NOT "reaches every service", it would reach
+            # NONE, silently dropping a required var from every container (a
+            # broken-bundle false affordance). Reject it, and reject any named
+            # consumer that is not a real service.
             if var.consumers is not None:
+                if not var.consumers:
+                    raise ValueError(
+                        f"env var {var.name!r} declares an empty consumer scope; a "
+                        "declared env consumer scope must name at least one service"
+                    )
                 for consumer in var.consumers:
                     if consumer not in service_ids:
                         raise ValueError(

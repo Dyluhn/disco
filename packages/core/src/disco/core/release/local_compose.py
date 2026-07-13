@@ -467,6 +467,10 @@ def _migrate_source(
     the resource that declares a `migrate_cmd`. Among such resources the one with the
     smallest `persistent_path` is chosen, so the pick is ORDER-INDEPENDENT (WO-C7
     §11.9) — normally there is exactly one migrate-bearing resource."""
+    # O2 (carried, out of C7 scope — baseline behavior, no isolation impact): a
+    # NON-ingress service's own `migrate_cmd` is intentionally IGNORED here; only the
+    # ingress-level command and resource-level commands drive the one-shot migrate
+    # service. A worker that declares its own migrate step is not wired a migration.
     if ingress.migrate_cmd:
         return ingress.migrate_cmd, None
     for resource in sorted(spec.resources, key=lambda r: r.persistent_path):
