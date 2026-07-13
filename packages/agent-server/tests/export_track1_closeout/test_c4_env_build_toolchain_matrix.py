@@ -1065,3 +1065,124 @@ def test_unsupported_package_manager_lockfile_fails_closed(
         f"expected the exact typed blocker {_TOOLCHAIN_UNSUPPORTED_BLOCKER!r} for a "
         f"{lockfile} project, saw {sorted(_blocker_codes(body))}."
     )
+
+
+# ===========================================================================
+# §8.8 (closeout finding — no-lockfile toolchain bypass) — the unsupported-toolchain
+# reject must ALSO fire when the AUTHORITATIVE package-manager declaration is NOT a
+# committed lockfile: a corepack ``package.json`` ``"packageManager"`` field naming
+# bun/pnpm/yarn, or an unambiguous workspace marker (``pnpm-workspace.yaml``). Each is an
+# explicit declaration of a toolchain the neutral base image does not provision and must
+# fail closed with ``toolchain_unsupported`` — never a SILENT map onto npm. Pre-fix the
+# reject keyed ONLY on committed root lockfiles, so a ``packageManager``-field-only or a
+# ``pnpm-workspace.yaml``-only project bypassed the gate and shipped a self-hostable
+# candidate whose install step was silently mapped to ``npm install`` (§8.8: "Merely
+# mapping them to Node/Python is FAILURE").
+# ===========================================================================
+
+# A node service that binds ``$PORT`` and reads no undeclared env, whose ONLY
+# release-blocking signal is a corepack ``packageManager:"pnpm@8"`` declaration with NO
+# lockfile. Pre-fix the lockfile-only reject misses it and the lowering silently maps it
+# to ``npm install``, shipping a self-hostable candidate.
+_NODE_PM_FIELD_NO_LOCKFILE: dict[str, bytes] = {
+    "package.json": (
+        b'{"name":"svc","packageManager":"pnpm@8.15.0",'
+        b'"scripts":{"start":"node server.js"}}'
+    ),
+    "server.js": (b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"),
+}
+
+# A node service whose ONLY release-blocking signal is a ``pnpm-workspace.yaml`` marker
+# with NO lockfile — an unambiguous pnpm declaration the base image does not provision.
+_NODE_PNPM_WORKSPACE_NO_LOCKFILE: dict[str, bytes] = {
+    "package.json": b'{"name":"svc","scripts":{"start":"node server.js"}}',
+    "pnpm-workspace.yaml": b"packages:\n  - 'apps/*'\n",
+    "server.js": (b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"),
+}
+
+# A plain npm node service that EXPLICITLY declares ``packageManager:"npm@…"`` (npm IS
+# provisioned) — the no-false-positive control: the toolchain reject must NOT fire, so it
+# stays a self-hostable candidate.
+_NODE_NPM_PM_FIELD: dict[str, bytes] = {
+    "package.json": (
+        b'{"name":"svc","packageManager":"npm@10.5.0",'
+        b'"scripts":{"start":"node server.js"}}'
+    ),
+    "package-lock.json": b'{"lockfileVersion":3,"name":"svc"}',
+    "server.js": (b"require('http').createServer((_q,r)=>r.end('ok')).listen(process.env.PORT);\n"),
+}
+
+
+@pytest.mark.parametrize(
+    ("label", "files"),
+    [
+        ("packageManager_field", _NODE_PM_FIELD_NO_LOCKFILE),
+        ("pnpm_workspace_marker", _NODE_PNPM_WORKSPACE_NO_LOCKFILE),
+    ],
+)
+def test_unsupported_toolchain_without_lockfile_fails_closed(
+    label: str,
+    files: dict[str, bytes],
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C4 §8.8 (no-lockfile toolchain bypass) — RED on tip 6c58f84e.
+
+    A node service whose authoritative package-manager declaration is NOT a committed
+    lockfile — a corepack ``packageManager:"pnpm@8"`` field, or a ``pnpm-workspace.yaml``
+    marker — names a toolchain the neutral base image does not provision. On the tip the
+    reject keys ONLY on committed root lockfiles, so this bypasses the gate: the lowering
+    silently maps it to ``npm install`` and ships an ``assessment=candidate``,
+    ``self_host:true`` verdict. §8.8 requires it to fail closed with the exact typed
+    ``toolchain_unsupported`` blocker (``needs_review``, ``self_host:false``, no overlay),
+    exactly like a committed unsupported lockfile."""
+    cid = _cid(closeout_name, "conv_c4nolk")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), files)
+
+    body = _release(client, cid)
+    assert isinstance(body, dict)
+
+    assert body["assessment"] == "needs_review", (
+        f"a {label} project names an unprovisioned package manager with NO lockfile and "
+        "must fail closed to needs_review; the tip keyed the reject only on committed "
+        f"lockfiles and silently mapped it to npm, returning {body['assessment']!r}."
+    )
+    assert body["self_host"] is False and body["spec_digest"] is None
+    assert _overlay_present(_overlay_texts(client, cid)) == frozenset(), (
+        f"a fail-closed {label} project must ship NO self-host overlay"
+    )
+    assert _TOOLCHAIN_UNSUPPORTED_BLOCKER in _blocker_codes(body), (
+        f"expected the exact typed blocker {_TOOLCHAIN_UNSUPPORTED_BLOCKER!r} for a "
+        f"{label} project, saw {sorted(_blocker_codes(body))}."
+    )
+
+
+def test_npm_package_manager_field_stays_a_candidate(
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C4 §8.8 (no false toolchain reject) — GREEN preservation.
+
+    A node service that explicitly declares ``packageManager:"npm@10"`` names the ONE
+    package manager the neutral base image provisions, so the no-lockfile toolchain reject
+    must NOT fire — it stays a self-hostable ``candidate`` with no ``toolchain_unsupported``
+    blocker. Guards the finding-#1 fix against over-rejecting a plain npm project."""
+    cid = _cid(closeout_name, "conv_c4npm")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_project(ps, _store, cid, _cid(closeout_name, "proj"), _NODE_NPM_PM_FIELD)
+
+    body = _release(client, cid)
+    assert isinstance(body, dict)
+    assert body["assessment"] == "candidate" and body["self_host"] is True, (
+        "an explicit npm packageManager declaration must stay a self-hostable candidate; "
+        f"got assessment={body['assessment']!r}, self_host={body['self_host']!r}."
+    )
+    assert _TOOLCHAIN_UNSUPPORTED_BLOCKER not in _blocker_codes(body), (
+        "npm is provisioned — the no-lockfile toolchain reject must not fire for it, saw "
+        f"{sorted(_blocker_codes(body))}."
+    )

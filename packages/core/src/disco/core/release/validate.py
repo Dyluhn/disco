@@ -23,10 +23,9 @@ import re
 from collections.abc import Iterator, Mapping
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
-
-from disco.core.release.spec import ReleaseSpec, SecretClass, ServiceRole
+from disco.core.release.spec import EnvScope, ReleaseSpec, SecretClass, ServiceRole
 from disco.core.secret_paths import is_runtime_secret_path
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 # A shell-style variable reference — braced (`${NAME}`) or bare (`$NAME`). Used to
 # find the env vars a command/resource depends on, and (in the leak check) to
@@ -43,6 +42,7 @@ class BlockerCode(str, Enum):
     undeclared_env_var = "undeclared_env_var"
     secret_file_present = "secret_file_present"
     secret_name_leaked = "secret_name_leaked"
+    secret_build_env_unsupported = "secret_build_env_unsupported"
 
 
 class Blocker(BaseModel):
@@ -246,6 +246,35 @@ def _check_secret_files(files: Mapping[str, int | bytes], blockers: list[Blocker
             )
 
 
+def _check_secret_build_env(spec: ReleaseSpec, blockers: list[Blocker]) -> None:
+    """Fail closed on ANY build-scope env var classified `secret`.
+
+    A secret build variable cannot be lowered safely: folding it into a Compose
+    `build.args` / Dockerfile `ARG` bakes it into image build history, and a
+    secret-free self-host bundle has no way to supply a build-time secret. The
+    detector already fails such a workspace closed at discovery
+    (`secret_build_env_unsupported`), but this is the AUTHORITATIVE gate at the
+    emit/validate boundary: it refuses the spec regardless of how the build var was
+    produced (source-derived, hand-built, or a future producer), so the "a secret
+    never folds into build.args" invariant does not rest solely on the detector.
+    Deterministic: reports each offending name once, in spec order."""
+    for var in spec.env:
+        if var.scope is EnvScope.build and var.secret is SecretClass.secret:
+            blockers.append(
+                Blocker(
+                    code=BlockerCode.secret_build_env_unsupported,
+                    message=(
+                        f"build-scope env var {var.name!r} is classified secret; a "
+                        "secret build variable cannot be supplied to a secret-free "
+                        "self-host bundle (folding it into a build arg would leak it "
+                        "into image build history), so this release is not supported. "
+                        "Rename it to a non-secret public build var, or remove the "
+                        "build-time secret dependency."
+                    ),
+                )
+            )
+
+
 def _check_secret_name_leaks(spec: ReleaseSpec, blockers: list[Blocker]) -> None:
     secret_names = [var.name for var in spec.env if var.secret is SecretClass.secret]
     if not secret_names:
@@ -285,12 +314,15 @@ def validate_release(spec: ReleaseSpec, files: Mapping[str, int | bytes]) -> Val
     * `secret_file_present`— a tree path the runtime-secret predicate flags.
     * `secret_name_leaked` — a `secret`-classified env NAME used as a bare literal
       value (outside a `${...}` reference) somewhere in the spec.
+    * `secret_build_env_unsupported` — a build-scope env var classified `secret`
+      (unsafe to lower: a build arg bakes it into image history).
     """
     blockers: list[Blocker] = []
     _check_ingress_count(spec, blockers)
     _check_paths_present(spec, files, blockers)
     _check_undeclared_env_vars(spec, blockers)
     _check_secret_files(files, blockers)
+    _check_secret_build_env(spec, blockers)
     _check_secret_name_leaks(spec, blockers)
     return ValidationResult(blockers=blockers)
 

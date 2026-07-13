@@ -300,6 +300,27 @@ _UNSUPPORTED_PY_PM: dict[str, str] = {
     "uv.lock": "uv",
 }
 
+# The node package managers the neutral base image does NOT provision. An
+# AUTHORITATIVE non-lockfile declaration naming one of these — a corepack
+# `packageManager` field, an unambiguous workspace/config marker, or a start/build
+# script that invokes it — fails detection closed with `toolchain_unsupported` EVEN
+# WITH NO COMMITTED LOCKFILE (§8.8: "Merely mapping them to Node/Python is FAILURE").
+# npm (a `package-lock.json`, `packageManager:"npm@…"`, a `node`/`npm`/`npx` script
+# head, or no PM signal) is the one the base image runs, so it never trips this.
+_UNSUPPORTED_NODE_PM_NAMES = frozenset({"bun", "pnpm", "yarn"})
+
+# ROOT config/workspace markers that UNAMBIGUOUSLY name a non-npm package manager by
+# their mere presence (each file is that tool's own config), even when no lockfile is
+# committed: a `pnpm-workspace.yaml` is pnpm-only, a `.yarnrc(.yml)` is a Yarn config,
+# a `bunfig.toml` is Bun's config.
+_NODE_WORKSPACE_MARKERS: dict[str, str] = {
+    ".yarnrc": "yarn",
+    ".yarnrc.yml": "yarn",
+    "bunfig.toml": "bun",
+    "pnpm-workspace.yaml": "pnpm",
+    "pnpm-workspace.yml": "pnpm",
+}
+
 
 # ---- result models ------------------------------------------------------------
 
@@ -728,6 +749,88 @@ def _unsupported_pm_blocker(
     return None
 
 
+def _package_manager_field(pkg: object) -> str | None:
+    """The corepack `packageManager` manager NAME declared in a parsed `package.json`
+    (the part before `@`), lowercased — `"pnpm@8.0.0"` -> `"pnpm"`. `None` when the
+    field is absent or not a non-empty string. This is an EXPLICIT, authoritative
+    declaration of which package manager builds the app."""
+    if not isinstance(pkg, dict):
+        return None
+    value = pkg.get("packageManager")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    name = value.strip().split("@", 1)[0].strip().lower()
+    return name or None
+
+
+def _node_toolchain_blocker(manager: str, why: str, evidence: str) -> _DetectBlocker:
+    """A `toolchain_unsupported` fail-closed outcome for an authoritative non-npm
+    package-manager declaration (`why` states which signal named `manager`)."""
+    return _DetectBlocker(
+        code="toolchain_unsupported",
+        message=(
+            f"{why}; the {manager!r} package manager is NOT provisioned in the neutral "
+            "base image and the detector will NOT silently map it onto npm. Vendor the "
+            "toolchain explicitly, or use npm (package-lock.json)."
+        ),
+        field="package_manager",
+        evidence=(evidence,),
+    )
+
+
+def _unsupported_node_pm_declaration(
+    files: Mapping[str, str | bytes], pkg: object
+) -> _DetectBlocker | None:
+    """A `toolchain_unsupported` fail-closed outcome when an AUTHORITATIVE package-manager
+    declaration OTHER than a committed lockfile names a node toolchain the neutral base
+    image does not provision — closing the no-lockfile bypass (§8.8). Three signals,
+    checked in a stable order so the finding is deterministic:
+
+    1. the corepack `package.json` `"packageManager"` field naming bun/pnpm/yarn;
+    2. an unambiguous non-npm workspace/config marker at the ROOT (`pnpm-workspace.yaml`,
+       `.yarnrc(.yml)`, `bunfig.toml`);
+    3. a `start`/`build` script whose interpreter head is bun/pnpm/yarn.
+
+    npm never trips this (a `package-lock.json`, `packageManager:"npm@…"`, a
+    `node`/`npm`/`npx` script head, or no PM signal at all), so a plain npm project is
+    never mis-flagged. `None` when no unsupported declaration is present. Keyed on ROOT
+    markers only (a nested `.yarnrc` in a vendored dep never triggers it)."""
+    manager = _package_manager_field(pkg)
+    if manager is not None and manager in _UNSUPPORTED_NODE_PM_NAMES:
+        return _node_toolchain_blocker(
+            manager,
+            f'the package.json "packageManager" field declares {manager!r}',
+            f"toolchain evidence: packageManager field names unsupported manager {manager!r} "
+            "(no lockfile required)",
+        )
+    roots = {_norm(p) for p in files if "/" not in _norm(p)}
+    for marker in sorted(_NODE_WORKSPACE_MARKERS):
+        if marker in roots:
+            mgr = _NODE_WORKSPACE_MARKERS[marker]
+            return _node_toolchain_blocker(
+                mgr,
+                f"the project declares a {marker!r} workspace/config marker",
+                f"toolchain evidence: {marker} indicates unsupported manager {mgr!r} "
+                "(no lockfile required)",
+            )
+    for script_name in ("start", "build"):
+        script = _script(pkg, script_name)
+        if script is None:
+            continue
+        tokens = script.split()
+        if not tokens:
+            continue
+        head = tokens[0].rsplit("/", 1)[-1].lower()
+        if head in _UNSUPPORTED_NODE_PM_NAMES:
+            return _node_toolchain_blocker(
+                head,
+                f"the {script_name!r} script invokes the {head!r} package manager",
+                f"toolchain evidence: {script_name} script head {head!r} is an unsupported "
+                "manager (no lockfile required)",
+            )
+    return None
+
+
 def _node_detect(
     files: Mapping[str, str | bytes],
 ) -> ReleaseService | _DetectBlocker | None:
@@ -792,6 +895,13 @@ def _node_detect(
     toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
     if toolchain is not None:
         return toolchain
+    # An authoritative non-lockfile PM declaration (a `packageManager` field, a
+    # workspace/config marker, or a bun/pnpm/yarn script head) rejects the release too —
+    # closing the no-lockfile bypass. Ordered AFTER the two committed-lockfile checks so a
+    # genuine two-lockfile disagreement still fails closed as `package_manager_conflict`.
+    declared_toolchain = _unsupported_node_pm_declaration(files, pkg)
+    if declared_toolchain is not None:
+        return declared_toolchain
     build_secret = _secret_build_blocker(files)
     if build_secret is not None:
         return build_secret
@@ -950,6 +1060,11 @@ def _static_detect(
         toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
         if toolchain is not None:
             return toolchain
+        # An authoritative non-lockfile PM declaration also rejects a build-requiring
+        # static bundle (same no-lockfile bypass, same §8.8 reject-not-map contract).
+        declared_toolchain = _unsupported_node_pm_declaration(files, pkg)
+        if declared_toolchain is not None:
+            return declared_toolchain
         build_secret = _secret_build_blocker(files)
         if build_secret is not None:
             return build_secret

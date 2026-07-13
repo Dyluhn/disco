@@ -331,6 +331,23 @@ def _scope_env(spec: ReleaseSpec, scope: EnvScope) -> dict[str, str]:
     return {name: values[name] for name in sorted(values)}
 
 
+def _build_args(spec: ReleaseSpec) -> dict[str, str]:
+    """The build-scope env map folded into a service's Compose ``build.args`` — PUBLIC
+    build vars only. A required public build var renders a ``${NAME:?...}`` guard, an
+    optional one a bare ``${NAME}``. A build-scope SECRET var is NEVER emitted here: the
+    detector fails such a workspace closed at discovery and ``validate_release`` refuses
+    the spec (``secret_build_env_unsupported``), and this public-only filter is the
+    emit-layer belt to that gate — so a secret can never be smuggled into ``build.args``
+    (which would bake it into image build history). Sorted by NAME for deterministic
+    emission, and symmetric with ``_build_arg_names`` (the Dockerfile ``ARG`` set)."""
+    values: dict[str, str] = {}
+    for var in spec.env:
+        if var.scope is not EnvScope.build or var.secret is not SecretClass.public:
+            continue
+        values[var.name] = _required_guard(var.name) if var.required else f"${{{var.name}}}"
+    return {name: values[name] for name in sorted(values)}
+
+
 def _build_arg_names(spec: ReleaseSpec) -> list[str]:
     """The build-scope PUBLIC env NAMES to declare as Dockerfile ``ARG``s (visible to
     the install/build ``RUN``). A build-scope SECRET var never reaches emission — the
@@ -465,12 +482,13 @@ def _service_block(
         environment[name] = value
     block["environment"] = {name: environment[name] for name in sorted(environment)}
 
-    build_args = _scope_env(spec, EnvScope.build)
+    build_args = _build_args(spec)
     if build_args:
-        # Fold build-scope env into build.args (still guarded/bare by rule). The
-        # matching Dockerfile `ARG`s (`_arg_lines`) declare only the PUBLIC build vars
-        # so a secret is never emitted as a plain build ARG (§8.4) — a build-scope
-        # SECRET var never reaches emission anyway (the detector fails it closed).
+        # Fold PUBLIC build-scope env into build.args (guarded/bare by rule), symmetric
+        # with the Dockerfile `ARG`s (`_arg_lines`). A build-scope SECRET var is filtered
+        # out here AND never reaches emission (the detector fails it closed and
+        # `validate_release` refuses it with `secret_build_env_unsupported`, §8.4), so a
+        # secret is never smuggled into build.args or a plain build ARG.
         build = block["build"]
         assert isinstance(build, dict)
         build["args"] = {name: build_args[name] for name in sorted(build_args)}
