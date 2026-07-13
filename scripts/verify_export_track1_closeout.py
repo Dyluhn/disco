@@ -115,18 +115,27 @@ _PYTEST_CURRENT_TEST_BASELINE: frozenset[tuple[str, str]] = frozenset(
 _PY_MOCK_CALL_NAMES = frozenset({"Mock", "patch"})
 _PY_MOCK_ANY_USE_NAMES = frozenset({"MagicMock", "create_autospec"})
 _MONKEYPATCH_FIXTURE_NAMES = frozenset({"monkeypatch", "mp"})
-# Frontend: module-replacement helpers are forbidden outright.
+# Frontend: module-replacement helpers are forbidden outright. Detection is
+# alias-aware (see `_vi_local_names`) and covers both attribute (`vi.mock(`) and
+# subscript (`vi['mock']`) forms, so aliasing/bracketing `vi` cannot evade it.
+_FORBIDDEN_VI_METHODS: tuple[tuple[str, str], ...] = (
+    ("mock", "forbidden_vi_mock"),
+    ("spyOn", "forbidden_vi_spyOn"),
+    ("stubGlobal", "forbidden_vi_stubGlobal"),
+    ("stubEnv", "forbidden_vi_stubEnv"),
+)
+# jest.* is never aliased in this codebase; flag its literal module-replacement forms.
 _FRONTEND_FORBIDDEN = (
-    ("vi.mock(", "forbidden_vi_mock"),
-    ("vi.spyOn(", "forbidden_vi_spyOn"),
-    ("vi.stubGlobal(", "forbidden_vi_stubGlobal"),
-    ("vi.stubEnv(", "forbidden_vi_stubEnv"),
     ("jest.mock(", "forbidden_jest_mock"),
     ("jest.spyOn(", "forbidden_jest_spyOn"),
 )
 _VI_FN_ASSIGN_RE = re.compile(r"(?<![=!<>])=\s*vi\.fn\s*\(")
 _DECL_TAIL_RE = re.compile(r"\b(?:const|let|var)\b[^=]*$")
 _TS_IMPORT_RE = re.compile(r"""^\s*import\s+(?P<body>.+?)\s+from\s+["']""")
+# Whole-source (DOTALL) form so multi-line `import { … } from "…"` blocks are parsed.
+_TS_IMPORT_BLOCK_RE = re.compile(r"""import\s+(?P<body>.+?)\s+from\s+["']""", re.DOTALL)
+# `const v = vi` / `let v = vi` / `v = vi` — a local aliased to the vi test runner.
+_VI_ALIAS_RE = re.compile(r"\b(?:const|let|var)?\s*([A-Za-z_$][\w$]*)\s*=\s*vi\s*[;\n]")
 
 
 @dataclass
@@ -466,6 +475,46 @@ def _setattr_target_ok(call: ast.Call) -> tuple[bool, str]:
     return False, rendered
 
 
+def _is_monkeypatch_source(call: ast.Call) -> bool:
+    """True if a call yields a monkeypatch object: `MonkeyPatch(...)` or
+    `<x>.getfixturevalue("monkeypatch")`."""
+    func = call.func
+    if isinstance(func, ast.Name) and func.id == "MonkeyPatch":
+        return True
+    if isinstance(func, ast.Attribute):
+        if func.attr == "MonkeyPatch":
+            return True
+        if func.attr == "getfixturevalue" and call.args:
+            arg0 = call.args[0]
+            return isinstance(arg0, ast.Constant) and arg0.value == "monkeypatch"
+    return False
+
+
+def _monkeypatch_roots(tree: ast.Module) -> set[str]:
+    """Names that refer to a monkeypatch fixture — the fixture params plus any local
+    aliased to one (`m = monkeypatch`), a constructed `MonkeyPatch()`, or
+    `request.getfixturevalue("monkeypatch")`, transitively — so aliasing cannot
+    smuggle a `setattr` past the config-seam restriction."""
+    roots = set(_MONKEYPATCH_FIXTURE_NAMES)
+    changed = True
+    while changed:  # fixpoint: catches chained aliases (m = monkeypatch; n = m)
+        changed = False
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Assign) and len(node.targets) == 1):
+                continue
+            target = node.targets[0]
+            if not isinstance(target, ast.Name) or target.id in roots:
+                continue
+            value = node.value
+            aliased = (isinstance(value, ast.Name) and value.id in roots) or (
+                isinstance(value, ast.Call) and _is_monkeypatch_source(value)
+            )
+            if aliased:
+                roots.add(target.id)
+                changed = True
+    return roots
+
+
 def _scan_python_test(source: str, rel: str) -> list[dict[str, object]]:
     violations: list[dict[str, object]] = []
 
@@ -478,6 +527,7 @@ def _scan_python_test(source: str, rel: str) -> list[dict[str, object]]:
         add(exc.lineno or 0, "python_parse_error", str(exc))
         return violations
 
+    monkeypatch_roots = _monkeypatch_roots(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -498,10 +548,7 @@ def _scan_python_test(source: str, rel: str) -> list[dict[str, object]]:
             elif isinstance(func, ast.Attribute):
                 if func.attr == "patch" and _attr_root_name(func.value) == "mock":
                     add(node.lineno, "forbidden_mock_usage", "mock.patch(...)")
-                if (
-                    func.attr == "setattr"
-                    and _attr_root_name(func.value) in _MONKEYPATCH_FIXTURE_NAMES
-                ):
+                if func.attr == "setattr" and _attr_root_name(func.value) in monkeypatch_roots:
                     ok, target = _setattr_target_ok(node)
                     if not ok:
                         add(
@@ -514,18 +561,17 @@ def _scan_python_test(source: str, rel: str) -> list[dict[str, object]]:
 
 
 def _ts_imported_names(source: str) -> set[str]:
+    """Local names introduced by `import … from "…"`, including multi-line blocks and
+    `x as y` aliases (the alias is the local binding)."""
     names: set[str] = set()
-    for line in source.splitlines():
-        match = _TS_IMPORT_RE.match(line)
-        if not match:
-            continue
+    for match in _TS_IMPORT_BLOCK_RE.finditer(source):
         body = match.group("body")
-        for brace in re.findall(r"\{([^}]*)\}", body):
+        for brace in re.findall(r"\{([^}]*)\}", body, re.DOTALL):
             for part in brace.split(","):
                 token = part.strip().split(" as ")[-1].strip()
-                if token:
+                if re.fullmatch(r"[A-Za-z_$][\w$]*", token):
                     names.add(token)
-        outside = re.sub(r"\{[^}]*\}", "", body)
+        outside = re.sub(r"\{[^}]*\}", "", body, flags=re.DOTALL)
         for part in outside.split(","):
             token = part.strip()
             star = re.match(r"\*\s+as\s+([A-Za-z_$][\w$]*)", token)
@@ -536,13 +582,45 @@ def _ts_imported_names(source: str) -> set[str]:
     return names
 
 
+def _vi_local_names(source: str) -> set[str]:
+    """Every local name that refers to the `vi` test runner: `vi` itself, `import
+    { vi as X }`, and `const X = vi`. Used to make the module-replacement scan
+    alias-proof."""
+    names: set[str] = {"vi"}
+    for match in _TS_IMPORT_BLOCK_RE.finditer(source):
+        for brace in re.findall(r"\{([^}]*)\}", match.group("body"), re.DOTALL):
+            for part in brace.split(","):
+                bits = [b.strip() for b in part.split(" as ")]
+                if bits[0] == "vi" and len(bits) == 2 and bits[1]:
+                    names.add(bits[1])
+    for match in _VI_ALIAS_RE.finditer(source):
+        names.add(match.group(1))
+    return names
+
+
 def _scan_frontend_test(source: str, rel: str) -> list[dict[str, object]]:
     violations: list[dict[str, object]] = []
     imported = _ts_imported_names(source)
+    vi_names = _vi_local_names(source)
+    # `<vi>.method(` and `<vi>['method'](` for every alias of vi and every forbidden
+    # module-replacement method — attribute and subscript forms alike.
+    vi_alt = "|".join(re.escape(n) for n in sorted(vi_names))
+    forbidden_vi_res = [
+        (
+            re.compile(rf"(?<![\w$])(?:{vi_alt})\s*(?:\.\s*{m}\s*\(|\[\s*['\"]{m}['\"]\s*\])"),
+            rule,
+            m,
+        )
+        for m, rule in _FORBIDDEN_VI_METHODS
+    ]
     for lineno, line in enumerate(source.splitlines(), start=1):
         for token, rule in _FRONTEND_FORBIDDEN:
             if token in line:
                 violations.append({"file": rel, "line": lineno, "rule": rule, "detail": token})
+        for pattern, rule, method in forbidden_vi_res:
+            if pattern.search(line):
+                detail = f"vi.{method} (attr/subscript, alias-aware)"
+                violations.append({"file": rel, "line": lineno, "rule": rule, "detail": detail})
         match = _VI_FN_ASSIGN_RE.search(line)
         if match:
             lhs = line[: match.start()].rstrip()
