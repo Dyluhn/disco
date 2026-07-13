@@ -1,7 +1,7 @@
 {
   "schema": "export-track1-closeout-acceptance/v1",
-  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself); the reviewer-created protected tag export-track1-closeout-acceptance-v1 freezes the manifest itself. python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ titles) the frontend lane compares. red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds. Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
-  "acceptance_tag": "export-track1-closeout-acceptance-v1",
+  "note": "Frozen SHA-256 manifest for the Export Track-1 Closeout acceptance harness (WO-C0, plan §1.1 / §4.2). Hashes every frozen acceptance file in plan §1.1 EXCEPT this manifest (a file cannot hash itself); the reviewer-created protected tag export-track1-closeout-acceptance-v2 freezes the manifest itself. python_closeout_inventory is generated deterministically from `pytest --collect-only` over the closeout dirs (marker 'export_track1_closeout and not integration'); the verifier reads it back FROM THIS JSON and compares to a fresh collect-only so changing pytest discovery cannot hide a test. frontend_closeout_inventory lists the frozen vitest files (+ titles) the frontend lane compares. red_tests names one representative failing public-boundary test per work order C1–C8 plus the frontend C3/C6 reds, AND (acceptance-v2 / R0) one per independent-audit gap G02/G04/G05/G06/G07/G12/G13; remediation_r0 carries the full 15-node R0 proving set plus the R4-activated / record-only / ratified-baseline ledger (the R1–R6 production fixes are PARKED — R0 only freezes the reds). Anti-bypass operational reading (§4.4): A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
+  "acceptance_tag": "export-track1-closeout-acceptance-v2",
   "baseline_sha": "2ec1ceba08e90bd1f45a19075d76975d44e90b7c",
   "seed": {
     "env": "CLOSEOUT_SEED",
@@ -11,8 +11,9 @@
   "anti_bypass_operational_reading": "A closeout acceptance test may seam the system ONLY at (1) the config loader — monkeypatch.setattr(cfg_store, 'load', ...), the same injection the settings PUT performs — and (2) the environment — monkeypatch.setenv/delenv (e.g. DISCO_DATA_DIR). No other monkeypatch.setattr target is permitted; the code under test (detect / spec / emit / release-route / tool / store) is never patched. unittest.mock / MagicMock / Mock() / create_autospec / patch() are forbidden entirely. In the frontend, vi.fn() is allowed ONLY as a callback/prop value (e.g. onDownload={vi.fn()}) or a locally-declared const passed as one; vi.mock / vi.spyOn / vi.stubGlobal / vi.stubEnv / jest.mock (module replacement) are forbidden. Production source may not reference closeout fixture names, the C8 secret/build sentinels, CLOSEOUT_SEED, a force-verdict switch, or PYTEST_CURRENT_TEST outside the ratified pre-existing auth/workflow baseline. A lexical/AST scan cannot prove the absence of a semantically-equivalent indirect branch; the independent diff review (plan §4.9) is the required backstop.",
   "files": {
     ".github/workflows/export-track1-closeout.yml": "a08695b1f551aec9a9799f46b93fe796c5f3ec106b07f656c8a4807bdb9c5004",
-    "docs/export-track1-closeout-work-orders.md": "2e40892c663ce10f2a856d48890f32ecc494336814c4956a517d8ba811283032",
-    "frontend/e2e/export-track1-closeout/selfhost-candidate.spec.ts": "b33aa4d8a338a20f273473b62b830b7abe4037e0f5588959a801cbaff782173e",
+    "docs/export-track1-closeout-work-orders.md": "3826b9738a0c3d0e5f1a5f06e8fdb3281b24b904167b99f54eaaf1114a4bca48",
+    "frontend/e2e/export-track1-closeout/selfhost-candidate.spec.ts": "e4ad1f8651e7203c0e4c6946b294514b1619af18f1c3a2bdd4f6d02a45265447",
+    "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts": "24079e15f0df881970332bed369df2df1436738594cf8d990b0690b1aa27910b",
     "frontend/e2e/export-track1-closeout/selfhost-needs-review.spec.ts": "099dc48229cae1a23c708caacc697356fc0bc1edc6532e5881e2ec9281f83dce",
     "frontend/e2e/export-track1-closeout/selfhost-not-web.spec.ts": "22826a896e085516694e7a393ca8cc978ec16925f7ffdbc26e5ae4230de8172b",
     "frontend/src/test/export-track1-closeout/c3-candidate-copy.test.tsx": "5a1bbcff56e098512a5a83c1c3dc4baa07033e799b8667f476e1a16f03b005de",
@@ -32,6 +33,12 @@
     "packages/agent-server/tests/export_track1_closeout/test_c6_dirprefix_collision.py": "040ad9a0ba478b26abf4ba7863e0e390a2f9d7a00aebc3c9c1bd957d7ca0fe21",
     "packages/agent-server/tests/export_track1_closeout/test_c7_empty_consumers.py": "e960b62ecf3e8caf6dd91f853d86ce933e46b28d90f65cd5087f50c876407d2c",
     "packages/agent-server/tests/export_track1_closeout/test_c7_topology_matrix.py": "01f39684091a8e3534d50d19758e57f77a03298b63105ff6245fe2065d06c5ad",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py": "036436bdc50d50e803294c3590405561c85c82a96c4c9354da3fd7ef9bb67bf0",
+    "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py": "ee07125cb69e47c63d6232e9dc9af6f5cdc82959a8230d6dbb46000fb0ee4a2c",
+    "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py": "8993ebdd603019f3c6364876572081f4fe4ae321fac138ee7dd2d41b5d49d215",
+    "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py": "a05a9236c4f41d348c35afd130afcc29bdbe7d41d4c8caaad8c0620fae8f72c8",
+    "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py": "19db9a3acb3fcbbd35dd6db992691163d4e5a50287302c6bb4418bba74550e21",
+    "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py": "d574a2f28da285618f40140c1b89c96f4b399744aea3eba49e38ff0037b238bd",
     "packages/agent-server/tests/fixtures/export_track1_closeout/README.md": "1b6b49f6d890511ece5cb957902151b65ba5eae94b418174f694f79903386876",
     "packages/agent-server/tests/integration/_closeout_live_support.py": "ca596d4708bc78742abcc641f95391c9f0015e315410b27ccf45373d15b4c3ba",
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py": "42dbd6c14ad689c89c9287e410d04874dc0f9b03499b51bfd2da05b85d09a546",
@@ -42,7 +49,8 @@
     "packages/tools/tests/export_track1_closeout/test_c1_intent_store_custom_root.py": "0aa05166c3af801774f78f154cb1e34a6522b937c9f12329cfba473ad31f6976",
     "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "dc5a7cf56a61e6653f4e600cd67387fce50ae4711e3f4ecd4a962d4c3f5075f7",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
-    "scripts/gen_closeout_acceptance_manifest.py": "84b0004cb8fca23d523ff6d70f554997a1f0ed58270fb6b9bd8b3204fe6e2f41",
+    "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
+    "scripts/gen_closeout_acceptance_manifest.py": "0c6f4c4c26c860d8a57d2926b013e3acef84aca72fb94cbcc2002920222cca42",
     "scripts/verify_export_track1_closeout.py": "8ebeb5ba27f112e30db21217dd7081f3c00ae317d9f070e97e12fc23545568e8"
   },
   "missing_frozen_paths": [],
@@ -237,6 +245,20 @@
     "packages/agent-server/tests/export_track1_closeout/test_c7_topology_matrix.py::test_single_service_unbound_env_defaults_to_sole_ingress",
     "packages/agent-server/tests/export_track1_closeout/test_c7_topology_matrix.py::test_web_worker_bound_db_env_and_mount_isolated_to_consumer",
     "packages/agent-server/tests/export_track1_closeout/test_c7_topology_matrix.py::test_worker_only_state_resource_isolated_to_worker",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_does_not_ship_through_release_download[leading]",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_does_not_ship_through_release_download[middle]",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_does_not_ship_through_release_download[trailing]",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[leading]",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[middle]",
+    "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[trailing]",
+    "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py::test_interpreted_candidate_with_deps_emits_dependency_install_layer[express_node_no_build]",
+    "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py::test_interpreted_candidate_with_deps_emits_dependency_install_layer[fastapi_python_no_build]",
+    "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py::test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm",
+    "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py::test_g07_root_persistent_path_backed_or_fails_closed[root-file-app-db]",
+    "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py::test_g07_root_persistent_path_backed_or_fails_closed[root-file-db-sqlite]",
+    "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py::test_g12_appkit_dockerfile_has_no_heredoc_copy",
+    "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_docker_evidence_absent_engine_must_not_claim_live_production",
+    "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_frontend_lane_unexecuted_browser_must_block_green",
     "packages/core/tests/export_track1_closeout/test_c4_build_secret_validate_gate.py::test_secret_build_env_var_is_refused_by_validate_release",
     "packages/core/tests/export_track1_closeout/test_c4_build_secret_validate_gate.py::test_secret_build_env_var_never_folds_into_build_args",
     "packages/core/tests/export_track1_closeout/test_c4_npm_precedence.py::test_active_launcher_head_rejects_even_with_authoritative_npm[build-bunx --bun vite build]",
@@ -405,7 +427,8 @@
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[node_script]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[npm_start]",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[python_module]",
-    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[uvicorn_module]"
+    "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py::test_supported_command_matrix_accepted[uvicorn_module]",
+    "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py::test_declared_static_output_dir_round_trips_into_sidecar"
   ],
   "frontend_closeout_inventory": {
     "c3-candidate-copy.test.tsx": {
@@ -531,6 +554,88 @@
       "node_id": "frontend/src/test/export-track1-closeout/c6-collision-blockers.test.tsx::renders every collision blocker (code + exact path) and only the plain download",
       "boundary": "SelfHostPanel rendered with an overlay-collision release verdict",
       "expected_failure": "an overlay-collision verdict still exposes a self-host action / hides collision blockers instead of rendering every blocker (code + exact path) with only the plain source download"
+    },
+    {
+      "work_order": "R1/G02",
+      "lane": "python-closeout",
+      "node_id": "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[leading]",
+      "boundary": "real release_declare ToolExecutor (execute_pi_tool) + real release route + real bound /download zip bytes",
+      "expected_failure": "a bare POSITIONAL literal credential (npm _authToken operand — no flag, no '=', no shell metacharacter, not a ${NAME} ref) passes check_token_hygiene AND the positional-operand branch of check_declaration_argv, so it is ACCEPTED at declare, PERSISTS in release-intent.json, and SHIPS verbatim in the emitted Dockerfile CMD + release.json; it must fail closed like the C5 flag forms. Siblings cover the middle/trailing positions and the does_not_ship_through_release_download half (6 nodes total). Fix = R1."
+    },
+    {
+      "work_order": "R2/G04",
+      "lane": "python-closeout",
+      "node_id": "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py::test_interpreted_candidate_with_deps_emits_dependency_install_layer[express_node_no_build]",
+      "boundary": "real release + /download routes; assertion on emitted Dockerfile bytes in the zip",
+      "expected_failure": "a typed INTERPRETED candidate with dependencies and NO build step emits an empty build_cmd, so local_compose._effective_install_cmd returns () and the Dockerfile is COPY -> CMD with NO npm/pip install layer -> unrunnable image ('Cannot find module express' / uvicorn missing). Must emit a dependency install layer or fail closed. Sibling [fastapi_python_no_build] (2 nodes). = C8 finding F1. Fix = R2."
+    },
+    {
+      "work_order": "R2/G05",
+      "lane": "python-closeout",
+      "node_id": "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py::test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm",
+      "boundary": "real release + /download routes; assertion on /release JSON + emitted Dockerfile bytes",
+      "blocker_code": "toolchain_unsupported",
+      "expected_failure": "a typed intent with start_cmd ('pnpm','start') is accepted as a candidate (pnpm is in detect._SUPPORTED_NODE_HEADS) and the emitted node image provisions NO pnpm (no corepack enable, no global install) -> 'pnpm start' fails at container start, though the SOURCE path fails such a workspace closed with toolchain_unsupported. Must fail closed the same way (or actually provision/pin pnpm). Fix = R2."
+    },
+    {
+      "work_order": "R2/G06",
+      "lane": "python-closeout",
+      "node_id": "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py::test_declared_static_output_dir_round_trips_into_sidecar",
+      "boundary": "real ConversationRuntime executing the real ReleaseDeclareTool; persisted sidecar bytes on disk",
+      "blocker_code": "extra_forbidden",
+      "expected_failure": "ReleaseIntent has extra='forbid' and no output_dir field, so a declaration supplying output_dir='dist' is REJECTED with extra_forbidden and nothing persists — a static/Vite build's output dir is UNDECLARABLE through the typed intent though the internal ReleaseService spec DOES interpolate it into 'COPY --from=build /app/<output_dir>/'. Must round-trip output_dir into the sidecar. = C8 finding F2. Fix = R2 (add field + lower through the tool)."
+    },
+    {
+      "work_order": "R3/G07",
+      "lane": "python-closeout",
+      "node_id": "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py::test_g07_root_persistent_path_backed_or_fails_closed[root-file-app-db]",
+      "boundary": "real release + /download routes; emitted compose.yaml parsed in-process with PyYAML",
+      "expected_failure": "a resource with persistent_path '/app.db' (parent dir = '/') is accepted self_host:true but Compose mounts the named volume at /data (the local_mount_target root-file fallback, carried O1), NOT at '/', so /app.db lives on the container's EPHEMERAL layer and does not survive a restart while self_host:true promises it does. Must fail closed with a typed repair blocker OR emit a volume that actually backs /app.db. Sibling [root-file-db-sqlite] (2 nodes). = C7 residual O1. Fix = R3."
+    },
+    {
+      "work_order": "R5/G12",
+      "lane": "python-closeout",
+      "node_id": "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py::test_g12_appkit_dockerfile_has_no_heredoc_copy",
+      "boundary": "real release + /download routes; emitted AppKit Dockerfile bytes read from the download zip",
+      "expected_failure": "the AppKit dev_server overlay (local_compose._dev_server_dockerfile) emits a heredoc 'COPY <<'DISCO_ENTRYPOINT' …' — a BuildKit/Buildx-only feature — but the bundle SELFHOST.md + the live guard declare only 'Docker Engine + Compose v2 plugin', so on a host meeting exactly that prerequisite the image fails to build. Must emit no heredoc COPY. Fix lands in local_compose, NOT the DO-NOT-TOUCH appkit generator. = C8 finding F3. Fix = R5."
+    },
+    {
+      "work_order": "R6/G13",
+      "lane": "python-closeout",
+      "node_id": "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_docker_evidence_absent_engine_must_not_claim_live_production",
+      "boundary": "imports the REAL verify_export_track1_closeout.py module and calls its real functions on a real tmp filesystem — the code under test, not a mock",
+      "expected_failure": "(a) _write_docker_host_artifacts writes status='produced_by_live_lane_on_docker_host' even when NO Docker engine ran (the status string itself lies; only the separate 'available' flag betrays it); (b) sibling test_frontend_lane_unexecuted_browser_must_block_green — _run_frontend_lane computes lane.green from vitest+typecheck+build ONLY, so the Playwright browser e2e is reported green though it never executed, folding into all_lanes_green -> passed:true. The G13(b) mirror is a curated always-green vitest subset (c3/c6) so the ONLY reason green could differ is the un-gated browser lane — exactly the defect. Must not label unproduced evidence as live. Fix = R6."
     }
-  ]
+  ],
+  "remediation_r0": {
+    "acceptance_version": "v2",
+    "base_candidate": "581d1fbe",
+    "summary": "R0 legitimate re-freeze after the independent audit (gaps G01-G19). Lands the proving reds against 581d1fbe with NO production change; the R1-R6 production fixes are PARKED. acceptance-v1 (G01) was a LIGHTWEIGHT tag moved AFTER C1-C6; v2 is an ANNOTATED reviewer-created tag on an acceptance-only (production-free) commit preceding all remediation. G19 fixed: the frozen frontend gate now targets e2e/export-track1-closeout/** (a directory), not the nonexistent single spec. G10 harness contradiction fixed (candidate spec toHaveCount(0)->toBeVisible).",
+    "proving_reds": [
+      "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[leading]",
+      "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[middle]",
+      "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_rejected_at_release_declare[trailing]",
+      "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_does_not_ship_through_release_download[leading]",
+      "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_does_not_ship_through_release_download[middle]",
+      "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py::test_positional_credential_does_not_ship_through_release_download[trailing]",
+      "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py::test_interpreted_candidate_with_deps_emits_dependency_install_layer[express_node_no_build]",
+      "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py::test_interpreted_candidate_with_deps_emits_dependency_install_layer[fastapi_python_no_build]",
+      "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py::test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm",
+      "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py::test_declared_static_output_dir_round_trips_into_sidecar",
+      "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py::test_g07_root_persistent_path_backed_or_fails_closed[root-file-app-db]",
+      "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py::test_g07_root_persistent_path_backed_or_fails_closed[root-file-db-sqlite]",
+      "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py::test_g12_appkit_dockerfile_has_no_heredoc_copy",
+      "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_docker_evidence_absent_engine_must_not_claim_live_production",
+      "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py::test_frontend_lane_unexecuted_browser_must_block_green"
+    ],
+    "r4_activated_deferred": {
+      "G08": "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts — the self-host download-binding e2e. RED at reachability today (the candidate/needs-review SelfHostPanel is unreachable offline, same wall as G09); its version_seq+spec_digest binding teeth activate once R4 restores reachability. The G11 null-binding concern is FOLDED here (guard belongs at the URL-construction seam api/projects.ts:187 + types/release.ts:73-74 nullability, NOT a marker stamped on the panel) plus the R4 type-nullability fix. NOT counted among the R0 proving reds."
+    },
+    "record_only": {
+      "G09_e2e_reachability": "4 Firefox e2e reachability reds (candidate x2 + needs-review x2 SelfHostPanel unreachable in Build+Agent offline; the not-web path is reachable and passes) — confirmed via live Firefox. Activates at R4.",
+      "G14_live_matrix": "the 7-node frozen live Docker matrix (integration-marked): 2 pass / 5 fail on 581d1fbe (the C8 live run — first time the frozen live lane ever executed). Re-run to 7/7 is R7."
+    },
+    "ratified_baseline_suppression": "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py:349 '# noqa: BLE001' (G18) — the SINGLE ratified pre-existing suppression; it strengthens the test (catches a churner crash). No new suppressions added.",
+    "parked_production_fixes": "R1(G02) R2(G03-G06) R3(G07) R4(G08-G11) R5(G12) R6(G13,G18,G19) R7(G14) R8(G15-G17)"
+  }
 }

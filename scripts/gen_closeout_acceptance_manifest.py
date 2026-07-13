@@ -61,7 +61,7 @@ FROZEN_FILES: tuple[str, ...] = (
 
 # The baseline the harness is authored against (plan header).
 BASELINE_SHA = "2ec1ceba08e90bd1f45a19075d76975d44e90b7c"
-ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v1"
+ACCEPTANCE_TAG = "export-track1-closeout-acceptance-v2"
 
 # ---- lane definitions (single source of truth; the verifier imports these) ----
 
@@ -282,7 +282,235 @@ RED_TESTS: tuple[dict[str, object], ...] = (
             "with only the plain source download"
         ),
     },
+    # ---- R0 acceptance-v2 additions: the independent-audit gap-ledger proving reds
+    # (plan Consolidated Remediation Plan, gaps G02/G04/G05/G06/G07/G12/G13). One
+    # representative index entry per gap; sibling nodes named in expected_failure. All
+    # node IDs cross-checked against a real `pytest --collect-only` (the machine-truth
+    # python_closeout_inventory). The PRODUCTION fixes are PARKED (R1–R6); R0 only
+    # FREEZES these reds against 581d1fbe. See red_remediation_r0 below for the full
+    # 15-node proving set + the R4-activated / record-only / ratified-baseline ledger.
+    {
+        "work_order": "R1/G02",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/agent-server/tests/export_track1_closeout/test_g02_positional_credential.py"
+            "::test_positional_credential_rejected_at_release_declare[leading]"
+        ),
+        "boundary": (
+            "real release_declare ToolExecutor (execute_pi_tool) + real release route "
+            "+ real bound /download zip bytes"
+        ),
+        "expected_failure": (
+            "a bare POSITIONAL literal credential (npm _authToken operand — no flag, no "
+            "'=', no shell metacharacter, not a ${NAME} ref) passes check_token_hygiene "
+            "AND the positional-operand branch of check_declaration_argv, so it is "
+            "ACCEPTED at declare, PERSISTS in release-intent.json, and SHIPS verbatim in "
+            "the emitted Dockerfile CMD + release.json; it must fail closed like the C5 "
+            "flag forms. Siblings cover the middle/trailing positions and the "
+            "does_not_ship_through_release_download half (6 nodes total). Fix = R1."
+        ),
+    },
+    {
+        "work_order": "R2/G04",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/agent-server/tests/export_track1_closeout/test_g04_interpreted_install.py"
+            "::test_interpreted_candidate_with_deps_emits_dependency_install_layer"
+            "[express_node_no_build]"
+        ),
+        "boundary": "real release + /download routes; assertion on emitted Dockerfile bytes in the zip",
+        "expected_failure": (
+            "a typed INTERPRETED candidate with dependencies and NO build step emits an "
+            "empty build_cmd, so local_compose._effective_install_cmd returns () and the "
+            "Dockerfile is COPY -> CMD with NO npm/pip install layer -> unrunnable image "
+            "('Cannot find module express' / uvicorn missing). Must emit a dependency "
+            "install layer or fail closed. Sibling [fastapi_python_no_build] (2 nodes). "
+            "= C8 finding F1. Fix = R2."
+        ),
+    },
+    {
+        "work_order": "R2/G05",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/agent-server/tests/export_track1_closeout/test_g05_typed_pnpm_start.py"
+            "::test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm"
+        ),
+        "boundary": "real release + /download routes; assertion on /release JSON + emitted Dockerfile bytes",
+        "blocker_code": "toolchain_unsupported",
+        "expected_failure": (
+            "a typed intent with start_cmd ('pnpm','start') is accepted as a candidate "
+            "(pnpm is in detect._SUPPORTED_NODE_HEADS) and the emitted node image "
+            "provisions NO pnpm (no corepack enable, no global install) -> 'pnpm start' "
+            "fails at container start, though the SOURCE path fails such a workspace "
+            "closed with toolchain_unsupported. Must fail closed the same way (or "
+            "actually provision/pin pnpm). Fix = R2."
+        ),
+    },
+    {
+        "work_order": "R2/G06",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py"
+            "::test_declared_static_output_dir_round_trips_into_sidecar"
+        ),
+        "boundary": "real ConversationRuntime executing the real ReleaseDeclareTool; persisted sidecar bytes on disk",
+        "blocker_code": "extra_forbidden",
+        "expected_failure": (
+            "ReleaseIntent has extra='forbid' and no output_dir field, so a declaration "
+            "supplying output_dir='dist' is REJECTED with extra_forbidden and nothing "
+            "persists — a static/Vite build's output dir is UNDECLARABLE through the "
+            "typed intent though the internal ReleaseService spec DOES interpolate it "
+            "into 'COPY --from=build /app/<output_dir>/'. Must round-trip output_dir into "
+            "the sidecar. = C8 finding F2. Fix = R2 (add field + lower through the tool)."
+        ),
+    },
+    {
+        "work_order": "R3/G07",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/agent-server/tests/export_track1_closeout/test_g07_root_persistent_path.py"
+            "::test_g07_root_persistent_path_backed_or_fails_closed[root-file-app-db]"
+        ),
+        "boundary": "real release + /download routes; emitted compose.yaml parsed in-process with PyYAML",
+        "expected_failure": (
+            "a resource with persistent_path '/app.db' (parent dir = '/') is accepted "
+            "self_host:true but Compose mounts the named volume at /data (the "
+            "local_mount_target root-file fallback, carried O1), NOT at '/', so /app.db "
+            "lives on the container's EPHEMERAL layer and does not survive a restart "
+            "while self_host:true promises it does. Must fail closed with a typed repair "
+            "blocker OR emit a volume that actually backs /app.db. Sibling "
+            "[root-file-db-sqlite] (2 nodes). = C7 residual O1. Fix = R3."
+        ),
+    },
+    {
+        "work_order": "R5/G12",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/agent-server/tests/export_track1_closeout/test_g12_appkit_no_heredoc.py"
+            "::test_g12_appkit_dockerfile_has_no_heredoc_copy"
+        ),
+        "boundary": "real release + /download routes; emitted AppKit Dockerfile bytes read from the download zip",
+        "expected_failure": (
+            "the AppKit dev_server overlay (local_compose._dev_server_dockerfile) emits a "
+            "heredoc 'COPY <<'DISCO_ENTRYPOINT' …' — a BuildKit/Buildx-only feature — but "
+            "the bundle SELFHOST.md + the live guard declare only 'Docker Engine + "
+            "Compose v2 plugin', so on a host meeting exactly that prerequisite the image "
+            "fails to build. Must emit no heredoc COPY. Fix lands in local_compose, NOT "
+            "the DO-NOT-TOUCH appkit generator. = C8 finding F3. Fix = R5."
+        ),
+    },
+    {
+        "work_order": "R6/G13",
+        "lane": "python-closeout",
+        "node_id": (
+            "packages/agent-server/tests/export_track1_closeout/test_g13_verifier_truthfulness.py"
+            "::test_docker_evidence_absent_engine_must_not_claim_live_production"
+        ),
+        "boundary": (
+            "imports the REAL verify_export_track1_closeout.py module and calls its real "
+            "functions on a real tmp filesystem — the code under test, not a mock"
+        ),
+        "expected_failure": (
+            "(a) _write_docker_host_artifacts writes status="
+            "'produced_by_live_lane_on_docker_host' even when NO Docker engine ran (the "
+            "status string itself lies; only the separate 'available' flag betrays it); "
+            "(b) sibling test_frontend_lane_unexecuted_browser_must_block_green — "
+            "_run_frontend_lane computes lane.green from vitest+typecheck+build ONLY, so "
+            "the Playwright browser e2e is reported green though it never executed, "
+            "folding into all_lanes_green -> passed:true. The G13(b) mirror is a curated "
+            "always-green vitest subset (c3/c6) so the ONLY reason green could differ is "
+            "the un-gated browser lane — exactly the defect. Must not label unproduced "
+            "evidence as live. Fix = R6."
+        ),
+    },
 )
+
+
+# ---- R0 acceptance-v2 remediation ledger (plan Consolidated Remediation Plan) -----
+# The independent audit of candidate 581d1fbe found gaps the acceptance-v1 harness
+# missed (G01-G19). R0 is the legitimate re-freeze: it LANDS the proving reds against
+# 581d1fbe WITHOUT any production change (fixes R1-R6 are PARKED). This block is the
+# machine-readable G-ID -> node-ID inventory the reviewer reads back. It is DOCUMENTARY
+# (the verifier gates on `files` + `python_closeout_inventory` + `frontend_closeout_
+# inventory`, never on this), so every node ID is hand-verified against a real
+# `pytest --collect-only` (the machine-truth python_closeout_inventory).
+_R0_AGENT = "packages/agent-server/tests/export_track1_closeout"
+_R0_TOOLS = "packages/tools/tests/export_track1_closeout"
+REMEDIATION_R0: dict[str, object] = {
+    "acceptance_version": "v2",
+    "base_candidate": "581d1fbe",
+    "summary": (
+        "R0 legitimate re-freeze after the independent audit (gaps G01-G19). Lands the "
+        "proving reds against 581d1fbe with NO production change; the R1-R6 production "
+        "fixes are PARKED. acceptance-v1 (G01) was a LIGHTWEIGHT tag moved AFTER C1-C6; "
+        "v2 is an ANNOTATED reviewer-created tag on an acceptance-only (production-free) "
+        "commit preceding all remediation. G19 fixed: the frozen frontend gate now "
+        "targets e2e/export-track1-closeout/** (a directory), not the nonexistent single "
+        "spec. G10 harness contradiction fixed (candidate spec toHaveCount(0)->toBeVisible)."
+    ),
+    "proving_reds": [
+        f"{_R0_AGENT}/test_g02_positional_credential.py"
+        "::test_positional_credential_rejected_at_release_declare[leading]",
+        f"{_R0_AGENT}/test_g02_positional_credential.py"
+        "::test_positional_credential_rejected_at_release_declare[middle]",
+        f"{_R0_AGENT}/test_g02_positional_credential.py"
+        "::test_positional_credential_rejected_at_release_declare[trailing]",
+        f"{_R0_AGENT}/test_g02_positional_credential.py"
+        "::test_positional_credential_does_not_ship_through_release_download[leading]",
+        f"{_R0_AGENT}/test_g02_positional_credential.py"
+        "::test_positional_credential_does_not_ship_through_release_download[middle]",
+        f"{_R0_AGENT}/test_g02_positional_credential.py"
+        "::test_positional_credential_does_not_ship_through_release_download[trailing]",
+        f"{_R0_AGENT}/test_g04_interpreted_install.py"
+        "::test_interpreted_candidate_with_deps_emits_dependency_install_layer[express_node_no_build]",
+        f"{_R0_AGENT}/test_g04_interpreted_install.py"
+        "::test_interpreted_candidate_with_deps_emits_dependency_install_layer[fastapi_python_no_build]",
+        f"{_R0_AGENT}/test_g05_typed_pnpm_start.py"
+        "::test_typed_pnpm_start_intent_is_rejected_or_provisions_pnpm",
+        f"{_R0_TOOLS}/test_g06_intent_output_dir.py"
+        "::test_declared_static_output_dir_round_trips_into_sidecar",
+        f"{_R0_AGENT}/test_g07_root_persistent_path.py"
+        "::test_g07_root_persistent_path_backed_or_fails_closed[root-file-app-db]",
+        f"{_R0_AGENT}/test_g07_root_persistent_path.py"
+        "::test_g07_root_persistent_path_backed_or_fails_closed[root-file-db-sqlite]",
+        f"{_R0_AGENT}/test_g12_appkit_no_heredoc.py"
+        "::test_g12_appkit_dockerfile_has_no_heredoc_copy",
+        f"{_R0_AGENT}/test_g13_verifier_truthfulness.py"
+        "::test_docker_evidence_absent_engine_must_not_claim_live_production",
+        f"{_R0_AGENT}/test_g13_verifier_truthfulness.py"
+        "::test_frontend_lane_unexecuted_browser_must_block_green",
+    ],
+    "r4_activated_deferred": {
+        "G08": (
+            "frontend/e2e/export-track1-closeout/selfhost-download-binding.spec.ts — the "
+            "self-host download-binding e2e. RED at reachability today (the candidate/"
+            "needs-review SelfHostPanel is unreachable offline, same wall as G09); its "
+            "version_seq+spec_digest binding teeth activate once R4 restores reachability. "
+            "The G11 null-binding concern is FOLDED here (guard belongs at the URL-"
+            "construction seam api/projects.ts:187 + types/release.ts:73-74 nullability, "
+            "NOT a marker stamped on the panel) plus the R4 type-nullability fix. NOT "
+            "counted among the R0 proving reds."
+        ),
+    },
+    "record_only": {
+        "G09_e2e_reachability": (
+            "4 Firefox e2e reachability reds (candidate x2 + needs-review x2 SelfHostPanel "
+            "unreachable in Build+Agent offline; the not-web path is reachable and passes) "
+            "— confirmed via live Firefox. Activates at R4."
+        ),
+        "G14_live_matrix": (
+            "the 7-node frozen live Docker matrix (integration-marked): 2 pass / 5 fail on "
+            "581d1fbe (the C8 live run — first time the frozen live lane ever executed). "
+            "Re-run to 7/7 is R7."
+        ),
+    },
+    "ratified_baseline_suppression": (
+        "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py:349 "
+        "'# noqa: BLE001' (G18) — the SINGLE ratified pre-existing suppression; it "
+        "strengthens the test (catches a churner crash). No new suppressions added."
+    ),
+    "parked_production_fixes": "R1(G02) R2(G03-G06) R3(G07) R4(G08-G11) R5(G12) R6(G13,G18,G19) R7(G14) R8(G15-G17)",
+}
 
 
 def repo_root() -> Path:
@@ -407,7 +635,11 @@ def build_manifest(root: Path) -> dict[str, object]:
         "cannot hide a test. frontend_closeout_inventory lists the frozen vitest files "
         "(+ titles) the frontend lane compares. red_tests names one representative "
         "failing public-boundary test per work order C1–C8 plus the frontend C3/C6 "
-        "reds. Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
+        "reds, AND (acceptance-v2 / R0) one per independent-audit gap "
+        "G02/G04/G05/G06/G07/G12/G13; remediation_r0 carries the full 15-node R0 "
+        "proving set plus the R4-activated / record-only / ratified-baseline ledger "
+        "(the R1–R6 production fixes are PARKED — R0 only freezes the reds). "
+        "Anti-bypass operational reading (§4.4): " + OPERATIONAL_READING
     )
     return {
         "schema": "export-track1-closeout-acceptance/v1",
@@ -422,6 +654,7 @@ def build_manifest(root: Path) -> dict[str, object]:
         "python_closeout_inventory": collect_python_closeout_ids(root),
         "frontend_closeout_inventory": frontend_closeout_inventory(root),
         "red_tests": list(RED_TESTS),
+        "remediation_r0": REMEDIATION_R0,
     }
 
 

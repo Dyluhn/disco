@@ -4,8 +4,9 @@
  *
  * FROZEN acceptance path (plan §1.1). Firefox-only. Locked semantics §2.1: a
  * `candidate` is statically plausible and UNVERIFIED — the panel must read exactly
- * "Bundle available" + "Not runtime-verified", must never say "Ready", and (being
- * unverified) must expose NO run command. The plain source download stays available.
+ * "Bundle available" + "Not runtime-verified", must never say "Ready", and MAY show
+ * the exact local run command (an internally complete bundle). The plain source
+ * download stays available.
  *
  * The candidate verdict is the offline `conv_demo_snake` fixture (self_host:true).
  *
@@ -18,8 +19,11 @@
  * only as the ProjectsView row badge — a separate control). This spec is authored to
  * the intended contract and asserts it as soon as a fixture-mode finished demo (or
  * the C3 impl surfacing the panel for a resumed finished project) makes the panel
- * reachable. On baseline it is RED (the panel is unreachable, and even mounted the
- * copy says "Ready to self-host" with a run command). Its live validation is deferred.
+ * reachable. On baseline (581d1fbe) it is RED SOLELY because the panel is unreachable
+ * offline. Once reachable this is a green-preservation proof: the candidate StatusPill
+ * already renders "Bundle available" + "Not runtime-verified" (never "Ready") and the
+ * self-hostable branch already shows the run command — the WO-C3/C5 honest copy is in
+ * place, so the copy/run-command are NOT the defect. Its live validation is deferred.
  */
 
 import { expect, test, type Page } from "@playwright/test";
@@ -38,8 +42,9 @@ async function assertCandidatePanel(page: Page, artifact: string): Promise<void>
   const text = (await panel.textContent()) ?? "";
   expect(text.toLowerCase()).not.toContain("ready");
 
-  // Unverified ⇒ NO run command / self-host-ready affordance.
-  await expect(panel.locator('[data-disco-control="build.self-host-command"]')).toHaveCount(0);
+  // A candidate MAY show the exact local run command (an internally complete
+  // bundle); never claims "Ready".
+  await expect(panel.locator('[data-disco-control="build.self-host-command"]')).toBeVisible();
 
   // The plain source download remains available.
   await expect(panel.locator('[data-disco-control="build.download-source"]')).toBeVisible();

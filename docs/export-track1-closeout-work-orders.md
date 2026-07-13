@@ -47,8 +47,7 @@ WO-C0 will create and freeze these paths:
 - `packages/agent-server/tests/integration/test_export_track1_closeout_live.py`
 - `packages/agent-server/tests/fixtures/export_track1_closeout/**`
 - `frontend/src/test/export-track1-closeout/**`
-- `frontend/e2e/export-track1-closeout.spec.ts`
-- `frontend/e2e/export-track1-closeout.spec.ts-snapshots/**`
+- `frontend/e2e/export-track1-closeout/**`
 - `.github/workflows/export-track1-closeout.yml`
 - `docs/export-track1-closeout-work-orders.md`
 - `docs/export-track1-closeout-acceptance.sha256`
@@ -217,7 +216,7 @@ npx vitest run src/test/export-track1-closeout \
   --reporter=json --outputFile=/tmp/export-track1-vitest.json
 npm run test
 npx vite build
-npx playwright test e2e/export-track1-closeout.spec.ts --project=firefox
+npx playwright test e2e/export-track1-closeout --project=firefox --retries=0 --reporter=json
 ```
 
 Required result: all commands exit `0`, no skipped/todo tests in the closeout suite, and
