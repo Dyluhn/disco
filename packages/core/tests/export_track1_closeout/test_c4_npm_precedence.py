@@ -31,6 +31,21 @@ fix matches launcher FAMILIES (``bun``/``bunx`` → bun, ``pnpm``/``pnpx`` → p
 yarn) and also inspects ``prebuild``/``postbuild`` — only when there is NO authoritative
 npm signal (finding #1 precedence still holds).
 
+FINDING #2d (silent-broken-bundle via a HIDDEN launcher head — HIGH). The launcher-head
+check parsed only the first whitespace token (``script.split()[0]``), so a launcher hidden
+behind a leading ``NAME=VALUE`` env prefix, a shell chain (``&&`` / ``||`` / ``;`` / ``|`` /
+``&``), or a ``corepack`` wrapper escaped the family match → false npm ``candidate`` →
+emitted ``CMD ["npm","start"]`` shells to a missing ``bunx`` / ``pnpm`` / ``yarn`` at run
+time. It also inspected only ``start`` / ``build``, not the install/start lifecycle hooks
+the emitted bundle actually runs. The fix extracts the EFFECTIVE head of every shell
+sub-command (stripping env-assignment / ``corepack`` prefixes) and inspects every key
+``npm ci`` + ``npm run build`` + ``npm start`` provably run (``preinstall`` / ``install`` /
+``postinstall``, ``prebuild`` / ``build`` / ``postbuild``, ``prestart`` / ``start`` /
+``poststart``; ``prepare`` is EXCLUDED — its execution under ``npm ci`` is version-dependent
+and not provable, so a launcher there is not a provable bundle crash). A launcher HEAD in
+any inspected key → ``toolchain_unsupported``; a launcher name that is only a non-head
+ARGUMENT stays a candidate.
+
 RED vs GREEN (BEFORE each fix):
   * RED (finding #1, tip 300d7ec6) — ``package-lock.json`` + ``.yarnrc`` and
     ``packageManager:"npm@10"`` + ``pnpm-workspace.yaml`` are WRONGLY rejected
@@ -45,6 +60,12 @@ RED vs GREEN (BEFORE each fix):
     #2c makes the active launcher head runtime-authoritative — it rejects
     ``toolchain_unsupported`` even with a lockfile, while the PASSIVE marker cases above
     still stay ``candidate``.
+  * RED (closeout #2d, tip a78f6b70) — a launcher hidden behind an env prefix
+    (``NODE_ENV=production bunx vite``) or a shell chain (``cd app && bunx vite``), or living
+    in an install/start lifecycle hook (``postinstall`` / ``preinstall`` / ``prestart`` /
+    …), beside a committed ``package-lock.json``, was WRONGLY a ``candidate``. Robust
+    extraction rejects it ``toolchain_unsupported``, while benign chains/hooks (every
+    effective head node/npm/npx/…, or a launcher only as a non-head arg) stay ``candidate``.
   * GREEN preservation — a plain pnpm/yarn/bun declaration with NO npm signal STILL fails
     closed; a plain npm project (incl. one with an authoritative-npm-overridden stray
     PASSIVE marker) STILL a candidate; a NON-npm ``packageManager`` field STILL rejects
@@ -237,6 +258,88 @@ def test_launcher_family_head_without_npm_signal_fails_closed(
         "server.js": _SERVER_JS,
     }
     _assert_toolchain_unsupported(_detect(files))
+
+
+# ---- FINDING #2d: robust head extraction — env-prefix / shell-chain / corepack + hooks ----
+
+# Head-hiding shapes whose EFFECTIVE launcher head the naive ``split()[0]`` parse missed,
+# each WITH a committed ``package-lock.json`` (so it also proves the #2c UNCONDITIONAL reject
+# survives the hiding: an authoritative npm signal never rescues a live launcher).
+_HIDDEN_LAUNCHER_CASES: tuple[tuple[str, str], ...] = (
+    ("start", "NODE_ENV=production bunx vite"),  # leading env-assignment prefix
+    ("start", "cd app && bunx vite"),  # `&&` chain, launcher in 2nd sub-command
+    ("build", "vite build && bunx compress"),  # `&&` chain, benign head first
+    ("start", "true ; pnpm dev"),  # `;` sequence
+    ("start", "vite build | pnpx bundle"),  # `|` pipe
+    ("start", "node warmup.js & bunx serve"),  # `&` background
+    ("start", "corepack pnpm start"),  # corepack wrapper
+    ("start", "NODE_ENV=prod corepack yarn dev"),  # env prefix + corepack wrapper
+    ("preinstall", "pnpm run gen"),  # npm ci install-lifecycle hook
+    ("install", "yarn build"),  # npm ci install-lifecycle hook
+    ("postinstall", "bunx patch"),  # npm ci install-lifecycle hook
+    ("prestart", "yarn warmup"),  # npm start pre-hook
+    ("poststart", "pnpx notify"),  # npm start post-hook
+)
+
+
+@pytest.mark.parametrize(("script_key", "script"), _HIDDEN_LAUNCHER_CASES)
+def test_hidden_launcher_head_rejects_even_with_authoritative_npm(
+    script_key: str, script: str, closeout_name: object
+) -> None:
+    """RED on a78f6b70 (closeout #2d). A non-npm launcher hidden behind an env prefix, a
+    shell chain (``&&``/``||``/``;``/``|``/``&``), or a ``corepack`` wrapper — or living in an
+    install/start lifecycle hook the emitted bundle actually runs (``npm ci`` ->
+    pre/install/post; ``npm start`` -> pre/post) — was missed by the naive ``split()[0]``
+    parse and shipped a FALSE npm ``candidate`` whose ``CMD ["npm","start"]`` shells to a
+    missing ``bunx``/``pnpm``/``yarn`` at run time (silent-broken-bundle). Robust extraction
+    must fail it closed to ``toolchain_unsupported`` even with a committed
+    ``package-lock.json`` present (#2c: a live launcher is runtime-authoritative)."""
+    assert callable(closeout_name)
+    scripts = {"start": "node server.js"}
+    scripts[script_key] = script  # may overwrite start with the head-hiding launcher
+    files = {
+        "package.json": _package_json(str(closeout_name("svc")), scripts, None),
+        "package-lock.json": _PACKAGE_LOCK,
+        "server.js": _SERVER_JS,
+    }
+    _assert_toolchain_unsupported(_detect(files))
+
+
+# Benign shapes that must NEVER become ``toolchain_unsupported`` — every effective head is
+# npm-family / a normal binary, a launcher name appears only as a non-head ARGUMENT, or the
+# launcher lives in the DELIBERATELY-uninspected ``prepare`` hook. All carry a committed
+# ``package-lock.json`` (a real npm project) and must stay a ``candidate``.
+_BENIGN_HEAD_CASES: tuple[tuple[str, str], ...] = (
+    ("start", "NODE_ENV=production node server.js"),  # env prefix, node head
+    ("build", "cd app && npm run build"),  # chain, cd + npm heads
+    ("build", "vite build && node post.js"),  # chain, vite + node heads
+    ("start", "npx serve"),  # npx (npm-family) head
+    ("start", 'echo "use bun" && node server.js'),  # `bun` only inside an echo ARG
+    ("postinstall", "node scripts/patch.js"),  # hook, node head
+    ("postinstall", "patch-package"),  # hook, plain-binary head
+    ("prestart", "node warmup.js"),  # start pre-hook, node head
+    ("prepare", "husky install"),  # husky is not a launcher (and `prepare` is uninspected)
+)
+
+
+@pytest.mark.parametrize(("script_key", "script"), _BENIGN_HEAD_CASES)
+def test_benign_chains_and_hooks_stay_candidate(
+    script_key: str, script: str, closeout_name: object
+) -> None:
+    """GREEN — NO NEW FALSE-BLOCK (the critical #2d guard). A real npm project whose every
+    effective sub-command head is node/npm/npx/vite/…, or where a launcher name is only a
+    non-head argument, or whose only launcher lives in the uninspected ``prepare`` hook, must
+    stay a self-host ``candidate`` — robust extraction rejects a launcher HEAD only, in a key
+    the emitted bundle actually runs."""
+    assert callable(closeout_name)
+    scripts = {"start": "node server.js"}
+    scripts[script_key] = script  # may overwrite start; server.js still binds $PORT
+    files = {
+        "package.json": _package_json(str(closeout_name("svc")), scripts, None),
+        "package-lock.json": _PACKAGE_LOCK,
+        "server.js": _SERVER_JS,
+    }
+    _assert_candidate(_detect(files))
 
 
 # ---- GREEN preservation: the genuine reject must NOT be weakened ----

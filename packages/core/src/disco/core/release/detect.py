@@ -335,11 +335,40 @@ _SCRIPT_HEAD_FAMILY: dict[str, str] = {
     "yarn": "yarn",
 }
 
-# The `package.json` script keys whose interpreter head reveals a non-npm launcher. Beyond
-# the process entrypoints (`start`/`build`), the corepack lifecycle hooks `prebuild` /
-# `postbuild` (npm runs them around `build`) can invoke a non-npm manager too, so they are
-# inspected as well (closeout #2).
-_TOOLCHAIN_SCRIPT_KEYS = ("start", "build", "prebuild", "postbuild")
+# The `package.json` script keys the EMITTED bundle provably runs, so a non-npm launcher
+# hidden in any of them crashes at bundle time (closeout #2 / #2d). Ordered by npm-lifecycle
+# phase:
+#   * `npm ci` (the emitted install step) runs, for the ROOT package, `preinstall` ->
+#     `install` -> `postinstall` (stable across npm versions);
+#   * `npm run build` (emitted only when a `build` script exists) runs `prebuild` -> `build`
+#     -> `postbuild`;
+#   * `npm start` (the emitted Dockerfile CMD) runs `prestart` -> `start` -> `poststart`.
+# `prepare` is DELIBERATELY EXCLUDED: whether `npm ci` runs it is version-dependent and
+# historically inconsistent (it is primarily an `npm install`-without-args / pre-pack hook),
+# so a launcher there does NOT provably run in the production bundle and inspecting it would
+# risk a false-block. `prepublish*` / `prepack` / `postpack` never run on `npm ci` / `npm
+# start` and are excluded for the same reason.
+_TOOLCHAIN_SCRIPT_KEYS = (
+    "preinstall",
+    "install",
+    "postinstall",
+    "prebuild",
+    "build",
+    "postbuild",
+    "prestart",
+    "start",
+    "poststart",
+)
+
+# Sub-command separators in a shell script string: a launcher hidden in ANY sub-command of a
+# chain (`cd app && bunx vite`, `true ; pnpm dev`, `a | pnpx b`, `a & bunx b`) runs at bundle
+# time, so each sub-command's head is inspected independently (closeout #2d). The two-char
+# `&&` / `||` are matched BEFORE their single-char `&` / `|` so an operator is never split
+# mid-token.
+_SHELL_CHAIN_RE = re.compile(r"&&|\|\||;|\||&")
+# A leading `NAME=VALUE` shell env-assignment (`NODE_ENV=production bunx vite`): any number
+# precede the real command head and are stripped before it is read (closeout #2d).
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
 
 # ---- result models ------------------------------------------------------------
@@ -798,6 +827,42 @@ def _node_toolchain_blocker(manager: str, why: str, evidence: str) -> _DetectBlo
     )
 
 
+def _effective_head(sub_command: str) -> str | None:
+    """The effective interpreter head of ONE shell sub-command: the first token after any
+    leading `NAME=VALUE` env-assignments and an optional `corepack` wrapper, path-stripped
+    and lowercased (`/usr/bin/bunx` -> `bunx`). `None` when the sub-command carries no
+    command token (only env-assignments, a bare `corepack`, or empty)."""
+    tokens = sub_command.split()
+    idx = 0
+    while idx < len(tokens) and _ENV_ASSIGN_RE.match(tokens[idx]):
+        idx += 1
+    if idx < len(tokens) and tokens[idx].rsplit("/", 1)[-1].lower() == "corepack":
+        idx += 1
+    if idx >= len(tokens):
+        return None
+    return tokens[idx].rsplit("/", 1)[-1].lower()
+
+
+def _launcher_family_in_script(script: str) -> tuple[str, str] | None:
+    """The first `(head, family)` non-npm launcher match across a script string's shell
+    sub-commands, else `None` (closeout #2d — robust against a launcher hidden behind an env
+    prefix, a shell chain, or a corepack wrapper).
+
+    Splits the string on shell operators, derives each sub-command's effective head
+    (`_effective_head` strips env-assignment / `corepack` prefixes), and matches it against
+    `_SCRIPT_HEAD_FAMILY`. So `NODE_ENV=production bunx vite`, `cd app && bunx vite`,
+    `true ; pnpm dev`, and `corepack pnpm start` are all caught — while a launcher name that
+    appears only as a non-head ARGUMENT (`echo "use bun" && node x`) is NOT, since only a
+    command HEAD names a runtime. Deterministic: the first launcher in sub-command order."""
+    for sub_command in _SHELL_CHAIN_RE.split(script):
+        head = _effective_head(sub_command)
+        if head is not None:
+            family = _SCRIPT_HEAD_FAMILY.get(head)
+            if family is not None:
+                return (head, family)
+    return None
+
+
 def _has_authoritative_npm_signal(files: Mapping[str, str | bytes], pkg: object) -> bool:
     """Whether the tree carries an AUTHORITATIVE declaration that npm — the ONE node
     manager the neutral base image provisions — builds the app: a committed ROOT
@@ -876,12 +941,9 @@ def _unsupported_node_pm_declaration(
         script = _script(pkg, script_name)
         if script is None:
             continue
-        tokens = script.split()
-        if not tokens:
-            continue
-        head = tokens[0].rsplit("/", 1)[-1].lower()
-        family = _SCRIPT_HEAD_FAMILY.get(head)
-        if family is not None:
+        match = _launcher_family_in_script(script)
+        if match is not None:
+            head, family = match
             return _node_toolchain_blocker(
                 family,
                 f"the {script_name!r} script invokes the {family!r} package manager "
