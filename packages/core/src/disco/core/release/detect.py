@@ -61,8 +61,6 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import NamedTuple
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from disco.core.release.spec import (
     EnvScope,
     EnvVarDecl,
@@ -77,6 +75,7 @@ from disco.core.release.spec import (
     SecretClass,
     ServiceRole,
 )
+from pydantic import BaseModel, ConfigDict, Field
 
 # Frozen + reject-unknowns, matching the release contract's discipline: a
 # DetectionResult is a finding, not a mutable accumulator, so `==` over two runs
@@ -163,6 +162,25 @@ _PY_TOKENS = frozenset(
     {"python", "python3", "uvicorn", "gunicorn", "hypercorn", "flask", "fastapi", "poetry", "uv"}
 )
 
+# Genuinely-SUPPORTED start-command heads — an ALLOWLIST, not a blocklist. The
+# neutral base images run exactly these; a declared start whose head is NOT here fails
+# closed to `toolchain_unsupported` (§7 crit 4 / §15: NO node-fallback for an arbitrary
+# executable merely because its name can be guessed — ruby/go/php/caddy/`./server`/bun/
+# deno/uv/poetry are all rejected). Node base: the npm-family launchers. Python base: a
+# bare interpreter (matched by the `python` prefix, e.g. `python3.12`) plus the
+# ASGI/WSGI servers the image can install.
+_SUPPORTED_NODE_HEADS = frozenset({"node", "npm", "npx", "yarn", "pnpm"})
+_SUPPORTED_PY_SERVER_HEADS = frozenset({"uvicorn", "gunicorn", "hypercorn"})
+
+
+def _is_supported_toolchain_head(head: str) -> bool:
+    """Whether a start-command interpreter head is a runtime the base images run."""
+    return (
+        head in _SUPPORTED_NODE_HEADS
+        or head in _SUPPORTED_PY_SERVER_HEADS
+        or head.startswith("python")
+    )
+
 # Non-sqlite database url schemes — recognized ONLY to fail closed on them.
 _UNKNOWN_DB_SCHEMES = (
     "mysql://",
@@ -177,6 +195,68 @@ _UNKNOWN_DB_SCHEMES = (
 _DB_FILE_URL_RE = re.compile(r"database_url\s*[=:]\s*[\"']?file:", re.IGNORECASE)
 _LIBSQL_RE = re.compile(r"@libsql/client|libsql|drizzle", re.IGNORECASE)
 _SQLITE_WORD_RE = re.compile(r"sqlite", re.IGNORECASE)
+
+# ---- bounded detection (§7.11) ------------------------------------------------
+#
+# Every WHOLE-TREE content scan (web-framework, database, env, route signals) reads
+# at most `_MAX_SCAN_BYTES` per file and SKIPS binary files (a NUL byte in the
+# scanned head marks a file binary). A named-config parse (`package.json`,
+# `wrangler.toml`, `vite.config.*`) reads a single small file and is separately
+# bounded by the same cap. The detector therefore NEVER performs an unbounded
+# whole-tree text decode, so an out-of-bounds binary blob or an oversized text file
+# can never inject a spurious marker (a `scheme://` url, a framework token) into the
+# verdict — the marker sits past the cap, or inside a skipped binary, and is never
+# read. The cap is generous (well above any real source file) so a legitimate
+# config is always fully seen.
+_MAX_SCAN_BYTES = 256 * 1024
+
+# Direct environment-variable reads in JS/TS: `process.env.NAME` and the quoted
+# bracket form `process.env['NAME']`. A DYNAMIC bracket read (`process.env[name]`
+# — a non-quoted index) cannot be resolved to a NAME statically and fails closed.
+_JS_ENV_DOT_RE = re.compile(r"process\.env\.([A-Za-z_][A-Za-z0-9_]*)")
+_JS_ENV_STR_RE = re.compile(r"""process\.env\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\]""")
+_JS_ENV_DYNAMIC_RE = re.compile(r"""process\.env\[\s*(?!['"])""")
+
+# A `NAME=` declaration line in a dotenv / dev-vars file (`.env`, `.env.example`,
+# `.dev.vars`, …) — the env NAMES an owner has DECLARED for the workspace (values
+# are ignored; only the names matter). An optional `export ` prefix is tolerated.
+_DOTENV_NAME_RE = re.compile(r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+# A root HTTP route registration serving `/` (an Express/http root handler or a
+# FastAPI/Flask root GET decorator) — used to POSITIVELY establish the `GET /`
+# health contract rather than guessing it.
+_JS_ROOT_ROUTE_RE = re.compile(r"""\.(?:get|use|all|route)\(\s*['"]/['"]""")
+_JS_CATCHALL_RE = re.compile(r"createServer\s*\(")
+_PY_ROOT_GET_RE = re.compile(r"""@\w+\.get\(\s*['"]/['"]""")
+
+# A MODULE-SCOPE FastAPI (ASGI) app assignment in a root module — the only python
+# shape the detector can auto-start with `uvicorn <module>:app`. Anchored at column 0
+# (no leading indentation): an INDENTED `app = FastAPI()` is a function-local (an
+# app-factory like `def create_app(): app = FastAPI()`), which does NOT exist at module
+# scope — emitting `main:app` for it would fabricate a non-existent entrypoint. A Flask
+# (WSGI) app, an app-factory, or a nested/absent entrypoint is NOT auto-startable and
+# fails closed (`entrypoint_unresolved`), never a fabricated module.
+_FASTAPI_APP_RE = re.compile(r"(?m)^app\s*=\s*FastAPI\b")
+
+# CONVENTIONAL health-probe endpoints the detector "infers" — the well-known paths a
+# reader would ASSUME a service exposes. When an intent declares one of these AND the
+# workspace ships a scannable service that does NOT actually register the route, the
+# health contract is broken (`health_path_unresolved`): the app claims a standard
+# probe it never serves. A NON-conventional, owner-specific path (e.g. a deep custom
+# route) is trusted as a declared datum, not second-guessed against the source. The
+# root `/` is universally served and is never verified.
+_CONVENTIONAL_HEALTH_PATHS = frozenset(
+    {"/healthz", "/health", "/ping", "/status", "/livez", "/readyz", "/healthcheck"}
+)
+
+# A static-build output directory declared in a Vite config: an EXPLICIT string
+# literal (`outDir: 'dist'`) is honored; a bare `outDir` key with a non-literal
+# value (`outDir: process.env...`) is DYNAMIC and fails closed.
+_VITE_OUTDIR_LITERAL_RE = re.compile(r"""outDir\s*:\s*['"]([^'"]+)['"]""")
+_VITE_OUTDIR_KEY_RE = re.compile(r"\boutDir\b")
+_VITE_CONFIG_NAMES = frozenset(
+    {"vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.cjs"}
+)
 
 
 # ---- result models ------------------------------------------------------------
@@ -206,6 +286,26 @@ class MissingField(BaseModel):
     detail: str
 
 
+class DetectionBlocker(BaseModel):
+    """A fine-grained, TYPED reason a workspace fails closed to `needs_review`.
+
+    `code` is a stable, machine-readable code the release API returns verbatim on
+    the blocker's `code` field (`required_env_unresolved`, `port_contract_unresolved`,
+    `entrypoint_unresolved`, `toolchain_unsupported`, `output_dir_unresolved`,
+    `health_path_unresolved`, `runtime_conflict`); `field` optionally names the
+    release-contract field an owner must declare; `path` optionally names a
+    workspace path the finding is about. Distinct from `MissingField`: a
+    `DetectionBlocker` carries the EXACT typed code (not the coarse
+    `release_field_unresolved`), so a predictable defect is diagnosable."""
+
+    model_config = _STRICT
+
+    code: str
+    message: str
+    field: str | None = None
+    path: str | None = None
+
+
 class DetectionResult(BaseModel):
     """The detector's verdict as immutable DATA.
 
@@ -225,6 +325,7 @@ class DetectionResult(BaseModel):
     evidence: tuple[str, ...] = Field(default_factory=tuple)
     reasons: tuple[str, ...] = Field(default_factory=tuple)
     missing: tuple[MissingField, ...] = Field(default_factory=tuple)
+    blockers: tuple[DetectionBlocker, ...] = Field(default_factory=tuple)
 
     @property
     def ingress(self) -> ReleaseService | None:
@@ -251,15 +352,75 @@ class _DbFinding(NamedTuple):
     has_url: bool
 
 
+class _DetectBlocker(NamedTuple):
+    """An internal fail-closed outcome from a runtime detector: the workspace has
+    THIS runtime's signature but a predictable, unrepairable-without-declaration
+    defect, so detection fails closed with the exact typed `code`. A detector
+    returns `None` (signature absent — try the next runtime), a `ReleaseService`
+    (a resolved candidate), or a `_DetectBlocker` (signature present but unreleasable)."""
+
+    code: str
+    message: str
+    field: str
+    evidence: tuple[str, ...]
+
+
 # ---- content helpers ----------------------------------------------------------
 
 
 def _as_text(value: str | bytes) -> str:
-    """A best-effort text view of a file for signal scanning (binary bytes decode
-    lossily; we only ever look for ascii markers)."""
+    """A best-effort, BOUNDED text view of a named-config file for parsing (binary
+    bytes decode lossily; we only ever look for ascii markers). Capped at
+    `_MAX_SCAN_BYTES` so even a pathological single config file can never force an
+    unbounded decode (§7.11)."""
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="ignore")
-    return value
+        return value[:_MAX_SCAN_BYTES].decode("utf-8", errors="ignore")
+    return value[:_MAX_SCAN_BYTES]
+
+
+def _scan_text(value: str | bytes) -> str:
+    """A BOUNDED, binary-safe text view for WHOLE-TREE signal scanning (§7.11).
+
+    Reads at most `_MAX_SCAN_BYTES` and returns an EMPTY view for a binary file (a
+    NUL byte in the scanned head marks it binary). A marker that sits past the cap
+    (an oversized text file) or inside a binary blob is therefore never read, so it
+    can never reach the verdict via an unbounded whole-tree decode."""
+    if isinstance(value, bytes):
+        head = value[:_MAX_SCAN_BYTES]
+        if b"\x00" in head:
+            return ""
+        return head.decode("utf-8", errors="ignore")
+    return value[:_MAX_SCAN_BYTES]
+
+
+def _file_text(files: Mapping[str, str | bytes], target: str) -> str | None:
+    """The bounded text of the file whose normalized path is `target`, or `None`."""
+    for path in files:
+        if _norm(path) == target:
+            return _scan_text(files[path])
+    return None
+
+
+def _strip_comments(text: str) -> str:
+    """Best-effort removal of JS block/line comments (`/* */`, `//`) and Python line
+    comments (`#`) for the fail-open-prone LITERAL checks (the `$PORT` bind, the Vite
+    `outDir`, the health route). A decoy planted in a comment (`// outDir: 'dist'`,
+    `# process.env.PORT`, `// '/healthz'`) then no longer satisfies the contract.
+
+    Used ONLY for those literal scans — never for the database / framework / env-name
+    scans. Comment lexing is approximate (it does not track string context), but that
+    is safe HERE: a mistaken strip only removes a would-be literal, making the check
+    MORE conservative (fail-closed), never fail-open."""
+    without_block = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    lines: list[str] = []
+    for line in without_block.splitlines():
+        cut = len(line)
+        for marker in ("//", "#"):
+            idx = line.find(marker)
+            if idx != -1:
+                cut = min(cut, idx)
+        lines.append(line[:cut])
+    return "\n".join(lines)
 
 
 def _norm(path: str) -> str:
@@ -330,12 +491,117 @@ def _node_install(files: Mapping[str, str | bytes]) -> tuple[str | None, str, tu
     return (None, "npm", ("npm", "install"))
 
 
-def _node_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
-    """A node ingress service IFF a root package.json declares a server `start`
-    script (a Vite/static bundle has `build`/`dev` but no server `start`)."""
+# ---- env / route / health signal helpers (bounded, whole-tree) ----------------
+
+
+def _declared_env_names(files: Mapping[str, str | bytes]) -> frozenset[str]:
+    """The env NAMES an owner has DECLARED for the workspace, read from any dotenv /
+    dev-vars file present (`.env`, `.env.example`, `.dev.vars`, …). NAMES only — the
+    values are ignored. A read of one of these names is therefore an INTENDED input,
+    not an unresolved one, so it does not fail detection closed."""
+    names: set[str] = set()
+    for path in files:
+        base = _basename(path)
+        if base.startswith(".env") or base.startswith(".dev.vars"):
+            names.update(_DOTENV_NAME_RE.findall(_scan_text(files[path])))
+    return frozenset(names)
+
+
+def _js_env_reads(source: str) -> frozenset[str]:
+    """The env NAMES read via a DIRECT `process.env.NAME` / `process.env['NAME']`
+    form in JS/TS source."""
+    return frozenset(_JS_ENV_DOT_RE.findall(source)) | frozenset(_JS_ENV_STR_RE.findall(source))
+
+
+def _js_has_dynamic_env(source: str) -> bool:
+    """Whether the source reads env through a DYNAMIC computed index
+    (`process.env[name]`) whose NAME cannot be resolved statically."""
+    return _JS_ENV_DYNAMIC_RE.search(source) is not None
+
+
+def _js_references_port(source: str, port_env: str) -> bool:
+    """Whether the source binds the `$PORT` contract — a `process.env.<port_env>`
+    (or quoted-bracket) read. A server that binds only a literal port never honors
+    the host's `$PORT` and fails the port contract."""
+    pattern = re.compile(
+        r"process\.env(?:\." + re.escape(port_env) + r"\b"
+        r"|\[\s*['\"]" + re.escape(port_env) + r"['\"]\s*\])"
+    )
+    # Strip comments first: a decoy `// … process.env.PORT` must not satisfy the bind.
+    return pattern.search(_strip_comments(source)) is not None
+
+
+def _js_serves_root(source: str) -> bool:
+    """Whether a node server POSITIVELY serves `GET /` — a raw `http.createServer`
+    catch-all handler, or an explicit root route registration. Used to establish
+    the `/` health contract rather than assuming it."""
+    return (
+        _JS_CATCHALL_RE.search(source) is not None or _JS_ROOT_ROUTE_RE.search(source) is not None
+    )
+
+
+def _node_source(files: Mapping[str, str | bytes]) -> str:
+    """The bounded, binary-safe concatenation of the workspace's scannable content —
+    where `process.env` reads and route registrations live. Each file is capped and
+    binary files are skipped (§7.11), so an out-of-bounds file injects no signal."""
+    return "\n".join(_scan_text(files[path]) for path in sorted(files))
+
+
+def _node_detect(
+    files: Mapping[str, str | bytes],
+) -> ReleaseService | _DetectBlocker | None:
+    """Detect a node ingress from a root `package.json` server `start` script.
+
+    Returns `None` when there is no node server signature; a `ReleaseService` for a
+    resolved candidate (exact `$PORT` env use, established `GET /` health when the
+    server serves root); or a `_DetectBlocker` when the signature is present but the
+    contract is predictably broken — a DYNAMIC/undeclared env read
+    (`required_env_unresolved`) or a server that never binds `$PORT`
+    (`port_contract_unresolved`)."""
     pkg = _root_package_json(files)
     if _script(pkg, "start") is None:
-        return None
+        return None  # no node server signature — not this runtime
+
+    source = _node_source(files)
+    port_env = "PORT"
+    declared = _declared_env_names(files) | {port_env}
+
+    if _js_has_dynamic_env(source):
+        return _DetectBlocker(
+            code="required_env_unresolved",
+            message=(
+                "the node server reads an environment variable through a dynamic "
+                "`process.env[<expr>]` index whose name cannot be resolved statically; "
+                "declare the required env names in a typed release intent."
+            ),
+            field="required_env",
+            evidence=("node env read: dynamic process.env[<expr>] index",),
+        )
+    undeclared = sorted(_js_env_reads(source) - declared)
+    if undeclared:
+        return _DetectBlocker(
+            code="required_env_unresolved",
+            message=(
+                "the node server reads environment variable(s) "
+                f"{', '.join(undeclared)} that are neither the $PORT contract nor "
+                "declared in a dotenv template or typed intent; requiredness cannot "
+                "be established statically — declare it."
+            ),
+            field="required_env",
+            evidence=(f"node env read: undeclared {', '.join(undeclared)}",),
+        )
+    if not _js_references_port(source, port_env):
+        return _DetectBlocker(
+            code="port_contract_unresolved",
+            message=(
+                "the node server does not bind the $PORT contract (no "
+                "`process.env.PORT` read); it cannot honor the host-assigned port. "
+                "Bind `process.env.PORT` or declare the port via a typed intent."
+            ),
+            field="port_env",
+            evidence=("node port evidence: no process.env.PORT read (literal port only)",),
+        )
+
     build_cmd = ("npm", "run", "build") if _script(pkg, "build") is not None else ()
     lockfile, manager, install = _node_install(files)
     return ReleaseService(
@@ -347,39 +613,66 @@ def _node_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
         install_cmd=install,
         build_cmd=build_cmd,
         start_cmd=("npm", "start"),
-        port_env="PORT",
+        port_env=port_env,
+        health_path="/" if _js_serves_root(source) else None,
     )
 
 
 def _has_web_framework(files: Mapping[str, str | bytes]) -> bool:
     for path in sorted(files):
-        text = _as_text(files[path]).lower()
+        text = _scan_text(files[path]).lower()
         if "fastapi" in text or "from flask" in text or "import flask" in text:
             return True
     return False
 
 
-def _python_module(files: Mapping[str, str | bytes]) -> str:
-    roots = _paths(files)
-    if "main.py" in roots:
-        return "main"
-    if "app.py" in roots:
-        return "app"
-    return "main"
+def _python_root_module(files: Mapping[str, str | bytes]) -> str | None:
+    """The root module (`main`/`app`) that defines a module-level FastAPI (ASGI)
+    `app` — the only shape auto-startable with `uvicorn <module>:app`. Returns
+    `None` for a nested entrypoint, a Flask (WSGI) app, or an absent root module —
+    the detector must NOT invent a `main:app` that does not exist."""
+    for module, filename in (("main", "main.py"), ("app", "app.py")):
+        text = _file_text(files, filename)
+        if text is not None and _FASTAPI_APP_RE.search(text):
+            return module
+    return None
 
 
-def _python_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
-    """A python ingress service IFF a python manifest is present AND a web
-    framework import (fastapi/flask) is found in the contents."""
+def _python_detect(
+    files: Mapping[str, str | bytes],
+) -> ReleaseService | _DetectBlocker | None:
+    """Detect a python ingress from a python manifest + a web-framework import.
+
+    Returns `None` when there is no python-web signature; a `ReleaseService` for a
+    resolvable FastAPI (ASGI) root app (`uvicorn main:app`, established `GET /`
+    health when a root route exists); or a `_DetectBlocker`
+    (`entrypoint_unresolved`) when the framework is present but no compatible root
+    ASGI entrypoint can be resolved (a nested app, a Flask/WSGI app, or no root
+    module) — never a fabricated `main:app`."""
     manifests = {"pyproject.toml", "requirements.txt"}
     tree = _paths(files)
     if not (manifests & tree) or not _has_web_framework(files):
-        return None
-    if "requirements.txt" in tree:
-        install: tuple[str, ...] = ("pip", "install", "-r", "requirements.txt")
-    else:
-        install = ("pip", "install", ".")
-    module = _python_module(files)
+        return None  # no python-web signature — not this runtime
+
+    module = _python_root_module(files)
+    if module is None:
+        return _DetectBlocker(
+            code="entrypoint_unresolved",
+            message=(
+                "a python web framework was detected but no compatible root ASGI "
+                "entrypoint (a `main.py`/`app.py` defining `app = FastAPI(...)`) could "
+                "be resolved — a nested module or a WSGI (Flask) app has no statically "
+                "verifiable start command; declare the start command via a typed intent."
+            ),
+            field="start_cmd",
+            evidence=("python entrypoint evidence: no root `app = FastAPI(...)` module",),
+        )
+    install: tuple[str, ...] = (
+        ("pip", "install", "-r", "requirements.txt")
+        if "requirements.txt" in tree
+        else ("pip", "install", ".")
+    )
+    module_text = _file_text(files, f"{module}.py") or ""
     return ReleaseService(
         id=_INGRESS_ID,
         role=ServiceRole.ingress,
@@ -387,20 +680,64 @@ def _python_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
         install_cmd=install,
         start_cmd=("uvicorn", f"{module}:app", "--host", "0.0.0.0", "--port", "${PORT}"),
         port_env="PORT",
+        health_path="/" if _PY_ROOT_GET_RE.search(module_text) else None,
     )
 
 
-def _static_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
-    """A static ingress service IFF a root `index.html` is present (with no server
-    `start` script — those are handled as node above)."""
+def _static_output_dir(files: Mapping[str, str | bytes], build_script: str) -> str | None:
+    """Resolve a build-requiring static bundle's output directory, or `None` when it
+    cannot be established (fail closed):
+
+    * an unknown build tool (not a recognized `vite` build) -> `None`;
+    * a Vite config with an EXPLICIT literal `outDir: '<x>'` -> `<x>`;
+    * a Vite config with a DYNAMIC `outDir` (a non-literal value) -> `None`;
+    * a provable default-Vite build (recognized `vite`, no `outDir` override) ->
+      Vite's default `dist`."""
+    if not re.search(r"\bvite\b", build_script):
+        return None  # unknown bundler — output dir not statically knowable
+    for path in files:
+        if _basename(path) in _VITE_CONFIG_NAMES:
+            # Strip comments first: a decoy `// outDir: 'dist'` must not be read as a
+            # resolved output directory when the real config is dynamic/absent.
+            text = _strip_comments(_scan_text(files[path]))
+            literal = _VITE_OUTDIR_LITERAL_RE.search(text)
+            if literal is not None:
+                return literal.group(1)
+            if _VITE_OUTDIR_KEY_RE.search(text):
+                return None  # dynamic/computed outDir — fail closed
+    return "dist"  # default-Vite: no outDir override
+
+
+def _static_detect(
+    files: Mapping[str, str | bytes],
+) -> ReleaseService | _DetectBlocker | None:
+    """Detect a static ingress from a root `index.html` (with no node `start`).
+
+    A no-build site serves the workspace root; a build-requiring bundle must resolve
+    a statically-known output directory, else it fails closed
+    (`output_dir_unresolved`)."""
     if "index.html" not in _paths(files):
         return None
     pkg = _root_package_json(files)
-    if _script(pkg, "build") is not None:
+    build_script = _script(pkg, "build")
+    if build_script is not None:
+        output_dir = _static_output_dir(files, build_script)
+        if output_dir is None:
+            return _DetectBlocker(
+                code="output_dir_unresolved",
+                message=(
+                    "a static build was detected but its output directory cannot be "
+                    "resolved statically (an unknown build tool, or a dynamically "
+                    "computed Vite `outDir`); the emitted bundle would serve the wrong "
+                    "tree. Declare the output directory via a typed intent."
+                ),
+                field="output_dir",
+                evidence=(
+                    "static output evidence: build output directory not statically resolvable",
+                ),
+            )
         # A build-requiring static bundle MUST install its dependencies before the
         # build runs, or the emitted image builds against an empty node_modules.
-        # Attach the install command (npm ci when a lockfile is present, else npm
-        # install) so deps install BEFORE the build in the emitted Dockerfile.
         lockfile, manager, install = _node_install(files)
         return ReleaseService(
             id=_INGRESS_ID,
@@ -410,7 +747,7 @@ def _static_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
             lockfile=lockfile,
             install_cmd=install,
             build_cmd=("npm", "run", "build"),
-            output_dir="dist",
+            output_dir=output_dir,
             port_env="PORT",
         )
     return ReleaseService(
@@ -422,13 +759,14 @@ def _static_service(files: Mapping[str, str | bytes]) -> ReleaseService | None:
     )
 
 
-def _runtime_conflict_result(node: ReleaseService, python: ReleaseService) -> DetectionResult:
+def _runtime_conflict_result() -> DetectionResult:
     """Fail closed when TWO different runtime detectors match the same tree.
 
     A project that carries BOTH a node server start-script AND a python
     web-framework entrypoint declares two competing runtimes; short-circuiting to
     one silently discards the other. Return `needs_review` naming BOTH pieces of
-    evidence so an owner declares which runtime releases the app."""
+    evidence — carried verbatim in the typed `runtime_conflict` blocker so an owner
+    can see WHY the runtimes conflict and declare which one releases the app."""
     node_evidence = "node runtime evidence: package.json declares a server 'start' script"
     python_evidence = (
         "python runtime evidence: a python manifest with a web-framework "
@@ -443,16 +781,48 @@ def _runtime_conflict_result(node: ReleaseService, python: ReleaseService) -> De
             "evidence cannot be reconciled automatically, so an owner must declare "
             "which runtime releases this app.",
         ),
-        missing=(
-            MissingField(
+        blockers=(
+            DetectionBlocker(
+                code="runtime_conflict",
                 field="runtime",
-                detail=(
-                    "conflicting node and python runtime evidence — declare which "
-                    "one releases the app"
+                message=(
+                    "conflicting runtime evidence — " + node_evidence + "; " + python_evidence
                 ),
             ),
         ),
     )
+
+
+def _fail_closed(blocker: _DetectBlocker) -> DetectionResult:
+    """Build a `needs_review` result carrying an EXACT typed `DetectionBlocker`
+    (and its evidence) from a detector's fail-closed outcome — no ingress, no
+    overlay, so the release API returns `self_host:false` with the precise code."""
+    return DetectionResult(
+        assessment=ReleaseAssessment.needs_review,
+        evidence=blocker.evidence,
+        reasons=(blocker.message,),
+        blockers=(
+            DetectionBlocker(code=blocker.code, message=blocker.message, field=blocker.field),
+        ),
+    )
+
+
+def _health_route_present(files: Mapping[str, str | bytes], health_path: str) -> bool:
+    """Whether a DECLARED health path corresponds to an explicit route in the source.
+
+    The root `/` is always considered served (any bound web server answers it); a
+    non-root path must appear as a quoted route literal somewhere in the (bounded,
+    binary-safe) source. This backs `health_path_unresolved`: a declared health path
+    with no corresponding route is a broken contract."""
+    if health_path == "/":
+        return True
+    needles = (f'"{health_path}"', f"'{health_path}'")
+    for path in sorted(files):
+        # Strip comments first: a decoy `// '/healthz'` must not count as a real route.
+        text = _strip_comments(_scan_text(files[path]))
+        if any(needle in text for needle in needles):
+            return True
+    return False
 
 
 def _detect_database(files: Mapping[str, str | bytes]) -> _DbFinding:
@@ -464,7 +834,7 @@ def _detect_database(files: Mapping[str, str | bytes]) -> _DbFinding:
     has_url = False
     for path in sorted(files):
         norm = _norm(path)
-        text = _as_text(files[path])
+        text = _scan_text(files[path])
         low = text.lower()
         for scheme in _UNKNOWN_DB_SCHEMES:
             if scheme in low:
@@ -593,6 +963,62 @@ def _conflict_result(intent: ReleaseIntent, manifest: str) -> DetectionResult:
     )
 
 
+def _declared_python_deps(files: Mapping[str, str | bytes]) -> frozenset[str]:
+    """The python package NAMES an owner has DECLARED (a `requirements.txt` line, or
+    a `pyproject.toml` token), lowercased. A declared start executable that is a pip
+    package (e.g. `gunicorn`) must appear here, or the base image cannot run it."""
+    names: set[str] = set()
+    req = _file_text(files, "requirements.txt")
+    if req is not None:
+        for line in req.splitlines():
+            token = re.split(r"[\s<>=!~;\[#]", line.strip(), maxsplit=1)[0].strip().lower()
+            if token:
+                names.add(token)
+    pyproject = _file_text(files, "pyproject.toml")
+    if pyproject is not None:
+        names.update(token.lower() for token in re.findall(r"[A-Za-z0-9_.-]+", pyproject))
+    return frozenset(names)
+
+
+def _toolchain_blocker(
+    intent: ReleaseIntent, files: Mapping[str, str | bytes]
+) -> _DetectBlocker | None:
+    """A `toolchain_unsupported` fail-closed outcome when the declared start command
+    cannot run on the neutral base image: a head that is NOT a supported toolchain
+    (anything outside the allowlist — ruby/go/php/caddy/`./server`/bun/deno/uv/poetry
+    all fail here, never a Node fallback), or a python start executable that is a pip
+    package absent from the declared dependencies. `None` when the toolchain is
+    supported."""
+    head = intent.start_cmd[0].rsplit("/", 1)[-1].lower()
+    if not _is_supported_toolchain_head(head):
+        return _DetectBlocker(
+            code="toolchain_unsupported",
+            message=(
+                f"the declared start command head {head!r} is not a supported toolchain "
+                "on the neutral base image; the detector will NOT guess a runtime from an "
+                "executable name. Declare a supported start (node/npm/npx/yarn/pnpm, or a "
+                "python interpreter / uvicorn / gunicorn), or vendor the runtime explicitly."
+            ),
+            field="start_cmd",
+            evidence=(f"toolchain evidence: unsupported start head {head!r} (not on allowlist)",),
+        )
+    if _runtime_from_argv(intent.start_cmd) is RuntimeStrategy.python and not head.startswith(
+        "python"
+    ):
+        if head not in _declared_python_deps(files):
+            return _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    f"the declared python start executable {head!r} is absent from the "
+                    "declared dependencies (requirements.txt / pyproject.toml), so the "
+                    "base image cannot run it; declare it as a dependency."
+                ),
+                field="start_cmd",
+                evidence=(f"toolchain evidence: python start executable {head!r} not declared",),
+            )
+    return None
+
+
 def _classify_secret(name: str) -> SecretClass:
     """Classify a declared env-var NAME as `secret` or `public` by its shape.
 
@@ -607,7 +1033,7 @@ def _classify_secret(name: str) -> SecretClass:
     return SecretClass.public
 
 
-def _from_intent(intent: ReleaseIntent) -> DetectionResult:
+def _from_intent(intent: ReleaseIntent, files: Mapping[str, str | bytes]) -> DetectionResult:
     # A release intent with NO start command cannot describe a runnable app: there is
     # no process to launch. Rather than fabricate a runnable candidate (the emitter
     # would default an empty start to `npm start`), fail closed to needs_review
@@ -624,6 +1050,35 @@ def _from_intent(intent: ReleaseIntent) -> DetectionResult:
                 "before this app can be a release candidate.",
             ),
             missing=_missing_fields(("start_cmd",)),
+        )
+    # The declared start command must run on the neutral base image (a supported
+    # runner + any pip-package start executable declared as a dependency).
+    toolchain = _toolchain_blocker(intent, files)
+    if toolchain is not None:
+        return _fail_closed(toolchain)
+    # A declared CONVENTIONAL health probe (`/healthz`, `/health`, …) must correspond
+    # to a real route WHEN the workspace ships a concrete node/python service we can
+    # scan: claiming a standard probe the source never registers is a broken contract.
+    # A non-conventional owner-specific path is trusted as a declared datum, and an
+    # intent over an undetectable stack (no scannable service) is trusted as declared.
+    if (
+        intent.health_path is not None
+        and intent.health_path in _CONVENTIONAL_HEALTH_PATHS
+        and (_node_detect(files) is not None or _python_detect(files) is not None)
+        and not _health_route_present(files, intent.health_path)
+    ):
+        return _fail_closed(
+            _DetectBlocker(
+                code="health_path_unresolved",
+                message=(
+                    f"the declared health path {intent.health_path!r} is a conventional "
+                    "probe but does not correspond to any route in the detected service's "
+                    "source; the health check would never pass. Declare a health path the "
+                    "app actually serves."
+                ),
+                field="health_path",
+                evidence=(f"health evidence: no route for conventional {intent.health_path!r}",),
+            )
         )
     service = ReleaseService(
         id=_INGRESS_ID,
@@ -802,7 +1257,7 @@ def detect_release(
 
     # Rung 1 — a typed intent wins outright.
     if intent is not None:
-        return _from_intent(intent)
+        return _from_intent(intent, files)
 
     # Rung 1 — the AppKit contract shape.
     if _is_appkit(files):
@@ -812,17 +1267,24 @@ def detect_release(
     if manifest is not None:
         return _container_review(manifest)
 
-    # Rung 3 — deterministic detectors (with database handling). When two DIFFERENT
-    # runtime detectors both match (a node server start-script AND a python
-    # web-framework entrypoint), that is genuinely conflicting evidence: fail closed
-    # to needs_review naming both. Single-runtime detection is unchanged.
-    node = _node_service(files)
-    python = _python_service(files)
+    # Rung 3 — deterministic detectors (with database handling). Each detector
+    # returns `None` (its runtime signature is absent), a `ReleaseService` (a
+    # resolved candidate), or a `_DetectBlocker` (its signature is present but the
+    # contract is predictably broken — fail closed with the exact typed code). When
+    # two DIFFERENT runtime signatures both match (a node server start-script AND a
+    # python web-framework entrypoint), that is genuinely conflicting evidence: fail
+    # closed to `runtime_conflict` naming both.
+    node = _node_detect(files)
+    python = _python_detect(files)
     if node is not None and python is not None:
-        return _runtime_conflict_result(node, python)
-    service = node or python or _static_service(files)
-    if service is not None:
-        return _detected_result(service, files)
+        return _runtime_conflict_result()
+    outcome = node if node is not None else python
+    if outcome is None:
+        outcome = _static_detect(files)
+    if isinstance(outcome, _DetectBlocker):
+        return _fail_closed(outcome)
+    if outcome is not None:
+        return _detected_result(outcome, files)
 
     # Rung 4 — imported without a typed intent: repairable review.
     if provenance.imported:
@@ -833,6 +1295,7 @@ def detect_release(
 
 
 __all__ = [
+    "DetectionBlocker",
     "DetectionResult",
     "MissingField",
     "Provenance",

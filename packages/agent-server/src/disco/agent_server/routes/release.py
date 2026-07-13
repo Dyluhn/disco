@@ -333,13 +333,18 @@ def assess_release(
     elif assessment is ReleaseAssessment.candidate and spec is not None:
         validation = validate_release(spec, files)
         if validation.ok:
-            self_host = True
             overlay = emit_local_compose(spec)
             present = set(files)
+            collided = False
             for path in sorted(overlay):
                 if path in present:
                     # The workspace already has a file here — it wins; the generated
                     # overlay entry is dropped and reported so the choice is legible.
+                    # An overlay collision means the bundle is NOT internally complete
+                    # (a generated file could not be placed), so it forces
+                    # `self_host:false`: the API never advertises a self-hostable
+                    # candidate while ALSO reporting a blocker (plan §7.6 / §2 #3).
+                    collided = True
                     blockers.append(
                         _ResponseBlocker(
                             code="overlay_suppressed_by_workspace_file",
@@ -352,6 +357,7 @@ def assess_release(
                     )
                 elif not is_runtime_secret_path(path):
                     overlay_files[path] = overlay[path]
+            self_host = not collided
         else:
             blockers.extend(
                 _ResponseBlocker(
@@ -359,6 +365,15 @@ def assess_release(
                 )
                 for blocker in validation.blockers
             )
+    elif detection.blockers:
+        # A detector fail-closed with EXACT typed codes (required_env_unresolved,
+        # port_contract_unresolved, entrypoint_unresolved, toolchain_unsupported,
+        # output_dir_unresolved, health_path_unresolved, runtime_conflict). Surface
+        # each verbatim so a predictable defect is precisely diagnosable.
+        blockers.extend(
+            _ResponseBlocker(code=item.code, message=item.message, field=item.field, path=item.path)
+            for item in detection.blockers
+        )
     else:
         blockers.extend(
             _ResponseBlocker(code="release_field_unresolved", field=item.field, message=item.detail)
