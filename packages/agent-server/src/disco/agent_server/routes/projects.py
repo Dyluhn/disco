@@ -525,24 +525,40 @@ def _zip_workspace_with_overlay(src: Path, overlay: dict[str, str]) -> Iterator[
     The workspace portion is emitted identically to ``zip_workspace`` (same sorted
     order, same ZIP_DEFLATED, same runtime-secret exclusion), so a candidate
     download's SOURCE bytes are unchanged from the plain zip and only the overlay
-    files are added. A workspace file always wins a path collision (the overlay
-    entry is skipped), and a runtime-secret path is never emitted from the overlay
-    — defense in depth over the caller's already-filtered map."""
+    files are added. A workspace file always wins a path collision, and a
+    runtime-secret path is never emitted from the overlay — defense in depth over the
+    caller's already-filtered map.
+
+    The writer is HARDENED against unsafe overlay archive names (plan §10.7): an
+    overlay entry is dropped when its normalized name would ESCAPE the extraction
+    root (a `../` traversal / absolute path) or COLLIDE with an already-written name —
+    exactly, case-insensitively (a Windows/macOS case-fold clash), or after slash
+    normalization (`dir//f` onto `dir/f`). So the produced archive never carries a
+    colliding or escaping entry even if a caller passes an adversarial overlay map."""
     if not src.exists() or not src.is_dir():
         raise FileNotFoundError(f"workspace directory not found: {src}")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        workspace_rels: set[str] = set()
+        taken_norm: set[str] = set()
+        taken_lower: set[str] = set()
         for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
             rel = path.relative_to(src).as_posix()
             if is_runtime_secret_path(rel):
                 continue
             zf.write(path, arcname=rel)
-            workspace_rels.add(rel)
-        for rel in sorted(overlay):
-            if rel in workspace_rels or is_runtime_secret_path(rel):
+            taken_norm.add(posixpath.normpath(rel))
+            taken_lower.add(rel.lower())
+        for raw in sorted(overlay):
+            rel = posixpath.normpath(raw.replace("\\", "/"))
+            if rel in {"", "."} or rel == ".." or rel.startswith("../") or posixpath.isabs(rel):
+                continue  # a traversal / absolute name would escape the extraction root
+            if is_runtime_secret_path(rel):
                 continue
-            zf.writestr(rel, overlay[rel].encode("utf-8"))
+            if rel in taken_norm or rel.lower() in taken_lower:
+                continue  # the workspace (or an earlier overlay entry) wins the collision
+            zf.writestr(rel, overlay[raw].encode("utf-8"))
+            taken_norm.add(rel)
+            taken_lower.add(rel.lower())
     buf.seek(0)
     chunk = 64 * 1024
     while True:
@@ -665,10 +681,17 @@ def _build_bound_download_zip(
             409, "source_integrity_failed", "version bytes no longer match the recorded digest"
         )
 
-    # Assess the SAME in-memory snapshot (no second read of the version dir).
+    # Assess the SAME in-memory snapshot (no second read of the version dir). A
+    # corrupt/unreadable host-owned intent sidecar makes the read raise StorageError;
+    # surface it as a TYPED bound-download reject that emits no bytes — NEVER a
+    # broad-`except` fallback to a successful plain zip (plan §10.9).
+    try:
+        intent = ps.read_release_intent(conversation_id)
+    except StorageError as exc:
+        raise _BoundReject(500, "release_intent_unreadable", str(exc)) from exc
     assessed = assess_release(
         source_files,
-        intent=ps.read_release_intent(conversation_id),
+        intent=intent,
         project_name=record.title or conversation_id,
         version_seq=version_record.seq,
         tree_digest=version_record.tree_digest,
