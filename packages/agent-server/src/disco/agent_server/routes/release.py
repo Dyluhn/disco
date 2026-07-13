@@ -35,12 +35,17 @@ the committed contents + the typed intent, nothing else.
 from __future__ import annotations
 
 import asyncio
+import posixpath
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from disco.core.release.detect import DetectionResult, Provenance, detect_release
-from disco.core.release.local_compose import emit_local_compose
+from disco.core.release.local_compose import (
+    COMPOSE_PATH,
+    DOCKERFILE_PATH,
+    emit_local_compose,
+)
 from disco.core.release.spec import (
     DetectorProvenance,
     IntentUpgradeError,
@@ -248,6 +253,96 @@ def _fail_closed_assessment(
     return AssessedRelease(response=response, overlay_files={})
 
 
+# Reserved single-service overlay paths that ALSO trip the detector's
+# container-manifest rung: a workspace `compose.yaml` / root `Dockerfile` both
+# shadows a GENERATED overlay file AND masks an underlying deterministic candidate
+# by short-circuiting detection to a generic container review. When a real candidate
+# emerges with those set aside, the workspace file is an overlay COLLISION (reported
+# as `overlay_path_conflict`), not an opaque owner-supplied runtime (plan §10.2).
+_CONTAINER_MANIFEST_OVERLAY_PATHS = frozenset({COMPOSE_PATH, DOCKERFILE_PATH})
+
+
+def _overlay_collisions(overlay: Mapping[str, str], files: Mapping[str, bytes]) -> list[str]:
+    """Every generated overlay path that collides with an existing workspace file —
+    checked the way a real filesystem would resolve names, not by exact string match
+    alone. A workspace `selfhost.md` shadows a generated `SELFHOST.md` on a
+    case-insensitive (Windows/macOS) filesystem, and `dir//f` normalizes onto
+    `dir/f`; both are collisions the export must fail closed on (plan §10.1/§10.7).
+
+    A generated overlay path is ALSO a collision when a workspace file makes that path
+    a DIRECTORY: a workspace file at `compose.yaml/inner.txt` means `compose.yaml` is a
+    directory, so the generated `compose.yaml` FILE cannot be placed there without an
+    ambiguous file-vs-directory archive pair that cannot be extracted intact. This is
+    checked on the SAME normalized + case-folded keys as the exact/lower/norm
+    comparison — a workspace key equals the overlay path OR lives directly under it
+    (`overlay_path + "/"`) — over ALL six generated overlay paths, not just the
+    container-manifest ones, so it composes with the existing collision logic.
+
+    Returns the colliding GENERATED paths (the exact overlay names), sorted, so each
+    becomes a typed `overlay_path_conflict` blocker naming the path it would clobber.
+    """
+    present_exact = set(files)
+    present_lower = {path.lower() for path in files}
+    present_norm = {posixpath.normpath(path) for path in files}
+
+    def _occupied_as_dir(prefix: str, keys: set[str]) -> bool:
+        # A workspace key lives UNDER `prefix/`, so `prefix` names a DIRECTORY there
+        # and a generated FILE at `prefix` cannot coexist with it. The trailing slash
+        # keeps `compose.yaml.bak` / `Dockerfile-dev` from false-matching `compose.yaml`
+        # / `Dockerfile`.
+        needle = prefix + "/"
+        return any(key.startswith(needle) for key in keys)
+
+    collisions = [
+        path
+        for path in overlay
+        if path in present_exact
+        or path.lower() in present_lower
+        or posixpath.normpath(path) in present_norm
+        or _occupied_as_dir(path, present_exact)
+        or _occupied_as_dir(path.lower(), present_lower)
+        or _occupied_as_dir(posixpath.normpath(path), present_norm)
+    ]
+    return sorted(collisions)
+
+
+def _recover_masked_candidate(
+    detection: DetectionResult,
+    files: Mapping[str, bytes],
+    *,
+    intent: ReleaseIntent | None,
+    imported: bool,
+) -> DetectionResult:
+    """Recover a candidate that a reserved container-manifest overlay path masked.
+
+    A workspace `compose.yaml` / root `Dockerfile` trips the detector's
+    container-manifest rung BEFORE the deterministic detectors run, so an otherwise
+    self-hostable node/python/static project degrades to a generic container review.
+    Re-detect with those reserved files set aside: if a real candidate emerges, return
+    IT (so the overlay is generated for the true shape and the reserved file is
+    reported as an `overlay_path_conflict`), else return the original detection.
+
+    Only applies with NO typed intent — an intent alongside a container manifest is a
+    genuine, separately-handled release conflict (detector rung 1), not a collision.
+    """
+    if intent is not None or detection.assessment is ReleaseAssessment.candidate:
+        return detection
+    masked = {
+        path
+        for path in files
+        if posixpath.normpath(path) in _CONTAINER_MANIFEST_OVERLAY_PATHS
+    }
+    if not masked:
+        return detection
+    unmasked = {path: data for path, data in files.items() if path not in masked}
+    recovered = detect_release(
+        unmasked, intent=None, provenance=Provenance(imported=imported)
+    )
+    if recovered.assessment is ReleaseAssessment.candidate:
+        return recovered
+    return detection
+
+
 def assess_release(
     files: Mapping[str, bytes],
     *,
@@ -290,8 +385,17 @@ def assess_release(
     # name that real record, so the spec can be pinned to it.
     assert version_seq is not None and tree_digest is not None
 
-    ingress = detection.ingress
-    assessment = detection.assessment
+    # WO-C6 §10.2 — recover an underlying candidate that a reserved container-manifest
+    # overlay path (a root `Dockerfile` / `compose.yaml`) masked, so the collision is
+    # reported honestly rather than as a generic container review. `effective` is the
+    # detection whose SHAPE the overlay is generated from; the collision check below
+    # then runs against the FULL workspace, so the masked reserved file is reported.
+    effective = _recover_masked_candidate(
+        detection, files, intent=intent, imported=imported
+    )
+
+    ingress = effective.ingress
+    assessment = effective.assessment
     spec: ReleaseSpec | None = None
     ingress_info: _IngressInfo | None = None
     digest: str | None = None
@@ -299,7 +403,7 @@ def assess_release(
     if ingress is not None:
         try:
             spec = _build_spec(
-                detection, name=project_name, version_seq=version_seq, tree_digest=tree_digest
+                effective, name=project_name, version_seq=version_seq, tree_digest=tree_digest
             )
         except ValidationError as exc:
             # A SCHEMA-valid intent can still describe an INCONSISTENT release — e.g. a
@@ -334,31 +438,41 @@ def assess_release(
     elif assessment is ReleaseAssessment.candidate and spec is not None:
         validation = validate_release(spec, files)
         if validation.ok:
+            # ATOMIC overlay (plan §10.1): the COMPLETE overlay is generated in memory
+            # and collision-checked as a WHOLE. A collision with ANY generated path
+            # means the bundle cannot be placed intact, so the ENTIRE overlay is
+            # withheld (never a partial, self-host-labelled bundle §2 #7 forbids) and
+            # the assessment fails closed — `needs_review`, `self_host:false`, and NO
+            # bound `spec_digest` — with one typed `overlay_path_conflict` blocker per
+            # colliding path (plan §10.2). Otherwise the whole overlay ships and the
+            # candidate is self-hostable.
             overlay = emit_local_compose(spec)
-            present = set(files)
-            collided = False
-            for path in sorted(overlay):
-                if path in present:
-                    # The workspace already has a file here — it wins; the generated
-                    # overlay entry is dropped and reported so the choice is legible.
-                    # An overlay collision means the bundle is NOT internally complete
-                    # (a generated file could not be placed), so it forces
-                    # `self_host:false`: the API never advertises a self-hostable
-                    # candidate while ALSO reporting a blocker (plan §7.6 / §2 #3).
-                    collided = True
-                    blockers.append(
-                        _ResponseBlocker(
-                            code="overlay_suppressed_by_workspace_file",
-                            message=(
-                                f"the generated {path!r} is suppressed because the workspace "
-                                "already contains a file at that path (the workspace file is kept)."
-                            ),
-                            path=path,
-                        )
+            collisions = _overlay_collisions(overlay, files)
+            if collisions:
+                assessment = ReleaseAssessment.needs_review
+                digest = None
+                overlay_files = {}
+                self_host = False
+                blockers.extend(
+                    _ResponseBlocker(
+                        code="overlay_path_conflict",
+                        message=(
+                            f"the generated self-host overlay file {path!r} conflicts "
+                            "with a file already in the workspace; the whole self-host "
+                            "overlay is withheld until the conflict is resolved "
+                            "(rename or remove the workspace file)."
+                        ),
+                        path=path,
                     )
-                elif not is_runtime_secret_path(path):
-                    overlay_files[path] = overlay[path]
-            self_host = not collided
+                    for path in collisions
+                )
+            else:
+                overlay_files = {
+                    path: overlay[path]
+                    for path in overlay
+                    if not is_runtime_secret_path(path)
+                }
+                self_host = True
         else:
             blockers.extend(
                 _ResponseBlocker(
@@ -366,26 +480,26 @@ def assess_release(
                 )
                 for blocker in validation.blockers
             )
-    elif detection.blockers:
+    elif effective.blockers:
         # A detector fail-closed with EXACT typed codes (required_env_unresolved,
         # port_contract_unresolved, entrypoint_unresolved, toolchain_unsupported,
         # output_dir_unresolved, health_path_unresolved, runtime_conflict). Surface
         # each verbatim so a predictable defect is precisely diagnosable.
         blockers.extend(
             _ResponseBlocker(code=item.code, message=item.message, field=item.field, path=item.path)
-            for item in detection.blockers
+            for item in effective.blockers
         )
     else:
         blockers.extend(
             _ResponseBlocker(code="release_field_unresolved", field=item.field, message=item.detail)
-            for item in detection.missing
+            for item in effective.missing
         )
 
     response = ReleaseResponse(
         assessment=assessment.value,
-        reasons=list(detection.reasons),
+        reasons=list(effective.reasons),
         blockers=blockers,
-        required_env=_required_env_view(detection),
+        required_env=_required_env_view(effective),
         command=_RELEASE_COMMAND,
         ingress=ingress_info,
         self_host=self_host,

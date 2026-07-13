@@ -301,33 +301,44 @@ def test_download_candidate_but_no_overlay_keys_leak_into_not_web(store, tmp_pat
     assert not (overlay_names & names)
 
 
-# ---- criterion 2 collision rule: workspace file wins, suppression is a blocker --
+# ---- criterion 2 collision rule (WO-C6 atomic overlay): a workspace file at a --
+# ---- generated overlay path fails the WHOLE assessment closed, never a partial --
+# ---- bundle. (Reconciled from WO-7's `overlay_suppressed_by_workspace_file` +   --
+# ---- partial-overlay behavior, which WO-C6 §10.1/§10.2 supersedes.) -------------
 
 
-def test_overlay_collision_workspace_file_wins_and_is_reported(store, tmp_path, monkeypatch):
+def test_overlay_collision_fails_closed_with_typed_conflict(store, tmp_path, monkeypatch):
     client, ps = _client_for(store, tmp_path, monkeypatch)
     files = dict(_NODE_FILES)
     files[".env.example"] = b"FOO=workspace-owned\n"
     _seed(ps, store, "conv_collide", files, intent=_NODE_INTENT)
     ps.cut_version("conv_collide", trigger="test")
 
-    # /release reports the suppression as a blocker naming the colliding path.
+    # /release fails the WHOLE assessment closed: needs_review / self_host:false /
+    # spec_digest:null, with a typed `overlay_path_conflict` blocker naming the path.
     body = client.get("/api/projects/conv_collide/release").json()
-    assert body["assessment"] == "candidate"
-    suppressed = [
-        b for b in body["blockers"] if b["code"] == "overlay_suppressed_by_workspace_file"
-    ]
-    assert [b["path"] for b in suppressed] == [".env.example"]
+    assert body["assessment"] == "needs_review"
+    assert body["self_host"] is False
+    assert body["spec_digest"] is None
+    conflicts = [b for b in body["blockers"] if b["code"] == "overlay_path_conflict"]
+    assert [b["path"] for b in conflicts] == [".env.example"]
 
-    # the BOUND download keeps the workspace .env.example (overlay one is dropped)
-    # and still adds the other overlay files.
-    res = client.get(
+    # a BOUND self-host download of the collided version is refused (no zip bytes).
+    bound = client.get(
         f"/api/projects/conv_collide/download?version_seq={body['version_seq']}"
-        f"&spec_digest={body['spec_digest']}"
+        f"&spec_digest=sha256:{'0' * 64}"
     )
+    assert bound.status_code in (409, 410)
+    assert bound.headers.get("content-type") != "application/zip"
+    assert not bound.content.startswith(b"PK")
+
+    # the PLAIN (unbound) source download still works, keeps the workspace file
+    # byte-for-byte, and ships NO generated overlay file (all-or-none).
+    res = client.get("/api/projects/conv_collide/download")
     with zipfile.ZipFile(io.BytesIO(res.content)) as zf:
+        names = set(zf.namelist())
         assert zf.read(".env.example") == b"FOO=workspace-owned\n"
-        assert {"compose.yaml", "Dockerfile", "SELFHOST.md", "release.json"} <= set(zf.namelist())
+        assert not ({"compose.yaml", "Dockerfile", "SELFHOST.md", "release.json"} & names)
 
 
 # ---- criterion 3: a planted secret never reaches the zip or the /release JSON --
