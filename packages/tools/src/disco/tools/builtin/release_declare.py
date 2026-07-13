@@ -42,11 +42,34 @@ nothing.
 from __future__ import annotations
 
 from disco.core import SecurityRisk
+from disco.core.release.command_grammar import check_declaration_argv, check_no_inline_secret_cli
 from disco.core.release.spec import ReleaseIntent, ResourceDecl
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..anatomy import ToolContext, ToolDef, ToolOutcome
 from ..release_intent import ReleaseIntentWriteError
+
+# A STATIC, value-free rejection for a command that fails the runtime grammar
+# (WO-C5 §9.11/§9.2/§9.4). It names the RULE and never echoes the offending argv —
+# a rejected token can itself carry a secret, so the tool's output stays hygienic.
+_GRAMMAR_REJECTION = (
+    "release intent rejected — a start/build command did not parse through the "
+    "runtime grammar: an accepted command must head with a supported runtime "
+    "(node/npm/npx/yarn/pnpm, python, or uvicorn/gunicorn/hypercorn) and use known "
+    "flags only; an arbitrary executable/shell, an unknown flag, or an inline literal "
+    "value is rejected. Pass any secret or value as a WHOLE ${NAME} reference to a "
+    "declared env var (in required_env or the $PORT contract), never inline."
+)
+
+# A STATIC, value-free rejection for a resource `migrate_cmd` inline secret (WO-C5 #3
+# / F5). The runtime-head grammar does NOT apply to a migration tool (alembic /
+# wrangler), but a credential on a secret-bearing flag must be a declared ${NAME} ref.
+_MIGRATE_SECRET_REJECTION = (
+    "release intent rejected — a resource migrate_cmd carries an inline secret on a "
+    "credential-bearing flag (--token / --password / --api-key / --secret / "
+    "--credential / --access-token / …). A migration credential must be a WHOLE ${NAME} "
+    "reference to a declared env var, never an inline literal value."
+)
 
 
 class ReleaseDeclareArgs(BaseModel):
@@ -150,6 +173,39 @@ class ReleaseDeclareTool:
         except ValidationError as exc:
             return ToolOutcome(
                 success=False, error="invalid_release_intent", content=_rejection_reason(exc)
+            )
+
+        # WO-C5 §9.11: the DECLARATION-boundary runtime grammar. ReleaseIntent's own
+        # validators guaranteed token hygiene (no metacharacter / substitution / inline
+        # assignment / partial interpolation survived); the grammar now proves the
+        # start/build commands parse through a runtime-specific shape — a supported
+        # executable + known-safe flags — and that the ONLY value a flag carries is a
+        # WHOLE DECLARED ${NAME} reference. This is the check that rejects an arbitrary
+        # executable/shell, an unknown flag, and every inline secret CLI form
+        # (`--token VALUE` / `--password VALUE` / URL userinfo), NOT a secret-flag
+        # blacklist. A rejection persists NOTHING and echoes NO value.
+        declared = frozenset(intent.required_env) | {intent.port_env}
+        try:
+            check_declaration_argv(intent.start_cmd, declared_names=declared, field="start_cmd")
+            check_declaration_argv(intent.build_cmd, declared_names=declared, field="build_cmd")
+        except ValueError:
+            return ToolOutcome(
+                success=False, error="invalid_release_intent", content=_GRAMMAR_REJECTION
+            )
+
+        # WO-C5 #3 F5: a resource `migrate_cmd` is lowered verbatim into the compose
+        # migrate-service command + release.json, so an inline secret there ships in the
+        # bundle. The runtime-head grammar does NOT apply (a migration heads with
+        # alembic / wrangler), but the same HEAD-AGNOSTIC inline-secret hygiene must — a
+        # credential-bearing flag's value must be a whole declared ${NAME} reference.
+        try:
+            for resource in intent.resources:
+                check_no_inline_secret_cli(
+                    resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
+                )
+        except ValueError:
+            return ToolOutcome(
+                success=False, error="invalid_release_intent", content=_MIGRATE_SECRET_REJECTION
             )
 
         # WO-C1: persist ONLY through the runtime-injected, host-owned intent writer,

@@ -6,4 +6,4 @@ ENV PYTHONUNBUFFERED=1
 COPY ./ ./
 RUN ["pip", "install", "-r", "requirements.txt"]
 EXPOSE 8080
-CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
+CMD ["sh", "-c", "exec 'uvicorn' 'main:app' '--host' '0.0.0.0' '--port' \"${PORT}\""]
