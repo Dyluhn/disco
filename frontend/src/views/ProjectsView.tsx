@@ -94,13 +94,14 @@ function EmptyProjects() {
 function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => void }) {
   const navigate = useNavigate();
   const download = useDownloadProject();
-  // WO-9: the release verdict drives a per-row self-host affordance. It is a
-  // non-interactive status badge (never a dead button) shown ONLY when the project
-  // is genuinely self-hostable — the honest "open this to get the run command"
-  // signal, capability-driven exactly like the SelfHostPanel in the finished-run
-  // handoff. `files_missing` projects have no workspace to assess, so skip the query.
+  // WO-9 / WO-C3: the release verdict drives a per-row self-host affordance — a
+  // non-interactive status badge (never a dead button), capability-driven exactly
+  // like the SelfHostPanel. Honest readiness (§7.7): a `verified` project is "ready";
+  // an unverified `candidate` self-hosts a bundle but is stamped "Not runtime-verified",
+  // NEVER "ready". `files_missing` projects have no workspace to assess, so skip the query.
   const release = useProjectRelease(project.files_missing ? null : project.id);
-  const selfHostable = release.data?.self_host === true;
+  const verified = release.data?.assessment === "verified";
+  const bundleAvailable = release.data?.self_host === true;
   return (
     <li className="flex items-center justify-between gap-section border-b border-hairline py-inline last:border-b-0">
       <button
@@ -122,16 +123,29 @@ function ProjectRow({ project, onDelete }: { project: Project; onDelete: () => v
               files missing
             </span>
           )}
-          {selfHostable && (
+          {verified ? (
+            // Verified: readiness the project has EARNED — the only state that may
+            // claim "ready" (§2.2).
             <span
               data-self-host="ready"
-              title="Self-hostable — open to see the run command and required environment variables"
+              title="Verified self-hostable — open to see the run command and required environment variables"
               className="flex shrink-0 items-center gap-hair rounded-full border border-accent/50 px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-accent"
             >
               <Server className="size-3" aria-hidden />
               self-host
             </span>
-          )}
+          ) : bundleAvailable ? (
+            // Candidate: a bundle is available but it is UNVERIFIED — never stamped
+            // "ready" (§2.1 / §7.7 "every UI mounting point").
+            <span
+              data-self-host="candidate"
+              title="Self-host bundle available — not runtime-verified; open to review"
+              className="flex shrink-0 items-center gap-hair rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint"
+            >
+              <Server className="size-3" aria-hidden />
+              Not runtime-verified
+            </span>
+          ) : null}
         </div>
         <div className="font-ui text-[0.76rem] text-text-faint">
           {project.last_snapshot_at

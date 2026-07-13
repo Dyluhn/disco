@@ -35,15 +35,20 @@ describe("ProjectsView — WO-9 relabel + self-host affordance", () => {
     expect(document.querySelector('[title="Download source"]')).not.toBeNull();
   });
 
-  it("shows a self-host badge on a self-hostable project row", async () => {
+  it("shows an honest, unverified self-host badge on a candidate project row", async () => {
     renderView(<ProjectsView />);
-    // conv_demo_snake resolves to a `candidate` (self_host: true) verdict.
-    const badge = await screen.findByText(/self-host/i);
+    // conv_demo_snake resolves to a `candidate` (self_host: true, UNVERIFIED) verdict.
+    // WO-C3 (§7.7): an unverified candidate is NEVER stamped "ready" — it carries the
+    // honest "Not runtime-verified" qualifier instead.
+    const badge = await screen.findByText(/not runtime-verified/i);
     expect(badge).toBeInTheDocument();
     // The badge is a non-interactive status marker (a <span>), not its own
     // (dead) button — it carries the capability signal, no false affordance.
     expect(badge.tagName).toBe("SPAN");
-    expect(badge.getAttribute("data-self-host")).toBe("ready");
+    // A candidate is unverified: the badge must NOT claim readiness.
+    expect(badge.getAttribute("data-self-host")).toBe("candidate");
+    const row = badge.closest("li") as HTMLElement;
+    expect(row.querySelector('[data-self-host="ready"]')).toBeNull();
   });
 
   it("does not badge the files-missing row as self-hostable", async () => {

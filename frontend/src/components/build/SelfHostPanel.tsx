@@ -22,18 +22,30 @@
 import { AlertTriangle, Download, Info, KeyRound, Server, Terminal } from "lucide-react";
 import type { ReleaseResponse } from "@/types/release";
 
+/** "Ready to self-host" is reserved for a VERIFIED release — verification has
+ * actually run the project. A `candidate` is statically plausible and UNVERIFIED,
+ * so its bundle is only "available", never "ready" (locked semantic §2.1/§2.2). */
 function StatusPill({ release }: { release: ReleaseResponse }) {
-  const ready = release.self_host;
-  const label = ready
+  const verified = release.assessment === "verified";
+  const status = verified
+    ? "ready"
+    : release.self_host
+      ? "candidate"
+      : release.blockers.length > 0
+        ? "needs_review"
+        : "not_web";
+  const label = verified
     ? "Ready to self-host"
-    : release.blockers.length > 0
-      ? "Needs review"
-      : "Not a web app";
+    : release.self_host
+      ? "Bundle available"
+      : release.blockers.length > 0
+        ? "Needs review"
+        : "Not a web app";
   return (
     <span
-      data-self-host-status={ready ? "ready" : release.blockers.length > 0 ? "needs_review" : "not_web"}
+      data-self-host-status={status}
       className={
-        ready
+        verified || release.self_host
           ? "shrink-0 rounded-full border border-accent/40 px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-accent"
           : "shrink-0 rounded-full border border-hairline px-inline py-px font-ui text-[0.66rem] uppercase tracking-wide text-text-faint"
       }
@@ -50,7 +62,11 @@ export function SelfHostPanel({
   release: ReleaseResponse;
   onDownload: () => void;
 }) {
-  const ready = release.self_host;
+  // The bundle is downloadable/runnable when the release is self-hostable; the
+  // honest "Ready" claim is tied to VERIFICATION (assessment === "verified"), NOT
+  // to `self_host`. A `candidate` self-hosts a bundle but stays "Not runtime-verified".
+  const selfHostable = release.self_host;
+  const verified = release.assessment === "verified";
   const reason = release.reasons[0] ?? null;
 
   return (
@@ -66,9 +82,19 @@ export function SelfHostPanel({
         <StatusPill release={release} />
       </div>
 
-      {ready ? (
+      {selfHostable ? (
         <div className="flex flex-col gap-inline">
           {reason && <p className="font-ui text-[0.78rem] text-text-muted">{reason}</p>}
+          {!verified && (
+            // A candidate is statically plausible but UNVERIFIED — it never claims
+            // to be "Ready" (§2.1). This qualifier is the honest counterpart.
+            <p
+              data-self-host-note="unverified"
+              className="font-ui text-[0.74rem] text-text-faint"
+            >
+              Not runtime-verified — the self-host bundle is available but has not been run.
+            </p>
+          )}
           <div className="flex flex-col gap-hair">
             <span className="font-ui text-[0.72rem] font-medium uppercase tracking-wide text-text-faint">
               Run it
@@ -130,9 +156,19 @@ export function SelfHostPanel({
               <li
                 key={`${blocker.code}-${i}`}
                 data-blocker-code={blocker.code}
-                className="font-ui text-[0.76rem] text-text-muted"
+                className="flex flex-col font-ui text-[0.76rem] text-text-muted"
               >
-                {blocker.message}
+                <span>{blocker.message}</span>
+                {/* A structured path (e.g. an overlay-collision path — needed by C6)
+                    is surfaced verbatim when the finding names one. */}
+                {blocker.path && (
+                  <code
+                    data-blocker-path={blocker.path}
+                    className="font-mono text-[0.72rem] text-text-faint"
+                  >
+                    {blocker.path}
+                  </code>
+                )}
               </li>
             ))}
           </ul>
