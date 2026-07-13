@@ -43,6 +43,7 @@ from disco.core.release.detect import DetectionResult, Provenance, detect_releas
 from disco.core.release.local_compose import emit_local_compose
 from disco.core.release.spec import (
     DetectorProvenance,
+    IntentUpgradeError,
     ReleaseAssessment,
     ReleaseIntent,
     ReleaseSpec,
@@ -409,6 +410,42 @@ def _read_tree(root: Path) -> dict[str, bytes]:
     return files
 
 
+def _intent_upgrade_required(
+    version_seq: int | None, tree_digest: str | None, detail: str
+) -> AssessedRelease:
+    """A `needs_review` assessment for a persisted intent sidecar whose schema this
+    build cannot read without guessing (a NEWER version, or an un-upgradeable v1 shape
+    carrying a field the current schema forbids). Reports the EXACT typed
+    `intent_upgrade_required` blocker (§8.11) with `self_host:false` and NO overlay — a
+    handled version gate, never a 500 and never a silent reinterpretation. The message
+    is defensively clamped; a `ReleaseIntent` is NAMES-ONLY so it can carry no secret
+    value."""
+    blocker = _ResponseBlocker(
+        code="intent_upgrade_required",
+        message=(
+            "the persisted release intent declares a schema version this build cannot "
+            f"read without guessing and must be upgraded before release: {detail}"
+        ),
+        field="schema_version",
+    )
+    response = ReleaseResponse(
+        assessment=ReleaseAssessment.needs_review.value,
+        reasons=[
+            "the persisted release-intent sidecar declares an unsupported schema "
+            "version; it must be upgraded before this app can be assessed for release.",
+        ],
+        blockers=[blocker],
+        required_env=[],
+        command=_RELEASE_COMMAND,
+        ingress=None,
+        self_host=False,
+        spec_digest=None,
+        version_seq=version_seq,
+        tree_digest=tree_digest,
+    )
+    return AssessedRelease(response=response, overlay_files={})
+
+
 def _integrity_blocker(detail: str) -> _ResponseBlocker:
     return _ResponseBlocker(
         code="source_integrity_failed",
@@ -496,12 +533,19 @@ def assess_project(
     """Read a project's host-owned intent sidecar and assess its source-bound release
     readiness. The tree assessed is the VERIFIED committed version that matches the
     live workspace (read from the immutable version store, not the mutable mirror);
-    when the live tree matches no committed version the assessment fails closed. Raises
-    `StorageError` on a corrupt intent sidecar (an honest failure, never a silent
-    'no intent')."""
-    intent = ps.read_release_intent(conversation_id)
+    when the live tree matches no committed version the assessment fails closed. A
+    version-gate refusal on the intent sidecar (a NEWER schema, or an un-upgradeable v1
+    shape) is reported as a `needs_review` with the typed `intent_upgrade_required`
+    blocker (§8.11), NOT a 500. Raises `StorageError` on a genuinely corrupt intent
+    sidecar (an honest failure, never a silent 'no intent')."""
     name = record.title or conversation_id
     source = _resolve_source(ps, conversation_id, workspace)
+    try:
+        intent = ps.read_release_intent(conversation_id)
+    except IntentUpgradeError as exc:
+        return _intent_upgrade_required(
+            source.version_seq, source.tree_digest, _clamp(str(exc), _REASON_MAX)
+        )
     if source.verified is not None and source.workspace is not None:
         return assess_release(
             _read_tree(source.workspace),

@@ -16,6 +16,7 @@ emitted `compose.yaml` with a real YAML parser (pyyaml) and asserts its structur
 
 from __future__ import annotations
 
+import os as _os
 import subprocess
 from pathlib import Path
 from shutil import which
@@ -531,6 +532,12 @@ def test_multi_service_uses_selfhost_dockerfiles():
 
 
 def test_build_scope_env_becomes_build_args():
+    # A PUBLIC build-scope var lowers to a Compose build arg (required -> guard, optional
+    # -> bare). A SECRET build-scope var must NEVER fold into build.args — that would bake
+    # the secret into image build history — so the emitter drops it (belt to the
+    # `validate_release` `secret_build_env_unsupported` gate; the detector also fails such
+    # a workspace closed at discovery). This test therefore asserts public -> build.args
+    # AND secret -> absent, rather than the previous shape which enshrined the leak.
     spec = ReleaseSpec(
         kind="web",
         name="Acme Build-Arg App",
@@ -548,13 +555,14 @@ def test_build_scope_env_becomes_build_args():
             ),
         ),
         env=(
+            EnvVarDecl(name="VITE_PUBLIC_BANNER", scope=EnvScope.build, required=True),
+            EnvVarDecl(name="SENTRY_DSN", scope=EnvScope.build, required=False),
             EnvVarDecl(
                 name="NPM_TOKEN",
                 scope=EnvScope.build,
                 required=True,
                 secret=SecretClass.secret,
             ),
-            EnvVarDecl(name="SENTRY_DSN", scope=EnvScope.build, required=False),
         ),
         provenance=_prov(),
     )
@@ -564,15 +572,19 @@ def test_build_scope_env_becomes_build_args():
     assert isinstance(build, dict)
     args = build["args"]
     assert isinstance(args, dict)
-    assert args["NPM_TOKEN"] == "${NPM_TOKEN:?Set NPM_TOKEN — see .env.example}"  # required guard
+    # PUBLIC build vars fold in: a required guard, and an optional bare reference.
+    assert args["VITE_PUBLIC_BANNER"] == (
+        "${VITE_PUBLIC_BANNER:?Set VITE_PUBLIC_BANNER — see .env.example}"  # required guard
+    )
     assert args["SENTRY_DSN"] == "${SENTRY_DSN}"  # optional, no guard
+    # A SECRET build var is NEVER folded into build.args (no leak into image history).
+    assert "NPM_TOKEN" not in args
     # Build-scope env is NOT duplicated into runtime `environment`.
     env = web["environment"]
     assert isinstance(env, dict)
+    assert "VITE_PUBLIC_BANNER" not in env
     assert "NPM_TOKEN" not in env
 
-
-import os as _os
 
 _DETECT_FIXTURES = Path(__file__).parent / "fixtures" / "release_detect"
 

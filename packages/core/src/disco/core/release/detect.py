@@ -181,6 +181,7 @@ def _is_supported_toolchain_head(head: str) -> bool:
         or head.startswith("python")
     )
 
+
 # Non-sqlite database url schemes — recognized ONLY to fail closed on them.
 _UNKNOWN_DB_SCHEMES = (
     "mysql://",
@@ -257,6 +258,128 @@ _VITE_OUTDIR_KEY_RE = re.compile(r"\boutDir\b")
 _VITE_CONFIG_NAMES = frozenset(
     {"vite.config.js", "vite.config.ts", "vite.config.mjs", "vite.config.cjs"}
 )
+
+# ---- WO-C4 build-env / package-manager / build-secret signals -----------------
+#
+# A Vite CLIENT build var — `import.meta.env.VITE_<NAME>`. Vite exposes ONLY the
+# `VITE_`-prefixed vars to the client build (the built-ins — `MODE`, `DEV`, `PROD`,
+# `BASE_URL`, `SSR` — are Vite-provided, never host-supplied), so this captures
+# exactly the host-supplied BUILD-scope vars. They are compile-time constants
+# embedded in the PUBLIC bundle, so a `VITE_`-prefixed name is public BY CONVENTION;
+# a secret-shaped one is a leak and fails closed like any secret build var.
+_VITE_BUILD_ENV_RE = re.compile(r"import\.meta\.env\.(VITE_[A-Za-z0-9_]+)")
+
+# The node lockfiles, each naming exactly one package manager. TWO or more present
+# is a package-manager DISAGREEMENT (`package_manager_conflict`, §8.9): the tree
+# declares two managers and picking one by precedence would silently install the
+# wrong dependency graph. Fail closed, never resolve by precedence.
+_NODE_LOCKFILES = ("pnpm-lock.yaml", "yarn.lock", "package-lock.json")
+
+# An `${NAME}` / `$NAME` env reference inside an `.npmrc` (an install-time auth
+# token read at `npm ci`). A secret-shaped referenced NAME is a BUILD-time secret
+# the install step needs — unsupported in a secret-free bundle, so it fails closed
+# with `secret_build_env_unsupported` (§8.4).
+_NPMRC_ENV_REF_RE = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
+_NPMRC_NAME = ".npmrc"
+
+# ROOT lockfiles/manifests each naming a package manager the neutral base images do
+# NOT provision. The node base runs npm (`package-lock.json` -> `npm ci`, or a bare
+# `npm install`); the python base runs pip (`requirements.txt` / a plain `pyproject`).
+# A lockfile naming bun / pnpm / yarn (node) or poetry / uv (python) is NOT silently
+# mapped onto npm/pip (§8.8: "Merely mapping them to Node/Python is FAILURE") — its
+# mere presence fails detection closed with `toolchain_unsupported`. The LIVE
+# install/pin proof is a separate lane; here the STATIC contract is reject-not-map.
+_UNSUPPORTED_NODE_PM: dict[str, str] = {
+    "bun.lock": "bun",
+    "bun.lockb": "bun",
+    "pnpm-lock.yaml": "pnpm",
+    "yarn.lock": "yarn",
+}
+_UNSUPPORTED_PY_PM: dict[str, str] = {
+    "poetry.lock": "poetry",
+    "uv.lock": "uv",
+}
+
+# The node package managers the neutral base image does NOT provision. An
+# AUTHORITATIVE non-lockfile declaration naming one of these — a corepack
+# `packageManager` field, an unambiguous workspace/config marker, or a start/build
+# script that invokes it — fails detection closed with `toolchain_unsupported` EVEN
+# WITH NO COMMITTED LOCKFILE (§8.8: "Merely mapping them to Node/Python is FAILURE").
+# npm (a `package-lock.json`, `packageManager:"npm@…"`, a `node`/`npm`/`npx` script
+# head, or no PM signal) is the one the base image runs, so it never trips this.
+_UNSUPPORTED_NODE_PM_NAMES = frozenset({"bun", "pnpm", "yarn"})
+
+# ROOT config/workspace markers that UNAMBIGUOUSLY name a non-npm package manager by
+# their mere presence (each file is that tool's own config), even when no lockfile is
+# committed: a `pnpm-workspace.yaml` is pnpm-only, a `.yarnrc(.yml)` is a Yarn config,
+# a `bunfig.toml` is Bun's config.
+_NODE_WORKSPACE_MARKERS: dict[str, str] = {
+    ".yarnrc": "yarn",
+    ".yarnrc.yml": "yarn",
+    "bunfig.toml": "bun",
+    "pnpm-workspace.yaml": "pnpm",
+    "pnpm-workspace.yml": "pnpm",
+}
+
+# The bun/pnpm/yarn launcher HEADS a `start`/`build`/`prebuild`/`postbuild` script may
+# invoke, mapped to the package-manager FAMILY each names. A manager and its `x`-suffixed
+# one-off runner belong to the SAME family — `bunx` is bun, `pnpx` is pnpm — so an
+# `x`-launcher head is caught exactly like the bare manager (closeout #2: an exact-match
+# {bun,pnpm,yarn} check let `bunx`/`pnpx` heads slip through to a false npm candidate).
+# Every family names a toolchain the neutral base image does not provision.
+_SCRIPT_HEAD_FAMILY: dict[str, str] = {
+    "bun": "bun",
+    "bunx": "bun",
+    "pnpm": "pnpm",
+    "pnpx": "pnpm",
+    "yarn": "yarn",
+}
+
+# The `package.json` script keys the EMITTED bundle provably runs, so a non-npm launcher
+# hidden in any of them crashes at bundle time (closeout #2 / #2d / #2e). Ordered by
+# npm-lifecycle phase:
+#   * `npm ci` (the emitted install step) runs, for the ROOT package, `preinstall` ->
+#     `install` -> `postinstall` -> `preprepare` -> `prepare` -> `postprepare` — the last
+#     three CONFIRMED on npm 10.9.7 (the emitted `node:22-bookworm-slim` image's npm major:
+#     `npm ci` with no `--ignore-scripts` runs the prepare lifecycle), closeout #2e;
+#   * `npm run build` (emitted only when a `build` script exists) runs `prebuild` -> `build`
+#     -> `postbuild`;
+#   * `npm start` (the emitted Dockerfile CMD) runs `prestart` -> `start` -> `poststart`.
+# `prepublish*` / `prepack` / `postpack` are EXCLUDED — they run only on `npm publish` /
+# `npm pack`, never on the emitted `npm ci` / `npm start`, so a launcher there is not a
+# bundle crash and inspecting them would risk a false-block.
+_TOOLCHAIN_SCRIPT_KEYS = (
+    "preinstall",
+    "install",
+    "postinstall",
+    "preprepare",
+    "prepare",
+    "postprepare",
+    "prebuild",
+    "build",
+    "postbuild",
+    "prestart",
+    "start",
+    "poststart",
+)
+
+# Sub-command separators in a shell script string: a launcher hidden in ANY sub-command of a
+# chain (`cd app && bunx vite`, `true ; pnpm dev`, `a | pnpx b`, `a & bunx b`) runs at bundle
+# time, so each sub-command's head is inspected independently (closeout #2d). The two-char
+# `&&` / `||` are matched BEFORE their single-char `&` / `|` so an operator is never split
+# mid-token.
+_SHELL_CHAIN_RE = re.compile(r"&&|\|\||;|\||&")
+# A leading `NAME=VALUE` shell env-assignment (`NODE_ENV=production bunx vite`): any number
+# precede the real command head and are stripped before it is read (closeout #2d).
+_ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# TRANSPARENT-PREFIX wrappers that exec the REST of their command line as a new command, so
+# the effective launcher head sits AFTER them (`cross-env FOO=1 bunx vite` -> `bunx`,
+# `dotenv -- bunx x` -> `bunx`). Each is stripped (with a single following `--` argv
+# separator) when it heads a sub-command; unwrapping REPEATS so stacked wrappers
+# (`env cross-env bunx x`) still resolve (closeout #2e). BOUNDED to these bare-prefix
+# wrappers — a flag-argument form (`dotenv -e .env`, `nice -n 10`) is the documented ceiling.
+_TRANSPARENT_WRAPPERS = frozenset({"corepack", "cross-env", "env", "exec", "dotenv"})
 
 
 # ---- result models ------------------------------------------------------------
@@ -547,6 +670,326 @@ def _node_source(files: Mapping[str, str | bytes]) -> str:
     return "\n".join(_scan_text(files[path]) for path in sorted(files))
 
 
+def _build_env_decls(files: Mapping[str, str | bytes]) -> tuple[EnvVarDecl, ...]:
+    """The BUILD-scope env vars a client build reads, discovered from source (§8.1 /
+    §8.2). Currently the Vite `import.meta.env.VITE_<NAME>` form — a compile-time
+    constant baked into the built bundle. Each is a `build`-scope `EnvVarDecl`
+    (host-derived secret classification, fail-closed), so a public build var lowers to
+    a Compose build arg + Dockerfile `ARG` (never a runtime `ENV`), and every
+    statically discovered NAME is conserved in the spec rather than silently dropped.
+
+    Bounded + binary-safe (§7.11): reads only `_scan_text` views, in a stable order."""
+    names: set[str] = set()
+    for path in sorted(files):
+        names.update(_VITE_BUILD_ENV_RE.findall(_scan_text(files[path])))
+    return tuple(
+        EnvVarDecl(
+            name=name,
+            scope=EnvScope.build,
+            required=True,
+            secret=_classify_secret(name),
+        )
+        for name in sorted(names)
+    )
+
+
+def _lockfile_conflict(files: Mapping[str, str | bytes]) -> _DetectBlocker | None:
+    """A `package_manager_conflict` fail-closed outcome when the ROOT declares two or
+    more node lockfiles (e.g. `package-lock.json` AND `yarn.lock`): two package
+    managers, an irreconcilable disagreement. Resolving it by precedence would
+    silently install the wrong dependency graph, so detection fails closed (§8.9).
+    `None` when at most one lockfile is present."""
+    roots = {_norm(p) for p in files if "/" not in _norm(p)}
+    present = [name for name in _NODE_LOCKFILES if name in roots]
+    if len(present) < 2:
+        return None
+    return _DetectBlocker(
+        code="package_manager_conflict",
+        message=(
+            "the project declares two or more package-manager lockfiles ("
+            + ", ".join(present)
+            + "), an irreconcilable disagreement about which package manager builds "
+            "the app; this is NOT resolved by precedence — remove all but one lockfile "
+            "or declare the package manager via a typed release intent."
+        ),
+        field="package_manager",
+        evidence=(f"lockfile conflict: {', '.join(present)}",),
+    )
+
+
+def _secret_build_blocker(files: Mapping[str, str | bytes]) -> _DetectBlocker | None:
+    """A `secret_build_env_unsupported` fail-closed outcome when the install step needs
+    a BUILD-time SECRET — an `.npmrc` referencing a secret-shaped `${NAME}` auth token
+    read at `npm ci` time (§8.4). A secret-free bundle cannot carry that value, and a
+    plain build `ARG` would leak it into image history, so detection fails closed
+    rather than shipping a bundle whose build cannot authenticate. `None` when no
+    secret-shaped build reference is found."""
+    for path in sorted(files):
+        if _basename(path) != _NPMRC_NAME:
+            continue
+        for name in _NPMRC_ENV_REF_RE.findall(_scan_text(files[path])):
+            if _classify_secret(name) is SecretClass.secret:
+                return _DetectBlocker(
+                    code="secret_build_env_unsupported",
+                    message=(
+                        "the build reads a secret-shaped credential from an .npmrc at "
+                        "install time; a secret-free self-host bundle cannot supply a "
+                        "build-time secret (a plain build ARG would leak it into image "
+                        "history), so this build is not supported. Remove the "
+                        "build-time credential or vendor its dependencies."
+                    ),
+                    field="build_env",
+                    evidence=(
+                        f"build-secret evidence: secret-shaped .npmrc reference in {_norm(path)}",
+                    ),
+                )
+    return None
+
+
+def _secret_build_env_blocker(files: Mapping[str, str | bytes]) -> _DetectBlocker | None:
+    """A `secret_build_env_unsupported` fail-closed outcome when a SOURCE-DISCOVERED
+    build-scope env var is secret-classed — e.g. a Vite client bundle reading
+    `import.meta.env.VITE_API_TOKEN` (a secret-shaped name). Such a value would be
+    baked into the PUBLIC build output, and a secret-free self-host bundle cannot
+    supply a build-time secret, so it fails closed EXACTLY like a secret `.npmrc`
+    reference (§8.4) — never folded into a plain build arg while shipping a
+    self-hostable candidate. This closes the discovery-source gap: the contract is the
+    same whether the secret build var comes from an `.npmrc` OR from application
+    source. `None` when every discovered build var is public. Deterministic: the first
+    secret build var in sorted order (via `_build_env_decls`) names the blocker."""
+    for decl in _build_env_decls(files):
+        if decl.secret is SecretClass.secret:
+            return _DetectBlocker(
+                code="secret_build_env_unsupported",
+                message=(
+                    f"the client build reads a secret-shaped build variable {decl.name!r} "
+                    "from application source; it would be baked into the public build "
+                    "output, and a secret-free self-host bundle cannot supply a build-time "
+                    "secret (a plain build arg would leak it), so this build is not "
+                    "supported. Rename it to a non-secret public build var, or remove the "
+                    "build-time secret dependency."
+                ),
+                field="build_env",
+                evidence=(
+                    f"build-secret evidence: source-discovered secret build var {decl.name!r}",
+                ),
+            )
+    return None
+
+
+def _unsupported_pm_blocker(
+    files: Mapping[str, str | bytes], table: Mapping[str, str]
+) -> _DetectBlocker | None:
+    """A `toolchain_unsupported` fail-closed outcome when the ROOT declares a
+    package-manager lockfile naming a toolchain the neutral base image does NOT
+    provision (bun/pnpm/yarn for node, poetry/uv for python — `table` selects which).
+    The lockfile is NOT silently mapped onto npm/pip (§8.8); its presence rejects the
+    release with the exact typed code so the defect is diagnosable. `None` when no such
+    lockfile is present. Deterministic: the first matching lockfile in sorted order
+    names the blocker."""
+    roots = {_norm(p) for p in files if "/" not in _norm(p)}
+    for lockfile in sorted(table):
+        if lockfile in roots:
+            manager = table[lockfile]
+            return _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    f"the project declares a {lockfile!r} lockfile, which indicates the "
+                    f"{manager!r} package manager; that toolchain is NOT provisioned in "
+                    "the neutral base image and the detector will NOT silently map it "
+                    "onto npm/pip. Vendor the toolchain explicitly, or use npm "
+                    "(package-lock.json) / pip (requirements.txt)."
+                ),
+                field="package_manager",
+                evidence=(
+                    f"toolchain evidence: {lockfile} indicates unsupported package "
+                    f"manager {manager!r} (not on the base image)",
+                ),
+            )
+    return None
+
+
+def _package_manager_field(pkg: object) -> str | None:
+    """The corepack `packageManager` manager NAME declared in a parsed `package.json`
+    (the part before `@`), lowercased — `"pnpm@8.0.0"` -> `"pnpm"`. `None` when the
+    field is absent or not a non-empty string. This is an EXPLICIT, authoritative
+    declaration of which package manager builds the app."""
+    if not isinstance(pkg, dict):
+        return None
+    value = pkg.get("packageManager")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    name = value.strip().split("@", 1)[0].strip().lower()
+    return name or None
+
+
+def _node_toolchain_blocker(manager: str, why: str, evidence: str) -> _DetectBlocker:
+    """A `toolchain_unsupported` fail-closed outcome for an authoritative non-npm
+    package-manager declaration (`why` states which signal named `manager`)."""
+    return _DetectBlocker(
+        code="toolchain_unsupported",
+        message=(
+            f"{why}; the {manager!r} package manager is NOT provisioned in the neutral "
+            "base image and the detector will NOT silently map it onto npm. Vendor the "
+            "toolchain explicitly, or use npm (package-lock.json)."
+        ),
+        field="package_manager",
+        evidence=(evidence,),
+    )
+
+
+def _effective_head(sub_command: str) -> str | None:
+    """The effective interpreter head of ONE shell sub-command: the first token that is
+    neither a leading `NAME=VALUE` env-assignment nor a TRANSPARENT-PREFIX wrapper
+    (`_TRANSPARENT_WRAPPERS` — `corepack`/`cross-env`/`env`/`exec`/`dotenv`, each of which
+    execs the REST of the line), path-stripped and lowercased (`/usr/bin/bunx` -> `bunx`).
+
+    Env-assignment and wrapper stripping REPEAT, so a stacked/prefixed form resolves to the
+    real command — `cross-env FOO=1 bunx x` and `env cross-env bunx x` both yield `bunx`; a
+    single `--` argv separator after a wrapper (`dotenv -- bunx x`) is skipped. BOUNDED: it
+    does NOT skip arbitrary `-flag` / value-arg forms (`dotenv -e .env`, `nice -n 10`), which
+    remain the documented opaque-wrapper ceiling. `None` when nothing but env-assignments /
+    bare wrappers remains."""
+    tokens = sub_command.split()
+    idx = 0
+    while True:
+        while idx < len(tokens) and _ENV_ASSIGN_RE.match(tokens[idx]):
+            idx += 1
+        if idx >= len(tokens):
+            return None
+        head = tokens[idx].rsplit("/", 1)[-1].lower()
+        if head not in _TRANSPARENT_WRAPPERS:
+            return head
+        idx += 1
+        if idx < len(tokens) and tokens[idx] == "--":
+            idx += 1
+
+
+# ACCEPTED HEURISTIC CEILING (closeout #2e) — `_launcher_family_in_script` resolves DIRECT,
+# env-prefixed, shell-chained, and transparent-wrapper (`_TRANSPARENT_WRAPPERS`) launcher
+# heads. It DELIBERATELY does NOT recover a launcher buried by an opaque or quoted
+# sub-grammar — the static-parse ceiling of shell, and not a shape a real production start
+# script uses:
+#   * a quoted shell string:               `sh -c "bunx x"`, `bash -lc "bunx x"`
+#   * a task runner exec'ing a quoted arg: `concurrently "bunx x"`, `npm-run-all -p bunx:*`
+#   * command substitution:                `$(bunx x)`, backticks
+#   * a quoted command head:               `"bunx" vite`
+#   * a flag-argument wrapper:             `nice -n 10 bunx x`, `time bunx x`, `xargs bunx`,
+#                                          `dotenv -e .env bunx x`
+# Recovering these needs a real shell parser (quote / word-splitting / substitution grammar).
+# The reject line is drawn at direct / env-prefixed / chained / transparent-wrapper launcher
+# heads; wrapping a launcher any deeper is not a shape a real npm start script emits.
+def _launcher_family_in_script(script: str) -> tuple[str, str] | None:
+    """The first `(head, family)` non-npm launcher match across a script string's shell
+    sub-commands, else `None` (closeout #2d — robust against a launcher hidden behind an env
+    prefix, a shell chain, or a corepack wrapper).
+
+    Splits the string on shell operators, derives each sub-command's effective head
+    (`_effective_head` strips env-assignment / `corepack` prefixes), and matches it against
+    `_SCRIPT_HEAD_FAMILY`. So `NODE_ENV=production bunx vite`, `cd app && bunx vite`,
+    `true ; pnpm dev`, and `corepack pnpm start` are all caught — while a launcher name that
+    appears only as a non-head ARGUMENT (`echo "use bun" && node x`) is NOT, since only a
+    command HEAD names a runtime. Deterministic: the first launcher in sub-command order."""
+    for sub_command in _SHELL_CHAIN_RE.split(script):
+        head = _effective_head(sub_command)
+        if head is not None:
+            family = _SCRIPT_HEAD_FAMILY.get(head)
+            if family is not None:
+                return (head, family)
+    return None
+
+
+def _has_authoritative_npm_signal(files: Mapping[str, str | bytes], pkg: object) -> bool:
+    """Whether the tree carries an AUTHORITATIVE declaration that npm — the ONE node
+    manager the neutral base image provisions — builds the app: a committed ROOT
+    `package-lock.json`, OR a corepack `packageManager:"npm@…"` field. When the owner has
+    authoritatively named npm, a co-present STRAY PASSIVE config marker (a leftover
+    `.yarnrc` / `pnpm-workspace.yaml` / `bunfig.toml` from a yarn/pnpm/bun→npm migration) is
+    a migration remnant, not a live toolchain declaration — npm wins over it (closeout #1).
+    This override is SCOPED to passive markers: it does NOT reach an ACTIVE launcher in a
+    script head (closeout #2c), which is runtime-authoritative and rejects regardless. A
+    committed non-npm LOCKFILE is a STRONGER signal already rejected upstream
+    (`_lockfile_conflict` / `_unsupported_pm_blocker`) before this runs, so this precedence
+    never masks a real committed-lockfile disagreement."""
+    roots = {_norm(p) for p in files if "/" not in _norm(p)}
+    if "package-lock.json" in roots:
+        return True
+    return _package_manager_field(pkg) == "npm"
+
+
+def _unsupported_node_pm_declaration(
+    files: Mapping[str, str | bytes], pkg: object
+) -> _DetectBlocker | None:
+    """A `toolchain_unsupported` fail-closed outcome when an AUTHORITATIVE package-manager
+    declaration OTHER than a committed lockfile names a node toolchain the neutral base
+    image does not provision — closing the no-lockfile bypass (§8.8). Signals, checked in
+    a stable order so the finding is deterministic:
+
+    1. the corepack `package.json` `"packageManager"` field naming bun/pnpm/yarn — the
+       MOST authoritative statement of which manager builds the app; mapping it onto npm
+       is exactly the §8.8 failure, so it rejects even if a (stale) `package-lock.json` is
+       also present.
+    2. a PASSIVE non-npm workspace/config MARKER at the ROOT (`pnpm-workspace.yaml`,
+       `.yarnrc(.yml)`, `bunfig.toml`) — UNLESS an authoritative npm signal is present (a
+       committed `package-lock.json` OR `packageManager:"npm@…"`), in which case the marker
+       is treated as a migration leftover and npm WINS (closeout #1): the project stays a
+       candidate.
+    3. an ACTIVE launcher in a `start`/`build`/`prebuild`/`postbuild` script HEAD whose
+       interpreter is a bun/pnpm/yarn launcher FAMILY — the bare manager OR its
+       `x`-suffixed runner (`bunx`, `pnpx`) (closeout #2). This is RUNTIME-authoritative
+       and rejects UNCONDITIONALLY — even beside an authoritative npm signal (closeout
+       #2c): a script that literally invokes bun/pnpm/yarn genuinely needs that runtime, so
+       silently lowering it to `npm start` would ship a broken bundle.
+
+    npm never trips this (a `package-lock.json`, `packageManager:"npm@…"`, a
+    `node`/`npm`/`npx` script head, or no PM signal at all), so a plain npm project —
+    including one carrying a stray PASSIVE marker alongside an authoritative npm signal — is
+    never mis-flagged. `None` when no unsupported declaration wins. Keyed on ROOT markers
+    only (a nested `.yarnrc` in a vendored dep never triggers it)."""
+    manager = _package_manager_field(pkg)
+    if manager is not None and manager in _UNSUPPORTED_NODE_PM_NAMES:
+        return _node_toolchain_blocker(
+            manager,
+            f'the package.json "packageManager" field declares {manager!r}',
+            f"toolchain evidence: packageManager field names unsupported manager {manager!r} "
+            "(no lockfile required)",
+        )
+    # closeout #1: an authoritative npm signal overrides a co-present STRAY PASSIVE config
+    # marker (a migration leftover) — the base image runs npm, so a leftover non-npm config
+    # file is not a reject. Scoped to the MARKER loop only: it does NOT reach the ACTIVE
+    # launcher script head below (closeout #2c).
+    if not _has_authoritative_npm_signal(files, pkg):
+        roots = {_norm(p) for p in files if "/" not in _norm(p)}
+        for marker in sorted(_NODE_WORKSPACE_MARKERS):
+            if marker in roots:
+                mgr = _NODE_WORKSPACE_MARKERS[marker]
+                return _node_toolchain_blocker(
+                    mgr,
+                    f"the project declares a {marker!r} workspace/config marker",
+                    f"toolchain evidence: {marker} indicates unsupported manager {mgr!r} "
+                    "(no lockfile required)",
+                )
+    # closeout #2c: an ACTIVE launcher in a script head is RUNTIME-authoritative and rejects
+    # UNCONDITIONALLY — even beside a committed `package-lock.json` / `packageManager:"npm@…"`.
+    # The app literally invokes bun/pnpm/yarn, so lowering it to `npm start` would ship a
+    # broken bundle; an npm lockfile does not override a live launcher.
+    for script_name in _TOOLCHAIN_SCRIPT_KEYS:
+        script = _script(pkg, script_name)
+        if script is None:
+            continue
+        match = _launcher_family_in_script(script)
+        if match is not None:
+            head, family = match
+            return _node_toolchain_blocker(
+                family,
+                f"the {script_name!r} script invokes the {family!r} package manager "
+                f"(via the {head!r} launcher)",
+                f"toolchain evidence: {script_name} script head {head!r} is an unsupported "
+                f"manager {family!r} (no lockfile required)",
+            )
+    return None
+
+
 def _node_detect(
     files: Mapping[str, str | bytes],
 ) -> ReleaseService | _DetectBlocker | None:
@@ -601,8 +1044,34 @@ def _node_detect(
             field="port_env",
             evidence=("node port evidence: no process.env.PORT read (literal port only)",),
         )
+    # A package-manager disagreement, an unsupported toolchain, or a build-time secret
+    # is unreleasable — fail closed BEFORE emitting a candidate whose install step is
+    # ambiguous, cannot run on the base image, or cannot authenticate (§8.9 / §8.8 /
+    # §8.4).
+    conflict = _lockfile_conflict(files)
+    if conflict is not None:
+        return conflict
+    toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
+    if toolchain is not None:
+        return toolchain
+    # An authoritative non-lockfile PM declaration (a `packageManager` field, a
+    # workspace/config marker, or a bun/pnpm/yarn script head) rejects the release too —
+    # closing the no-lockfile bypass. Ordered AFTER the two committed-lockfile checks so a
+    # genuine two-lockfile disagreement still fails closed as `package_manager_conflict`.
+    declared_toolchain = _unsupported_node_pm_declaration(files, pkg)
+    if declared_toolchain is not None:
+        return declared_toolchain
+    build_secret = _secret_build_blocker(files)
+    if build_secret is not None:
+        return build_secret
 
     build_cmd = ("npm", "run", "build") if _script(pkg, "build") is not None else ()
+    # A build step that reads a SOURCE-DISCOVERED secret build var fails closed like an
+    # `.npmrc` build secret (§8.4) — a secret build var must never fold into build.args.
+    if build_cmd:
+        source_secret = _secret_build_env_blocker(files)
+        if source_secret is not None:
+            return source_secret
     lockfile, manager, install = _node_install(files)
     return ReleaseService(
         id=_INGRESS_ID,
@@ -667,6 +1136,11 @@ def _python_detect(
             field="start_cmd",
             evidence=("python entrypoint evidence: no root `app = FastAPI(...)` module",),
         )
+    # A poetry/uv lockfile names a toolchain the neutral python base image does NOT
+    # provision; fail closed rather than silently mapping it onto `pip install` (§8.8).
+    toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_PY_PM)
+    if toolchain is not None:
+        return toolchain
     install: tuple[str, ...] = (
         ("pip", "install", "-r", "requirements.txt")
         if "requirements.txt" in tree
@@ -736,6 +1210,28 @@ def _static_detect(
                     "static output evidence: build output directory not statically resolvable",
                 ),
             )
+        # A build-requiring static bundle installs with a package manager too, so the
+        # same disagreement / unsupported-toolchain / build-secret guards apply (§8.9 /
+        # §8.8 / §8.4).
+        conflict = _lockfile_conflict(files)
+        if conflict is not None:
+            return conflict
+        toolchain = _unsupported_pm_blocker(files, _UNSUPPORTED_NODE_PM)
+        if toolchain is not None:
+            return toolchain
+        # An authoritative non-lockfile PM declaration also rejects a build-requiring
+        # static bundle (same no-lockfile bypass, same §8.8 reject-not-map contract).
+        declared_toolchain = _unsupported_node_pm_declaration(files, pkg)
+        if declared_toolchain is not None:
+            return declared_toolchain
+        build_secret = _secret_build_blocker(files)
+        if build_secret is not None:
+            return build_secret
+        # A SOURCE-DISCOVERED secret build var (a secret-shaped `import.meta.env.VITE_*`)
+        # fails closed like an `.npmrc` build secret — never folded into build.args (§8.4).
+        source_secret = _secret_build_env_blocker(files)
+        if source_secret is not None:
+            return source_secret
         # A build-requiring static bundle MUST install its dependencies before the
         # build runs, or the emitted image builds against an empty node_modules.
         lockfile, manager, install = _node_install(files)
@@ -769,8 +1265,7 @@ def _runtime_conflict_result() -> DetectionResult:
     can see WHY the runtimes conflict and declare which one releases the app."""
     node_evidence = "node runtime evidence: package.json declares a server 'start' script"
     python_evidence = (
-        "python runtime evidence: a python manifest with a web-framework "
-        "(fastapi/flask) entrypoint"
+        "python runtime evidence: a python manifest with a web-framework (fastapi/flask) entrypoint"
     )
     return DetectionResult(
         assessment=ReleaseAssessment.needs_review,
@@ -849,8 +1344,9 @@ def _detect_database(files: Mapping[str, str | bytes]) -> _DbFinding:
         if norm.endswith(".db"):
             sqlite_evidence.append(f"sqlite database file {norm}")
     if unknown_engine:
-        return _DbFinding(_DbKind.unknown, unknown_engine, tuple(dict.fromkeys(unknown_evidence)),
-                          False)
+        return _DbFinding(
+            _DbKind.unknown, unknown_engine, tuple(dict.fromkeys(unknown_evidence)), False
+        )
     if sqlite_evidence:
         return _DbFinding(_DbKind.sqlite, "sqlite", tuple(dict.fromkeys(sqlite_evidence)), has_url)
     return _DbFinding(_DbKind.none, "", (), False)
@@ -1192,6 +1688,14 @@ def _detected_result(service: ReleaseService, files: Mapping[str, str | bytes]) 
                     binding=_DB_ID,
                 ),
             )
+    # Statically discovered BUILD-scope env NAMES (a Vite `import.meta.env.VITE_*`
+    # client build var) are conserved in the spec so they lower to a build arg +
+    # Dockerfile ARG (§8.1 / §8.2); a name already present (a runtime DB var) is not
+    # duplicated. Only added for a build-requiring service — a served-as-is static
+    # site or a plain runtime process has no build step to inject them into.
+    if service.build_cmd:
+        existing = {var.name for var in env}
+        env = env + tuple(decl for decl in _build_env_decls(files) if decl.name not in existing)
     return DetectionResult(
         assessment=ReleaseAssessment.candidate,
         services=(service,),
