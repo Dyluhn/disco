@@ -14,6 +14,7 @@ higher layers) — `disco.core` is the leaf.
 from __future__ import annotations
 
 from .spec import (
+    RELEASE_SPEC_SCHEMA_VERSION,
     CloudResourceProfile,
     DetectorProvenance,
     EnvScope,
@@ -31,11 +32,13 @@ from .spec import (
     SecretClass,
     ServiceRole,
     load_release_spec,
+    local_mount_target,
     serialize_release_spec,
     spec_digest,
 )
 
 __all__ = [
+    "RELEASE_SPEC_SCHEMA_VERSION",
     "CloudResourceProfile",
     "DetectorProvenance",
     "EnvScope",
@@ -53,6 +56,7 @@ __all__ = [
     "SecretClass",
     "ServiceRole",
     "load_release_spec",
+    "local_mount_target",
     "serialize_release_spec",
     "spec_digest",
 ]

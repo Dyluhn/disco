@@ -47,13 +47,16 @@ def _ingress(**overrides: Any) -> ReleaseService:
 
 
 def _resource(**overrides: Any) -> ResourceDecl:
+    # WO-C7: a resource in a ReleaseSpec must carry an absolute-normalized
+    # persistent_path and at least one valid consumer (`web`, the ingress here).
     base: dict[str, Any] = {
         "id": "db",
         "kind": ResourceKind.sqlite,
-        "persistent_path": "data/app.db",
+        "persistent_path": "/data/app.db",
         "profiles": ResourceProfiles(
             local=LocalResourceProfile(url="file:/data/app.db", volume="app-data")
         ),
+        "consumers": ("web",),
     }
     base.update(overrides)
     return ResourceDecl(**base)

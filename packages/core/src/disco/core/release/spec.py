@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import re
 from collections.abc import Iterable
 from enum import Enum
@@ -190,6 +191,25 @@ def _require_unique(values: Iterable[str], *, what: str) -> None:
         seen.add(item)
 
 
+def _require_absolute_normalized_posix(value: str, *, field: str) -> None:
+    """A resource `persistent_path` (WO-C7 model invariant) must be an ABSOLUTE,
+    NORMALIZED POSIX path: it starts at the root (`/`), carries no `//` run, no
+    `/./` single-dot segment, no `..` traversal, and no trailing slash — i.e. it is
+    already in canonical form. A relative path, a double slash (including a leading
+    `//`, which POSIX/`posixpath.normpath` treats specially and would otherwise
+    survive normalization), or a `.`/`..` segment is rejected. Value-free: the
+    message names the RULE, never the path (a path could carry sensitive data)."""
+    if not value.startswith("/"):
+        raise ValueError(f"{field} must be an absolute POSIX path (a leading '/')")
+    if value.startswith("//"):
+        raise ValueError(f"{field} must not begin with a '//' run")
+    if value != posixpath.normpath(value):
+        raise ValueError(
+            f"{field} must be a NORMALIZED absolute POSIX path "
+            "(no '//' run, no '/./' segment, no '..' segment, no trailing slash)"
+        )
+
+
 # ---- enums (small closed vocabularies) ----------------------------------------
 
 
@@ -281,6 +301,19 @@ class EnvVarDecl(BaseModel):
     # Optional id of a `ResourceDecl` this variable is bound to (e.g. the DB URL
     # var bound to the sqlite resource). Still a NAME/id reference — never a value.
     binding: _IdStr | None = Field(default=None, exclude_if=lambda value: value is None)
+    # WO-C7 (schema v2): the CONSUMER service ids this env var is injected into. A
+    # per-env consumer scope so a multi-service secret reaches ONLY its consumers
+    # (plan §11.8/§11.11). `None` means "no explicit scope declared": a BOUND var
+    # (`binding` set) derives its consumers from the resource it binds; an UNBOUND
+    # var defaults to the sole ingress in a SINGLE-service spec and is REJECTED in a
+    # multi-service spec (implicit fan-out is forbidden). An empty tuple is a
+    # distinct, explicit "no consumer" that the cross-field validators reject. The
+    # field is ABSENT from a v1 sidecar (added in v2) — `exclude_if=None` keeps a
+    # var that declares no scope serializing to the v1 shape, and a v1 payload
+    # lacking the key parses as `None` (the documented v1 read policy).
+    consumers: tuple[_IdStr, ...] | None = Field(
+        default=None, max_length=_MAX_LINKS, exclude_if=lambda value: value is None
+    )
 
     @field_validator("name")
     @classmethod
@@ -293,6 +326,16 @@ class EnvVarDecl(BaseModel):
         if value is None:
             return None
         return _validate_id(value, field="EnvVarDecl binding")
+
+    @field_validator("consumers")
+    @classmethod
+    def _consumers_are_ids(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        for consumer in value:
+            _ = _validate_id(consumer, field="EnvVarDecl consumer")
+        _require_unique(value, what="EnvVarDecl consumer")
+        return value
 
 
 # ---- services -----------------------------------------------------------------
@@ -487,6 +530,29 @@ class ResourceDecl(BaseModel):
         return self
 
 
+def _strip_file_scheme(url: str) -> str:
+    return url[len("file:") :] if url.startswith("file:") else url
+
+
+def local_mount_target(resource: ResourceDecl) -> str:
+    """The container directory a resource's named volume mounts at — the PARENT
+    directory of its local path.
+
+    The SINGLE source of truth (WO-C7) shared by two consumers so they can never
+    drift: the `ReleaseSpec` schema validator (no two distinct resources may claim
+    the same mount target) and the local-compose emitter (each resource mounts its
+    volume here). Derived from the LOCAL url (a sqlite `file:/data/app.db` →
+    `/data`); the C5 url⊕persistent_path consistency guard makes the two agree, and
+    the `/data` fallback matches a bare-root path so the emitter's historical output
+    is byte-preserved."""
+    path = _strip_file_scheme(resource.profiles.local.url) or resource.persistent_path
+    path = path.rstrip("/")
+    slash = path.rfind("/")
+    if slash <= 0:
+        return "/data"
+    return path[:slash]
+
+
 # ---- detector provenance ------------------------------------------------------
 
 
@@ -671,9 +737,22 @@ def parse_release_intent(raw: object) -> ReleaseIntent:
 
 # ---- the release spec ---------------------------------------------------------
 
+# The CURRENT schema version of the CONTRACT shape. WO-C7 adds the per-env
+# `consumers` topology (`EnvVarDecl.consumers`), so the version is bumped to 2. The
+# v1 READ POLICY is explicit and tested: a persisted v1 spec carries no per-env
+# consumers, so every `EnvVarDecl.consumers` parses as `None`; the cross-field
+# invariants below then read it under the SAME rules as a fresh v2 spec — a
+# single-service spec defaults an unbound var to its sole ingress, while a
+# MULTI-service spec with an unbound, consumer-less var is REJECTED (not silently
+# treated as global — plan §11.11 forbids that). Since v1 only ever emitted
+# single-service specs (the detector derives a single `web` ingress), every genuine
+# v1 spec still reads; only a hand-forged multi-service v1 spec with implicit
+# fan-out is refused.
+RELEASE_SPEC_SCHEMA_VERSION = 2
+
 
 class ReleaseSpec(BaseModel):
-    """The neutral, immutable, secret-free release contract (v1, LOCAL profile).
+    """The neutral, immutable, secret-free release contract (v2, LOCAL profile).
 
     Binds a release to an exact committed workspace version (`version_seq` +
     `tree_digest`, mirroring `store.VersionRecord`) and captures the full
@@ -683,14 +762,21 @@ class ReleaseSpec(BaseModel):
 
     Cross-field invariants enforced here (so every consumer can trust the spec):
     exactly one ingress-role service; unique service ids, env-var names, and
-    resource ids; and referential integrity of `depends_on` / resource `consumers`
-    (→ service ids) and env `binding` (→ resource ids)."""
+    resource ids; referential integrity of `depends_on` / resource `consumers` /
+    env `consumers` (→ service ids) and env `binding` (→ resource ids); and — the
+    WO-C7 topology invariants — every resource has ≥1 consumer, distinct resources
+    never share a persistent_path OR a mount target, every persistent_path is an
+    absolute normalized POSIX path, the service dependency graph is acyclic (no
+    self-edge, no cycle), and a multi-service spec never fans an unbound env var out
+    implicitly (it must declare consumers)."""
 
     model_config = _STRICT
 
     # Forward-compat version tag for the CONTRACT shape itself (distinct from the
-    # workspace `version_seq` below), matching the AppKit specs' convention.
-    schema_version: int = Field(default=1, ge=1)
+    # workspace `version_seq` below), matching the AppKit specs' convention. WO-C7
+    # bumps the default to `RELEASE_SPEC_SCHEMA_VERSION` (2) — see that constant for
+    # the tested v1 read policy.
+    schema_version: int = Field(default=RELEASE_SPEC_SCHEMA_VERSION, ge=1)
     kind: _ShortStr
     name: _NameStr
     # Source binding — mirrors `disco.tools.projects.store.VersionRecord`
@@ -762,6 +848,13 @@ class ReleaseSpec(BaseModel):
                 if dep not in service_ids:
                     raise ValueError(f"service {service.id!r} depends_on unknown service {dep!r}")
         for resource in self.resources:
+            # WO-C7: every resource must have at least one (valid) consumer — an
+            # orphan resource that no service uses is an ill-formed topology.
+            if not resource.consumers:
+                raise ValueError(
+                    f"resource {resource.id!r} declares no consumers; every resource must "
+                    "have at least one consumer service"
+                )
             for consumer in resource.consumers:
                 if consumer not in service_ids:
                     raise ValueError(
@@ -770,6 +863,102 @@ class ReleaseSpec(BaseModel):
         for var in self.env:
             if var.binding is not None and var.binding not in resource_ids:
                 raise ValueError(f"env var {var.name!r} binds unknown resource {var.binding!r}")
+            # WO-C7: a declared per-env consumer scope must reference real services.
+            if var.consumers is not None:
+                for consumer in var.consumers:
+                    if consumer not in service_ids:
+                        raise ValueError(
+                            f"env var {var.name!r} names unknown consumer service {consumer!r}"
+                        )
+        return self
+
+    @model_validator(mode="after")
+    def _resource_paths_and_mount_targets_unique(self) -> ReleaseSpec:
+        # WO-C7: distinct resources may not claim the SAME persistent_path or mount
+        # target — either collision would collapse two resources onto one volume and
+        # silently clobber their state. Also enforce the absolute-normalized-POSIX
+        # persistent_path invariant here (a SPEC/release-boundary tightening; a raw
+        # intent-time `ResourceDecl` may still carry a relative spelling). Messages
+        # name resource IDS only, never the path value.
+        seen_paths: dict[str, str] = {}
+        seen_targets: dict[str, str] = {}
+        for resource in self.resources:
+            _require_absolute_normalized_posix(
+                resource.persistent_path, field=f"resource {resource.id!r} persistent_path"
+            )
+            path = resource.persistent_path
+            if path in seen_paths:
+                raise ValueError(
+                    f"resources {seen_paths[path]!r} and {resource.id!r} declare the same "
+                    "persistent_path; distinct resources may not claim the same persistent path"
+                )
+            seen_paths[path] = resource.id
+            target = local_mount_target(resource)
+            if target in seen_targets:
+                raise ValueError(
+                    f"resources {seen_targets[target]!r} and {resource.id!r} mount at the same "
+                    "container target; distinct resources may not share a mount target"
+                )
+            seen_targets[target] = resource.id
+        return self
+
+    @model_validator(mode="after")
+    def _dependency_graph_is_acyclic(self) -> ReleaseSpec:
+        # WO-C7: the generic `depends_on` graph must be a DAG — a service may not
+        # depend on itself, and no cycle may exist (a cycle deadlocks compose
+        # start-ordering). Referential validity (`_references_resolve`) has already
+        # run, so every edge points at a known service; an unknown edge is skipped
+        # here defensively. Bounded by `_MAX_SERVICES`.
+        adjacency = {service.id: service.depends_on for service in self.services}
+        for service in self.services:
+            if service.id in service.depends_on:
+                raise ValueError(f"service {service.id!r} depends on itself (a self-dependency)")
+        visiting: set[str] = set()
+        done: set[str] = set()
+
+        def _visit(node: str) -> None:
+            visiting.add(node)
+            for dep in adjacency.get(node, ()):
+                if dep not in adjacency:
+                    continue
+                if dep in visiting:
+                    raise ValueError(
+                        "the service dependency graph contains a cycle "
+                        f"(reached {dep!r} again)"
+                    )
+                if dep not in done:
+                    _visit(dep)
+            visiting.discard(node)
+            done.add(node)
+
+        for sid in adjacency:
+            if sid not in done:
+                _visit(sid)
+        return self
+
+    @model_validator(mode="after")
+    def _multi_service_unbound_env_declares_consumers(self) -> ReleaseSpec:
+        # WO-C7 §11.11: in a MULTI-service spec, an unbound RUNTIME env var must
+        # declare its consumers — implicit fan-out (and silently treating a missing
+        # consumer list as global) is forbidden. A single-service spec may default
+        # an unbound var to its sole ingress, so the rule is scoped to multi-service.
+        # BUILD-scope env is a distinct, documented mechanism: it is PUBLIC by
+        # construction (a secret build var is refused upstream) and is folded into
+        # each service's compile-time `build.args`, not the runtime environment, so
+        # it carries no per-consumer secret-isolation semantics and is not gated here.
+        if len(self.services) <= 1:
+            return self
+        for var in self.env:
+            if (
+                var.scope is EnvScope.runtime
+                and var.binding is None
+                and var.consumers is None
+            ):
+                raise ValueError(
+                    f"env var {var.name!r} is unbound and declares no consumers in a "
+                    "multi-service spec; implicit fan-out is forbidden — declare its "
+                    "consumer service(s)"
+                )
         return self
 
 
@@ -819,8 +1008,16 @@ def serialize_release_spec(spec: ReleaseSpec) -> str:
 def load_release_spec(data: bytes | str) -> ReleaseSpec:
     """Parse + schema-validate a ReleaseSpec from JSON bytes/str already in hand.
 
-    Raises `ValueError` on malformed JSON or a non-object payload, and a pydantic
-    `ValidationError` if the JSON violates the schema."""
+    Version-gated (WO-C7 v1 read policy): a payload declaring a `schema_version`
+    NEWER than `RELEASE_SPEC_SCHEMA_VERSION` is REJECTED rather than mis-read under
+    the current schema. A v1 (or version-less legacy) payload is read as-is: it
+    carries no per-env `consumers`, so each var parses as `None` and the cross-field
+    invariants apply the documented v1 rule (sole-ingress default for a
+    single-service spec; a multi-service unbound-consumer-less var is refused, never
+    fanned out).
+
+    Raises `ValueError` on malformed JSON, a non-object payload, or a newer schema
+    version, and a pydantic `ValidationError` if the JSON violates the schema."""
     raw = data.decode("utf-8") if isinstance(data, bytes) else data
     try:
         parsed = json.loads(raw)
@@ -828,6 +1025,14 @@ def load_release_spec(data: bytes | str) -> ReleaseSpec:
         raise ValueError(f"ReleaseSpec is not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError(f"ReleaseSpec must be a JSON object, got {type(parsed).__name__}")
+    version = parsed.get("schema_version", 1)
+    if isinstance(version, int) and not isinstance(version, bool):
+        if version > RELEASE_SPEC_SCHEMA_VERSION:
+            raise ValueError(
+                f"ReleaseSpec declares schema_version {version}, newer than this build "
+                f"supports ({RELEASE_SPEC_SCHEMA_VERSION}); it must not be silently "
+                "reinterpreted under an older schema."
+            )
     return ReleaseSpec.model_validate(parsed)
 
 
@@ -838,8 +1043,10 @@ __all__ = [
     "EnvVarDecl",
     "GeneratedFileRef",
     "RELEASE_INTENT_SCHEMA_VERSION",
+    "RELEASE_SPEC_SCHEMA_VERSION",
     "IntentUpgradeError",
     "LocalResourceProfile",
+    "local_mount_target",
     "ReleaseAssessment",
     "ReleaseIntent",
     "ReleaseService",
