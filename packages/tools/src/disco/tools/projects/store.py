@@ -38,7 +38,7 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import Enum
@@ -231,6 +231,15 @@ def tree_digest(root: Path) -> str:
     """Stable sha256 over sorted workspace-relative path + file-sha256 pairs."""
     file_hashes, _ = _scan_tree(root)
     return _tree_digest_from_hashes(file_hashes)
+
+
+def tree_digest_of_files(files: Mapping[str, bytes]) -> str:
+    """`tree_digest` over an in-memory {rel: bytes} snapshot — same file-set +
+    algorithm as `tree_digest(root)`. For verifying a source tree that was read
+    once into memory (no re-traversal, so no read-vs-read TOCTOU)."""
+    return _tree_digest_from_hashes(
+        {rel: hashlib.sha256(data).hexdigest() for rel, data in files.items()}
+    )
 
 
 def _version_to_dict(record: VersionRecord) -> dict[str, Any]:
