@@ -400,6 +400,74 @@ _KNOWN_FLAGS: dict[str, frozenset[str]] = {
 }
 
 
+# Known credential-bearing CLI flag NAMES (lowercased). A VALUE carried on one of
+# these must be a WHOLE DECLARED `${NAME}` env reference, never an inline literal —
+# so a secret is never baked into an emitted command. Deliberately a focused set of
+# unambiguously-secret flags (not `--key`/`--pass`, which have benign non-secret
+# uses) so head-agnostic hygiene on a `migrate_cmd` never false-rejects a legitimate
+# non-secret argument.
+_SECRET_CLI_FLAGS = frozenset(
+    {
+        "--token",
+        "--api-token",
+        "--auth-token",
+        "--access-token",
+        "--refresh-token",
+        "--password",
+        "--passwd",
+        "--secret",
+        "--client-secret",
+        "--api-key",
+        "--apikey",
+        "--credential",
+        "--credentials",
+    }
+)
+
+
+def check_no_inline_secret_cli(
+    argv: tuple[str, ...], *, declared_names: frozenset[str], field: str
+) -> None:
+    """Reject an INLINE literal secret carried on a known credential-bearing CLI flag
+    (`--token VALUE` / `--token=VALUE`, `--password`, `--api-key`, `--secret`,
+    `--credential`, `--access-token`, … in both the space and `=` forms) UNLESS the
+    value is a WHOLE DECLARED `${NAME}` env reference (WO-C5 #3 / F5).
+
+    HEAD-AGNOSTIC by design: it does NOT constrain the executable and does NOT reject
+    unknown non-secret flags or positionals, so a legitimate migration command (an
+    `alembic -c alembic.ini upgrade head`, a `wrangler d1 migrations apply`, positional
+    operands) stays valid. This is inline-secret DATA HYGIENE on an argv that is already
+    rendered as a SAFE exec-array (never a shell string) — NOT the §9 runtime grammar,
+    which would wrongly reject a non-runtime migration tool. Value-free message: a
+    rejected value can itself be the secret. A migration credential must be a declared
+    `${NAME}` reference (bound to the resource / in required_env), never inline."""
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token.startswith("-") and "=" in token:
+            name, _, value = token.partition("=")
+            if name.lower() in _SECRET_CLI_FLAGS:
+                ref = whole_env_ref(value)
+                if ref is None or ref not in declared_names:
+                    raise _inline_secret_error(field)
+        elif token.lower() in _SECRET_CLI_FLAGS:
+            following = argv[index + 1] if index + 1 < len(argv) else None
+            ref = whole_env_ref(following) if following is not None else None
+            if ref is None or ref not in declared_names:
+                raise _inline_secret_error(field)
+            index += 1  # the reference value is consumed by this secret flag
+        index += 1
+
+
+def _inline_secret_error(field: str) -> ValueError:
+    return ValueError(
+        f"{field} carries an inline secret on a credential-bearing flag "
+        "(--token / --password / --api-key / --secret / --credential / --access-token / "
+        "…); the value must be a whole ${NAME} reference to a declared env var, never an "
+        "inline literal that would be baked into the exported command"
+    )
+
+
 def _head_family(head: str) -> str | None:
     """The supported runtime family for a command head (basename, lowercased), or
     ``None`` if the executable is not one the neutral base images run."""
@@ -478,6 +546,7 @@ def check_declaration_argv(
 __all__ = [
     "check_declaration_argv",
     "check_health_path",
+    "check_no_inline_secret_cli",
     "check_persistent_path",
     "check_sqlite_local_url",
     "check_token_hygiene",

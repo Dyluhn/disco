@@ -380,3 +380,139 @@ def test_leading_dash_root_cannot_emit_flag_copy_source(case_id: str, root: str)
                     f"[{case_id}] a leading-dash root emitted a COPY source {source!r} that "
                     "parses as a COPY flag; WO-C5 #2 F2 rejects a path segment starting with '-'."
                 )
+
+
+# ===========================================================================
+# F5 — a resource `migrate_cmd` inline secret-CLI value never reaches the shipped
+# bundle. RED on 345ad5dd (the runtime grammar gated only start/build; a resource
+# migrate_cmd was lowered VERBATIM into the compose migrate-service `command:` +
+# serialized into release.json, so `--token SECRET` shipped in plaintext).
+# ===========================================================================
+
+
+def _sqlite_resource_json(migrate_cmd: list[str]) -> dict[str, Any]:
+    """A valid raw sqlite `ResourceDecl` sidecar shape carrying `migrate_cmd`."""
+    return {
+        "id": "db",
+        "kind": "sqlite",
+        "persistent_path": "/data/app.db",
+        "profiles": {"local": {"url": "file:/data/app.db", "volume": "app-data"}},
+        "consumers": ["web"],
+        "migrate_cmd": migrate_cmd,
+    }
+
+
+_MIGRATE_SECRET_CMDS: list[tuple[str, list[str]]] = [
+    ("token_space", ["alembic", "upgrade", "head", "--token", "C5F5SECRET"]),
+    ("password_space", ["alembic", "upgrade", "head", "--password", "C5F5SECRET"]),
+    ("api_key_equals", ["alembic", "upgrade", "head", "--api-key=C5F5SECRET"]),
+    ("credential_space", ["wrangler", "d1", "execute", "db", "--credential", "C5F5SECRET"]),
+    ("access_token_equals", ["alembic", "upgrade", "--access-token=C5F5SECRET"]),
+]
+
+
+@pytest.mark.parametrize(
+    "case_id,migrate_cmd", _MIGRATE_SECRET_CMDS, ids=[c[0] for c in _MIGRATE_SECRET_CMDS]
+)
+def test_migrate_cmd_inline_secret_never_reaches_bundle(
+    case_id: str,
+    migrate_cmd: list[str],
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C5 #3 F5 — RED on 345ad5dd.
+
+    A resource `migrate_cmd` carrying an inline secret on a credential-bearing flag
+    must fail closed on the emission path (head-agnostic inline-secret hygiene), so no
+    bundle is emitted and the planted value `C5F5SECRET` appears in NO shipped byte
+    (compose.yaml migrate command + release.json). Baseline lowered it verbatim."""
+    cid = _cid(closeout_name, "conv_c5f5")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_raw(
+        ps,
+        _store,
+        cid,
+        {"start_cmd": ["node", "server.js"], "resources": [_sqlite_resource_json(migrate_cmd)]},
+    )
+
+    assert _assessment(client, cid) != "candidate", (
+        f"[{case_id}] a migrate_cmd with an inline secret was accepted as a self-host "
+        "candidate; the emission-path inline-secret hygiene must fail it closed."
+    )
+    assert "C5F5SECRET" not in _release_body(client, cid), (
+        f"[{case_id}] the secret value was echoed in the /release response."
+    )
+    for name, text in _download_bytes_texts(client, cid).items():
+        assert "C5F5SECRET" not in text, (
+            f"[{case_id}] the migrate secret was baked into the emitted {name}; a resource "
+            "migrate_cmd inline secret must be rejected on the emission path (WO-C5 #3 F5)."
+        )
+
+
+def test_migrate_cmd_declared_secret_ref_is_candidate(
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C5 #3 F5 (positive) — a migration credential passed as a whole DECLARED
+    `${NAME}` reference (`--token ${DB_TOKEN}`, DB_TOKEN in required_env) carries no
+    literal and must remain a self-host candidate — the fix rejects inline VALUES, not
+    the safe reference form."""
+    cid = _cid(closeout_name, "conv_c5f5ok")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_raw(
+        ps,
+        _store,
+        cid,
+        {
+            "start_cmd": ["node", "server.js"],
+            "required_env": ["DB_TOKEN"],
+            "resources": [
+                _sqlite_resource_json(["alembic", "upgrade", "head", "--token", "${DB_TOKEN}"])
+            ],
+        },
+    )
+    assert _assessment(client, cid) == "candidate", (
+        "a migrate_cmd whose credential is a whole declared ${NAME} reference must remain "
+        "a self-host candidate; F5 rejects inline secret VALUES, not the reference form."
+    )
+
+
+_LEGIT_MIGRATE_CMDS: list[tuple[str, list[str]]] = [
+    ("alembic_config", ["alembic", "-c", "alembic.ini", "upgrade", "head"]),
+    ("wrangler_apply", ["wrangler", "d1", "migrations", "apply", "app-db"]),
+    ("npm_migrate", ["npm", "run", "migrate"]),
+]
+
+
+@pytest.mark.parametrize(
+    "case_id,migrate_cmd", _LEGIT_MIGRATE_CMDS, ids=[c[0] for c in _LEGIT_MIGRATE_CMDS]
+)
+def test_legit_migrate_commands_stay_candidate(
+    case_id: str,
+    migrate_cmd: list[str],
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C5 #3 F5 (positive) — head-AGNOSTIC hygiene must NOT reject a legitimate
+    non-secret migration command. A migration tool (`alembic -c alembic.ini …`,
+    `wrangler d1 migrations apply`, `npm run migrate`) with no credential-bearing flag
+    must stay a self-host candidate — this is inline-secret data hygiene, not the §9
+    runtime-executable grammar (which would wrongly reject a non-runtime migration tool)."""
+    cid = _cid(closeout_name, "conv_c5f5legit")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed_raw(
+        ps,
+        _store,
+        cid,
+        {"start_cmd": ["node", "server.js"], "resources": [_sqlite_resource_json(migrate_cmd)]},
+    )
+    assert _assessment(client, cid) == "candidate", (
+        f"[{case_id}] a legitimate non-secret migrate command was rejected; F5 hygiene is "
+        "head-agnostic and must only reject an INLINE secret, never a benign migration tool."
+    )

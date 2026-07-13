@@ -42,7 +42,7 @@ nothing.
 from __future__ import annotations
 
 from disco.core import SecurityRisk
-from disco.core.release.command_grammar import check_declaration_argv
+from disco.core.release.command_grammar import check_declaration_argv, check_no_inline_secret_cli
 from disco.core.release.spec import ReleaseIntent, ResourceDecl
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -59,6 +59,16 @@ _GRAMMAR_REJECTION = (
     "flags only; an arbitrary executable/shell, an unknown flag, or an inline literal "
     "value is rejected. Pass any secret or value as a WHOLE ${NAME} reference to a "
     "declared env var (in required_env or the $PORT contract), never inline."
+)
+
+# A STATIC, value-free rejection for a resource `migrate_cmd` inline secret (WO-C5 #3
+# / F5). The runtime-head grammar does NOT apply to a migration tool (alembic /
+# wrangler), but a credential on a secret-bearing flag must be a declared ${NAME} ref.
+_MIGRATE_SECRET_REJECTION = (
+    "release intent rejected — a resource migrate_cmd carries an inline secret on a "
+    "credential-bearing flag (--token / --password / --api-key / --secret / "
+    "--credential / --access-token / …). A migration credential must be a WHOLE ${NAME} "
+    "reference to a declared env var, never an inline literal value."
 )
 
 
@@ -181,6 +191,21 @@ class ReleaseDeclareTool:
         except ValueError:
             return ToolOutcome(
                 success=False, error="invalid_release_intent", content=_GRAMMAR_REJECTION
+            )
+
+        # WO-C5 #3 F5: a resource `migrate_cmd` is lowered verbatim into the compose
+        # migrate-service command + release.json, so an inline secret there ships in the
+        # bundle. The runtime-head grammar does NOT apply (a migration heads with
+        # alembic / wrangler), but the same HEAD-AGNOSTIC inline-secret hygiene must — a
+        # credential-bearing flag's value must be a whole declared ${NAME} reference.
+        try:
+            for resource in intent.resources:
+                check_no_inline_secret_cli(
+                    resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
+                )
+        except ValueError:
+            return ToolOutcome(
+                success=False, error="invalid_release_intent", content=_MIGRATE_SECRET_REJECTION
             )
 
         # WO-C1: persist ONLY through the runtime-injected, host-owned intent writer,

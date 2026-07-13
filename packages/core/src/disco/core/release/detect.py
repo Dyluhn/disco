@@ -61,7 +61,10 @@ from collections.abc import Mapping
 from enum import Enum
 from typing import NamedTuple
 
-from disco.core.release.command_grammar import check_declaration_argv
+from disco.core.release.command_grammar import (
+    check_declaration_argv,
+    check_no_inline_secret_cli,
+)
 from disco.core.release.spec import (
     EnvScope,
     EnvVarDecl,
@@ -1554,6 +1557,29 @@ def _command_grammar_blocker(intent: ReleaseIntent) -> _DetectBlocker | None:
                 ),
                 field=field,
                 evidence=(f"command-grammar evidence: {field} rejected by the runtime grammar",),
+            )
+    # WO-C5 #3 F5: a resource `migrate_cmd` is lowered VERBATIM into the compose
+    # migrate-service command + serialized into release.json, so an inline secret CLI
+    # value there would ship in the bundle. The runtime-head grammar does NOT apply (a
+    # migration legitimately heads with alembic / wrangler), but the SAME head-agnostic
+    # inline-secret hygiene must — a credential-bearing flag's value must be a whole
+    # declared ${NAME} reference, never an inline literal.
+    for resource in intent.resources:
+        try:
+            check_no_inline_secret_cli(
+                resource.migrate_cmd, declared_names=declared, field="migrate_cmd"
+            )
+        except ValueError:
+            return _DetectBlocker(
+                code="toolchain_unsupported",
+                message=(
+                    "a resource migrate_cmd carries an inline secret on a credential-bearing "
+                    "flag (e.g. '--token VALUE'); a migration credential must be a whole "
+                    "${NAME} reference to a declared env var, never an inline literal that "
+                    "would be lowered into the exported migrate command + release.json."
+                ),
+                field="migrate_cmd",
+                evidence=("command-grammar evidence: migrate_cmd carries an inline secret",),
             )
     return None
 
