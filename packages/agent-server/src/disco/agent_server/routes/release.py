@@ -268,18 +268,39 @@ def _overlay_collisions(overlay: Mapping[str, str], files: Mapping[str, bytes]) 
     case-insensitive (Windows/macOS) filesystem, and `dir//f` normalizes onto
     `dir/f`; both are collisions the export must fail closed on (plan §10.1/§10.7).
 
+    A generated overlay path is ALSO a collision when a workspace file makes that path
+    a DIRECTORY: a workspace file at `compose.yaml/inner.txt` means `compose.yaml` is a
+    directory, so the generated `compose.yaml` FILE cannot be placed there without an
+    ambiguous file-vs-directory archive pair that cannot be extracted intact. This is
+    checked on the SAME normalized + case-folded keys as the exact/lower/norm
+    comparison — a workspace key equals the overlay path OR lives directly under it
+    (`overlay_path + "/"`) — over ALL six generated overlay paths, not just the
+    container-manifest ones, so it composes with the existing collision logic.
+
     Returns the colliding GENERATED paths (the exact overlay names), sorted, so each
     becomes a typed `overlay_path_conflict` blocker naming the path it would clobber.
     """
     present_exact = set(files)
     present_lower = {path.lower() for path in files}
     present_norm = {posixpath.normpath(path) for path in files}
+
+    def _occupied_as_dir(prefix: str, keys: set[str]) -> bool:
+        # A workspace key lives UNDER `prefix/`, so `prefix` names a DIRECTORY there
+        # and a generated FILE at `prefix` cannot coexist with it. The trailing slash
+        # keeps `compose.yaml.bak` / `Dockerfile-dev` from false-matching `compose.yaml`
+        # / `Dockerfile`.
+        needle = prefix + "/"
+        return any(key.startswith(needle) for key in keys)
+
     collisions = [
         path
         for path in overlay
         if path in present_exact
         or path.lower() in present_lower
         or posixpath.normpath(path) in present_norm
+        or _occupied_as_dir(path, present_exact)
+        or _occupied_as_dir(path.lower(), present_lower)
+        or _occupied_as_dir(posixpath.normpath(path), present_norm)
     ]
     return sorted(collisions)
 

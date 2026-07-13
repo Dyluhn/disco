@@ -519,6 +519,14 @@ async def _resolve_project_for_read(
     return ps, record, workspace
 
 
+def _ancestor_dirs(rel: str) -> list[str]:
+    """The directory prefixes of a normalized POSIX archive name, outermost first —
+    e.g. ``a/b/c`` -> ``["a", "a/b"]``; a top-level name has none. Used to reserve the
+    directories a written entry occupies so a later entry can never clash file-vs-dir."""
+    parts = rel.split("/")
+    return ["/".join(parts[: i + 1]) for i in range(len(parts) - 1)]
+
+
 def _zip_workspace_with_overlay(src: Path, overlay: dict[str, str]) -> Iterator[bytes]:
     """Stream a zip of the workspace tree PLUS the generated self-host overlay.
 
@@ -533,21 +541,35 @@ def _zip_workspace_with_overlay(src: Path, overlay: dict[str, str]) -> Iterator[
     overlay entry is dropped when its normalized name would ESCAPE the extraction
     root (a `../` traversal / absolute path) or COLLIDE with an already-written name —
     exactly, case-insensitively (a Windows/macOS case-fold clash), or after slash
-    normalization (`dir//f` onto `dir/f`). So the produced archive never carries a
-    colliding or escaping entry even if a caller passes an adversarial overlay map."""
+    normalization (`dir//f` onto `dir/f`). It ALSO reserves the DIRECTORY PREFIXES of
+    every written name, so a generated file is never written where a workspace entry
+    already occupies that path as a directory (a `compose.yaml/inner.txt` workspace
+    file blocks a generated `compose.yaml` FILE) and vice-versa (a workspace FILE at an
+    ancestor blocks a generated path beneath it). So the produced archive never carries
+    a colliding, file-vs-directory, or escaping entry even for an adversarial overlay
+    map — belt-and-suspenders behind the assess-time collision gate."""
     if not src.exists() or not src.is_dir():
         raise FileNotFoundError(f"workspace directory not found: {src}")
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
         taken_norm: set[str] = set()
         taken_lower: set[str] = set()
+        taken_dirs_norm: set[str] = set()
+        taken_dirs_lower: set[str] = set()
+
+        def _reserve(rel: str) -> None:
+            taken_norm.add(rel)
+            taken_lower.add(rel.lower())
+            for parent in _ancestor_dirs(rel):
+                taken_dirs_norm.add(parent)
+                taken_dirs_lower.add(parent.lower())
+
         for path in sorted(p for p in src.rglob("*") if p.is_file() and not p.is_symlink()):
             rel = path.relative_to(src).as_posix()
             if is_runtime_secret_path(rel):
                 continue
             zf.write(path, arcname=rel)
-            taken_norm.add(posixpath.normpath(rel))
-            taken_lower.add(rel.lower())
+            _reserve(posixpath.normpath(rel))
         for raw in sorted(overlay):
             rel = posixpath.normpath(raw.replace("\\", "/"))
             if rel in {"", "."} or rel == ".." or rel.startswith("../") or posixpath.isabs(rel):
@@ -556,9 +578,13 @@ def _zip_workspace_with_overlay(src: Path, overlay: dict[str, str]) -> Iterator[
                 continue
             if rel in taken_norm or rel.lower() in taken_lower:
                 continue  # the workspace (or an earlier overlay entry) wins the collision
+            if rel in taken_dirs_norm or rel.lower() in taken_dirs_lower:
+                continue  # a workspace/overlay entry already occupies this path as a DIR
+            ancestors = _ancestor_dirs(rel)
+            if any(a in taken_norm or a.lower() in taken_lower for a in ancestors):
+                continue  # an ANCESTOR of this path is already a FILE (a file/dir clash)
             zf.writestr(rel, overlay[raw].encode("utf-8"))
-            taken_norm.add(rel)
-            taken_lower.add(rel.lower())
+            _reserve(rel)
     buf.seek(0)
     chunk = 64 * 1024
     while True:
