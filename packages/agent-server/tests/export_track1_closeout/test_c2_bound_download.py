@@ -429,3 +429,72 @@ async def test_event_loop_stays_responsive_during_large_assessment(
             f"(slowest health {slowest_health:.3f}s vs big {big_dt:.3f}s); the workspace "
             "hash/read must not block the async event loop (WO-C2 §6.11)."
         )
+
+
+# ---- criterion 8 (regression): a pruned bound version fails TYPED, never 500/torn --
+
+
+def test_bound_download_of_pruned_version_fails_typed(
+    _store: SqliteEventStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    closeout_name: object,
+) -> None:
+    """WO-C2 acc. 8 (§4.7 harness addition) — the source-binding TOCTOU regression.
+
+    ``_build_bound_download_zip`` used to read the committed version directory THREE
+    separate times (integrity digest, release assessment, zip emit). A concurrent
+    ``_prune`` deleting an UNPINNED bound version *between* those reads could escape as
+    an untyped 500 (a ``StorageError``/``OSError`` outside the ``_BoundReject`` handler)
+    or emit a torn/empty 200. The fix collapses the source to ONE in-memory read whose
+    hash is the integrity guard, so a bound download for a version whose bytes are gone
+    can only fail TYPED (409/410) and never emit a zip.
+
+    Deterministic case: cut enough distinct UNPINNED versions (well past
+    ``_MAX_UNLABELED``) that v1 is pruned outright, then assert the bound download is a
+    typed failure carrying no zip bytes and is neither 200 nor 500.
+
+    Honest scope: with v1 FULLY pruned the version index no longer lists seq 1, so the
+    already-present ``version_workspace_path`` guard rejects it with a typed 410 even
+    on the pre-fix code — this deterministic case is a green-at-tip PRESERVATION guard
+    for the ``never 200/500`` contract. The mid-read window that was previously an
+    untyped 500 (prune landing between the resolve and the integrity read) is closed by
+    the single-read refactor by construction rather than by a timing-dependent test."""
+    cid = _cid(closeout_name, "conv_c2prune")
+    client, ps = _client(_store, tmp_path, monkeypatch)
+    _seed(ps, _store, cid, title=_cid(closeout_name, "proj"))
+
+    n = ps.cut_version(cid, trigger="closeout")
+    assert n is not None and n.seq == 1
+    body = client.get(f"/api/projects/{cid}/release").json()
+    assert body["version_seq"] == 1 and body["self_host"] is True
+    spec_d = body["spec_digest"]
+
+    live = ps.path_for(cid)
+    # Deterministically prune v1: cut a generous count of distinct UNPINNED versions
+    # (each adds a NEW file so the tree digest changes and a fresh version is cut),
+    # well past _MAX_UNLABELED=20, so v1 is dropped from the store entirely.
+    for i in range(40):
+        (live / f"churn_{i}.txt").write_bytes(f"iteration {i}\n".encode())
+        assert ps.cut_version(cid, trigger="prune") is not None
+    assert 1 not in {v.seq for v in ps.list_versions(cid)}, (
+        "v1 was not pruned; the deterministic prune precondition did not hold"
+    )
+
+    res = client.get(_bound_url(cid, 1, spec_d))
+    assert res.status_code in (409, 410), (
+        f"a bound download for a pruned version returned {res.status_code}; a source-bound "
+        "download may only succeed as its version or fail atomically with a typed 409/410."
+    )
+    assert res.status_code not in (200, 500), (
+        f"a pruned bound download returned {res.status_code}; it must be neither a (torn) "
+        "200 nor an untyped 500."
+    )
+    assert res.headers.get("content-type") != "application/zip", (
+        "a rejected bound download emitted zip bytes; it must emit none."
+    )
+    reason = res.json()["detail"]["reason"]
+    assert reason in {"version_not_found", "source_integrity_failed"}, (
+        f"a pruned bound download must carry a typed reason, got {reason!r}"
+    )
+    assert b"PK\x03\x04" not in res.content, "a rejected bound download body contains zip magic"

@@ -26,8 +26,7 @@ from disco.tools.projects import (
     aiter_zip_workspace,
     is_runtime_secret_path,
 )
-from disco.tools.projects.store import VersionRecord
-from disco.tools.projects.store import tree_digest as compute_tree_digest
+from disco.tools.projects.store import VersionRecord, tree_digest_of_files
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from starlette.datastructures import UploadFile
@@ -625,8 +624,17 @@ def _build_bound_download_zip(
     self-host candidate, or its assessed `spec_digest` does not equal the bound
     value. The zip source is version N's IMMUTABLE stored workspace — never the
     mutable live mirror — so a concurrent live edit / N+1 cut can never leak a mixed
-    tree into a completed download."""
-    from .release import assess_version
+    tree into a completed download.
+
+    The version bytes are read EXACTLY ONCE into memory; the integrity digest, the
+    release assessment, and the emitted zip all derive from that single snapshot. A
+    concurrent `_prune` that deletes an UNPINNED version N's directory can therefore
+    never tear the download across a read-vs-read window: the read either observes the
+    whole tree (a wholly-N zip) or it fails atomically. A vanished/partial dir yields
+    an empty-or-short snapshot whose digest cannot match the recorded one (typed 409),
+    and a file that disappears mid-read raises `OSError` (typed 410) — never an untyped
+    500 and never a torn/empty 200."""
+    from .release import assess_release
 
     try:
         version_ws = ps.version_workspace_path(conversation_id, version_seq)
@@ -640,14 +648,33 @@ def _build_bound_download_zip(
     if version_record is None:
         raise _BoundReject(410, "version_not_found", f"no committed version {version_seq}")
 
-    # Re-hash the stored version workspace and require it to equal its recorded
-    # digest before a single byte is emitted (never serve a corrupt source).
-    if compute_tree_digest(version_ws) != version_record.tree_digest:
+    # ONE atomic read of the immutable committed source. A concurrent prune that
+    # removes the whole dir makes `rglob` yield nothing (an empty snapshot, caught by
+    # the digest guard below); a file that vanishes mid-read raises `OSError` here.
+    try:
+        source_files = _version_source_files(version_ws)
+    except OSError as exc:
+        raise _BoundReject(410, "version_not_found", "version workspace was removed") from exc
+
+    # Integrity guard over the IN-MEMORY bytes (never a re-traversal): hashing the
+    # snapshot reproduces `store.tree_digest(version_ws)` exactly for an intact tree,
+    # so a pruned/torn read yields a digest that cannot equal the recorded one and
+    # fails closed as a typed 409 — never a silent empty-200.
+    if tree_digest_of_files(source_files) != version_record.tree_digest:
         raise _BoundReject(
             409, "source_integrity_failed", "version bytes no longer match the recorded digest"
         )
 
-    assessed = assess_version(ps, record, conversation_id, version_record, version_ws)
+    # Assess the SAME in-memory snapshot (no second read of the version dir).
+    assessed = assess_release(
+        source_files,
+        intent=ps.read_release_intent(conversation_id),
+        project_name=record.title or conversation_id,
+        version_seq=version_record.seq,
+        tree_digest=version_record.tree_digest,
+        source_snapshotted=True,
+        imported=record.imported,
+    )
     response = assessed.response
     if not response.self_host or response.spec_digest is None:
         raise _BoundReject(
@@ -658,7 +685,7 @@ def _build_bound_download_zip(
             409, "spec_digest_mismatch", "spec_digest does not match the bound version"
         )
 
-    combined = _version_source_files(version_ws)
+    combined = dict(source_files)
     for rel, text in assessed.overlay_files.items():
         # A workspace file always wins a collision (the overlay entry was already
         # dropped upstream); never emit a runtime-secret path.

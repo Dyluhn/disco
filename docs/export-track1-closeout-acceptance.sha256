@@ -22,7 +22,7 @@
     "frontend/src/test/export-track1-closeout/c3-verified-wording.test.tsx": "6681c91837b9a309a9e9c8f4ceaa8815c0190f32e826fde9b9c2af1ce78ac834",
     "frontend/src/test/export-track1-closeout/c6-collision-blockers.test.tsx": "8da008c2e076b6d97568cab90c171a03193f87df3a7625f9653473cdc0dbb4ad",
     "packages/agent-server/tests/export_track1_closeout/conftest.py": "96bd584649345537111feb14b1ef86ebe68b6e123c4ffcb7b4b36d75f93b150a",
-    "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py": "e424c61afb0f99bcc937578e5dacf45dcded098bf7506325db1ddbc3fbcd7a4d",
+    "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py": "cecb5d40d755a8335b1106bace6bfe5bd9c8eafb5cfbbd1845c7c8e6a20f74cb",
     "packages/agent-server/tests/export_track1_closeout/test_c2_release_source_binding.py": "c1bd42e5082622ad8724fc8998c444839f13ac4f04a104c6644e1d0a8248d174",
     "packages/agent-server/tests/export_track1_closeout/test_c3_detection_matrix.py": "704987bbc63d3f27cda81855f3194f6d8a8562dcfe8ae389f6c5bf05dfe6a7fa",
     "packages/agent-server/tests/export_track1_closeout/test_c4_env_build_toolchain_matrix.py": "d2d32f12b570f0df23340d780bed7a34e6f16a7b373e3e0371c112675e9c8dac",
@@ -43,6 +43,7 @@
   "missing_frozen_paths": [],
   "python_closeout_inventory": [
     "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_is_wholly_one_version_under_concurrent_cut",
+    "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_of_pruned_version_fails_typed",
     "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_other_owner_sequence_is_forbidden",
     "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_rejects_invalid_binding[nonexistent_seq]",
     "packages/agent-server/tests/export_track1_closeout/test_c2_bound_download.py::test_bound_download_rejects_invalid_binding[other_conversation_seq]",
