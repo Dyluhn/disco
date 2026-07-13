@@ -336,22 +336,25 @@ _SCRIPT_HEAD_FAMILY: dict[str, str] = {
 }
 
 # The `package.json` script keys the EMITTED bundle provably runs, so a non-npm launcher
-# hidden in any of them crashes at bundle time (closeout #2 / #2d). Ordered by npm-lifecycle
-# phase:
+# hidden in any of them crashes at bundle time (closeout #2 / #2d / #2e). Ordered by
+# npm-lifecycle phase:
 #   * `npm ci` (the emitted install step) runs, for the ROOT package, `preinstall` ->
-#     `install` -> `postinstall` (stable across npm versions);
+#     `install` -> `postinstall` -> `preprepare` -> `prepare` -> `postprepare` — the last
+#     three CONFIRMED on npm 10.9.7 (the emitted `node:22-bookworm-slim` image's npm major:
+#     `npm ci` with no `--ignore-scripts` runs the prepare lifecycle), closeout #2e;
 #   * `npm run build` (emitted only when a `build` script exists) runs `prebuild` -> `build`
 #     -> `postbuild`;
 #   * `npm start` (the emitted Dockerfile CMD) runs `prestart` -> `start` -> `poststart`.
-# `prepare` is DELIBERATELY EXCLUDED: whether `npm ci` runs it is version-dependent and
-# historically inconsistent (it is primarily an `npm install`-without-args / pre-pack hook),
-# so a launcher there does NOT provably run in the production bundle and inspecting it would
-# risk a false-block. `prepublish*` / `prepack` / `postpack` never run on `npm ci` / `npm
-# start` and are excluded for the same reason.
+# `prepublish*` / `prepack` / `postpack` are EXCLUDED — they run only on `npm publish` /
+# `npm pack`, never on the emitted `npm ci` / `npm start`, so a launcher there is not a
+# bundle crash and inspecting them would risk a false-block.
 _TOOLCHAIN_SCRIPT_KEYS = (
     "preinstall",
     "install",
     "postinstall",
+    "preprepare",
+    "prepare",
+    "postprepare",
     "prebuild",
     "build",
     "postbuild",
@@ -369,6 +372,14 @@ _SHELL_CHAIN_RE = re.compile(r"&&|\|\||;|\||&")
 # A leading `NAME=VALUE` shell env-assignment (`NODE_ENV=production bunx vite`): any number
 # precede the real command head and are stripped before it is read (closeout #2d).
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+# TRANSPARENT-PREFIX wrappers that exec the REST of their command line as a new command, so
+# the effective launcher head sits AFTER them (`cross-env FOO=1 bunx vite` -> `bunx`,
+# `dotenv -- bunx x` -> `bunx`). Each is stripped (with a single following `--` argv
+# separator) when it heads a sub-command; unwrapping REPEATS so stacked wrappers
+# (`env cross-env bunx x`) still resolve (closeout #2e). BOUNDED to these bare-prefix
+# wrappers — a flag-argument form (`dotenv -e .env`, `nice -n 10`) is the documented ceiling.
+_TRANSPARENT_WRAPPERS = frozenset({"corepack", "cross-env", "env", "exec", "dotenv"})
 
 
 # ---- result models ------------------------------------------------------------
@@ -828,21 +839,46 @@ def _node_toolchain_blocker(manager: str, why: str, evidence: str) -> _DetectBlo
 
 
 def _effective_head(sub_command: str) -> str | None:
-    """The effective interpreter head of ONE shell sub-command: the first token after any
-    leading `NAME=VALUE` env-assignments and an optional `corepack` wrapper, path-stripped
-    and lowercased (`/usr/bin/bunx` -> `bunx`). `None` when the sub-command carries no
-    command token (only env-assignments, a bare `corepack`, or empty)."""
+    """The effective interpreter head of ONE shell sub-command: the first token that is
+    neither a leading `NAME=VALUE` env-assignment nor a TRANSPARENT-PREFIX wrapper
+    (`_TRANSPARENT_WRAPPERS` — `corepack`/`cross-env`/`env`/`exec`/`dotenv`, each of which
+    execs the REST of the line), path-stripped and lowercased (`/usr/bin/bunx` -> `bunx`).
+
+    Env-assignment and wrapper stripping REPEAT, so a stacked/prefixed form resolves to the
+    real command — `cross-env FOO=1 bunx x` and `env cross-env bunx x` both yield `bunx`; a
+    single `--` argv separator after a wrapper (`dotenv -- bunx x`) is skipped. BOUNDED: it
+    does NOT skip arbitrary `-flag` / value-arg forms (`dotenv -e .env`, `nice -n 10`), which
+    remain the documented opaque-wrapper ceiling. `None` when nothing but env-assignments /
+    bare wrappers remains."""
     tokens = sub_command.split()
     idx = 0
-    while idx < len(tokens) and _ENV_ASSIGN_RE.match(tokens[idx]):
+    while True:
+        while idx < len(tokens) and _ENV_ASSIGN_RE.match(tokens[idx]):
+            idx += 1
+        if idx >= len(tokens):
+            return None
+        head = tokens[idx].rsplit("/", 1)[-1].lower()
+        if head not in _TRANSPARENT_WRAPPERS:
+            return head
         idx += 1
-    if idx < len(tokens) and tokens[idx].rsplit("/", 1)[-1].lower() == "corepack":
-        idx += 1
-    if idx >= len(tokens):
-        return None
-    return tokens[idx].rsplit("/", 1)[-1].lower()
+        if idx < len(tokens) and tokens[idx] == "--":
+            idx += 1
 
 
+# ACCEPTED HEURISTIC CEILING (closeout #2e) — `_launcher_family_in_script` resolves DIRECT,
+# env-prefixed, shell-chained, and transparent-wrapper (`_TRANSPARENT_WRAPPERS`) launcher
+# heads. It DELIBERATELY does NOT recover a launcher buried by an opaque or quoted
+# sub-grammar — the static-parse ceiling of shell, and not a shape a real production start
+# script uses:
+#   * a quoted shell string:               `sh -c "bunx x"`, `bash -lc "bunx x"`
+#   * a task runner exec'ing a quoted arg: `concurrently "bunx x"`, `npm-run-all -p bunx:*`
+#   * command substitution:                `$(bunx x)`, backticks
+#   * a quoted command head:               `"bunx" vite`
+#   * a flag-argument wrapper:             `nice -n 10 bunx x`, `time bunx x`, `xargs bunx`,
+#                                          `dotenv -e .env bunx x`
+# Recovering these needs a real shell parser (quote / word-splitting / substitution grammar).
+# The reject line is drawn at direct / env-prefixed / chained / transparent-wrapper launcher
+# heads; wrapping a launcher any deeper is not a shape a real npm start script emits.
 def _launcher_family_in_script(script: str) -> tuple[str, str] | None:
     """The first `(head, family)` non-npm launcher match across a script string's shell
     sub-commands, else `None` (closeout #2d — robust against a launcher hidden behind an env

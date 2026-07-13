@@ -41,10 +41,22 @@ the emitted bundle actually runs. The fix extracts the EFFECTIVE head of every s
 sub-command (stripping env-assignment / ``corepack`` prefixes) and inspects every key
 ``npm ci`` + ``npm run build`` + ``npm start`` provably run (``preinstall`` / ``install`` /
 ``postinstall``, ``prebuild`` / ``build`` / ``postbuild``, ``prestart`` / ``start`` /
-``poststart``; ``prepare`` is EXCLUDED — its execution under ``npm ci`` is version-dependent
-and not provable, so a launcher there is not a provable bundle crash). A launcher HEAD in
-any inspected key → ``toolchain_unsupported``; a launcher name that is only a non-head
-ARGUMENT stays a candidate.
+``poststart``). A launcher HEAD in any inspected key → ``toolchain_unsupported``; a launcher
+name that is only a non-head ARGUMENT stays a candidate. (#2d initially excluded ``prepare``;
+#2e CORRECTS that — see below.)
+
+FINDING #2e (prepare lifecycle hook + transparent-wrapper unwrap; documented opaque-wrapper
+ceiling — the FINAL launcher-detection closeout). (A) ``npm ci`` DOES run ``preprepare`` /
+``prepare`` / ``postprepare`` (verified on npm 10.9.7, the emitted ``node:22-bookworm-slim``
+image's npm major), so a launcher in ``prepare`` (``prepare:"bunx build"``) crashes the
+emitted ``RUN ["npm","ci"]`` exactly like ``postinstall`` — those three keys are now
+inspected (the #2d exclusion rested on a false premise). (B) ``_effective_head`` now unwraps
+the TRANSPARENT-PREFIX wrapper family (``corepack`` / ``cross-env`` / ``env`` / ``exec`` /
+``dotenv``), which exec the rest of the line, so ``cross-env FOO=1 bunx vite``, ``env bunx
+x``, ``exec bunx x``, and ``dotenv -- bunx x`` resolve to the real launcher head. The
+opaque/quoted-wrapper class (``sh -c "…"``, ``concurrently "…"``, ``$(…)``, quoted heads,
+flag-arg wrappers like ``nice`` / ``dotenv -e .env``) is an ACCEPTED static-parse ceiling,
+documented at the detection site — not a shape a real production start script uses.
 
 RED vs GREEN (BEFORE each fix):
   * RED (finding #1, tip 300d7ec6) — ``package-lock.json`` + ``.yarnrc`` and
@@ -66,6 +78,11 @@ RED vs GREEN (BEFORE each fix):
     …), beside a committed ``package-lock.json``, was WRONGLY a ``candidate``. Robust
     extraction rejects it ``toolchain_unsupported``, while benign chains/hooks (every
     effective head node/npm/npx/…, or a launcher only as a non-head arg) stay ``candidate``.
+  * RED (closeout #2e, tip b265c08a) — ``prepare:"pnpm build"`` + ``package-lock.json`` (npm
+    ci runs prepare), and a launcher behind a transparent wrapper (``cross-env FOO=1 bunx
+    vite``, ``dotenv -- bunx x``), were WRONGLY ``candidate`` (prepare uninspected; only
+    ``corepack`` unwrapped). The fix rejects them; benign wrapper heads (``cross-env … node``,
+    ``env node x``) and benign ``prepare`` (``husky install``, ``node …``) stay ``candidate``.
   * GREEN preservation — a plain pnpm/yarn/bun declaration with NO npm signal STILL fails
     closed; a plain npm project (incl. one with an authoritative-npm-overridden stray
     PASSIVE marker) STILL a candidate; a NON-npm ``packageManager`` field STILL rejects
@@ -279,6 +296,19 @@ _HIDDEN_LAUNCHER_CASES: tuple[tuple[str, str], ...] = (
     ("postinstall", "bunx patch"),  # npm ci install-lifecycle hook
     ("prestart", "yarn warmup"),  # npm start pre-hook
     ("poststart", "pnpx notify"),  # npm start post-hook
+    # #2e (A): `npm ci` runs the prepare lifecycle (npm 10.9.7 / node:22) -> a launcher in
+    # prepare/preprepare/postprepare crashes the emitted `npm ci`.
+    ("prepare", "pnpm build"),
+    ("preprepare", "yarn gen"),
+    ("postprepare", "pnpx notify"),
+    # #2e (B): a launcher behind a transparent-prefix wrapper (`corepack` was already caught;
+    # `cross-env`/`env`/`exec`/`dotenv` are the new family) still runs at bundle time.
+    ("start", "cross-env FOO=1 bunx vite"),
+    ("start", "cross-env NODE_ENV=prod pnpm dev"),
+    ("start", "env bunx x"),
+    ("start", "exec bunx x"),
+    ("start", "dotenv -- bunx x"),
+    ("start", "env cross-env bunx x"),  # stacked wrappers resolve
 )
 
 
@@ -318,7 +348,15 @@ _BENIGN_HEAD_CASES: tuple[tuple[str, str], ...] = (
     ("postinstall", "node scripts/patch.js"),  # hook, node head
     ("postinstall", "patch-package"),  # hook, plain-binary head
     ("prestart", "node warmup.js"),  # start pre-hook, node head
-    ("prepare", "husky install"),  # husky is not a launcher (and `prepare` is uninspected)
+    # #2e (A): `prepare` is now INSPECTED, but a non-launcher head there is still a candidate.
+    ("prepare", "husky install"),  # husky is not a launcher
+    ("prepare", "node scripts/x.js"),  # node head
+    ("prepare", "patch-package"),  # plain-binary head
+    # #2e (B): a transparent wrapper whose REAL command is node/npm is NOT a launcher.
+    ("start", "cross-env NODE_ENV=production node server.js"),  # wrapper -> node
+    ("start", "env node x"),  # wrapper env -> node
+    ("start", "exec node server.js"),  # wrapper exec -> node
+    ("start", "dotenv -- npm run start"),  # wrapper dotenv (+ `--`) -> npm
 )
 
 
