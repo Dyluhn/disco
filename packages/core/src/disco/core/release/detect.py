@@ -321,6 +321,26 @@ _NODE_WORKSPACE_MARKERS: dict[str, str] = {
     "pnpm-workspace.yml": "pnpm",
 }
 
+# The bun/pnpm/yarn launcher HEADS a `start`/`build`/`prebuild`/`postbuild` script may
+# invoke, mapped to the package-manager FAMILY each names. A manager and its `x`-suffixed
+# one-off runner belong to the SAME family — `bunx` is bun, `pnpx` is pnpm — so an
+# `x`-launcher head is caught exactly like the bare manager (closeout #2: an exact-match
+# {bun,pnpm,yarn} check let `bunx`/`pnpx` heads slip through to a false npm candidate).
+# Every family names a toolchain the neutral base image does not provision.
+_SCRIPT_HEAD_FAMILY: dict[str, str] = {
+    "bun": "bun",
+    "bunx": "bun",
+    "pnpm": "pnpm",
+    "pnpx": "pnpm",
+    "yarn": "yarn",
+}
+
+# The `package.json` script keys whose interpreter head reveals a non-npm launcher. Beyond
+# the process entrypoints (`start`/`build`), the corepack lifecycle hooks `prebuild` /
+# `postbuild` (npm runs them around `build`) can invoke a non-npm manager too, so they are
+# inspected as well (closeout #2).
+_TOOLCHAIN_SCRIPT_KEYS = ("start", "build", "prebuild", "postbuild")
+
 
 # ---- result models ------------------------------------------------------------
 
@@ -778,23 +798,50 @@ def _node_toolchain_blocker(manager: str, why: str, evidence: str) -> _DetectBlo
     )
 
 
+def _has_authoritative_npm_signal(files: Mapping[str, str | bytes], pkg: object) -> bool:
+    """Whether the tree carries an AUTHORITATIVE declaration that npm — the ONE node
+    manager the neutral base image provisions — builds the app: a committed ROOT
+    `package-lock.json`, OR a corepack `packageManager:"npm@…"` field. When the owner has
+    authoritatively named npm, a co-present STRAY non-npm config marker (a leftover
+    `.yarnrc` / `pnpm-workspace.yaml` / `bunfig.toml` from a yarn/pnpm/bun→npm migration)
+    or a non-npm script head is a migration remnant, not a live toolchain declaration —
+    npm wins (closeout #1). A committed non-npm LOCKFILE is a STRONGER signal already
+    rejected upstream (`_lockfile_conflict` / `_unsupported_pm_blocker`) before this runs,
+    so this precedence never masks a real committed-lockfile disagreement."""
+    roots = {_norm(p) for p in files if "/" not in _norm(p)}
+    if "package-lock.json" in roots:
+        return True
+    return _package_manager_field(pkg) == "npm"
+
+
 def _unsupported_node_pm_declaration(
     files: Mapping[str, str | bytes], pkg: object
 ) -> _DetectBlocker | None:
     """A `toolchain_unsupported` fail-closed outcome when an AUTHORITATIVE package-manager
     declaration OTHER than a committed lockfile names a node toolchain the neutral base
-    image does not provision — closing the no-lockfile bypass (§8.8). Three signals,
-    checked in a stable order so the finding is deterministic:
+    image does not provision — closing the no-lockfile bypass (§8.8). Signals, checked in
+    a stable order so the finding is deterministic:
 
-    1. the corepack `package.json` `"packageManager"` field naming bun/pnpm/yarn;
-    2. an unambiguous non-npm workspace/config marker at the ROOT (`pnpm-workspace.yaml`,
+    1. the corepack `package.json` `"packageManager"` field naming bun/pnpm/yarn — the
+       MOST authoritative statement of which manager builds the app; mapping it onto npm
+       is exactly the §8.8 failure, so it rejects even if a (stale) `package-lock.json` is
+       also present.
+    2. AUTHORITATIVE-NPM PRECEDENCE (closeout #1): otherwise, when the owner has
+       authoritatively named npm — a committed `package-lock.json` OR `packageManager:
+       "npm@…"` — a co-present STRAY non-npm workspace/config marker or non-npm script
+       head is a migration remnant, so npm WINS and the project stays a candidate.
+    3. an unambiguous non-npm workspace/config marker at the ROOT (`pnpm-workspace.yaml`,
        `.yarnrc(.yml)`, `bunfig.toml`);
-    3. a `start`/`build` script whose interpreter head is bun/pnpm/yarn.
+    4. a `start`/`build`/`prebuild`/`postbuild` script whose interpreter head is a
+       bun/pnpm/yarn launcher FAMILY — the bare manager OR its `x`-suffixed runner
+       (`bunx`, `pnpx`) (closeout #2).
 
     npm never trips this (a `package-lock.json`, `packageManager:"npm@…"`, a
-    `node`/`npm`/`npx` script head, or no PM signal at all), so a plain npm project is
-    never mis-flagged. `None` when no unsupported declaration is present. Keyed on ROOT
-    markers only (a nested `.yarnrc` in a vendored dep never triggers it)."""
+    `node`/`npm`/`npx` script head, or no PM signal at all), so a plain npm project —
+    including one carrying a stray non-npm marker or launcher head alongside an
+    authoritative npm signal — is never mis-flagged. `None` when no unsupported
+    declaration wins. Keyed on ROOT markers only (a nested `.yarnrc` in a vendored dep
+    never triggers it)."""
     manager = _package_manager_field(pkg)
     if manager is not None and manager in _UNSUPPORTED_NODE_PM_NAMES:
         return _node_toolchain_blocker(
@@ -803,6 +850,10 @@ def _unsupported_node_pm_declaration(
             f"toolchain evidence: packageManager field names unsupported manager {manager!r} "
             "(no lockfile required)",
         )
+    # closeout #1: an authoritative npm signal beats any co-present STRAY marker / launcher
+    # head below — the base image runs npm, so a leftover non-npm config is not a reject.
+    if _has_authoritative_npm_signal(files, pkg):
+        return None
     roots = {_norm(p) for p in files if "/" not in _norm(p)}
     for marker in sorted(_NODE_WORKSPACE_MARKERS):
         if marker in roots:
@@ -813,7 +864,7 @@ def _unsupported_node_pm_declaration(
                 f"toolchain evidence: {marker} indicates unsupported manager {mgr!r} "
                 "(no lockfile required)",
             )
-    for script_name in ("start", "build"):
+    for script_name in _TOOLCHAIN_SCRIPT_KEYS:
         script = _script(pkg, script_name)
         if script is None:
             continue
@@ -821,12 +872,14 @@ def _unsupported_node_pm_declaration(
         if not tokens:
             continue
         head = tokens[0].rsplit("/", 1)[-1].lower()
-        if head in _UNSUPPORTED_NODE_PM_NAMES:
+        family = _SCRIPT_HEAD_FAMILY.get(head)
+        if family is not None:
             return _node_toolchain_blocker(
-                head,
-                f"the {script_name!r} script invokes the {head!r} package manager",
+                family,
+                f"the {script_name!r} script invokes the {family!r} package manager "
+                f"(via the {head!r} launcher)",
                 f"toolchain evidence: {script_name} script head {head!r} is an unsupported "
-                "manager (no lockfile required)",
+                f"manager {family!r} (no lockfile required)",
             )
     return None
 
