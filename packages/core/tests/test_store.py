@@ -10,7 +10,12 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from disco.core import EventKind, SqliteEventStore, WorkspaceRestoredEvent
+from disco.core import (
+    EventKind,
+    SqliteEventStore,
+    WorkspaceRestoredEvent,
+    WorkspaceVersionEvent,
+)
 from event_fakes import action, user_msg
 from pydantic import ValidationError
 
@@ -75,6 +80,24 @@ async def test_workspace_restored_event_round_trips_through_store(store):
     assert restored.version_seq == 3
     assert restored.tree_digest == "abc123"
     assert restored.label == "before refactor"
+
+
+async def test_workspace_version_event_round_trips_through_store(store):
+    event = WorkspaceVersionEvent(
+        version_seq=4,
+        tree_digest="durable123",
+        trigger="finish",
+    )
+    stored = await store.append(CID, event)
+    events = await store.get_events(CID)
+
+    assert events == [stored]
+    committed = events[0]
+    assert isinstance(committed, WorkspaceVersionEvent)
+    assert committed.kind is EventKind.WORKSPACE_VERSION
+    assert committed.version_seq == 4
+    assert committed.tree_digest == "durable123"
+    assert committed.trigger == "finish"
 
 
 # ---- G4: idempotency --------------------------------------------------------

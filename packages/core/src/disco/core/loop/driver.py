@@ -36,6 +36,7 @@ from ..llm import (
     OperatingMode,
 )
 from ..llm.types import EMPTY_REASONING_ONLY_METADATA_KEY
+from ..obs import log_event
 from ..view import View, repair_tool_call_adjacency
 from . import signals, view_render
 from .boundaries import AgentStep
@@ -83,6 +84,7 @@ def _escalated_provider_prefs(n: int) -> dict:
         return {"allow_fallbacks": True, "ignore": ["Chutes"]}
     return {"allow_fallbacks": True}
 
+
 # A hard temperature jitter for the single stuck-escape retry step. When the loop
 # detects a repeating action→error/obs rut it gives the model ONE retry at this
 # temperature (vs. the driver's small anti-fewshot default) to break the
@@ -101,16 +103,12 @@ _EMPTY_REASONING_REPAIR_REMINDER = (
     "one tool now, or say in plain text what you need."
 )
 _PROSE_NOOP_REPAIR_REMINDER = (
-    "You described the next action instead of performing it — call the tool for it "
-    "in THIS turn."
+    "You described the next action instead of performing it — call the tool for it in THIS turn."
 )
 
 
 def _view_has_current_objective(view: View) -> bool:
-    return any(
-        "<current-objective>" in (message.content or "")
-        for message in view.messages
-    )
+    return any("<current-objective>" in (message.content or "") for message in view.messages)
 
 
 def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
@@ -132,10 +130,7 @@ def _is_tool_result_adjacency_protocol_error(err: LLMError) -> bool:
 
 
 def _is_planning_tool_refusal(event: Event) -> bool:
-    return (
-        isinstance(event, AgentErrorEvent)
-        and _PLANNING_TOOL_REFUSAL_NEEDLE in event.error
-    )
+    return isinstance(event, AgentErrorEvent) and _PLANNING_TOOL_REFUSAL_NEEDLE in event.error
 
 
 def planning_tool_refusal_streak(events: list[Event]) -> int:
@@ -163,6 +158,25 @@ def planning_tool_refusal_streak(events: list[Event]) -> int:
 class Driver:
     def __init__(self, loop: AgentLoop) -> None:
         self._loop = loop
+
+    def _record_model_repair(
+        self, repair_kind: str, *, attempt: int, tool_name: str | None = None
+    ) -> None:
+        """Put every hidden model/provider repair into the per-conversation trace.
+
+        Requeries intentionally stay out of the durable chat/event history, but that
+        previously made a run which guessed bad tool syntax or repeatedly triggered
+        provider 400s look clean to the soak. DISCO_INSPECT traces are bounded and
+        redacted at the HTTP boundary, so record only structural diagnostics here.
+        """
+        fields: dict[str, object] = {
+            "cid": self._loop.conversation_id,
+            "repair_kind": repair_kind,
+            "attempt": attempt,
+        }
+        if tool_name:
+            fields["tool_name"] = tool_name
+        log_event("agent.repair", **fields)
 
     async def _persist_empty_reasoning_diagnostic(self, diagnostic: dict) -> None:
         await self._loop._emit(
@@ -316,8 +330,7 @@ class Driver:
     def force_submit_read_calls_remaining(self) -> int:
         return max(
             0,
-            (_PLAN_EXPLORE_READ_CAP + _FORCE_SUBMIT_READ_GRACE)
-            - self._loop._plan_explore_reads,
+            (_PLAN_EXPLORE_READ_CAP + _FORCE_SUBMIT_READ_GRACE) - self._loop._plan_explore_reads,
         )
 
     def tools_for_step(
@@ -359,6 +372,7 @@ class Driver:
             _finish_tool_singleton,
             _remember_tool_singleton,
             _serve_tool_singleton,
+            _workflow_finish_tool_spec,
         )
 
         effective_mode = mode or self._loop.mode
@@ -375,9 +389,7 @@ class Driver:
             # grounding reads are bounded by the read grace below; the prose-narration case
             # force_submit also targets is a TOOL-LESS turn, still caught by the valve.
             if force_submit_only and self._loop._plan_tool is not None:
-                plan_name = getattr(
-                    self._loop._plan_tool, "name", self._loop._plan_tool
-                )
+                plan_name = getattr(self._loop._plan_tool, "name", self._loop._plan_tool)
                 # Read grace: allow grounding reads until the read counter exceeds the cap
                 # by _FORCE_SUBMIT_READ_GRACE, THEN collapse to submit-only so a read loop
                 # can't run to the iteration hard cap.
@@ -400,9 +412,7 @@ class Driver:
                         return False
                     return reads_allowed and name in force_readonly
 
-                narrowed = [
-                    t for t in tools if _force_keep(getattr(t, "name", None))
-                ]
+                narrowed = [t for t in tools if _force_keep(getattr(t, "name", None))]
                 if narrowed:
                     return narrowed
                 # Plan tool object not in the available set (shouldn't happen in the
@@ -459,22 +469,32 @@ class Driver:
                 _clarify_tool_singleton(),
             ]
         if self._loop._planning_tools:
-            tools = [
-                t for t in tools if getattr(t, "name", None) not in self._loop._planning_tools
-            ]
+            tools = [t for t in tools if getattr(t, "name", None) not in self._loop._planning_tools]
         # Append the virtual ask_user + clarify + propose_plan_update tools in execution
         # mode. All are documented so the model decides WHEN to use them;
         # neither is injected by reminder. propose_plan_update is the model's
         # auto-recovery affordance: when its current plan is wrong, it proposes
         # a revision and the user accepts/refines via the plan-approval gate.
-        virtuals = [_finish_tool_singleton()]
+        workflow_run = getattr(self._loop, "_workflow_run", None)
+        if workflow_run is not None:
+            virtuals = [_workflow_finish_tool_spec(workflow_run)]
+        else:
+            virtuals = [_finish_tool_singleton()]
         # P6 — when a Build contract governs the run, ALSO advertise its verification
         # finalizer (ready_for_*_verification) as a per-kind alias of `finish` (the name
         # the prompt pack instructs the model to call). Advertised next to plain `finish`
         # (kept for compatibility) and, like `finish`, survives meta-tool suppression
         # since both route to the same host-truth finish gate.
         if self._loop._finish_alias:
-            virtuals.append(_finish_alias_tool_spec(self._loop._finish_alias))
+            if workflow_run is not None:
+                virtuals.append(
+                    _workflow_finish_tool_spec(
+                        workflow_run,
+                        name=self._loop._finish_alias,
+                    )
+                )
+            else:
+                virtuals.append(_finish_alias_tool_spec(self._loop._finish_alias))
         if not suppress_meta_tools:
             # Autonomous mode withholds the ask gates (no human to answer); the model
             # is told to assume + proceed. The rest stay — propose_plan_update is the
@@ -548,22 +568,13 @@ class Driver:
             virtual_names.add(self._loop._finish_alias)
         # Include mode-scoped virtuals (planning tools) so
         # we don't requery for valid exploration turns.
-        all_known_names = (
-            known_tool_names
-            | virtual_names
-            | set(self._loop._planning_tools)
-        )
+        all_known_names = known_tool_names | virtual_names | set(self._loop._planning_tools)
         return all_known_names
 
     def unknown_tool_requery_hint(self, tool_name: str, offered_names: set[str]) -> str:
-        _hint = (
-            f"ERROR: Unknown tool '{tool_name}'. "
-            f"Available: {sorted(list(offered_names))}"
-        )
+        _hint = f"ERROR: Unknown tool '{tool_name}'. Available: {sorted(list(offered_names))}"
         if self._loop._assist:
-            _suggestion = _nearest_tool_name(
-                tool_name, offered_names
-            )
+            _suggestion = _nearest_tool_name(tool_name, offered_names)
             if _suggestion is not None:
                 _hint = f"{_hint} did you mean '{_suggestion}'?"
         return _hint
@@ -579,8 +590,7 @@ class Driver:
         """
         escape_seq = signals.stuck_escape_seq(events)
         acted_since_escape = escape_seq is not None and any(
-            isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq
-            for e in events
+            isinstance(e, ActionEvent) and e.seq is not None and e.seq > escape_seq for e in events
         )
         in_escape = escape_seq is not None and not acted_since_escape
         escape_temp = _STUCK_ESCAPE_TEMP if in_escape else None
@@ -600,8 +610,7 @@ class Driver:
             )
 
         fresh_session = (
-            mode != OperatingMode.PLANNING
-            and signals.actions_since_last_resume(events) == 0
+            mode != OperatingMode.PLANNING and signals.actions_since_last_resume(events) == 0
         )
 
         planning_refusal_force = (
@@ -611,9 +620,7 @@ class Driver:
         force_submit_only = mode == OperatingMode.PLANNING and (
             signals.prose_plan_force_submit(events) or planning_refusal_force
         )
-        force_read_tools = (
-            _PLANNING_TOOL_REFUSAL_READ_TOOLS if planning_refusal_force else None
-        )
+        force_read_tools = _PLANNING_TOOL_REFUSAL_READ_TOOLS if planning_refusal_force else None
         return mode, escape_temp, fresh_session, force_submit_only, force_read_tools
 
     async def _repair_degenerate_step(
@@ -634,10 +641,11 @@ class Driver:
         prose_noop_repair_count)``.
         """
         if step.empty_reasoning_diagnostic is not None:
-            await self._persist_empty_reasoning_diagnostic(
-                step.empty_reasoning_diagnostic
-            )
+            await self._persist_empty_reasoning_diagnostic(step.empty_reasoning_diagnostic)
             if empty_reasoning_repair_count < 1:
+                self._record_model_repair(
+                    "empty_reasoning", attempt=empty_reasoning_repair_count + 1
+                )
                 return (
                     True,
                     transient_messages
@@ -656,10 +664,10 @@ class Driver:
             and not signals.prose_noop_repair_seen_current_execution_segment(events)
         ):
             await self._persist_prose_noop_diagnostic(step)
+            self._record_model_repair("prose_without_action", attempt=prose_noop_repair_count + 1)
             return (
                 True,
-                transient_messages
-                + [LLMMessage(role="user", content=_PROSE_NOOP_REPAIR_REMINDER)],
+                transient_messages + [LLMMessage(role="user", content=_PROSE_NOOP_REPAIR_REMINDER)],
                 empty_reasoning_repair_count,
                 prose_noop_repair_count + 1,
             )
@@ -690,9 +698,7 @@ class Driver:
                     # to the View if we're in a retry loop.
                     if transient_messages:
                         current_view = current_view.model_copy(
-                            update={
-                                "messages": current_view.messages + transient_messages
-                            }
+                            update={"messages": current_view.messages + transient_messages}
                         )
 
                     step = await self._loop.agent.step(
@@ -726,7 +732,12 @@ class Driver:
                         ),
                     )
 
-                    should_continue, transient_messages, empty_reasoning_repair_count, prose_noop_repair_count = await self._repair_degenerate_step(
+                    (
+                        should_continue,
+                        transient_messages,
+                        empty_reasoning_repair_count,
+                        prose_noop_repair_count,
+                    ) = await self._repair_degenerate_step(
                         step,
                         mode=mode,
                         events=events,
@@ -759,14 +770,15 @@ class Driver:
                         # executed and the execution-finish gate spun forever
                         # (the confirm/reject livelock root cause).
                         _gbn = getattr(self._loop.policy, "gates_by_name", None)
-                        _name_gated = callable(_gbn) and _gbn(
-                            step.tool_call.tool_name
-                        )
+                        _name_gated = callable(_gbn) and _gbn(step.tool_call.tool_name)
                         if not _name_gated and requery_count < 2:
                             requery_count += 1
-                            _LOG.info(
-                                f"Unknown tool {step.tool_call.tool_name}, requerying..."
+                            self._record_model_repair(
+                                "unknown_tool",
+                                attempt=requery_count,
+                                tool_name=step.tool_call.tool_name,
                             )
+                            _LOG.info(f"Unknown tool {step.tool_call.tool_name}, requerying...")
                             offered_tools = self.tools_for_step(
                                 suppress_meta_tools=fresh_session,
                                 force_submit_only=force_submit_only,
@@ -842,9 +854,10 @@ class Driver:
                     if _is_tool_result_adjacency_protocol_error(e):
                         if protocol_repair_count < 1:
                             protocol_repair_count += 1
-                            repaired_messages = repair_tool_call_adjacency(
-                                current_view.messages
+                            self._record_model_repair(
+                                "tool_history_protocol", attempt=protocol_repair_count
                             )
+                            repaired_messages = repair_tool_call_adjacency(current_view.messages)
                             repaired_view = current_view.model_copy(
                                 update={"messages": repaired_messages}
                             )
@@ -867,15 +880,20 @@ class Driver:
                     # wasting two more doomed round-trips.
                     if not isinstance(e, (LLMAuthError, BudgetExceeded)) and requery_count < 2:
                         requery_count += 1
+                        self._record_model_repair(
+                            "provider_rejected_request", attempt=requery_count
+                        )
                         _LOG.warning(f"Provider rejected request: {e}, requerying...")
-                        transient_messages.append(LLMMessage(
-                            role="user",
-                            content=(
-                                f"The provider rejected the previous request: {e}. "
-                                "Please adjust your response (check tool names, "
-                                "JSON structure, or parameters) and try again."
+                        transient_messages.append(
+                            LLMMessage(
+                                role="user",
+                                content=(
+                                    f"The provider rejected the previous request: {e}. "
+                                    "Please adjust your response (check tool names, "
+                                    "JSON structure, or parameters) and try again."
+                                ),
                             )
-                        ))
+                        )
                         continue
                     raise
         except LLMContextWindowExceeded:

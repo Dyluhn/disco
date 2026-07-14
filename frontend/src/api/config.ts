@@ -1,7 +1,7 @@
 import { MCP_CONNECTIONS } from "@/fixtures/config";
 import type { McpConnection, McpServerApprove, McpServerConfig, Skill, SkillCreate, SkillPatch } from "@/types/config";
 import type { ProbeResult } from "@/types/probe";
-import { agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
+import { agentLive, agentSend, apiGet, apiSend, fixtureDelay, isLive } from "./client";
 
 /**
  * Data-access for the skills + MCP surfaces. Components reach these only through
@@ -102,7 +102,11 @@ export async function listMcpConnections(): Promise<McpConnection[]> {
 }
 
 export async function createMcpServer(config: McpServerConfig): Promise<McpConnection> {
-  if (isLive()) return apiSend<McpConnection>("POST", "/api/mcp/servers", config);
+  if (isLive()) {
+    const connection = await apiSend<McpConnection>("POST", "/api/mcp/servers", config);
+    if (agentLive()) await agentSend("POST", "/api/mcp/reload");
+    return connection;
+  }
   await fixtureDelay();
   const conn: McpConnection = {
     id: config.name,
@@ -121,12 +125,15 @@ export async function updateMcpServer(
   name: string,
   patch: McpServerConfig,
 ): Promise<McpConnection> {
-  if (isLive())
-    return apiSend<McpConnection>(
+  if (isLive()) {
+    const connection = await apiSend<McpConnection>(
       "PATCH",
       `/api/mcp/servers/${encodeURIComponent(name)}`,
       patch,
     );
+    if (agentLive()) await agentSend("POST", "/api/mcp/reload");
+    return connection;
+  }
   await fixtureDelay();
   const idx = fixtureMcp.findIndex((c) => c.id === name);
   if (idx === -1) throw new Error(`unknown server ${name}`);
@@ -138,6 +145,7 @@ export async function updateMcpServer(
 export async function deleteMcpServer(name: string): Promise<void> {
   if (isLive()) {
     await apiSend<void>("DELETE", `/api/mcp/servers/${encodeURIComponent(name)}`);
+    if (agentLive()) await agentSend("POST", "/api/mcp/reload");
     return;
   }
   await fixtureDelay();
@@ -150,12 +158,15 @@ export async function approveMcpServer(
   name: string,
   body: McpServerApprove,
 ): Promise<McpConnection> {
-  if (isLive())
-    return apiSend<McpConnection>(
+  if (isLive()) {
+    const connection = await apiSend<McpConnection>(
       "POST",
       `/api/mcp/servers/${encodeURIComponent(name)}/approve`,
       body,
     );
+    if (agentLive()) await agentSend("POST", "/api/mcp/reload");
+    return connection;
+  }
   await fixtureDelay();
   const idx = fixtureMcp.findIndex((c) => c.id === name);
   if (idx === -1) throw new Error(`unknown server ${name}`);

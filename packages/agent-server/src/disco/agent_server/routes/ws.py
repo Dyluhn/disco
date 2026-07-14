@@ -20,7 +20,7 @@ from disco.core.selection_edit import (
 )
 from disco.core.store.sqlite import SqliteEventStore, SubscriberOverflow
 from disco.retrieval.local_encoders import EncoderUnavailable
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import ValidationError
 
 from ..auth import websocket_session
@@ -315,7 +315,12 @@ def make_ws_router(store: SqliteEventStore, runtime: ConversationRuntime | None)
     async def conversation_ws(
         websocket: WebSocket,
         conversation_id: str,
-        last_seq: int = Query(default=0),
+        # A plain scalar default is intentional. Under the production ASGI
+        # stack an omitted WebSocket Query(default=0) could reach the handler as
+        # the parameter descriptor rather than integer zero: the state frame
+        # was sent, but the history pump never advanced. FastAPI still exposes
+        # non-path scalar parameters as query parameters here.
+        last_seq: int = 0,
     ) -> None:
         if await _require_conversation_ws_session(websocket, store, conversation_id) is None:
             return

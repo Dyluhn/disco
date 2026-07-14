@@ -175,6 +175,9 @@ afterEach(() => {
 describe("McpSection — live CRUD over the real fetch path", () => {
   it("renders the connection list from a real GET /api/mcp", async () => {
     renderMcp();
+    expect(
+      screen.getByRole("button", { name: /loading connections/i }),
+    ).toBeDisabled();
     await waitFor(() => {
       expect(screen.getByText("Filesystem")).toBeInTheDocument();
     });

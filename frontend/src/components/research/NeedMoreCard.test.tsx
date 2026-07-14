@@ -548,6 +548,10 @@ describe("NeedMoreCard", () => {
     await waitFor(() =>
       expect(screen.getByText(/Synthesizing turns 3\/8/i)).toBeInTheDocument(),
     );
+    expect(document.querySelector('[data-tts-state="generating"]')).toHaveAttribute(
+      "data-tts-stage",
+      "synthesizing",
+    );
     expect(screen.queryByText(/Downloading voice model/i)).not.toBeInTheDocument();
   });
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 from disco.core.llm import CompletionResponse, StreamChunk, TokenUsage
 from disco.retrieval import LexicalReranker
-from disco.retrieval.streaming import stream_research_answer
+from disco.retrieval.streaming import _follow_ups, stream_research_answer
 from research_fakes import FakeExtractionProvider, FakeNLI, FakeSearchProvider, hit
 
 # ---------------------------------------------------------------------------
@@ -33,14 +33,15 @@ class AnswerSequenceRouter:
 
     The first call to stream_complete() yields answers[0], the second yields
     answers[1], etc.  complete() (used by _follow_ups with SUMMARIZER role)
-    always returns an empty-text response so follow_ups is [] — keeps the
-    final-frame assertions simple.
+    always returns an empty-text response, exercising deterministic follow-up
+    fallback while keeping the final-frame assertions stable.
     """
 
     def __init__(self, answers: list[str]) -> None:
         self._answers = list(answers)
         self._idx = 0
         self.stream_calls: list[str] = []  # texts returned in order
+        self.stream_requests = []
 
     async def complete(self, req, *, context=None) -> CompletionResponse:  # type: ignore[override]
         return CompletionResponse(
@@ -55,6 +56,7 @@ class AnswerSequenceRouter:
         text = self._answers[min(self._idx, len(self._answers) - 1)]
         self._idx += 1
         self.stream_calls.append(text)
+        self.stream_requests.append(req)
         # Yield each word as a separate chunk, then a terminal done chunk.
         for word in text.split(" "):
             yield StreamChunk(delta_text=word + " ")
@@ -137,6 +139,88 @@ def _nli_all_unsupported() -> FakeNLI:
 
 async def _collect(gen) -> list[dict]:
     return [frame async for frame in gen]
+
+
+@pytest.mark.asyncio
+async def test_follow_ups_repair_once_then_validate_questions():
+    class _Router:
+        def __init__(self):
+            self.requests = []
+
+        async def complete(self, req, *, context=None):
+            self.requests.append(req)
+            text = (
+                ""
+                if len(self.requests) == 1
+                else "1. First useful question?\n2) Second useful question?"
+            )
+            return CompletionResponse(
+                text=text,
+                usage=TokenUsage(input_tokens=1, output_tokens=1),
+                finish_reason="stop",
+                model_used="fake",
+                routing=None,
+            )
+
+    router = _Router()
+    follow_ups = await _follow_ups(router, "Why?", "Because.")
+
+    assert follow_ups == ["First useful question?", "Second useful question?"]
+    assert [request.attempt for request in router.requests] == [1, 2]
+    assert [request.max_tokens for request in router.requests] == [160, 2048]
+
+
+@pytest.mark.asyncio
+async def test_follow_ups_fail_over_to_distinct_contextual_questions():
+    router = AnswerSequenceRouter([_ROUND0_ANSWER])
+
+    follow_ups = await _follow_ups(router, "How do safe HTTP methods work?", "Answer")
+
+    assert len(follow_ups) == 3
+    assert len(set(follow_ups)) == 3
+    assert all("safe HTTP methods" in item for item in follow_ups)
+
+
+@pytest.mark.asyncio
+async def test_empty_reasoning_answer_gets_one_bounded_visible_text_repair():
+    router = AnswerSequenceRouter(["", _ROUND0_ANSWER])
+    frames = await _collect(
+        stream_research_answer(
+            "test query",
+            router=router,
+            search=_make_search([_SEARCH_URL_R0]),
+            extraction=_make_extraction([_SEARCH_URL_R0]),
+            reranker=LexicalReranker(),
+            nli=FakeNLI({_ROUND0_CLAIM_TEXT: "entail"}),
+        )
+    )
+
+    assert router.stream_calls == ["", _ROUND0_ANSWER]
+    assert [request.attempt for request in router.stream_requests] == [1, 2]
+    assert [request.max_tokens for request in router.stream_requests] == [1200, 4096]
+    assert not any(frame["type"] == "error" for frame in frames)
+    final = next(frame for frame in frames if frame["type"] == "final")
+    assert final["answer"]["blocks"][0]["text"].strip()
+
+
+@pytest.mark.asyncio
+async def test_double_empty_reasoning_answer_fails_closed_without_blank_final():
+    router = AnswerSequenceRouter(["", ""])
+    frames = await _collect(
+        stream_research_answer(
+            "test query",
+            router=router,
+            search=_make_search([_SEARCH_URL_R0]),
+            extraction=_make_extraction([_SEARCH_URL_R0]),
+            reranker=LexicalReranker(),
+            nli=FakeNLI({_ROUND0_CLAIM_TEXT: "entail"}),
+        )
+    )
+
+    assert len(router.stream_calls) == 2
+    assert not any(frame["type"] == "final" for frame in frames)
+    error = next(frame for frame in frames if frame["type"] == "error")
+    assert "no visible answer" in error["message"]
 
 
 # ---------------------------------------------------------------------------

@@ -3230,6 +3230,10 @@ class ConversationRuntime:
     async def _close_mcp_pool(self) -> None:
         return await self._mcp._close_mcp_pool()
 
+    async def reload_mcp_pool(self) -> dict[str, Any]:
+        """Apply Settings MCP changes without restarting the agent-server."""
+        return await self._mcp.reload()
+
     @property
     def _mcp_call_target(self) -> Any:
         return self._mcp._mcp_call_target

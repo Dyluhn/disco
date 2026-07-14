@@ -340,27 +340,12 @@ class PodmanSandboxInstance(ContainerInstance):
         return sorted(n for n in out.decode("utf-8", "replace").splitlines() if n)
 
     async def write_file(self, path: str, data: bytes) -> None:
-        """Write via podman-py `put_archive` (binary-safe + works over remote); the
-        parent dir is created via the CLI first."""
-        self._alive()
-        target = await asyncio.to_thread(self._resolve_guest_path, path)  # symlink jail (P2)
-        parent = posixpath.dirname(target) or self._ws
-        name = posixpath.basename(target)
+        """Binary-safe write through the inherited staged atomic path.
 
-        def _write() -> None:
-            self._exec(["mkdir", "-p", "--", parent], 30)
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                info = tarfile.TarInfo(name=name)
-                info.size = len(data)
-                # [BP-00 root-cause] TarInfo defaults mtime to 0 (epoch 1970) — see
-                # ContainerInstance.write_file; stamp the real write time.
-                info.mtime = int(time.time())
-                tar.addfile(info, io.BytesIO(data))
-            if not self._container.put_archive(parent, buf.getvalue()):
-                raise SandboxError(f"write_file {path!r} failed")
-
-        await asyncio.to_thread(_write)
+        Direct podman-py put_archive into the workspace creates SELinux labels
+        which rootless guest processes cannot later rename or unlink.
+        """
+        await self.atomic_write(path, data)
 
 
 class PodmanSandboxService:

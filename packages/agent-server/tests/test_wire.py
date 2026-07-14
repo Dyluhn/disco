@@ -118,6 +118,18 @@ def test_pending_message_with_no_socket_is_applied_on_connect(client):
         assert ev["event"]["message"]["content"] == "queued while away"
 
 
+def test_explicit_zero_cursor_replays_complete_history(client):
+    cid = _create(client)
+    for i in range(3):
+        client.post(f"/conversations/{cid}/messages", json={"content": f"history-{i}"})
+
+    with client.websocket_connect(f"/ws/conversations/{cid}?last_seq=0") as ws:
+        assert ws.receive_json()["type"] == "state"
+        replayed = [ws.receive_json() for _ in range(3)]
+
+    assert [frame["event"]["seq"] for frame in replayed] == [1, 2, 3]
+
+
 def test_send_message_over_ws_is_echoed_as_event(client):
     cid = _create(client)
     with client.websocket_connect(f"/ws/conversations/{cid}") as ws:

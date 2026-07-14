@@ -166,4 +166,16 @@ export interface ErrorFrame {
   type: "error";
   message: string;
 }
-export type StreamFrame = TokenFrame | BlockFrame | StateFrame | FinalFrame | ErrorFrame;
+/** Retrieval can transparently start another search round when the first
+ * answer has no supported claims. This progress frame is non-terminal. */
+export interface PhaseFrame {
+  type: "phase";
+  phase: string;
+}
+export type StreamFrame =
+  | TokenFrame
+  | BlockFrame
+  | StateFrame
+  | FinalFrame
+  | ErrorFrame
+  | PhaseFrame;

@@ -203,9 +203,7 @@ def _validate_params_schema(schema: dict[str, Any]) -> dict[str, Any]:
     _validate_json_value(schema, path="$")
     violations = _walk_schema(schema, path="$")
     if violations:
-        detail = "; ".join(
-            f"{v.location}: {v.kind} ({v.detail})" for v in violations
-        )
+        detail = "; ".join(f"{v.location}: {v.kind} ({v.detail})" for v in violations)
         raise ValueError(f"params_model_schema has schema holes: {detail}")
     return schema
 
@@ -259,14 +257,10 @@ def _normalize_egress_allow_entry(value: str) -> str:
     suffix = normalized.startswith(".")
     host = normalized[1:] if suffix else normalized
     if not host or host.startswith(".") or host.endswith("."):
-        raise ValueError(
-            "egress_allow entries must be bare hostnames or *.suffix patterns"
-        )
+        raise ValueError("egress_allow entries must be bare hostnames or *.suffix patterns")
     labels = host.split(".")
     if not all(_HOST_LABEL_RE.match(label) for label in labels):
-        raise ValueError(
-            "egress_allow entries must be bare hostnames or *.suffix patterns"
-        )
+        raise ValueError("egress_allow entries must be bare hostnames or *.suffix patterns")
     return normalized
 
 
@@ -313,9 +307,7 @@ class McpMount(BaseModel):
                     raise ValueError(f"invalid MCP-qualified tool name {raw!r}")
                 server, tool = parts
                 if server != raw_server:
-                    raise ValueError(
-                        f"MCP tool {raw!r} does not match mount server {raw_server!r}"
-                    )
+                    raise ValueError(f"MCP tool {raw!r} does not match mount server {raw_server!r}")
                 normalized.append(tool)
             else:
                 normalized.append(_validate_mcp_component(raw, field="tool name"))
@@ -402,14 +394,56 @@ class WorkflowDefinition(BaseModel):
         if writable_mounts and not self.policies.allows_writes:
             servers = ", ".join(sorted(writable_mounts))
             raise ValueError(
-                "writable MCP mounts require policies.allows_writes=True "
-                f"(servers: {servers})"
+                f"writable MCP mounts require policies.allows_writes=True (servers: {servers})"
             )
         return self
 
     def digest(self) -> str:
         """Stable definition identity over canonical JSON."""
         return _hash_text(_canonical_json(self.model_dump(mode="json")))
+
+
+def workflow_finish_supports_verify(defn: WorkflowDefinition) -> bool:
+    """Whether a sealed workflow may execute a model-authored finish probe.
+
+    ``finish.verify`` is implemented by running the supplied command through the
+    first-party ``shell`` tool.  A workflow that did not explicitly seal
+    ``shell`` into its approved tool set must therefore neither advertise nor
+    execute that parameter.
+    """
+
+    return "shell" in defn.tools
+
+
+def workflow_finish_tool_description(defn: WorkflowDefinition) -> str:
+    base = (
+        "Declare the workflow COMPLETE and end the run. Call this only after the "
+        "sealed output contract has been satisfied. Provide a short summary."
+    )
+    if workflow_finish_supports_verify(defn):
+        return (
+            f"{base} You may optionally provide a shell `verify` command; a failed "
+            "verification refuses completion until fixed or capped."
+        )
+    return (
+        f"{base} Completion is checked by the workflow's host-owned output-contract "
+        "gates; this workflow does not grant shell verification."
+    )
+
+
+def workflow_finish_tool_schema(defn: WorkflowDefinition) -> dict[str, object]:
+    properties: dict[str, object] = {
+        "summary": {
+            "type": "string",
+            "description": "Short summary of what was accomplished.",
+        }
+    }
+    if workflow_finish_supports_verify(defn):
+        properties["verify"] = {
+            "type": "string",
+            "description": "Optional shell completion check; exit 0 means success.",
+        }
+    return {"type": "object", "properties": properties, "required": []}
 
 
 class WorkflowApproval(BaseModel):
@@ -559,9 +593,7 @@ def _compile_findings(
     available_mcp_names: frozenset[str],
 ) -> list[WorkflowValidationFinding]:
     findings: list[WorkflowValidationFinding] = []
-    unknown_builtin = sorted(
-        name for name in defn.tools if name not in available_builtin_names
-    )
+    unknown_builtin = sorted(name for name in defn.tools if name not in available_builtin_names)
     for name in unknown_builtin:
         findings.append(
             _finding(
@@ -582,10 +614,7 @@ def _compile_findings(
                         "error",
                         "mcp_server_mismatch",
                         "mcp_mounts",
-                        (
-                            f"MCP tool {qualified!r} does not match server prefix "
-                            f"{mount.server!r}"
-                        ),
+                        (f"MCP tool {qualified!r} does not match server prefix {mount.server!r}"),
                     )
                 )
             elif qualified not in available_mcp_names:
@@ -621,10 +650,7 @@ def _policy_findings(defn: WorkflowDefinition) -> list[WorkflowValidationFinding
                 "error",
                 "write_policy_inconsistent",
                 "policies.allows_writes",
-                (
-                    "writable MCP mounts require policies.allows_writes=True "
-                    f"(servers: {servers})"
-                ),
+                (f"writable MCP mounts require policies.allows_writes=True (servers: {servers})"),
             )
         )
     return findings
@@ -668,9 +694,7 @@ def validate_definition(
         )
     )
     findings.extend(_policy_findings(defn))
-    findings.extend(
-        _skill_findings(defn, available_skill_names=available_skill_names)
-    )
+    findings.extend(_skill_findings(defn, available_skill_names=available_skill_names))
     return findings
 
 
@@ -753,9 +777,7 @@ def simulate_definition(
         )
 
     try:
-        output_path = render_workflow_output_path(
-            defn.output_contract.path_template, params
-        )
+        output_path = render_workflow_output_path(defn.output_contract.path_template, params)
     except ValueError as exc:
         findings.append(
             _finding(

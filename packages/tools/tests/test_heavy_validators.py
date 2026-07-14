@@ -26,11 +26,15 @@ def test_validate_pdf_renders_flags_missing():
     assert problems and "failed" in problems[0]
 
 
-def test_validate_pptx_renders_guards_when_soffice_absent():
+def test_validate_pptx_renders_guards_when_soffice_absent(monkeypatch):
     """When soffice is missing (the PR gate), the heavy validator returns a clear note rather
     than raising — so it degrades to a skip instead of a false failure."""
-    if shutil.which("soffice") is not None:
-        pytest.skip("soffice present — guard path not exercised here")
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda command: None if command == "soffice" else real_which(command),
+    )
     problems = validate_pptx_renders("anything.pptx")
     assert problems == [
         "soffice unavailable — run this heavy validator on the VM 201 evidence host"

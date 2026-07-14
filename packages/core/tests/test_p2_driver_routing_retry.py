@@ -114,7 +114,7 @@ async def test_provider_unavailable_no_json_hint_in_retry():
         assert hint_texts == [], f"unexpected model-blame hints in retry messages: {hint_texts}"
 
 
-async def test_plain_llm_error_still_uses_json_hint_requery():
+async def test_plain_llm_error_still_uses_json_hint_requery(caplog):
     """Regression: a plain LLMError must still take the requery-with-hint path
     (existing DEFECT-6 behavior unchanged)."""
 
@@ -145,6 +145,7 @@ async def test_plain_llm_error_still_uses_json_hint_requery():
     agent = _PlainErrorAgent()
     loop, store = build_loop(agent)
 
+    caplog.set_level("INFO", logger="disco.span")
     await loop.send_message("go")
     await loop.run()
 
@@ -160,6 +161,21 @@ async def test_plain_llm_error_still_uses_json_hint_requery():
             for m in retry_messages
         )
         assert hint_present, "expected a provider-rejection hint in the requery messages"
+
+    repairs = [
+        getattr(record, "_fields", {})
+        for record in caplog.records
+        if getattr(record, "_fields", {}).get("span") == "agent.repair"
+    ]
+    assert repairs == [
+        {
+            "span": "agent.repair",
+            "event": "point",
+            "cid": CID,
+            "repair_kind": "provider_rejected_request",
+            "attempt": 1,
+        }
+    ]
 
 
 async def test_provider_unavailable_cap_leads_to_pause():

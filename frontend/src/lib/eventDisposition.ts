@@ -34,6 +34,7 @@ export const KNOWN_EVENT_KINDS = [
   "agent_error",
   "condensation",
   "status",
+  "workspace_version",
   "workspace_restored",
   "error",
   "plan",
@@ -70,6 +71,10 @@ export const EVENT_DISPOSITION: Record<
   observation: { disposition: "rendered", where: "Build/Agent ActivityFeed (tool results, screenshots)." },
   agent_error: { disposition: "rendered", where: "Build/Agent ActivityFeed error rows + status." },
   status: { disposition: "rendered", where: "AgentStatusBar / lifecycle state machine across all surfaces." },
+  workspace_version: {
+    disposition: "suppressed",
+    where: "Durable version-commit signal consumed by the workspace version-history hook; not a chat turn.",
+  },
   workspace_restored: {
     disposition: "suppressed",
     where: "Workspace rollback audit marker. Version history UI will surface it from the versions API, not as a chat turn.",

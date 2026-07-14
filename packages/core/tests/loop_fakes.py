@@ -45,8 +45,17 @@ class ScriptedAgent:
         self.calls = 0
 
     async def step(
-        self, view, tools, *, mode: OperatingMode, overflow_signal, on_stream=None,
-        temperature=None, assist=False, attempt: int = 1, provider_prefs=None,
+        self,
+        view,
+        tools,
+        *,
+        mode: OperatingMode,
+        overflow_signal,
+        on_stream=None,
+        temperature=None,
+        assist=False,
+        attempt: int = 1,
+        provider_prefs=None,
     ):
         i = self.calls
         if i in self._before:
@@ -73,8 +82,19 @@ class GatedAgent:
         self.proceed = asyncio.Event()
         self.calls = 0
 
-    async def step(self, view, tools, *, mode, overflow_signal, on_stream=None,
-                   temperature=None, assist=False, attempt: int = 1, provider_prefs=None):
+    async def step(
+        self,
+        view,
+        tools,
+        *,
+        mode,
+        overflow_signal,
+        on_stream=None,
+        temperature=None,
+        assist=False,
+        attempt: int = 1,
+        provider_prefs=None,
+    ):
         i = self.calls
         self.calls += 1
         if i == self.gate_at:
@@ -196,9 +216,7 @@ class SequenceProvider:
         tool_calls = spec.get("tool_calls", [])
         # Honor an explicit finish_reason (e.g. "length" for W-31 truncation
         # tests); default to the historical tool_calls-presence heuristic.
-        finish_reason = spec.get("finish_reason") or (
-            "tool_calls" if tool_calls else "stop"
-        )
+        finish_reason = spec.get("finish_reason") or ("tool_calls" if tool_calls else "stop")
         return CompletionResponse(
             text=spec.get("text", ""),
             tool_calls=tool_calls,
@@ -248,6 +266,7 @@ def build_loop(
     model_policy: ModelExecutionPolicy | None = None,
     autonomous: bool = False,
     workflow_run=None,
+    finish_alias: str | None = None,
     quiet: bool = False,
 ):
     """Construct an AgentLoop over fakes. `router` is unused by the loop itself
@@ -286,6 +305,7 @@ def build_loop(
         model_policy=model_policy or ModelExecutionPolicy.standard(),
         autonomous=autonomous,
         workflow_run=workflow_run,
+        finish_alias=finish_alias,
         quiet=quiet,
     )
     return loop, store
@@ -341,9 +361,7 @@ def assert_blocked_question_landing(
     questions = [
         e
         for e in events
-        if isinstance(e, MessageEvent)
-        and e.source == EventSource.AGENT
-        and e.id == terminal.detail
+        if isinstance(e, MessageEvent) and e.source == EventSource.AGENT and e.id == terminal.detail
     ]
     assert questions, f"missing question message {terminal.detail}"
     content = questions[-1].message.content if questions[-1].message else ""

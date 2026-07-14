@@ -185,6 +185,29 @@ def test_scenarios_yaml_parses_all_15_scenarios():
     assert steer["followups"][0]["trigger"] == "after_first_file_write"
 
 
+def test_live_thrash_monitor_confirms_repeated_model_repair(tmp_path):
+    transport = FakeTransport(tmp_path / "disco.db", states=["RUNNING"])
+    client = _client(transport, tmp_path)
+    scenario = _smoke_scenario()
+    client.enable_live_thrash_monitor(scenario)
+    trace = {
+        "spans": [
+            {"span": "agent.repair", "event": "point", "repair_kind": "unknown_tool"},
+            {"span": "agent.repair", "event": "point", "repair_kind": "unknown_tool"},
+        ]
+    }
+
+    client.observe_live_thrash_snapshot([], trace, terminal_status="RUNNING")
+    assert client.live_thrash_monitor["findings"] == []
+    client.observe_live_thrash_snapshot([], trace, terminal_status="RUNNING")
+
+    monitor = client.live_thrash_monitor
+    assert monitor["enabled"] is True
+    assert monitor["sample_count"] == 2
+    assert len(monitor["findings"]) == 1
+    assert monitor["findings"][0]["oracle_results"][0]["code"] == "MODEL_REPAIR_THRASH"
+
+
 # ---- happy-path: drive + dossier + classify -> PASS -------------------------
 
 
@@ -218,6 +241,7 @@ async def test_smoke_run_assembles_dossier_and_classifies_pass(tmp_path):
     assert (base / "manifest.json").is_file()
     assert (base / "timeline.md").is_file()
     assert (base / "prompt.txt").is_file()
+    assert (conv / "thrash-monitor.json").is_file()
     assert (base / "classification.json").is_file()
     assert (conv / "events.jsonl").is_file()
     assert (conv / "state.final.json").is_file()
@@ -1000,6 +1024,23 @@ async def test_collect_preview_no_verify_serves_and_probes_for_genuine_evidence(
     assert preview["source"] == "snapshot_serve_probe"  # REAL serve+probe, not a forged 200
     assert preview["health"]["status"] == 200
     assert "Build Smoke OK" in preview["content"]
+
+
+def test_snapshot_probe_fallback_reads_jailed_index_when_loopback_is_blocked(
+    tmp_path, monkeypatch
+):
+    served = tmp_path / "served"
+    served.mkdir()
+    (served / "index.html").write_text("<h1>JAILED FALLBACK</h1>", encoding="utf-8")
+    transport = FakeTransport(tmp_path / "disco.db", states=["FINISHED"])
+    client = _client(transport, tmp_path)
+
+    def _blocked(*_args, **_kwargs):
+        raise OSError("loopback denied by sandbox profile")
+
+    monkeypatch.setattr("urllib.request.urlopen", _blocked)
+
+    assert client._serve_probe_snapshot(served) == (200, "<h1>JAILED FALLBACK</h1>")
 
 
 @pytest.mark.asyncio
@@ -3056,6 +3097,7 @@ _ASSERTION_KEYS = {
     "workspace",
     "preview",
     "terminal_status_in",
+    "thrash",
 }
 _FOLLOWUP_TRIGGERS = {"after_terminal", "after_first_file_write"}
 
@@ -3085,6 +3127,17 @@ def test_every_scenario_loads_with_a_valid_schema():
         a = s.get("assertions") or {}
         assert isinstance(a, dict) and a, f"{sid}: assertions missing"
         assert set(a) <= _ASSERTION_KEYS, f"{sid}: unknown keys {set(a) - _ASSERTION_KEYS}"
+
+        thrash = a.get("thrash") or {}
+        assert set(thrash) == {
+            "max_identical_action_repeats",
+            "max_same_tool_error_repeats",
+            "max_actionless_pauses",
+            "max_same_model_repair_repeats",
+            "max_total_model_repairs",
+        }, f"{sid}: malformed thrash policy"
+        assert all(isinstance(value, int) and value >= 0 for value in thrash.values()), sid
+        assert s.get("requires_inspect_trace") is True, sid
 
         # NO scenario asserts tool_scope (no per-turn tool-scope evidence yet — file header).
         assert "tool_scope" not in a, f"{sid}: must not assert tool_scope (no evidence yet)"

@@ -272,11 +272,12 @@ export function McpSection() {
           <button
             type="button"
             data-disco-control="settings.mcp-add"
+            disabled={isLoading}
             onClick={() => setCreating(true)}
-            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text"
+            className="flex items-center gap-hair rounded-control border border-hairline px-inline py-hair font-ui text-[0.78rem] text-text-muted transition-colors hover:border-accent hover:text-text disabled:cursor-wait disabled:opacity-40"
           >
             <Plus className="size-3.5" aria-hidden />
-            Add connection
+            {isLoading ? "Loading connections…" : "Add connection"}
           </button>
         )}
       </div>
@@ -288,8 +289,8 @@ export function McpSection() {
 
       {(create.error || update.error || remove.error || approve.error) && (
         <p role="alert" className="font-ui text-[0.8rem] text-unsupported">
-          Couldn't save — the server didn't respond. Your connections are
-          unchanged.
+          Couldn't apply this change to every service. Check the App and Agent
+          servers, then retry; the saved configuration may already have changed.
         </p>
       )}
 

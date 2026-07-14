@@ -42,6 +42,7 @@ from disco.core import (
     LLMMessage,
     MessageEvent,
     StatusEvent,
+    WorkspaceVersionEvent,
 )
 from disco.core.env import disco_env
 from disco.tools import ProcessSandboxService
@@ -725,7 +726,19 @@ class LifecycleManager:
                 total_bytes=result.total_bytes,
             )
             try:
-                store.cut_version(conversation_id, trigger=trigger)
+                version = store.cut_version(conversation_id, trigger=trigger)
+                if version is not None:
+                    # A terminal StatusEvent is visible before this copy finishes.
+                    # Publish an explicit commit marker so the UI and reliability
+                    # harness never mistake an early history read for durable state.
+                    await self._rt._store.append(
+                        conversation_id,
+                        WorkspaceVersionEvent(
+                            version_seq=version.seq,
+                            tree_digest=version.tree_digest,
+                            trigger=trigger,
+                        ),
+                    )
             except Exception:  # noqa: BLE001 — versions are additive; mirror stays authoritative
                 _LOG.warning(
                     "version cut failed for %s after snapshot", conversation_id, exc_info=True

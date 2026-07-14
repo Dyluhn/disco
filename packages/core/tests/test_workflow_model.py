@@ -17,6 +17,8 @@ from disco.core.workflow import (
     WorkflowPolicies,
     WorkflowVerify,
     compile_workflow_scope,
+    workflow_finish_supports_verify,
+    workflow_finish_tool_schema,
     render_workflow_output_path,
     validate_definition,
 )
@@ -121,9 +123,7 @@ def test_digest_stability_uses_canonical_json() -> None:
 def test_writable_mcp_mount_requires_write_policy() -> None:
     with pytest.raises(ValidationError, match="allows_writes=True"):
         _defn(
-            mcp_mounts=(
-                McpMount(server="github", tool_names=("create_issue",), read_only=False),
-            )
+            mcp_mounts=(McpMount(server="github", tool_names=("create_issue",), read_only=False),)
         )
 
     defn = _defn(
@@ -177,9 +177,7 @@ def test_validate_definition_warns_browser_without_declared_egress() -> None:
         available_skill_names=frozenset({"research-notes"}),
     )
 
-    browser_findings = [
-        finding for finding in findings if finding.code == "browser_without_egress"
-    ]
+    browser_findings = [finding for finding in findings if finding.code == "browser_without_egress"]
     assert [(finding.severity, finding.path) for finding in browser_findings] == [
         ("warning", "policies.egress_allow")
     ]
@@ -250,6 +248,16 @@ def test_compile_workflow_scope_happy_path() -> None:
     )
     assert scope.allowed_tools == expected
     assert scope.advertised == expected
+
+
+def test_workflow_finish_verify_requires_explicit_shell_scope() -> None:
+    no_shell = _defn(tools=("file_read",))
+    with_shell = _defn(tools=("file_read", "shell"))
+
+    assert workflow_finish_supports_verify(no_shell) is False
+    assert "verify" not in workflow_finish_tool_schema(no_shell)["properties"]
+    assert workflow_finish_supports_verify(with_shell) is True
+    assert "verify" in workflow_finish_tool_schema(with_shell)["properties"]
 
 
 def test_compile_workflow_scope_rejects_unknown_builtin_tool() -> None:

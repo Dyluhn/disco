@@ -32,6 +32,7 @@ from .provider_ledger import ProviderLedgerOracle
 from .revision import RevisionOracle
 from .schema import OracleResult, failing, passing, skipping
 from .targeted_edit import RewriteAvoidanceOracle, TargetedEditOracle
+from .thrash import ThrashOracle
 from .tool_scope import ToolScopeOracle
 
 # P8D targeted/manual-edit oracles — wired into classify() SKIP-safe (each SKIPs without its
@@ -66,6 +67,7 @@ __all__ = [
     "ShowToUserOracle",
     "SidecarStopOracle",
     "TargetedEditOracle",
+    "ThrashOracle",
     "ToolScopeOracle",
     "VerificationGateOracle",
     "failing",

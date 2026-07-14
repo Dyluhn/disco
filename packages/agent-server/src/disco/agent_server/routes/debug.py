@@ -99,7 +99,22 @@ def make_debug_router(
         # Workspace file paths and content are intentionally excluded to eliminate
         # any path-traversal or workspace-content leakage risk.
         project_manifest: dict[str, Any] | None = None
+        runtime_state: dict[str, Any] | None = None
         if runtime is not None:
+            runtime_state = {
+                "sandbox_backend": runtime.sandbox_backend_name(),
+                "sandbox_state": runtime.sandbox_state(conversation_id),
+                "sandbox_instance_ids": runtime.sandbox_instance_ids(conversation_id),
+                "live_session": runtime.live_session(conversation_id) is not None,
+                "mcp_retrieval_searches": [
+                    str(getattr(provider, "name", type(provider).__name__))
+                    for provider in runtime._mcp_retrieval_searches
+                ],
+                "mcp_retrieval_extractions": [
+                    str(getattr(provider, "name", type(provider).__name__))
+                    for provider in runtime._mcp_retrieval_extractions
+                ],
+            }
             ps_method = getattr(runtime, "project_store", None)
             if ps_method is not None:
                 ps = ps_method()
@@ -121,6 +136,7 @@ def make_debug_router(
             "events": events_list,
             "inspect_trace": inspect_trace,
             "project_manifest": project_manifest,
+            "runtime": runtime_state,
         }
 
         # Redact sensitive keys before any bytes leave the process.

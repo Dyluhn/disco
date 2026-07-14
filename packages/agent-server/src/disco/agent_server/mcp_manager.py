@@ -19,6 +19,7 @@ unaffected.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import logging
 from typing import Any
@@ -35,6 +36,50 @@ class McpManager:
 
     def __init__(self, rt: Any) -> None:
         self._rt = rt
+        self._reload_lock = asyncio.Lock()
+
+    async def reload(self) -> dict[str, Any]:
+        """Atomically apply the latest persisted MCP config and approvals.
+
+        Settings is served by the app-server, while this process owns the live
+        clients/tool registry. Historically config mutations stayed invisible
+        here until a process restart. Serializing close→start makes a successful
+        Settings save immediately truthful for the next Agent/workflow turn.
+        """
+
+        async with self._reload_lock:
+            await self._close_mcp_pool()
+            self._rt._mcp_approval_pending.clear()
+            await self._start_mcp_pool()
+            servers = self._rt._config_store.load().mcp.servers
+            pool_status = (
+                self._rt._mcp_pool.server_status()
+                if self._rt._mcp_pool is not None
+                else {}
+            )
+            pool_tools = (
+                [tool.name for tool in self._rt._mcp_pool.snapshot()]
+                if self._rt._mcp_pool is not None
+                else []
+            )
+            connected = sorted(
+                {
+                    *self._rt._mcp_http_clients,
+                    *(name for name, status in pool_status.items() if status == "connected"),
+                }
+            )
+            return {
+                "ok": True,
+                "configured_servers": sorted(servers),
+                "connected_servers": connected,
+                "registered_tools": sorted(
+                    {
+                        *self._rt._mcp_http_tools,
+                        *pool_tools,
+                    }
+                ),
+                "approval_required": sorted(self._rt._mcp_approval_pending),
+            }
 
     def _compose_mcp_retrieval(self, deps: dict[str, Any]) -> tuple[Any, Any]:
         """Compose the bundled search/extraction providers with the conversation's

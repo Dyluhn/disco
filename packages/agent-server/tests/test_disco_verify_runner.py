@@ -19,9 +19,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from disco.agent_server.verify.runner import (
     AbstractVerifyClient,
+    HttpVerifyClient,
     _locate_deliverables,
     _run_file_validators,
     _run_forbid_checks,
@@ -32,6 +34,47 @@ from disco.agent_server.verify.scenarios import (
     slides_from_research_report,
 )
 from disco.agent_server.verify.schema import Scenario, VerifyResult
+
+
+async def test_http_verify_client_pairs_and_sends_cookie_csrf_and_real_export_path() -> None:
+    seen: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path == "/api/auth/session":
+            return httpx.Response(200, json={"authenticated": False})
+        if request.url.path == "/api/auth/pairing-token":
+            return httpx.Response(200, json={"pairing_token": "pair-proof"})
+        if request.url.path == "/api/auth/mint":
+            assert request.headers["origin"] == "http://127.0.0.1:8000"
+            assert json.loads(request.content) == {"pairing_token": "pair-proof"}
+            return httpx.Response(
+                200,
+                json={"csrf_token": "csrf-proof"},
+                headers={"set-cookie": "disco_session=session-proof; Path=/; HttpOnly"},
+            )
+        assert request.headers["cookie"] == "disco_session=session-proof"
+        assert request.headers["x-disco-csrf"] == "csrf-proof"
+        if request.url.path == "/conversations":
+            return httpx.Response(201, json={"conversation_id": "conv_authproof"})
+        if request.url.path == "/api/conversations/conv_authproof/report/export":
+            assert request.url.params["fmt"] == "md"
+            return httpx.Response(200, content=b"# grounded report")
+        return httpx.Response(404)
+
+    client = HttpVerifyClient(
+        "http://127.0.0.1:8000", _transport=httpx.MockTransport(handler)
+    )
+    cid = await client.create_conversation("build", None)
+    assert cid == "conv_authproof"
+    assert await client.export_report(cid, "md") == (200, b"# grounded report")
+    assert seen == [
+        "/api/auth/session",
+        "/api/auth/pairing-token",
+        "/api/auth/mint",
+        "/conversations",
+        "/api/conversations/conv_authproof/report/export",
+    ]
 
 # ---------------------------------------------------------------------------
 # Fake transport — feeds canned responses, records calls
@@ -170,7 +213,11 @@ def _clean_pptx_bytes() -> bytes:
     from pptx import Presentation
 
     buf = io.BytesIO()
-    Presentation().save(buf)
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[0])
+    slide.shapes.title.text = "Reliability proof"
+    slide.placeholders[1].text = "This deck contains real extractable content."
+    presentation.save(buf)
     return buf.getvalue()
 
 

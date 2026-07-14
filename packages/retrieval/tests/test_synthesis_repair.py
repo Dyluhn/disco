@@ -371,9 +371,9 @@ async def test_think_only_response_counts_as_empty_and_retries() -> None:
     assert "<think" not in md
 
 
-async def test_empty_response_after_retry_degrades_honestly() -> None:
-    """If the section is STILL empty after the retry, the body degrades to an
-    honest placeholder — a titled section card is NEVER rendered blank."""
+async def test_empty_response_after_retry_preserves_cited_evidence() -> None:
+    """If the section is STILL empty after the retry, preserve source excerpts
+    with real citation ids instead of finishing with an uncited placeholder."""
     router = _ScriptedRouter([
         ("   ", "stop"),  # whitespace-only
         ("\n\n", "stop"),  # retry: also empty
@@ -383,8 +383,10 @@ async def test_empty_response_after_retry_degrades_honestly() -> None:
         passages=[_passage()],
     )
 
-    async def _emit(_kind: str, _payload: dict[str, Any]) -> None:
-        return None
+    emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def _emit(kind: str, payload: dict[str, Any]) -> None:
+        emitted.append((kind, payload))
 
     section = await synthesize_section(
         sub,
@@ -404,9 +406,53 @@ async def test_empty_response_after_retry_degrades_honestly() -> None:
     )
 
     assert router.calls == 2
-    assert section.markdown.strip()  # honest message, not a blank card
-    assert "could not be generated" in section.markdown
+    assert "Alpha scored 90" in section.markdown
+    assert "[[p1]]" in section.markdown
+    assert section.cited_passage_ids == ["p1"]
     assert section.confidence == "low"
+    assert emitted[-1] == (
+        "synthesize_section_fallback",
+        {
+            "section": "Historical context?",
+            "reason": "empty_after_retry",
+            "passages_preserved": 1,
+        },
+    )
+
+
+async def test_synthesis_exception_preserves_cited_evidence() -> None:
+    router = _ScriptedRouter([RuntimeError("provider exploded")])
+    sub = SubQuestionResult(
+        subq=SubQuestion(title="Failure recovery"),
+        passages=[_passage()],
+    )
+    emitted: list[tuple[str, dict[str, Any]]] = []
+
+    async def _emit(kind: str, payload: dict[str, Any]) -> None:
+        emitted.append((kind, payload))
+
+    section = await synthesize_section(
+        sub,
+        router=router,
+        embedder=None,
+        vector_store=InMemoryVectorStore(),
+        namespace="ns",
+        nli=_FakeNLI(),
+        section_id="s1",
+        top_k_for_section=4,
+        emit=_emit,
+        leg_context=GatherLegContext(
+            subq_id="sq1",
+            namespace="ns",
+            call_context=CallContext(conversation_id="conv_exception"),
+        ),
+    )
+
+    assert router.calls == 1
+    assert "Alpha scored 90" in section.markdown
+    assert section.cited_passage_ids == ["p1"]
+    assert section.confidence == "low"
+    assert emitted[-1][1]["reason"] == "exception:RuntimeError"
 
 
 async def test_truncation_guard_is_bounded() -> None:

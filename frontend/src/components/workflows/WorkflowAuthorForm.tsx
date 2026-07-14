@@ -489,7 +489,10 @@ export function WorkflowAuthorForm() {
         </form>
 
         {result && (
-          <section className="flex flex-col gap-inline rounded-control border border-hairline bg-surface-2 p-inline">
+          <section
+            aria-label={`${result.workflow.name} draft review`}
+            className="flex flex-col gap-inline rounded-control border border-hairline bg-surface-2 p-inline"
+          >
             <div className="flex flex-col gap-hair">
               <div className="font-ui text-[0.82rem] text-text-muted">{result.summary}</div>
               <h3 className="font-ui text-[0.96rem] font-semibold text-text">
@@ -931,6 +934,7 @@ export function WorkflowAuthorForm() {
                   <label className="flex flex-col gap-hair font-ui text-[0.8rem] text-text-muted">
                     Format
                     <select
+                      aria-label="Output format"
                       value={outputFormat}
                       onChange={(event) => setOutputFormat(event.target.value as OutputFormat)}
                       className="rounded-control border border-hairline bg-surface-2 px-inline py-hair text-[0.84rem] text-text outline-none focus:border-accent"

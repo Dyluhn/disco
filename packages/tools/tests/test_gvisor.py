@@ -38,6 +38,8 @@ class FakeContainer:
         self.exec_results: list[tuple[int, bytes, bytes]] = []
         self.fs: dict[str, bytes] = {}  # in-container files, by absolute path
         self.tar_mtimes: dict[str, int] = {}  # mtime of each put_archive'd member
+        self.put_archive_paths: list[str] = []
+        self.deny_rename_over: set[str] = set()
 
     def start(self):
         self.started = True
@@ -56,6 +58,8 @@ class FakeContainer:
                 code, out, err = 0, self.fs[path], b""
             else:
                 code, out, err = 44, b"", b"DISCO_READ_MISSING:no file"
+        elif cmd[0] == "realpath":
+            code, out, err = 0, f"{cmd[-1]}\n".encode(), b""
         elif cmd[0] == "cat":
             path = cmd[-1]
             if path in self.fs:
@@ -70,6 +74,42 @@ class FakeContainer:
             code, out, err = 0, ("\n".join(names) + "\n").encode() if names else b"", b""
         elif cmd[0] == "mkdir":
             code, out, err = 0, b"", b""
+        elif cmd[0] == "test":
+            path = cmd[-1]
+            code, out, err = (0, b"", b"") if path in self.fs else (1, b"", b"")
+        elif cmd[0] == "cp":
+            source, target = cmd[-2:]
+            if source in self.fs:
+                self.fs[target] = self.fs[source]
+                if source in self.tar_mtimes:
+                    self.tar_mtimes[target] = self.tar_mtimes[source]
+                code, out, err = 0, b"", b""
+            else:
+                code, out, err = 1, b"", b"missing source"
+        elif cmd[0] == "mv":
+            source, target = cmd[-2:]
+            if target in self.deny_rename_over and target in self.fs:
+                code, out, err = 1, b"", b"permission denied"
+            elif source in self.fs:
+                self.fs[target] = self.fs.pop(source)
+                if source in self.tar_mtimes:
+                    self.tar_mtimes[target] = self.tar_mtimes.pop(source)
+                code, out, err = 0, b"", b""
+            else:
+                code, out, err = 1, b"", b"missing source"
+        elif cmd[0] == "rm":
+            self.fs.pop(cmd[-1], None)
+            self.tar_mtimes.pop(cmd[-1], None)
+            code, out, err = 0, b"", b""
+        elif cmd[0] == "sha256sum":
+            import hashlib
+
+            path = cmd[-1]
+            if path in self.fs:
+                digest = hashlib.sha256(self.fs[path]).hexdigest()
+                code, out, err = 0, f"{digest}  {path}\n".encode(), b""
+            else:
+                code, out, err = 1, b"", b"missing file"
         elif cmd[0] == "stat":
             path = cmd[-1]
             code, out, err = (
@@ -87,6 +127,7 @@ class FakeContainer:
         import io
         import tarfile
 
+        self.put_archive_paths.append(path)
         with tarfile.open(fileobj=io.BytesIO(data)) as tar:
             for m in tar.getmembers():
                 f = tar.extractfile(m)
@@ -476,6 +517,35 @@ async def test_write_file_stamps_real_mtime(tmp_path):
     await inst.write_file("site/style.css", b"body { color: #111; }")
     (mtime,) = [v for k, v in client.last.tar_mtimes.items() if k.endswith("style.css")]
     assert mtime >= before, f"tar member mtime {mtime} is stale (epoch-1970 regression)"
+
+
+async def test_atomic_write_stages_archive_outside_workspace_then_guest_renames(tmp_path):
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+
+    await inst.atomic_write("site/index.html", b"<h1>atomic</h1>")
+
+    assert client.last.fs["/workspace/site/index.html"] == b"<h1>atomic</h1>"
+    assert client.last.put_archive_paths[-1] == "/tmp"
+    assert not any("disco-upload-" in path for path in client.last.fs)
+    assert not any(".disco-tmp-" in path for path in client.last.fs)
+
+
+async def test_atomic_write_recovers_legacy_selinux_labeled_existing_file(tmp_path):
+    client = FakeDockerClient()
+    svc = _svc(tmp_path, client)
+    inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
+    target = "/workspace/site/index.html"
+    client.last.fs[target] = b"legacy"
+    client.last.deny_rename_over.add(target)
+
+    await inst.atomic_write("site/index.html", b"replacement")
+
+    assert client.last.fs[target] == b"replacement"
+    assert client.last.put_archive_paths[-1] == "/workspace/site"
+    assert not any("disco-upload-" in path for path in client.last.fs)
+    assert not any(".disco-tmp-" in path for path in client.last.fs)
 
 
 async def test_runsc_missing_is_a_typed_error(tmp_path):

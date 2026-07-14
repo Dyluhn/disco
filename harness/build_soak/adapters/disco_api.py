@@ -56,6 +56,8 @@ from typing import Any, Protocol
 
 import httpx  # the adapter MAY import an http client (oracle path stays disco/http-free)
 
+from ..oracles.thrash import ThrashOracle
+
 # Pre-create infra error hierarchy (codex P1#2): the runner-side health probe fails
 # with built-in OSError/ConnectionError/TimeoutError (fake transport, raw sockets) OR,
 # via HttpTransport, with the httpx hierarchy — httpx.ConnectError / ConnectTimeout /
@@ -323,6 +325,8 @@ class CollectedRun:
     state_final: dict[str, Any]
     workspace_manifest: dict[str, Any]
     preview: dict[str, Any] | None
+    inspect_trace: dict[str, Any] | None = None
+    thrash_monitor: dict[str, Any] = field(default_factory=dict)
     timeline: list[str] = field(default_factory=list)
     # Each AWAITING_USER_DECISION gate the runner AUTO-RESOLVED (Part B): one dict per
     # resolution {alternatives_id, option_id, attempt}. A PASS that REQUIRED auto-resolution
@@ -372,6 +376,114 @@ class DiscoApiClient:
         # drive_scenario raised before returning a CollectedRun (so an abandoned RUNNING
         # build can still be killed from run_once's finally). None until a create succeeds.
         self.last_conversation_id: str | None = None
+        # Live soak observability. The terminal classifier remains authoritative,
+        # but this sampler proves the model/tool trace was inspected while the
+        # run was active and records the first persistently bad threshold crossing.
+        self._live_thrash_scenario: dict[str, Any] | None = None
+        self._live_thrash_samples = 0
+        self._live_thrash_findings: list[dict[str, Any]] = []
+        self._live_thrash_candidate = ""
+        self._live_thrash_candidate_count = 0
+        self._live_thrash_recorded: set[str] = set()
+        self._live_thrash_last_sample = time.monotonic()
+
+    def enable_live_thrash_monitor(self, scenario: dict[str, Any]) -> None:
+        self._live_thrash_scenario = scenario
+        self._live_thrash_samples = 0
+        self._live_thrash_findings = []
+        self._live_thrash_candidate = ""
+        self._live_thrash_candidate_count = 0
+        self._live_thrash_recorded = set()
+        self._live_thrash_last_sample = time.monotonic()
+
+    @property
+    def live_thrash_monitor(self) -> dict[str, Any]:
+        return {
+            "enabled": self._live_thrash_scenario is not None,
+            "sample_count": self._live_thrash_samples,
+            "minimum_confirmation_samples": 2,
+            "findings": list(self._live_thrash_findings),
+        }
+
+    def observe_live_thrash_snapshot(
+        self,
+        events: list[dict[str, Any]],
+        inspect_trace: dict[str, Any] | None,
+        *,
+        terminal_status: str = "",
+    ) -> None:
+        """Evaluate one in-run snapshot; require two matching live samples.
+
+        A just-committed ActionEvent may not have its ObservationEvent yet. Two
+        matching samples prevent that transient prefix from being reported as a
+        tool-error finding. At a terminal state the event prefix is stable, so a
+        single sample is conclusive.
+        """
+
+        scenario = self._live_thrash_scenario
+        if scenario is None:
+            return
+        self._live_thrash_samples += 1
+        failed = [
+            result.to_dict()
+            for result in ThrashOracle().check(
+                events,
+                scenario=scenario,
+                inspect_trace=inspect_trace,
+            )
+            if result.failed
+        ]
+        if not failed:
+            self._live_thrash_candidate = ""
+            self._live_thrash_candidate_count = 0
+            return
+        fingerprint = json.dumps(failed, sort_keys=True, separators=(",", ":"))
+        if fingerprint == self._live_thrash_candidate:
+            self._live_thrash_candidate_count += 1
+        else:
+            self._live_thrash_candidate = fingerprint
+            self._live_thrash_candidate_count = 1
+        terminal = terminal_status in TERMINAL_STATES or terminal_status == PAUSED_STATE
+        if not terminal and self._live_thrash_candidate_count < 2:
+            return
+        if fingerprint in self._live_thrash_recorded:
+            return
+        self._live_thrash_recorded.add(fingerprint)
+        finding = {
+            "detected_at_epoch": time.time(),
+            "terminal_status": terminal_status or None,
+            "event_count": len(events),
+            "max_event_seq": max((int(event.get("seq", -1)) for event in events), default=-1),
+            "confirmation_samples": self._live_thrash_candidate_count,
+            "oracle_results": failed,
+        }
+        self._live_thrash_findings.append(finding)
+        _LOG.error(
+            "live thrash threshold crossed conversation=%s findings=%s",
+            self.last_conversation_id,
+            failed,
+        )
+
+    async def _sample_live_thrash(
+        self, conversation_id: str, *, terminal_status: str = ""
+    ) -> None:
+        if self._live_thrash_scenario is None:
+            return
+        now = time.monotonic()
+        terminal = terminal_status in TERMINAL_STATES or terminal_status == PAUSED_STATE
+        if not terminal and now - self._live_thrash_last_sample < 1.0:
+            return
+        self._live_thrash_last_sample = now
+        try:
+            events = self.collect_events(conversation_id)
+            trace = await self.collect_inspect_trace(conversation_id)
+        except Exception:  # noqa: BLE001 — final evidence gate catches missing trace
+            return
+        self.observe_live_thrash_snapshot(
+            events,
+            trace,
+            terminal_status=terminal_status,
+        )
 
     # -- pre-create infra probe (§9; the ONLY infra source) -------------------
 
@@ -417,10 +529,13 @@ class DiscoApiClient:
         model: str | None = None,
         autonomous: bool = False,
         appkit: bool = False,
+        surface: str = "build",
     ) -> str:
-        """POST /conversations (surface=build) then POST the user message (which the
-        route appends AND kicks). Returns the conversation_id."""
-        body: dict[str, Any] = {"surface": "build", "autonomous": autonomous}
+        """POST /conversations then POST the user message (which the route appends
+        AND kicks). Returns the conversation_id."""
+        if surface not in {"build", "agent"}:
+            raise ValueError(f"unsupported soak conversation surface: {surface!r}")
+        body: dict[str, Any] = {"surface": surface, "autonomous": autonomous}
         if appkit:
             # EPIC F strict AppKit mode — the phase-based allowlist build. The
             # appkit soak lane (deadlock regression cbfec1fd) sets this per
@@ -631,6 +746,7 @@ class DiscoApiClient:
         seen_active = False
         while True:
             last = self._status_of(await self.get_state(conversation_id))
+            await self._sample_live_thrash(conversation_id, terminal_status=last)
             if stop_on_gate and last in GATE_STATES:
                 return last
             # A WORK terminal only ENDS the wait when it is the follow-up's OWN new terminal
@@ -964,6 +1080,25 @@ class DiscoApiClient:
     async def collect_state(self, conversation_id: str) -> dict[str, Any]:
         return await self.get_state(conversation_id)
 
+    async def collect_inspect_trace(self, conversation_id: str) -> dict[str, Any] | None:
+        """Fetch the redacted per-conversation routing/model span trace.
+
+        Inspect is intentionally optional at the adapter layer so deterministic
+        fake-transport tests and non-campaign callers remain usable. The live CLI
+        campaign enforces its presence before counting a run.
+        """
+        try:
+            status, data = await self._t.get_json(f"/api/debug/trace/{conversation_id}")
+        except Exception:  # noqa: BLE001 — campaign policy adjudicates absence
+            return None
+        if status >= 400 or not isinstance(data, dict):
+            return None
+        if str(data.get("conversation_id") or "") != conversation_id:
+            return None
+        if not isinstance(data.get("events"), list):
+            return None
+        return data
+
     async def collect_workspace(
         self, conversation_id: str, file_paths: list[str]
     ) -> dict[str, Any]:
@@ -1274,6 +1409,23 @@ class DiscoApiClient:
         import threading
         import urllib.error
         import urllib.request
+
+        served_root = served_dir.resolve()
+
+        def static_index_fallback() -> tuple[int, str] | None:
+            """Equivalent GET / evidence when loopback clients are forbidden.
+
+            The caller already selected a static served root. Re-jail the file
+            here so this fallback can never follow an index symlink outside it.
+            """
+
+            try:
+                index = (served_root / "index.html").resolve()
+                if not index.is_relative_to(served_root) or not index.is_file():
+                    return None
+                return 200, index.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None
 
         class _QuietHandler(http.server.SimpleHTTPRequestHandler):
             # silence per-request stderr noise; signature matches BaseHTTPRequestHandler

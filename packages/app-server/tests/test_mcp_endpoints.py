@@ -28,7 +28,14 @@ def store() -> SqliteEventStore:
 
 
 @pytest.fixture
-def client(store: SqliteEventStore, tmp_path: Path) -> TestClient:
+def config_store(tmp_path: Path) -> ConfigStore:
+    return ConfigStore(tmp_path / "config.json")
+
+
+@pytest.fixture
+def client(
+    store: SqliteEventStore, tmp_path: Path, config_store: ConfigStore
+) -> TestClient:
     """Build the app with a shared DB connection so mcp_approvals table is
     reachable from ConfigState."""
     # Ensure mcp_approvals table exists in the in-memory DB.
@@ -43,7 +50,7 @@ def client(store: SqliteEventStore, tmp_path: Path) -> TestClient:
     )
     store._conn.commit()
     cfg_state = ConfigState(
-        store=ConfigStore(tmp_path / "config.json"),
+        store=config_store,
         secrets=SecretStore(tmp_path / "secrets.json", box=SecretBox("test-app-secret")),
         skills=SkillStore(tmp_path / "skills"),
         db_conn=store._conn,
@@ -100,8 +107,8 @@ def test_mcp_list_starts_empty(client):
     assert conns == []
 
 
-def test_mcp_create_and_list_round_trip(client):
-    """POST creates a server; GET lists it with the live projection."""
+def test_mcp_create_and_list_round_trip(client, config_store):
+    """POST creates a server and activates the fresh-install MCP runtime gate."""
     created = client.post(
         "/api/mcp/servers",
         json={
@@ -123,6 +130,7 @@ def test_mcp_create_and_list_round_trip(client):
     listed = client.get("/api/mcp").json()
     assert len(listed) == 1
     assert listed[0]["name"] == "filesystem"
+    assert config_store.load().mcp.enabled is True
 
 
 def test_mcp_create_duplicate_is_400(client):
@@ -140,7 +148,7 @@ def test_mcp_create_duplicate_is_400(client):
     )
 
 
-def test_mcp_patch_toggle_enabled(client):
+def test_mcp_patch_toggle_enabled(client, config_store):
     """PATCH toggles enabled without resetting transport or configured risk."""
     client.post(
         "/api/mcp/servers",
@@ -166,6 +174,14 @@ def test_mcp_patch_toggle_enabled(client):
     assert listed[0]["enabled"] is False
     assert listed[0]["transport"] == "streamable_http"
     assert listed[0]["risk_tier"] == "high"
+    assert config_store.load().mcp.enabled is False
+
+    # The same per-connection switch must be able to reactivate the global
+    # runtime gate; there is no separate top-level switch in Settings.
+    reenabled = client.patch("/api/mcp/servers/srv1", json={"enabled": True})
+    assert reenabled.status_code == 200
+    assert reenabled.json()["enabled"] is True
+    assert config_store.load().mcp.enabled is True
 
 
 def test_mcp_patch_nonexistent_is_404(client):
@@ -178,7 +194,7 @@ def test_mcp_patch_nonexistent_is_404(client):
     )
 
 
-def test_mcp_delete_removes_server(client):
+def test_mcp_delete_removes_server(client, config_store):
     """DELETE removes the server and its approval row."""
     client.post(
         "/api/mcp/servers",
@@ -187,6 +203,7 @@ def test_mcp_delete_removes_server(client):
     assert client.delete("/api/mcp/servers/to_delete").status_code == 204
     assert client.delete("/api/mcp/servers/to_delete").status_code == 404
     assert client.get("/api/mcp").json() == []
+    assert config_store.load().mcp.enabled is False
 
 
 # ---- approval ---------------------------------------------------------------

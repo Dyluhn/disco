@@ -10,6 +10,7 @@ limits-bite / secret-non-leak is the live local-socket check.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import tarfile
 from collections import namedtuple
@@ -63,6 +64,37 @@ class FakeContainer:
             code, out, err = 0, ("\n".join(names) + "\n").encode() if names else b"", b""
         elif cmd[0] == "mkdir":
             code, out, err = 0, b"", b""
+        elif cmd[0] == "realpath":
+            # This fake has no symlink table, so every jailed guest path resolves
+            # to itself. Dedicated symlink-jail tests use richer fakes.
+            code, out, err = 0, f"{cmd[-1]}\n".encode(), b""
+        elif cmd[0] == "test" and "-f" in cmd:
+            path = cmd[-1]
+            code, out, err = (0, b"", b"") if path in self.fs else (1, b"", b"")
+        elif cmd[0] == "cp":
+            source, target = cmd[-2:]
+            if source in self.fs:
+                self.fs[target] = self.fs[source]
+                code, out, err = 0, b"", b""
+            else:
+                code, out, err = 1, b"", b"no file"
+        elif cmd[0] == "mv":
+            source, target = cmd[-2:]
+            if source in self.fs:
+                self.fs[target] = self.fs.pop(source)
+                code, out, err = 0, b"", b""
+            else:
+                code, out, err = 1, b"", b"no file"
+        elif cmd[0] == "rm":
+            self.fs.pop(cmd[-1], None)
+            code, out, err = 0, b"", b""
+        elif cmd[0] == "sha256sum":
+            path = cmd[-1]
+            if path in self.fs:
+                digest = hashlib.sha256(self.fs[path]).hexdigest()
+                code, out, err = 0, f"{digest}  {path}\n".encode(), b""
+            else:
+                code, out, err = 1, b"", b"no file"
         elif cmd[0] == "stat":
             path = cmd[-1]
             code, out, err = (

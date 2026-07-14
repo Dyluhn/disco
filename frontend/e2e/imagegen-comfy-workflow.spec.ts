@@ -5,11 +5,11 @@ import { expect, test } from "@playwright/test";
  * Image generation. Fixture mode (no backend); we click ComfyUI to reveal the
  * contextual fields, fill the checkpoint + a sample API-format graph, and capture.
  */
-test("Settings → Image generation: ComfyUI custom-workflow textarea", async ({ page }) => {
+test("Settings → Image generation: ComfyUI custom-workflow textarea", async ({ page }, testInfo) => {
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: /^settings$/i })).toBeVisible();
 
-  const section = page.locator('section:has(h2:text-is("Image generation"))');
+  const section = page.locator("#image-generation section");
   await expect(section).toBeVisible();
   await section.scrollIntoViewIfNeeded();
 
@@ -29,5 +29,8 @@ test("Settings → Image generation: ComfyUI custom-workflow textarea", async ({
   );
 
   await section.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: "../.harness/evidence/a3-image-gen/comfy-workflow-textarea.png", fullPage: true });
+  await page.screenshot({
+    path: testInfo.outputPath("comfy-workflow-textarea.png"),
+    fullPage: true,
+  });
 });

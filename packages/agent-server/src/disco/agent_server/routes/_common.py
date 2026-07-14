@@ -210,6 +210,13 @@ class UpdateSettingsBody(BaseModel):
     # Order C: weak-model assist tier toggle. None ⇒ leave unchanged; True/False
     # ⇒ explicit per-conversation override (mirrors CreateConversationBody.assist).
     assist: bool | None = None
+    # Deep Research compose settings. These are patchable while the conversation
+    # is still pristine so a lazily-created upload cid can retain its files even
+    # if the user changes controls before submitting the query.
+    depth_tier: Literal["quick", "standard_deep", "exhaustive"] | None = None
+    iterative: bool | None = None
+    recency_window: Literal["month", "week"] | None = None
+    sources: list[str] | None = None
 
 
 def _reject_if_imported(store: SqliteEventStore, conversation_id: str) -> None:

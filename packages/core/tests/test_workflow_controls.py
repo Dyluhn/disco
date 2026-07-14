@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import pytest
-from disco.core import ConversationStatus, EventSource, MessageEvent, StatusEvent, ToolCall
+from disco.core import (
+    ActionEvent,
+    ConversationStatus,
+    EventSource,
+    MessageEvent,
+    StatusEvent,
+    ToolCall,
+)
 from disco.core.llm import ToolSpec
 from disco.core.loop import AgentStep
 from disco.core.workflow import (
@@ -36,6 +43,8 @@ def _workflow_run(
     *,
     path_template: str = "outputs/{name}.md",
     params: dict[str, object] | None = None,
+    tools: tuple[str, ...] = (),
+    finalizer: str = "finish",
 ) -> WorkflowRun:
     return WorkflowRun(
         run_id="wf_run_1",
@@ -43,11 +52,12 @@ def _workflow_run(
             name="wf",
             card="Write one contracted workflow output file.",
             params_model_schema=_schema(),
+            tools=tools,
             output_contract=WorkflowOutputContract(
                 path_template=path_template,
                 format="markdown",
             ),
-            verify=WorkflowVerify(checks=("output_exists",), finalizer="finish"),
+            verify=WorkflowVerify(checks=("output_exists",), finalizer=finalizer),
         ),
         params=params or {"name": "report"},
     )
@@ -99,6 +109,69 @@ def _finish_call(summary: str = "done") -> AgentStep:
     return AgentStep(
         thought=summary,
         tool_call=ToolCall(tool_name="finish", arguments={"summary": summary}),
+    )
+
+
+def _tool_schema(loop: object, name: str) -> dict[str, object]:
+    specs = [tool for tool in loop._tools_for_step() if tool.name == name]  # type: ignore[attr-defined]
+    assert len(specs) == 1
+    return specs[0].parameters_schema
+
+
+async def test_sealed_workflow_finish_surface_omits_verify_without_shell() -> None:
+    loop, _ = build_loop(
+        ScriptedAgent([_finish_call()]),
+        workflow_run=_workflow_run(finalizer="ready_for_workflow_output"),
+        finish_alias="ready_for_workflow_output",
+    )
+
+    assert "verify" not in _tool_schema(loop, "finish")["properties"]
+    assert "verify" not in _tool_schema(loop, "ready_for_workflow_output")["properties"]
+
+
+async def test_sealed_workflow_finish_surface_includes_verify_with_shell() -> None:
+    loop, _ = build_loop(
+        ScriptedAgent([_finish_call()]),
+        workflow_run=_workflow_run(tools=("shell",)),
+    )
+
+    assert "verify" in _tool_schema(loop, "finish")["properties"]
+
+
+async def test_sealed_workflow_finish_cannot_smuggle_unapproved_shell_probe() -> None:
+    agent = ScriptedAgent(
+        [
+            AgentStep(
+                thought="done",
+                tool_call=ToolCall(
+                    tool_name="finish",
+                    arguments={"summary": "done", "verify": "touch escaped.txt"},
+                ),
+            )
+        ]
+    )
+    loop, store = build_loop(
+        agent,
+        executor=_WorkflowExecutor(files={"outputs/report.md"}),
+        workflow_run=_workflow_run(),
+    )
+
+    await loop.run()
+
+    events = await store.get_events("conv")
+    assert not any(
+        isinstance(event, ActionEvent) and event.meta.get("verify_probe") for event in events
+    )
+    ignored = [
+        event
+        for event in events
+        if isinstance(event, MessageEvent)
+        and event.meta.get("workflow_finish_verify_ignored") is True
+    ]
+    assert len(ignored) == 1
+    assert any(
+        isinstance(event, StatusEvent) and event.status == ConversationStatus.FINISHED
+        for event in events
     )
 
 
@@ -161,10 +234,7 @@ async def test_workflow_needs_input_interactive_uses_ask_landing() -> None:
         legacy_detail="workflow_needs_input",
     )
     assert "Upload source.csv" in content
-    assert any(
-        isinstance(e, StatusEvent) and e.detail == "workflow_needs_input"
-        for e in events
-    )
+    assert any(isinstance(e, StatusEvent) and e.detail == "workflow_needs_input" for e in events)
 
 
 async def test_workflow_needs_input_autonomous_terminal_explanation() -> None:

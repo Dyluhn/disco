@@ -16,7 +16,7 @@ test.describe("Contradiction surfacing — support meter + claim verdicts", () =
     await input.press("Enter");
 
     // Plan-approval gate, then approve the decomposition.
-    const approve = page.getByRole("button", { name: /approve & build/i });
+    const approve = page.locator('[data-disco-control="approve-plan"]');
     await expect(approve).toBeVisible();
     await approve.click();
 

@@ -20,7 +20,13 @@ test.describe("visual regression", () => {
       .fill("How does reciprocal rank fusion work, and when should I use it?");
     await page.keyboard.press("Enter");
     await expect(page.getByRole("tab", { name: /cited/i })).toBeVisible();
-    await page.waitForTimeout(500); // let the streamed answer settle
+    // The source tabs mount at count zero before the fixture has finished. A
+    // screenshot at that point is a race-shaped baseline, not visual evidence.
+    await expect(page.getByRole("button", { name: /stop generating/i })).toBeHidden({
+      timeout: 15_000,
+    });
+    await expect(page.getByRole("tab", { name: /cited\s*4/i })).toBeVisible();
+    await expect(page.getByRole("heading", { name: /when to use it/i })).toBeVisible();
 
     await expect(page).toHaveScreenshot("research-answer.png", { fullPage: true });
     await toggleTheme(page);
@@ -34,8 +40,10 @@ test.describe("visual regression", () => {
     await expect(page.getByRole("heading", { name: /^settings$/i })).toBeVisible();
     await page.waitForTimeout(300);
 
-    await expect(page).toHaveScreenshot("settings.png", { fullPage: true });
+    // Settings owns an internal scroll region. A browser full-page capture only
+    // adds blank document height; the viewport is the actual rendered surface.
+    await expect(page).toHaveScreenshot("settings.png");
     await toggleTheme(page);
-    await expect(page).toHaveScreenshot("settings-alt-theme.png", { fullPage: true });
+    await expect(page).toHaveScreenshot("settings-alt-theme.png");
   });
 });

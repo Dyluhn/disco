@@ -159,7 +159,15 @@ class McpConfigService:
         if body.transport == "stdio":
             srv["command"] = [body.url]
         servers = {**cfg.servers, body.name: srv}
-        new_cfg = cfg.model_copy(update={"servers": servers})
+        # The Settings UI exposes per-connection switches, not a separate
+        # top-level MCP switch.  A fresh install starts with ``mcp.enabled``
+        # false, so persisting an enabled server without also activating MCP
+        # leaves a connection that can be approved forever but can never be
+        # started by the Agent runtime.  Treat the top-level bit as the
+        # aggregate runtime gate for Settings-managed connections.
+        new_cfg = cfg.model_copy(
+            update={"servers": servers, "enabled": cfg.enabled or body.enabled}
+        )
         self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         from disco.tools.mcp.approval import compute_config_hash
 
@@ -192,7 +200,8 @@ class McpConfigService:
         if patch.risk_tier:
             updated["risk_tier"] = patch.risk_tier
         servers = {**cfg.servers, name: updated}
-        new_cfg = cfg.model_copy(update={"servers": servers})
+        any_enabled = any(server.get("enabled", True) for server in servers.values())
+        new_cfg = cfg.model_copy(update={"servers": servers, "enabled": any_enabled})
         self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         approvals = self._mcp_approvals()
         ap = approvals.get(name)
@@ -231,7 +240,8 @@ class McpConfigService:
             delete_mcp_approval(self._db_conn, name)
             delete_mcp_config_approval(self._db_conn, name)
         servers = {k: v for k, v in cfg.servers.items() if k != name}
-        new_cfg = cfg.model_copy(update={"servers": servers})
+        any_enabled = any(server.get("enabled", True) for server in servers.values())
+        new_cfg = cfg.model_copy(update={"servers": servers, "enabled": any_enabled})
         self._store.save(self._store.load().model_copy(update={"mcp": new_cfg}))
         return True
 

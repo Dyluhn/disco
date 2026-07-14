@@ -63,6 +63,7 @@ services:
       OPENAI_IMAGE_API_KEY: "${OPENAI_IMAGE_API_KEY:-}"
       OPENAI_TTS_API_KEY: "${OPENAI_TTS_API_KEY:-}"
       DISCO_LOG_LEVEL: "${DISCO_LOG_LEVEL:-${PMX_LOG_LEVEL:-INFO}}"
+      DISCO_LOG_JSON: "${DISCO_LOG_JSON:-0}"
     volumes:
       - disco-data:/data
     ports:
@@ -115,6 +116,10 @@ services:
       OPENAI_IMAGE_API_KEY: "${OPENAI_IMAGE_API_KEY:-}"
       OPENAI_TTS_API_KEY: "${OPENAI_TTS_API_KEY:-}"
       DISCO_LOG_LEVEL: "${DISCO_LOG_LEVEL:-${PMX_LOG_LEVEL:-INFO}}"
+      # Reliability/operator diagnostics. Inspect remains explicitly opt-in;
+      # JSON logs make model/tool thrash machine-readable in captured compose logs.
+      DISCO_INSPECT: "${DISCO_INSPECT:-0}"
+      DISCO_LOG_JSON: "${DISCO_LOG_JSON:-0}"
       # --- memory hygiene (OOM floor fix) ---------------------------------
       # Deep Research's bursty concurrent gather + in-process ONNX encoders
       # fragment the heap; the glibc allocator then strands freed pages mid-heap

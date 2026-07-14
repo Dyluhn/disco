@@ -354,6 +354,42 @@ async def test_patch_route_assist_on_pristine(tmp_path, monkeypatch):
     assert rt.is_assist(cid) is True
 
 
+async def test_patch_route_deep_research_settings_preserves_upload_cid(
+    tmp_path, monkeypatch
+):
+    """A pristine upload cid accepts the final DR controls before kickoff."""
+    from disco.agent_server.app import create_app
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("PMX_DB", str(tmp_path / "c.db"))
+    store = SqliteEventStore(":memory:")
+    rt = ConversationRuntime(store=store)
+    app = create_app(store, runtime=rt)
+    client = TestClient(app)
+
+    cid = client.post(
+        "/conversations",
+        json={"surface": "deep_research", "depth_tier": "quick"},
+    ).json()["conversation_id"]
+    await store.append(cid, _env_msg())
+    await store.append(cid, _datasource_event())
+
+    r = client.patch(
+        f"/conversations/{cid}/settings",
+        json={
+            "depth_tier": "exhaustive",
+            "iterative": True,
+            "recency_window": "week",
+            "sources": ["arxiv", "ddgs"],
+        },
+    )
+    assert r.status_code == 200
+    assert rt._dr._depth_for(cid).value == "exhaustive"
+    assert rt._dr._iterative_for(cid) is True
+    assert rt._dr._recency_for(cid) == "week"
+    assert rt.get_research_sources(cid) == ("arxiv", "ddgs")
+
+
 async def test_patch_route_409_after_loop_composed(tmp_path, monkeypatch):
     """PATCH /settings after loop is composed → 409; settings UNMUTATED."""
     from disco.agent_server.app import create_app

@@ -92,6 +92,14 @@ WRITE_BEFORE_REVISION_APPROVAL = "WRITE_BEFORE_REVISION_APPROVAL"
 # finished". Fail-closed: a build that does not complete is not a PASS even if some
 # files happen to exist (migration 2026_06_24_paused_incomplete_not_pass).
 BUILD_DID_NOT_FINISH = "BUILD_DID_NOT_FINISH"
+# The model repeatedly issued the same call, hit the same tool/schema error, or
+# paused without taking an action. These are product-quality failures even when a
+# later lucky guess lets the run reach FINISHED: the soak is meant to remove the
+# friction, not merely wait it out.
+TOOL_CALL_THRASH = "TOOL_CALL_THRASH"
+TOOL_ERROR_THRASH = "TOOL_ERROR_THRASH"
+ACTIONLESS_THRASH = "ACTIONLESS_THRASH"
+MODEL_REPAIR_THRASH = "MODEL_REPAIR_THRASH"
 
 # P8D — targeted-edit / manual-edit discipline (an edit touched only what it should,
 # preserved direct work + anchors, and did not rewrite the world).
@@ -223,6 +231,10 @@ SEVERITY_BY_CODE: dict[str, str] = {
     OBSERVATION_WITHOUT_ACTION: P1,
     WRITE_BEFORE_REVISION_APPROVAL: P1,
     BUILD_DID_NOT_FINISH: P1,
+    TOOL_CALL_THRASH: P1,
+    TOOL_ERROR_THRASH: P1,
+    ACTIONLESS_THRASH: P1,
+    MODEL_REPAIR_THRASH: P1,
     # P2
     SLOW_FIRST_PLAN: P2,
     EXCESSIVE_READS_BEFORE_PLAN: P2,

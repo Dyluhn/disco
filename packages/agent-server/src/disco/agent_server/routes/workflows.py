@@ -28,6 +28,8 @@ from disco.core.workflow import (
     WorkflowInstance,
     WorkflowValidationFinding,
     compile_workflow_scope,
+    workflow_finish_tool_description,
+    workflow_finish_tool_schema,
     simulate_definition,
     validate_definition,
 )
@@ -53,26 +55,6 @@ _SAFE_ID_FRAGMENT = re.compile(r"[^A-Za-z0-9_.-]+")
 _MCP_NAME_RE = re.compile(r"^mcp__([^_][A-Za-z0-9_]*)__([^_].+)$")
 _AUTHORING_OUTPUT_FORMATS = ("markdown", "html", "json", "csv", "pptx", "pdf", "text")
 _ONE_SHOT_CRON = "* * * * *"
-
-_FINISH_DESCRIPTION = (
-    "Declare the task COMPLETE and end the run. Call this ONLY when every plan "
-    "step is done and verified. Provide a short summary and optionally a verify "
-    "command; failed verification refuses the finish until fixed or capped."
-)
-_FINISH_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "summary": {
-            "type": "string",
-            "description": "Short summary of what was accomplished.",
-        },
-        "verify": {
-            "type": "string",
-            "description": "Optional completion check; exit 0 means success.",
-        },
-    },
-    "required": [],
-}
 
 
 class DraftWorkflowBody(BaseModel):
@@ -119,7 +101,8 @@ class _WorkflowDraftFailed(ValueError):
 
 
 def make_workflows_router(
-    store: SqliteEventStore, runtime: ConversationRuntime | None  # noqa: ARG001
+    store: SqliteEventStore,
+    runtime: ConversationRuntime | None,  # noqa: ARG001
 ) -> APIRouter:
     router = APIRouter()
 
@@ -293,9 +276,7 @@ def make_workflows_router(
         return {"workflow": _workflow_review_payload(instance_id, approved, env)}
 
     _add_workflow_route_pair(router, "", _list_workflows, methods=["GET"])
-    _add_workflow_route_pair(
-        router, "/authoring-context", _authoring_context, methods=["GET"]
-    )
+    _add_workflow_route_pair(router, "/authoring-context", _authoring_context, methods=["GET"])
     _add_workflow_route_pair(router, "/draft", _draft_workflow, methods=["POST"])
     _add_workflow_route_pair(router, "/author", _author_workflow, methods=["POST"])
     _add_workflow_route_pair(
@@ -304,12 +285,8 @@ def make_workflows_router(
         _draft_workflow_from_description,
         methods=["POST"],
     )
-    _add_workflow_route_pair(
-        router, "/{instance_id}/approve", _approve_workflow, methods=["POST"]
-    )
-    _add_workflow_route_pair(
-        router, "/{instance_id}/run", _run_workflow, methods=["POST"]
-    )
+    _add_workflow_route_pair(router, "/{instance_id}/approve", _approve_workflow, methods=["POST"])
+    _add_workflow_route_pair(router, "/{instance_id}/run", _run_workflow, methods=["POST"])
     return router
 
 
@@ -347,9 +324,7 @@ def _draft_definition(
             available_builtin_names=env.builtin_names,
             available_mcp_names=env.mcp_names,
         )
-    all_findings = _dedupe_findings(
-        [*(extra_findings or []), *findings, *simulation.findings]
-    )
+    all_findings = _dedupe_findings([*(extra_findings or []), *findings, *simulation.findings])
     instance = WorkflowInstance(
         definition_digest=definition.digest(),
         definition=definition,
@@ -375,7 +350,10 @@ def _workflow_store(
     if project_store.status() != StorageStatus.OK:
         raise HTTPException(
             status_code=409,
-            detail={"reason": "project_storage_unavailable", "status": project_store.status().value},
+            detail={
+                "reason": "project_storage_unavailable",
+                "status": project_store.status().value,
+            },
         )
     root = project_store.root
     if root is None:
@@ -466,9 +444,7 @@ def _workflow_review_payload(
         "enabled": instance.enabled,
         "approved": instance.approval is not None,
         "approval": (
-            instance.approval.model_dump(mode="json")
-            if instance.approval is not None
-            else None
+            instance.approval.model_dump(mode="json") if instance.approval is not None else None
         ),
         "params": instance.params,
         "definition": instance.definition.model_dump(mode="json"),
@@ -499,7 +475,9 @@ def _compiled_surface_payload(
         "compile_error": compile_error,
         "allowed_tools": allowed,
         "advertised_tools": advertised,
-        "tool_definitions": [_surface_tool_payload(name, env) for name in allowed],
+        "tool_definitions": [
+            _surface_tool_payload(name, env, instance.definition) for name in allowed
+        ],
         "mcp_mounts": [
             {
                 **mount.model_dump(mode="json"),
@@ -524,12 +502,16 @@ def _compiled_surface_payload(
     }
 
 
-def _surface_tool_payload(name: str, env: _SurfaceEnvironment) -> dict[str, object]:
+def _surface_tool_payload(
+    name: str,
+    env: _SurfaceEnvironment,
+    definition: WorkflowDefinition,
+) -> dict[str, object]:
     if name == "finish":
         return {
             "name": "finish",
-            "description": _FINISH_DESCRIPTION,
-            "parameters_schema": _FINISH_SCHEMA,
+            "description": workflow_finish_tool_description(definition),
+            "parameters_schema": workflow_finish_tool_schema(definition),
             "read_only": True,
             "runs_in": "in_process",
             "base_risk": "LOW",
@@ -685,9 +667,7 @@ async def _draft_args_from_description(
     try:
         args = DraftWorkflowArgs.model_validate(normalized)
     except ValueError as exc:
-        raise _WorkflowDraftFailed(
-            f"model returned an invalid workflow draft: {exc}"
-        ) from exc
+        raise _WorkflowDraftFailed(f"model returned an invalid workflow draft: {exc}") from exc
     return args, summary
 
 
@@ -845,9 +825,7 @@ def _normalize_draft_payload(
     normalized["params"] = _normalize_params(normalized.get("params"))
     normalized["mcp_mounts"] = _normalize_mcp_mounts(normalized.get("mcp_mounts"))
 
-    normalized["allows_writes"] = _bool_or_default(
-        normalized.get("allows_writes"), default=False
-    )
+    normalized["allows_writes"] = _bool_or_default(normalized.get("allows_writes"), default=False)
     normalized["untrusted_content"] = _bool_or_default(
         normalized.get("untrusted_content"), default=True
     )

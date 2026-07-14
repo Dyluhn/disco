@@ -85,6 +85,31 @@ class _FinishVerifyMixin(_FinishGateProto):
             # a redundant impossible check here.
             return True, False
 
+        workflow_run = getattr(self._loop, "_workflow_run", None)
+        workflow_tools = tuple(getattr(getattr(workflow_run, "definition", None), "tools", ()))
+        if workflow_run is not None and "shell" not in workflow_tools:
+            # Defense in depth for stale clients and model hallucinations. The
+            # workflow finish schema omits `verify` in this shape, but arguments
+            # are still untrusted: never let the virtual finish tool smuggle a
+            # raw shell action outside the approved workflow scope.
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(
+                        role="user",
+                        content=(
+                            "<system-reminder>\n"
+                            "The supplied finish verification was ignored because this "
+                            "sealed workflow does not grant the shell tool. Host-owned "
+                            "workflow output checks remain authoritative.\n"
+                            "</system-reminder>"
+                        ),
+                    ),
+                    meta={"workflow_finish_verify_ignored": True},
+                )
+            )
+            return True, False
+
         call = ToolCall(tool_name="shell", arguments={"command": command})
         # meta marker: this shell action is the GATE'S probe, not the agent's
         # work. Phase-B re-run #6 (2026-06-10): an unmarked probe counted as a
@@ -203,9 +228,7 @@ class _FinishVerifyMixin(_FinishGateProto):
         # Browserless backend? (process backend exposes no `browser` tool) → no-op,
         # let the gate fall back to today's passive behavior.
         try:
-            tool_names = {
-                getattr(t, "name", None) for t in self._loop.executor.available_tools()
-            }
+            tool_names = {getattr(t, "name", None) for t in self._loop.executor.available_tools()}
         except Exception:  # noqa: BLE001 — any introspection failure → degrade safely
             tool_names = set()
         if "browser" not in tool_names:
@@ -237,9 +260,7 @@ class _FinishVerifyMixin(_FinishGateProto):
 
     def _available_tool_names(self) -> set[str | None]:
         try:
-            return {
-                getattr(t, "name", None) for t in self._loop.executor.available_tools()
-            }
+            return {getattr(t, "name", None) for t in self._loop.executor.available_tools()}
         except Exception:  # noqa: BLE001 — introspection failure → degrade safely
             return set()
 
@@ -310,8 +331,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
         projected = artifact_paths_from_events(events)
         if not manifest_paths:
             _LOG.info(
-                "artifact-manifest reader skipped for %s:%s: no manifest data "
-                "(projected=%d)",
+                "artifact-manifest reader skipped for %s:%s: no manifest data (projected=%d)",
                 self._loop.conversation_id,
                 consumer,
                 len(projected),
@@ -337,10 +357,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
             return None
         raw = (raw_path or "").strip()
         norm = posixpath.normpath(raw) if raw else "."
-        directory_like = (
-            norm in ("", ".")
-            or posixpath.basename(norm.rstrip("/")) != "index.html"
-        )
+        directory_like = norm in ("", ".") or posixpath.basename(norm.rstrip("/")) != "index.html"
         if directory_like and await self._host_artifact_file_exists(path) is False:
             return None
         return path
@@ -592,9 +609,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
             clean = href.split("#", 1)[0].split("?", 1)[0].strip()
             if not clean or "://" in clean or clean.startswith("//"):
                 continue
-            safe = _safe_deliverable_file_path(
-                posixpath.normpath(posixpath.join(base_dir, clean))
-            )
+            safe = _safe_deliverable_file_path(posixpath.normpath(posixpath.join(base_dir, clean)))
             if safe is not None:
                 candidates.append(safe)
         if not candidates:
@@ -615,9 +630,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
                 return True
         return False
 
-    async def _related_game_texts_for_html(
-        self, html_path: str, html_text: str
-    ) -> list[str]:
+    async def _related_game_texts_for_html(self, html_path: str, html_text: str) -> list[str]:
         base_dir = posixpath.dirname(html_path)
         candidates: list[str] = []
         for src in html_script_srcs(html_text):
@@ -628,9 +641,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
             if safe is not None:
                 candidates.append(safe)
         for name in ("README.md", "NOTES.md"):
-            safe = _safe_deliverable_file_path(
-                posixpath.normpath(posixpath.join(base_dir, name))
-            )
+            safe = _safe_deliverable_file_path(posixpath.normpath(posixpath.join(base_dir, name)))
             if safe is not None:
                 candidates.append(safe)
 
@@ -656,9 +667,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
             if raw is None:
                 continue
             text = raw.decode("utf-8", errors="replace")
-            manifest_present = await self._manifest_present_for_html(
-                path, text, deliverable_paths
-            )
+            manifest_present = await self._manifest_present_for_html(path, text, deliverable_paths)
             hint = detect_html_medium(
                 text,
                 manifest_present=manifest_present,
@@ -775,9 +784,7 @@ class _HostVerifyGateMixin(_FinishGateProto):
     ) -> Disp:
         label = self._verdict_label(verdict) or "fail"
         summary = str(
-            verdict.get("summary")
-            or verdict.get("detail")
-            or "host verifier did not pass"
+            verdict.get("summary") or verdict.get("detail") or "host verifier did not pass"
         )
         next_action = str(verdict.get("next_action") or "")
         first_failure = self._verdict_first_failure(verdict)
@@ -1027,9 +1034,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             "        s.close()\n"
         )
         try:
-            res = await sbx.exec_shell(
-                f"python3 -c {shlex.quote(script)}", timeout_s=10
-            )
+            res = await sbx.exec_shell(f"python3 -c {shlex.quote(script)}", timeout_s=10)
         except Exception:  # noqa: BLE001 — detection failure → no binding (degrade safe)
             return None
         for line in str(getattr(res, "stdout", "") or "").splitlines():
@@ -1270,9 +1275,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         availability check — the precise "the render/console check cannot run here"
         signal that distinguishes an UNVERIFIABLE delivery from a BROKEN app."""
         try:
-            tool_names = {
-                getattr(t, "name", None) for t in self._loop.executor.available_tools()
-            }
+            tool_names = {getattr(t, "name", None) for t in self._loop.executor.available_tools()}
         except Exception:  # noqa: BLE001 — introspection failure → assume available (cautious)
             return False
         return "browser" not in tool_names
@@ -1364,9 +1367,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         self._loop._browser_verify_refusals = 0
         return Disp.FALLTHROUGH
 
-    async def maybe_honest_unverifiable_static_actionless_finish(
-        self, events: list[Event]
-    ) -> bool:
+    async def maybe_honest_unverifiable_static_actionless_finish(self, events: list[Event]) -> bool:
         """Bug 6 — the ACTIONLESS-VALVE twin of `_maybe_honest_unverifiable_static_finish`.
 
         The finish-gate honest path only runs when the model REACHES the finish gate.
@@ -1397,10 +1398,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
             return False
         if not _nonbrowser_static_validation_passed(events):
             return False
-        if not (
-            self._browser_verification_unavailable()
-            or _browser_unavailable_observed(events)
-        ):
+        if not (self._browser_verification_unavailable() or _browser_unavailable_observed(events)):
             return False
         if _real_web_failure_evidence(events):
             return False
@@ -1433,9 +1431,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         self._loop._browser_verify_refusals = 0
         return True
 
-    async def _verifier_unavailable_disposition(
-        self, tool_name: str = "verify_web_app"
-    ) -> Disp:
+    async def _verifier_unavailable_disposition(self, tool_name: str = "verify_web_app") -> Disp:
         """P1-2 — disposition when the structured verifier is advertised but produced NO
         usable verdict (verifier execution error / empty / the driven verify
         failed). On the build/web surface a clean FINISH requires a real PASS
@@ -1488,9 +1484,7 @@ class _BrowserVerifyGateMixin(_FinishGateProto):
         self._loop._browser_verify_refusals = 0
         return Disp.FALLTHROUGH
 
-    async def _browser_verify_delegated_to_host(
-        self, step: AgentStep, events: list[Event]
-    ) -> bool:
+    async def _browser_verify_delegated_to_host(self, step: AgentStep, events: list[Event]) -> bool:
         if not self._host_verify_authoritative():
             return False
         if getattr(self._loop, "_host_verifier", None) is None:
@@ -1723,9 +1717,7 @@ class _ExportRenderGateMixin(_FinishGateProto):
             and latest_post_export_deliverable is not None
             and latest_post_export_deliverable.artifact_kind == "files"
         ):
-            facts = export_render_facts_for_path(
-                events, latest_post_export_deliverable.path
-            )
+            facts = export_render_facts_for_path(events, latest_post_export_deliverable.path)
         if facts is None:
             facts = latest_export_render_facts(events)
         if facts is None or facts.ok:
@@ -1798,7 +1790,9 @@ class _RenderVerifyGateMixin(_FinishGateProto):
             return False, safe
 
     async def gate_workflow_output_contract(
-        self, step: AgentStep, events: list[Event]  # noqa: ARG002
+        self,
+        step: AgentStep,
+        events: list[Event],  # noqa: ARG002
     ) -> Disp:
         workflow_run = getattr(self._loop, "_workflow_run", None)
         if workflow_run is None:

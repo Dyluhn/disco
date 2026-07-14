@@ -65,11 +65,17 @@ async def test_forget_conversation_is_idempotent_on_unknown_cid() -> None:
     await rt.forget_conversation("never-existed")  # must not raise
 
 
-async def test_agent_delete_route_clears_pin_and_deletes_rows() -> None:
+async def test_agent_delete_route_clears_pin_rows_and_audio_cache(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISCO_DATA_DIR", str(tmp_path))
     store = SqliteEventStore(":memory:")
     store.create_conversation(CID, owner_id="local")
     rt = _runtime(store)
     rt._pinned_kernels[CID] = rt._disco_kernel
+    audio_dir = tmp_path / "cache" / "tts" / CID
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "audio_overview_single_deadbeef.mp3").write_bytes(b"generated")
     await store.append(CID, _user("build it"))
     await store.append(CID, StatusEvent(status=ConversationStatus.FINISHED))
 
@@ -82,6 +88,7 @@ async def test_agent_delete_route_clears_pin_and_deletes_rows() -> None:
     assert resp.json()["deleted"] is True
     assert CID not in rt._pinned_kernels  # runtime state released on delete
     assert await store.list_conversations(owner_id="local") == []  # rows gone
+    assert not audio_dir.exists()  # generated report audio cannot leak after deletion
 
 
 # ---- app-server best-effort notify ------------------------------------------

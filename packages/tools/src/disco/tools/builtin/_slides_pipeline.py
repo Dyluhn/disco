@@ -132,7 +132,12 @@ def _purpose_for_model_endpoint(cfg: Any, llm_url: str, api_key_env: str | None)
     for entry in cfg.models.values():
         if not entry.base_url:
             continue
-        if entry.base_url.rstrip("/") == llm_url and (entry.api_key_env or None) == api_key_env:
+        # Normalize BOTH sides: a keyless local entry stores api_key_env as "" while
+        # ctx.driver_llm carries it verbatim — `None == ""` must not knock a
+        # self-hosted driver down to model:unknown (unapproved).
+        if entry.base_url.rstrip("/") == llm_url and (entry.api_key_env or None) == (
+            api_key_env or None
+        ):
             return f"model:{entry.provider}"
     return "model:unknown"
 

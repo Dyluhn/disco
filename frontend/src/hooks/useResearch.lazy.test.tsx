@@ -89,6 +89,32 @@ describe("useResearch — BW-08 twin lazy pre-create", () => {
       result.current.reScope({ query: "narrower" });
     });
     // reScope reuses the already-minted preCid — no second POST /conversations.
+    await waitFor(() => expect(createBuildConversation).toHaveBeenCalledTimes(1));
+  });
+
+  it("coalesces Enter with an attachment cid creation already in flight", async () => {
+    let resolveCreate!: (cid: string) => void;
+    createBuildConversation.mockImplementationOnce(
+      () => new Promise<string>((resolve) => { resolveCreate = resolve; }),
+    );
+    const { result } = renderHook(() => useResearch(), { wrapper: wrapper() });
+
+    let attachment!: Promise<string | null>;
+    act(() => {
+      attachment = result.current.ensurePreCid!();
+      void result.current.submit("use the file I just attached");
+    });
+    await waitFor(() => expect(createBuildConversation).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      resolveCreate("conv_shared");
+      await attachment;
+    });
+    await waitFor(() =>
+      expect(requestResearch).toHaveBeenCalledWith(
+        expect.objectContaining({ conversation_id: "conv_shared" }),
+      ),
+    );
     expect(createBuildConversation).toHaveBeenCalledTimes(1);
   });
 });

@@ -19,11 +19,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import copy
 import json
 import os
 import subprocess
 import sys
 import time
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -52,6 +54,15 @@ from .classify import CLASSIFICATION_NAME, classify
 from .evidence import EvidenceManifest, compute_evidence_hashes, write_manifest
 from .product_evidence import PRODUCT_EVIDENCE_NAME, write_product_evidence
 from .provider_ledger import parse_relay_log, record_applies_to_conversation
+from .resources import (
+    GIB,
+    AdmissionPolicy,
+    ResourceGate,
+    ResourcePool,
+    read_host_resources,
+    resolve_worker_count,
+    safe_worker_count,
+)
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 _DEFAULT_OUT = "test-record/build-soak"
@@ -91,7 +102,19 @@ _TRIGGER_AFTER_TERMINAL = "after_terminal"
 def load_scenarios(path: str | Path = _SCENARIOS) -> dict[str, dict[str, Any]]:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
     scenarios = raw.get("scenarios") or []
-    return {str(s["id"]): s for s in scenarios if s.get("id")}
+    defaults = raw.get("defaults") or {}
+
+    def merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+        out = copy.deepcopy(base)
+        for key, value in override.items():
+            if isinstance(value, dict) and isinstance(out.get(key), dict):
+                out[key] = merge(out[key], value)
+            else:
+                out[key] = copy.deepcopy(value)
+        return out
+
+    loaded = [merge(defaults, s) for s in scenarios if s.get("id")]
+    return {str(s["id"]): s for s in loaded}
 
 
 def _declared_workspace_paths(scenario: dict[str, Any]) -> list[str]:
@@ -500,13 +523,19 @@ async def drive_scenario(
     `timeout_s` is the PROGRESS-AWARE INACTIVITY window (no-new-events budget), NOT a
     blind wall-clock; `hard_cap_s` is the generous safety ceiling (Bug 15)."""
     timeline: list[str] = []
+    client.enable_live_thrash_monitor(scenario)
     prompt = str(scenario["prompt"])
     appkit = bool(scenario.get("appkit"))
+    surface = str(scenario.get("surface") or "build")
     cid = await client.create_build_conversation(
-        prompt, model=model, autonomous=autonomous, appkit=appkit
+        prompt,
+        model=model,
+        autonomous=autonomous,
+        appkit=appkit,
+        surface=surface,
     )
     timeline.append(
-        f"created build conversation {cid} (autonomous={autonomous}, appkit={appkit})"
+        f"created {surface} conversation {cid} (autonomous={autonomous}, appkit={appkit})"
     )
     state_initial = await client.get_state(cid)
 
@@ -645,6 +674,18 @@ async def drive_scenario(
     state_final = await client.get_state(cid)
     workspace = await client.collect_workspace(cid, _declared_workspace_paths(scenario))
     preview = await client.collect_preview(cid) if _preview_required(scenario) else None
+    inspect_trace = await client.collect_inspect_trace(cid)
+    client.observe_live_thrash_snapshot(
+        events,
+        inspect_trace,
+        terminal_status=DiscoApiClient._status_of(state_final),
+    )
+    thrash_monitor = client.live_thrash_monitor
+    timeline.append(
+        "live thrash monitor sampled "
+        f"{thrash_monitor['sample_count']} times and detected "
+        f"{len(thrash_monitor['findings'])} threshold crossing(s)"
+    )
     timeline.append(f"collected {len(events)} events; workspace files={list(workspace)}")
     return CollectedRun(
         conversation_id=cid,
@@ -653,6 +694,8 @@ async def drive_scenario(
         state_final=state_final,
         workspace_manifest=workspace,
         preview=preview,
+        inspect_trace=inspect_trace,
+        thrash_monitor=thrash_monitor,
         timeline=timeline,
         decision_resolutions=decisions,
         declared_followup_seqs=declared_followup_seqs,
@@ -739,6 +782,13 @@ def assemble_dossier(
         (preview_dir / "served.html").write_text(
             str(run.preview.get("content") or ""), encoding="utf-8"
         )
+    if run.inspect_trace is not None:
+        (conv / "inspect-trace.json").write_text(
+            json.dumps(run.inspect_trace, indent=2, sort_keys=True), encoding="utf-8"
+        )
+    (conv / "thrash-monitor.json").write_text(
+        json.dumps(run.thrash_monitor, indent=2, sort_keys=True), encoding="utf-8"
+    )
 
     # [Lane A A-B4] PERSIST product_evidence so a folder reclassify/replay ADJUDICATES instead of
     # going green-by-absence (the headless soak's REL-5 cleanup evidence was in-memory only → any
@@ -759,6 +809,9 @@ def assemble_dossier(
     }
     if _pe:
         evidence_files[PRODUCT_EVIDENCE_NAME] = f"{conv_rel}/{PRODUCT_EVIDENCE_NAME}"
+    if run.inspect_trace is not None:
+        evidence_files["inspect-trace.json"] = f"{conv_rel}/inspect-trace.json"
+    evidence_files["thrash-monitor.json"] = f"{conv_rel}/thrash-monitor.json"
     # P1 (codex): the PREVIEW dossier is preview TRUTH the oracle adjudicates on — it
     # MUST be under the hash lock too, else a preview-health/served-html tamper would
     # not trip the §6 INVALID_RUN. Hash both preview files when a preview was captured.
@@ -772,7 +825,7 @@ def assemble_dossier(
         repo_commit=commit,
         model=model or "",
         autonomous=autonomous,
-        surface="build",
+        surface=str(scenario.get("surface") or "build"),
         kernel=kernel,
         mode=mode,
         started_at="",
@@ -817,7 +870,9 @@ def classify_dossier(
                 provider_ledger = [
                     {**r, "after_terminal": float(r["ts"]) > _t and bool(r.get("has_tools", True))}
                     for r in _recs
-                    if isinstance(r.get("ts"), (int, float)) and float(r["ts"]) >= _s
+                    if isinstance(r.get("ts"), (int, float))
+                    and float(r["ts"]) >= _s
+                    and record_applies_to_conversation(r, run.conversation_id)
                 ]
         except Exception:
             provider_ledger = None
@@ -832,6 +887,7 @@ def classify_dossier(
         preview=run.preview,
         autonomous=autonomous,
         provider_ledger=provider_ledger,
+        inspect_trace=run.inspect_trace,
         # HARN-2: browser product-harness evidence (None until HARN-1b populates it on
         # CollectedRun; the browser oracles SKIP without it, so headless runs are unaffected).
         product_evidence=getattr(run, "product_evidence", None),
@@ -1106,9 +1162,15 @@ def _relay_log_path() -> str | None:
     """[codex] ONE canonical resolver for the MiniMax relay-ledger path — the SINGLE source for
     BOTH reading the ledger AND the `_live_measure` fail-closed gate, so the rule can never key on
     a different env var than the one that actually carries the ledger. The relay WRITES
-    MINIMAX_RELAY_LOG (minimax_relay.py); we also accept the legacy PMX_RELAY_LOG (Playwright live
-    specs) and DISCO_RELAY_LOG so no driver path can drift into a silent SKIP-as-PASS."""
-    for name in ("MINIMAX_RELAY_LOG", "PMX_RELAY_LOG", "DISCO_RELAY_LOG"):
+    MINIMAX_RELAY_LOG (minimax_relay.py); direct drivers write DISCO_PROVIDER_LEDGER. We also
+    accept the legacy PMX_RELAY_LOG (Playwright live specs) and DISCO_RELAY_LOG so no driver path
+    can drift into a silent SKIP-as-PASS."""
+    for name in (
+        "DISCO_PROVIDER_LEDGER",
+        "MINIMAX_RELAY_LOG",
+        "PMX_RELAY_LOG",
+        "DISCO_RELAY_LOG",
+    ):
         v = os.environ.get(name)
         if v:
             return v
@@ -1335,6 +1397,7 @@ async def run_once(
     kernel: str = "disco",
     timeout_s: float,
     hard_cap_s: float = _DEFAULT_HARD_CAP_S,
+    require_inspect_trace: bool = False,
 ) -> dict[str, Any]:
     # §9 pre-create infra gate (the ONLY infra source). No conversation exists yet, so a
     # failure here needs no teardown (returns before the try/finally below).
@@ -1420,6 +1483,38 @@ async def run_once(
                 out_root, run_id, scenario, f"{type(exc).__name__}: {exc}"
             )
 
+        if require_inspect_trace:
+            trace = run.inspect_trace or {}
+            routing = trace.get("routing_decisions")
+            spans = trace.get("spans")
+            agent_spans = (
+                [
+                    span
+                    for span in spans
+                    if isinstance(span, dict) and span.get("span") == "agent.step"
+                ]
+                if isinstance(spans, list)
+                else []
+            )
+            missing_trace_parts = [
+                name
+                for name, present in (
+                    ("routing_decisions", isinstance(routing, list) and bool(routing)),
+                    ("agent.step spans", bool(agent_spans)),
+                )
+                if not present
+            ]
+            if missing_trace_parts:
+                return _invalid_run_record(
+                    out_root,
+                    run_id,
+                    scenario,
+                    "required per-conversation inspect trace was absent or incomplete",
+                    code=fc.MISSING_REQUIRED_EVIDENCE,
+                    first_broken_link="model_request -> inspect_trace",
+                    facts={"missing_trace_parts": missing_trace_parts},
+                )
+
         # [REL-5] Measure terminal cleanup + release BEFORE freezing the dossier, so the
         # lifecycle / sidecar / cleanup oracles ADJUDICATE (instead of SKIP "no evidence
         # (headless run)"). The build's §6 evidence is already frozen into `run` by
@@ -1494,23 +1589,93 @@ def _exit_code(status: str) -> int:
     }.get(status, 1)
 
 
+def _policy_from_args(args: argparse.Namespace) -> AdmissionPolicy:
+    return AdmissionPolicy(
+        memory_reserve_bytes=int(args.memory_reserve_gib * GIB),
+        memory_per_worker_bytes=int(args.memory_per_worker_gib * GIB),
+        disk_reserve_bytes=int(args.disk_reserve_gib * GIB),
+        disk_per_worker_bytes=int(args.disk_per_worker_gib * GIB),
+        cpus_per_worker=args.cpus_per_worker,
+    )
+
+
+def _policy_dict(policy: AdmissionPolicy) -> dict[str, int]:
+    return {
+        "memory_reserve_bytes": policy.memory_reserve_bytes,
+        "memory_per_worker_bytes": policy.memory_per_worker_bytes,
+        "disk_reserve_bytes": policy.disk_reserve_bytes,
+        "disk_per_worker_bytes": policy.disk_per_worker_bytes,
+        "cpus_per_worker": policy.cpus_per_worker,
+    }
+
+
+def _run_batch_item(
+    *, index: int, run_id: str, base: Path, classification: dict[str, Any]
+) -> dict[str, Any]:
+    cid = str(classification.get("conversation_id") or "")
+    trace_path = base / run_id / "conversations" / cid / "inspect-trace.json"
+    trace: dict[str, Any] = {}
+    if cid and trace_path.is_file():
+        with contextlib.suppress(json.JSONDecodeError, OSError):
+            loaded = json.loads(trace_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                trace = loaded
+    thrash = next(
+        (
+            result
+            for result in classification.get("oracle_results") or []
+            if isinstance(result, dict) and result.get("oracle") == "ThrashOracle"
+        ),
+        None,
+    )
+    return {
+        "index": index,
+        "run_id": run_id,
+        "run_dir": str(base / run_id),
+        "scenario_id": classification.get("scenario_id"),
+        "status": classification.get("status"),
+        "code": classification.get("code"),
+        "severity": classification.get("severity"),
+        "conversation_id": classification.get("conversation_id"),
+        "inspect": {
+            "captured": bool(trace),
+            "event_count": int(trace.get("event_count") or 0),
+            "routing_decisions": len(trace.get("routing_decisions") or []),
+            "spans": len(trace.get("spans") or []),
+        },
+        "thrash_oracle": thrash,
+    }
+
+
 async def _amain(args: argparse.Namespace) -> int:
     from .adapters.disco_api import HttpTransport  # live deps only on the CLI path
 
     scenarios = load_scenarios(args.scenarios)
-    if args.scenario not in scenarios:
-        print(f"unknown scenario {args.scenario!r}; known: {sorted(scenarios)}", file=sys.stderr)
+    requested_scenarios = (
+        list(scenarios)
+        if args.scenario.strip().lower() == "all"
+        else [item.strip() for item in args.scenario.split(",") if item.strip()]
+    )
+    unknown = sorted(set(requested_scenarios) - set(scenarios))
+    if not requested_scenarios or unknown:
+        print(
+            f"unknown scenario(s) {unknown or [args.scenario]!r}; known: {sorted(scenarios)}",
+            file=sys.stderr,
+        )
         return 2
-    scenario = scenarios[args.scenario]
+    selected = {scenario_id: scenarios[scenario_id] for scenario_id in requested_scenarios}
+    if args.iterations <= 0:
+        print("--iterations must be positive", file=sys.stderr)
+        return 2
     # [Lane A A-B1] FAIL-CLOSED infra preflight: a reliability soak must be able to adjudicate
     # terminal cleanup + provider-after-terminal, which REQUIRES the relay ledger. Refuse to START a
     # positive scenario without it — else run_once's _live_measure is False, the sidecar/cleanup
     # slices are omitted, the oracles SKIP, and the run classifies SKIP-as-PASS. A scenario opts out
     # only by explicitly declaring `requires_relay_ledger: false` (a pure classifier/negative case).
-    if scenario.get("requires_relay_ledger", True) and not _relay_log_path():
+    if any(scenario.get("requires_relay_ledger", True) for scenario in selected.values()) and not _relay_log_path():
         print(
             "[build-soak] INFRA_FAILURE: scenario requires the relay ledger to adjudicate terminal "
-            "cleanup + provider-after-terminal — set MINIMAX_RELAY_LOG (or PMX_/DISCO_RELAY_LOG). "
+            "cleanup + provider-after-terminal — set DISCO_PROVIDER_LEDGER or MINIMAX_RELAY_LOG. "
             "Refusing to run a soak that could SKIP-as-PASS.",
             file=sys.stderr,
         )
@@ -1519,54 +1684,200 @@ async def _amain(args: argparse.Namespace) -> int:
     commit = _git_commit(repo_root)
     db_path = args.db or os.environ.get("DISCO_DB") or str(repo_root / "disco.db")
     model = args.model or os.environ.get("DISCO_SOAK_MODEL") or None
-    autonomous = bool(args.autonomous or scenario.get("autonomous"))
 
     # Bug 9: read the authoritative host ProjectStore SNAPSHOT for workspace collection
     # (not the fragile dev-server preview proxy). "" mirrors the agent-server's OWN root
     # resolution from the SAME env (DISCO_DATA_DIR / XDG_DATA_HOME / ~/.local/share). The
     # snapshot wait absorbs the FINISHED-before-_maybe_snapshot flush window.
     projects_root = args.projects_root or os.environ.get("DISCO_PROJECTS_ROOT") or ""
-    transport: Transport = HttpTransport(args.base_url)
-    client = DiscoApiClient(
-        transport,
-        db_path=db_path,
-        projects_root=projects_root,
-        snapshot_wait_s=args.snapshot_wait,
+
+    # Refuse to spend model calls unless the app can expose its actual per-run
+    # routing/model spans. Individual workers validate their own trace again.
+    require_inspect_preflight = any(
+        bool(scenario.get("requires_inspect_trace", True)) for scenario in selected.values()
+    )
+    if require_inspect_preflight:
+        try:
+            inspect_transport = HttpTransport(args.base_url)
+            inspect_status, inspect_data = await inspect_transport.get_json("/api/debug/inspect")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[build-soak] INFRA_FAILURE: inspect preflight failed: {exc}", file=sys.stderr)
+            return 3
+        if inspect_status != 200 or inspect_data.get("enabled") is not True:
+            print(
+                "[build-soak] INFRA_FAILURE: DISCO_INSPECT is not enabled; refusing to run "
+                "without per-conversation model/routing logs.",
+                file=sys.stderr,
+            )
+            return 3
+
+    out_root = Path(args.out)
+    out_root.mkdir(parents=True, exist_ok=True)
+    batch_stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
+    batch_label = requested_scenarios[0] if len(requested_scenarios) == 1 else "scenario_matrix"
+    batch_id = f"batch_{batch_label}_{batch_stamp}"
+    batch_dir = out_root / batch_id
+    batch_dir.mkdir(parents=True, exist_ok=False)
+    started_at = datetime.now(UTC).isoformat()
+
+    try:
+        policy = _policy_from_args(args)
+    except ValueError as exc:
+        print(f"invalid resource policy: {exc}", file=sys.stderr)
+        return 2
+    initial_resources = read_host_resources(disk_path=batch_dir)
+    safe_workers = safe_worker_count(initial_resources, policy)
+    try:
+        resolved_workers = resolve_worker_count(args.parallel, initial_resources, policy)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    resolved_workers = min(resolved_workers, args.iterations)
+    if resolved_workers == 0:
+        print(
+            "[build-soak] INFRA_FAILURE: no worker fits while preserving the configured "
+            f"desktop reserve ({args.memory_reserve_gib:g} GiB RAM, "
+            f"{args.disk_reserve_gib:g} GiB disk).",
+            file=sys.stderr,
+        )
+        return 3
+    requested_label = str(args.parallel)
+    if requested_label != "auto" and int(requested_label) > resolved_workers:
+        print(
+            f"[build-soak] clamped --parallel {requested_label} to {resolved_workers} "
+            "for the current resource headroom."
+        )
+    print(
+        f"[build-soak] {args.iterations} iterations, {resolved_workers} parallel workers "
+        f"(safe now: {safe_workers}); reserving {args.memory_reserve_gib:g} GiB RAM "
+        f"and {args.disk_reserve_gib:g} GiB disk for the desktop."
     )
 
-    worst = 0
-    for i in range(args.iterations):
-        ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-        run_id = f"build_soak_{args.scenario}_{ts}_{i:03d}"
-        classification = await run_once(
-            client,
-            scenario,
-            run_id=run_id,
-            out_root=args.out,
-            model=model,
-            autonomous=autonomous,
-            commit=commit,
-            kernel=args.kernel,
-            timeout_s=args.timeout,
-            hard_cap_s=args.hard_cap,
-        )
+    gate = ResourceGate(
+        policy,
+        disk_path=batch_dir,
+        poll_s=args.resource_poll,
+        wait_timeout_s=args.resource_wait_timeout,
+    )
+    pool = ResourcePool(gate, policy, max_workers=resolved_workers)
+    semaphore = asyncio.Semaphore(resolved_workers)
+
+    async def run_iteration(index: int) -> dict[str, Any]:
+        scenario_id = requested_scenarios[index % len(requested_scenarios)]
+        scenario = selected[scenario_id]
+        autonomous = bool(args.autonomous or scenario.get("autonomous"))
+        require_inspect = bool(scenario.get("requires_inspect_trace", True))
+        run_id = f"build_soak_{scenario_id}_{batch_stamp}_{index:03d}"
+        try:
+            async with semaphore, pool.slot():
+                transport: Transport = HttpTransport(args.base_url)
+                client = DiscoApiClient(
+                    transport,
+                    db_path=db_path,
+                    projects_root=projects_root,
+                    snapshot_wait_s=args.snapshot_wait,
+                )
+                classification = await run_once(
+                    client,
+                    scenario,
+                    run_id=run_id,
+                    out_root=batch_dir,
+                    model=model,
+                    autonomous=autonomous,
+                    commit=commit,
+                    kernel=args.kernel,
+                    timeout_s=args.timeout,
+                    hard_cap_s=args.hard_cap,
+                    require_inspect_trace=require_inspect,
+                )
+        except TimeoutError as exc:
+            classification = _infra_failure_record(
+                batch_dir,
+                run_id,
+                scenario,
+                InfraProbeError(
+                    "HOST_RESOURCE_ADMISSION_TIMEOUT",
+                    {"reason": str(exc), "policy": _policy_dict(policy)},
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 — keep the rest of the soak running
+            classification = _invalid_run_record(
+                batch_dir, run_id, scenario, f"parallel worker error: {type(exc).__name__}: {exc}"
+            )
         status = str(classification.get("status"))
         code = classification.get("code")
         print(
-            f"[{i + 1}/{args.iterations}] {run_id}: {status}"
+            f"[{index + 1}/{args.iterations}] {run_id}: {status}"
             + (f" / {code}" if code else "")
-            + f"  -> {Path(args.out) / run_id}"
+            + f"  -> {batch_dir / run_id}"
         )
-        worst = max(worst, _exit_code(status))
-        if i + 1 < args.iterations:
-            time.sleep(1.0)
-    return worst
+        return _run_batch_item(
+            index=index,
+            run_id=run_id,
+            base=batch_dir,
+            classification=classification,
+        )
+
+    runs = await asyncio.gather(*(run_iteration(i) for i in range(args.iterations)))
+    runs = sorted(runs, key=lambda item: int(item["index"]))
+    status_counts = Counter(str(item.get("status")) for item in runs)
+    failure_counts = Counter(str(item.get("code")) for item in runs if item.get("code"))
+    final_resources = read_host_resources(disk_path=batch_dir)
+    summary = {
+        "schema_version": 1,
+        "batch_id": batch_id,
+        "scenario_ids": requested_scenarios,
+        "scenario_counts": dict(
+            sorted(Counter(str(item.get("scenario_id")) for item in runs).items())
+        ),
+        "surfaces": sorted(
+            {str(scenario.get("surface", "build")) for scenario in selected.values()}
+        ),
+        "commit": commit,
+        "model": model,
+        "started_at": started_at,
+        "finished_at": datetime.now(UTC).isoformat(),
+        "iterations": args.iterations,
+        "parallel": {
+            "requested": requested_label,
+            "resolved": resolved_workers,
+            "safe_at_start": safe_workers,
+        },
+        "resource_policy": _policy_dict(policy),
+        "resources": {
+            "initial": initial_resources.to_dict(),
+            "final": final_resources.to_dict(),
+        },
+        "inspect_required": require_inspect_preflight,
+        "status_counts": dict(sorted(status_counts.items())),
+        "failure_code_counts": dict(sorted(failure_counts.items())),
+        "runs": runs,
+    }
+    summary_path = batch_dir / "batch-summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    print(f"[build-soak] batch report -> {summary_path}")
+    return max((_exit_code(str(item.get("status"))) for item in runs), default=0)
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Headless live-API Build Soak runner (§25).")
-    p.add_argument("--scenario", required=True, help="scenario id from scenarios.yaml")
-    p.add_argument("--iterations", type=int, default=1)
+    p.add_argument(
+        "--scenario",
+        required=True,
+        help="one id, a comma-separated scenario matrix, or 'all' from scenarios.yaml",
+    )
+    p.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="total runs; a scenario matrix is assigned round-robin across them",
+    )
+    p.add_argument(
+        "--parallel",
+        default="auto",
+        help="concurrent workers: 'auto' (default) or a positive integer, clamped to "
+        "live RAM/CPU/disk headroom",
+    )
     p.add_argument("--model", default=None, help="driver model (default $DISCO_SOAK_MODEL)")
     p.add_argument("--out", default=_DEFAULT_OUT, help="output root for run folders")
     p.add_argument("--autonomous", action="store_true", help="headless auto-approve")
@@ -1608,6 +1919,18 @@ def main(argv: list[str] | None = None) -> int:
         "not a product BUILD_DID_NOT_FINISH (Bug 15).",
     )
     p.add_argument("--scenarios", default=str(_SCENARIOS))
+    p.add_argument(
+        "--memory-reserve-gib",
+        type=float,
+        default=32.0,
+        help="RAM kept unavailable to new soak workers for the desktop (default: 32 GiB)",
+    )
+    p.add_argument("--memory-per-worker-gib", type=float, default=3.0)
+    p.add_argument("--disk-reserve-gib", type=float, default=10.0)
+    p.add_argument("--disk-per-worker-gib", type=float, default=0.5)
+    p.add_argument("--cpus-per-worker", type=int, default=1)
+    p.add_argument("--resource-poll", type=float, default=5.0)
+    p.add_argument("--resource-wait-timeout", type=float, default=1800.0)
     args = p.parse_args(argv)
     return asyncio.run(_amain(args))
 

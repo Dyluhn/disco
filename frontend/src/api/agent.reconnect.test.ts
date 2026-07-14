@@ -72,6 +72,38 @@ describe("subscribeLive — reconnect with backoff", () => {
     h.cancel();
   });
 
+  it("reconnects from the highest event actually delivered, not the state watermark", async () => {
+    const cursors: number[] = [];
+    const h = subscribeLive(
+      "conv_cursor",
+      () => {},
+      (cid, lastSeq) => {
+        expect(cid).toBe("conv_cursor");
+        cursors.push(lastSeq);
+        return `ws://test/ws/conversations/${cid}?last_seq=${lastSeq}`;
+      },
+    );
+    await Promise.resolve();
+    const first = MockWS.instances[0];
+    first.open();
+    first.message({
+      type: "state",
+      state: { execution_status: "FINISHED", last_seq: 99 },
+    });
+    first.message({
+      type: "event",
+      event: { id: "e7", kind: "status", source: "system", seq: 7, status: "RUNNING" },
+    });
+    first.close();
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(MockWS.instances).toHaveLength(2);
+    expect(cursors).toEqual([0, 7]);
+    expect(MockWS.instances[1].url).toContain("?last_seq=7");
+    h.cancel();
+  });
+
   it("retries forever, surfaces degraded state after the old retry budget, and drains queued sends on reopen", async () => {
     const frames: { type: string; state?: string }[] = [];
     const h = subscribeLive("conv_x", (f) => frames.push(f as { type: string; state?: string }));

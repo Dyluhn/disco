@@ -184,6 +184,23 @@ def _host_speaks_chat_template_kwargs(base_url: str) -> bool:
     return ip.is_private or ip.is_loopback or ip in ipaddress.ip_network("100.64.0.0/10")
 
 
+def _requires_user_after_tool_result(base_url: str) -> bool:
+    """Whether this compatibility endpoint rejects a trailing ``tool`` turn.
+
+    OpenCode Go currently routes some models through a strict Fireworks chat
+    template which returns HTTP 400 when the request ends immediately after a
+    tool result. The same history succeeds once followed by a user continuation.
+    Keep the shim pinned to that endpoint so conforming OpenAI-compatible hosts
+    retain their byte-identical payloads.
+    """
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(base_url)
+    return (parsed.hostname or "").lower() == "opencode.ai" and parsed.path.rstrip(
+        "/"
+    ).endswith("/zen/go/v1")
+
+
 def _sanitize_tool_name(name: str) -> str:
     """Sanitize tool names for OpenAI boundary (dots are forbidden).
     Strip everything before the last dot and filter to [a-zA-Z0-9_-]."""
@@ -410,6 +427,22 @@ class OpenAIProvider:
         # follows the assistant tool_call that declared it (MiniMax 2013; OpenAI
         # spec). No-op when the render pipeline already produced an adjacent list.
         msgs = _normalize_tool_call_ordering(msgs)
+        # Live reliability runs exposed a deterministic 400/requery pair after
+        # every tool on OpenCode Go: that endpoint's strict template requires a
+        # user turn after the tool result. Previously the generic repair path
+        # appended an alarming "provider rejected" prompt and paid for a second
+        # request. Add the neutral continuation on the first request instead.
+        if (
+            _requires_user_after_tool_result(self._base)
+            and msgs
+            and msgs[-1].get("role") == "tool"
+        ):
+            msgs.append(
+                {
+                    "role": "user",
+                    "content": "Continue from the tool result above.",
+                }
+            )
         # B9: Assistant prefill. Append as a trailing
         # assistant message; compatible servers (llama.cpp, vLLM, Anthropic)
         # will continue from here.

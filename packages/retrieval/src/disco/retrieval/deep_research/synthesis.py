@@ -409,6 +409,34 @@ def _format_passages(passages: list[Passage]) -> str:
     return "\n\n".join(parts)
 
 
+def _grounded_extractive_fallback(passages: list[Passage]) -> str:
+    """Preserve citable evidence when the synthesis model returns no prose.
+
+    This is deliberately extractive: it does not invent a summary or keep
+    spending model calls after the bounded retry. Source text is escaped so it
+    cannot inject markdown/citation syntax; the only live citation marker is the
+    passage id appended by us.
+    """
+
+    blocks = [
+        "The synthesis model returned no usable prose after a bounded retry. "
+        "The gathered evidence is preserved below without added interpretation."
+    ]
+    for passage in passages[:3]:
+        excerpt = " ".join(passage.text.split())
+        if not excerpt:
+            continue
+        if len(excerpt) > 500:
+            excerpt = excerpt[:497].rsplit(" ", 1)[0].rstrip() + " …"
+        title = passage.source_title or passage.source_url
+        # Escape source-controlled markdown, especially bracket pairs that
+        # could masquerade as citations in the report contract.
+        title = re.sub(r"([\\`*_[\]<>])", r"\\\1", title[:120])
+        excerpt = re.sub(r"([\\`*_[\]<>])", r"\\\1", excerpt)
+        blocks.append(f"**Evidence from {title}:**\n\n> {excerpt} [[{passage.id}]]")
+    return "\n\n".join(blocks) if len(blocks) > 1 else ""
+
+
 _Confidence = Literal["high", "mixed", "low"]
 
 
@@ -546,6 +574,7 @@ async def synthesize_section(
     # tracking coherent and makes the leg's identity visible at the router
     # for the entire gather→synth pipeline.
     leg_messages: list[LLMMessage] = [LLMMessage(role="user", content=instruction)]
+    used_extractive_fallback = False
     try:
         resp = await _complete_with_transient_retry(
             router,
@@ -709,13 +738,27 @@ async def synthesize_section(
         # BW-07 (1) — repair malformed/half tables so remark-gfm never sees one.
         markdown = _repair_tables(markdown)
 
-    except Exception as exc:  # noqa: BLE001 — synthesis failure → honest empty
-        return ReportSection(
-            id=section_id,
-            title=sub_result.subq.title,
-            markdown=f"*(Section synthesis failed: {type(exc).__name__})*",
-            confidence="low",
-        )
+    except Exception as exc:  # noqa: BLE001 — preserve gathered evidence below
+        markdown = _grounded_extractive_fallback(passages)
+        used_extractive_fallback = bool(markdown)
+        try:
+            await emit(
+                "synthesize_section_fallback",
+                {
+                    "section": sub_result.subq.title,
+                    "reason": f"exception:{type(exc).__name__}",
+                    "passages_preserved": min(len(passages), 3),
+                },
+            )
+        except Exception:  # noqa: BLE001 — telemetry cannot erase evidence
+            pass
+        if not markdown:
+            return ReportSection(
+                id=section_id,
+                title=sub_result.subq.title,
+                markdown=f"*(Section synthesis failed: {type(exc).__name__})*",
+                confidence="low",
+            )
 
     # EMPTY-SECTION GUARD (final). If the body is STILL empty after the
     # empty-response retry + the truncation/chart/table post-processing (e.g. the
@@ -725,12 +768,26 @@ async def synthesize_section(
     # so an empty markdown shows as a titled card with no content (a false
     # affordance). This says plainly that the section had no usable output.
     if not markdown.strip():
-        return ReportSection(
-            id=section_id,
-            title=sub_result.subq.title,
-            markdown="*(This section could not be generated from the gathered sources.)*",
-            confidence="low",
-        )
+        markdown = _grounded_extractive_fallback(passages)
+        used_extractive_fallback = bool(markdown)
+        try:
+            await emit(
+                "synthesize_section_fallback",
+                {
+                    "section": sub_result.subq.title,
+                    "reason": "empty_after_retry",
+                    "passages_preserved": min(len(passages), 3),
+                },
+            )
+        except Exception:  # noqa: BLE001 — telemetry cannot erase evidence
+            pass
+        if not markdown:
+            return ReportSection(
+                id=section_id,
+                title=sub_result.subq.title,
+                markdown="*(This section could not be generated from the gathered sources.)*",
+                confidence="low",
+            )
 
     # per-claim NLI verification (reuse the existing verifier — same shape
     # as the standard-answer flow, applied to this section's body + this
@@ -738,6 +795,8 @@ async def synthesize_section(
     by_id = {p.id: p for p in passages}
     claims = await asyncio.to_thread(_verify_claims, markdown, by_id, nli)
     confidence, unsupported = _confidence_from_claims(claims)
+    if used_extractive_fallback:
+        confidence = "low"
     disputed_notes = _extract_disputed_notes(markdown)
     # the cited passage ids actually mentioned in the body (regex extract)
     cited_ids = sorted({m for m in re.findall(r"\[\[([\w-]+)\]\]", markdown) if m in by_id})

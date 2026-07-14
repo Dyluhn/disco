@@ -93,6 +93,8 @@ def test_evidence_returns_bundle_when_inspect_on(monkeypatch: object) -> None:
     assert "events" in body, "bundle must include the event log"
     assert "inspect_trace" in body, "bundle must include the inspect trace (may be null)"
     assert "project_manifest" in body, "bundle must include the project manifest (may be null)"
+    assert "runtime" in body, "bundle must include runtime cleanup evidence (may be null)"
+    assert body["runtime"] is None
 
     # The seeded user message must appear in the event list.
     assert isinstance(body["events"], list)

@@ -45,6 +45,7 @@ class EventKind(str, Enum):
     AGENT_ERROR = "agent_error"
     CONDENSATION = "condensation"
     STATUS = "status"
+    WORKSPACE_VERSION = "workspace_version"
     WORKSPACE_RESTORED = "workspace_restored"
     ERROR = "error"  # conversation-level error (distinct from agent_error)
     PLAN = "plan"  # a proposed, structured plan awaiting approval (Build plan-mode)
@@ -584,6 +585,22 @@ class StatusEvent(BaseEvent):
     detail: str | None = None
 
 
+class WorkspaceVersionEvent(BaseEvent):
+    """A durable workspace version finished persisting.
+
+    ``FINISHED`` is appended by the loop before the runtime copies the sandbox
+    workspace into project storage.  Consumers must therefore use this event,
+    rather than the terminal status, as the commit signal for version history.
+    NOT LLMConvertible — this is storage/UI synchronization bookkeeping.
+    """
+
+    kind: Literal[EventKind.WORKSPACE_VERSION] = EventKind.WORKSPACE_VERSION
+    source: EventSource = EventSource.SYSTEM
+    version_seq: int
+    tree_digest: str
+    trigger: str
+
+
 class WorkspaceRestoredEvent(BaseEvent):
     """A user-requested workspace rollback was applied.
 
@@ -1004,6 +1021,7 @@ Event = Annotated[
     | AgentErrorEvent
     | CondensationEvent
     | StatusEvent
+    | WorkspaceVersionEvent
     | WorkspaceRestoredEvent
     | PlanEvent
     | ReportEvent

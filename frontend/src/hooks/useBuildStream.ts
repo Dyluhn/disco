@@ -359,7 +359,11 @@ export function useBuildStream(
 
   const confirm = useCallback(() => handle.current?.send({ type: "confirm" }), []);
   const reject = useCallback(() => handle.current?.send({ type: "reject" }), []);
-  const cancel = useCallback(() => handle.current?.send({ type: "cancel" }), []);
+  // The Build/Agent Stop control promises a resumable, non-destructive pause.
+  // `cancel` takes the loop lock and can lose a race to a long in-flight model
+  // turn; the server's `pause` control is deliberately lock-free and is observed
+  // at the next step boundary. Deep Research keeps its separate `cancel` path.
+  const cancel = useCallback(() => handle.current?.send({ type: "pause" }), []);
   const steer = useCallback((text: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;

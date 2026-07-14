@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -20,6 +21,7 @@ from disco.core import (
     MessageEvent,
     SqliteEventStore,
     StatusEvent,
+    WorkspaceVersionEvent,
 )
 from disco.tools import ProcessSandboxService
 from disco.tools.projects import SnapshotResult, StorageStatus
@@ -61,6 +63,7 @@ class _VersionCutStore:
         self.fail_cut = fail_cut
         self.manifest_writes = 0
         self.cut_triggers: list[str] = []
+        self.next_version = None
 
     def status(self) -> StorageStatus:
         return StorageStatus.OK
@@ -79,7 +82,7 @@ class _VersionCutStore:
         self.cut_triggers.append(trigger)
         if self.fail_cut:
             raise RuntimeError("version store unavailable")
-        return None
+        return self.next_version
 
 
 # ---- snapshot version cuts ---------------------------------------------------
@@ -103,6 +106,30 @@ async def test_maybe_snapshot_cuts_version_after_manifest(monkeypatch, tmp_path)
 
     assert project_store.manifest_writes == 1
     assert project_store.cut_triggers == ["finish"]
+
+
+async def test_maybe_snapshot_emits_commit_after_version_cut(monkeypatch, tmp_path):
+    store = SqliteEventStore(":memory:")
+    rt = _runtime(store)
+    cid = "conv-snapshot-commit"
+    project_store = _VersionCutStore(tmp_path)
+    project_store.next_version = SimpleNamespace(seq=2, tree_digest="tree-2")
+    rt._project_store_now = MagicMock(return_value=project_store)
+    rt._executors[cid] = MagicMock(_sandbox=object())
+
+    async def _snapshot(session, dest):
+        return SnapshotResult(file_count=1, total_bytes=4, paths=["a.txt"])
+
+    monkeypatch.setattr("disco.agent_server.lifecycle.snapshot_workspace", _snapshot)
+
+    await rt._maybe_snapshot(cid, trigger="finish")
+
+    events = await store.get_events(cid)
+    assert len(events) == 1
+    assert isinstance(events[0], WorkspaceVersionEvent)
+    assert events[0].version_seq == 2
+    assert events[0].tree_digest == "tree-2"
+    assert events[0].trigger == "finish"
 
 
 async def test_maybe_snapshot_survives_cut_version_failure(

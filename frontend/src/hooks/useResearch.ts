@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { requestResearch } from "@/api/research";
 import { agentLive } from "@/api/client";
@@ -34,25 +34,59 @@ export function useResearch() {
   // the paperclip) or submit (which mints + reuses one cid). Offline (no
   // VITE_AGENT_BASE) → no create ever fires (fixture mode), exactly as before.
   const [preCid, setPreCid] = useState<string | null>(null);
+  const preCidRef = useRef<string | null>(null);
+  const preCreateFlightRef = useRef<Promise<string> | null>(null);
   const preCreate = useMutation({
     // "agent"-tagged minimal conversation record, no loop/sandbox.
     mutationFn: () => createBuildConversation(null, "agent"),
   });
 
   // W-07: lazily obtain the pre-created cid for the Attach affordance. Returns the
-  // existing preCid, or creates one NOW (same surface as the eager mount path) and
+  // existing preCid, or creates one NOW on the active surface and
   // stores it so the upcoming submit reuses it — routing the upload to THIS
   // (standard search) pipeline. null offline (no upload possible).
   const ensurePreCid = useCallback(async () => {
     if (!agentLive()) return null;
-    if (preCid) return preCid;
-    const cid = await preCreate.mutateAsync();
-    setPreCid(cid);
-    return cid;
+    const existing = preCidRef.current ?? preCid;
+    if (existing) return existing;
+    if (preCreateFlightRef.current) return preCreateFlightRef.current;
+    const flight = preCreate.mutateAsync().then((cid) => {
+      preCidRef.current = cid;
+      setPreCid(cid);
+      return cid;
+    });
+    preCreateFlightRef.current = flight;
+    try {
+      return await flight;
+    } finally {
+      if (preCreateFlightRef.current === flight) preCreateFlightRef.current = null;
+    }
   }, [preCid, preCreate]);
 
+  const submitAction = useMutation({
+    mutationFn: async ({
+      query,
+      opts,
+    }: {
+      query: string;
+      opts?: {
+        model_override?: string | null;
+        think?: boolean;
+        sources?: string[];
+      };
+    }) => {
+      // Coalesce with an attachment create already in flight. Without this,
+      // pressing Enter while the file picker was uploading minted a second cid
+      // and silently ran without the attachment.
+      let cid = preCidRef.current ?? preCid;
+      if (!cid && agentLive()) cid = await ensurePreCid();
+      return requestResearch({ query, ...opts, conversation_id: cid ?? null });
+    },
+    onSuccess: setScope,
+  });
+
   const submit = useCallback(
-    async (
+    (
       query: string,
       opts?: {
         model_override?: string | null;
@@ -66,17 +100,9 @@ export function useResearch() {
       // (on this real submit) so the run's artifacts stay reachable via runCid.
       // Offline → null cid (fixture mode). The minted cid is stored so reScope /
       // runCid keep the run under ONE conversation.
-      let cid = preCid;
-      if (!cid && agentLive()) {
-        cid = await preCreate.mutateAsync();
-        setPreCid(cid);
-      }
-      action.mutate(
-        { query, ...opts, conversation_id: cid ?? null },
-        { onSuccess: setScope },
-      );
+      submitAction.mutate({ query, opts });
     },
-    [action, preCid, preCreate],
+    [submitAction],
   );
 
   const reScope = useCallback(
@@ -92,7 +118,7 @@ export function useResearch() {
 
   return {
     scope,
-    submitting: action.isPending,
+    submitting: submitAction.isPending || action.isPending,
     submit,
     reScope,
     reset: () => setScope(null),
@@ -112,7 +138,7 @@ export function useResearch() {
     // Surface a failed submit/re-scope request (was silent: a failed mutation
     // left the user with an un-disabled button and no message). Distinct from the
     // stream `error` (which covers failures AFTER a run has started).
-    submitError: action.error ?? null,
+    submitError: submitAction.error ?? action.error ?? null,
   };
 }
 

@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from ..auth import current_owner_id, current_session
+from ..report_audio import remove_report_audio_cache
 from ..runtime import (
     ConversationRuntime,
     WorkspaceRestoreConflict,
@@ -244,7 +245,9 @@ def make_conversations_router(
         conversation_id = await require_owned_conversation(request, store, conversation_id)
         _reject_if_imported(store, conversation_id)
 
-        # Gate model_override + assist together under the atomic state-aware check.
+        # Gate model_override + assist + Deep Research compose settings together
+        # under the state-aware pristine check. This lets an upload cid keep its
+        # files while the user changes depth/recency/sources before the first kick.
         # PATCH is a PARTIAL update: a model_override field PRESENT (even as null) is an
         # explicit choice — null on a terminal conversation means "reset to default" and
         # must be APPLIED, not dropped (the #24 silent-ignore). A field ABSENT means leave
@@ -254,7 +257,14 @@ def make_conversations_router(
         # PRE-KICK convenience owned by apply_settings_change, and applying it on the route
         # would mask an explicit terminal reset.
         model_field_set = "model_override" in body.model_fields_set
-        if model_field_set or body.assist is not None:
+        deep_fields = {
+            "depth_tier",
+            "iterative",
+            "recency_window",
+            "sources",
+        }
+        deep_field_set = bool(deep_fields & body.model_fields_set)
+        if model_field_set or body.assist is not None or deep_field_set:
             ok = await runtime.apply_settings_change(
                 conversation_id,
                 model_override=body.model_override,
@@ -266,7 +276,7 @@ def make_conversations_router(
                     status_code=409,
                     detail={
                         "reason": "conversation_not_pristine",
-                        "hint": "model/assist settings are fixed while a run is in flight"
+                        "hint": "compose settings are fixed while a run is in flight"
                         " — change them once the run has finished, errored, stopped, or paused",
                     },
                 )
@@ -275,6 +285,14 @@ def make_conversations_router(
             runtime.set_autonomous(conversation_id, body.autonomous)
         if body.quiet is not None:
             runtime.set_quiet(conversation_id, body.quiet)
+        if "depth_tier" in body.model_fields_set and body.depth_tier is not None:
+            runtime.set_depth(conversation_id, body.depth_tier)
+        if "iterative" in body.model_fields_set and body.iterative is not None:
+            runtime.set_iterative(conversation_id, body.iterative)
+        if "recency_window" in body.model_fields_set:
+            runtime.set_recency(conversation_id, body.recency_window)
+        if "sources" in body.model_fields_set and body.sources is not None:
+            runtime.set_research_sources(conversation_id, body.sources)
         return {"ok": True, "model_override": runtime._model_override.get(conversation_id)}
 
     @router.post("/conversations/{conversation_id}/messages")
@@ -527,6 +545,8 @@ def make_conversations_router(
         if runtime is not None:
             await runtime.forget_conversation(conversation_id)
         deleted = await store.delete_conversation(conversation_id, owner_id=owner_id)
+        if deleted:
+            remove_report_audio_cache(conversation_id)
         return {"id": conversation_id, "deleted": deleted}
 
     return router

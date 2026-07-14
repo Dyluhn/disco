@@ -34,6 +34,7 @@ from .oracles import (
     OutputTruthOracle,
     ProviderLedgerOracle,
     RevisionOracle,
+    ThrashOracle,
     ToolScopeOracle,
 )
 from .oracles.schema import OracleResult
@@ -82,6 +83,7 @@ def classify(
     autonomous: bool | None = None,
     revision_meta: dict[str, Any] | None = None,
     provider_ledger: list[dict[str, Any]] | None = None,
+    inspect_trace: dict[str, Any] | None = None,
     product_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Classify one run from its raw event log (full-event dicts OR DB rows) plus
@@ -134,17 +136,24 @@ def classify(
         results += ToolScopeOracle().check(events, scenario=scenario, tool_scope=tool_scope)
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 5. revision.
+        # 5. model/tool thrash. Cost valves may eventually stop or recover a
+        # repeated bad call; the soak still treats that interaction as broken.
+        results += ThrashOracle().check(
+            events, scenario=scenario, inspect_trace=inspect_trace
+        )
+        first_fail = _first_fail(results)
+    if first_fail is None:
+        # 6. revision.
         results += RevisionOracle().check(events, scenario=scenario, meta=revision_meta)
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 6. output truth.
+        # 7. output truth.
         results += OutputTruthOracle().check(
             events, scenario=scenario, workspace_manifest=workspace_manifest, preview=preview
         )
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 7. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
+        # 8. provider ledger (HARN-1a) — MiniMax-only / no-OpenRouter / zero-calls-after-terminal.
         results += ProviderLedgerOracle().check(
             events,
             scenario=scenario,
@@ -153,7 +162,7 @@ def classify(
         )
         first_fail = _first_fail(results)
     if first_fail is None:
-        # 8. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
+        # 9. browser product-harness oracles (HARN-2). Each SKIPs without its evidence
         # slice, so a headless run (product_evidence is None) is unaffected; a product-
         # harness run enforces the real UI path.
         for _oracle_cls in BROWSER_EVIDENCE_ORACLES:
@@ -162,7 +171,7 @@ def classify(
             if first_fail is not None:
                 break
     if first_fail is None:
-        # 9. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
+        # 10. targeted/manual-edit oracles (P8D). SKIP-safe: each SKIPs without its
         # product_evidence slice, so non-edit runs are unaffected; an edit-harness run
         # enforces targeted-edit + manual-preservation discipline. Producer = P1B-LIVE.
         for _oracle_cls in TARGETED_EDIT_ORACLES:
@@ -257,6 +266,17 @@ def classify_run_folder(
     if ledger_path.is_file():
         provider_ledger = _read_ledger(ledger_path)
 
+    inspect_trace: dict[str, Any] | None = None
+    trace_path = base / "inspect-trace.json"
+    if not trace_path.is_file():
+        trace_path = next(iter(base.rglob("inspect-trace.json")), trace_path)
+    if trace_path.is_file():
+        try:
+            loaded_trace = json.loads(trace_path.read_text(encoding="utf-8"))
+            inspect_trace = loaded_trace if isinstance(loaded_trace, dict) else None
+        except (json.JSONDecodeError, ValueError):
+            inspect_trace = None
+
     # HARN-2: the browser product-harness evidence dossier (a single JSON object).
     # Absent → the browser oracles SKIP (headless run unaffected).
     product_evidence: dict[str, Any] | None = None
@@ -280,6 +300,7 @@ def classify_run_folder(
         evidence_intact=evidence_intact,
         autonomous=manifest.autonomous if manifest else None,
         provider_ledger=provider_ledger,
+        inspect_trace=inspect_trace,
         product_evidence=product_evidence,
     )
     (base / CLASSIFICATION_NAME).write_text(

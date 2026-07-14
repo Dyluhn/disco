@@ -17,6 +17,8 @@ const ELEMENT_MENTION_PICKER_JS = resolve(
   __dirname,
   "../packages/agent-server/src/disco/agent_server/element_mention_picker.js",
 );
+const RELIABILITY_APP_PROXY = process.env.DISCO_VITE_APP_PROXY_TARGET?.trim();
+const RELIABILITY_AGENT_PROXY = process.env.DISCO_VITE_AGENT_PROXY_TARGET?.trim();
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -38,6 +40,29 @@ export default defineConfig({
   },
   server: {
     fs: { allow: [resolve(__dirname, ".."), __dirname] },
+    ...(RELIABILITY_APP_PROXY && RELIABILITY_AGENT_PROXY
+      ? {
+          // Live reliability uses the same single-front-door shape as the
+          // packaged nginx deployment. Browser cookies, CORS, CSRF, HTTP, and
+          // WebSockets therefore exercise one origin even when the local App
+          // and Agent servers listen on separate ports.
+          proxy: {
+            "/svc/app": {
+              target: RELIABILITY_APP_PROXY,
+              changeOrigin: true,
+              headers: { origin: new URL(RELIABILITY_APP_PROXY).origin },
+              rewrite: (path: string) => path.replace(/^\/svc\/app/, ""),
+            },
+            "/svc/agent": {
+              target: RELIABILITY_AGENT_PROXY,
+              changeOrigin: true,
+              ws: true,
+              headers: { origin: new URL(RELIABILITY_AGENT_PROXY).origin },
+              rewrite: (path: string) => path.replace(/^\/svc\/agent/, ""),
+            },
+          },
+        }
+      : {}),
   },
   test: {
     environment: "jsdom",

@@ -510,17 +510,20 @@ class ProcessSandboxService:
         self._instances: dict[str, ProcessSandboxInstance] = {}
 
     async def create(
-        self, spec: SandboxSpec, *, owner_id: str, conversation_id: str
+        self, spec: SandboxSpec | None, *, owner_id: str, conversation_id: str
     ) -> SandboxInstance:
+        # Preserve the lightweight dev/integration convenience accepted by the
+        # process backend: an omitted spec means the ordinary sealed defaults.
+        # Production-valid backends still require their explicit deployment
+        # configuration at the service boundary.
+        spec = spec or SandboxSpec()
         instance_id = f"sbx_{uuid.uuid4().hex}"
         workspace = self._root / instance_id
         workspace.mkdir(parents=True, exist_ok=True)
         relay: CapabilityRelayServer | None = None
         try:
             if spec.host_services:
-                relay = CapabilityRelayServer(
-                    "127.0.0.1", 0, self._cfg.host_service_upstream
-                )
+                relay = CapabilityRelayServer("127.0.0.1", 0, self._cfg.host_service_upstream)
                 serve_in_thread(relay)
             instance = ProcessSandboxInstance(
                 instance_id, owner_id, conversation_id, spec, workspace, relay

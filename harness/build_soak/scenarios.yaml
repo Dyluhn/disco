@@ -25,7 +25,55 @@
 # event-adjudicable plan-discipline invariant — WRITE_TOOL_ATTEMPTED_IN_PLANNING
 # (a mutating action before approval) — is still enforced from the event log.
 
+# Defaults are deep-merged into every scenario by load_scenarios(). Live CLI
+# campaigns also fail closed when the per-conversation inspect trace is missing,
+# so routing/model spans are preserved alongside the durable tool/event stream.
+defaults:
+  requires_inspect_trace: true
+  assertions:
+    thrash:
+      max_identical_action_repeats: 2
+      # One transient failure may recover. Repeating the same normalized tool
+      # error a second time is already model/tool-contract thrash, even if the
+      # model later escapes through a less-safe shell workaround.
+      max_same_tool_error_repeats: 1
+      max_actionless_pauses: 0
+      # Requeries occur before an ActionEvent exists. DISCO_INSPECT records them
+      # as agent.repair spans so repeated unknown-tool guesses or provider 400
+      # repairs can no longer disappear from an otherwise green event stream.
+      max_same_model_repair_repeats: 1
+      max_total_model_repairs: 3
+
 scenarios:
+  # ---- Agent surface: general task + executable proof ---------------------
+  # Uses the same durable loop as Build but a non-web deliverable. The task
+  # cannot pass on a confident chat response: the final workspace must contain
+  # both the promised report and the script whose output the agent was asked to
+  # execute and verify.
+  - id: agent_general_task
+    mode: api
+    surface: agent
+    prompt: >-
+      Complete this hands-on task in the workspace. Create inventory.py containing
+      a function named summarize_inventory that totals the quantities in a small
+      hard-coded inventory, prints exactly 'TOTAL ITEMS: 42', and exits cleanly.
+      Run the script and verify its actual output. Then create task-report.md with
+      the heading exactly 'Agent Task Complete', state that the verified total was
+      42, and briefly list what you did. Finish only after both files exist and the
+      script has been run successfully.
+    assertions:
+      event_chain:
+        require_user_event: true
+        require_plan_before_execution: true
+        require_action_observation_pairs: true
+      workspace:
+        files:
+          - path: "inventory.py"
+            must_contain: ["summarize_inventory", "TOTAL ITEMS: 42"]
+          - path: "task-report.md"
+            must_contain: ["Agent Task Complete", "42"]
+      terminal_status_in: ["FINISHED", "VERIFIED"]
+
   # ---- §15.1 Smoke ---------------------------------------------------------
   - id: static_html_minimal
     mode: api

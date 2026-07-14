@@ -43,10 +43,17 @@ class _FakeMCPCall:
 class _FakeMCPTool:
     """A minimal MCP tool object with name and description."""
 
-    def __init__(self, name: str, description: str = ""):
+    def __init__(self, name: str, description: str = "", input_schema: dict | None = None):
         self.name = name
         self.description = description
-        self.inputSchema = {}
+        if input_schema is None:
+            if name in {"search", "web_search", "brave_search"}:
+                input_schema = {"properties": {"query": {"type": "string"}}}
+            elif name in {"fetch", "web_fetch", "fetch_url", "extract"}:
+                input_schema = {"properties": {"id": {"type": "string"}}}
+            else:
+                input_schema = {"properties": {}}
+        self.inputSchema = input_schema
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +67,9 @@ def test_tool_matches_search_shape():
     assert _tool_matches_search_shape(_FakeMCPTool("brave_search"))
     assert not _tool_matches_search_shape(_FakeMCPTool("echo"))
     assert not _tool_matches_search_shape(_FakeMCPTool("fetch"))
+    assert not _tool_matches_search_shape(
+        _FakeMCPTool("search", input_schema={"properties": {"term": {"type": "string"}}})
+    )
 
 
 def test_tool_matches_fetch_shape():
@@ -70,6 +80,9 @@ def test_tool_matches_fetch_shape():
     assert _tool_matches_fetch_shape(_FakeMCPTool("extract"))
     assert not _tool_matches_fetch_shape(_FakeMCPTool("echo"))
     assert not _tool_matches_fetch_shape(_FakeMCPTool("search"))
+    assert not _tool_matches_fetch_shape(
+        _FakeMCPTool("fetch", input_schema={"properties": {"path": {"type": "string"}}})
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -120,12 +133,22 @@ def test_build_retrieval_providers_returns_protocol_instances():
         {
             "server": "srv",
             "tool_name": "search",
-            "tool": _FakeMCPTool("search", "Search the web"),
+            # Production registration stores the qualified name in ToolDef;
+            # the separate tool_name entry carries the raw MCP name.
+            "tool": _FakeMCPTool(
+                "mcp__srv__search",
+                "Search the web",
+                {"properties": {"query": {"type": "string"}}},
+            ),
         },
         {
             "server": "srv",
             "tool_name": "fetch",
-            "tool": _FakeMCPTool("fetch", "Fetch a URL"),
+            "tool": _FakeMCPTool(
+                "mcp__srv__fetch",
+                "Fetch a URL",
+                {"properties": {"url": {"type": "string"}}},
+            ),
         },
         {
             "server": "srv",
@@ -203,7 +226,10 @@ async def test_extraction_provider_calls_mcp_tool():
     extract_results = {
         "srv/fetch": {
             "content": [
-                {"type": "text", "text": "Full page content here"},
+                {
+                    "type": "text",
+                    "text": "Full page content here with enough substantive source text to cite.",
+                },
             ],
             "isError": False,
         },
@@ -224,6 +250,9 @@ async def test_extraction_provider_calls_mcp_tool():
     assert doc.url == "https://example.com/page"
     assert "Full page content" in doc.content
     assert doc.status == "ok"
+    assert doc.fetched_ok is True
+    assert len(doc.passages) == 1
+    assert doc.passages[0].source_url == "https://example.com/page"
 
 
 @pytest.mark.asyncio
@@ -255,6 +284,26 @@ async def test_search_provider_handles_error_gracefully():
     provider = _MCPRetrievalSearchProvider("srv", "search", failing_call)
     hits = await provider.search("query")
     assert hits == []
+
+
+@pytest.mark.asyncio
+async def test_mcp_error_results_never_become_search_hits_or_citable_content():
+    result = {
+        "content": [{"type": "text", "text": "unknown source"}],
+        "isError": True,
+    }
+    fake_call = _FakeMCPCall({"srv/search": result, "srv/fetch": result})
+
+    search = _MCPRetrievalSearchProvider("srv", "search", fake_call.call)
+    extraction = _MCPRetrievalExtractionProvider("srv", "fetch", fake_call.call)
+
+    assert await search.search("query") == []
+    doc = await extraction.extract("https://example.com/missing")
+    assert doc.fetched_ok is False
+    assert doc.status == "error"
+    assert doc.passages == []
+    assert doc.content == ""
+    assert doc.error == "unknown source"
 
 
 @pytest.mark.asyncio
@@ -358,3 +407,107 @@ async def test_mcp_discovered_url_flows_through_real_engine_to_citation():
     assert any(p.source_url == MCP_URL for p in result.passages)
     # Sanity: it was the production MCP provider that supplied it.
     assert mcp_search.name == "mcp__srv__search"
+
+
+@pytest.mark.asyncio
+async def test_composite_search_does_not_starve_mcp_behind_primary_limit():
+    """A full bundled result page must not push every MCP result beyond the
+    extraction cap; otherwise MCP is called but can never affect citations."""
+    from disco.retrieval.models import SearchHit
+    from disco.tools.mcp.retrieval_tier import CompositeSearchProvider
+
+    class _Provider:
+        def __init__(self, name: str, count: int):
+            self.name = name
+            self.count = count
+
+        async def search(self, query, **kwargs):
+            return [
+                SearchHit(
+                    url=f"https://{self.name}.example/{index}",
+                    title=f"{self.name} {index}",
+                    source_engine=self.name,
+                    rank=index,
+                )
+                for index in range(self.count)
+            ]
+
+    composite = CompositeSearchProvider(_Provider("bundled", 10), [_Provider("mcp", 1)])
+    hits = await composite.search("q", limit=6)
+
+    assert len(hits) == 6
+    assert [hit.source_engine for hit in hits[:3]] == ["bundled", "mcp", "bundled"]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_url_keeps_mcp_affinity_through_real_engine():
+    """A bundled duplicate must not erase the MCP server that can read it."""
+    from disco.retrieval.engine import DefaultRetrievalEngine
+    from disco.retrieval.models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
+    from disco.retrieval.ranking import LexicalReranker
+    from disco.tools.mcp.retrieval_tier import compose_with_mcp
+
+    url = "https://example.com/shared"
+    mcp_results = {
+        "srv/search": {
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "results": [{"title": "Shared", "url": url, "snippet": "MCP"}]
+                }),
+            }],
+            "isError": False,
+        },
+        "srv/fetch": {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "MCP_AFFINITY_PROOF safe method content is substantive enough "
+                    "to become a citable passage in the production chunker."
+                ),
+            }],
+            "isError": False,
+        },
+    }
+    calls = _FakeMCPCall(mcp_results)
+    mcp_search = _MCPRetrievalSearchProvider("srv", "search", calls.call)
+    mcp_extract = _MCPRetrievalExtractionProvider("srv", "fetch", calls.call)
+
+    class _BundledSearch:
+        name = "bundled"
+
+        async def search(self, query, **kwargs):
+            return [SearchHit(url=url, title="Shared", source_engine=self.name)]
+
+    class _BundledExtraction:
+        name = "bundled"
+
+        async def extract(self, target):
+            return ExtractedDoc(
+                url=target,
+                title="Bundled",
+                content="bundled fallback",
+                passages=[Passage(
+                    id="bundled_p0",
+                    source_url=target,
+                    source_title="Bundled",
+                    text="bundled fallback",
+                )],
+            )
+
+        async def extract_many(self, urls):
+            return [await self.extract(target) for target in urls]
+
+    search, extraction = compose_with_mcp(
+        _BundledSearch(),
+        _BundledExtraction(),
+        mcp_searches=[mcp_search],
+        mcp_extractions=[mcp_extract],
+    )
+    result = await DefaultRetrievalEngine(
+        search, extraction, LexicalReranker()
+    ).retrieve(RetrievalRequest(query="safe method", top_k=3))
+
+    assert result.all_hits[0].source_engine == "bundled|mcp__srv__search"
+    assert any("MCP_AFFINITY_PROOF" in passage.text for passage in result.passages)
+    assert ("srv", "fetch", {"id": url}) in calls.calls

@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+import multiprocessing as mp
+import subprocess
+from pathlib import Path
+
+from harness.reliability.matrix import load_matrix
+from harness.reliability.state import (
+    FAIL,
+    INFRA,
+    PASS,
+    empty_state,
+    load_state,
+    promotion_report,
+    record_campaign,
+    source_revision,
+    state_transaction,
+)
+
+MATRIX = Path(__file__).parents[1] / "matrix.yaml"
+
+
+def _result(status: str, units: int, *, device: str | None = None) -> dict:
+    result = {
+        "suite_id": "live-build-shapes",
+        "status": status,
+        "reason": "test",
+        "claims": ["build.api_shapes_live"],
+        "units_passed": units,
+    }
+    if device:
+        result["fresh_device_id"] = device
+    return result
+
+
+def _record(state: dict, campaign: str, revision: str, result: dict) -> None:
+    record_campaign(
+        state,
+        campaign_id=campaign,
+        revision=revision,
+        commit="abc",
+        dirty=False,
+        started_at="start",
+        finished_at="finish",
+        results=[result],
+    )
+
+
+def _record_in_process(path: str, index: int) -> None:
+    with state_transaction(path) as state:
+        _record(state, f"parallel-{index}", "parallel-revision", _result(PASS, 1))
+
+
+def test_passes_accumulate_only_on_same_untainted_revision() -> None:
+    matrix = load_matrix(MATRIX)
+    state = empty_state()
+    _record(state, "c1", "r1", _result(PASS, 100))
+    _record(state, "c2", "r1", _result(PASS, 200))
+    report = promotion_report(
+        state, matrix, revision="r1", claim_ids={"build.api_shapes_live"}
+    )
+    assert report["eligible"] is True
+    assert report["claims"][0]["observed"] == 300
+
+
+def test_one_product_failure_taints_prior_and_later_passes_on_revision() -> None:
+    matrix = load_matrix(MATRIX)
+    state = empty_state()
+    _record(state, "c1", "r1", _result(PASS, 299))
+    _record(state, "c2", "r1", _result(FAIL, 0))
+    _record(state, "c3", "r1", _result(PASS, 300))
+    report = promotion_report(
+        state, matrix, revision="r1", claim_ids={"build.api_shapes_live"}
+    )
+    assert report["tainted"] is True
+    assert report["eligible"] is False
+    assert report["claims"][0]["observed"] == 0
+
+
+def test_infrastructure_failure_does_not_taint_but_never_counts() -> None:
+    matrix = load_matrix(MATRIX)
+    state = empty_state()
+    _record(state, "c1", "r1", _result(PASS, 100))
+    _record(state, "c2", "r1", _result(INFRA, 0))
+    report = promotion_report(
+        state, matrix, revision="r1", claim_ids={"build.api_shapes_live"}
+    )
+    assert report["tainted"] is False
+    assert report["claims"][0]["observed"] == 100
+
+
+def test_new_revision_starts_after_fix_streak_from_zero() -> None:
+    matrix = load_matrix(MATRIX)
+    state = empty_state()
+    _record(state, "c1", "r1", _result(FAIL, 0))
+    _record(state, "c2", "r2", _result(PASS, 100))
+    report = promotion_report(
+        state, matrix, revision="r2", claim_ids={"build.api_shapes_live"}
+    )
+    assert report["tainted"] is False
+    assert report["claims"][0]["observed"] == 100
+
+
+def test_parallel_campaign_processes_do_not_lose_ledger_updates(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    context = mp.get_context("fork")
+    processes = [
+        context.Process(target=_record_in_process, args=(str(state_path), index))
+        for index in range(12)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    state = load_state(state_path)
+    assert len(state["campaign_ids"]) == 12
+    assert len(state["revisions"]["parallel-revision"]["campaigns"]) == 12
+
+
+def test_nested_untracked_file_bytes_change_source_revision(tmp_path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "reliability@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Reliability Test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+
+    nested = tmp_path / "new-package" / "matrix.yaml"
+    nested.parent.mkdir()
+    nested.write_text("target: 1\n", encoding="utf-8")
+    first, _, dirty = source_revision(tmp_path)
+    nested.write_text("target: 300\n", encoding="utf-8")
+    second, _, _ = source_revision(tmp_path)
+
+    assert dirty is True
+    assert first != second

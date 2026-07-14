@@ -66,6 +66,16 @@ function restoredEvent(seq: number): AgentEvent {
   } as AgentEvent;
 }
 
+function versionEvent(seq: number): AgentEvent {
+  return {
+    id: `version-${seq}`,
+    kind: "workspace_version",
+    version_seq: seq,
+    tree_digest: `digest-${seq}`,
+    trigger: "finish",
+  } as AgentEvent;
+}
+
 function statusEvent(status: ConversationStatus): AgentEvent {
   return {
     id: `status-${status}`,
@@ -124,6 +134,22 @@ describe("useWorkspaceVersions", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     rerender({ events: [restoredEvent(4)] });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("refetches when a durable workspace-version commit lands", async () => {
+    fetchMock.mockImplementation(async () => json({ versions: [] }));
+
+    const { rerender } = renderHook(
+      ({ events }) => useWorkspaceVersions("conv_version_commit", events, "FINISHED"),
+      {
+        initialProps: { events: [] as AgentEvent[] },
+        wrapper: makeWrapper(),
+      },
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    rerender({ events: [versionEvent(4)] });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
 

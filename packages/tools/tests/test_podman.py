@@ -175,6 +175,8 @@ class FakeCli:
     def __call__(self, argv, timeout):
         self.calls.append(argv)
         rest = argv[5:]  # after ["podman","--url",url,"exec",name]
+        if rest[0] == "realpath":
+            return (0, f"{rest[-1]}\n".encode(), b"")
         if rest[0] == "python3" and "DISCO_READ_" in rest[2]:
             path = rest[3].rstrip("/") + "/" + rest[4]
             return (
@@ -193,6 +195,31 @@ class FakeCli:
             return (0, ("\n".join(names) + "\n").encode() if names else b"", b"")
         if rest[0] == "mkdir":
             return (0, b"", b"")
+        if rest[0] == "test":
+            return (0, b"", b"") if rest[-1] in self.fs else (1, b"", b"")
+        if rest[0] == "cp":
+            source, target = rest[-2:]
+            if source not in self.fs:
+                return (1, b"", b"missing source")
+            self.fs[target] = self.fs[source]
+            return (0, b"", b"")
+        if rest[0] == "mv":
+            source, target = rest[-2:]
+            if source not in self.fs:
+                return (1, b"", b"missing source")
+            self.fs[target] = self.fs.pop(source)
+            return (0, b"", b"")
+        if rest[0] == "rm":
+            self.fs.pop(rest[-1], None)
+            return (0, b"", b"")
+        if rest[0] == "sha256sum":
+            import hashlib
+
+            path = rest[-1]
+            if path not in self.fs:
+                return (1, b"", b"missing file")
+            digest = hashlib.sha256(self.fs[path]).hexdigest()
+            return (0, f"{digest}  {path}\n".encode(), b"")
         if rest[0] == "stat":
             path = rest[-1]
             return (
@@ -298,7 +325,7 @@ async def test_limits_and_no_env_leak_in_create(monkeypatch):
 async def test_timeout_reported_and_file_round_trip():
     svc, _client, cli = _svc()
     inst = await svc.create(SandboxSpec(), owner_id="o", conversation_id="c")
-    # write (put_archive) -> read/list (CLI), jailed
+    # staged binary-safe write -> read/list (CLI), jailed
     await inst.write_file("sub/a.txt", b"hello")
     assert await inst.read_file("sub/a.txt") == b"hello"
     assert "sub" in await inst.list_dir(".")

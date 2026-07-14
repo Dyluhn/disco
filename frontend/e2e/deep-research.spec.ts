@@ -18,7 +18,7 @@ test.describe("Deep Research → plan → report", () => {
     await input.press("Enter");
 
     // Plan-approval gate, then approve the decomposition.
-    const approve = page.getByRole("button", { name: /approve & build/i });
+    const approve = page.locator('[data-disco-control="approve-plan"]');
     await expect(approve).toBeVisible();
     await approve.click();
 
@@ -39,7 +39,7 @@ test.describe("Deep Research → plan → report", () => {
       "What is the current state of solid-state battery commercialization?",
     );
     await input.press("Enter");
-    await page.getByRole("button", { name: /approve & build/i }).click();
+    await page.locator('[data-disco-control="approve-plan"]').click();
 
     // While the run streams (status=RUNNING) a graceful Stop control is offered.
     // The full Stop→PAUSED→Resume transition races the fixture's fast auto-

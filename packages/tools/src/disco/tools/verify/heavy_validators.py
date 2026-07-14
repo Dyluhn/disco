@@ -14,6 +14,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import zipfile
 
 
 def _missing(tool: str) -> bool:
@@ -25,6 +26,21 @@ def validate_pptx_renders(path: str, *, workdir: str | None = None) -> list[str]
     and lays out, then reuses the cheap PDF checks on the result."""
     if _missing("soffice"):
         return ["soffice unavailable — run this heavy validator on the VM 201 evidence host"]
+    # LibreOffice is deliberately permissive: corrupt/plaintext bytes carrying
+    # a .pptx suffix can be opened as a Writer document and exported with exit
+    # code 0. Prove this is an actual Presentation package before trusting the
+    # render result.
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+            required = {"[Content_Types].xml", "ppt/presentation.xml"}
+            if not required <= names:
+                return ["corrupt pptx: required presentation package parts are missing"]
+            # Reading the central package parts forces CRC/decompression checks.
+            for name in required:
+                archive.read(name)
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        return [f"corrupt pptx: {exc}"]
     work = workdir or tempfile.mkdtemp(prefix="deckrender-")
     proc = subprocess.run(
         ["soffice", "--headless", "--convert-to", "pdf", "--outdir", work, path],
@@ -39,7 +55,13 @@ def validate_pptx_renders(path: str, *, workdir: str | None = None) -> list[str]
         return ["pptx did not render to a pdf (deck does not open)"]
     from disco.tools.verify.artifact_validators import validate_pdf
 
-    return validate_pdf(str(pdf))
+    # A deck made entirely of images/shapes (and even a deliberately blank
+    # template) may have no extractable PDF text. That is valid for PPTX; retain
+    # the structural page/open checks while leaving visual non-blank assertions
+    # to deck-specific fixture tests.
+    return [
+        problem for problem in validate_pdf(str(pdf)) if problem != "pdf has no extractable text"
+    ]
 
 
 def validate_pdf_renders(path: str, *, workdir: str | None = None) -> list[str]:

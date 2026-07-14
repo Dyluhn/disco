@@ -68,6 +68,13 @@ def make_mcp_router(
 
         return {"enabled": True, "servers": servers}
 
+    @router.post("/api/mcp/reload")
+    async def reload_mcp_servers() -> dict:
+        """Apply the latest persisted MCP config/approvals to the live runtime."""
+        if runtime is None:
+            raise HTTPException(status_code=503, detail={"reason": "no_runtime"})
+        return await runtime.reload_mcp_pool()
+
     @router.get("/api/mcp/servers/{name}/status")
     async def get_mcp_server_status(name: str) -> dict:
         """Per-server health/status endpoint for the UI status projection."""

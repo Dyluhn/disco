@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import errno
+import hashlib
 import io
 import ipaddress
 import json
@@ -1079,25 +1080,84 @@ class ContainerInstance:
             target = real_target
             parent = posixpath.dirname(target) or self._ws
             tmp_name = f".disco-tmp-{secrets.token_hex(8)}"
+            upload_name = f"disco-upload-{secrets.token_hex(8)}"
             self._guest_run(["mkdir", "-p", "--", parent])
+            target_was_file = self._guest_run(["test", "-f", target])[0] == 0
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w") as tar:
-                info = tarfile.TarInfo(name=tmp_name)
+                info = tarfile.TarInfo(name=upload_name)
                 info.size = len(data)
                 info.uid = info.gid = self._workspace_uid
                 info.mtime = int(time.time())
                 tar.addfile(info, io.BytesIO(data))
-            if not self._container.put_archive(parent, buf.getvalue()):
-                raise SandboxError(f"atomic_write {path!r} staging failed")
+            # Rootless Podman's Docker-compatible put_archive applies a
+            # container-runtime SELinux label when extracting directly into a
+            # tmpfs volume. The guest can read that file but cannot rename or
+            # unlink it inside the volume, so every file_write strands a
+            # .disco-tmp-* and fails. Extract into the container's own /tmp,
+            # then have a guest process copy into the workspace. That copy gets
+            # the workspace-compatible label; the final mv remains the only
+            # commit and is still atomic on the workspace filesystem.
+            upload_path = posixpath.join("/tmp", upload_name)
             tmp_path = posixpath.join(parent, tmp_name)
-            # -T (--no-target-directory): a TRUE rename/replace. Without it, if `target` is an
-            # existing directory or a symlink-to-directory, `mv` would move tmp INTO it (succeeding
-            # while leaving target unchanged + stranding tmp). -T makes mv replace the target as a
-            # non-directory, or fail (rc!=0) if it is a real dir — which we surface (codex round-4).
-            rc, _ = self._guest_run(["mv", "-fT", "--", tmp_path, target])
-            if rc != 0:
-                self._guest_run(["rm", "-f", "--", tmp_path])
-                raise SandboxError(f"atomic_write {path!r} rename failed (rc={rc})")
+            if not self._container.put_archive("/tmp", buf.getvalue()):
+                raise SandboxError(f"atomic_write {path!r} staging failed")
+            committed = False
+            try:
+                rc, _ = self._guest_run(["cp", "--", upload_path, tmp_path])
+                if rc != 0:
+                    raise SandboxError(f"atomic_write {path!r} guest staging failed (rc={rc})")
+                # -T (--no-target-directory): a TRUE rename/replace. Without it, if `target` is an
+                # existing directory or a symlink-to-directory, `mv` would move tmp INTO it
+                # (succeeding while leaving target unchanged + stranding tmp). -T makes mv replace
+                # the target as a non-directory, or fail (rc!=0) if it is a real dir.
+                rc, _ = self._guest_run(["mv", "-fT", "--", tmp_path, target])
+                if rc != 0:
+                    # Compatibility recovery for files materialized by older
+                    # rootless-Podman builds. Direct put_archive into the tmpfs
+                    # gave those files container_runtime_tmpfs_t; the guest may
+                    # read them but SELinux denies unlink/rename-over. The runtime
+                    # archive API can replace that existing regular file. Verify
+                    # the full digest before reporting success. New writes never
+                    # take this branch because write_file now uses this staged
+                    # path and receives a workspace-compatible label.
+                    if not target_was_file:
+                        raise SandboxError(
+                            f"atomic_write {path!r} rename failed (rc={rc})"
+                        )
+                    fallback = io.BytesIO()
+                    with tarfile.open(fileobj=fallback, mode="w") as tar:
+                        info = tarfile.TarInfo(name=posixpath.basename(target))
+                        info.size = len(data)
+                        info.uid = info.gid = self._workspace_uid
+                        info.mtime = int(time.time())
+                        tar.addfile(info, io.BytesIO(data))
+                    if not self._container.put_archive(parent, fallback.getvalue()):
+                        raise SandboxError(
+                            f"atomic_write {path!r} legacy overwrite failed"
+                        )
+                    digest_rc, digest_out = self._guest_run(
+                        ["sha256sum", "--", target]
+                    )
+                    expected_digest = hashlib.sha256(data).hexdigest()
+                    digest_parts = digest_out.decode("ascii", "replace").split(
+                        maxsplit=1
+                    )
+                    observed_digest = digest_parts[0] if digest_parts else ""
+                    if digest_rc != 0 or observed_digest != expected_digest:
+                        raise SandboxError(
+                            f"atomic_write {path!r} legacy overwrite verification failed"
+                        )
+                    self._guest_run(["rm", "-f", "--", tmp_path])
+                    _LOG.warning(
+                        "atomic_write recovered legacy SELinux-labeled target %s",
+                        target,
+                    )
+                committed = True
+            finally:
+                self._guest_run(["rm", "-f", "--", upload_path])
+                if not committed:
+                    self._guest_run(["rm", "-f", "--", tmp_path])
 
         await self._guarded(_aw)
 
@@ -1196,31 +1256,8 @@ class ContainerInstance:
         return await self._guarded(_test)
 
     async def write_file(self, path: str, data: bytes) -> None:
-        """Write a workspace file via `cp` (put_archive) — binary-safe."""
-        self._alive()
-
-        def _write() -> None:
-            target = self._resolve_guest_path(path)  # lexical + symlink jail (P2)
-            parent = posixpath.dirname(target) or self._ws
-            name = posixpath.basename(target)
-            self._container.exec_run(["mkdir", "-p", "--", parent])
-            buf = io.BytesIO()
-            with tarfile.open(fileobj=buf, mode="w") as tar:
-                info = tarfile.TarInfo(name=name)
-                info.size = len(data)
-                # Own the file as the container's run-user (not root) so it's editable.
-                info.uid = info.gid = self._workspace_uid
-                # [BP-00 root-cause] TarInfo defaults mtime to 0 (epoch 1970), and
-                # put_archive preserves it. Every agent write then lands with an
-                # mtime that NEVER changes, so anything mtime-based lies: HTTP
-                # If-Modified-Since answers 304 forever (the browser re-renders its
-                # first cached copy of an edited file), make/vite see "unchanged".
-                info.mtime = int(time.time())
-                tar.addfile(info, io.BytesIO(data))
-            if not self._container.put_archive(parent, buf.getvalue()):
-                raise SandboxError(f"write_file {path!r} failed")
-
-        await self._guarded(_write)
+        """Binary-safe workspace write through the atomic SELinux-safe path."""
+        await self.atomic_write(path, data)
 
     async def list_dir(self, path: str) -> list[str]:
         """List a workspace dir via `exec ls`."""

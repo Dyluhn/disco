@@ -64,6 +64,8 @@ export function useBuild(
   // submit (which falls through to create.mutate when no preCid exists). The
   // same cid is reused so uploads in the pending session survive the kick.
   const [preCid, setPreCid] = useState<string | null>(null);
+  const preCidRef = useRef<string | null>(null);
+  const preCreateFlightRef = useRef<Promise<string> | null>(null);
   const preCreate = useMutation({
     mutationFn: (opts: { modelOverride: string | null; autonomous: boolean; quiet: boolean }) =>
       createBuildConversation(opts.modelOverride, surface, opts.autonomous, null, opts.quiet),
@@ -176,20 +178,54 @@ export function useBuild(
       ),
   });
 
-  // W-07: lazily obtain the pre-created cid for the Attach affordance so uploads
-  // work BEFORE the user submits (and even before the eager mount-create lands).
-  // Returns the existing preCid or creates one now (default settings, like the
-  // mount path) and stores it so submit() reuses the SAME cid (upload survives).
+  const startPrecreated = useMutation({
+    mutationFn: async ({
+      targetCid,
+      task,
+      settings,
+    }: {
+      targetCid: string | Promise<string>;
+      task: string;
+      settings: {
+        modelOverride: string | null;
+        autonomous: boolean;
+        quiet: boolean;
+        assist: boolean;
+      };
+    }): Promise<BuildSession> => {
+      const cid = await targetCid;
+      await patchConversationSettings(cid, settings);
+      return { cid, task, kick: true };
+    },
+    onSuccess: (nextSession) => {
+      preCidRef.current = null;
+      setPreCid(null);
+      setSession(nextSession);
+    },
+  });
+
+  // W-07: lazily obtain the upload cid. Concurrent callers share one in-flight
+  // create so selecting a file and immediately submitting cannot fork the run.
   const ensurePreCid = useCallback(async () => {
     if (!agentLive()) return null;
-    if (preCid) return preCid;
-    const cid = await preCreate.mutateAsync({
+    const existing = preCidRef.current ?? preCid;
+    if (existing) return existing;
+    if (preCreateFlightRef.current) return preCreateFlightRef.current;
+    const flight = preCreate.mutateAsync({
       modelOverride: null,
       autonomous: false,
       quiet: quietChoice,
+    }).then((cid) => {
+      preCidRef.current = cid;
+      setPreCid(cid);
+      return cid;
     });
-    setPreCid(cid);
-    return cid;
+    preCreateFlightRef.current = flight;
+    try {
+      return await flight;
+    } finally {
+      if (preCreateFlightRef.current === flight) preCreateFlightRef.current = null;
+    }
   }, [preCid, preCreate, quietChoice]);
 
   const submit = useCallback(
@@ -198,18 +234,21 @@ export function useBuild(
       if (!trimmed) return;
       clearFreshMode(surface);
       // G1/DR-4: use pre-created cid if available so uploads survive.
-      if (preCid) {
-        // runthru-v2 ROOT-1: the preCid was created on mount with DEFAULT settings,
-        // so apply the user's CURRENT model pick + autonomous + assist choice to it
-        // BEFORE the kick (the loop caches the model at kick). await so the patch lands.
-        await patchConversationSettings(preCid, {
-          modelOverride: modelId,
-          autonomous: autonomousChoice,
-          quiet: quietChoice,
-          assist: assistChoice,
+      const uploadCid = preCidRef.current ?? preCid ?? preCreateFlightRef.current;
+      if (uploadCid) {
+        // Apply the user's CURRENT model pick + autonomous + assist choice to it
+        // BEFORE the kick. The target may still be the in-flight attachment
+        // create; awaiting it prevents a second conversation from being minted.
+        startPrecreated.mutate({
+          targetCid: uploadCid,
+          task: trimmed,
+          settings: {
+            modelOverride: modelId,
+            autonomous: autonomousChoice,
+            quiet: quietChoice,
+            assist: assistChoice,
+          },
         });
-        setSession({ cid: preCid, task: trimmed, kick: true });
-        setPreCid(null);
         return;
       }
       create.mutate(
@@ -222,7 +261,16 @@ export function useBuild(
         { onSuccess: (cid) => setSession({ cid, task: trimmed, kick: true }) },
       );
     },
-    [create, modelId, autonomousChoice, assistChoice, quietChoice, preCid, surface],
+    [
+      create,
+      startPrecreated,
+      modelId,
+      autonomousChoice,
+      assistChoice,
+      quietChoice,
+      preCid,
+      surface,
+    ],
   );
 
   const kill = useCallback(async () => {
@@ -239,7 +287,7 @@ export function useBuild(
     cid: session?.cid ?? null,
     task: session?.task ?? null,
     resumed: Boolean(resumeCid),
-    submitting: create.isPending,
+    submitting: create.isPending || startPrecreated.isPending,
     modelId,
     setModelId,
     autonomousChoice,
@@ -265,6 +313,6 @@ export function useBuild(
     answer: steer,
     // A failed create (e.g. backend unreachable) was silent — the surface stayed
     // on the empty state with no signal. Expose it so the UI can show an error.
-    submitError: create.error ?? null,
+    submitError: create.error ?? startPrecreated.error ?? null,
   };
 }

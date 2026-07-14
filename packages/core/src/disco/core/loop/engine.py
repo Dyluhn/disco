@@ -53,7 +53,11 @@ from ..llm import (
 from ..state import ConversationState
 from ..store.base import EventStore
 from ..view import Condenser, Summarizer, View
-from ..workflow import WorkflowRun
+from ..workflow import (
+    WorkflowRun,
+    workflow_finish_tool_description,
+    workflow_finish_tool_schema,
+)
 from . import signals, view_render
 from .boundaries import (
     Agent,
@@ -290,7 +294,7 @@ _FORCE_SUBMIT_DIRECTIVE = (
     "<system-reminder>\n"
     "Call the `submit_plan` tool NOW with a NON-EMPTY `steps` array — the plan you last "
     "submitted had no steps, which cannot be executed. Give the concrete change(s) as "
-    "ordered steps, e.g. submit_plan(summary=\"…\", steps=[\"Change every call-to-action "
+    'ordered steps, e.g. submit_plan(summary="…", steps=["Change every call-to-action '
     "button label to 'Get Started'\"]). Even a SINGLE step is enough for a small revision — "
     "one step naming the exact edit is a valid, complete plan. `submit_plan` is the only "
     "available action; do not reply in prose and do not submit an empty steps list.\n"
@@ -334,9 +338,7 @@ def _planning_tool_refusal_message(
             "execution."
         )
     if streak >= _PLANNING_TOOL_REFUSAL_NARROW_AT:
-        detail += (
-            "\nThe next turn will offer only `submit_plan` + `file_read`."
-        )
+        detail += "\nThe next turn will offer only `submit_plan` + `file_read`."
     return f"<system-reminder>\n{detail}\n</system-reminder>"
 
 
@@ -361,9 +363,7 @@ def _read_churn_nudge_message(path: str, count: int) -> str:
 
 
 def _hint_text(text: str) -> str:
-    return " " + " ".join(
-        "".join(ch.lower() if ch.isalnum() else " " for ch in text).split()
-    ) + " "
+    return " " + " ".join("".join(ch.lower() if ch.isalnum() else " " for ch in text).split()) + " "
 
 
 def _has_any_hint(text: str, hints: tuple[str, ...]) -> bool:
@@ -389,6 +389,7 @@ def _design_direction_brief_text(plan: PlanEvent, events: list[Event]) -> str | 
     if _has_any_hint(brief, _DESIGN_DIRECTION_SITE_APP_HINTS):
         return brief
     return None
+
 
 # _EXECUTION_NUDGE moved to loop/finish.py (with the execution-nudge gate).
 
@@ -516,6 +517,21 @@ def _finish_alias_tool_spec(alias: str):
     from ..llm.types import ToolSpec
 
     return ToolSpec(name=alias, description=_FINISH_DESCRIPTION, parameters_schema=_FINISH_SCHEMA)
+
+
+def _workflow_finish_tool_spec(workflow_run: WorkflowRun, *, name: str = "finish"):
+    """Build the finish surface approved for this sealed workflow.
+
+    Unlike the generic Build finish tool this is intentionally not cached: the
+    presence of ``verify`` is part of each workflow definition's sealed scope.
+    """
+    from ..llm.types import ToolSpec
+
+    return ToolSpec(
+        name=name,
+        description=workflow_finish_tool_description(workflow_run.definition),
+        parameters_schema=workflow_finish_tool_schema(workflow_run.definition),
+    )
 
 
 def _remember_tool_spec():
@@ -749,20 +765,19 @@ class AgentLoop:
         self._execution_mode = execution_mode  # the mode an approved plan runs in
         self._plan_nudges = 0  # consecutive nudges while planning (safety cap)
         # Forced-submit recovery for revision re-plans (default ON; kill switch).
-        self._revision_force_submit_enabled = (
-            os.environ.get("DISCO_REVISION_FORCE_SUBMIT", "1").strip().lower()
-            not in ("0", "false", "no", "off")
-        )
+        self._revision_force_submit_enabled = os.environ.get(
+            "DISCO_REVISION_FORCE_SUBMIT", "1"
+        ).strip().lower() not in ("0", "false", "no", "off")
         self._plan_explore_reads = 0  # (B2/B6) consecutive PLANNING reads w/o a plan
         self._execution_nudges = 0  # consecutive "you must act" nudges in execution
         self._browser_verify_refusals = 0  # consecutive browser-verification refusals
         self._identical_plan_revisions = 0  # C8 (T11): consecutive identical-steps
-                                            # propose_plan_update auto-approvals in
-                                            # autonomous mode. Increments when the
-                                            # new plan's steps match the immediately
-                                            # prior plan's; resets on a different
-                                            # (incl. appended) plan. The cap lives
-                                            # at module-level so tests can pin it.
+        # propose_plan_update auto-approvals in
+        # autonomous mode. Increments when the
+        # new plan's steps match the immediately
+        # prior plan's; resets on a different
+        # (incl. appended) plan. The cap lives
+        # at module-level so tests can pin it.
         self._finish_verify_refusals = 0  # consecutive finish-verify failures (cap-3 release)
         self._finish_verify_strips = 0  # malformed verifies auto-stripped (anti-gaming cap)
         self._workflow_output_contract_refusals = 0
@@ -967,7 +982,6 @@ class AgentLoop:
         scope = getattr(self.executor, "_scope", None)
         return getattr(scope, "preset", None) == "workflow_router"
 
-
     # ---- plan-mode helpers (Build) ------------------------------------------
 
     def _effective_mode(self, events: list[Event]) -> OperatingMode:
@@ -1027,9 +1041,7 @@ class AgentLoop:
     def _gate_recitation(
         self, view: View, events: list[Event], *, context_pack_active: bool = False
     ) -> View:
-        return self._recit.gate_recitation(
-            view, events, context_pack_active=context_pack_active
-        )
+        return self._recit.gate_recitation(view, events, context_pack_active=context_pack_active)
 
     def _should_emit_reground(self, events: list[Event]) -> bool:
         return self._recit.should_emit_reground(events)
@@ -1130,9 +1142,7 @@ class AgentLoop:
                     source=EventSource.ENVIRONMENT,
                     message=LLMMessage(
                         role="user",
-                        content=_read_churn_nudge_message(
-                            state.path, state.warning_count
-                        ),
+                        content=_read_churn_nudge_message(state.path, state.warning_count),
                     ),
                     meta={
                         "diagnostic": signals.READ_CHURN_NUDGE_DIAGNOSTIC,
@@ -1176,9 +1186,7 @@ class AgentLoop:
             return Disp.FALLTHROUGH
         if not signals.should_synthesize_finish_after_actionless_pauses(events):
             return Disp.FALLTHROUGH
-        return await self._finish.synthetic_finish_after_actionless_pauses(
-            state, events
-        )
+        return await self._finish.synthetic_finish_after_actionless_pauses(state, events)
 
     async def _route_plan_approval_gate(self, plan: PlanEvent) -> Disp:
         """Route a newly-emitted PlanEvent through the normal approval gate."""
@@ -1187,9 +1195,7 @@ class AgentLoop:
             # exact same events approve_plan() would, so the event log
             # is identical whether a human or the harness approved.
             self.mode = self._execution_mode
-            await self._emit(
-                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-            )
+            await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
             await self._arm_dod_from_plan()
             await self._seed_context_from_plan()  # CXT-6: same as interactive approve_plan
             return Disp.CONTINUE
@@ -1206,11 +1212,7 @@ class AgentLoop:
         if not steps:
             return None
         instruction = signals.current_revision_instruction(events) or ""
-        summary = (
-            signals.latest_prose_plan_summary(events)
-            or instruction[:120]
-            or "Proposed plan"
-        )
+        summary = signals.latest_prose_plan_summary(events) or instruction[:120] or "Proposed plan"
         return PlanEvent(
             summary=summary,
             steps=steps,
@@ -1267,9 +1269,7 @@ class AgentLoop:
                         await self._emit(
                             MessageEvent(
                                 source=EventSource.ENVIRONMENT,
-                                message=LLMMessage(
-                                    role="user", content=_FORCE_SUBMIT_DIRECTIVE
-                                ),
+                                message=LLMMessage(role="user", content=_FORCE_SUBMIT_DIRECTIVE),
                             )
                         )
                         self._plan_nudges = 0
@@ -1326,9 +1326,7 @@ class AgentLoop:
                     await self._emit(
                         MessageEvent(
                             source=EventSource.AGENT,
-                            message=LLMMessage(
-                                role="assistant", content=step.thought
-                            ),
+                            message=LLMMessage(role="assistant", content=step.thought),
                         )
                     )
                     events = await self._events()
@@ -1397,9 +1395,7 @@ class AgentLoop:
                     await self._emit(
                         MessageEvent(
                             source=EventSource.ENVIRONMENT,
-                            message=LLMMessage(
-                                role="user", content=_FORCE_SUBMIT_DIRECTIVE
-                            ),
+                            message=LLMMessage(role="user", content=_FORCE_SUBMIT_DIRECTIVE),
                         )
                     )
                     self._plan_nudges = 0  # fresh runway for the forced-submit step
@@ -1462,9 +1458,7 @@ class AgentLoop:
                         error=_planning_tool_refusal_message(
                             tc.tool_name,
                             streak=refusal_streak,
-                            read_calls_remaining=(
-                                self._driver.force_submit_read_calls_remaining()
-                            ),
+                            read_calls_remaining=(self._driver.force_submit_read_calls_remaining()),
                         ),
                         action_id=action.id,
                         tool_call_id=tc.call_id,
@@ -1811,9 +1805,7 @@ class AgentLoop:
                 if await self._maybe_reenter_planning_for_followup(events):
                     events = await self._events()
 
-                disp = await self._maybe_synthesize_finish_after_actionless_pauses(
-                    state, events
-                )
+                disp = await self._maybe_synthesize_finish_after_actionless_pauses(state, events)
                 if disp is Disp.CONTINUE:
                     continue
                 if disp is Disp.HALT:
@@ -1869,19 +1861,16 @@ class AgentLoop:
                     if await self._meta.handle_serve(step, events) is Disp.HALT:
                         return await self.get_state()
                     continue
-                if (
-                    step.tool_call is not None
-                    and step.tool_call.tool_name in ("skip", "needs_input")
+                if step.tool_call is not None and step.tool_call.tool_name in (
+                    "skip",
+                    "needs_input",
                 ):
                     disp = await self._meta.handle_workflow_control(step, events)
                     if disp is Disp.CONTINUE:
                         continue
                     if disp is Disp.HALT:
                         return await self.get_state()
-                if (
-                    step.tool_call is not None
-                    and step.tool_call.tool_name == "delegate_explore"
-                ):
+                if step.tool_call is not None and step.tool_call.tool_name == "delegate_explore":
                     if await self._meta.handle_delegate_explore(step, events) is Disp.HALT:
                         return await self.get_state()
                     continue
@@ -1892,12 +1881,9 @@ class AgentLoop:
                     # finish signal: normalize the name to "finish" so the host-truth gate
                     # + every downstream reader behaves byte-identically regardless of the
                     # contract-specific name (the gate is name-agnostic; this is defensive).
-                    requested_verification = (
-                        step.requested_verification
-                        or (
-                            self._finish_alias is not None
-                            and step.tool_call.tool_name == self._finish_alias
-                        )
+                    requested_verification = step.requested_verification or (
+                        self._finish_alias is not None
+                        and step.tool_call.tool_name == self._finish_alias
                     )
                     if (
                         step.tool_call.tool_name != "finish"
@@ -1985,20 +1971,14 @@ class AgentLoop:
                 if disp is Disp.CONTINUE:
                     continue
 
-                if (
-                    step.tool_call is not None
-                    and step.tool_call.tool_name == "propose_plan_update"
-                ):
+                if step.tool_call is not None and step.tool_call.tool_name == "propose_plan_update":
                     disp = await self._meta.handle_propose_plan_update(step, events)
                     if disp is Disp.CONTINUE:
                         continue
                     if disp is Disp.HALT:
                         return await self.get_state()
 
-                if (
-                    step.tool_call is not None
-                    and step.tool_call.tool_name == "questions_v2"
-                ):
+                if step.tool_call is not None and step.tool_call.tool_name == "questions_v2":
                     if await self._meta.handle_questions_v2(step, events) is Disp.HALT:
                         return await self.get_state()
 
@@ -2119,12 +2099,8 @@ class AgentLoop:
                 and signals.is_revision_intent(text)
             ):
                 evs = await self._events()
-                if (
-                    not signals.current_blocked_question_landing(evs)
-                    and any(
-                        isinstance(e, StatusEvent) and e.detail == "plan_approved"
-                        for e in evs
-                    )
+                if not signals.current_blocked_question_landing(evs) and any(
+                    isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in evs
                 ):
                     await self._enter_revision_planning(text)
         return await self.get_state()
@@ -2249,8 +2225,7 @@ class AgentLoop:
             # dropped without an explicit rename). Keep the stronger existing bar —
             # the model cannot relax its own acceptance criteria mid-build.
             _LOG.warning(
-                "DoD revision for %s rejected as a weakening; existing acceptance "
-                "bar preserved.",
+                "DoD revision for %s rejected as a weakening; existing acceptance bar preserved.",
                 self.conversation_id,
             )
 
@@ -2263,9 +2238,7 @@ class AgentLoop:
             if state.execution_status != ConversationStatus.AWAITING_PLAN_APPROVAL:
                 return state
             self.mode = self._execution_mode
-            await self._emit(
-                StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved")
-            )
+            await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="plan_approved"))
             await self._arm_dod_from_plan()
             await self._seed_context_from_plan()
         return await self.get_state()
@@ -2545,9 +2518,7 @@ class AgentLoop:
             return False
         # Plan-gated only: a plan must have been approved at some point. Non-build
         # surfaces (Research) never emit plan_approved, so this never fires there.
-        if not any(
-            isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events
-        ):
+        if not any(isinstance(e, StatusEvent) and e.detail == "plan_approved" for e in events):
             return False
         # A reply to the shared blocked lander is the answer to the agent's
         # pending question, not a host-side revision steer. Deliver it in the
@@ -2586,9 +2557,7 @@ class AgentLoop:
         top-of-loop follow-up check, and the mid-step gate — so they cannot diverge."""
         self.mode = OperatingMode.PLANNING
         self._plan_explore_reads = 0  # (B2/B6) fresh planning segment
-        await self._emit(
-            StatusEvent(status=ConversationStatus.RUNNING, detail="planning")
-        )
+        await self._emit(StatusEvent(status=ConversationStatus.RUNNING, detail="planning"))
         await self._planner.emit_replan_framing_if_revision(text)
 
     async def _gate_midstep_steer_replan(self, step: AgentStep) -> Disp:

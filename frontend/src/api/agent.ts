@@ -80,11 +80,8 @@ export async function createBuildConversation(
   return res.conversation_id;
 }
 
-/** runthru-v2 ROOT-1: apply the user's model pick (and autonomous choice) to a
- * PRE-CREATED conversation right before the kick. The build surface pre-creates a
- * cid on mount with defaults, so without this the picker's value was dropped and the
- * run used the default model (local Qwen) instead of what the user chose. The server
- * 409s if the loop already started (the model is fixed once a run begins). */
+/** Apply compose-time settings to a lazily-created upload conversation right
+ * before the first kick. The server 409s once real work has started. */
 export async function patchConversationSettings(
   conversationId: string,
   settings: {
@@ -92,6 +89,10 @@ export async function patchConversationSettings(
     autonomous?: boolean;
     quiet?: boolean;
     assist?: boolean | null;
+    depthTier?: "quick" | "standard_deep" | "exhaustive";
+    iterative?: boolean;
+    recencyWindow?: "month" | "week" | null;
+    sources?: string[];
   },
 ): Promise<void> {
   if (!agentLive()) return;
@@ -100,6 +101,12 @@ export async function patchConversationSettings(
     ...(settings.autonomous !== undefined ? { autonomous: settings.autonomous } : {}),
     ...(settings.quiet !== undefined ? { quiet: settings.quiet } : {}),
     ...(settings.assist !== undefined ? { assist: settings.assist } : {}),
+    ...(settings.depthTier !== undefined ? { depth_tier: settings.depthTier } : {}),
+    ...(settings.iterative !== undefined ? { iterative: settings.iterative } : {}),
+    ...(settings.recencyWindow !== undefined
+      ? { recency_window: settings.recencyWindow }
+      : {}),
+    ...(settings.sources !== undefined ? { sources: settings.sources } : {}),
   });
 }
 
@@ -360,13 +367,37 @@ const _RECONNECT_BACKOFF_CAP_MS = 15000;
 const _STALE_FRAME_TIMEOUT_MS = 45000;
 
 // exported for the reconnect test; not part of the public api (use subscribeConversation)
-export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void): AgentHandle {
+export type ConversationWsUrlFactory = (
+  conversationId: string,
+  lastSeq: number,
+) => string;
+
+const defaultConversationWsUrl: ConversationWsUrlFactory = (
+  conversationId,
+  lastSeq,
+) =>
+  agentWsUrl(
+    `/ws/conversations/${encodeURIComponent(conversationId)}?last_seq=${lastSeq}`,
+  )!;
+
+export function subscribeLive(
+  cid: string,
+  onFrame: (f: WSServerFrame) => void,
+  wsUrlForCursor: ConversationWsUrlFactory = defaultConversationWsUrl,
+): AgentHandle {
   let closed = false;
   let ws: WebSocket | null = null;
   let attempt = 0;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let degraded = false;
+  // The production ASGI stack does not reliably apply the WebSocket route's
+  // Query(default=0) when the parameter is omitted. In that shape it sends the
+  // state snapshot but never drains durable history, leaving reopened runs on
+  // "Resuming…" forever. Always send an explicit cursor. Advance it only after
+  // an event was actually delivered: the state frame's `last_seq` is a server
+  // watermark, not proof this client received every event up to that point.
+  let lastSeq = 0;
   const queue: WSClientFrame[] = [];
 
   const clearWatchdog = () => {
@@ -397,7 +428,7 @@ export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void):
     timer = null;
     await ensureAgentSession();
     if (closed) return;
-    const socket = new WebSocket(agentWsUrl(`/ws/conversations/${cid}`)!);
+    const socket = new WebSocket(wsUrlForCursor(cid, lastSeq));
     ws = socket;
     socket.onopen = () => {
       if (closed || ws !== socket) return;
@@ -414,7 +445,11 @@ export function subscribeLive(cid: string, onFrame: (f: WSServerFrame) => void):
       if (closed || ws !== socket) return;
       armWatchdog(socket);
       try {
-        onFrame(JSON.parse(ev.data) as WSServerFrame);
+        const frame = JSON.parse(ev.data) as WSServerFrame;
+        if (frame.type === "event" && typeof frame.event.seq === "number") {
+          lastSeq = Math.max(lastSeq, frame.event.seq);
+        }
+        onFrame(frame);
       } catch {
         onFrame({ type: "error", error: { detail: "malformed frame from server" } });
       }

@@ -109,6 +109,7 @@ export function ResearchSurface() {
       className="flex min-h-full flex-col pt-section"
       data-research-phase={researchPhase}
       data-stream-state={streamState}
+      data-research-stage={r.stage ?? undefined}
     >
       {!started ? (
         <main className="flex flex-1 flex-col items-center justify-center gap-major px-body pb-[12vh]">

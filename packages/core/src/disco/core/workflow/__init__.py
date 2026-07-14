@@ -38,6 +38,9 @@ from .models import (
     render_workflow_output_path,
     simulate_definition,
     validate_definition,
+    workflow_finish_supports_verify,
+    workflow_finish_tool_description,
+    workflow_finish_tool_schema,
 )
 
 __all__ = [
@@ -74,4 +77,7 @@ __all__ = [
     "render_workflow_output_path",
     "simulate_definition",
     "validate_definition",
+    "workflow_finish_supports_verify",
+    "workflow_finish_tool_description",
+    "workflow_finish_tool_schema",
 ]

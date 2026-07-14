@@ -33,6 +33,7 @@ from typing import Any
 
 import disco.tools.verify.artifact_validators as _av
 import httpx
+from disco.core.auth import CSRF_HEADER, SESSION_COOKIE
 from disco.core.evidence.schema import redact
 from websockets.asyncio.client import connect as _ws_connect  # has py.typed
 
@@ -170,17 +171,67 @@ class AbstractVerifyClient(ABC):
 class HttpVerifyClient(AbstractVerifyClient):
     """Production transport: drives the real app over HTTP and WebSocket."""
 
-    def __init__(self, base_url: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        _transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._origin = self._base_url
+        self._cookies = httpx.Cookies()
+        self._csrf_token = ""
+        self._transport = _transport
+
+    def _client(
+        self, *, timeout: float = 30.0, follow_redirects: bool = False
+    ) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=timeout,
+            follow_redirects=follow_redirects,
+            cookies=self._cookies,
+            headers={"Origin": self._origin},
+            transport=self._transport,
+        )
+
+    async def _ensure_session(self) -> None:
+        if self._csrf_token and self._cookies.get(SESSION_COOKIE):
+            return
+        async with self._client() as hc:
+            session = await hc.get("/api/auth/session")
+            body = session.json() if session.status_code == 200 else {}
+            if not body.get("authenticated"):
+                pairing = await hc.get("/api/auth/pairing-token")
+                pairing.raise_for_status()
+                token = str(pairing.json().get("pairing_token") or "")
+                if not token:
+                    raise RuntimeError("agent-server pairing route returned no token")
+                minted = await hc.post(
+                    "/api/auth/mint",
+                    json={"pairing_token": token},
+                    headers={"Origin": self._origin},
+                )
+                minted.raise_for_status()
+                body = minted.json()
+            self._cookies.update(hc.cookies)
+        self._csrf_token = str(body.get("csrf_token") or "")
+        if not self._csrf_token or not self._cookies.get(SESSION_COOKIE):
+            raise RuntimeError("agent-server pairing did not establish a session")
+
+    async def _mutation_headers(self) -> dict[str, str]:
+        await self._ensure_session()
+        return {CSRF_HEADER: self._csrf_token}
 
     async def create_conversation(
         self, surface: str, model_override: str | None, *, appkit_mode: bool = False
     ) -> str:
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+        headers = await self._mutation_headers()
+        async with self._client() as hc:
             body: dict[str, Any] = {"surface": surface, "model_override": model_override}
             if appkit_mode:
                 body["appkit_mode"] = True
-            resp = await hc.post("/conversations", json=body)
+            resp = await hc.post("/conversations", json=body, headers=headers)
             resp.raise_for_status()
             return str(resp.json()["conversation_id"])
 
@@ -195,6 +246,7 @@ class HttpVerifyClient(AbstractVerifyClient):
         auto_answer: str | None = None,
         send_build_brief: bool = False,
     ) -> None:
+        await self._ensure_session()
         ws_base = (
             self._base_url.replace("http://", "ws://").replace("https://", "wss://")
         )
@@ -202,8 +254,15 @@ class HttpVerifyClient(AbstractVerifyClient):
         deadline = time.monotonic() + timeout_s
         answers = 0
         sent_cmds = False
+        session_cookie = self._cookies.get(SESSION_COOKIE)
+        if not session_cookie:
+            raise RuntimeError("agent-server WebSocket has no authenticated session cookie")
         try:
-            async with _ws_connect(ws_url) as ws:
+            async with _ws_connect(
+                ws_url,
+                origin=self._origin,
+                additional_headers={"Cookie": f"{SESSION_COOKIE}={session_cookie}"},
+            ) as ws:
                 first_frame: dict[str, Any] = {"type": "send_message", "content": prompt}
                 if send_build_brief:
                     # EPIC M: presence signals the Build first-send. The server RECOMPUTES
@@ -257,11 +316,12 @@ class HttpVerifyClient(AbstractVerifyClient):
 
     async def export_report(self, cid: str, fmt: str) -> tuple[int, bytes] | None:
         try:
-            async with httpx.AsyncClient(
-                base_url=self._base_url, timeout=60.0, follow_redirects=True
-            ) as hc:
+            headers = await self._mutation_headers()
+            async with self._client(timeout=60.0, follow_redirects=True) as hc:
                 resp = await hc.post(
-                    f"/conversations/{cid}/report/export", params={"format": fmt}
+                    f"/api/conversations/{cid}/report/export",
+                    params={"fmt": fmt},
+                    headers=headers,
                 )
                 return resp.status_code, resp.content
         except Exception as exc:  # noqa: BLE001 — unreachable → report, don't crash
@@ -270,9 +330,11 @@ class HttpVerifyClient(AbstractVerifyClient):
 
     async def fire_schedule_now(self, cid: str, schedule_id: str) -> bool:
         try:
-            async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+            headers = await self._mutation_headers()
+            async with self._client() as hc:
                 resp = await hc.post(
-                    f"/conversations/{cid}/schedules/{schedule_id}/fire-now"
+                    f"/conversations/{cid}/schedules/{schedule_id}/fire-now",
+                    headers=headers,
                 )
                 return 200 <= resp.status_code < 300
         except Exception as exc:  # noqa: BLE001
@@ -285,8 +347,9 @@ class HttpVerifyClient(AbstractVerifyClient):
         *,
         timeout_s: float,
     ) -> dict[str, Any]:
+        await self._ensure_session()
         deadline = time.monotonic() + timeout_s
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+        async with self._client() as hc:
             while True:
                 resp = await hc.get(f"/conversations/{cid}/state")
                 resp.raise_for_status()
@@ -303,9 +366,10 @@ class HttpVerifyClient(AbstractVerifyClient):
                 await asyncio.sleep(_POLL_INTERVAL)
 
     async def get_events(self, cid: str) -> list[dict[str, Any]]:
+        await self._ensure_session()
         all_events: list[dict[str, Any]] = []
         after_seq: int | None = None
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+        async with self._client() as hc:
             while True:
                 params: dict[str, Any] = {"limit": 200}
                 if after_seq is not None:
@@ -322,14 +386,16 @@ class HttpVerifyClient(AbstractVerifyClient):
         return all_events
 
     async def get_state(self, cid: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+        await self._ensure_session()
+        async with self._client() as hc:
             resp = await hc.get(f"/conversations/{cid}/state")
             resp.raise_for_status()
             result: dict[str, Any] = resp.json()
             return result
 
     async def get_trace(self, cid: str) -> dict[str, Any] | None:
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+        await self._ensure_session()
+        async with self._client() as hc:
             resp = await hc.get(f"/api/debug/trace/{cid}")
             if resp.status_code == 200:
                 result: dict[str, Any] = resp.json()
@@ -337,7 +403,8 @@ class HttpVerifyClient(AbstractVerifyClient):
             return None
 
     async def get_manifest(self, cid: str) -> dict[str, Any] | None:
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=30.0) as hc:
+        await self._ensure_session()
+        async with self._client() as hc:
             resp = await hc.get(f"/api/projects/{cid}/manifest")
             if resp.status_code == 200:
                 result: dict[str, Any] = resp.json()
@@ -345,7 +412,8 @@ class HttpVerifyClient(AbstractVerifyClient):
             return None
 
     async def download_artifact(self, cid: str, path: str) -> bytes | None:
-        async with httpx.AsyncClient(base_url=self._base_url, timeout=60.0) as hc:
+        await self._ensure_session()
+        async with self._client(timeout=60.0) as hc:
             resp = await hc.get(f"/conversations/{cid}/artifacts/{path}")
             if resp.status_code == 200:
                 return resp.content
@@ -362,9 +430,8 @@ class HttpVerifyClient(AbstractVerifyClient):
 
     async def fetch_preview(self, cid: str) -> tuple[int, bytes] | None:
         try:
-            async with httpx.AsyncClient(
-                base_url=self._base_url, timeout=30.0, follow_redirects=True
-            ) as hc:
+            await self._ensure_session()
+            async with self._client(follow_redirects=True) as hc:
                 resp = await hc.get(f"/conversations/{cid}/preview-app/")
                 return resp.status_code, resp.content
         except Exception as exc:  # noqa: BLE001 — unreachable → report, don't crash

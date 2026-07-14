@@ -709,10 +709,15 @@ function AudioSection({
   // Radix Dialog handles open/close via the `open` prop; unmounting it would
   // lose any open-animation state and break the dialog after first generation.
   return (
-    // Gap #46: data-tts-state reflects the TTS lifecycle (idle → generating →
-    // done | unavailable). `display:contents` so the marker carries the attr
-    // without perturbing the flex layout of the action row.
-    <div className="contents" data-tts-state={audio.status}>
+    // Gap #46: keep both lifecycle and the live server stage on one stable
+    // marker. The visible progress row is intentionally transient, so putting
+    // `data-tts-stage` only on that child made external observers lose the
+    // stage as soon as the row was replaced by the player.
+    <div
+      className="contents"
+      data-tts-state={audio.status}
+      data-tts-stage={audio.status === "generating" ? audio.progress?.stage ?? "" : ""}
+    >
       <AudioModeDialog
         open={modeOpen}
         onOpenChange={onModeOpenChange}

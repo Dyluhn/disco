@@ -30,6 +30,7 @@ import inspect
 import logging
 import os
 import re
+import shutil
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -153,6 +154,16 @@ def report_audio_cache_dir() -> Path:
     root = _default_cache_dir()
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def remove_report_audio_cache(conversation_id: str) -> None:
+    """Remove one conversation's generated audio without permitting traversal."""
+
+    root = report_audio_cache_dir().resolve()
+    target = (root / conversation_id).resolve()
+    if target.parent != root:
+        raise ValueError("conversation id does not resolve to one audio-cache directory")
+    shutil.rmtree(target, ignore_errors=True)
 
 
 # ---- C1: provider-agnostic normalizer for TTS -------------------------------
@@ -604,5 +615,6 @@ __all__ = [
     "_normalize_for_tts",
     "generate_report_audio",
     "report_audio_cache_dir",
+    "remove_report_audio_cache",
     "report_to_overview_text",
 ]

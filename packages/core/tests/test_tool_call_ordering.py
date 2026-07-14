@@ -134,3 +134,27 @@ def test_payload_wires_the_normalizer() -> None:
     assert wire[ai].get("tool_calls"), "assistant tool_calls preserved"
     assert roles[ai + 1] == "tool"
     assert wire[ai + 1]["tool_call_id"] == "a1"
+
+
+def test_opencode_go_adds_neutral_user_continuation_after_tool_result() -> None:
+    req = CompletionRequest(
+        profile=CapabilityProfile(role=ModelRole.AGENT_DRIVER),
+        messages=[
+            LLMMessage(role="user", content="q"),
+            LLMMessage(
+                role="assistant",
+                content="",
+                tool_calls=[{"id": "a1", "name": "do_thing", "arguments": {}}],
+            ),
+            LLMMessage(role="tool", content="result-body", tool_call_id="a1"),
+        ],
+    )
+
+    go = OpenAIProvider("https://opencode.ai/zen/go/v1", name="opencode-go")
+    go_wire = go._payload(req, "deepseek-v4-flash", stream=False)["messages"]
+    assert [message["role"] for message in go_wire[-2:]] == ["tool", "user"]
+    assert go_wire[-1]["content"] == "Continue from the tool result above."
+
+    conforming = OpenAIProvider("https://api.openai.com/v1", name="openai")
+    conforming_wire = conforming._payload(req, "m1", stream=False)["messages"]
+    assert conforming_wire[-1]["role"] == "tool"

@@ -11,23 +11,25 @@ export interface StreamState {
   streamingBlockId: string | null; // the block tokens are currently filling
   answer: GroundedAnswer | null; // the authoritative final answer
   error: string | null;
+  stage: string | null; // non-terminal backend progress, e.g. reformulating
 }
 
-const initial: StreamState = {
+export const initialResearchStreamState: StreamState = {
   phase: "idle",
   blocks: [],
   partial: {},
   streamingBlockId: null,
   answer: null,
   error: null,
+  stage: null,
 };
 
 type Action = { type: "reset" } | { type: "stop" } | { type: "frame"; frame: StreamFrame };
 
-function reducer(state: StreamState, action: Action): StreamState {
+export function researchStreamReducer(state: StreamState, action: Action): StreamState {
   switch (action.type) {
     case "reset":
-      return { ...initial, phase: "running" };
+      return { ...initialResearchStreamState, phase: "running" };
     case "stop":
       return { ...state, phase: "finished" };
     case "frame": {
@@ -35,6 +37,8 @@ function reducer(state: StreamState, action: Action): StreamState {
       switch (f.type) {
         case "state":
           return { ...state, phase: f.status };
+        case "phase":
+          return { ...state, phase: "running", stage: f.phase };
         case "token":
           // Ephemeral typewriter text for the in-flight block only.
           return {
@@ -55,24 +59,40 @@ function reducer(state: StreamState, action: Action): StreamState {
         }
         case "final":
           // Reconcile entirely to the authoritative answer; tokens discarded.
+          if (!f.answer || !Array.isArray(f.answer.blocks)) {
+            return {
+              ...state,
+              phase: "error",
+              error: "research final frame is missing its structured blocks",
+              streamingBlockId: null,
+            };
+          }
           return {
             ...state,
             answer: f.answer,
             blocks: f.answer.blocks,
             partial: {},
             streamingBlockId: null,
+            stage: null,
           };
         case "error":
           return { ...state, phase: "error", error: f.message };
+        default:
+          // The wire can gain advisory progress frames before this frontend is
+          // upgraded. Preserve the last valid state instead of letting a reducer
+          // fall-through return undefined and crash the entire Search surface.
+          return state;
       }
     }
+    default:
+      return state;
   }
 }
 
 /** Subscribe to a research run for `scope`; null = idle. Manages token/block/
  * final reconciliation so the UI never rests in a token-only state. */
 export function useResearchStream(scope: ReScope | null): StreamState & { stop: () => void } {
-  const [state, dispatch] = useReducer(reducer, initial);
+  const [state, dispatch] = useReducer(researchStreamReducer, initialResearchStreamState);
   const handle = useRef<StreamHandle | null>(null);
 
   useEffect(() => {

@@ -1,10 +1,10 @@
 """AppKit EPIC N — the primitive registry + the DIRECTORY primitive.
 
 Proves:
-  * the generator is now PRIMITIVE-PARAMETRIZED via a registry, yet lead-gen output
-    is BYTE-IDENTICAL — an unrecognized app_kind falls back to lead-gen, and a
-    lead_gen spec lowers to the same tree the dispatcher and the lead-gen primitive
-    produce;
+  * the generator is now PRIMITIVE-PARAMETRIZED via a registry; an unrecognized
+    app_kind uses the same lead-gen code path while its spec-derived deployment
+    namespace changes deterministically, and an explicit lead_gen spec lowers to
+    the exact same tree through the dispatcher and primitive;
   * the DIRECTORY primitive lowers DETERMINISTICALLY to a static multi-route site
     that is design_lint-CLEAN for every recipe, has NO server data plane (no
     /api/leads route, no D1 binding), a route-aware App shell, and a searchable
@@ -14,10 +14,10 @@ Proves:
 
 from __future__ import annotations
 
-import pytest
-
 import hashlib
 import json
+
+import pytest
 
 from disco.core.appkit.spec import AppSpec
 from disco.core.appkit import (
@@ -84,26 +84,26 @@ def test_lead_gen_dispatch_is_byte_identical_to_primitive():
     assert via_dispatch == via_primitive
 
 
-@pytest.mark.xfail(
-    reason="stale upstream at nightly HEAD b6cc4a1a: app_kind feeds the sha-namespaced "
-    "resource names, so package.json/wrangler.toml/OWNER_GUIDE.md legitimately differ; "
-    "fails identically in disco-nightly under the same interpreter — revisit in B2",
-    strict=True,
-)
-def test_unknown_app_kind_lowers_as_lead_gen_byte_identical():
+def test_unknown_app_kind_uses_lead_gen_with_namespaced_metadata_changes_only():
     recipe = get_recipe("editorial-ledger")
     design = recipe.to_design_spec()
     app = ensure_lead_entity(default_lead_gen_app_spec("Acme Studio", recipe))
     lead_tree = generate(app, design)
-    # Re-tag the SAME spec with an unrecognized app_kind: it must still lower to the
-    # lead-gen tree, modulo the one byte the app_kind feeds (the manifest digest).
+    # Re-tag the SAME spec with an unrecognized app_kind. The primitive still
+    # resolves to lead-gen, while spec-hashed deployment names must change to
+    # avoid colliding with a distinct input spec.
     bumped = AppSpec.model_validate({**app.model_dump(mode="json"), "app_kind": "totally_unknown"})
     other = generate(bumped, design)
     shared = set(lead_tree) & set(other)
-    # Every file except the spec-digest manifest is byte-identical (app_kind only
-    # changes the manifest's spec hash, never the lead-gen code paths).
+    # Only spec-derived deployment metadata changes. Application code and the
+    # generated lead form remain byte-identical, proving the fallback primitive.
     differing = [p for p in sorted(shared) if lead_tree[p] != other[p]]
-    assert differing == ["src/generated/manifest.ts"], differing
+    assert differing == [
+        "OWNER_GUIDE.md",
+        "package.json",
+        "src/generated/manifest.ts",
+        "wrangler.toml",
+    ], differing
     assert set(lead_tree) == set(other)
 
 

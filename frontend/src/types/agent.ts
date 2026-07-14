@@ -90,6 +90,12 @@ export interface StatusEvent extends EventBase {
   status: ConversationStatus;
   detail?: string | null;
 }
+export interface WorkspaceVersionEvent extends EventBase {
+  kind: "workspace_version";
+  version_seq: number;
+  tree_digest: string;
+  trigger: string;
+}
 export interface WorkspaceRestoredEvent extends EventBase {
   kind: "workspace_restored";
   version_seq: number;
@@ -300,6 +306,7 @@ export type AgentEvent =
   | AgentErrorEvent
   | CondensationEvent
   | StatusEvent
+  | WorkspaceVersionEvent
   | WorkspaceRestoredEvent
   | PlanEvent
   | ReportEvent
@@ -389,6 +396,7 @@ export type WSClientFrame =
   | { type: "approve_plan" } // approve the pending plan → start building
   | { type: "request_plan"; content: string } // (re-)enter plan mode with an instruction
   | { type: "pick_alternative"; option_id: string } // structured recovery: pick a proposed alternative
+  | { type: "pause" } // cooperative Build/Agent stop at the next step boundary; resumable
   | { type: "cancel" }
   | { type: "resume" } // continue a stopped/incomplete run (explicit, never on open)
   | { type: "ping" }

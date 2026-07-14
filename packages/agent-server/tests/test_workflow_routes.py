@@ -113,9 +113,7 @@ def _quiet_startup(runtime: ConversationRuntime) -> None:
     rt._close_mcp_pool = mock.AsyncMock()
 
 
-def _runtime_for_project_root(
-    project_root: Path | str, config_path: Path
-) -> ConversationRuntime:
+def _runtime_for_project_root(project_root: Path | str, config_path: Path) -> ConversationRuntime:
     store = SqliteEventStore(":memory:")
     cfg_store = ConfigStore(config_path)
     cfg_store.save_projects(ProjectStorageSettings(projects_root=str(project_root)))
@@ -188,6 +186,12 @@ async def test_workflow_draft_list_and_approve_records_surface_digest(
             tool["name"] for tool in listed_workflow["compiled_surface"]["tool_definitions"]
         }
         assert {"file_read", "finish", "skip", "needs_input"} <= rendered_tools
+        finish_surface = next(
+            tool
+            for tool in listed_workflow["compiled_surface"]["tool_definitions"]
+            if tool["name"] == "finish"
+        )
+        assert "verify" not in finish_surface["parameters_schema"]["properties"]
 
         approved = await client.post(
             "/api/workflows/wf_route_ok/approve",
@@ -204,6 +208,30 @@ async def test_workflow_draft_list_and_approve_records_surface_digest(
     assert stored.enabled is True
     assert stored.approval is not None
     assert stored.approval.surface_shown_digest == surface_digest
+
+
+async def test_workflow_review_advertises_verify_only_with_explicit_shell(
+    tmp_path: Path,
+) -> None:
+    app = _app(tmp_path)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        draft = await client.post(
+            "/api/workflows/draft",
+            json={
+                "instance_id": "wf_route_shell",
+                "definition": _definition(tools=["file_read", "shell"]),
+                "params": {"query": "smoke"},
+            },
+        )
+
+    assert draft.status_code == 200
+    finish_surface = next(
+        tool
+        for tool in draft.json()["workflow"]["compiled_surface"]["tool_definitions"]
+        if tool["name"] == "finish"
+    )
+    assert "verify" in finish_surface["parameters_schema"]["properties"]
 
 
 async def test_workflow_authoring_context_lists_pickable_inventory(tmp_path: Path) -> None:
@@ -363,9 +391,7 @@ async def test_workflow_draft_from_description_strips_think_spans(
     assert response.status_code == 200
     body = response.json()
     assert body["summary"] == "Reads a query and writes a markdown workflow brief."
-    assert JsonDirWorkflowStore(tmp_path).get_instance(
-        body["workflow"]["instance_id"]
-    ) is not None
+    assert JsonDirWorkflowStore(tmp_path).get_instance(body["workflow"]["instance_id"]) is not None
 
 
 async def test_workflow_draft_from_description_rejects_blank_description(
@@ -443,8 +469,7 @@ async def test_workflow_author_returns_error_findings_without_approving(
     workflow = response.json()["workflow"]
     assert workflow["enabled"] is False
     assert any(
-        finding["code"] == "unknown_builtin_tool"
-        for finding in workflow["validation_findings"]
+        finding["code"] == "unknown_builtin_tool" for finding in workflow["validation_findings"]
     )
     assert any(
         finding["code"] == "simulation_scope_compile_failed"
@@ -467,8 +492,7 @@ async def test_workflow_approve_refuses_error_findings(tmp_path: Path) -> None:
         assert draft.status_code == 200
         workflow = draft.json()["workflow"]
         assert any(
-            finding["code"] == "unknown_builtin_tool"
-            for finding in workflow["validation_findings"]
+            finding["code"] == "unknown_builtin_tool" for finding in workflow["validation_findings"]
         )
 
         approved = await client.post(
@@ -571,8 +595,6 @@ async def test_workflow_run_fires_approved_instance(tmp_path: Path) -> None:
         assert runtime.created_spec is not None
         assert runtime.created_spec.instance_id == "wf_route_run"
         assert runtime.created_spec.enabled is False
-        assert not (
-            tmp_path / "workflow_schedules" / "schedules" / "wfsched_route.json"
-        ).exists()
+        assert not (tmp_path / "workflow_schedules" / "schedules" / "wfsched_route.json").exists()
     finally:
         await runtime.aclose()

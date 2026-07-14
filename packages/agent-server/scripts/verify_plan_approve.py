@@ -35,6 +35,7 @@ from disco.core import (
     SqliteEventStore,
     StatusEvent,
 )
+from disco.core.env import disco_env
 from disco.core.llm.config import default_config
 from disco.tools.sandbox import LocalSandboxService, SandboxConfig, SandboxSpec
 

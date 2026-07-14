@@ -13,6 +13,14 @@ function latestWorkspaceRestoreKey(events: AgentEvent[]): string | null {
   return null;
 }
 
+function latestWorkspaceVersionKey(events: AgentEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind === "workspace_version") return `${e.id}:${e.version_seq}`;
+  }
+  return null;
+}
+
 function latestTerminalStatusKey(
   events: AgentEvent[],
   status?: ConversationStatus,
@@ -38,30 +46,48 @@ export function useWorkspaceVersions(
   });
 
   const restoreKey = useMemo(() => latestWorkspaceRestoreKey(events), [events]);
+  const versionKey = useMemo(() => latestWorkspaceVersionKey(events), [events]);
   const terminalKey = useMemo(
     () => latestTerminalStatusKey(events, status),
     [events, status],
   );
-  const previous = useRef<{ cid: string | null; restore: string | null; terminal: string | null }>({
+  const previous = useRef<{
+    cid: string | null;
+    restore: string | null;
+    version: string | null;
+    terminal: string | null;
+  }>({
     cid: conversationId,
     restore: restoreKey,
+    version: versionKey,
     terminal: terminalKey,
   });
 
   useEffect(() => {
     if (!conversationId) {
-      previous.current = { cid: conversationId, restore: restoreKey, terminal: terminalKey };
+      previous.current = {
+        cid: conversationId,
+        restore: restoreKey,
+        version: versionKey,
+        terminal: terminalKey,
+      };
       return;
     }
     const prev = previous.current;
     const cidChanged = prev.cid !== conversationId;
     const restoreChanged = restoreKey !== null && restoreKey !== prev.restore;
+    const versionChanged = versionKey !== null && versionKey !== prev.version;
     const terminalChanged = terminalKey !== null && terminalKey !== prev.terminal;
-    previous.current = { cid: conversationId, restore: restoreKey, terminal: terminalKey };
-    if (!cidChanged && (restoreChanged || terminalChanged)) {
+    previous.current = {
+      cid: conversationId,
+      restore: restoreKey,
+      version: versionKey,
+      terminal: terminalKey,
+    };
+    if (!cidChanged && (restoreChanged || versionChanged || terminalChanged)) {
       void query.refetch();
     }
-  }, [conversationId, query, restoreKey, terminalKey]);
+  }, [conversationId, query, restoreKey, terminalKey, versionKey]);
 
   return {
     versions: query.data ?? [],

@@ -23,7 +23,7 @@ import {
   exportReport as exportReportApi,
   type ReportExportFmt,
 } from "@/api/deepResearch";
-import { killConversation } from "@/api/agent";
+import { killConversation, patchConversationSettings } from "@/api/agent";
 import { agentLive } from "@/api/client";
 import { markConversationKilled } from "@/lib/sessionResume";
 import type { MessageEvent } from "@/types/agent";
@@ -61,80 +61,15 @@ export function useDeepResearch(
   // synchronous (client-side blob) so it never sets this.
   const [exportPending, setExportPending] = useState<ReportExportFmt | null>(null);
 
-  // G1/DR-4: pre-created cid for the empty state so UploadComposer can render
-  // before the user submits their first query. Created eagerly on mount
-  // (and re-created when depth/recency change so the run's settings match
-  // what was set when the user typed their query). The preCid is passed
-  // to submit() which uses it as the existing cid rather than creating a new
-  // one — so any uploaded files are already in the right conversation.
-  // Resume path: no pre-create (we have the server's cid already).
+  // G1/DR-4: upload cid for the empty state. Creation is LAZY: merely visiting
+  // the composer must not persist an empty History row. The first attachment
+  // calls ensurePreCid; a plain submit creates the real conversation directly.
+  // If controls change after an attachment, submit patches the SAME cid before
+  // kickoff so uploaded files are retained and the final settings win.
   const [preCid, setPreCid] = useState<string | null>(null);
+  const preCidRef = useRef<string | null>(null);
+  const preCreateFlightRef = useRef<Promise<string> | null>(null);
   const preCreate = useMutation({ mutationFn: createDeepResearchConversation });
-  // Track which depth/recency combo the current preCid was created for so we
-  // only re-create when they actually change (not on every render).
-  const sourcesKey = sources.join("\u0000");
-  const preCidSettingsRef = useRef<{
-    depthTier: Tier;
-    iterative: boolean;
-    recencyWindow: "month" | "week" | null;
-    leaderId: string | null;
-    sourcesKey: string;
-  } | null>(null);
-
-  useEffect(() => {
-    // Don't pre-create on the resume path (we already have a cid) or when
-    // a session is live (the run has already started), or offline (no server).
-    if (resumeCid || session !== null || !agentLive()) return;
-    const alreadyMatchesCurrent =
-      preCidSettingsRef.current !== null &&
-      preCidSettingsRef.current.depthTier === depthTier &&
-      preCidSettingsRef.current.iterative === iterative &&
-      preCidSettingsRef.current.recencyWindow === recencyWindow &&
-      preCidSettingsRef.current.leaderId === leaderId &&
-      preCidSettingsRef.current.sourcesKey === sourcesKey;
-    if (alreadyMatchesCurrent) return;
-    // R9: include leaderId so the pre-created cid carries the user's model pick.
-    // Without it the preCid submit path ran the DR on the backend default/last-
-    // selected instead of the chosen model. Changing the model re-creates the
-    // preCid (same as depth/recency) so the run's model always matches the UI.
-    const requested = {
-      depthTier,
-      iterative,
-      recencyWindow,
-      leaderId,
-      sourcesKey,
-    };
-    preCidSettingsRef.current = requested;
-    // R1 FIX: flush the STALE preCid immediately. Otherwise a submit() during the
-    // in-flight re-create window would reuse the old cid (created with the PREVIOUS
-    // settings — e.g. iterative:false), so toggling Iterative ON silently ran a
-    // standard research. With preCid null, submit() falls through to create.mutate
-    // which always carries the CURRENT settings.
-    setPreCid(null);
-    preCreate.mutate(
-      // query is intentionally empty — no USER message is sent at pre-create
-      // time; the cid is just a lightweight conversation record for uploads.
-      { query: "", leaderId, depthTier, iterative, recencyWindow, sources },
-      {
-        // Guard against an out-of-order resolve: only adopt this cid if its
-        // settings are STILL the current ones (a newer toggle hasn't superseded
-        // it while this create was in flight).
-        onSuccess: (cid) => {
-          const cur = preCidSettingsRef.current;
-          if (
-            cur &&
-            cur.depthTier === requested.depthTier &&
-            cur.iterative === requested.iterative &&
-            cur.recencyWindow === requested.recencyWindow &&
-            cur.leaderId === requested.leaderId &&
-            cur.sourcesKey === requested.sourcesKey
-          ) {
-            setPreCid(cid);
-          }
-        },
-      },
-    );
-  }, [resumeCid, session, depthTier, iterative, recencyWindow, leaderId, sourcesKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stream = useDeepResearchStream(session);
 
@@ -160,6 +95,41 @@ export function useDeepResearch(
 
   const create = useMutation({ mutationFn: createDeepResearchConversation });
 
+  const startPrecreated = useMutation({
+    mutationFn: async ({
+      targetCid,
+      query,
+      modelOverride,
+      runDepthTier,
+      runIterative,
+      runRecencyWindow,
+      runSources,
+    }: {
+      targetCid: string | Promise<string>;
+      query: string;
+      modelOverride: string | null;
+      runDepthTier: Tier;
+      runIterative: boolean;
+      runRecencyWindow: "month" | "week" | null;
+      runSources: string[];
+    }) => {
+      const cid = await targetCid;
+      await patchConversationSettings(cid, {
+        modelOverride,
+        depthTier: runDepthTier,
+        iterative: runIterative,
+        recencyWindow: runRecencyWindow,
+        sources: runSources,
+      });
+      return { cid, query, depthTier: runDepthTier, kick: true } as DeepResearchSession;
+    },
+    onSuccess: (nextSession) => {
+      preCidRef.current = null;
+      setPreCid(null);
+      setSession(nextSession);
+    },
+  });
+
   // W-07: lazily obtain the pre-created cid for the Attach affordance so uploads
   // work BEFORE the user submits. Returns the existing preCid, or creates one NOW
   // carrying the CURRENT depth/recency/iterative/leader settings (so the upload
@@ -167,19 +137,27 @@ export function useDeepResearch(
   // reuses the SAME cid. null offline.
   const ensurePreCid = useCallback(async () => {
     if (!agentLive()) return null;
-    if (preCid) return preCid;
-    const requested = { depthTier, iterative, recencyWindow, leaderId, sourcesKey };
-    preCidSettingsRef.current = requested;
-    const cid = await preCreate.mutateAsync({
+    const existing = preCidRef.current ?? preCid;
+    if (existing) return existing;
+    if (preCreateFlightRef.current) return preCreateFlightRef.current;
+    const flight = preCreate.mutateAsync({
       query: "",
       leaderId,
       depthTier,
       iterative,
       recencyWindow,
       sources,
+    }).then((cid) => {
+      preCidRef.current = cid;
+      setPreCid(cid);
+      return cid;
     });
-    setPreCid(cid);
-    return cid;
+    preCreateFlightRef.current = flight;
+    try {
+      return await flight;
+    } finally {
+      if (preCreateFlightRef.current === flight) preCreateFlightRef.current = null;
+    }
   }, [
     preCid,
     preCreate,
@@ -188,7 +166,6 @@ export function useDeepResearch(
     recencyWindow,
     leaderId,
     sources,
-    sourcesKey,
   ]);
 
   const submit = useCallback(
@@ -197,13 +174,20 @@ export function useDeepResearch(
       if (!trimmed) return;
       // G1/DR-4: if we pre-created a cid (for upload support in the empty state),
       // USE IT instead of creating a new one — so any uploaded files are already
-      // associated with the conversation that will run. The settings (depth/recency)
-      // were set at pre-create time to match what was showing in the UI.
-      // If preCid is not yet available (pre-create in flight or offline),
-      // fall through to the normal create path.
-      if (preCid) {
-        setSession({ cid: preCid, query: trimmed, depthTier, kick: true });
-        setPreCid(null); // consumed; a fresh preCid will be created for the next run
+      // associated with the conversation that will run. Current settings are
+      // patched immediately before kickoff. An in-flight attachment create is
+      // shared rather than forking a second conversation.
+      const uploadCid = preCidRef.current ?? preCid ?? preCreateFlightRef.current;
+      if (uploadCid) {
+        startPrecreated.mutate({
+          targetCid: uploadCid,
+          query: trimmed,
+          modelOverride: leaderId,
+          runDepthTier: depthTier,
+          runIterative: iterative,
+          runRecencyWindow: recencyWindow,
+          runSources: sources,
+        });
         return;
       }
       create.mutate(
@@ -215,7 +199,7 @@ export function useDeepResearch(
         },
       );
     },
-    [create, leaderId, depthTier, iterative, recencyWindow, sources, preCid],
+    [create, startPrecreated, leaderId, depthTier, iterative, recencyWindow, sources, preCid],
   );
 
   // fix-c #5: the bounded-by "Run on exhaustive tier" button used to call
@@ -229,14 +213,21 @@ export function useDeepResearch(
       if (!q) return;
       setDepthTier("exhaustive");
       create.mutate(
-        { query: q, leaderId, depthTier: "exhaustive", iterative, sources },
+        {
+          query: q,
+          leaderId,
+          depthTier: "exhaustive",
+          iterative,
+          recencyWindow,
+          sources,
+        },
         {
           onSuccess: (cid) =>
             setSession({ cid, query: q, depthTier: "exhaustive", kick: true }),
         },
       );
     },
-    [create, leaderId, iterative, sources],
+    [create, leaderId, iterative, recencyWindow, sources],
   );
 
   // Stop = pause (cooperative; the engine halts at the next checkpoint and keeps
@@ -376,7 +367,7 @@ export function useDeepResearch(
       recoveredQuery !== null ||
       (session !== null && session.query !== "(resumed)"),
     resumed: Boolean(resumeCid),
-    submitting: create.isPending,
+    submitting: create.isPending || startPrecreated.isPending,
     leaderId,
     setLeaderId,
     selectedSources: sources,
@@ -404,6 +395,6 @@ export function useDeepResearch(
     exportPending,
     ...stream,
     // A failed create was silent (empty state, no message). Expose it to the UI.
-    submitError: create.error ?? null,
+    submitError: create.error ?? startPrecreated.error ?? null,
   };
 }

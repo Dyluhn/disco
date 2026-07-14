@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from .models import Passage, RetrievalRequest, RetrievalResult, SearchHit
+from .models import ExtractedDoc, Passage, RetrievalRequest, RetrievalResult, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker, reciprocal_rank_fusion
 
@@ -27,6 +27,21 @@ class RetrievalEngine(Protocol):
 
 class VectorStoreLike(Protocol):
     async def query(self, namespace: str, vector: list[float], *, top_k: int) -> list[Passage]: ...
+
+
+async def extract_discovered_hits(
+    extraction: ExtractionProvider, hits: list[SearchHit]
+) -> list[ExtractedDoc]:
+    """Extract discovery hits without discarding optional provider affinity.
+
+    The stable extraction protocol remains URL-only. Composite providers may
+    additionally implement ``extract_hits`` when discovery provenance determines
+    which extractor can read a result (notably MCP search/fetch pairs).
+    """
+    extract_hits = getattr(extraction, "extract_hits", None)
+    if callable(extract_hits):
+        return await extract_hits(hits)
+    return await extraction.extract_many([hit.url for hit in hits])
 
 
 class DefaultRetrievalEngine:
@@ -92,8 +107,11 @@ class DefaultRetrievalEngine:
         queries = await self._transform(req)
 
         all_hits = await self._discover(req, queries)
-        urls = [h.url for h in all_hits][: self._candidate_cap]
-        extracted = await self._extraction.extract_many(urls) if urls else []
+        candidate_hits = all_hits[: self._candidate_cap]
+        if candidate_hits:
+            extracted = await extract_discovered_hits(self._extraction, candidate_hits)
+        else:
+            extracted = []
 
         # Passages come from EXTRACTED content + corpora — never from snippets.
         candidates: list[Passage] = [p for doc in extracted if doc.fetched_ok for p in doc.passages]

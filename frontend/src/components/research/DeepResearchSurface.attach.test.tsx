@@ -1,13 +1,13 @@
 /**
  * G1/DR-4 attach tests — DeepResearchSurface empty state.
  *
- * When agentLive() is true and a pre-create returns a cid, the UploadComposer
- * should appear in the empty state of the Deep Research surface BEFORE the user
- * submits a query. Verifies F1 (pre-create-on-mount) + the footer slot wiring.
+ * The UploadComposer appears before a cid exists and lazily creates one only
+ * after the user actually selects a file. Merely visiting the surface must not
+ * leave an empty conversation in History.
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { ModeProvider } from "@/shell/ModeProvider";
@@ -24,6 +24,10 @@ vi.mock("@/api/agent", async (importOriginal) => {
     killConversation: vi.fn().mockResolvedValue(undefined),
     // subscribeConversation never fires in the empty state (no session).
     subscribeConversation: vi.fn().mockReturnValue({ close: () => {} }),
+    uploadFiles: vi.fn().mockResolvedValue({
+      saved: [{ name: "notes.txt", bytes: 5 }],
+      rejected: [],
+    }),
   };
 });
 
@@ -31,7 +35,7 @@ vi.mock("@/api/deepResearch", async (importOriginal) => {
   const mod = await importOriginal<typeof import("@/api/deepResearch")>();
   return {
     ...mod,
-    // Pre-create fires in useDeepResearch with { query: "", depthTier, recencyWindow }.
+    // Lazy creation fires only after a real attachment signal.
     createDeepResearchConversation: vi.fn().mockResolvedValue("cid_test_deep"),
   };
 });
@@ -58,49 +62,64 @@ function renderSurface() {
 // ---- tests -------------------------------------------------------------------
 
 describe("DeepResearchSurface — G1/DR-4 attach (empty state)", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    // restoreAllMocks() also clears implementations on module-level vi.fn
+    // mocks, so make each test independent by restoring their behavior here.
+    const deepApi = await import("@/api/deepResearch");
+    const agentApi = await import("@/api/agent");
+    vi.mocked(deepApi.createDeepResearchConversation).mockResolvedValue("cid_test_deep");
+    vi.mocked(agentApi.uploadFiles).mockResolvedValue({
+      saved: [{ name: "notes.txt", bytes: 5 }],
+      rejected: [],
+    });
     window.localStorage.clear();
-    // Make agentLive() return true so the pre-create effect fires.
+    // Make agentLive() return true so the lazy ensureCid callback is actionable.
     vi.spyOn(clientModule, "agentLive").mockReturnValue(true);
   });
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("UploadComposer appears in the empty state once the pre-create resolves", async () => {
+  it("UploadComposer is immediately actionable without creating a cid on mount", async () => {
     renderSurface();
 
-    // The composer appears once createDeepResearchConversation resolves the preCid.
-    await waitFor(
-      () => expect(screen.getByTestId("upload-composer")).toBeInTheDocument(),
-      { timeout: 3000 },
-    );
-    // The attach-files button is enabled — cid is wired.
+    expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /attach files/i })).toBeEnabled();
+    const { createDeepResearchConversation } = await import("@/api/deepResearch");
+    expect(createDeepResearchConversation).not.toHaveBeenCalled();
   });
 
   it("UploadComposer renders but self-disables when agentLive is false (offline/fixture mode)", async () => {
     vi.spyOn(clientModule, "agentLive").mockReturnValue(false);
     renderSurface();
 
-    // Allow async effects to settle. runthru-v2 #9: the composer is ALWAYS rendered
-    // inline (no longer gated on `r.preCid && …`). With agentLive false no preCid is
-    // created, so the composer self-disables (disabled:opacity-40) instead of vanishing.
-    await new Promise((r) => setTimeout(r, 100));
+    // The composer is ALWAYS rendered inline. With agentLive false no lazy cid
+    // callback is exposed, so the affordance is disabled instead of vanishing.
     expect(screen.getByTestId("upload-composer")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /attach files/i })).toBeDisabled();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /attach files/i })).toBeDisabled(),
+    );
   });
 
-  it("createDeepResearchConversation is called on mount with empty query", async () => {
+  it("creates exactly one upload cid after a real file selection", async () => {
     const { createDeepResearchConversation } = await import("@/api/deepResearch");
+    const { uploadFiles } = await import("@/api/agent");
     renderSurface();
 
-    await waitFor(
-      () => expect(createDeepResearchConversation).toHaveBeenCalled(),
-      { timeout: 3000 },
+    const input = document.querySelector(
+      '[data-disco-control="build.upload-input"]',
+    ) as HTMLInputElement;
+    const file = new File(["notes"], "notes.txt", { type: "text/plain" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() =>
+      expect(createDeepResearchConversation).toHaveBeenCalledTimes(1),
     );
-    // The pre-create fires with an EMPTY query (just a placeholder conversation record).
     const [firstCallArg] = (createDeepResearchConversation as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(firstCallArg).toMatchObject({ query: "" });
+    await waitFor(() =>
+      expect(uploadFiles).toHaveBeenCalledWith("cid_test_deep", [file]),
+    );
   });
 });

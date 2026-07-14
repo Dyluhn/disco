@@ -14,6 +14,7 @@ cited answers from real sources.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import AsyncIterator, Sequence
 from typing import Any, Protocol
@@ -27,11 +28,14 @@ from disco.core.llm import (
 )
 from disco.core.think import strip_think_spans
 
+from .engine import extract_discovered_hits
 from .local_encoders import EncoderUnavailable
 from .models import ExtractedDoc, Passage, RetrievalRequest, SearchHit
 from .providers import ExtractionProvider, SearchProvider
 from .ranking import Embedder, QueryRewriter, Reranker
 from .vectorstore import VectorStore
+
+_LOG = logging.getLogger(__name__)
 
 # NLI verdict (3-way) -> the UI's claim band.
 _VERDICT = {"entail": "supported", "neutral": "weak", "contradict": "unsupported"}
@@ -322,26 +326,43 @@ def _drop_weak(answer: dict) -> dict:
 
 
 async def _follow_ups(router: LLMRouter, query: str, answer: str) -> list[str]:
+    prompt = (
+        f"Given this question and answer, suggest 3 short follow-up questions, "
+        f"one per line, no numbering.\n\nQ: {query}\n\nA: {answer[:1500]}"
+    )
     try:
-        req = CompletionRequest(
-            profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
-            messages=[
-                LLMMessage(
-                    role="user",
-                    content=(
-                        f"Given this question and answer, suggest 3 short follow-up questions, "
-                        f"one per line, no numbering.\n\nQ: {query}\n\nA: {answer[:1500]}"
-                    ),
+        for attempt, max_tokens in ((1, 160), (2, 2048)):
+            req = CompletionRequest(
+                profile=CapabilityProfile(role=ModelRole.SUMMARIZER),
+                messages=[LLMMessage(role="user", content=prompt)],
+                temperature=0.3,
+                max_tokens=max_tokens,
+                enable_thinking=False,
+                attempt=attempt,
+            )
+            resp = await router.complete(req)
+            lines: list[str] = []
+            for raw in resp.text.splitlines():
+                item = re.sub(r"^\s*(?:[-•*]|\d+[.)])\s*", "", raw).strip()
+                if len(item) < 8 or item in lines:
+                    continue
+                lines.append(item)
+            if len(lines) >= 2:
+                return lines[:3]
+            if attempt == 1:
+                _LOG.warning(
+                    "Follow-up model returned fewer than two questions; running one bounded repair"
                 )
-            ],
-            temperature=0.3,
-            max_tokens=160,
-        )
-        resp = await router.complete(req)
-        lines = [ln.strip(" -•\t") for ln in resp.text.splitlines() if ln.strip()]
-        return lines[:3]
-    except Exception:  # noqa: BLE001 — follow-ups are optional polish
-        return []
+    except Exception as exc:  # noqa: BLE001 — retain useful deterministic fallbacks
+        _LOG.warning("Follow-up generation failed; using deterministic fallbacks: %s", exc)
+
+    _LOG.warning("Follow-up model remained empty; using deterministic fallbacks")
+    subject = " ".join(query.strip().rstrip("?").split())[:140] or "this topic"
+    return [
+        f"What evidence would most strengthen the answer about {subject}?",
+        f"Which exceptions or edge cases matter most for {subject}?",
+        f"What related question about {subject} should be investigated next?",
+    ]
 
 
 async def _corpus_passages(
@@ -471,12 +492,13 @@ async def stream_research_answer(
             # On re-search rounds, skip URLs already extracted in prior rounds so we
             # fetch fresh sources.
             candidate_hits = [h for h in hits if h.url not in exclude_urls] or hits
-            urls = [h.url for h in candidate_hits[:extract_cap]]
-            docs = await extraction.extract_many(urls)
+            docs = await extract_discovered_hits(
+                extraction, candidate_hits[:extract_cap]
+            )
             passages = [p for d in docs if d.fetched_ok for p in d.passages]
             if not passages and len(candidate_hits) > extract_cap:
-                extra = await extraction.extract_many(
-                    [h.url for h in candidate_hits[extract_cap:discover_limit]]
+                extra = await extract_discovered_hits(
+                    extraction, candidate_hits[extract_cap:discover_limit]
                 )
                 docs = docs + extra
                 passages = [p for d in docs if d.fetched_ok for p in d.passages]
@@ -513,58 +535,108 @@ async def stream_research_answer(
             # accepted answer stream token-by-token to the frontend.
             token_frames: list[dict[str, Any]] = []
             answer_text = ""
-            in_think = False
-            carry = ""
-            async for chunk in router.stream_complete(
-                CompletionRequest(
-                    profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
-                    messages=_answer_prompt(current_query, top),
-                    temperature=0.0,
-                    # `think=False` (default) turns the reasoning model's thinking OFF so it
-                    # answers directly and cites. Otherwise a reasoning model (Qwen3.6 et al)
-                    # spends its whole budget in `reasoning_content`, hits the token ceiling
-                    # mid-thought, and `content` comes back EMPTY — no claims, empty prose
-                    # (the canary's "up but not grounding" failure). `think=True` keeps it on
-                    # with a bigger budget for a deeper, reasoned answer.
-                    enable_thinking=think,
-                    max_tokens=4096 if think else 1200,
-                    stream=True,
-                )
-            ):
-                if chunk.delta_text:
-                    answer_text += chunk.delta_text
-                    # Streaming think-guard: withhold <think>…</think> spans from the
-                    # wire (a leaked reasoning preamble must never paint as answer).
-                    carry += chunk.delta_text
-                    emit = ""
-                    while carry:
-                        if in_think:
-                            end = carry.lower().find("</think>")
-                            if end == -1:
-                                carry = carry[-16:]  # keep a tail in case the tag splits
+            base_tokens = 4096 if think else 1200
+            base_messages = _answer_prompt(current_query, top)
+            for generation_attempt in (1, 2):
+                token_frames = []
+                raw_answer = ""
+                in_think = False
+                carry = ""
+                messages = base_messages
+                if generation_attempt == 2:
+                    messages = [
+                        *base_messages,
+                        LLMMessage(
+                            role="user",
+                            content=(
+                                "The previous completion returned no visible answer. "
+                                "Return the final grounded answer now, with the required "
+                                "source ids; do not return only reasoning."
+                            ),
+                        ),
+                    ]
+                async for chunk in router.stream_complete(
+                    CompletionRequest(
+                        profile=CapabilityProfile(role=ModelRole.RAG_ANSWERER),
+                        messages=messages,
+                        temperature=0.0,
+                        # `think=False` (default) turns reasoning off on servers that
+                        # support the control. Some OpenAI-compatible gateways ignore
+                        # that knob and can spend the whole short budget in
+                        # `reasoning_content`; one bounded repair gets enough room to
+                        # finish but still requires visible, citable answer text.
+                        enable_thinking=think if generation_attempt == 1 else False,
+                        max_tokens=(
+                            base_tokens
+                            if generation_attempt == 1
+                            else max(4096, base_tokens * 2)
+                        ),
+                        attempt=generation_attempt,
+                        stream=True,
+                    )
+                ):
+                    if chunk.delta_text:
+                        raw_answer += chunk.delta_text
+                        # Streaming think-guard: withhold <think>…</think> spans from the
+                        # wire (a leaked reasoning preamble must never paint as answer).
+                        carry += chunk.delta_text
+                        emit = ""
+                        while carry:
+                            if in_think:
+                                end = carry.lower().find("</think>")
+                                if end == -1:
+                                    carry = carry[-16:]  # tail for a split closing tag
+                                    break
+                                carry = carry[end + len("</think>"):]
+                                in_think = False
+                                continue
+                            start = carry.lower().find("<think>")
+                            if start == -1:
+                                # Hold a tail in case "<think>" straddles chunks.
+                                keep = max(0, len(carry) - 8)
+                                emit += carry[:keep]
+                                carry = carry[keep:]
                                 break
-                            carry = carry[end + len("</think>"):]
-                            in_think = False
-                            continue
-                        start = carry.lower().find("<think>")
-                        if start == -1:
-                            # hold back a small tail in case "<think>" straddles chunks
-                            keep = max(0, len(carry) - 8)
-                            emit += carry[:keep]
-                            carry = carry[keep:]
-                            break
-                        emit += carry[:start]
-                        carry = carry[start + len("<think>"):]
-                        in_think = True
-                    if emit:
-                        token_frames.append(
-                            {"type": "token", "token": emit, "block_id": "answer"}
-                        )
+                            emit += carry[:start]
+                            carry = carry[start + len("<think>"):]
+                            in_think = True
+                        if emit:
+                            token_frames.append(
+                                {"type": "token", "token": emit, "block_id": "answer"}
+                            )
+
+                answer_text = _strip_think_spans(raw_answer).strip()
+                if answer_text:
+                    # Flush the deliberately-held split-tag tail now that the full
+                    # response has proved it is visible answer text.
+                    streamed = "".join(frame["token"] for frame in token_frames)
+                    if answer_text.startswith(streamed):
+                        tail = answer_text[len(streamed):]
+                        if tail:
+                            token_frames.append(
+                                {"type": "token", "token": tail, "block_id": "answer"}
+                            )
+                    break
+                if generation_attempt == 1:
+                    _LOG.warning(
+                        "Research answerer returned no visible text; running one bounded repair"
+                    )
+            if not answer_text:
+                _LOG.error(
+                    "Research answerer returned no visible text after bounded repair"
+                )
+                yield {
+                    "type": "error",
+                    "message": (
+                        "The answer model returned no visible answer after one bounded "
+                        "repair. Try another model or retry the search."
+                    ),
+                }
+                return
 
             # 5. structure + verify. The NLI verifier is SYNC (blocking httpx), so run
             # it in a thread — otherwise its many calls freeze the event loop and the
             # WebSocket's keepalive pings time out, dropping the connection mid-answer.
-            answer_text = _strip_think_spans(answer_text)
             blocks = _to_blocks(answer_text)
             claims = await asyncio.to_thread(_verify_claims, answer_text, by_id, nli)
 
