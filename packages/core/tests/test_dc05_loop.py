@@ -374,6 +374,23 @@ async def test_duplicate_serve_suppressed_and_trips_valve():
     assert_blocked_question_landing(events, legacy_detail="actionless")
     deliverables = [e for e in events if isinstance(e, DeliverableEvent)]
     assert len(deliverables) == 1
+    duplicate_guidance = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and e.meta.get("diagnostic") == "serve_duplicate_ignored"
+    ]
+    assert len(duplicate_guidance) == 2
+    assert all("call `finish`" in e.message.content for e in duplicate_guidance)
+    assert any(
+        "Handoff recorded" in message.content
+        for message in agent.seen_views[3].messages
+    )
+    assert any(
+        "duplicate `serve` call was ignored" in message.content
+        for message in agent.seen_views[4].messages
+    )
 
 
 @pytest.mark.asyncio
@@ -382,6 +399,7 @@ async def test_empty_serve_spam_trips_valve():
     the only witness, and it must still trip the valve."""
     agent = ScriptedAgent([
         action_step("submit_plan", {"summary": "p", "steps": [{"title": "1"}]}),
+        action_step("shell", {}),
         action_step("serve", {}),
         action_step("serve", {}),
         action_step("serve", {}),
@@ -394,6 +412,14 @@ async def test_empty_serve_spam_trips_valve():
     events = await store.get_events(CID)
     assert_blocked_question_landing(events, legacy_detail="actionless")
     assert not any(isinstance(e, DeliverableEvent) for e in events)
+    malformed_feedback = [
+        e
+        for e in events
+        if isinstance(e, MessageEvent)
+        and e.source == EventSource.ENVIRONMENT
+        and "provide both required string fields" in e.message.content
+    ]
+    assert len(malformed_feedback) == 3
 
 
 @pytest.mark.asyncio

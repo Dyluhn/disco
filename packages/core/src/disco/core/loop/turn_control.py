@@ -79,6 +79,23 @@ _IDENTICAL_PLAN_NUDGE_TEXT = (
     "proposal will halt the run."
 )
 
+_SERVE_HANDOFF_DIAGNOSTIC = "serve_handoff_recorded"
+_SERVE_DUPLICATE_DIAGNOSTIC = "serve_duplicate_ignored"
+_SERVE_HANDOFF_GUIDANCE = (
+    "<system-reminder>\n"
+    "Handoff recorded. `serve` does not complete the run. Do not serve this "
+    "artifact again. If verification and plan work are complete, call `finish` "
+    "now; otherwise perform the remaining work, then call `finish`.\n"
+    "</system-reminder>"
+)
+_SERVE_DUPLICATE_GUIDANCE = (
+    "<system-reminder>\n"
+    "This artifact was already handed off, so the duplicate `serve` call was "
+    "ignored. Do not serve it again. If verification and plan work are complete, "
+    "call `finish` now; otherwise perform the remaining work, then call `finish`.\n"
+    "</system-reminder>"
+)
+
 # D2: the reserved AlternativesEvent option id for "Continue anyway" — the bypass
 # the user can always pick at the circuit-breaker gate to reset the failure streak
 # and let the agent keep going. The frontend renders it as a distinct button;
@@ -299,7 +316,10 @@ async def _coerce_serve_entry_path(loop, raw_path: str) -> tuple[str, bool, bool
     if not _serve_path_is_workspace_root(path):
         return path, False, False
     if await _serve_path_verified_present(loop, "index.html"):
-        _LOG.info("serve path %r points at the workspace root; auto-coerced to index.html", raw_path)
+        _LOG.info(
+            "serve path %r points at the workspace root; auto-coerced to index.html",
+            raw_path,
+        )
         return "index.html", True, True
     return path, True, False
 
@@ -1180,18 +1200,21 @@ class Valve:
         model edits a file it built in a prior turn; the file was un-grounded by that write and is
         too large to be re-grounded by the (truncated) workspace-snapshot pin, so the read-before-
         write gate refuses every edit and the model loops without re-reading → circuit breaker →
-        STUCK. On the 2nd same-path FRESH_READ_REQUIRED (and only ONCE per path per revision — the
-        durable `auto_ground_read:{path}` StatusEvent marker survives the injected read's own success
-        Observation), the HARNESS injects ONE REAL file_read of that path. A genuine read sets
+        STUCK. On the 2nd same-path FRESH_READ_REQUIRED (and only ONCE per path per
+        revision — the durable `auto_ground_read:{path}` StatusEvent marker survives
+        the injected read's own success Observation), the HARNESS injects ONE REAL
+        file_read of that path. A genuine read sets
         read_since_write + records the sha AND puts the current bytes before the model, so the next
         edit is grounded for real and targets real text — preserving the read-before-write safety
         (it satisfies the contract by ACTUALLY reading) for every genuinely-unread file. A file that
-        STILL fails after one real read (truly huge/un-coverable) falls through to gate_circuit_
-        breaker and STUCKs cleanly — the marker prevents re-arming. Runs BEFORE the circuit breaker."""
+        STILL fails after one real read (truly huge/un-coverable) falls through to
+        gate_circuit_breaker and STUCKs cleanly — the marker prevents re-arming. Runs
+        BEFORE the circuit breaker."""
         target = signals.fresh_read_autoground_target(events)
         if target is None:
             return Disp.FALLTHROUGH
-        # Durable semantic sentinel (NOT volatile ActionEvent.meta): one auto-read per path/revision.
+        # Durable semantic sentinel (NOT volatile ActionEvent.meta): one auto-read per
+        # path/revision.
         await self._loop._emit(
             StatusEvent(
                 status=ConversationStatus.RUNNING, detail=f"auto_ground_read:{target}"
@@ -1605,65 +1628,102 @@ class MetaToolHandlers:
                 "tool calls (write files, run commands, start your "
                 "server), then serve the result.",
             )
-        if not step.tool_call.arguments:
-            _LOG.debug("Skipping deliverable emission: empty payload from agent")
-            self._loop._invisible_steps += 1
-        else:
-            title = str(step.tool_call.arguments.get("title") or "").strip()
-            raw_path = str(step.tool_call.arguments.get("path") or "").strip()
-            path, root_like, coerced_to_index = await _coerce_serve_entry_path(
-                self._loop, raw_path
+        arguments = step.tool_call.arguments or {}
+        if not arguments:
+            return await self._loop._valve.refuse_fresh_session(
+                step,
+                "serve refused: provide both required string fields `title` and "
+                "`path`; optionally set `kind` to exactly `app` or `files`.",
             )
-            kind = str(step.tool_call.arguments.get("kind") or "app").strip()
-            # F3: a sandbox-internal/loopback serve address (e.g. 127.0.0.1:8000) is
-            # NOT reachable from the host — drop it so consumers fall back to the
-            # host-reachable preview-app proxy instead of a false "Deployed" link.
-            url = _canonical_deployment_url(str(step.tool_call.arguments.get("url") or ""))
-            if kind not in ("app", "files"):
-                kind = "app"
-            if not title:
-                self._loop._invisible_steps += 1
-            elif root_like and not coerced_to_index:
-                return await self._loop._valve.refuse_fresh_session(
-                    step,
-                    _serve_root_refusal(),
+
+        title = str(arguments.get("title") or "").strip()
+        raw_path = str(arguments.get("path") or "").strip()
+        path, root_like, coerced_to_index = await _coerce_serve_entry_path(
+            self._loop, raw_path
+        )
+        kind = str(arguments.get("kind") or "app").strip()
+        # F3: a sandbox-internal/loopback serve address (e.g. 127.0.0.1:8000) is
+        # NOT reachable from the host — drop it so consumers fall back to the
+        # host-reachable preview-app proxy instead of a false "Deployed" link.
+        url = _canonical_deployment_url(str(arguments.get("url") or ""))
+        if not title:
+            return await self._loop._valve.refuse_fresh_session(
+                step,
+                "serve refused: `title` is required and must be a non-empty "
+                "human-readable label.",
+            )
+        if not raw_path:
+            return await self._loop._valve.refuse_fresh_session(
+                step,
+                "serve refused: `path` is required and must be a non-empty "
+                "workspace-relative entry path.",
+            )
+        if kind not in ("app", "files"):
+            return await self._loop._valve.refuse_fresh_session(
+                step,
+                "serve refused: `kind` must be exactly `app` or `files`; omit it "
+                "only when the documented `app` default is intended.",
+            )
+        if root_like and not coerced_to_index:
+            return await self._loop._valve.refuse_fresh_session(
+                step,
+                _serve_root_refusal(),
+            )
+        if not path:
+            return await self._loop._valve.refuse_fresh_session(
+                step,
+                "serve refused: normalized `path` is empty; provide a workspace-relative "
+                "entry file path.",
+            )
+        if any(
+            isinstance(e, DeliverableEvent)
+            and e.path == path
+            and e.artifact_kind == kind
+            for e in events
+        ):
+            # Same artifact already handed off — an identical card adds
+            # nothing for the user. Keep counting the duplicate toward the
+            # historical anti-spam valve, but make the result visible to the
+            # model so it can recover by calling finish.
+            _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
+            self._loop._invisible_steps += 1
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=_SERVE_DUPLICATE_GUIDANCE),
+                    meta={"diagnostic": _SERVE_DUPLICATE_DIAGNOSTIC},
                 )
-            elif not path:
-                self._loop._invisible_steps += 1
-            elif any(
-                isinstance(e, DeliverableEvent)
-                and e.path == path
-                and e.artifact_kind == kind
-                for e in events
-            ):
-                # Same artifact already handed off — an identical
-                # card adds nothing for the user; re-emitting it is
-                # the few-shot spam prompt for the next one.
-                _LOG.debug("Skipping duplicate deliverable: %s (%s)", path, kind)
-                self._loop._invisible_steps += 1
-            elif await _serve_path_missing(self._loop, path):
-                # CD-TOOLS-5 OUTPUT-TRUTH: never hand off a deliverable whose path does not exist
-                # in the workspace — that is a false "Open / Download" card for nothing. Refuse with
-                # actionable feedback (counted + valve-routed) instead of emitting a fake handoff.
-                # (serve is the SHOW handoff, not verification — the verify gate still proves it works.)
-                return await self._loop._valve.refuse_fresh_session(
-                    step,
-                    f"serve refused: checked normalized deliverable path {path!r}, "
-                    "but it does not exist in the workspace. Serve takes the entry "
-                    "FILE path; for a site that is usually 'index.html'. If the file "
-                    "is elsewhere, pass that workspace-relative entry path; otherwise "
-                    "build or write the intended entry file first, then serve that file.",
+            )
+        elif await _serve_path_missing(self._loop, path):
+            # CD-TOOLS-5 OUTPUT-TRUTH: never hand off a deliverable whose path does not exist
+            # in the workspace — that is a false "Open / Download" card for nothing. Refuse with
+            # actionable feedback (counted + valve-routed) instead of emitting a fake handoff.
+            # (serve is the SHOW handoff, not verification — the verify gate still proves it works.)
+            return await self._loop._valve.refuse_fresh_session(
+                step,
+                f"serve refused: checked normalized deliverable path {path!r}, "
+                "but it does not exist in the workspace. Serve takes the entry "
+                "FILE path; for a site that is usually 'index.html'. If the file "
+                "is elsewhere, pass that workspace-relative entry path; otherwise "
+                "build or write the intended entry file first, then serve that file.",
+            )
+        else:
+            await self._loop._emit(
+                DeliverableEvent(
+                    source=EventSource.AGENT,
+                    title=title,
+                    path=path,
+                    artifact_kind=kind,  # type: ignore[arg-type]
+                    deployment_url=url,
                 )
-            else:
-                await self._loop._emit(
-                    DeliverableEvent(
-                        source=EventSource.AGENT,
-                        title=title,
-                        path=path,
-                        artifact_kind=kind,  # type: ignore[arg-type]
-                        deployment_url=url,
-                    )
+            )
+            await self._loop._emit(
+                MessageEvent(
+                    source=EventSource.ENVIRONMENT,
+                    message=LLMMessage(role="user", content=_SERVE_HANDOFF_GUIDANCE),
+                    meta={"diagnostic": _SERVE_HANDOFF_DIAGNOSTIC},
                 )
+            )
         if await self._loop._post_noop_valve() is Disp.HALT:
             return Disp.HALT
         return Disp.CONTINUE

@@ -5,10 +5,12 @@ DeliverableEvent the UI renders as Open-the-app / Download-the-files. Non-blocki
 
 from __future__ import annotations
 
+import pytest
 from disco.core import (
     ActionEvent,
     ConversationStatus,
     DeliverableEvent,
+    MessageEvent,
 )
 from disco.core.events import EventSource
 from disco.core.llm import DefaultLLMRouter, OperatingMode, ProposedToolCall
@@ -17,6 +19,14 @@ from llm_fakes import simple_config
 from loop_fakes import FakeExecutor, SequenceProvider, build_loop
 
 CID = "conv"
+
+
+def _environment_messages(events):
+    return [
+        event
+        for event in events
+        if isinstance(event, MessageEvent) and event.source == EventSource.ENVIRONMENT
+    ]
 
 
 def _agent(scripted):
@@ -62,17 +72,32 @@ async def test_serve_emits_a_deliverable_event_and_continues():
     assert delivs[0].path == "dist"
     assert delivs[0].artifact_kind == "app"
     assert delivs[0].source == EventSource.AGENT
+    guidance = [
+        event
+        for event in _environment_messages(events)
+        if event.meta.get("diagnostic") == "serve_handoff_recorded"
+    ]
+    assert len(guidance) == 1
+    assert "Handoff recorded" in guidance[0].message.content
+    assert "call `finish`" in guidance[0].message.content
 
 
-async def test_serve_defaults_kind_to_app_and_validates_enum():
+async def test_serve_defaults_kind_to_app_and_rejects_invalid_enum():
     agent = _agent(
         [
             {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "make"})]},
             {
                 "tool_calls": [
                     ProposedToolCall(
+                        tool_name="serve", arguments={"title": "Report", "path": "out.pdf"}
+                    )
+                ]
+            },
+            {
+                "tool_calls": [
+                    ProposedToolCall(
                         tool_name="serve",
-                        arguments={"title": "Report", "path": "out.pdf", "kind": "bogus"},
+                        arguments={"title": "Bad", "path": "bad.pdf", "kind": "bogus"},
                     )
                 ]
             },
@@ -82,22 +107,46 @@ async def test_serve_defaults_kind_to_app_and_validates_enum():
     loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
     await loop.send_message("go")
     await loop.run()
-    deliv = next(e for e in await store.get_events(CID) if isinstance(e, DeliverableEvent))
-    assert deliv.artifact_kind == "app"  # bogus kind normalized to the default
+    events = await store.get_events(CID)
+    delivs = [event for event in events if isinstance(event, DeliverableEvent)]
+    assert len(delivs) == 1
+    assert delivs[0].artifact_kind == "app"  # omitted kind uses the documented default
+    invalid = [
+        event
+        for event in _environment_messages(events)
+        if "`kind` must be exactly `app` or `files`" in event.message.content
+    ]
+    assert len(invalid) == 1
 
 
-async def test_serve_missing_path_or_title_is_a_noop():
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        ({}, "provide both required string fields"),
+        ({"title": "x"}, "`path` is required"),
+        ({"path": "out.pdf"}, "`title` is required"),
+    ],
+)
+async def test_serve_malformed_arguments_are_explicit_and_actionable(arguments, expected):
     agent = _agent(
         [
             {"tool_calls": [ProposedToolCall(tool_name="shell", arguments={"cmd": "ls"})]},
-            {"tool_calls": [ProposedToolCall(tool_name="serve", arguments={"title": "x"})]},
+            {"tool_calls": [ProposedToolCall(tool_name="serve", arguments=arguments)]},
             {"tool_calls": [ProposedToolCall(tool_name="finish", arguments={"summary": "x"})]},
         ]
     )
     loop, store = build_loop(agent, executor=FakeExecutor(), policy=NeverConfirm())
     await loop.send_message("go")
-    await loop.run()
-    assert not any(isinstance(e, DeliverableEvent) for e in await store.get_events(CID))
+    state = await loop.run()
+    assert state.execution_status == ConversationStatus.FINISHED
+    events = await store.get_events(CID)
+    assert not any(isinstance(event, DeliverableEvent) for event in events)
+    feedback = [
+        event
+        for event in _environment_messages(events)
+        if expected in event.message.content
+    ]
+    assert len(feedback) == 1
 
 
 def test_serve_offered_in_execution_not_planning():
