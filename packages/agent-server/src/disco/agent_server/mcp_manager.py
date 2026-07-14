@@ -43,6 +43,38 @@ _HTTP_INIT_TIMEOUT_S = 3.0
 _HTTP_RETRY_DELAYS_S = (0.25, 1.0)
 
 
+def _diagnostic_exception_type(exc: BaseException) -> str:
+    """Return a useful leaf type without exposing exception messages."""
+
+    leaves: list[BaseException] = []
+
+    def collect(current: BaseException) -> None:
+        if isinstance(current, BaseExceptionGroup):
+            for nested in current.exceptions:
+                collect(nested)
+            return
+        leaves.append(current)
+
+    collect(exc)
+    if not leaves:
+        return type(exc).__name__
+    priority = {
+        "ConnectError": 0,
+        "ConnectTimeout": 1,
+        "ConnectionError": 2,
+        "TimeoutError": 3,
+        "ReadTimeout": 4,
+        "WriteTimeout": 5,
+        "PoolTimeout": 6,
+    }
+    return type(
+        min(
+            enumerate(leaves),
+            key=lambda indexed: (priority.get(type(indexed[1]).__name__, 100), indexed[0]),
+        )[1]
+    ).__name__
+
+
 class McpManager:
     """Owns the MCP lifecycle logic; shared state lives on the runtime back-ref."""
 
@@ -426,6 +458,7 @@ class McpManager:
                 return
             except Exception as exc:
                 await self._discard_http_client(name)
+                diagnostic_type = _diagnostic_exception_type(exc)
                 if attempt < _HTTP_CONNECT_ATTEMPTS:
                     delay = _HTTP_RETRY_DELAYS_S[attempt - 1]
                     _LOG.warning(
@@ -434,7 +467,7 @@ class McpManager:
                         name,
                         attempt,
                         _HTTP_CONNECT_ATTEMPTS,
-                        type(exc).__name__,
+                        diagnostic_type,
                         delay,
                     )
                     await asyncio.sleep(delay)
@@ -444,13 +477,13 @@ class McpManager:
                     "degraded",
                     code="mcp_connection_failed",
                     attempts=attempt,
-                    exception_type=type(exc).__name__,
+                    exception_type=diagnostic_type,
                 )
                 _LOG.warning(
                     "MCP HTTP server %r degraded after %d bounded attempts (%s)",
                     name,
                     attempt,
-                    type(exc).__name__,
+                    diagnostic_type,
                 )
 
     async def _discard_http_client(self, name: str) -> None:

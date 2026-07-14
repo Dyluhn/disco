@@ -5,6 +5,7 @@ from collections import Counter
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 from disco.agent_server.mcp_manager import McpManager
 from disco.tools.mcp.approval import compute_config_hash
 from disco.tools.mcp.config import McpServerConfig
@@ -91,6 +92,37 @@ async def test_http_server_recovers_within_bounded_retry_ladder(monkeypatch) -> 
     assert attempts == 2
     assert runtime._mcp_http_status["recovering"] == {"status": "connected"}
     sleep.assert_awaited_once_with(0.25)
+
+
+async def test_http_degraded_status_unwraps_exception_group_without_message_leak(
+    monkeypatch,
+) -> None:
+    manager, runtime = _manager()
+    server = _server("grouped")
+    grouped = ExceptionGroup(
+        "SDK task group",
+        [ExceptionGroup("transport", [httpx.ConnectError("credential-shaped refusal")])],
+    )
+    manager._connect_http = AsyncMock(side_effect=grouped)
+    monkeypatch.setattr("disco.agent_server.mcp_manager.asyncio.sleep", AsyncMock())
+
+    await manager._start_http_server(
+        "grouped",
+        server,
+        {},
+        {"grouped": compute_config_hash(server)},
+    )
+
+    assert manager._connect_http.await_count == 3
+    assert runtime._mcp_http_status["grouped"] == {
+        "status": "degraded",
+        "diagnostic": {
+            "code": "mcp_connection_failed",
+            "attempts": 3,
+            "exception_type": "ConnectError",
+        },
+    }
+    assert "credential-shaped" not in repr(runtime._mcp_http_status)
 
 
 def test_server_normalization_accepts_typed_and_raw_without_echoing_secrets() -> None:
