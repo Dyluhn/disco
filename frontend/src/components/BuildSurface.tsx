@@ -21,7 +21,7 @@ import {
 } from "@/lib/buildTrace";
 import { useReplay } from "@/lib/useReplay";
 import { isolationForBackend } from "@/lib/isolation";
-import { agentFetch, agentHttpBase, agentLive } from "@/api/client";
+import { agentFetch, agentLive, pathPreviewBootstrapUrl } from "@/api/client";
 import { EmptyState, ErrorState } from "@/components/states";
 import { Markdown } from "@/components/Markdown";
 import { QueryInput } from "@/components/QueryInput";
@@ -141,6 +141,43 @@ export function BuildSurface({
   );
   const finalMessage = useMemo(() => latestAgentMessage(visibleEvents), [visibleEvents]);
   const deliverable = useMemo(() => deriveDeliverable(visibleEvents), [visibleEvents]);
+  const [handoffPreview, setHandoffPreview] = useState<{
+    cid: string;
+    deliverableId: string;
+    url: string;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setHandoffPreview(null);
+    if (
+      b.status !== "FINISHED" ||
+      !b.cid ||
+      deliverable?.kind !== "app"
+    ) {
+      return;
+    }
+    const cid = b.cid;
+    const deliverableId = deliverable.id;
+    void pathPreviewBootstrapUrl(cid, "/")
+      .then((url) => {
+        if (!cancelled && url) setHandoffPreview({ cid, deliverableId, url });
+      })
+      .catch(() => {
+        // H083: executable handoffs fail closed. Never substitute the
+        // authenticated /preview-app/ path when capability minting fails.
+        if (!cancelled) setHandoffPreview(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [b.cid, b.status, deliverable?.id, deliverable?.kind]);
+  const handoffOpenUrl =
+    b.cid &&
+    deliverable?.kind === "app" &&
+    handoffPreview?.cid === b.cid &&
+    handoffPreview.deliverableId === deliverable.id
+      ? handoffPreview.url
+      : null;
   const [elementMention, setElementMention] = useState<ElementMentionPayload | null>(null);
   // W-01: on resume, useBuild seeds the task with the internal "(resumed)"
   // sentinel. The H1 must read the PROJECT, never the literal sentinel — and
@@ -589,13 +626,11 @@ export function BuildSurface({
           <DeliverablePanel
             deliverable={b.status === "FINISHED" ? deliverable : null}
             cid={b.cid}
-            onOpen={() =>
-              b.cid &&
-              window.open(
-                `${agentHttpBase()}/conversations/${b.cid}/preview-app/`,
-                "_blank",
-                "noopener,noreferrer",
-              )
+            appUrl={handoffOpenUrl}
+            onOpen={
+              handoffOpenUrl
+                ? () => window.open(handoffOpenUrl, "_blank", "noopener,noreferrer")
+                : undefined
             }
             onDownload={() => b.cid && download.mutate(b.cid)}
             onExportManifest={() => b.cid && exportManifest.mutate(b.cid)}

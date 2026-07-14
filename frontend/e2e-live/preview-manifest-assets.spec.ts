@@ -224,10 +224,14 @@ async function openFromHandoff(
 ): Promise<void> {
   const open = page.locator('[data-disco-control="build.open-app"]').first();
   await expect(open).toBeVisible({ timeout: 120_000 });
-  await expect(open).toHaveAttribute(
-    "data-app-url",
-    new RegExp(`/conversations/${cid}/preview-app/$`),
+  const handoffUrl = await open.getAttribute("data-app-url");
+  expect(handoffUrl, "handoff did not mint an isolated preview capability").toBeTruthy();
+  const parsedHandoff = new URL(handoffUrl!);
+  expect(parsedHandoff.pathname).toBe(
+    `/__disco/path-preview-auth/${cid.replace(/^conv_/, "").slice(0, 8)}`,
   );
+  expect(parsedHandoff.searchParams.get("intent")).toBeTruthy();
+  expect(parsedHandoff.origin).not.toBe(new URL(page.url()).origin);
   const popupPromise = context.waitForEvent("page", { timeout: 30_000 });
   await open.click();
   const popup = await popupPromise;

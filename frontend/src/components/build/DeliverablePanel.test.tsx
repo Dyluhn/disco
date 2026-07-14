@@ -66,6 +66,21 @@ describe("DeliverablePanel", () => {
     expect(onOpen).toHaveBeenCalledOnce();
   });
 
+  it("never derives an executable app URL from the authenticated agent origin", () => {
+    render(
+      <DeliverablePanel
+        deliverable={{ id: "d", title: "Landing page", path: "index.html", kind: "app" }}
+        cid="conv_deadbeef"
+        onOpen={vi.fn()}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /open the deliverable/i });
+    expect(btn).not.toHaveAttribute(
+      "data-app-url",
+      expect.stringContaining("/conversations/conv_deadbeef/preview-app/"),
+    );
+  });
+
   it("a files deliverable with cid + file path renders direct download anchor", () => {
     // F1: when cid is provided and it's a file (has extension), render an anchor
     // to the per-file artifact route, NOT a button calling onDownload

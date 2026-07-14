@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, ConversationStatus } from "@/types/agent";
 
 let buildState: Record<string, unknown>;
+const pathPreviewBootstrapUrlMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/useBuild", () => ({
   useBuild: () => buildState,
@@ -39,6 +40,7 @@ vi.mock("@/api/client", async (orig) => ({
   ...(await orig<typeof import("@/api/client")>()),
   agentLive: () => true,
   agentHttpBase: () => "",
+  pathPreviewBootstrapUrl: pathPreviewBootstrapUrlMock,
 }));
 
 import { BuildSurface } from "@/components/BuildSurface";
@@ -119,6 +121,9 @@ function stubStateFetch(title: string | null) {
 
 beforeEach(() => {
   stubStateFetch(null);
+  pathPreviewBootstrapUrlMock.mockResolvedValue(
+    "http://localhost:18250/__disco/path-preview-auth/deadbeef?intent=signed",
+  );
 });
 
 afterEach(() => {
@@ -167,6 +172,55 @@ describe("RECOVERY: errored build — 'Try again' resumes (never resets)", () =>
       screen.getByLabelText(/choose the model that runs the agent/i),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+  });
+});
+
+describe("finished app handoff isolation", () => {
+  const appEvents = [
+    userMessage("u1", "build an app"),
+    {
+      kind: "deliverable",
+      id: "d1",
+      title: "Finished app",
+      path: "release/index.html",
+      artifact_kind: "app",
+      source: "agent",
+    } as AgentEvent,
+  ];
+
+  it("opens only the pre-minted isolated path capability", async () => {
+    const open = vi.fn();
+    vi.stubGlobal("open", open);
+    buildState = baseBuild({ status: "FINISHED", events: appEvents });
+    renderSurface(<BuildSurface resumeCid="cid-1" />);
+
+    const button = await screen.findByRole("button", { name: /open the deliverable/i });
+    await waitFor(() =>
+      expect(button).toHaveAttribute(
+        "data-app-url",
+        "http://localhost:18250/__disco/path-preview-auth/deadbeef?intent=signed",
+      ),
+    );
+    expect(button.getAttribute("data-app-url")).not.toContain("/conversations/cid-1/");
+    await userEvent.click(button);
+    expect(pathPreviewBootstrapUrlMock).toHaveBeenCalledWith("cid-1", "/");
+    expect(open).toHaveBeenCalledWith(
+      "http://localhost:18250/__disco/path-preview-auth/deadbeef?intent=signed",
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("fails closed when an isolated handoff cannot be minted", async () => {
+    pathPreviewBootstrapUrlMock.mockRejectedValue(new Error("capability unavailable"));
+    buildState = baseBuild({ status: "FINISHED", events: appEvents });
+    renderSurface(<BuildSurface resumeCid="cid-1" />);
+
+    const button = await screen.findByRole("button", { name: /open the deliverable/i });
+    await waitFor(() => expect(pathPreviewBootstrapUrlMock).toHaveBeenCalled());
+    expect(button).toBeDisabled();
+    expect(button).not.toHaveAttribute("data-app-url");
+    expect(document.body.innerHTML).not.toContain("/conversations/cid-1/preview-app/");
   });
 });
 
