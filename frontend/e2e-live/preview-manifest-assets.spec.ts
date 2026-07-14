@@ -147,6 +147,33 @@ function selectedApp(events: EventJson[]): EventJson | undefined {
     .find((event) => event.kind === "deliverable" && event.artifact_kind === "app");
 }
 
+function verifierFallbackEvidence(events: EventJson[]): Array<Record<string, unknown>> {
+  const annotated = events.flatMap((event) => {
+    if (!new Set(["verifier_shadow", "verifier_verdict"]).has(String(event.kind))) return [];
+    const meta = event.meta;
+    if (!meta || typeof meta !== "object" || Array.isArray(meta)) return [];
+    const record = meta as Record<string, unknown>;
+    if (typeof record.model_verifier_status !== "string") return [];
+    expect(typeof record.model_verifier_applied).toBe("boolean");
+    if (record.model_verifier_applied === false) {
+      expect(typeof record.model_verifier_cause).toBe("string");
+      expect(String(record.model_verifier_cause).length).toBeLessThanOrEqual(256);
+      expect(String(record.model_verifier_cause)).not.toMatch(/authorization|api[_-]?key|secret/i);
+    }
+    return [{
+      kind: event.kind,
+      seq: event.seq,
+      model_verifier_status: record.model_verifier_status,
+      model_verifier_applied: record.model_verifier_applied,
+      ...(record.model_verifier_cause === undefined
+        ? {}
+        : { model_verifier_cause: record.model_verifier_cause }),
+    }];
+  });
+  expect(annotated.length, "verifier events did not persist model-verifier status").toBeGreaterThan(0);
+  return annotated;
+}
+
 async function assertApiGraph(
   request: APIRequestContext,
   cid: string,
@@ -341,6 +368,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     await page.goto(`/build/${buildCid}`);
     await approveBuildPlan(page);
     const buildFirst = await waitForCommittedFinish(request, buildCid);
+    const buildFirstVerifier = verifierFallbackEvidence(buildFirst.events);
     expect(selectedApp(buildFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(buildFirst.events, await inspectTrace(request, buildCid));
     await assertApiGraph(request, buildCid, FIRST_MARKER);
@@ -352,6 +380,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     cids.push(agentCid);
     await agentPage.goto(`/agent/${agentCid}`);
     const agentFirst = await waitForCommittedFinish(request, agentCid);
+    const agentFirstVerifier = verifierFallbackEvidence(agentFirst.events);
     expect(selectedApp(agentFirst.events)?.path).toBe(RELEASE_ENTRY);
     assertNoThrash(agentFirst.events, await inspectTrace(request, agentCid));
     await assertApiGraph(request, agentCid, FIRST_MARKER);
@@ -384,6 +413,7 @@ test("Build and Agent open the selected multi-file manifest across restart and r
     await page.reload();
     await approveBuildPlan(page);
     const buildSecond = await waitForCommittedFinish(request, buildCid, beforeRevision);
+    const buildSecondVerifier = verifierFallbackEvidence(buildSecond.events);
     expect(selectedApp(buildSecond.events)?.path).toBe(RELEASE_ENTRY);
     expect(buildSecond.version).toBeGreaterThan(buildFirst.version);
     assertNoThrash(buildSecond.events, await inspectTrace(request, buildCid));
@@ -407,12 +437,15 @@ test("Build and Agent open the selected multi-file manifest across restart and r
         second_version: buildSecond.version,
         selected_entry: selectedApp(buildSecond.events)?.path,
         event_count: buildSecond.events.length,
+        first_verifier: buildFirstVerifier,
+        second_verifier: buildSecondVerifier,
       },
       agent: {
         cid: agentCid,
         version: agentFirst.version,
         selected_entry: selectedApp(agentFirst.events)?.path,
         event_count: agentFirst.events.length,
+        verifier: agentFirstVerifier,
       },
       iframe_responses: iframeResponses,
       console_errors: consoleErrors,
