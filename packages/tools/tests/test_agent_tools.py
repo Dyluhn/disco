@@ -140,14 +140,17 @@ async def test_code_exec_python_state_persists_across_cells(tmp_path):
 
     # Mock the pwd for the session
     from unittest.mock import patch
-    with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
-        mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
+    try:
+        with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
+            mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
 
-        r1 = await ex.execute(call("code_exec", language="python", code="x = 21 * 2"))
-        assert r1.success, r1.content
-        # the next cell sees `x` from the previous one — not a fresh interpreter
-        r2 = await ex.execute(call("code_exec", language="python", code="print(x)"))
-        assert r2.success and "42" in r2.content, r2.content
+            r1 = await ex.execute(call("code_exec", language="python", code="x = 21 * 2"))
+            assert r1.success, r1.content
+            # the next cell sees `x` from the previous one — not a fresh interpreter
+            r2 = await ex.execute(call("code_exec", language="python", code="print(x)"))
+            assert r2.success and "42" in r2.content, r2.content
+    finally:
+        await session.destroy()
 
 
 async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
@@ -163,17 +166,22 @@ async def test_code_exec_erroring_cell_keeps_prior_state(tmp_path):
     ex = DefaultToolExecutor(build_default_registry(), _STANDARD_AGENT_SCOPE, sandbox=session)
 
     from unittest.mock import patch
-    with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
-        mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
+    try:
+        with patch.object(ProcessSandboxInstance, "exec_shell") as mock_exec:
+            mock_exec.return_value = ExecResult(exit_code=0, stdout=str(ws), stderr="")
 
-        await ex.execute(call("code_exec", language="python", code="counter = 7"))
-        err = await ex.execute(
-            call("code_exec", language="python", code="raise ValueError('boom')")
-        )
-        assert err.success is False and "ValueError" in err.content
-        # state survived the error
-        ok = await ex.execute(call("code_exec", language="python", code="print(counter + 1)"))
-        assert ok.success and "8" in ok.content, ok.content
+            await ex.execute(call("code_exec", language="python", code="counter = 7"))
+            err = await ex.execute(
+                call("code_exec", language="python", code="raise ValueError('boom')")
+            )
+            assert err.success is False and "ValueError" in err.content
+            # state survived the error
+            ok = await ex.execute(
+                call("code_exec", language="python", code="print(counter + 1)")
+            )
+            assert ok.success and "8" in ok.content, ok.content
+    finally:
+        await session.destroy()
 
 
 # ---- agent-vs-research scoping (the registry split) --------------------------
