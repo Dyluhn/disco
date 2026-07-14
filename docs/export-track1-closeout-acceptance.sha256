@@ -56,8 +56,9 @@
     "packages/tools/tests/export_track1_closeout/test_c4_intent_contract.py": "dc5a7cf56a61e6653f4e600cd67387fce50ae4711e3f4ecd4a962d4c3f5075f7",
     "packages/tools/tests/export_track1_closeout/test_c5_injection_reject.py": "f291a5d83355f5cb67ea8d6b77d22db1b0e4b76e71a67498506fc47f461ad1e6",
     "packages/tools/tests/export_track1_closeout/test_g06_intent_output_dir.py": "932192ecea1a6f5d5014f5ea496d651f5e97dc79f161e59c360e22f455b2b825",
-    "scripts/gen_closeout_acceptance_manifest.py": "956b768e7d048c979368931f278cabdfba211ba8e94b42eaf5b111e56570fb92",
-    "scripts/verify_export_track1_closeout.py": "0a54cc0b176b903603cb2683831a87a8ceb3ce2217ecbbac9330c8176a9071e2"
+    "scripts/closeout_pytest_report.py": "8cfa5eaece2268ef4cbeaf5f063fab863899aa5afc02348f1933b6a0692fe50c",
+    "scripts/gen_closeout_acceptance_manifest.py": "4637fceff6d622d351cbf3fb89ede4d5ed709a3b1ef8867f297d925c96669fd8",
+    "scripts/verify_export_track1_closeout.py": "5b22ef0973888d95817dc02fe9e42392063e1076e964eb249089c53a6d8ae37d"
   },
   "missing_frozen_paths": [],
   "python_closeout_inventory": [

@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -58,6 +59,25 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import gen_closeout_acceptance_manifest as manifest_mod
+
+# ---- structured per-test report plugin (R6b harness correction, plan §9.3) --------
+# A governed pytest lane is green ONLY when EVERY governed-selected test truly PASSED.
+# JUnit cannot prove that (an xfail collapses to <skipped>, a NON-strict xpass records as
+# a plain pass, a deselected/vanished test is simply absent), so each governed pytest lane
+# is run under this purpose-built reporting plugin (``scripts/closeout_pytest_report.py``),
+# which writes ``{nodeid: category}`` (category honestly typed from pytest's own report
+# objects, never console text) plus the marker-governed selection. The verifier then
+# requires ``selected == represented-as-passed`` exactly. ``scripts/`` is prepended to the
+# lane subprocess PYTHONPATH so ``-p closeout_pytest_report`` resolves by bare module name.
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+_CLOSEOUT_REPORT_PLUGIN = "closeout_pytest_report"
+_NONLIVE_REPORT_FILE = "closeout-report-nonlive.json"
+_CLOSEOUT_REPORT_FILE = "closeout-report-closeout.json"
+_LIVE_REPORT_FILE = "closeout-report-live.json"
+# The one green category; every other category (failed/error/skipped/xfailed/xpassed) — and
+# a governed-selected node that produced NO result (a within-selection deselection) — is a
+# violation that forces the lane NON-green with a distinct, specific reason.
+_PASS_CATEGORY = "passed"
 
 # ---- evidence files a real Docker-host live run produces (plan §1.4). At authoring
 # / on a host with no Docker engine they are HONESTLY absent — recorded, never faked.
@@ -234,13 +254,40 @@ class LaneResult:
     junit_path: str | None = None
     rejected: bool | None = None
     rejection_reasons: list[str] = field(default_factory=list)
+    report_path: str | None = None
     detail: dict[str, object] = field(default_factory=dict)
 
 
-def _run(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run(
+    cmd: list[str], *, cwd: Path, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run a fixed-argv command (no shell), capturing output. Never raises on nonzero
-    — the CALLER reads returncode (plan §1.2: exit code captured, not inferred)."""
-    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+    — the CALLER reads returncode (plan §1.2: exit code captured, not inferred). ``env``
+    (when given) fully replaces the child environment; None inherits this process's."""
+    return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, check=False)
+
+
+def _pytest_env() -> dict[str, str]:
+    """The child environment for a governed pytest lane: this process's env with ``scripts/``
+    prepended to ``PYTHONPATH`` so ``-p closeout_pytest_report`` imports by bare module name
+    inside the ``python -m pytest`` subprocess (whose sys.path carries cwd, not scripts/)."""
+    env = dict(os.environ)
+    scripts = str(_SCRIPTS_DIR)
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = scripts + (os.pathsep + existing if existing else "")
+    return env
+
+
+def _load_structured_report(path: Path) -> dict[str, object] | None:
+    """Read a structured closeout pytest report. Returns None (fail-closed) when the file is
+    absent or unparseable — the governed lane then rejects for a missing report."""
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -295,8 +342,17 @@ def _run_pytest_lane(
     paths: tuple[str, ...],
     marker: str,
     junit_filename: str,
+    report_filename: str,
 ) -> LaneResult:
     junit_path = evidence_dir / junit_filename
+    report_path = evidence_dir / report_filename
+    # STALE-EVIDENCE-DIR defense: unlink any prior report/junit at these FIXED paths BEFORE
+    # the run. If a governed test hard-crashes the interpreter with exit code 0 (e.g.
+    # os._exit(0)) so pytest_sessionfinish never overwrites them, an ABSENT report is what
+    # remains — and the fail-closed path fires (absent report -> non-green) — instead of a
+    # reused --evidence-dir's earlier GREEN report being read and the lane falsely greened.
+    junit_path.unlink(missing_ok=True)
+    report_path.unlink(missing_ok=True)
     cmd = [
         sys.executable,
         "-m",
@@ -306,34 +362,146 @@ def _run_pytest_lane(
         "addopts=",
         "-m",
         marker,
+        "-p",
+        _CLOSEOUT_REPORT_PLUGIN,
+        "--closeout-report-json",
+        str(report_path),
         f"--junitxml={junit_path}",
     ]
-    proc = _run(cmd, cwd=repo)
+    proc = _run(cmd, cwd=repo, env=_pytest_env())
     return LaneResult(
         name=name,
         status="ran",
         exit_code=proc.returncode,
         junit=_parse_junit(junit_path),
         junit_path=str(junit_path),
+        report_path=str(report_path),
     )
 
 
-def _evaluate_closeout(lane: LaneResult, inventory_ok: bool, inventory_note: str) -> None:
-    """Apply the closeout-lane rejection rules (plan §1.2/§3.2) in place."""
+def _junit_reasons(junit: dict[str, int], exit_code: int | None, lane: str) -> list[str]:
+    """The JUnit-aggregate rejection reasons for a governed pytest lane (plan §1.2/§3.2):
+    a nonzero exit, any failure/error/skip, or a zero-test collection. Kept as the coarse
+    backstop; the fine-grained per-test truth comes from the structured report."""
     reasons: list[str] = []
-    if lane.exit_code != 0:
-        reasons.append(f"closeout pytest exit code {lane.exit_code} (expected 0)")
-    junit = lane.junit or {}
+    if exit_code != 0:
+        reasons.append(f"{lane} pytest exit code {exit_code} (expected 0)")
     for bad in ("failures", "errors", "skipped"):
         if junit.get(bad, 0) > 0:
-            reasons.append(f"closeout lane has {junit[bad]} {bad} (must be 0)")
+            reasons.append(f"{lane} lane has {junit[bad]} {bad} (must be 0)")
     if junit.get("tests", 0) == 0:
-        reasons.append("closeout lane collected zero tests")
-    if not inventory_ok:
-        reasons.append(f"frozen node-ID inventory mismatch: {inventory_note}")
+        reasons.append(f"{lane} lane collected zero tests")
+    return reasons
+
+
+# Human-readable clause per non-passing category, for the not_passed_reasons narrative.
+_CATEGORY_REASON: dict[str, str] = {
+    "skipped": "was SKIPPED",
+    "xfailed": "XFAILED (expected-fail under an xfail marker)",
+    "xpassed": "XPASSED (unexpected pass under an xfail marker)",
+    "failed": "FAILED",
+    "error": "ERRORED",
+}
+
+
+def _evaluate_structured_pytest_report(
+    report: dict[str, object] | None, *, lane: str
+) -> tuple[bool, list[str], dict[str, object]]:
+    """Decide, from the structured ``{nodeid: category}`` report the closeout plugin wrote,
+    whether EVERY governed-selected test is represented as ``passed`` — the fine-grained
+    truth JUnit cannot give (plan §9.3). Returns ``(ok, reasons, summary)``. Fail-CLOSED: a
+    missing/malformed report, or a report that selected zero tests, is NOT ok.
+
+    The gate is exact set-equality ``selected == represented-as-passed``:
+
+    * a governed-selected node whose category is failed/error/skipped/xfailed/xpassed, or
+      that produced NO result at all (a within-selection deselection / disappearance), is a
+      distinct, specifically-named violation;
+    * a non-passed outcome OUTSIDE the selection (a module-level collection skip/error keyed
+      by its collector nodeid) is likewise named;
+    * a passed result that is not in the governed selection is an unexpected extra.
+
+    The intentional ``-m "not integration"`` deselection is honored: those tests are absent
+    from ``selected`` (and never appear in ``categories``), so they are never gated. Pure +
+    importable so the committed mutation tests drive it with crafted reports."""
+    if report is None:
+        return (
+            False,
+            [f"{lane}: structured pytest report missing or unparseable (fail-closed)"],
+            {},
+        )
+    selected = report.get("selected")
+    categories = report.get("categories")
+    if not isinstance(selected, list) or not isinstance(categories, dict):
+        return (
+            False,
+            [f"{lane}: structured pytest report malformed (missing selected/categories)"],
+            {},
+        )
+    selected_set = {str(x) for x in selected}
+    cats: dict[str, str] = {str(k): str(v) for k, v in categories.items()}
+    if not selected_set:
+        return False, [f"{lane}: structured report selected zero tests"], {}
+
+    reasons: list[str] = []
+    # (a) every governed-selected node must be represented as passed.
+    for nid in sorted(selected_set):
+        cat = cats.get(nid)
+        if cat is None:
+            reasons.append(
+                f"{lane}: selected test {nid} produced NO result "
+                "(deselected / vanished within the governed selection)"
+            )
+        elif cat != _PASS_CATEGORY:
+            clause = _CATEGORY_REASON.get(cat, f"reported category {cat!r}")
+            reasons.append(f"{lane}: test {nid} {clause} (must PASS)")
+    # (b) any outcome outside the selection: a collection-level skip/error, or a stray pass.
+    for nid in sorted(cats):
+        if nid in selected_set:
+            continue
+        cat = cats[nid]
+        if cat == _PASS_CATEGORY:
+            reasons.append(f"{lane}: unexpected passed result {nid} not in the governed selection")
+        else:
+            clause = _CATEGORY_REASON.get(cat, f"reported category {cat!r}")
+            reasons.append(
+                f"{lane}: collection-level {clause} at {nid} "
+                "(a governed collector was skipped/errored)"
+            )
+
+    non_passed = sorted(nid for nid, cat in cats.items() if cat != _PASS_CATEGORY)
+    summary: dict[str, object] = {
+        "selected_count": len(selected_set),
+        "passed_count": sum(1 for cat in cats.values() if cat == _PASS_CATEGORY),
+        "represented_count": len(cats),
+        "non_passed": non_passed,
+        "collection_skipped": report.get("collection_skipped", []),
+        "collection_errors": report.get("collection_errors", []),
+        "deselected_count": report.get("deselected_count"),
+        "counts": report.get("counts", {}),
+    }
+    return (not reasons), reasons, summary
+
+
+def _finalize_pytest_lane(
+    lane: LaneResult,
+    *,
+    report: dict[str, object] | None,
+    extra_reasons: list[str] | None = None,
+) -> dict[str, object]:
+    """Set a governed pytest lane's green from BOTH the JUnit aggregate AND the structured
+    per-test report (and any lane-specific ``extra_reasons``, e.g. the closeout frozen
+    node-ID inventory mismatch), in place. Green ONLY when there are zero reasons across all
+    sources. Returns the structured summary for the lane detail."""
+    reasons = _junit_reasons(lane.junit or {}, lane.exit_code, lane.name)
+    _, structured_reasons, summary = _evaluate_structured_pytest_report(report, lane=lane.name)
+    reasons.extend(structured_reasons)
+    if extra_reasons:
+        reasons.extend(extra_reasons)
     lane.rejected = bool(reasons)
     lane.rejection_reasons = reasons
     lane.green = not lane.rejected
+    return summary
 
 
 # ---- frozen manifest tamper check ---------------------------------------------
@@ -766,6 +934,12 @@ def _write_docker_versions(repo: Path, evidence_dir: Path) -> dict[str, str]:
 def _run_live_lane(repo: Path, evidence_dir: Path) -> LaneResult:
     docker_versions = _write_docker_versions(repo, evidence_dir)
     junit_path = evidence_dir / "pytest-live.xml"
+    report_path = evidence_dir / _LIVE_REPORT_FILE
+    # STALE-EVIDENCE-DIR defense (see _run_pytest_lane): unlink any prior report/junit at
+    # these fixed paths BEFORE the run so an exit-0 crash that never writes leaves an ABSENT
+    # report and the fail-closed path fires, rather than a reused dir's earlier green result.
+    junit_path.unlink(missing_ok=True)
+    report_path.unlink(missing_ok=True)
     proc = _run(
         [
             sys.executable,
@@ -777,27 +951,30 @@ def _run_live_lane(repo: Path, evidence_dir: Path) -> LaneResult:
             "-m",
             manifest_mod.CLOSEOUT_MARKER_LIVE,
             "-ra",
+            "-p",
+            _CLOSEOUT_REPORT_PLUGIN,
+            "--closeout-report-json",
+            str(report_path),
             f"--junitxml={junit_path}",
         ],
         cwd=repo,
+        env=_pytest_env(),
     )
-    junit = _parse_junit(junit_path)
-    green = (
-        proc.returncode == 0
-        and junit.get("tests", 0) > 0
-        and junit.get("failures", 0) == 0
-        and junit.get("errors", 0) == 0
-        and junit.get("skipped", 0) == 0
-    )
-    return LaneResult(
+    lane = LaneResult(
         name="live-docker",
         status="ran",
-        green=green,
         exit_code=proc.returncode,
-        junit=junit,
+        junit=_parse_junit(junit_path),
         junit_path=str(junit_path),
+        report_path=str(report_path),
         detail={"docker_versions": docker_versions},
     )
+    # Same fail-open class as the other pytest lanes: JUnit alone cannot see an xpass or a
+    # within-selection disappearance, so gate on the structured report too (plan §9.3). On a
+    # host WITHOUT Docker the live tests FAIL (never skip), so the lane stays non-green here.
+    summary = _finalize_pytest_lane(lane, report=_load_structured_report(report_path))
+    lane.detail["structured"] = summary
+    return lane
 
 
 # ---- anti-bypass scanner (plan §4.4 / §4.9) -----------------------------------
@@ -1472,9 +1649,15 @@ def _not_passed_reasons(
     if not frozen_ok:
         reasons.append("frozen manifest not verified")
     for lane in lanes:
-        if lane.name == "python-closeout" and lane.rejected:
+        if lane.green is True:
+            continue
+        # A governed pytest lane (nonlive / closeout / live) records SPECIFIC per-test
+        # rejection reasons (a named failure, skip, xfail, xpass, error, collection-level
+        # skip/error, or a within-selection disappearance); surface each verbatim. Lanes
+        # without granular reasons (frontend / g11 / scanner) get the generic message.
+        if lane.rejection_reasons:
             reasons.extend(lane.rejection_reasons)
-        elif lane.green is not True:
+        else:
             reasons.append(f"{lane.name} lane not green")
     if not hygiene_ok:
         reasons.append(
@@ -1550,8 +1733,16 @@ def main(argv: list[str] | None = None) -> int:
         paths=manifest_mod.NONLIVE_TEST_PATHS,
         marker=manifest_mod.NONLIVE_MARKER,
         junit_filename="pytest-nonlive.xml",
+        report_filename=_NONLIVE_REPORT_FILE,
     )
-    nonlive.green = nonlive.exit_code == 0
+    # A pytest exit code of 0 is NOT proof the lane is clean — pytest exits 0 with
+    # SKIPPED/xfailed tests, and a non-strict xpass or a vanished test is invisible to the
+    # exit code AND to JUnit. Gate on the structured per-test report (plan §9.3): the lane is
+    # green ONLY when every governed-selected test truly PASSED.
+    nonlive_summary = _finalize_pytest_lane(
+        nonlive, report=_load_structured_report(Path(nonlive.report_path or ""))
+    )
+    nonlive.detail = {"structured": nonlive_summary}
     lanes.append(nonlive)
 
     closeout = _run_pytest_lane(
@@ -1561,6 +1752,7 @@ def main(argv: list[str] | None = None) -> int:
         paths=manifest_mod.CLOSEOUT_TEST_DIRS,
         marker=manifest_mod.CLOSEOUT_MARKER_NONLIVE,
         junit_filename="pytest-closeout.xml",
+        report_filename=_CLOSEOUT_REPORT_FILE,
     )
     observed = manifest_mod.collect_python_closeout_ids(repo)
     expected = sorted(frozen_inventory)
@@ -1568,13 +1760,21 @@ def main(argv: list[str] | None = None) -> int:
     extra = sorted(set(observed) - set(expected))
     inventory_ok = bool(expected) and not missing and not extra
     inventory_note = f"missing={missing} extra={extra}" if not inventory_ok else "match"
-    _evaluate_closeout(closeout, inventory_ok, inventory_note)
+    inventory_reasons = (
+        [] if inventory_ok else [f"frozen node-ID inventory mismatch: {inventory_note}"]
+    )
+    closeout_summary = _finalize_pytest_lane(
+        closeout,
+        report=_load_structured_report(Path(closeout.report_path or "")),
+        extra_reasons=inventory_reasons,
+    )
     closeout.detail = {
         "inventory_ok": inventory_ok,
         "expected_count": len(expected),
         "observed_count": len(observed),
         "missing": missing,
         "extra": extra,
+        "structured": closeout_summary,
     }
     lanes.append(closeout)
 
@@ -1658,6 +1858,13 @@ def main(argv: list[str] | None = None) -> int:
             "pytest-nonlive.xml": "written",
             "pytest-closeout.xml": "written",
             "pytest-live.xml": "written",
+            _NONLIVE_REPORT_FILE: "written"
+            if Path(nonlive.report_path or "").is_file()
+            else "absent",
+            _CLOSEOUT_REPORT_FILE: (
+                "written" if Path(closeout.report_path or "").is_file() else "absent"
+            ),
+            _LIVE_REPORT_FILE: "written" if Path(live.report_path or "").is_file() else "absent",
             "frontend-vitest.json": "written" if frontend.detail.get("npx_available") else "absent",
             "frontend-e2e.json": "written" if browser_written else "absent",
             "g11-typecheck.txt": "written",

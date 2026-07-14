@@ -53,6 +53,11 @@ FROZEN_DIR_GLOBS: tuple[str, ...] = (
 FROZEN_FILES: tuple[str, ...] = (
     "scripts/verify_export_track1_closeout.py",
     "scripts/gen_closeout_acceptance_manifest.py",
+    # R6b: the purpose-built pytest reporting plugin the verifier loads into every governed
+    # pytest lane (``-p closeout_pytest_report``) to prove every governed-selected test truly
+    # PASSED (JUnit collapses xfail->skipped, hides a non-strict xpass, and omits a vanished
+    # test). Frozen so a lane's truth-source cannot be silently weakened.
+    "scripts/closeout_pytest_report.py",
     "packages/agent-server/tests/integration/test_export_track1_closeout_live.py",
     "packages/agent-server/tests/integration/_closeout_live_support.py",
     ".github/workflows/export-track1-closeout.yml",
@@ -113,13 +118,15 @@ NONLIVE_MARKER = "not integration"
 COMMAND_INVENTORY: dict[str, str] = {
     "python_nonlive": (
         "python -m pytest packages/core/tests packages/tools/tests "
-        "packages/agent-server/tests -o addopts= -m 'not integration' --junitxml"
+        "packages/agent-server/tests -o addopts= -m 'not integration' "
+        "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "python_closeout": (
         "python -m pytest packages/core/tests/export_track1_closeout "
         "packages/tools/tests/export_track1_closeout "
         "packages/agent-server/tests/export_track1_closeout -o addopts= "
-        "-m 'export_track1_closeout and not integration' --junitxml"
+        "-m 'export_track1_closeout and not integration' "
+        "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
     "python_closeout_collect": (
         "python -m pytest packages/core/tests/export_track1_closeout "
@@ -137,7 +144,8 @@ COMMAND_INVENTORY: dict[str, str] = {
     "live_docker": (
         "python -m pytest "
         "packages/agent-server/tests/integration/test_export_track1_closeout_live.py "
-        "-o addopts= -m 'export_track1_closeout and integration' -ra --junitxml"
+        "-o addopts= -m 'export_track1_closeout and integration' -ra "
+        "-p closeout_pytest_report --closeout-report-json <report> --junitxml"
     ),
 }
 REQUIRED_COMMAND_IDS: frozenset[str] = frozenset(COMMAND_INVENTORY)
